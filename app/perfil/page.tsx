@@ -1,0 +1,586 @@
+'use client';
+
+import React, { useEffect, useState } from 'react';
+import { useRequireAuth } from '@/utils/useRequireAuth';
+import Layout from '@/components/Layout';
+import { User, Mail, Phone, Building2, Shield, Loader2, Edit2, Save, X, Search } from 'lucide-react';
+
+interface BancaItem {
+  id?: string;
+  name: string;
+  url: string | null;
+}
+
+interface UserProfile {
+  id: string;
+  email: string;
+  full_name: string | null;
+  telefone: string | null;
+  status: string | null;
+  created_at: string;
+  bancas: BancaItem[];
+}
+
+const PerfilPage = () => {
+  const { checking, userId } = useRequireAuth();
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [editingTelefone, setEditingTelefone] = useState(false);
+  const [telefoneValue, setTelefoneValue] = useState('');
+  const [savingTelefone, setSavingTelefone] = useState(false);
+  // Bancas: lista completa (para consultor/gerente) e seleção
+  const [allBancas, setAllBancas] = useState<BancaItem[]>([]);
+  const [selectedBancaIds, setSelectedBancaIds] = useState<Set<string>>(new Set());
+  const [savingBancas, setSavingBancas] = useState(false);
+  const [bancasLoaded, setBancasLoaded] = useState(false);
+  const [modalBancasOpen, setModalBancasOpen] = useState(false);
+  const [bancaSearchTerm, setBancaSearchTerm] = useState('');
+
+  useEffect(() => {
+    if (checking || !userId) return;
+
+    const loadProfile = async () => {
+      try {
+        setLoading(true);
+        const response = await fetch('/api/user/profile', {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-User-Id': userId,
+          },
+          credentials: 'include',
+        });
+
+        if (!response.ok) {
+          throw new Error('Erro ao carregar perfil');
+        }
+
+        const result = await response.json();
+        if (result.success) {
+          setProfile(result.data);
+          // Remove o prefixo 55 do telefone para exibição/edição
+          const telefoneDisplay = result.data.telefone 
+            ? result.data.telefone.replace(/\D/g, '').startsWith('55')
+              ? result.data.telefone.replace(/\D/g, '').slice(2)
+              : result.data.telefone.replace(/\D/g, '')
+            : '';
+          setTelefoneValue(telefoneDisplay);
+        } else {
+          throw new Error(result.error || 'Erro ao carregar perfil');
+        }
+      } catch (err: any) {
+        setError(err.message || 'Erro ao carregar perfil');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadProfile();
+  }, [checking, userId]);
+
+  // Carrega lista de bancas do banco (para exibição e modal)
+  const loadBancasList = async () => {
+    if (!userId) return;
+    try {
+      const res = await fetch('/api/crm/bancas', { headers: { 'X-User-Id': userId } });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.data)) {
+        setAllBancas(data.data);
+      }
+      setBancasLoaded(true);
+    } catch {
+      setBancasLoaded(true);
+    }
+  };
+
+  useEffect(() => {
+    if (!userId || !profile) return;
+    const canLoad = ['consultor', 'gerente', 'super_admin'].includes(profile.status || '');
+    if (!canLoad) return;
+    loadBancasList();
+  }, [userId, profile?.status]);
+
+  // Sincroniza seleção com as bancas do perfil (consultor/gerente/super_admin)
+  useEffect(() => {
+    if (!profile || !['consultor', 'gerente', 'super_admin'].includes(profile.status || '') || !bancasLoaded) return;
+    const ids = new Set<string>();
+    profile.bancas.forEach((b) => {
+      if (b.id) ids.add(b.id);
+      else if (b.url) {
+        const match = allBancas.find((a) => a.url === b.url);
+        if (match?.id) ids.add(match.id);
+      }
+    });
+    setSelectedBancaIds(ids);
+  }, [profile?.bancas, profile?.status, bancasLoaded, allBancas]);
+
+  const formatPhone = (phone: string | null): string => {
+    if (!phone) return '';
+    const digits = phone.replace(/\D/g, '');
+    if (digits.startsWith('55') && digits.length >= 13) {
+      return `${digits.slice(0, 2)} (${digits.slice(2, 4)}) ${digits.slice(4, 9)}-${digits.slice(9, 13)}`;
+    }
+    return phone;
+  };
+
+  const handleSaveTelefone = async () => {
+    const digitsOnly = telefoneValue.replace(/\D/g, '');
+    
+    if (!digitsOnly || digitsOnly.length < 10) {
+      setError('Telefone inválido. Informe o DDD e o número (ex: 8195124779)');
+      return;
+    }
+
+    try {
+      setSavingTelefone(true);
+      setError(null);
+
+      const response = await fetch('/api/user/telefone', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-Id': userId!,
+        },
+        credentials: 'include',
+        body: JSON.stringify({ telefone: digitsOnly }),
+      });
+
+      if (!response.ok) {
+        const result = await response.json();
+        throw new Error(result.error || 'Erro ao salvar telefone');
+      }
+
+      const result = await response.json();
+      if (result.success && profile) {
+        setProfile({ ...profile, telefone: result.data.telefone });
+        setTelefoneValue(result.data.telefone ? result.data.telefone.replace(/\D/g, '').slice(2) : '');
+        setEditingTelefone(false);
+      }
+    } catch (err: any) {
+      setError(err.message || 'Erro ao salvar telefone');
+    } finally {
+      setSavingTelefone(false);
+    }
+  };
+
+  const getStatusLabel = (status: string | null): string => {
+    const labels: Record<string, string> = {
+      super_admin: 'Super Admin',
+      admin: 'Administrador',
+      dono_banca: 'Dono de Banca',
+      gerente: 'Gerente',
+      consultor: 'Consultor',
+      auditoria: 'Auditoria',
+      suporte: 'Suporte',
+    };
+    return labels[status || ''] || status || 'Não definido';
+  };
+
+  const getStatusColor = (status: string | null): string => {
+    const colors: Record<string, string> = {
+      super_admin: 'bg-indigo-100 text-indigo-700',
+      admin: 'bg-purple-100 text-purple-700',
+      dono_banca: 'bg-blue-100 text-blue-700',
+      gerente: 'bg-green-100 text-green-700',
+      consultor: 'bg-yellow-100 text-yellow-700',
+      auditoria: 'bg-orange-100 text-orange-700',
+      suporte: 'bg-gray-100 text-gray-700',
+    };
+    return colors[status || ''] || 'bg-gray-100 text-gray-700';
+  };
+
+  const canEditBancas =
+    profile?.status === 'consultor' ||
+    profile?.status === 'gerente' ||
+    profile?.status === 'super_admin';
+
+  const toggleBanca = (bancaId: string) => {
+    setSelectedBancaIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(bancaId)) next.delete(bancaId);
+      else next.add(bancaId);
+      return next;
+    });
+  };
+
+  const handleSaveBancas = async () => {
+    if (!userId || !canEditBancas) return;
+    try {
+      setSavingBancas(true);
+      setError(null);
+      const response = await fetch('/api/user/bancas', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        credentials: 'include',
+        body: JSON.stringify({ banca_ids: Array.from(selectedBancaIds) }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Erro ao salvar bancas');
+      if (profile) {
+        const updatedBancas = allBancas.filter((b) => b.id && selectedBancaIds.has(b.id));
+        setProfile({ ...profile, bancas: updatedBancas });
+      }
+      setModalBancasOpen(false);
+    } catch (err: any) {
+      setError(err.message || 'Erro ao salvar bancas');
+    } finally {
+      setSavingBancas(false);
+    }
+  };
+
+  const openModalBancas = () => {
+    setError(null);
+    if (!bancasLoaded) loadBancasList();
+    setModalBancasOpen(true);
+  };
+
+  const closeModalBancas = () => {
+    if (!savingBancas) {
+      setError(null);
+      setBancaSearchTerm('');
+      setModalBancasOpen(false);
+    }
+  };
+
+  const filteredBancasModal = allBancas.filter(
+    (b) =>
+      !bancaSearchTerm.trim() ||
+      b.name.toLowerCase().includes(bancaSearchTerm.toLowerCase().trim()) ||
+      (b.url && b.url.toLowerCase().includes(bancaSearchTerm.toLowerCase().trim()))
+  );
+
+  if (checking || loading) {
+    return (
+      <Layout>
+        <div className="min-h-screen flex items-center justify-center">
+          <div className="text-center">
+            <Loader2 className="w-8 h-8 animate-spin text-[#8CD955] mx-auto mb-4" />
+            <p className="text-gray-600">Carregando perfil...</p>
+          </div>
+        </div>
+      </Layout>
+    );
+  }
+
+  if (error && !profile) {
+    return (
+      <Layout>
+        <div className="min-h-screen flex items-center justify-center">
+          <div className="text-center">
+            <p className="text-red-600 mb-4">{error}</p>
+            <button
+              onClick={() => window.location.reload()}
+              className="px-4 py-2 bg-[#8CD955] text-white rounded-xl hover:bg-[#7BC844] transition-colors"
+            >
+              Tentar novamente
+            </button>
+          </div>
+        </div>
+      </Layout>
+    );
+  }
+
+  if (!profile) {
+    return (
+      <Layout>
+        <div className="min-h-screen flex items-center justify-center">
+          <p className="text-gray-600">Perfil não encontrado</p>
+        </div>
+      </Layout>
+    );
+  }
+
+  return (
+    <Layout>
+      <div className="max-w-4xl mx-auto">
+        {/* Header */}
+        <div className="mb-8">
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">Meu Perfil</h1>
+          <p className="text-gray-600">Visualize e gerencie suas informações pessoais</p>
+        </div>
+
+        {/* Card Principal */}
+        <div className="bg-white rounded-2xl shadow-lg border border-gray-200 overflow-hidden">
+          {/* Header do Card */}
+          <div className="bg-gradient-to-r from-[#8CD955] to-[#7BC844] p-6">
+            <div className="flex items-center gap-4">
+              <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center">
+                <User className="w-8 h-8 text-[#8CD955]" />
+              </div>
+              <div className="flex-1">
+                <h2 className="text-2xl font-bold text-white mb-1">
+                  {profile.full_name || 'Sem nome'}
+                </h2>
+                <span className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(profile.status)}`}>
+                  {getStatusLabel(profile.status)}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Conteúdo do Card */}
+          <div className="p-6 space-y-6">
+            {/* Email */}
+            <div className="flex items-start gap-4 p-4 bg-gray-50 rounded-xl">
+              <div className="p-2 bg-blue-100 rounded-lg">
+                <Mail className="w-5 h-5 text-blue-600" />
+              </div>
+              <div className="flex-1">
+                <label className="block text-sm font-medium text-gray-500 mb-1">Email</label>
+                <p className="text-gray-900 font-medium">{profile.email}</p>
+              </div>
+            </div>
+
+            {/* Telefone */}
+            <div className="flex items-start gap-4 p-4 bg-gray-50 rounded-xl">
+              <div className="p-2 bg-green-100 rounded-lg">
+                <Phone className="w-5 h-5 text-green-600" />
+              </div>
+              <div className="flex-1">
+                <label className="block text-sm font-medium text-gray-500 mb-1">Telefone</label>
+                {editingTelefone ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="tel"
+                      value={telefoneValue.replace(/\D/g, '').slice(0, 11)}
+                      onChange={(e) => {
+                        const digits = e.target.value.replace(/\D/g, '').slice(0, 11);
+                        setTelefoneValue(digits);
+                      }}
+                      placeholder="8195124779"
+                      className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-transparent outline-none placeholder:text-gray-400"
+                      autoFocus
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                    />
+                    <button
+                      onClick={handleSaveTelefone}
+                      disabled={savingTelefone}
+                      className="p-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC844] transition-colors disabled:opacity-50"
+                      title="Salvar"
+                    >
+                      {savingTelefone ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Save className="w-4 h-4" />
+                      )}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setEditingTelefone(false);
+                        setTelefoneValue(profile.telefone || '');
+                        setError(null);
+                      }}
+                      className="p-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
+                      title="Cancelar"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between">
+                    <p className="text-gray-900 font-medium">
+                      {profile.telefone ? formatPhone(profile.telefone) : 'Não cadastrado'}
+                    </p>
+                    <button
+                      onClick={() => setEditingTelefone(true)}
+                      className="p-2 text-[#8CD955] hover:bg-green-50 rounded-lg transition-colors"
+                      title="Editar telefone"
+                    >
+                      <Edit2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+                {error && editingTelefone && (
+                  <p className="mt-2 text-sm text-red-600">{error}</p>
+                )}
+              </div>
+            </div>
+
+            {/* Bancas */}
+            <div className="flex items-start gap-4 p-4 bg-gray-50 rounded-xl">
+              <div className="p-2 bg-purple-100 rounded-lg">
+                <Building2 className="w-5 h-5 text-purple-600" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <label className="block text-sm font-medium text-gray-500 mb-2">
+                  {canEditBancas ? 'Bancas em que atuo' : profile.bancas.length === 1 ? 'Banca' : 'Bancas'}
+                </label>
+                {canEditBancas ? (
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div className="flex-1 min-w-0">
+                      {profile.bancas.length > 0 ? (
+                        <p className="text-gray-900 font-medium">
+                          {profile.bancas.map((b) => b.name).join(', ')}
+                        </p>
+                      ) : (
+                        <p className="text-gray-500">Nenhuma banca associada</p>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={openModalBancas}
+                      className="flex items-center gap-2 px-3 py-2 text-[#8CD955] hover:bg-green-50 rounded-lg transition-colors font-medium shrink-0"
+                      title="Escolher bancas"
+                    >
+                      <Edit2 className="w-4 h-4" />
+                      Escolher bancas
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    {profile.bancas.length > 0 ? (
+                      <div className="space-y-2">
+                        {profile.bancas.map((banca, index) => (
+                          <div key={banca.id || index} className="flex items-center gap-2">
+                            <span className="text-gray-900 font-medium">{banca.name}</span>
+                            {banca.url && (
+                              <a
+                                href={banca.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[#8CD955] hover:underline text-sm"
+                              >
+                                ({banca.url})
+                              </a>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-gray-500">Nenhuma banca associada</p>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* Modal de seleção de bancas */}
+            {modalBancasOpen && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={closeModalBancas}>
+                <div
+                  className="bg-white rounded-2xl shadow-xl max-w-lg w-full max-h-[85vh] flex flex-col overflow-hidden"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="p-4 border-b border-gray-200 flex items-center justify-between shrink-0">
+                    <h3 className="text-lg font-bold text-gray-900">Bancas em que atuo</h3>
+                    <button
+                      type="button"
+                      onClick={closeModalBancas}
+                      className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors"
+                      aria-label="Fechar"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
+                  <div className="flex-1 flex flex-col min-h-0 bg-white">
+                    {bancasLoaded && allBancas.length > 0 && (
+                      <div className="p-4 pt-0 shrink-0">
+                        <div className="relative">
+                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                          <input
+                            type="search"
+                            value={bancaSearchTerm}
+                            onChange={(e) => setBancaSearchTerm(e.target.value)}
+                            placeholder="Pesquisar banca por nome ou URL..."
+                            className="w-full pl-9 pr-4 py-2.5 border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] outline-none text-gray-800 placeholder:text-gray-500"
+                          />
+                        </div>
+                      </div>
+                    )}
+                    <div className="p-4 overflow-y-auto flex-1 min-h-0">
+                      {!bancasLoaded ? (
+                        <div className="flex items-center justify-center py-8">
+                          <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+                          <span className="ml-2 text-gray-600">Carregando bancas...</span>
+                        </div>
+                      ) : allBancas.length === 0 ? (
+                        <p className="text-gray-500 py-4">Nenhuma banca cadastrada no sistema. Peça ao administrador para cadastrar bancas.</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {filteredBancasModal.length === 0 ? (
+                            <p className="text-gray-600 py-4">Nenhuma banca encontrada para &quot;{bancaSearchTerm}&quot;</p>
+                          ) : (
+                            filteredBancasModal.map((banca) => (
+                              <label
+                                key={banca.id ?? ''}
+                                className="flex items-center gap-3 cursor-pointer hover:bg-gray-50 rounded-lg p-3 border border-gray-100"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={selectedBancaIds.has(banca.id ?? '')}
+                                  onChange={() => toggleBanca(banca.id ?? '')}
+                                  className="w-4 h-4 rounded border-gray-300 text-[#8CD955] focus:ring-[#8CD955]"
+                                />
+                                <span className="text-gray-900 font-medium">{banca.name}</span>
+                                {banca.url && (
+                                  <span className="text-gray-400 text-sm truncate max-w-[180px]" title={banca.url}>
+                                    {banca.url}
+                                  </span>
+                                )}
+                              </label>
+                            ))
+                          )}
+                        </div>
+                      )}
+                      {error && (
+                        <p className="mt-3 text-sm text-red-600">{error}</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="p-4 border-t border-gray-200 flex justify-end gap-2 shrink-0 bg-white">
+                    <button
+                      type="button"
+                      onClick={closeModalBancas}
+                      className="px-4 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-xl font-medium transition-colors"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSaveBancas}
+                      disabled={savingBancas || !bancasLoaded || allBancas.length === 0}
+                      className="flex items-center gap-2 px-4 py-2 bg-[#8CD955] text-white rounded-xl hover:bg-[#7BC844] transition-colors disabled:opacity-50 font-medium"
+                    >
+                      {savingBancas ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Salvando...
+                        </>
+                      ) : (
+                        <>
+                          <Save className="w-4 h-4" />
+                          Salvar
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Data de criação */}
+            <div className="flex items-start gap-4 p-4 bg-gray-50 rounded-xl">
+              <div className="p-2 bg-gray-100 rounded-lg">
+                <Shield className="w-5 h-5 text-gray-600" />
+              </div>
+              <div className="flex-1">
+                <label className="block text-sm font-medium text-gray-500 mb-1">Membro desde</label>
+                <p className="text-gray-900 font-medium">
+                  {new Date(profile.created_at).toLocaleDateString('pt-BR', {
+                    day: '2-digit',
+                    month: 'long',
+                    year: 'numeric',
+                  })}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Layout>
+  );
+};
+
+export default PerfilPage;

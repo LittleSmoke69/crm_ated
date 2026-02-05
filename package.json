@@ -1,0 +1,42 @@
+{
+  "name": "gmaps-extractor",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "clean": "rm -rf .next && rm -rf node_modules/.cache",
+    "clean:win": "powershell -ExecutionPolicy Bypass -File ./clean-cache.ps1",
+    "dev:clean": "npm run clean:win && npm run dev",
+    "setup:scheduled-function": "tsx scripts/setup-scheduled-function.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.81.1",
+    "amqplib": "^0.10.9",
+    "bcryptjs": "^3.0.2",
+    "dotenv": "^17.2.3",
+    "lucide-react": "^0.546.0",
+    "next": "^16.0.7",
+    "node-fetch": "^3.3.2",
+    "pm2": "^6.0.13",
+    "react": "^19.2.1",
+    "react-dom": "^19.2.1",
+    "reactflow": "^11.11.4",
+    "recharts": "^3.5.1"
+  },
+  "devDependencies": {
+    "@netlify/plugin-nextjs": "^5.14.4",
+    "@tailwindcss/postcss": "^4",
+    "@types/amqplib": "^0.10.8",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "baseline-browser-mapping": "^2.9.19",
+    "concurrently": "^9.2.1",
+    "tailwindcss": "^4",
+    "tsx": "^4.20.6",
+    "typescript": "^5"
+  }
+}
