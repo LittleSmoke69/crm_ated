@@ -1,0 +1,53 @@
+# =============================================================================
+# ZaplotoV2 - CODEOWNERS
+# CORE: @LittleSmoke69 (owner único)
+# NON-CORE: modificável por devs externos com PR aprovado
+# =============================================================================
+
+# --- CORE: Proteção total (sempre requer aprovação do owner) ---
+
+# Autenticação e autorização
+/lib/middleware/                    @LittleSmoke69
+
+# Serviços de integração e lógica de negócio
+/lib/services/                     @LittleSmoke69
+
+# Supabase
+/lib/supabase/                     @LittleSmoke69
+/lib/supabase.ts                   @LittleSmoke69
+
+# Utils de acesso e hierarquia
+/lib/utils/instance-access.ts      @LittleSmoke69
+/lib/utils/hierarchy.ts            @LittleSmoke69
+/lib/utils/user-bancas.ts          @LittleSmoke69
+
+# API Routes (todas)
+/app/api/                          @LittleSmoke69
+
+# Netlify scheduled functions
+/netlify/                           @LittleSmoke69
+/netlify.toml                       @LittleSmoke69
+
+# Migrações Supabase
+/migrations/                        @LittleSmoke69
+
+# Scripts operacionais
+/scripts/                           @LittleSmoke69
+
+# Configurações de build e deploy
+/next.config.ts                     @LittleSmoke69
+/package.json                       @LittleSmoke69
+
+# --- NON-CORE: Pode ter ownership de equipe (opcional) ---
+# Descomente e ajuste @team-frontend conforme sua organização:
+#
+# /app/**/page.tsx                  @team-frontend
+# /components/                      @team-frontend
+# /contexts/                        @team-frontend
+# /hooks/                           @team-frontend
+# /utils/supaDebug.ts               @team-frontend
+# /utils/useRequireAuth.ts          @team-frontend
+# /app/globals.css                  @team-frontend
+
+# --- Root ---
+*.md                               @LittleSmoke69
