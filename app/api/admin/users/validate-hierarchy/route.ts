@@ -61,6 +61,7 @@ export async function GET(req: NextRequest) {
     const issues: Array<{
       userId: string;
       email: string;
+      full_name?: string;
       issue: string;
     }> = [];
 
@@ -85,6 +86,7 @@ export async function GET(req: NextRequest) {
         issues.push({
           userId: user.id,
           email: user.email,
+          full_name: (user as any).full_name,
           issue: validation.error || 'Hierarquia inválida',
         });
       }
@@ -95,6 +97,7 @@ export async function GET(req: NextRequest) {
         issues.push({
           userId: user.id,
           email: user.email,
+          full_name: (user as any).full_name,
           issue: 'Ciclo detectado na hierarquia',
         });
       }
@@ -106,6 +109,7 @@ export async function GET(req: NextRequest) {
           issues.push({
             userId: user.id,
             email: user.email,
+            full_name: (user as any).full_name,
             issue: `Enroller ${user.enroller} não encontrado`,
           });
         }

@@ -405,13 +405,13 @@ export const PayloadViewer: React.FC<PayloadViewerProps> = ({ payload, normalize
               </>
             )}
             <div className="relative flex items-center">
-              <Search className="absolute left-2 w-4 h-4 text-gray-400" />
+              <Search className="absolute left-2 w-4 h-4 text-gray-500" />
               <input
                 type="text"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 placeholder="Buscar chaves/valores..."
-                className="pl-8 pr-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                className="pl-8 pr-3 py-1.5 text-sm bg-gray-100 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-900 placeholder:text-gray-500"
               />
             </div>
           </div>

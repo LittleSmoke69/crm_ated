@@ -85,6 +85,11 @@ body {
 }
 
 @layer utilities {
+  /* Evita que o navegador ajuste o scroll ao re-renderizar conteúdo (ex.: formulários ao digitar) */
+  .overflow-anchor-none {
+    overflow-anchor: none;
+  }
+
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
   }
@@ -145,4 +150,33 @@ body {
   display: inline-block;
   white-space: nowrap;
   animation: verifyMarquee 14s linear infinite;
+}
+
+/* VSL: marquee do header (loop para a esquerda) */
+@keyframes vslMarquee {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.vsl-marquee-anim {
+  animation: vslMarquee 25s linear infinite;
+}
+
+/* VSL: botão CTA pulsante */
+@keyframes vslCtaPulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.03);
+  }
+}
+
+.vsl-cta-pulse {
+  animation: vslCtaPulse 1.5s ease-in-out infinite;
 }

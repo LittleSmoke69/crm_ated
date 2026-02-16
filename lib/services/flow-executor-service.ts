@@ -70,6 +70,20 @@ export class FlowExecutorService {
         return null;
       }
 
+      // Idempotência: evita executar o mesmo evento mais de uma vez (ex: múltiplas boas-vindas)
+      const { data: existingExecution } = await supabaseServiceRole
+        .from('flow_executions')
+        .select('id')
+        .eq('flow_id', flowId)
+        .eq('trigger_event_id', eventId)
+        .limit(1)
+        .maybeSingle();
+
+      if (existingExecution) {
+        console.log(`⚠️ [FLOW EXECUTOR] Execução já existente para flow=${flowId} event=${eventId}, ignorando (idempotência)`);
+        return existingExecution.id;
+      }
+
       // Prepara dados de entrada (usa payload_normalized se disponível, senão payload)
       const inputData = event.payload_normalized || event.payload;
       

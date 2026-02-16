@@ -11,7 +11,7 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 export async function GET(req: NextRequest) {
   try {
-    await requireStatus(req, ['admin', 'auditoria']);
+    await requireStatus(req, ['super_admin', 'admin', 'auditoria']);
     const pairs = new Map<string, { group_id: string; instance_name: string }>();
 
     const { data: exits } = await supabaseServiceRole

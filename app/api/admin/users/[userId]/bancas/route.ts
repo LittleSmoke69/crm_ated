@@ -22,8 +22,8 @@ export async function PUT(
       .eq('id', userId)
       .single();
 
-    if (!profile || (profile.status !== 'consultor' && profile.status !== 'gerente')) {
-      return errorResponse('Apenas consultores e gerentes podem ter bancas atribuídas', 400);
+    if (!profile || (profile.status !== 'consultor' && profile.status !== 'gerente' && profile.status !== 'gestor')) {
+      return errorResponse('Apenas consultores, gerentes e gestores podem ter bancas atribuídas', 400);
     }
 
     const body = await req.json();
@@ -98,7 +98,7 @@ export async function GET(
       .eq('id', userId)
       .single();
 
-    if (!profile || (profile.status !== 'consultor' && profile.status !== 'gerente')) {
+    if (!profile || (profile.status !== 'consultor' && profile.status !== 'gerente' && profile.status !== 'gestor')) {
       return successResponse({ banca_ids: [] });
     }
 

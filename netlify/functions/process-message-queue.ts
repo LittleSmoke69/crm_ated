@@ -18,6 +18,8 @@
 import { createClient } from '@supabase/supabase-js';
 import {
   getCurrentDayAndTimeInTimezone,
+  getCurrentDateAndTimeInTimezone,
+  dateAtTimezoneToUTC,
   normalizeRecurringDays,
   isTodayInRecurringDays,
   isCurrentTimeAtOrPastRecurringTime,
@@ -188,8 +190,12 @@ async function processMessageJob(job: any, workerId: string): Promise<{ success:
     }
 
     const normalizedBaseUrl = normalizeBaseUrl(evolutionApi.base_url);
-    const isMentionAll = String(message.mention_all) === 'true' || message.mention_all === true;
+    // Menção @all: usa apenas mentionsEveryOne (sem @everyone obrigatório no texto)
+    const isMentionAll = message.mention_all === true || String(message.mention_all).toLowerCase() === 'true';
     const messageContent = message.content ? String(message.content).trim() : '';
+    if (isMentionAll) {
+      console.log(`${logPrefix} [DISPARO] mention_all=true → mentionsEveryOne injetado no payload`);
+    }
 
     // Log dos dados da mensagem
     console.log(`${logPrefix} 📨 [MENSAGEM] Dados da mensagem:`, {
@@ -207,9 +213,32 @@ async function processMessageJob(job: any, workerId: string): Promise<{ success:
     // Monta URL e body baseado no tipo de mensagem
     let url: string;
     let requestBody: any;
-    let requestType: 'texto' | 'imagem' | 'video' | 'audio' | 'documento' = 'texto';
+    let requestType: 'texto' | 'imagem' | 'video' | 'audio' | 'documento' | 'ptv' = 'texto';
 
-    if (message.message_type === 'audio' && message.attachment_url) {
+    if (message.message_type === 'ptv' && message.attachment_url) {
+      // PTV: sendPtv usa stat() e não aceita URL remota nesta instância.
+      // Fallback: sendMedia aceita URL — vídeo enviado como mídia normal.
+      requestType = 'video';
+      url = `${normalizedBaseUrl}/message/sendMedia/${instance_name}`;
+      const videoUrl = String(message.attachment_url);
+      if (!videoUrl || !videoUrl.startsWith('http')) {
+        throw new Error('URL do vídeo PTV inválida ou não configurada');
+      }
+      requestBody = {
+        number: group_id,
+        mediatype: 'video',
+        mimetype: (message.attachment_mime as string) || 'video/mp4',
+        media: videoUrl,
+        fileName: 'video.mp4',
+        delay: 1200,
+        mentionsEveryOne: !!isMentionAll,
+      };
+      if (messageContent) requestBody.caption = messageContent;
+      console.log(`${logPrefix} 📹 [REQUEST] Tipo: PTV (via sendMedia)`);
+      console.log(`${logPrefix} 📹 [REQUEST] Endpoint: sendMedia`);
+      console.log(`${logPrefix} 📹 [REQUEST] URL completa: ${url}`);
+      console.log(`${logPrefix} 📹 [REQUEST] Body:`, JSON.stringify(requestBody, null, 2));
+    } else if (message.message_type === 'audio' && message.attachment_url) {
       // Envio de áudio
       requestType = 'audio';
       url = `${normalizedBaseUrl}/message/sendWhatsAppAudio/${instance_name}`;
@@ -223,9 +252,9 @@ async function processMessageJob(job: any, workerId: string): Promise<{ success:
       requestBody = {
         number: group_id,
         audio: audioUrl,
-        mentionsEveryone: isMentionAll,
+        ...(isMentionAll && { mentionsEveryOne: true }),
       };
-      
+
       console.log(`${logPrefix} 🎵 [REQUEST] Tipo: ÁUDIO`);
       console.log(`${logPrefix} 🎵 [REQUEST] Endpoint: sendWhatsAppAudio`);
       console.log(`${logPrefix} 🎵 [REQUEST] URL completa: ${url}`);
@@ -300,9 +329,9 @@ async function processMessageJob(job: any, workerId: string): Promise<{ success:
         mimetype,
         media: mediaUrl,
         fileName,
-        mentionsEveryone: isMentionAll,
+        ...(isMentionAll && { mentionsEveryOne: true }),
       };
-      
+
       if (messageContent) {
         requestBody.caption = messageContent;
       }
@@ -318,7 +347,7 @@ async function processMessageJob(job: any, workerId: string): Promise<{ success:
       requestBody = {
         number: group_id,
         text: messageContent,
-        mentionsEveryone: isMentionAll,
+        ...(isMentionAll && { mentionsEveryOne: true }),
       };
       
       console.log(`${logPrefix} 💬 [REQUEST] Tipo: TEXTO`);
@@ -417,20 +446,24 @@ async function processMessageJob(job: any, workerId: string): Promise<{ success:
         console.log(`${logPrefix} 🔄 [RECORRENTE] Calculando próximo horário de execução...`);
         nextRunUTC = calculateNextRecurringRun(
           cron_expr || '',
-          timezone || 'America/Recife',
+          timezone || 'America/Sao_Paulo',
           recurring_days, // Passa o valor bruto, a função normaliza internamente
           recurring_time || '',
           logPrefix
         );
         
-        // Se não conseguiu calcular, agenda para próxima semana no mesmo horário
+        // Se não conseguiu calcular, usa fallback: amanhã no mesmo horário no timezone do agendamento (evita +7 dias)
         if (!nextRunUTC) {
-          console.warn(`${logPrefix} ⚠️ [RECORRENTE] Não foi possível calcular próximo horário, usando fallback (próxima semana)`);
-          const nextWeek = new Date();
-          nextWeek.setDate(nextWeek.getDate() + 7);
-          const [hours, minutes] = (recurring_time || '00:00').split(':').map(Number);
-          nextWeek.setHours(hours, minutes, 0, 0);
-          nextRunUTC = nextWeek.toISOString();
+          console.warn(`${logPrefix} ⚠️ [RECORRENTE] Não foi possível calcular próximo horário, usando fallback (amanhã no TZ)`);
+          const tz = timezone || 'America/Sao_Paulo';
+          const current = getCurrentDateAndTimeInTimezone(tz);
+          const [targetHour, targetMinute] = (recurring_time || '00:00').split(':').map((n: string) => parseInt(n, 10) || 0);
+          const noonTodayUtc = new Date(dateAtTimezoneToUTC(current.year, current.month, current.day, 12, 0, tz)).getTime();
+          const tomorrowUtc = noonTodayUtc + 24 * 60 * 60 * 1000;
+          const formatter = new Intl.DateTimeFormat('en-US', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' });
+          const parts = formatter.formatToParts(new Date(tomorrowUtc));
+          const get = (type: string) => parseInt(parts.find((p: { type: string }) => p.type === type)?.value || '0', 10);
+          nextRunUTC = dateAtTimezoneToUTC(get('year'), get('month'), get('day'), targetHour, targetMinute, tz);
           console.log(`${logPrefix} 📅 [RECORRENTE] Fallback: próximo horário = ${nextRunUTC}`);
         } else {
           console.log(`${logPrefix} ✅ [RECORRENTE] Próximo horário calculado: ${nextRunUTC}`);
@@ -661,7 +694,7 @@ export const handler: Handler = async (event, context) => {
         instance_name: job.instance_name,
         schedule_type: job.schedule_type,
         next_run_utc: job.next_run_utc,
-        next_run_local: jobTime ? jobTime.toLocaleString('pt-BR', { timeZone: job.timezone || 'America/Recife' }) : '(vazio)',
+        next_run_local: jobTime ? jobTime.toLocaleString('pt-BR', { timeZone: job.timezone || 'America/Sao_Paulo' }) : '(vazio)',
         is_due: isDue,
         minutes_until: timeDiff !== null ? `${timeDiff} min` : '(vazio)',
         recurring_days_raw: job.recurring_days,
@@ -694,9 +727,9 @@ export const handler: Handler = async (event, context) => {
         
         console.log(`[WORKER ${WORKER_ID}] ⏰ [VERIFICAR HORÁRIO] Job ${job.id}:`, {
           next_run_utc: job.next_run_utc,
-          next_run_local: jobTime.toLocaleString('pt-BR', { timeZone: job.timezone || 'America/Recife' }),
+          next_run_local: jobTime.toLocaleString('pt-BR', { timeZone: job.timezone || 'America/Sao_Paulo' }),
           agora_utc: nowISO,
-          agora_local: now.toLocaleString('pt-BR', { timeZone: job.timezone || 'America/Recife' }),
+          agora_local: now.toLocaleString('pt-BR', { timeZone: job.timezone || 'America/Sao_Paulo' }),
           diferenca_minutos: timeDiffMinutes,
           diferenca_segundos: timeDiffSeconds,
           esta_devido: isDue,
@@ -715,7 +748,7 @@ export const handler: Handler = async (event, context) => {
 
       // Recorrente: só processar se hoje for um dos recurring_days E se já estiver no horário recurringTime (no timezone)
       if (job.schedule_type === 'recurring') {
-        const tz = job.timezone || 'America/Recife';
+        const tz = job.timezone || 'America/Sao_Paulo';
         const todayIsRecurringDay = isTodayInRecurringDays(job.recurring_days, tz);
         const timeReached = isCurrentTimeAtOrPastRecurringTime(job.recurring_time || '', tz);
 

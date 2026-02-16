@@ -15,8 +15,10 @@ export async function POST(req: NextRequest) {
   try {
     await requireAuth(req);
 
+    console.log('[MATURATION] POST /api/maturation/process-now - Iniciando tick de processamento');
     // Executa o processamento imediatamente (uma batelada de até CLAIM_LIMIT steps)
     const result = await runMaturationTick(supabaseServiceRole);
+    console.log('[MATURATION] POST /api/maturation/process-now - Resultado:', result);
 
     return NextResponse.json({
       success: true,

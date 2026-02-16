@@ -38,6 +38,16 @@ function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, '').replace(/([^:]\/)\/+/g, '$1');
 }
 
+/** Remove sufixo @s.whatsapp.net - Evolution API espera apenas o número no campo number para contatos 1:1 */
+function normalizeNumberForEvolution(numberOrJid: string): string {
+  if (!numberOrJid || typeof numberOrJid !== 'string') return numberOrJid || '';
+  const s = numberOrJid.trim();
+  if (s.endsWith('@s.whatsapp.net')) return s.replace(/@s\.whatsapp\.net$/, '');
+  return s;
+}
+
+const LOG_PREFIX = '[MATURATION]';
+
 async function sendText(params: {
   baseUrl: string;
   instanceName: string;
@@ -46,7 +56,11 @@ async function sendText(params: {
   text: string;
 }): Promise<{ success: boolean; latencyMs: number; httpStatus?: number; error?: string }> {
   const { baseUrl, instanceName, apiKey, number, text } = params;
+  const numberNorm = normalizeNumberForEvolution(number);
   const url = `${normalizeBaseUrl(baseUrl)}/message/sendText/${instanceName}`;
+  const body = { number: numberNorm, textContent: { text } };
+  console.log(`${LOG_PREFIX} [Evolution API] sendText - URL: ${url}`);
+  console.log(`${LOG_PREFIX} [Evolution API] sendText - Body: number=${numberNorm}, text=${text?.substring(0, 50)}${text?.length > 50 ? '...' : ''}`);
   const startTime = Date.now();
   try {
     const controller = new AbortController();
@@ -54,12 +68,14 @@ async function sendText(params: {
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: apiKey },
-      body: JSON.stringify({ number, textContent: { text } }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
     clearTimeout(timeoutId);
     const latencyMs = Date.now() - startTime;
     const responseText = await response.text();
+    console.log(`${LOG_PREFIX} [Evolution API] sendText - Response: HTTP ${response.status}, latency=${latencyMs}ms`);
+    if (!response.ok) console.log(`${LOG_PREFIX} [Evolution API] sendText - Error body: ${responseText?.substring(0, 200)}`);
     if (response.ok) return { success: true, latencyMs, httpStatus: response.status };
     let errorMsg = `HTTP ${response.status}`;
     try {
@@ -84,13 +100,16 @@ async function sendMedia(params: {
   caption?: string;
 }): Promise<{ success: boolean; latencyMs: number; httpStatus?: number; error?: string; mediaUrl?: string }> {
   const { baseUrl, instanceName, apiKey, number, mediaUrl, mediaType, mimetype, caption } = params;
+  const numberNorm = normalizeNumberForEvolution(number);
   const url = `${normalizeBaseUrl(baseUrl)}/message/sendMedia/${instanceName}`;
+  const body: any = { number: numberNorm, mediatype: mediaType, mimetype, media: mediaUrl, fileName: mediaType === 'image' ? 'image.png' : 'file' };
+  if (caption) body.caption = caption;
+  console.log(`${LOG_PREFIX} [Evolution API] sendMedia - URL: ${url}`);
+  console.log(`${LOG_PREFIX} [Evolution API] sendMedia - Body: number=${numberNorm}, mediaType=${mediaType}, mediaUrl=${mediaUrl?.substring(0, 80)}...`);
   const startTime = Date.now();
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-    const body: any = { number, mediatype: mediaType, mimetype, media: mediaUrl, fileName: mediaType === 'image' ? 'image.png' : 'file' };
-    if (caption) body.caption = caption;
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: apiKey },
@@ -100,6 +119,8 @@ async function sendMedia(params: {
     clearTimeout(timeoutId);
     const latencyMs = Date.now() - startTime;
     const responseText = await response.text();
+    console.log(`${LOG_PREFIX} [Evolution API] sendMedia - Response: HTTP ${response.status}, latency=${latencyMs}ms`);
+    if (!response.ok) console.log(`${LOG_PREFIX} [Evolution API] sendMedia - Error body: ${responseText?.substring(0, 200)}`);
     if (response.ok) return { success: true, latencyMs, httpStatus: response.status, mediaUrl };
     let errorMsg = `HTTP ${response.status}`;
     try {
@@ -121,7 +142,11 @@ async function sendAudio(params: {
   audioUrl: string;
 }): Promise<{ success: boolean; latencyMs: number; httpStatus?: number; error?: string }> {
   const { baseUrl, instanceName, apiKey, number, audioUrl } = params;
+  const numberNorm = normalizeNumberForEvolution(number);
   const url = `${normalizeBaseUrl(baseUrl)}/message/sendWhatsAppAudio/${instanceName}`;
+  const body = { number: numberNorm, audio: audioUrl };
+  console.log(`${LOG_PREFIX} [Evolution API] sendWhatsAppAudio - URL: ${url}`);
+  console.log(`${LOG_PREFIX} [Evolution API] sendWhatsAppAudio - Body: number=${numberNorm}, audioUrl=${audioUrl?.substring(0, 80)}...`);
   const startTime = Date.now();
   try {
     const controller = new AbortController();
@@ -129,12 +154,14 @@ async function sendAudio(params: {
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: apiKey },
-      body: JSON.stringify({ number, audio: audioUrl }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
     clearTimeout(timeoutId);
     const latencyMs = Date.now() - startTime;
     const responseText = await response.text();
+    console.log(`${LOG_PREFIX} [Evolution API] sendWhatsAppAudio - Response: HTTP ${response.status}, latency=${latencyMs}ms`);
+    if (!response.ok) console.log(`${LOG_PREFIX} [Evolution API] sendWhatsAppAudio - Error body: ${responseText?.substring(0, 200)}`);
     if (response.ok) return { success: true, latencyMs, httpStatus: response.status };
     let errorMsg = `HTTP ${response.status}`;
     try {
@@ -186,6 +213,7 @@ function calculateBackoff(attempt: number): number {
 
 async function processStep(supabase: SupabaseClient, step: any): Promise<void> {
   const { id, job_id, step_index, type, instance_name, target_chat_id, base_url, api_key, payload_json, attempts } = step;
+  console.log(`${LOG_PREFIX} processStep - job=${job_id} step=${step_index} type=${type} instance=${instance_name} target_chat_id=${target_chat_id} base_url=${base_url}`);
   if (!target_chat_id) {
     const msg = 'Destino não definido para este step.';
     await supabase.from('maturation_steps').update({ status: 'failed', error: msg }).eq('id', id);
@@ -249,9 +277,18 @@ export async function runMaturationTick(supabase: SupabaseClient): Promise<any> 
   let totalProcessed = 0;
   const processedJobIds = new Set<string>();
 
+  console.log(`${LOG_PREFIX} runMaturationTick - Iniciando processamento`);
   while (Date.now() - startTime < MAX_RUNTIME_MS) {
     const { data: steps, error } = await supabase.rpc('claim_maturation_steps', { claim_limit: CLAIM_LIMIT });
-    if (error || !steps || steps.length === 0) break;
+    if (error) {
+      console.log(`${LOG_PREFIX} runMaturationTick - Erro ao claim steps:`, error);
+      break;
+    }
+    if (!steps || steps.length === 0) {
+      console.log(`${LOG_PREFIX} runMaturationTick - Nenhum step para processar`);
+      break;
+    }
+    console.log(`${LOG_PREFIX} runMaturationTick - ${steps.length} step(s) para processar`);
 
     for (const step of steps) {
       await processStep(supabase, step);
@@ -268,5 +305,6 @@ export async function runMaturationTick(supabase: SupabaseClient): Promise<any> 
   }
 
   const virginCount = await processVirginMaturation(supabase);
+  console.log(`${LOG_PREFIX} runMaturationTick - Finalizado: processed=${totalProcessed}, jobs=${Array.from(processedJobIds).length}`);
   return { processed: totalProcessed, virginCount, jobs: Array.from(processedJobIds) };
 }

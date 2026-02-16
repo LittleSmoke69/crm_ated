@@ -40,7 +40,7 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
   const [selectedTime, setSelectedTime] = useState('');
   const [recurringDays, setRecurringDays] = useState<Set<string>>(new Set());
   const [recurringTime, setRecurringTime] = useState('');
-  const [timezone, setTimezone] = useState('America/Recife');
+  const [timezone, setTimezone] = useState('America/Sao_Paulo');
   
   // Step 3: Groups
   const [groups, setGroups] = useState<Group[]>([]);
@@ -287,11 +287,12 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
       nextDate.setDate(nextDate.getDate() + daysUntilNext);
     }
     
-    // Se o horário já passou hoje e é um dos dias selecionados, agenda para a próxima semana
+    // Se o horário já passou hoje e é um dos dias selecionados: se todos os dias estão marcados = amanhã; senão = próxima semana
     if (selectedDayNumbers.includes(currentDay) && nextDate < now) {
-      nextDate.setDate(nextDate.getDate() + 7);
+      const allDaysSelected = selectedDayNumbers.length === 7;
+      nextDate.setDate(nextDate.getDate() + (allDaysSelected ? 1 : 7));
     }
-    
+
     return nextDate.toISOString();
   };
 
@@ -643,13 +644,13 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
               </div>
 
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
                 <input 
                   type="text" 
                   placeholder="Pesquisar grupos..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-white border border-gray-300 rounded-xl pl-10 pr-4 py-2.5 text-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                  className="w-full bg-gray-100 border border-gray-200 rounded-xl pl-10 pr-4 py-2.5 text-gray-900 text-sm focus:outline-none focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] placeholder:text-gray-500"
                 />
               </div>
 

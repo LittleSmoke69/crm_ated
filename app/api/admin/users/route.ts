@@ -4,14 +4,21 @@ import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { validateHierarchy, hasHierarchyCycle } from '@/lib/middleware/permissions';
 
+const DEFAULT_SETTINGS = {
+  max_leads_per_day: 100,
+  max_instances: 20,
+  is_admin: false,
+  is_active: true,
+};
+
 /**
- * GET /api/admin/users - Lista todos os usuários com suas estatísticas
+ * GET /api/admin/users - Lista todos os usuários com suas estatísticas.
+ * Usa consultas em lote (5 no total) para evitar timeout/502 com muitos usuários.
  */
 export async function GET(req: NextRequest) {
   try {
     await requireAdmin(req);
 
-    // Busca todos os usuários incluindo status e enroller
     const { data: users, error: usersError } = await supabaseServiceRole
       .from('profiles')
       .select('id, email, full_name, status, enroller, created_at, last_seen_at, total_online_time')
@@ -21,60 +28,61 @@ export async function GET(req: NextRequest) {
       return errorResponse(`Erro ao buscar usuários: ${usersError.message}`);
     }
 
-    // Busca configurações e estatísticas de cada usuário
-    const usersWithStats = await Promise.all(
-      (users || []).map(async (user) => {
-        const [
-          { data: settings },
-          { count: campaignsCount },
-          { count: instancesCount },
-          { count: contactsCount },
-          { data: campaigns },
-        ] = await Promise.all([
-          supabaseServiceRole
-            .from('user_settings')
-            .select('*')
-            .eq('user_id', user.id)
-            .single(),
-          supabaseServiceRole
-            .from('campaigns')
-            .select('id', { count: 'exact', head: true })
-            .eq('user_id', user.id),
-          supabaseServiceRole
-            .from('whatsapp_instances')
-            .select('id', { count: 'exact', head: true })
-            .eq('user_id', user.id),
-          supabaseServiceRole
-            .from('searches')
-            .select('id', { count: 'exact', head: true })
-            .eq('user_id', user.id),
-          supabaseServiceRole
-            .from('campaigns')
-            .select('processed_contacts, failed_contacts')
-            .eq('user_id', user.id),
-        ]);
+    const list = users || [];
+    if (list.length === 0) {
+      return successResponse([]);
+    }
 
-        const totalProcessed = campaigns?.reduce((sum, c) => sum + (c.processed_contacts || 0), 0) || 0;
-        const totalFailed = campaigns?.reduce((sum, c) => sum + (c.failed_contacts || 0), 0) || 0;
+    const userIds = list.map((u: { id: string }) => u.id);
 
-        return {
-          ...user,
-          settings: settings || {
-            max_leads_per_day: 100,
-            max_instances: 20,
-            is_admin: false,
-            is_active: true,
-          },
-          stats: {
-            campaigns: campaignsCount || 0,
-            instances: instancesCount || 0,
-            contacts: contactsCount || 0,
-            processed: totalProcessed,
-            failed: totalFailed,
-          },
-        };
-      })
-    );
+    const [
+      { data: settingsRows },
+      { data: campaignsRows },
+      { data: instancesRows },
+      { data: searchesRows },
+    ] = await Promise.all([
+      supabaseServiceRole.from('user_settings').select('*').in('user_id', userIds),
+      supabaseServiceRole.from('campaigns').select('user_id, processed_contacts, failed_contacts').in('user_id', userIds),
+      supabaseServiceRole.from('whatsapp_instances').select('user_id').in('user_id', userIds),
+      supabaseServiceRole.from('searches').select('user_id').in('user_id', userIds),
+    ]);
+
+    const settingsByUser = new Map<string, any>();
+    (settingsRows || []).forEach((s: any) => settingsByUser.set(s.user_id, s));
+
+    const campaignsCountByUser = new Map<string, number>();
+    const processedByUser = new Map<string, number>();
+    const failedByUser = new Map<string, number>();
+    (campaignsRows || []).forEach((c: any) => {
+      const uid = c.user_id;
+      campaignsCountByUser.set(uid, (campaignsCountByUser.get(uid) || 0) + 1);
+      processedByUser.set(uid, (processedByUser.get(uid) || 0) + (c.processed_contacts || 0));
+      failedByUser.set(uid, (failedByUser.get(uid) || 0) + (c.failed_contacts || 0));
+    });
+
+    const instancesCountByUser = new Map<string, number>();
+    (instancesRows || []).forEach((i: any) => {
+      const uid = i.user_id;
+      instancesCountByUser.set(uid, (instancesCountByUser.get(uid) || 0) + 1);
+    });
+
+    const contactsCountByUser = new Map<string, number>();
+    (searchesRows || []).forEach((s: any) => {
+      const uid = s.user_id;
+      contactsCountByUser.set(uid, (contactsCountByUser.get(uid) || 0) + 1);
+    });
+
+    const usersWithStats = list.map((user: any) => ({
+      ...user,
+      settings: settingsByUser.get(user.id) || DEFAULT_SETTINGS,
+      stats: {
+        campaigns: campaignsCountByUser.get(user.id) || 0,
+        instances: instancesCountByUser.get(user.id) || 0,
+        contacts: contactsCountByUser.get(user.id) || 0,
+        processed: processedByUser.get(user.id) || 0,
+        failed: failedByUser.get(user.id) || 0,
+      },
+    }));
 
     return successResponse(usersWithStats);
   } catch (err: any) {

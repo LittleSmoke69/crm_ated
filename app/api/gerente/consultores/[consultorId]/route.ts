@@ -1,8 +1,16 @@
 import { NextRequest } from 'next/server';
-import { requireStatus } from '@/lib/middleware/permissions';
+import { requireStatus, canAccessUser } from '@/lib/middleware/permissions';
+import { getEffectiveDonoIdForGestor } from '@/lib/middleware/gestor-owner';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { getConsultorsByManager, getHierarchyPath } from '@/lib/utils/hierarchy';
+import { getConsultorsByManager } from '@/lib/utils/hierarchy';
+import bcrypt from 'bcryptjs';
+
+function normalizeBancaUrl(url: string | null | undefined): string {
+  if (!url) return '';
+  let s = String(url).trim().replace(/^https?:\/\//i, '').replace(/\/api\/crm\/?/i, '').replace(/\/+$/, '').trim();
+  return s ? `https://${s}`.toLowerCase() : '';
+}
 
 /**
  * GET /api/gerente/consultores/[consultorId]
@@ -14,9 +22,37 @@ export async function GET(
 ) {
   let consultorId: string | undefined;
   try {
-    const { userId: managerId } = await requireStatus(req, ['gerente']);
+    const { userId, profile } = await requireStatus(req, ['gerente', 'gestor']);
     const resolvedParams = await params;
     consultorId = resolvedParams.consultorId;
+
+    let managerId: string;
+    if (profile?.status === 'gestor') {
+      let ownerId: string | null = await getEffectiveDonoIdForGestor(profile.id);
+      if (!ownerId) {
+        let { data: userBancas } = await supabaseServiceRole.from('user_bancas').select('banca_id').eq('user_id', profile.id);
+        if ((userBancas?.length ?? 0) === 0) {
+          const { data: fallback } = await supabaseServiceRole.from('user_bancas').select('banca_id').eq('user_id', userId);
+          userBancas = fallback ?? [];
+        }
+        const firstBancaId = userBancas?.[0]?.banca_id;
+        if (firstBancaId) {
+          const { data: banca } = await supabaseServiceRole.from('crm_bancas').select('id, url').eq('id', firstBancaId).single();
+          if (banca?.url) {
+            const { data: donos } = await supabaseServiceRole.from('profiles').select('id, banca_url').eq('status', 'dono_banca');
+            const found = (donos || []).find((d: { banca_url?: string | null }) => normalizeBancaUrl(d.banca_url) === normalizeBancaUrl(banca.url));
+            if (found) ownerId = found.id;
+          }
+        }
+      }
+      if (!ownerId) return errorResponse('Gestor deve estar vinculado a um Dono de Banca ou ter bancas atribuídas.', 403);
+      const canAccess = await canAccessUser(ownerId, consultorId!);
+      if (!canAccess) return errorResponse('Acesso negado. Este consultor não pertence à sua banca.', 403);
+      const { data: consultorProfile } = await supabaseServiceRole.from('profiles').select('enroller').eq('id', consultorId!).single();
+      managerId = (consultorProfile?.enroller as string) || consultorId!;
+    } else {
+      managerId = userId;
+    }
 
     // Busca parâmetros da query string
     const { searchParams } = req.nextUrl;
@@ -303,6 +339,78 @@ export async function GET(
     });
   } catch (err: any) {
     console.error('[Gerente Consultor Detail API] Erro:', err.message);
+    return serverErrorResponse(err);
+  }
+}
+
+/**
+ * PATCH /api/gerente/consultores/[consultorId]
+ * Permite ao Gerente editar nome, email e senha de um consultor diretamente abaixo dele
+ */
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: Promise<{ consultorId: string }> }
+) {
+  try {
+    const { userId: managerId } = await requireStatus(req, ['gerente']);
+    const resolvedParams = await params;
+    const consultorId = resolvedParams.consultorId;
+
+    if (!consultorId) {
+      return errorResponse('ID do consultor é obrigatório', 400);
+    }
+
+    const consultores = await getConsultorsByManager(managerId);
+    const consultor = consultores.find(c => c.id === consultorId);
+
+    if (!consultor) {
+      return errorResponse('Consultor não encontrado ou você não tem permissão para editá-lo', 404);
+    }
+
+    const body = await req.json();
+    const { fullName, email, password } = body;
+
+    const updateData: Record<string, unknown> = { updated_at: new Date().toISOString() };
+
+    if (fullName !== undefined) {
+      updateData.full_name = (fullName || '').trim() || null;
+    }
+
+    if (email !== undefined) {
+      const newEmail = (email || '').trim().toLowerCase();
+      if (newEmail && newEmail !== consultor.email) {
+        const { data: existing } = await supabaseServiceRole
+          .from('profiles')
+          .select('id')
+          .eq('email', newEmail)
+          .maybeSingle();
+        if (existing && existing.id !== consultorId) {
+          return errorResponse('Email já cadastrado', 400);
+        }
+        updateData.email = newEmail;
+      }
+    }
+
+    if (password && String(password).length > 0) {
+      updateData.password_hash = bcrypt.hashSync(password, bcrypt.genSaltSync(10));
+    }
+
+    if (Object.keys(updateData).length <= 1) {
+      return errorResponse('Nenhum campo para atualizar', 400);
+    }
+
+    const { error: updateError } = await supabaseServiceRole
+      .from('profiles')
+      .update(updateData)
+      .eq('id', consultorId);
+
+    if (updateError) {
+      return errorResponse(`Erro ao atualizar consultor: ${updateError.message}`, 400);
+    }
+
+    return successResponse({ id: consultorId }, 'Consultor atualizado com sucesso');
+  } catch (err: any) {
+    console.error('[Gerente Consultor Update] Erro:', err.message);
     return serverErrorResponse(err);
   }
 }

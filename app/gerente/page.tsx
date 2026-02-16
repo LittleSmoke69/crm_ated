@@ -24,10 +24,12 @@ import {
   Trash2,
   Search,
   ArrowUpRight,
+  Pencil,
   Wallet,
   Trophy,
   TrendingDown,
-  Info
+  Info,
+  Clock
 } from 'lucide-react';
 import Link from 'next/link';
 import StatusDistributionChart from '@/components/Charts/StatusDistributionChart';
@@ -41,6 +43,8 @@ interface ConsultorMetric {
   processed: number;
   failed: number;
   successRate: string;
+  lastSeenAt?: string | null;
+  totalOnlineTime?: number;
   externalKpis?: {
     total_leads: number;
     total_deposited: number;
@@ -113,6 +117,14 @@ export default function GerentePage() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [consultorToDelete, setConsultorToDelete] = useState<ConsultorMetric | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Modal de edição de consultor
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [consultorToEdit, setConsultorToEdit] = useState<ConsultorMetric | null>(null);
+  const [editFormData, setEditFormData] = useState({ fullName: '', email: '', password: '' });
+  const [editFormError, setEditFormError] = useState('');
+  const [editFormSuccess, setEditFormSuccess] = useState('');
+  const [isEditSubmitting, setIsEditSubmitting] = useState(false);
   
   // Filtros de banca e consultor
   const [bancas, setBancas] = useState<Array<{ id: string; name: string; url: string }>>([]);
@@ -190,17 +202,18 @@ export default function GerentePage() {
     return { dateFrom, dateTo };
   };
 
-  // Removido: chamadas automáticas de API ao carregar a página
-  // useEffect(() => {
-  //   if (!userId) return;
-  //   loadBancas();
-  // }, [userId]);
+  // Ao entrar em /gerente, carrega a lista de bancas antes de exibir a tela (busca em todas as bancas via crm_bancas)
+  useEffect(() => {
+    if (!userId) return;
+    loadBancas();
+  }, [userId]);
 
-  // useEffect(() => {
-  //   if (bancas.length > 0 && !selectedBanca) {
-  //     setSelectedBanca(bancas[0].url);
-  //   }
-  // }, [bancas, selectedBanca]);
+  // Opcional: selecionar a primeira banca quando a lista carregar e ainda não houver seleção
+  useEffect(() => {
+    if (bancas.length > 0 && !selectedBanca) {
+      setSelectedBanca(bancas[0].url);
+    }
+  }, [bancas, selectedBanca]);
 
   // useEffect(() => {
   //   if (!userId) return;
@@ -359,6 +372,63 @@ export default function GerentePage() {
     setDeleteModalOpen(true);
   };
 
+  const openEditModal = (consultor: ConsultorMetric) => {
+    setConsultorToEdit(consultor);
+    setEditFormData({
+      fullName: consultor.name || '',
+      email: consultor.email || '',
+      password: ''
+    });
+    setEditFormError('');
+    setEditFormSuccess('');
+    setEditModalOpen(true);
+  };
+
+  const handleEditConsultor = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!consultorToEdit) return;
+    setEditFormError('');
+    setEditFormSuccess('');
+    setIsEditSubmitting(true);
+    try {
+      const response = await fetch(`/api/gerente/consultores/${consultorToEdit.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-Id': userId as string
+        },
+        body: JSON.stringify({
+          fullName: editFormData.fullName.trim() || undefined,
+          email: editFormData.email.trim() || undefined,
+          password: editFormData.password || undefined
+        })
+      });
+      const result = await response.json();
+      if (result.success) {
+        setEditFormSuccess('Consultor atualizado com sucesso!');
+        loadData();
+        setTimeout(() => {
+          setEditModalOpen(false);
+          setConsultorToEdit(null);
+        }, 1500);
+      } else {
+        setEditFormError(result.error || 'Erro ao atualizar consultor');
+      }
+    } catch {
+      setEditFormError('Erro de conexão');
+    } finally {
+      setIsEditSubmitting(false);
+    }
+  };
+
+  const formatTime = (seconds: number = 0) => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    if (h > 0) return `${h}h ${m}m`;
+    if (m > 0) return `${m}m`;
+    return `${seconds}s`;
+  };
+
   const handleSignOut = () => {
     if (typeof window !== 'undefined') {
       sessionStorage.removeItem('user_id');
@@ -490,13 +560,13 @@ export default function GerentePage() {
                 <div className="absolute right-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-50 min-w-[280px] max-h-[400px] overflow-hidden flex flex-col">
                   <div className="p-3 border-b border-gray-100">
                     <div className="relative">
-                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500" />
                       <input
                         type="text"
                         placeholder="Pesquisar banca..."
                         value={bancaSearchTerm}
                         onChange={(e) => setBancaSearchTerm(e.target.value)}
-                        className="w-full pl-10 pr-3 py-2 bg-gray-50 border-none rounded-lg text-sm text-[#8CD955] font-bold focus:ring-2 focus:ring-[#8CD955]/20 outline-none placeholder:text-gray-400"
+                        className="w-full pl-10 pr-3 py-2 bg-gray-100 border border-gray-200 rounded-lg text-sm text-gray-900 font-bold focus:ring-2 focus:ring-[#8CD955]/30 outline-none placeholder:text-gray-500"
                         autoFocus
                       />
                     </div>
@@ -720,7 +790,7 @@ export default function GerentePage() {
               <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
                 <div className="flex items-center gap-2 mb-2">
                   <CheckCircle2 className="w-4 h-4 text-white" />
-                  <p className="text-xs font-bold text-white/90 uppercase">Leads Ativos</p>
+                  <p className="text-xs font-bold text-white/90 uppercase">Clientes Ativos</p>
                 </div>
                 <p className="text-2xl font-bold text-white">{gerenteTotalKpis.active_leads || 0}</p>
               </div>
@@ -1021,13 +1091,13 @@ export default function GerentePage() {
             </h2>
             
             <div className="relative w-full md:w-64">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500" />
               <input
                 type="text"
                 placeholder="Buscar consultor..."
                 value={tableSearchTerm}
                 onChange={(e) => setTableSearchTerm(e.target.value)}
-                className="w-full pl-9 pr-3 py-2 bg-white border border-gray-200 rounded-lg text-xs focus:ring-2 focus:ring-[#8CD955] outline-none transition-all"
+                className="w-full pl-9 pr-3 py-2 bg-gray-100 border border-gray-200 rounded-lg text-xs text-gray-900 placeholder:text-gray-500 focus:ring-2 focus:ring-[#8CD955] outline-none transition-all"
               />
             </div>
           </div>
@@ -1074,6 +1144,8 @@ export default function GerentePage() {
                         {sortBy === 'profit' && (sortOrder === 'asc' ? <ChevronDown className="w-3 h-3 rotate-180" /> : <ChevronDown className="w-3 h-3" />)}
                       </div>
                     </th>
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase text-center">Último acesso</th>
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase text-center">Horas online</th>
                     <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase text-right">Ações</th>
                   </tr>
                 </thead>
@@ -1093,7 +1165,7 @@ export default function GerentePage() {
                     </td>
                     
                       {consultor.externalKpisError ? (
-                      <td colSpan={3} className="px-6 py-4">
+                      <td colSpan={5} className="px-6 py-4">
                         <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 max-w-xs mx-auto">
                           <div className="flex items-center gap-2 text-amber-700">
                             <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
@@ -1120,9 +1192,33 @@ export default function GerentePage() {
                     </td>
                       </>
                     )}
-                    
+                    <td className="px-6 py-4 text-center">
+                      <span className="text-xs text-gray-600">
+                        {consultor.lastSeenAt
+                          ? new Date(consultor.lastSeenAt).toLocaleString('pt-BR', {
+                              day: '2-digit',
+                              month: '2-digit',
+                              year: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit'
+                            })
+                          : '—'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-center">
+                      <span className="text-xs font-medium text-gray-700">
+                        {formatTime(consultor.totalOnlineTime || 0)}
+                      </span>
+                    </td>
                     <td className="px-6 py-4 text-right">
                       <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => openEditModal(consultor)}
+                          className="inline-flex items-center gap-1.5 text-amber-600 hover:text-amber-700 font-bold text-xs bg-amber-50 px-3 py-1.5 rounded-lg transition-colors border border-amber-200 hover:border-amber-300"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                          Editar
+                        </button>
                         <Link
                           href={`/gerente/consultor/${consultor.id}`}
                           className="inline-flex items-center gap-1.5 text-blue-600 hover:text-blue-700 font-bold text-xs bg-blue-50 px-3 py-1.5 rounded-lg transition-colors border border-blue-200 hover:border-blue-300"
@@ -1176,6 +1272,12 @@ export default function GerentePage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => openEditModal(consultor)}
+                      className="p-2 text-amber-600 bg-amber-50 rounded-xl border border-amber-200"
+                    >
+                      <Pencil className="w-5 h-5" />
+                    </button>
                     <Link
                       href={`/gerente/consultor/${consultor.id}`}
                       className="p-2 text-blue-600 bg-blue-50 rounded-xl border border-blue-200"
@@ -1205,22 +1307,33 @@ export default function GerentePage() {
                     </div>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-3 gap-2">
-                    <div className="bg-gray-50 p-2.5 rounded-xl border border-gray-100 text-center">
-                      <p className="text-[9px] font-bold text-gray-400 uppercase mb-1">Leads</p>
-                      <p className="text-sm font-bold text-gray-700">{consultor.externalKpis?.total_leads || 0}</p>
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="bg-gray-50 p-2.5 rounded-xl border border-gray-100 text-center">
+                        <p className="text-[9px] font-bold text-gray-400 uppercase mb-1">Leads</p>
+                        <p className="text-sm font-bold text-gray-700">{consultor.externalKpis?.total_leads || 0}</p>
+                      </div>
+                      <div className="bg-[#8CD95510] p-2.5 rounded-xl border border-[#8CD955]/20 text-center">
+                        <p className="text-[9px] font-bold text-[#8CD955] uppercase mb-1">Depositado</p>
+                        <p className="text-sm font-bold text-[#8CD955]">
+                          R$ {(consultor.externalKpis?.total_deposited || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                        </p>
+                      </div>
+                      <div className="bg-blue-50 p-2.5 rounded-xl border border-blue-100 text-center">
+                        <p className="text-[9px] font-bold text-blue-600 uppercase mb-1">Lucro</p>
+                        <p className="text-sm font-bold text-blue-700">
+                          R$ {(consultor.externalKpis?.net_profit || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                        </p>
+                      </div>
                     </div>
-                    <div className="bg-[#8CD95510] p-2.5 rounded-xl border border-[#8CD955]/20 text-center">
-                      <p className="text-[9px] font-bold text-[#8CD955] uppercase mb-1">Depositado</p>
-                      <p className="text-sm font-bold text-[#8CD955]">
-                        R$ {(consultor.externalKpis?.total_deposited || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                      </p>
-                    </div>
-                    <div className="bg-blue-50 p-2.5 rounded-xl border border-blue-100 text-center">
-                      <p className="text-[9px] font-bold text-blue-600 uppercase mb-1">Lucro</p>
-                      <p className="text-sm font-bold text-blue-700">
-                        R$ {(consultor.externalKpis?.net_profit || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                      </p>
+                    <div className="flex gap-2 text-xs">
+                      <div className="flex items-center gap-1 text-gray-600">
+                        <Clock className="w-3.5 h-3.5" />
+                        <span>{consultor.lastSeenAt ? new Date(consultor.lastSeenAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}</span>
+                      </div>
+                      <div className="text-gray-600">
+                        <span className="font-medium">{formatTime(consultor.totalOnlineTime || 0)}</span> online
+                      </div>
                     </div>
                   </div>
                 )}
@@ -1294,6 +1407,65 @@ export default function GerentePage() {
                   <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 bg-gray-100 text-gray-600 font-bold py-3 rounded-xl">Cancelar</button>
                   <button type="submit" disabled={isSubmitting} className="flex-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white font-bold py-3 rounded-xl disabled:opacity-50 transition-colors">
                     {isSubmitting ? 'Cadastrando...' : 'Cadastrar Consultor'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Modal de Edição de Consultor */}
+        {editModalOpen && consultorToEdit && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200">
+              <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-amber-500 to-amber-600 text-white">
+                <h2 className="text-xl font-bold flex items-center gap-2">
+                  <Pencil className="w-6 h-6" />
+                  Editar Consultor
+                </h2>
+                <button onClick={() => { setEditModalOpen(false); setConsultorToEdit(null); }} className="hover:bg-white/20 p-1.5 rounded-xl transition-colors">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+              <form onSubmit={handleEditConsultor} className="p-6 space-y-4">
+                {editFormError && <div className="bg-red-50 text-red-600 p-3 rounded-xl text-sm font-medium border border-red-100">{editFormError}</div>}
+                {editFormSuccess && <div className="bg-[#8CD95515] text-[#8CD955] p-3 rounded-xl text-sm font-medium border border-[#8CD955]/30">{editFormSuccess}</div>}
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 uppercase mb-1.5 ml-1">Nome</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Nome do consultor"
+                    className="w-full bg-white border border-gray-300 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 placeholder:text-gray-400 font-medium transition-all"
+                    value={editFormData.fullName}
+                    onChange={e => setEditFormData({ ...editFormData, fullName: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 uppercase mb-1.5 ml-1">E-mail</label>
+                  <input
+                    type="email"
+                    required
+                    placeholder="exemplo@email.com"
+                    className="w-full bg-white border border-gray-300 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 placeholder:text-gray-400 font-medium transition-all"
+                    value={editFormData.email}
+                    onChange={e => setEditFormData({ ...editFormData, email: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 uppercase mb-1.5 ml-1">Nova senha (deixe em branco para manter)</label>
+                  <input
+                    type="password"
+                    placeholder="••••••••"
+                    className="w-full bg-white border border-gray-300 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 placeholder:text-gray-400 font-medium transition-all"
+                    value={editFormData.password}
+                    onChange={e => setEditFormData({ ...editFormData, password: e.target.value })}
+                  />
+                </div>
+                <div className="pt-4 flex gap-3">
+                  <button type="button" onClick={() => { setEditModalOpen(false); setConsultorToEdit(null); }} className="flex-1 bg-gray-100 text-gray-600 font-bold py-3 rounded-xl">Cancelar</button>
+                  <button type="submit" disabled={isEditSubmitting} className="flex-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white font-bold py-3 rounded-xl disabled:opacity-50 transition-colors">
+                    {isEditSubmitting ? 'Salvando...' : 'Salvar'}
                   </button>
                 </div>
               </form>

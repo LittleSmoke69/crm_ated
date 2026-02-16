@@ -94,85 +94,22 @@ export async function GET(req: NextRequest) {
           
           const apiKey = process.env.CRM_API_KEY;
           
-          // Se searchBy for 'last_deposit_at', precisa buscar TODA a base usando paginação
-          // Se searchBy for 'created_at', pode usar filtro de data na API
+          // Sempre busca a base COMPLETA do consultor (sem from/to) para evitar 404 da API externa.
+          // O filtro por período (created_at ou last_deposit_at) é aplicado localmente depois.
           let allLeads: any[] = [];
-          
-          if (searchBy === 'last_deposit_at') {
-            // Busca TODA a base usando paginação
-            const perPage = 2000;
-            let currentPage = 1;
-            let hasMore = true;
-            const maxPages = 1000; // Limite de segurança
-            
-            console.log('[Consultor Dashboard API] Buscando toda a base de clientes para filtrar por último depósito...');
-            
-            while (hasMore && currentPage <= maxPages) {
-              const leadsApiUrl = new URL(`${cleanBancaUrl}/api/crm/get-indicateds-by-consultant`);
-              leadsApiUrl.searchParams.append('consultant', consultorProfile.email);
-              leadsApiUrl.searchParams.append('per_page', perPage.toString());
-              leadsApiUrl.searchParams.append('page', currentPage.toString());
-              
-              const leadsResponse = await fetch(leadsApiUrl.toString(), {
-                method: 'GET',
-                headers: {
-                  'Content-Type': 'application/json',
-                  ...(apiKey && { 'X-API-KEY': apiKey }),
-                },
-                signal: AbortSignal.timeout(60000),
-              });
+          const perPage = 2000;
+          let currentPage = 1;
+          let hasMore = true;
+          const maxPages = 1000; // Limite de segurança
 
-              if (!leadsResponse.ok) {
-                if (leadsResponse.status === 404 && currentPage === 1) {
-                  console.log('[Consultor Dashboard API] 404 - Nenhum lead encontrado');
-                  break;
-                }
-                if (leadsResponse.status === 404) {
-                  hasMore = false;
-                  break;
-                }
-                const errorText = await leadsResponse.text();
-                console.error(`[Consultor Dashboard API] Erro HTTP ${leadsResponse.status} na página ${currentPage}:`, errorText);
-                if (allLeads.length > 0) {
-                  console.warn(`[Consultor Dashboard API] Erro na página ${currentPage}, mas retornando ${allLeads.length} leads já coletados`);
-                  break;
-                }
-                throw new Error(`Erro ao buscar dados da API da banca: ${leadsResponse.status}`);
-              }
+          console.log('[Consultor Dashboard API] Buscando base completa do consultor (sem filtro de data na API)...');
 
-              const leadsData = await leadsResponse.json();
-              
-              if (!leadsData.success || !Array.isArray(leadsData.data)) {
-                if (allLeads.length > 0) break;
-                throw new Error('Formato de resposta inválido da API da banca');
-              }
-              
-              const pageLeads = leadsData.data || [];
-              
-              if (pageLeads.length < perPage || pageLeads.length === 0) {
-                hasMore = false;
-              }
-              
-              allLeads = allLeads.concat(pageLeads);
-              console.log(`[Consultor Dashboard API] Página ${currentPage} carregada: ${pageLeads.length} leads (Total acumulado: ${allLeads.length})`);
-              
-              if (!hasMore) break;
-              currentPage++;
-            }
-            
-            console.log(`[Consultor Dashboard API] Total de leads carregados da base completa: ${allLeads.length}`);
-          } else {
-            // Busca normal com filtro de data na API
+          while (hasMore && currentPage <= maxPages) {
             const leadsApiUrl = new URL(`${cleanBancaUrl}/api/crm/get-indicateds-by-consultant`);
             leadsApiUrl.searchParams.append('consultant', consultorProfile.email);
-            leadsApiUrl.searchParams.append('per_page', '9999999');
-            
-            if (dateFrom) {
-              leadsApiUrl.searchParams.append('from', dateFrom);
-            }
-            if (dateTo) {
-              leadsApiUrl.searchParams.append('to', dateTo);
-            }
+            leadsApiUrl.searchParams.append('per_page', perPage.toString());
+            leadsApiUrl.searchParams.append('page', currentPage.toString());
+            // Não envia from/to: API externa pode retornar 404 com esses parâmetros
 
             const leadsResponse = await fetch(leadsApiUrl.toString(), {
               method: 'GET',
@@ -180,25 +117,48 @@ export async function GET(req: NextRequest) {
                 'Content-Type': 'application/json',
                 ...(apiKey && { 'X-API-KEY': apiKey }),
               },
+              signal: AbortSignal.timeout(60000),
             });
 
-            console.log('[Consultor Dashboard API] Resposta da API externa:', {
-              status: leadsResponse.status,
-              statusText: leadsResponse.statusText,
-              url: leadsApiUrl.toString()
-            });
-
-            if (leadsResponse.ok) {
-              const leadsData = await leadsResponse.json();
-              if (leadsData.success && Array.isArray(leadsData.data)) {
-                allLeads = leadsData.data;
-              } else {
-                allLeads = [];
+            if (!leadsResponse.ok) {
+              if (leadsResponse.status === 404 && currentPage === 1) {
+                console.log('[Consultor Dashboard API] 404 - Nenhum lead encontrado');
+                break;
               }
-            } else {
-              allLeads = [];
+              if (leadsResponse.status === 404) {
+                hasMore = false;
+                break;
+              }
+              const errorText = await leadsResponse.text();
+              console.error(`[Consultor Dashboard API] Erro HTTP ${leadsResponse.status} na página ${currentPage}:`, errorText);
+              if (allLeads.length > 0) {
+                console.warn(`[Consultor Dashboard API] Erro na página ${currentPage}, mas retornando ${allLeads.length} leads já coletados`);
+                break;
+              }
+              throw new Error(`Erro ao buscar dados da API da banca: ${leadsResponse.status}`);
             }
+
+            const leadsData = await leadsResponse.json();
+
+            if (!leadsData.success || !Array.isArray(leadsData.data)) {
+              if (allLeads.length > 0) break;
+              throw new Error('Formato de resposta inválido da API da banca');
+            }
+
+            const pageLeads = leadsData.data || [];
+
+            if (pageLeads.length < perPage || pageLeads.length === 0) {
+              hasMore = false;
+            }
+
+            allLeads = allLeads.concat(pageLeads);
+            console.log(`[Consultor Dashboard API] Página ${currentPage} carregada: ${pageLeads.length} leads (Total acumulado: ${allLeads.length})`);
+
+            if (!hasMore) break;
+            currentPage++;
           }
+
+          console.log(`[Consultor Dashboard API] Total de leads da base completa: ${allLeads.length}. Filtro por período será aplicado localmente (${searchBy}).`);
 
           // Processa os leads coletados
           if (allLeads.length > 0) {
@@ -214,11 +174,13 @@ export async function GET(req: NextRequest) {
             const initialCount = allLeads.length;
             const filteredOut: Array<{ lead: any; reason: string }> = [];
               
-            // Se searchBy for 'last_deposit_at', filtra por last_deposit_at em vez de created_at
+            const saoPauloTimeZone = 'America/Sao_Paulo';
+
+            // Filtro por período: aplicado localmente (base já veio completa da API, sem from/to)
             if (searchBy === 'last_deposit_at' && (dateFrom || dateTo)) {
               console.log(`\n[FILTRO 1] 🔍 Filtrando por último depósito (last_deposit_at)`);
               console.log(`   Período: ${dateFrom || 'sem início'} até ${dateTo || 'sem fim'}`);
-              
+
               const beforeFilter = filteredLeads.length;
               filteredLeads = filteredLeads.filter((lead: any) => {
                 if (!lead.last_deposit_at) {
@@ -228,14 +190,11 @@ export async function GET(req: NextRequest) {
                   });
                   return false;
                 }
-                
-                // Converte last_deposit_at para data em São Paulo
-                const saoPauloTimeZone = 'America/Sao_Paulo';
+
                 const depositDate = new Date(lead.last_deposit_at);
                 const depositDateSP = new Date(depositDate.toLocaleString('en-US', { timeZone: saoPauloTimeZone }));
                 const depositDateStr = depositDateSP.toISOString().split('T')[0];
-                
-                // Compara com os filtros de data
+
                 if (dateFrom && depositDateStr < dateFrom) {
                   filteredOut.push({
                     lead: { id: lead.id, name: lead.name || 'Sem nome', last_deposit_at: depositDateStr },
@@ -250,15 +209,63 @@ export async function GET(req: NextRequest) {
                   });
                   return false;
                 }
-                
                 return true;
               });
-              
+
               const afterFilter = filteredLeads.length;
               console.log(`   ✅ Leads antes do filtro: ${beforeFilter}`);
               console.log(`   ✅ Leads após o filtro: ${afterFilter}`);
               console.log(`   ❌ Leads filtrados: ${beforeFilter - afterFilter}`);
-              
+              if (filteredOut.length > 0 && filteredOut.length <= 10) {
+                console.log(`   📋 Exemplos de leads filtrados:`);
+                filteredOut.slice(0, 10).forEach((item, idx) => {
+                  console.log(`      ${idx + 1}. Lead ID ${item.lead.id} (${item.lead.name}): ${item.reason}`);
+                });
+              } else if (filteredOut.length > 10) {
+                console.log(`   📋 Primeiros 10 leads filtrados (de ${filteredOut.length} total):`);
+                filteredOut.slice(0, 10).forEach((item, idx) => {
+                  console.log(`      ${idx + 1}. Lead ID ${item.lead.id} (${item.lead.name}): ${item.reason}`);
+                });
+              }
+            } else if (searchBy === 'created_at' && (dateFrom || dateTo)) {
+              console.log(`\n[FILTRO 1] 🔍 Filtrando por data de cadastro (created_at)`);
+              console.log(`   Período: ${dateFrom || 'sem início'} até ${dateTo || 'sem fim'}`);
+
+              const beforeFilter = filteredLeads.length;
+              filteredLeads = filteredLeads.filter((lead: any) => {
+                if (!lead.created_at) {
+                  filteredOut.push({
+                    lead: { id: lead.id, name: lead.name || 'Sem nome' },
+                    reason: 'Sem data de cadastro (created_at vazio)'
+                  });
+                  return false;
+                }
+
+                const createdDate = new Date(lead.created_at);
+                const createdDateSP = new Date(createdDate.toLocaleString('en-US', { timeZone: saoPauloTimeZone }));
+                const createdDateStr = createdDateSP.toISOString().split('T')[0];
+
+                if (dateFrom && createdDateStr < dateFrom) {
+                  filteredOut.push({
+                    lead: { id: lead.id, name: lead.name || 'Sem nome', created_at: createdDateStr },
+                    reason: `Cadastro (${createdDateStr}) anterior ao período inicial (${dateFrom})`
+                  });
+                  return false;
+                }
+                if (dateTo && createdDateStr > dateTo) {
+                  filteredOut.push({
+                    lead: { id: lead.id, name: lead.name || 'Sem nome', created_at: createdDateStr },
+                    reason: `Cadastro (${createdDateStr}) posterior ao período final (${dateTo})`
+                  });
+                  return false;
+                }
+                return true;
+              });
+
+              const afterFilter = filteredLeads.length;
+              console.log(`   ✅ Leads antes do filtro: ${beforeFilter}`);
+              console.log(`   ✅ Leads após o filtro: ${afterFilter}`);
+              console.log(`   ❌ Leads filtrados: ${beforeFilter - afterFilter}`);
               if (filteredOut.length > 0 && filteredOut.length <= 10) {
                 console.log(`   📋 Exemplos de leads filtrados:`);
                 filteredOut.slice(0, 10).forEach((item, idx) => {
@@ -271,8 +278,8 @@ export async function GET(req: NextRequest) {
                 });
               }
             } else {
-              console.log(`\n[FILTRO 1] ⏭️  Pulando filtro de último depósito`);
-              console.log(`   Motivo: ${searchBy === 'created_at' ? 'Busca por data de cadastro (já filtrado pela API)' : 'Sem período selecionado'}`);
+              console.log(`\n[FILTRO 1] ⏭️  Sem filtro de período`);
+              console.log(`   Motivo: ${searchBy === 'created_at' ? 'Busca por data de cadastro' : 'Busca por último depósito'}; período: ${(dateFrom || dateTo) ? `${dateFrom || '?'} a ${dateTo || '?'}` : 'não informado (todo o período)'}`);
             }
             
             // Filtra fantasmas
@@ -529,10 +536,11 @@ export async function GET(req: NextRequest) {
               }
 
               // ============================================
-              // CALCULA DISTRIBUIÇÃO DE CLIENTES ESTRELAS
+              // CALCULA DISTRIBUIÇÃO DE CLIENTES ESTRELAS (apenas clientes ativos)
               // ============================================
               const starsDistribution: Record<string, number> = {};
-              filteredLeads.forEach((lead: any) => {
+              const activeLeadsForStars = filteredLeads.filter((lead: any) => lead.status === 'ativo' || lead.temperature === 'active');
+              activeLeadsForStars.forEach((lead: any) => {
                 const stars = parseInt(lead.user_level || lead.stars || '0') || 0;
                 const starKey = `${stars} Estrela${stars !== 1 ? 's' : ''}`;
                 starsDistribution[starKey] = (starsDistribution[starKey] || 0) + 1;

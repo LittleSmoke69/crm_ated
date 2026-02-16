@@ -12,7 +12,7 @@ export async function POST(req: NextRequest) {
   try {
     const { userId: requesterId } = await requireAuth(req);
     const body = await req.json();
-    const { user_id, feedback, banca_url, target_user_id } = body;
+    const { user_id, feedback, banca_url, banca_id, banca_name, target_user_id } = body;
 
     // Validações
     if (!feedback || !feedback.trim()) {
@@ -44,27 +44,38 @@ export async function POST(req: NextRequest) {
       return errorResponse('Email do consultor não encontrado no perfil.');
     }
 
-    // Busca a banca_url - prioriza a banca_url passada no body (selecionada no filtro)
+    // Busca a banca_url: prioriza banca_url do body; senão resolve por banca_id ou banca_name (do lead) em crm_bancas
     let bancaUrl = banca_url;
-    
+
+    if (!bancaUrl && (banca_id || banca_name)) {
+      let query = supabaseServiceRole.from('crm_bancas').select('id, url, name');
+      if (banca_id) {
+        query = query.eq('id', banca_id);
+      } else if (banca_name && banca_name.trim()) {
+        query = query.ilike('name', banca_name.trim());
+      }
+      const { data: bancaRows, error: bancaLookupError } = await query.limit(1);
+      const bancaRow = Array.isArray(bancaRows) ? bancaRows[0] : bancaRows;
+      if (!bancaLookupError && bancaRow?.url) {
+        bancaUrl = bancaRow.url;
+      }
+    }
+
     if (!bancaUrl) {
-      // Se não foi passada, tenta buscar do perfil do usuário
       bancaUrl = await getBancaUrl(requesterId);
     }
-    
+
     if (!bancaUrl) {
-      // Se ainda não encontrou, tenta buscar da tabela crm_bancas
       const { data: bancas, error: bancasError } = await supabaseServiceRole
         .from('crm_bancas')
         .select('url, name')
         .limit(1)
         .order('name', { ascending: true });
-      
+
       if (bancasError || !bancas || bancas.length === 0) {
         return errorResponse('Nenhuma banca configurada. Por favor, selecione uma banca no filtro.');
-      } else {
-        bancaUrl = bancas[0].url;
       }
+      bancaUrl = bancas[0].url;
     }
 
     if (!bancaUrl) {
@@ -122,6 +133,10 @@ export async function POST(req: NextRequest) {
       });
 
       if (!response.ok) {
+        if (response.status === 404) {
+          console.warn('[CRM Feedback] API externa retornou 404 (endpoint/recurso não encontrado).');
+          return errorResponse('Recurso ou endpoint da banca não encontrado (404). Verifique a URL da banca.', 404);
+        }
         const errorText = await response.text();
         console.error(`[CRM Feedback] Erro HTTP ${response.status}:`, errorText);
         return errorResponse(`Erro ao salvar feedback na API externa: ${response.status} ${response.statusText}`);
@@ -188,6 +203,16 @@ export async function GET(req: NextRequest) {
     if (!user_id) {
       return errorResponse('user_id é obrigatório', 400);
     }
+
+    // Normaliza para ID numérico do lead (crm_feedback.lead_user_id). Aceita composite "bancaId-28660".
+    const leadUserIdRaw = user_id.includes('-')
+      ? user_id.split('-').pop() ?? user_id
+      : user_id;
+    const leadUserId = parseInt(leadUserIdRaw, 10);
+    if (Number.isNaN(leadUserId)) {
+      return errorResponse('user_id deve ser o ID numérico do lead (ex.: 28660).', 400);
+    }
+    const leadUserIdStr = String(leadUserId);
 
     // Determina qual userId usar: se target_user_id foi passado, usa ele (consultor visualizado), senão usa o requesterId
     const targetUserId = target_user_id || requesterId;
@@ -258,13 +283,13 @@ export async function GET(req: NextRequest) {
     cleanBancaUrl = `https://${cleanBancaUrl}`;
 
     // Constrói a URL completa da API externa
-    const externalApiUrl = `${cleanBancaUrl}/api/crm/get-lead-feedback?user_id=${user_id}`;
+    const externalApiUrl = `${cleanBancaUrl}/api/crm/get-lead-feedback?user_id=${leadUserIdStr}`;
 
     console.log('[CRM Feedback] Buscando feedback:', {
       requesterId,
       targetUserId,
       consultantEmail: targetProfile.email,
-      user_id,
+      leadUserId: leadUserIdStr,
       urlFinal: externalApiUrl,
     });
 
@@ -281,7 +306,7 @@ export async function GET(req: NextRequest) {
             full_name
           )
         `)
-        .eq('lead_user_id', parseInt(user_id))
+        .eq('lead_user_id', leadUserId)
         .order('created_at', { ascending: false });
 
       if (!localError && localData) {

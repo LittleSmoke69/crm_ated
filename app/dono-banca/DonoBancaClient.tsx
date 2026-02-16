@@ -652,11 +652,11 @@ export default function DonoBancaHierarquia({
                   <p className="text-2xl font-bold text-white">{externalMetrics.awarded_clients_count || 0}</p>
                 </div>
 
-                {/* Card: Leads Ativos */}
+                {/* Card: Clientes Ativos */}
                 <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
                   <div className="flex items-center gap-2 mb-2">
                     <CheckCircle2 className="w-4 h-4 text-white" />
-                    <p className="text-xs font-bold text-white/90 uppercase">Leads Ativos</p>
+                    <p className="text-xs font-bold text-white/90 uppercase">Clientes Ativos</p>
                   </div>
                   <p className="text-2xl font-bold text-white">{externalMetrics.active_leads || 0}</p>
                 </div>
@@ -948,12 +948,12 @@ export default function DonoBancaHierarquia({
 
         {/* Search & List */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-          <div className="p-4 border-b border-gray-100 bg-gray-50/50 flex items-center gap-3">
-            <Search className="w-5 h-5 text-gray-400" />
+          <div className="p-4 border-b border-gray-200 bg-gray-100 flex items-center gap-3">
+            <Search className="w-5 h-5 text-gray-500" />
             <input 
               type="text" 
               placeholder="Buscar por nome ou email..."
-              className="bg-transparent border-none focus:ring-0 text-sm w-full"
+              className="bg-transparent border-none focus:ring-0 text-sm w-full text-gray-900 placeholder:text-gray-500"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />

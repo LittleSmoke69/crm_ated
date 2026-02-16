@@ -30,10 +30,10 @@ export async function POST(req: NextRequest) {
       return errorResponse('messageId, groupIds e instanceName são obrigatórios', 400);
     }
 
-    // 1. Busca os detalhes da mensagem (incluindo campos de mídia)
+    // 1. Busca os detalhes da mensagem (incluindo mention_all para menção @todos em todos os grupos)
     const { data: message, error: messageError } = await supabaseServiceRole
       .from('messages')
-      .select('*, attachment_type, attachment_mime, attachment_size')
+      .select('*, attachment_type, attachment_mime, attachment_size, mention_all')
       .eq('id', messageId)
       .single();
 
@@ -120,10 +120,16 @@ export async function POST(req: NextRequest) {
       errors: [] as any[],
     };
 
-    const isMentionAll = String(message.mention_all) === 'true' || message.mention_all === true;
+    // Menção @all: garantir boolean explícito (Evolution API pode aceitar mentionsEveryone ou mentions_everyone)
+    const isMentionAll = message.mention_all === true || String(message.mention_all).toLowerCase() === 'true';
     const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
 
-    // 3. Envia para cada grupo em paralelo (requests diretos à Evolution API)
+    if (isMentionAll) {
+      console.log('[DISPARO] mention_all=true → mentionsEveryOne injetado no payload');
+    }
+    console.log(`📌 [ACTIVATION] mention_all da mensagem: ${message.mention_all} → isMentionAll: ${isMentionAll} (todos os ${groupIds.length} grupos receberão a mesma opção)`);
+
+    // 3. Envia para cada grupo em paralelo (todos com a mesma opção de menção)
     const sendPromises = groupIds.map(async (groupId: string) => {
       try {
         const FETCH_TIMEOUT_MS = 30000; // 30 segundos
@@ -136,10 +142,29 @@ export async function POST(req: NextRequest) {
         let requestBody: any;
 
         try {
-          // Trata o conteúdo da mensagem para garantir que seja uma string limpa
+          // Conteúdo da mensagem (sem @everyone obrigatório; mentionsEveryOne basta para menção)
           const messageContent = message.content ? String(message.content).trim() : '';
-          
-          if (message.message_type === 'audio' && message.attachment_url) {
+
+          if (message.message_type === 'ptv' && message.attachment_url) {
+            // PTV: sendPtv da Evolution API usa stat() e não aceita URL remota nesta instância.
+            // Fallback: sendMedia aceita URL — vídeo enviado como mídia normal.
+            url = `${normalizedBaseUrl}/message/sendMedia/${instanceName}`;
+            url = url.replace(/([^:]\/)\/+/g, '$1');
+            const videoUrl = String(message.attachment_url);
+            if (!videoUrl || !videoUrl.startsWith('http')) {
+              throw new Error('URL do vídeo PTV inválida ou não configurada');
+            }
+            requestBody = {
+              number: groupId,
+              mediatype: 'video',
+              mimetype: message.attachment_mime || 'video/mp4',
+              media: videoUrl,
+              fileName: 'video.mp4',
+              delay: 1200,
+              mentionsEveryOne: !!isMentionAll,
+            };
+            if (messageContent) requestBody.caption = messageContent;
+          } else if (message.message_type === 'audio' && message.attachment_url) {
             // Envio de áudio
             url = `${normalizedBaseUrl}/message/sendWhatsAppAudio/${instanceName}`;
             url = url.replace(/([^:]\/)\/+/g, '$1');
@@ -153,7 +178,7 @@ export async function POST(req: NextRequest) {
             requestBody = {
               number: groupId,
               audio: audioUrl,
-              mentionsEveryone: isMentionAll,
+              ...(isMentionAll && { mentionsEveryOne: true }),
             };
           } else if (message.message_type === 'text_with_attachment' && message.attachment_url) {
             // Envio de mídia (imagem, vídeo, documento)
@@ -228,10 +253,10 @@ export async function POST(req: NextRequest) {
               mimetype,
               media: mediaUrl,
               fileName,
-              mentionsEveryone: isMentionAll,
+              ...(isMentionAll && { mentionsEveryOne: true }),
             };
-            
-            // Adiciona caption apenas se houver conteúdo
+
+            // Adiciona caption (já pode conter @everyone quando isMentionAll)
             if (messageContent) {
               requestBody.caption = messageContent;
             }
@@ -243,7 +268,7 @@ export async function POST(req: NextRequest) {
             requestBody = {
               number: groupId,
               text: messageContent,
-              mentionsEveryone: isMentionAll,
+              ...(isMentionAll && { mentionsEveryOne: true }),
             };
           }
 

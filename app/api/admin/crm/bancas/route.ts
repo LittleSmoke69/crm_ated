@@ -3,27 +3,77 @@ import { requireAdmin } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
+const LOG_PREFIX = '[lead-transfer][bancas]';
+
 /**
- * GET /api/admin/crm/bancas - Lista todas as bancas
- * Query: with_users=1 - inclui user_ids (consultores/gerentes em user_bancas) por banca
+ * GET /api/admin/crm/bancas - Lista bancas
+ * Query:
+ *   with_users=1 - inclui user_ids (consultores/gerentes em user_bancas) por banca
+ *   my_bancas=1  - para admin, retorna apenas bancas em que o usuário está em user_bancas; super_admin vê todas
  */
 export async function GET(req: NextRequest) {
   try {
-    await requireAdmin(req);
+    const { userId, profile } = await requireAdmin(req);
 
     const { searchParams } = new URL(req.url);
     const withUsers = searchParams.get('with_users') === '1';
+    const myBancasOnly = searchParams.get('my_bancas') === '1';
+    const bancaId = searchParams.get('banca_id')?.trim() || null;
 
-    const { data: bancas, error } = await supabaseServiceRole
-      .from('crm_bancas')
-      .select('*')
-      .order('name', { ascending: true });
+    console.log(`${LOG_PREFIX} GET request: userId=${userId}, profile.status=${profile.status}, my_bancas=${myBancasOnly}, with_users=${withUsers}, banca_id=${bancaId || 'all'}`);
 
-    if (error) {
-      return errorResponse(`Erro ao buscar bancas: ${error.message}`);
+    let bancas: { id: string; name: string; url: string }[];
+
+    if (myBancasOnly && profile.status === 'admin') {
+      const { data: userBancaIds, error: ubError } = await supabaseServiceRole
+        .from('user_bancas')
+        .select('banca_id')
+        .eq('user_id', userId);
+      if (ubError || !userBancaIds?.length) {
+        console.log(`${LOG_PREFIX} GET (admin my_bancas): no bancas for user, ubError=${!!ubError}, count=${userBancaIds?.length ?? 0}`);
+        return successResponse([]);
+      }
+      const bancaIds = userBancaIds.map((ub: { banca_id: string }) => ub.banca_id);
+      const { data: list, error } = await supabaseServiceRole
+        .from('crm_bancas')
+        .select('*')
+        .in('id', bancaIds)
+        .order('name', { ascending: true });
+      if (error) {
+        console.error(`${LOG_PREFIX} GET (admin my_bancas) db error:`, error);
+        return errorResponse(`Erro ao buscar bancas: ${error.message}`);
+      }
+      bancas = list ?? [];
+      console.log(`${LOG_PREFIX} GET (admin my_bancas): bancaIds=${bancaIds.length}, found=${bancas.length}`);
+    } else {
+      if (bancaId) {
+        const { data: single, error } = await supabaseServiceRole
+          .from('crm_bancas')
+          .select('*')
+          .eq('id', bancaId)
+          .maybeSingle();
+        if (error) {
+          console.error(`${LOG_PREFIX} GET (single banca) db error:`, error);
+          return errorResponse(`Erro ao buscar banca: ${error.message}`);
+        }
+        bancas = single ? [single] : [];
+        console.log(`${LOG_PREFIX} GET (single banca): id=${bancaId}, found=${bancas.length}`);
+      } else {
+        const { data: list, error } = await supabaseServiceRole
+          .from('crm_bancas')
+          .select('*')
+          .order('name', { ascending: true });
+        if (error) {
+          console.error(`${LOG_PREFIX} GET (all bancas) db error:`, error);
+          return errorResponse(`Erro ao buscar bancas: ${error.message}`);
+        }
+        bancas = list ?? [];
+        console.log(`${LOG_PREFIX} GET (all bancas): count=${bancas.length}`);
+      }
     }
 
     if (!withUsers || !bancas?.length) {
+      console.log(`${LOG_PREFIX} GET success: ${bancas?.length ?? 0} banca(s) returned`, bancas?.length ? bancas.map((b: { id: string; name: string }) => ({ id: b.id, name: b.name })) : []);
       return successResponse(bancas);
     }
 
@@ -38,13 +88,15 @@ export async function GET(req: NextRequest) {
       userIdsByBancaId.set(ub.banca_id, list);
     });
 
-    const bancasWithUsers = bancas.map((b: { id: string }) => ({
+    const bancasWithUsers = bancas.map((b) => ({
       ...b,
       user_ids: userIdsByBancaId.get(b.id) || [],
     }));
 
+    console.log(`${LOG_PREFIX} GET success: ${bancasWithUsers.length} banca(s) with user_ids`, bancasWithUsers.map((b) => ({ id: b.id, name: b.name, user_count: b.user_ids?.length ?? 0 })));
     return successResponse(bancasWithUsers);
   } catch (err: any) {
+    console.error(`${LOG_PREFIX} GET error:`, err);
     return serverErrorResponse(err);
   }
 }

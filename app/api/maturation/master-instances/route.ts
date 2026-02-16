@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       const result = await supabaseServiceRole
         .from('evolution_instances')
-        .select('id, instance_name, status, is_master, is_active')
+        .select('id, instance_name, status, is_master, is_active, phone_number')
         .eq('is_active', true)
         .in('status', ['ok', 'open', 'connected'])
         .order('is_master', { ascending: false })
@@ -75,29 +75,32 @@ export async function GET(req: NextRequest) {
       const { is_locked = false } = lockByEvolutionId.get(ei.id) || {};
       const isMaster = !!ei.is_master;
       const connected = isConnectedStatus(status);
-      // Disponível = mestre conectado e (se está no pool do maturador, não pode estar locked)
+      const hasPhoneNumber = !!(ei.phone_number && String(ei.phone_number).trim());
+      // Disponível = conectado, tem phone_number e (se está no pool do maturador, não pode estar locked)
+      // Todas as instâncias podem fazer maturação (não precisa ser mestre); phone_number é obrigatório para envio via API Evolution
       const available =
-        isMaster && connected && (inMaturador ? !is_locked : true);
+        connected && hasPhoneNumber && (inMaturador ? !is_locked : true);
       return {
         id: inMaturador ? (masterRows?.find((r: any) => r.evolution_instance_id === ei.id)?.id ?? null) : null,
         evolution_instance_id: ei.id,
         instance_name: ei.instance_name,
+        phone_number: ei.phone_number || null,
         status,
         is_master: !!ei.is_master,
         is_locked,
         available,
+        has_phone_number: hasPhoneNumber,
         source: inMaturador ? 'master_instances' : 'evolution_instances',
       };
     });
 
-    const masterAvailableCount = instances.filter((i: any) => i.available).length;
-    const masterTotal = instances.filter((i: any) => i.is_master).length;
+    const availableCount = instances.filter((i: any) => i.available).length;
 
     return NextResponse.json({
       instances,
       total: instances.length,
-      available: masterAvailableCount,
-      masterTotal,
+      available: availableCount,
+      masterTotal: instances.filter((i: any) => i.is_master).length,
     });
   } catch (error: any) {
     console.error('[GET /api/maturation/master-instances] Erro:', error);

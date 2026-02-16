@@ -157,6 +157,25 @@ export async function DELETE(
 
     console.log(`🗑️ [DELETE INSTANCE] Instância encontrada: ${instance.instance_name}, Status: ${instance.status}`);
 
+    // Remove vínculos do maturador antes de deletar (maturation_jobs -> master_instances -> evolution_instances)
+    const { data: masterRows } = await supabaseServiceRole
+      .from('master_instances')
+      .select('id')
+      .eq('evolution_instance_id', id);
+
+    if (masterRows && masterRows.length > 0) {
+      for (const master of masterRows) {
+        await supabaseServiceRole
+          .from('master_instances')
+          .update({ is_locked: false, locked_job_id: null, locked_at: null })
+          .eq('id', master.id);
+        await supabaseServiceRole
+          .from('maturation_jobs')
+          .delete()
+          .eq('master_instance_id', master.id);
+      }
+    }
+
     // Deleta na Evolution API (se houver API configurada)
     const evolutionApi = Array.isArray(instance.evolution_apis) 
       ? instance.evolution_apis[0] 

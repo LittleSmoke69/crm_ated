@@ -312,7 +312,7 @@ export default function DetalheGerente() {
                   <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
                     <div className="flex items-center gap-2 mb-2">
                       <CheckCircle2 className="w-4 h-4 text-white" />
-                      <p className="text-xs font-bold text-white/90 uppercase">Leads Ativos</p>
+                      <p className="text-xs font-bold text-white/90 uppercase">Clientes Ativos</p>
                     </div>
                     <p className="text-2xl font-bold text-white">{gerenteTotalKpis.active_leads || 0}</p>
                   </div>
@@ -548,12 +548,12 @@ export default function DetalheGerente() {
                           </div>
                         )}
                         
-                        {/* Leads Ativos */}
+                        {/* Clientes Ativos */}
                         {consultor.externalKpis.active_leads !== undefined && (
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2">
                               <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                              <p className="text-xs font-bold text-gray-600 uppercase">Leads Ativos</p>
+                              <p className="text-xs font-bold text-gray-600 uppercase">Clientes Ativos</p>
                             </div>
                             <p className="text-sm font-bold text-emerald-700">
                               {consultor.externalKpis.active_leads || 0}

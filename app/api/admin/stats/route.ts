@@ -12,7 +12,11 @@ export async function GET(req: NextRequest) {
   try {
     const { userId } = await requireAdmin(req);
 
-    // Busca todas as estatísticas
+    const now = new Date();
+    const startOfTodayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
+    const endOfTodayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0, 0));
+
+    // Busca todas as estatísticas (incluindo disparos CRM / message_schedules)
     const [
       usersResult,
       campaignsResult,
@@ -22,23 +26,44 @@ export async function GET(req: NextRequest) {
       campaignsData,
       instancesData,
       contactsData,
+      dispatchedTodayResult,
+      nextExecutionsResult,
+      dispatchesFailedResult,
+      dispatchesSuccessTotalResult,
     ] = await Promise.all([
       supabaseServiceRole.from('profiles').select('id', { count: 'exact', head: true }),
       supabaseServiceRole.from('campaigns').select('id', { count: 'exact', head: true }),
       supabaseServiceRole.from('searches').select('id', { count: 'exact', head: true }),
-      // Usa a nova tabela evolution_instances para contagem
       supabaseServiceRole.from('evolution_instances').select('id', { count: 'exact', head: true }),
       supabaseServiceRole.from('whatsapp_groups').select('id', { count: 'exact', head: true }),
       supabaseServiceRole
         .from('campaigns')
         .select('status, processed_contacts, failed_contacts, total_contacts'),
-      // Busca status das instâncias do novo sistema
       supabaseServiceRole
         .from('evolution_instances')
         .select('status, is_active'),
       supabaseServiceRole
         .from('campaign_contacts')
         .select('status'),
+      supabaseServiceRole
+        .from('message_schedules')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'sent')
+        .gte('sent_at', startOfTodayUtc.toISOString())
+        .lt('sent_at', endOfTodayUtc.toISOString()),
+      supabaseServiceRole
+        .from('message_schedules')
+        .select('id', { count: 'exact', head: true })
+        .in('status', ['scheduled', 'processing'])
+        .gt('next_run_utc', now.toISOString()),
+      supabaseServiceRole
+        .from('message_schedules')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'failed'),
+      supabaseServiceRole
+        .from('message_schedules')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'sent'),
     ]);
 
     const totalUsers = usersResult?.count || 0;
@@ -140,6 +165,12 @@ export async function GET(req: NextRequest) {
         pending: pendingContacts,
         added: addedContacts,
         sent: sentMessages,
+      },
+      dispatches: {
+        dispatchedToday: dispatchedTodayResult?.count ?? 0,
+        nextExecutions: nextExecutionsResult?.count ?? 0,
+        failures: dispatchesFailedResult?.count ?? 0,
+        successTotal: dispatchesSuccessTotalResult?.count ?? 0,
       },
       chartData,
     });

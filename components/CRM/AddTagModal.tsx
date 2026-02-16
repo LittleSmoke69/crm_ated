@@ -30,12 +30,26 @@ const AddTagModal: React.FC<AddTagModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [adding, setAdding] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Etiqueta que acabou de ser adicionada (exibida em caso de sucesso antes de fechar) */
+  const [addedTag, setAddedTag] = useState<Tag | null>(null);
 
   useEffect(() => {
     if (isOpen) {
+      setAddedTag(null);
+      setError(null);
       loadTags();
     }
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!addedTag) return;
+    const t = setTimeout(() => {
+      onTagAdded?.();
+      setAddedTag(null);
+      onClose();
+    }, 1800);
+    return () => clearTimeout(t);
+  }, [addedTag, onTagAdded, onClose]);
 
   const loadTags = async () => {
     try {
@@ -109,7 +123,12 @@ const AddTagModal: React.FC<AddTagModalProps> = ({
 
       if (result.success) {
         onTagAdded?.();
-        onClose();
+        const tagAdded = tags.find(t => t.id === tagId);
+        if (tagAdded) {
+          setAddedTag(tagAdded);
+        } else {
+          onClose();
+        }
       } else {
         setError(result.error || 'Erro ao adicionar etiqueta');
       }
@@ -123,7 +142,12 @@ const AddTagModal: React.FC<AddTagModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Filtra tags que já estão associadas
+  const handleCloseAfterSuccess = () => {
+    onTagAdded?.();
+    setAddedTag(null);
+    onClose();
+  };
+
   const availableTags = tags.filter(
     tag => !currentTags.some(currentTag => currentTag.id === tag.id)
   );
@@ -144,9 +168,9 @@ const AddTagModal: React.FC<AddTagModalProps> = ({
       <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md z-10 animate-in fade-in zoom-in duration-200">
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-100">
-          <h2 className="text-xl font-bold text-gray-800">Adicionar Etiqueta</h2>
+          <h2 className="text-xl font-bold text-gray-800">{addedTag ? 'Etiqueta adicionada' : 'Adicionar Etiqueta'}</h2>
           <button
-            onClick={onClose}
+            onClick={() => (addedTag ? handleCloseAfterSuccess() : onClose())}
             className="p-2 hover:bg-gray-100 rounded-lg transition text-gray-500 hover:text-gray-700"
             aria-label="Fechar"
           >
@@ -162,7 +186,23 @@ const AddTagModal: React.FC<AddTagModalProps> = ({
             </div>
           )}
 
-          {loading ? (
+          {addedTag ? (
+            <div className="py-6 text-center">
+              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium mb-4" style={{ backgroundColor: `${addedTag.color}20`, color: addedTag.color, border: `1px solid ${addedTag.color}` }}>
+                <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: addedTag.color }} />
+                {addedTag.label}
+              </div>
+              <p className="text-gray-700 font-semibold mb-1">Etiqueta adicionada com sucesso!</p>
+              <p className="text-gray-500 text-sm mb-6">Ela já aparece no lead. Fechando em instantes...</p>
+              <button
+                type="button"
+                onClick={handleCloseAfterSuccess}
+                className="px-4 py-2 bg-[#8CD955] hover:bg-[#7bc74a] text-white font-medium rounded-xl transition"
+              >
+                Fechar
+              </button>
+            </div>
+          ) : loading ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="w-6 h-6 animate-spin text-[#8CD955]" />
             </div>

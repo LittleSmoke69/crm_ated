@@ -86,7 +86,7 @@ export async function POST(req: NextRequest) {
         : scheduleType === 'recurring'
           ? calculateNextRecurringRun(
               cronExpr || '',
-              timezone || 'America/Recife',
+              timezone || 'America/Sao_Paulo',
               recurringDays,
               recurringTime || ''
             ) || scheduledAtUTC
@@ -102,7 +102,7 @@ export async function POST(req: NextRequest) {
       schedule_type: scheduleType,
       scheduled_at_utc: scheduleType === 'once' ? scheduledAtUTC : null,
       cron_expr: scheduleType === 'recurring' ? cronExpr : null,
-      timezone: timezone || 'America/Recife',
+      timezone: timezone || 'America/Sao_Paulo',
       recurring_days: scheduleType === 'recurring' ? recurringDays : null,
       recurring_time: scheduleType === 'recurring' ? recurringTime : null,
       next_run_utc: nextRunUTC,

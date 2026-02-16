@@ -162,7 +162,8 @@ async function selectAvailableMasterInstance(preferredEvolutionInstanceIds?: str
       id,
       evolution_instance_id,
       evolution_instances!inner (
-        instance_name
+        instance_name,
+        phone_number
       )
     `)
     .eq('is_active', true)
@@ -173,22 +174,24 @@ async function selectAvailableMasterInstance(preferredEvolutionInstanceIds?: str
   const { data: fromPool, error: poolError } = await fromPoolQuery.limit(1).maybeSingle();
 
   if (!poolError && fromPool) {
-    const instance = Array.isArray(fromPool.evolution_instances)
+    const evInst = Array.isArray(fromPool.evolution_instances)
       ? fromPool.evolution_instances[0]
       : fromPool.evolution_instances;
+    const ev = evInst as { instance_name: string; phone_number?: string | null };
+    if (!ev.phone_number || !String(ev.phone_number).trim()) return null;
     return {
       id: fromPool.id,
       evolution_instance_id: fromPool.evolution_instance_id,
-      instance_name: (instance as { instance_name: string }).instance_name,
+      instance_name: ev.instance_name,
     };
   }
 
   const { data: connectedMasters, error: evError } = await supabaseServiceRole
     .from('evolution_instances')
-    .select('id, instance_name')
+    .select('id, instance_name, phone_number')
     .eq('is_active', true)
-    .eq('is_master', true)
     .in('status', ['ok', 'open', 'connected'])
+    .not('phone_number', 'is', null)
     .limit(50);
 
   if (evError || !connectedMasters?.length) {
@@ -196,8 +199,12 @@ async function selectAvailableMasterInstance(preferredEvolutionInstanceIds?: str
   }
 
   const candidates = preferList?.length
-    ? connectedMasters.filter((ei: { id: string }) => preferList.includes(ei.id))
-    : connectedMasters;
+    ? connectedMasters.filter((ei: { id: string; phone_number?: string | null }) =>
+        preferList.includes(ei.id) && !!(ei.phone_number && String(ei.phone_number).trim())
+      )
+    : connectedMasters.filter((ei: { phone_number?: string | null }) =>
+        !!(ei.phone_number && String(ei.phone_number).trim())
+      );
 
   const { data: poolRows } = await supabaseServiceRole
     .from('master_instances')

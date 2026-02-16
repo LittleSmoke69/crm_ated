@@ -1,7 +1,7 @@
 /**
  * GET /api/admin/audit/raw-events
  * Lista eventos brutos group-participants.update (evolution_webhook_events).
- * Acesso: admin, auditoria.
+ * Acesso: super_admin, admin, auditoria.
  *
  * Query params:
  * - env: 'prod' | 'test'
@@ -19,7 +19,7 @@ const EVENT_TYPE = 'group-participants.update';
 
 export async function GET(req: NextRequest) {
   try {
-    await requireStatus(req, ['admin', 'auditoria']);
+    await requireStatus(req, ['super_admin', 'admin', 'auditoria']);
     const { searchParams } = req.nextUrl;
 
     const env = searchParams.get('env') || undefined;

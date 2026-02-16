@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { X, Calendar, Clock, Users, MessageSquare, Edit2, ExternalLink, Save, Loader2 } from 'lucide-react';
+import { X, Calendar, Clock, Users, MessageSquare, Edit2, ExternalLink, Save, Loader2, Plus, Trash2 } from 'lucide-react';
 import { useToast } from '@/hooks/useToast';
 import { supabase } from '@/lib/supabase';
 
@@ -9,6 +9,7 @@ interface ScheduleDetailsModalProps {
   isOpen: boolean;
   onClose: () => void;
   schedule: any;
+  groupSchedules?: any[];
   userId: string | null;
   onUpdate: () => void;
   onEditMessage: (messageId: string) => void;
@@ -18,6 +19,7 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
   isOpen,
   onClose,
   schedule,
+  groupSchedules = [],
   userId,
   onUpdate,
   onEditMessage,
@@ -25,6 +27,9 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
   const { showToast } = useToast();
   const [isEditing, setIsEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [showAddGroups, setShowAddGroups] = useState(false);
+  const [addingGroups, setAddingGroups] = useState(false);
+  const [selectedGroupIdsToAdd, setSelectedGroupIdsToAdd] = useState<string[]>([]);
   const [instances, setInstances] = useState<{ instance_name: string }[]>([]);
   const [groups, setGroups] = useState<{ group_id: string; group_subject: string }[]>([]);
   const [loadingOptions, setLoadingOptions] = useState(false);
@@ -82,10 +87,60 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
   }, [schedule]);
 
   useEffect(() => {
-    if (isOpen && userId && isEditing) {
+    if (isOpen && userId && (isEditing || showAddGroups)) {
       loadInstancesAndGroups();
     }
-  }, [isOpen, userId, isEditing, loadInstancesAndGroups]);
+  }, [isOpen, userId, isEditing, showAddGroups, loadInstancesAndGroups]);
+
+  const currentGroupIds = groupSchedules.length > 0 ? groupSchedules.map((s) => s.group_id) : [schedule?.group_id ? [schedule.group_id] : []].flat();
+  const availableGroupsToAdd = groups.filter((g) => !currentGroupIds.includes(g.group_id));
+
+  const handleRemoveFromDisparo = async (scheduleId: string) => {
+    if (!userId) return;
+    try {
+      const res = await fetch(`/api/crm/activations/schedules/${scheduleId}`, {
+        method: 'DELETE',
+        headers: { 'X-User-Id': userId },
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('Grupo removido do disparo.', 'success');
+        onUpdate();
+        onClose();
+      } else {
+        showToast(data?.error || 'Erro ao remover.', 'error');
+      }
+    } catch (e) {
+      console.error(e);
+      showToast('Erro ao remover grupo do disparo.', 'error');
+    }
+  };
+
+  const handleAddGroupsToDisparo = async () => {
+    if (!userId || !schedule?.id || selectedGroupIdsToAdd.length === 0) return;
+    setAddingGroups(true);
+    try {
+      const res = await fetch('/api/crm/activations/schedules/add-groups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({ sourceScheduleId: schedule.id, groupIds: selectedGroupIdsToAdd }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast(data?.message || 'Grupos adicionados.', 'success');
+        setSelectedGroupIdsToAdd([]);
+        setShowAddGroups(false);
+        onUpdate();
+      } else {
+        showToast(data?.error || 'Erro ao adicionar grupos.', 'error');
+      }
+    } catch (e) {
+      console.error(e);
+      showToast('Erro ao adicionar grupos.', 'error');
+    } finally {
+      setAddingGroups(false);
+    }
+  };
 
   const instancesWithCurrent = schedule?.instance_name && !instances.some((i) => i.instance_name === schedule.instance_name)
     ? [{ instance_name: schedule.instance_name }, ...instances]
@@ -190,17 +245,22 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           {/* Status Badge */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             <span className="text-sm font-semibold text-gray-700 uppercase tracking-wider">Status:</span>
             <span className={`px-3 py-1 rounded-full text-white text-sm font-medium ${statusColors[schedule.status] || 'bg-gray-500'}`}>
               {schedule.status === 'scheduled' ? 'Agendado' :
                schedule.status === 'processing' ? 'Processando' :
                schedule.status === 'sent' ? 'Enviado' :
                schedule.status === 'failed'
-                 ? (schedule.last_error?.trim() || 'Instância desconectada')
+                 ? (schedule.last_error?.trim() || 'Falhou')
                  : schedule.status === 'paused' ? 'Pausado' :
                schedule.status === 'canceled' ? 'Cancelado' : schedule.status}
             </span>
+            {(schedule.status === 'failed' || schedule.status === 'paused') && (
+              <p className="text-xs text-amber-700 bg-amber-50 px-2 py-1 rounded w-full mt-1">
+                Troque a instância e salve para reativar o disparo.
+              </p>
+            )}
           </div>
 
           {/* Tipo de Agendamento */}
@@ -367,29 +427,113 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
             </div>
           )}
 
-          {/* Grupos */}
-          {!isEditing ? (
-            <div>
-              <div className="flex items-center gap-2 mb-2">
+          {/* Grupos neste disparo */}
+          <div>
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <div className="flex items-center gap-2">
                 <Users className="w-5 h-5 text-gray-600" />
-                <span className="text-sm font-semibold text-gray-700 uppercase tracking-wider">Grupos:</span>
+                <span className="text-sm font-semibold text-gray-700 uppercase tracking-wider">
+                  Grupos neste disparo {groupSchedules.length > 0 ? `(${groupSchedules.length})` : ''}
+                </span>
               </div>
-              <div className="bg-white rounded-xl p-4 border border-gray-200">
-                <p className="text-gray-800 font-medium">
-                  {schedule.group_subject || schedule.group_id || 'N/A'}
-                </p>
-                {schedule.group_subject && schedule.group_id && schedule.group_subject !== schedule.group_id && (
-                  <p className="text-xs text-gray-500 mt-1">ID: {schedule.group_id}</p>
-                )}
-              </div>
+              {!isEditing && groupSchedules.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAddGroups(true)}
+                  className="px-3 py-1.5 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg text-sm font-medium flex items-center gap-1"
+                >
+                  <Plus className="w-4 h-4" />
+                  Adicionar grupos
+                </button>
+              )}
             </div>
-          ) : (
-            <div>
-              <div className="flex items-center gap-2 mb-2">
-                <Users className="w-5 h-5 text-gray-600" />
-                <span className="text-sm font-semibold text-gray-700 uppercase tracking-wider">Grupo:</span>
+            <div className="bg-white rounded-xl p-4 border border-gray-200 space-y-2">
+              {groupSchedules.length > 0 ? (
+                <ul className="space-y-2">
+                  {groupSchedules.map((s) => (
+                    <li
+                      key={s.id}
+                      className="flex items-center justify-between gap-2 py-2 border-b border-gray-100 last:border-0"
+                    >
+                      <span className="text-gray-800 font-medium truncate">
+                        {s.group_subject || s.group_id}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveFromDisparo(s.id)}
+                        className="shrink-0 px-2 py-1 text-red-600 hover:bg-red-50 rounded text-sm font-medium flex items-center gap-1"
+                        title="Remover este grupo do disparo"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                        Remover
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <>
+                  <p className="text-gray-800 font-medium">
+                    {schedule.group_subject || schedule.group_id || 'N/A'}
+                  </p>
+                  {schedule.group_subject && schedule.group_id && schedule.group_subject !== schedule.group_id && (
+                    <p className="text-xs text-gray-500 mt-1">ID: {schedule.group_id}</p>
+                  )}
+                </>
+              )}
+            </div>
+            {showAddGroups && (
+              <div className="mt-4 p-4 bg-gray-50 rounded-xl border border-gray-200">
+                <p className="text-sm font-semibold text-gray-700 mb-2">Selecione os grupos a adicionar:</p>
+                {loadingOptions ? (
+                  <div className="flex items-center gap-2 text-gray-500 text-sm">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Carregando grupos...
+                  </div>
+                ) : availableGroupsToAdd.length === 0 ? (
+                  <p className="text-sm text-gray-500">Todos os seus grupos já estão neste disparo.</p>
+                ) : (
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {availableGroupsToAdd.map((g) => (
+                      <label key={g.group_id} className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={selectedGroupIdsToAdd.includes(g.group_id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedGroupIdsToAdd((prev) => [...prev, g.group_id]);
+                            } else {
+                              setSelectedGroupIdsToAdd((prev) => prev.filter((id) => id !== g.group_id));
+                            }
+                          }}
+                          className="rounded border-gray-300 text-[#8CD955] focus:ring-[#8CD955]"
+                        />
+                        <span className="text-sm text-gray-800">{g.group_subject || g.group_id}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+                <div className="flex gap-2 mt-3">
+                  <button
+                    type="button"
+                    onClick={handleAddGroupsToDisparo}
+                    disabled={addingGroups || selectedGroupIdsToAdd.length === 0}
+                    className="px-4 py-2 bg-[#8CD955] hover:bg-[#7BC84A] disabled:opacity-50 text-white rounded-lg text-sm font-medium flex items-center gap-2"
+                  >
+                    {addingGroups ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                    Adicionar selecionados
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setShowAddGroups(false); setSelectedGroupIdsToAdd([]); }}
+                    className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg text-sm font-medium"
+                  >
+                    Cancelar
+                  </button>
+                </div>
               </div>
-              <div className="bg-white rounded-xl p-4 border border-gray-200">
+            )}
+            {isEditing && groupSchedules.length === 0 && (
+              <div className="mt-2">
                 {loadingOptions ? (
                   <div className="flex items-center gap-2 text-gray-500 text-sm">
                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -417,8 +561,8 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
                   </select>
                 )}
               </div>
-            </div>
-          )}
+            )}
+          </div>
 
           {/* Informações Adicionais */}
           <div className="grid grid-cols-2 gap-4">

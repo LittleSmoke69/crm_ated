@@ -29,7 +29,8 @@ export async function PATCH(
       attachment_url,
       send_intelligent,
       training_asset_id,
-      training_dataset_item_id
+      training_dataset_item_id,
+      ptv_delay,
     } = body;
 
     // Verifica se a mensagem existe e se o usuário tem permissão
@@ -84,6 +85,7 @@ export async function PATCH(
     if (send_intelligent !== undefined) updateData.send_intelligent = send_intelligent;
     if (training_asset_id !== undefined) updateData.training_asset_id = training_asset_id;
     if (training_dataset_item_id !== undefined) updateData.training_dataset_item_id = training_dataset_item_id;
+    if (ptv_delay !== undefined && typeof ptv_delay === 'number' && ptv_delay >= 0) updateData.ptv_delay = ptv_delay;
 
     const { data: message, error } = await supabaseServiceRole
       .from('messages')

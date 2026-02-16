@@ -10,7 +10,9 @@
     "clean": "rm -rf .next && rm -rf node_modules/.cache",
     "clean:win": "powershell -ExecutionPolicy Bypass -File ./clean-cache.ps1",
     "dev:clean": "npm run clean:win && npm run dev",
-    "setup:scheduled-function": "tsx scripts/setup-scheduled-function.ts"
+    "setup:scheduled-function": "tsx scripts/setup-scheduled-function.ts",
+    "anti-spam:worker": "tsx scripts/anti-spam-worker.ts",
+    "backfill:transfer-balances": "tsx scripts/backfill-transfer-balances.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.81.1",
@@ -24,7 +26,8 @@
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
     "reactflow": "^11.11.4",
-    "recharts": "^3.5.1"
+    "recharts": "^3.5.1",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@netlify/plugin-nextjs": "^5.14.4",

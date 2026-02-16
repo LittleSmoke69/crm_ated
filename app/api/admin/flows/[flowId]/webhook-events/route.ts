@@ -118,11 +118,11 @@ export async function GET(
       }
     }
 
-    // Busca eventos do webhook
+    // Busca eventos do webhook (tabela usa received_at, não created_at)
     let eventsQuery = supabaseServiceRole
       .from('evolution_webhook_events')
-      .select('id, env, event_type, instance_name, remote_jid, created_at, payload, payload_normalized')
-      .order('created_at', { ascending: false })
+      .select('id, env, event_type, instance_name, remote_jid, received_at, payload, payload_normalized')
+      .order('received_at', { ascending: false })
       .limit(limit);
 
     // Filtra por ambiente se especificado
@@ -220,7 +220,7 @@ export async function GET(
         event_type: event.event_type,
         instance_name: event.instance_name,
         group_jid: groupJid,
-        created_at: event.created_at,
+        created_at: event.received_at,
         has_execution: !!execution,
         execution: execution || null,
         has_automation: hasAutomation,

@@ -22,9 +22,9 @@ export async function GET(req: NextRequest) {
       .eq('id', auth.userId)
       .single();
 
-    const canAccess = profile?.status === 'super_admin' || profile?.status === 'admin' || profile?.status === 'dono_banca';
+    const canAccess = profile?.status === 'super_admin' || profile?.status === 'admin' || profile?.status === 'dono_banca' || profile?.status === 'auditoria';
     if (!canAccess) {
-      return errorResponse('Acesso negado. Apenas administradores.', 403);
+      return errorResponse('Acesso negado. Apenas administradores ou auditoria.', 403);
     }
 
     // Busca todas as instâncias com informações da API Evolution

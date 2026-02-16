@@ -689,7 +689,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <MetricCard 
-              title="Leads Ativos" 
+              title="Clientes Ativos" 
               value={metrics?.active_leads || 0} 
               icon={<CheckCircle className="w-5 h-5" />} 
               bgColor="bg-indigo-600" 

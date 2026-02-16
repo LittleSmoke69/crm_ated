@@ -2,10 +2,30 @@
 
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
-import bcrypt from 'bcryptjs';
 import { Mail, Lock, LogIn, AlertCircle } from 'lucide-react';
 import Logo from '@/components/Logo';
+
+/** Mapeia o status (role) do perfil para a rota inicial de acesso. */
+function getLandingRouteByStatus(status: string | null | undefined): string {
+  switch (status) {
+    case 'super_admin':
+    case 'admin':
+      return '/admin';
+    case 'dono_banca':
+      return '/dono-banca';
+    case 'gestor':
+      return '/gestor-trafego';
+    case 'gerente':
+      return '/gerente';
+    case 'consultor':
+      return '/crm/kanban';
+    case 'auditoria':
+    case 'suporte':
+      return '/admin';
+    default:
+      return '/';
+  }
+}
 
 const LoginPage = () => {
   const router = useRouter();
@@ -51,39 +71,35 @@ const LoginPage = () => {
     try {
       setLoading(true);
 
-      const emailLower = email.toLowerCase().trim();
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: email.trim().toLowerCase(),
+          password,
+        }),
+      });
 
-      const { data: user, error } = await supabase
-        .from('profiles')
-        .select('id, email, password_hash')
-        .eq('email', emailLower)
-        .single();
+      const data = await res.json();
 
-      if (error || !user) {
-        setErrorMsg('Credenciais inválidas.');
+      if (!res.ok || !data.success) {
+        setErrorMsg(data.error || 'Credenciais inválidas.');
         setLoading(false);
         return;
       }
 
-      const matches = bcrypt.compareSync(password, user.password_hash || '');
-      if (!matches) {
-        setErrorMsg('Credenciais inválidas.');
+      const { userId, email: userEmail, status } = data.data || {};
+      if (!userId || !userEmail) {
+        setErrorMsg('Resposta inválida do servidor.');
         setLoading(false);
         return;
       }
 
-      // Guarda artefatos de sessão (sessionStorage + cookie + fallback localStorage)
-      setSessionArtifacts(user.id, user.email);
+      setSessionArtifacts(userId, userEmail);
 
-      // (Opcional) registra último login — ignora erro
-      try {
-        await supabase
-          .from('profiles')
-          .update({ last_login_at: new Date().toISOString() })
-          .eq('user_id', user.id);
-      } catch {}
-
-      router.push('/');
+      // Redireciona para a rota da role do usuário (conforme status no banco)
+      const landingRoute = getLandingRouteByStatus(status);
+      router.push(landingRoute);
     } catch (err) {
       setErrorMsg('Erro ao efetuar login.');
     } finally {
@@ -93,7 +109,7 @@ const LoginPage = () => {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-100 px-4 py-12">
-      <div className="w-full max-w-md">
+      <div className="w-full max-w-lg">
         {/* Logo e Título */}
         <div className="text-center mb-8">
           <div className="flex items-center justify-center mb-3 w-full">
@@ -108,7 +124,7 @@ const LoginPage = () => {
         </div>
 
         {/* Card de Login */}
-        <div className="bg-gray-100 rounded-xl shadow-lg p-8 border border-gray-200">
+        <div className="bg-gray-100 rounded-xl shadow-lg p-10 border border-gray-200">
           {errorMsg && (
             <div className="mb-6 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-3 flex items-center gap-2">
               <AlertCircle className="w-5 h-5 flex-shrink-0" />
@@ -130,7 +146,7 @@ const LoginPage = () => {
                   value={email}
                   onChange={e => setEmail(e.target.value)}
                   placeholder="seu@email.com"
-                  className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 placeholder:text-gray-400 transition"
+                  className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-800 placeholder:text-gray-600 transition"
                   disabled={loading}
                   autoComplete="username"
                   inputMode="email"
@@ -152,7 +168,7 @@ const LoginPage = () => {
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 placeholder:text-gray-400 transition"
+                  className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-800 placeholder:text-gray-600 transition"
                   disabled={loading}
                   autoComplete="current-password"
                   required
@@ -187,9 +203,15 @@ const LoginPage = () => {
             </button>
           </form>
 
-          {/* Link para Registro */}
-          <div className="mt-6 text-center">
-            <p className="text-sm text-gray-600">
+          {/* Esqueceu a senha (esquerda) e Criar conta (direita) na mesma linha */}
+          <div className="mt-6 flex flex-nowrap items-center justify-between gap-4 text-sm">
+            <a
+              href="/forgot-password"
+              className="text-[#8CD955] hover:text-[#7BC84A] font-medium transition whitespace-nowrap"
+            >
+              Esqueceu a senha? Clique aqui
+            </a>
+            <p className="text-gray-600 whitespace-nowrap">
               Não tem conta?{' '}
               <a
                 href="/register"
