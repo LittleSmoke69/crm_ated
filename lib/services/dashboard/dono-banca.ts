@@ -43,7 +43,7 @@ function normalizeBancaUrl(bancaUrl: string): string {
 }
 
 /** Lead retornado por get-indicateds-by-consultant (campos usados na agregação) */
-interface IndicatedLead {
+export interface IndicatedLead {
   consultant_id?: number;
   consultant_name?: string;
   consultant_email?: string;
@@ -55,6 +55,7 @@ interface IndicatedLead {
   total_saque?: number;
   total_depositos_count?: number;
   status?: string;
+  created_at?: string | null;
 }
 
 /** Métricas agregadas por consultor (email como chave) */
@@ -86,7 +87,7 @@ const EMPTY_CONSULTANT_METRICS: ConsultantAggregatedMetrics = {
  * Busca todos os indicados no período via uma única chamada get-indicateds-by-consultant (from/to).
  * Pagina automaticamente (per_page=2000) e retorna o array completo de leads.
  */
-async function fetchIndicatedsByPeriod(
+export async function fetchIndicatedsByPeriod(
   cleanBancaUrl: string,
   dateFrom: string | null | undefined,
   dateTo: string | null | undefined
@@ -129,7 +130,7 @@ async function fetchIndicatedsByPeriod(
  * Uma única requisição get-indicateds-by-consultant (from/to) já traz todos os leads; esta função
  * transforma em totais por consultor.
  */
-function aggregateIndicatedsByConsultant(leads: IndicatedLead[]): Map<string, ConsultantAggregatedMetrics> {
+export function aggregateIndicatedsByConsultant(leads: IndicatedLead[]): Map<string, ConsultantAggregatedMetrics> {
   const byEmail = new Map<string, ConsultantAggregatedMetrics>();
 
   for (const lead of leads) {
@@ -180,7 +181,7 @@ export interface ExternalMetricsShape {
  * Calcula o resumo geral (externalMetrics) a partir apenas da lista de leads
  * retornada por get-indicateds-by-consultant. Usado pelo gestor-trafego para não depender de dashboard-metrics.
  */
-function computeExternalMetricsFromLeads(leads: IndicatedLead[]): ExternalMetricsShape {
+export function computeExternalMetricsFromLeads(leads: IndicatedLead[]): ExternalMetricsShape {
   let total_deposited = 0;
   let total_bets = 0;
   let total_prizes = 0;
