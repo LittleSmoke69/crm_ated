@@ -159,7 +159,7 @@ function DateInputDDMMYYYY({ value, onChange, className = '', maxDate }: { value
               const iso = `${view.year}-${String(view.month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
               const isSelected = value === iso;
               const isToday = todaySP === iso;
-              const isAfterMax = maxDate && iso > maxDate;
+              const isAfterMax = Boolean(maxDate && iso > maxDate);
               return (
                 <button
                   key={i}
