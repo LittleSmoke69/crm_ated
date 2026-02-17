@@ -65,6 +65,61 @@ export function dateAtTimezoneToUTC(
 }
 
 /**
+ * Retorna o dia da semana (0=domingo .. 6=sábado) para uma data civil no timezone.
+ * Usado para validar que a próxima execução cai em um dia selecionado.
+ */
+function getDayOfWeekForDateInTimezone(
+  timezone: string,
+  year: number,
+  month: number,
+  day: number
+): number {
+  const tz = timezone || 'America/Sao_Paulo';
+  const utcInstant = new Date(
+    dateAtTimezoneToUTC(year, month, day, 12, 0, tz)
+  ).getTime();
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    weekday: 'long',
+  });
+  const dayName = formatter.format(new Date(utcInstant)).toLowerCase();
+  return WEEKDAY_NAME_TO_NUM[dayName] ?? 0;
+}
+
+/**
+ * Soma N dias civis no timezone e retorna a nova data (ano, mês, dia).
+ * Garante que a próxima data seja sempre correta no calendário do usuário (evita DST).
+ */
+function addCalendarDaysInTimezone(
+  timezone: string,
+  year: number,
+  month: number,
+  day: number,
+  daysToAdd: number
+): { year: number; month: number; day: number } {
+  if (daysToAdd === 0) return { year, month, day };
+  const tz = timezone || 'America/Sao_Paulo';
+  const noonUtc = new Date(
+    dateAtTimezoneToUTC(year, month, day, 12, 0, tz)
+  ).getTime();
+  const nextUtc = noonUtc + daysToAdd * 24 * 60 * 60 * 1000;
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const parts = formatter.formatToParts(new Date(nextUtc));
+  const get = (type: string) =>
+    parseInt(parts.find((p) => p.type === type)?.value || '0', 10);
+  return {
+    year: get('year'),
+    month: get('month'),
+    day: get('day'),
+  };
+}
+
+/**
  * Retorna a data civil (ano, mês, dia) e hora atuais no timezone.
  */
 export function getCurrentDateAndTimeInTimezone(timezone: string): {
@@ -267,23 +322,24 @@ export function calculateNextRecurringRun(
   // Quando todos os dias da semana estão ativos, próxima execução = amanhã (sempre +1), nunca +7
   const allDaysActive = selectedDayNumbers.length === 7;
   if (allDaysActive && hasTimePassedToday) {
-    const daysToAdd = 1;
-    const noonTodayUtc = new Date(
-      dateAtTimezoneToUTC(current.year, current.month, current.day, 12, 0, tz)
-    ).getTime();
-    const nextRunUtcInstant = noonTodayUtc + daysToAdd * 24 * 60 * 60 * 1000;
-    const formatter = new Intl.DateTimeFormat('en-US', {
-      timeZone: tz,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    });
-    const parts = formatter.formatToParts(new Date(nextRunUtcInstant));
-    const get = (type: string) => parseInt(parts.find((p) => p.type === type)?.value || '0', 10);
-    return dateAtTimezoneToUTC(get('year'), get('month'), get('day'), targetHour, targetMinute, tz);
+    const nextDate = addCalendarDaysInTimezone(
+      tz,
+      current.year,
+      current.month,
+      current.day,
+      1
+    );
+    return dateAtTimezoneToUTC(
+      nextDate.year,
+      nextDate.month,
+      nextDate.day,
+      targetHour,
+      targetMinute,
+      tz
+    );
   }
 
-  // Próximo dia da semana (no timezone do usuário)
+  // Próximo dia da semana (no timezone do usuário) — calendário explícito
   let daysToAdd: number;
   const nextDayInWeek = selectedDayNumbers.find((d) => d > current.dayOfWeek);
   if (nextDayInWeek !== undefined) {
@@ -297,22 +353,26 @@ export function calculateNextRecurringRun(
     daysToAdd = 7;
   }
 
-  // "Hoje ao meio-dia" no TZ → UTC, + N dias, depois formatar no TZ para obter (ano, mês, dia)
-  const noonTodayUtc = new Date(
-    dateAtTimezoneToUTC(current.year, current.month, current.day, 12, 0, tz)
-  ).getTime();
-  const nextRunUtcInstant = noonTodayUtc + daysToAdd * 24 * 60 * 60 * 1000;
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone: tz,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  });
-  const parts = formatter.formatToParts(new Date(nextRunUtcInstant));
-  const get = (type: string) => parseInt(parts.find((p) => p.type === type)?.value || '0', 10);
-  const nextY = get('year');
-  const nextM = get('month');
-  const nextD = get('day');
+  const nextDate = addCalendarDaysInTimezone(
+    tz,
+    current.year,
+    current.month,
+    current.day,
+    daysToAdd
+  );
+  let nextY = nextDate.year;
+  let nextM = nextDate.month;
+  let nextD = nextDate.day;
+
+  // Validação: a data calculada deve cair em um dia selecionado (evita erros de DST/edge)
+  for (let i = 0; i < 7; i++) {
+    const dayOfWeek = getDayOfWeekForDateInTimezone(tz, nextY, nextM, nextD);
+    if (selectedDayNumbers.includes(dayOfWeek)) break;
+    const adjusted = addCalendarDaysInTimezone(tz, nextY, nextM, nextD, 1);
+    nextY = adjusted.year;
+    nextM = adjusted.month;
+    nextD = adjusted.day;
+  }
 
   return dateAtTimezoneToUTC(nextY, nextM, nextD, targetHour, targetMinute, tz);
 }
@@ -346,23 +406,17 @@ function calculateNextFromCronExpr(
         tz
       );
     }
-    const noonTodayUtc = new Date(
-      dateAtTimezoneToUTC(current.year, current.month, current.day, 12, 0, tz)
-    ).getTime();
-    const nextRunUtcInstant = noonTodayUtc + 24 * 60 * 60 * 1000;
-    const formatter = new Intl.DateTimeFormat('en-US', {
-      timeZone: tz,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    });
-    const formatterParts = formatter.formatToParts(new Date(nextRunUtcInstant));
-    const get = (type: string) =>
-      parseInt(formatterParts.find((p) => p.type === type)?.value || '0', 10);
+    const nextDate = addCalendarDaysInTimezone(
+      tz,
+      current.year,
+      current.month,
+      current.day,
+      1
+    );
     return dateAtTimezoneToUTC(
-      get('year'),
-      get('month'),
-      get('day'),
+      nextDate.year,
+      nextDate.month,
+      nextDate.day,
       targetHour,
       targetMinute,
       tz
@@ -408,23 +462,31 @@ function calculateNextFromCronExpr(
     daysToAdd = allDaysActive ? 1 : 7;
   }
 
-  const noonTodayUtc = new Date(
-    dateAtTimezoneToUTC(current.year, current.month, current.day, 12, 0, tz)
-  ).getTime();
-  const nextRunUtcInstant = noonTodayUtc + daysToAdd * 24 * 60 * 60 * 1000;
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone: tz,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  });
-  const formatterParts = formatter.formatToParts(new Date(nextRunUtcInstant));
-  const get = (type: string) =>
-    parseInt(formatterParts.find((p) => p.type === type)?.value || '0', 10);
+  const nextDate = addCalendarDaysInTimezone(
+    tz,
+    current.year,
+    current.month,
+    current.day,
+    daysToAdd
+  );
+  let nextY = nextDate.year;
+  let nextM = nextDate.month;
+  let nextD = nextDate.day;
+
+  // Validação: data deve cair em um dia selecionado (calendário interno)
+  for (let i = 0; i < 7; i++) {
+    const dayOfWeek = getDayOfWeekForDateInTimezone(tz, nextY, nextM, nextD);
+    if (weekdayNumbers.includes(dayOfWeek)) break;
+    const adjusted = addCalendarDaysInTimezone(tz, nextY, nextM, nextD, 1);
+    nextY = adjusted.year;
+    nextM = adjusted.month;
+    nextD = adjusted.day;
+  }
+
   return dateAtTimezoneToUTC(
-    get('year'),
-    get('month'),
-    get('day'),
+    nextY,
+    nextM,
+    nextD,
     targetHour,
     targetMinute,
     tz

@@ -2044,6 +2044,18 @@ const ActivationsPage = () => {
                         <p className="text-gray-800 font-medium break-words">{message?.title || 'Sem título'}</p>
                       </div>
 
+                      {/* Data de criação do disparo */}
+                      {(() => {
+                        const createdAt = groupSchedules.map((s: { created_at?: string }) => s.created_at).filter(Boolean).sort()[0];
+                        return createdAt ? (
+                          <div className="mb-3 sm:mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-gray-600 min-w-0">
+                            <Calendar className="w-4 h-4 shrink-0" />
+                            <span className="font-medium shrink-0">CRIADO EM:</span>
+                            <span className="break-words">{formatDateTime(createdAt)}</span>
+                          </div>
+                        ) : null;
+                      })()}
+
                       {/* Grupos deste disparo */}
                       <div className="mb-3 sm:mb-4 min-w-0">
                         <p className="text-xs font-semibold text-gray-500 uppercase mb-1">GRUPOS ({groupSchedules.length})</p>
