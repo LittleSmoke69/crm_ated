@@ -151,6 +151,10 @@ export async function GET(req: NextRequest) {
       });
 
       if (!response.ok) {
+        if (response.status === 404) {
+          console.warn('[CRM Metrics] API externa retornou 404 (endpoint de métricas não encontrado).');
+          return errorResponse('Endpoint de métricas da banca não encontrado (404).', 404);
+        }
         const errorText = await response.text();
         console.error(`[CRM Metrics] Erro HTTP ${response.status}:`, errorText);
         return errorResponse(`Erro ao consultar métricas na API externa: ${response.status} ${response.statusText}`);

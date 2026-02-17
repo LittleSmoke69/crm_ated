@@ -176,6 +176,12 @@ const AdminLoginPage = () => {
               </div>
             </div>
 
+            <div className="text-right">
+              <a href="/forgot-password" className="text-sm text-[#8CD955] hover:text-[#7BC84A] font-medium transition">
+                Esqueceu a senha? Clique aqui
+              </a>
+            </div>
+
             {/* Botão Submit */}
             <button
               type="submit"

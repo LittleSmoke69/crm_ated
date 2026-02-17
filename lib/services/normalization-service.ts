@@ -1,5 +1,15 @@
 import { supabaseServiceRole } from './supabase-service';
 
+/** Evita logar HTML de páginas de erro (ex.: Cloudflare 522) nos logs. */
+function sanitizeErrorForLog(error: unknown): string {
+  if (error == null) return 'Erro desconhecido';
+  const msg = typeof (error as any)?.message === 'string' ? (error as any).message : String(error);
+  if (msg.includes('<!DOCTYPE') || msg.includes('Connection timed out') || msg.includes('Error code 522')) {
+    return 'Supabase indisponível (timeout/522). Tente novamente em instantes.';
+  }
+  return msg.length > 300 ? msg.slice(0, 300) + '…' : msg;
+}
+
 export interface NormalizationMapping {
   target: string; // Campo normalizado de saída
   source: string; // Path no payload original (JSONPath style)
@@ -42,20 +52,39 @@ export class NormalizationService {
     instanceName?: string
   ): Promise<any> {
     try {
-      // Busca regras ativas para o tipo de evento (ordenadas por prioridade)
-      const { data: rules, error } = await supabaseServiceRole
-        .from('webhook_normalization_rules')
-        .select('*')
-        .eq('event_type', eventType)
-        .eq('enabled', true)
-        .order('priority', { ascending: false });
+      // Busca regras ativas (com retry para falhas transitórias ex.: 522/timeout Supabase)
+      let rules: NormalizationRule[] | null = null;
+      let lastError: unknown = null;
+      const maxAttempts = 3;
 
-      if (error) {
-        console.error('❌ [NORMALIZATION] Erro ao buscar regras:', error);
-        return payload; // Retorna payload original em caso de erro
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const { data, error } = await supabaseServiceRole
+          .from('webhook_normalization_rules')
+          .select('*')
+          .eq('event_type', eventType)
+          .eq('enabled', true)
+          .order('priority', { ascending: false });
+
+        if (!error) {
+          rules = data;
+          break;
+        }
+        lastError = error;
+        const msg = typeof error?.message === 'string' ? error.message : '';
+        const isRetryable = msg.includes('522') || msg.includes('Connection timed out') || msg.includes('<!DOCTYPE');
+        if (!isRetryable || attempt === maxAttempts) {
+          console.error('❌ [NORMALIZATION] Erro ao buscar regras:', sanitizeErrorForLog(error));
+          return payload;
+        }
+        await new Promise((r) => setTimeout(r, 1000 * attempt));
       }
 
-      if (!rules || rules.length === 0) {
+      if (lastError && !rules) {
+        console.error('❌ [NORMALIZATION] Erro ao buscar regras (após retries):', sanitizeErrorForLog(lastError));
+        return payload;
+      }
+
+      if (!rules?.length) {
         return payload; // Nenhuma regra, retorna payload original
       }
 
@@ -67,7 +96,7 @@ export class NormalizationService {
         try {
           normalized = await this.applyRule(rule, normalized, instanceName);
         } catch (err: any) {
-          console.error(`❌ [NORMALIZATION] Erro ao aplicar regra ${rule.id}:`, err);
+          console.error(`❌ [NORMALIZATION] Erro ao aplicar regra ${rule.id}:`, sanitizeErrorForLog(err));
           // Continua com próxima regra mesmo se esta falhar
         }
       }
@@ -77,7 +106,7 @@ export class NormalizationService {
 
       return normalized;
     } catch (err: any) {
-      console.error('❌ [NORMALIZATION] Erro ao normalizar payload:', err);
+      console.error('❌ [NORMALIZATION] Erro ao normalizar payload:', sanitizeErrorForLog(err));
       return payload; // Retorna payload original em caso de erro
     }
   }
@@ -129,7 +158,7 @@ export class NormalizationService {
       } catch (err: any) {
         console.error(
           `❌ [NORMALIZATION] Erro ao aplicar mapeamento ${mapping.target}:`,
-          err
+          sanitizeErrorForLog(err)
         );
         // Usa valor padrão se houver
         if (mapping.default !== undefined) {
@@ -423,7 +452,7 @@ export class NormalizationService {
         })
         .eq('id', eventId);
     } catch (err: any) {
-      console.error('❌ [NORMALIZATION] Erro ao salvar payload normalizado:', err);
+      console.error('❌ [NORMALIZATION] Erro ao salvar payload normalizado:', sanitizeErrorForLog(err));
     }
   }
 
@@ -445,13 +474,13 @@ export class NormalizationService {
       const { data, error } = await query;
 
       if (error) {
-        console.error('❌ [NORMALIZATION] Erro ao listar regras:', error);
+        console.error('❌ [NORMALIZATION] Erro ao listar regras:', sanitizeErrorForLog(error));
         return [];
       }
 
       return data || [];
     } catch (err: any) {
-      console.error('❌ [NORMALIZATION] Erro ao listar regras:', err);
+      console.error('❌ [NORMALIZATION] Erro ao listar regras:', sanitizeErrorForLog(err));
       return [];
     }
   }
@@ -471,13 +500,13 @@ export class NormalizationService {
         .single();
 
       if (error) {
-        console.error('❌ [NORMALIZATION] Erro ao criar regra:', error);
+        console.error('❌ [NORMALIZATION] Erro ao criar regra:', sanitizeErrorForLog(error));
         return null;
       }
 
       return data;
     } catch (err: any) {
-      console.error('❌ [NORMALIZATION] Erro ao criar regra:', err);
+      console.error('❌ [NORMALIZATION] Erro ao criar regra:', sanitizeErrorForLog(err));
       return null;
     }
   }
@@ -498,13 +527,13 @@ export class NormalizationService {
         .single();
 
       if (error) {
-        console.error('❌ [NORMALIZATION] Erro ao atualizar regra:', error);
+        console.error('❌ [NORMALIZATION] Erro ao atualizar regra:', sanitizeErrorForLog(error));
         return null;
       }
 
       return data;
     } catch (err: any) {
-      console.error('❌ [NORMALIZATION] Erro ao atualizar regra:', err);
+      console.error('❌ [NORMALIZATION] Erro ao atualizar regra:', sanitizeErrorForLog(err));
       return null;
     }
   }
@@ -520,13 +549,13 @@ export class NormalizationService {
         .eq('id', ruleId);
 
       if (error) {
-        console.error('❌ [NORMALIZATION] Erro ao deletar regra:', error);
+        console.error('❌ [NORMALIZATION] Erro ao deletar regra:', sanitizeErrorForLog(error));
         return false;
       }
 
       return true;
     } catch (err: any) {
-      console.error('❌ [NORMALIZATION] Erro ao deletar regra:', err);
+      console.error('❌ [NORMALIZATION] Erro ao deletar regra:', sanitizeErrorForLog(err));
       return false;
     }
   }

@@ -12,9 +12,9 @@ interface CampaignModalProps {
 }
 
 // Constantes de validação
-const MAX_IMAGE_MB = 15;
-const MAX_VIDEO_MB = 60;
-const MAX_AUDIO_MB = 15;
+const MAX_IMAGE_MB = 1024; // 1GB
+const MAX_VIDEO_MB = 1024; // 1GB
+const MAX_AUDIO_MB = 1024; // 1GB
 
 const MAX_SIZES = {
   image: MAX_IMAGE_MB * 1024 * 1024,

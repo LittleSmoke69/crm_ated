@@ -30,6 +30,9 @@ import {
   User,
   ListOrdered,
   ClipboardList,
+  ArrowLeftToLine,
+  ExternalLink,
+  ArrowRightLeft,
 } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import Logo from '@/components/Logo';
@@ -49,7 +52,7 @@ interface MenuItem {
   }[];
 }
 
-type UserStatus = 'super_admin' | 'admin' | 'consultor' | 'gerente' | 'dono_banca' | 'auditoria' | 'suporte' | null;
+type UserStatus = 'super_admin' | 'admin' | 'consultor' | 'gerente' | 'dono_banca' | 'gestor' | 'auditoria' | 'suporte' | null;
 
 const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const pathname = usePathname();
@@ -58,11 +61,21 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const [userStatus, setUserStatus] = useState<UserStatus>(null);
   const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
   const [loadingRoute, setLoadingRoute] = useState<string | null>(null);
+  const [isImpersonating, setIsImpersonating] = useState(false);
+
+  // Detecta modo impersonação (admin acessando conta de outro usuário)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    setIsImpersonating(!!sessionStorage.getItem('admin_original_id'));
+  }, [pathname]);
 
   // Verifica se está nas páginas que devem mostrar o botão Sair
   const shouldShowLogout = pathname === '/perfil' || 
                           pathname === '/list-cleaning' ||
+                          pathname === '/crm/transferido' ||
                           pathname?.startsWith('/admin/webhooks') ||
+                          pathname?.startsWith('/admin/meta') ||
+                          pathname?.startsWith('/admin/crm/lead-transfer') ||
                           onSignOut !== undefined;
 
   // Função de logout padrão
@@ -78,6 +91,39 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
 
   // Usa onSignOut se fornecido, senão usa a função padrão
   const handleLogout = onSignOut || handleDefaultLogout;
+
+  const handleBackToAdmin = () => {
+    if (typeof window === 'undefined') return;
+    const adminId = sessionStorage.getItem('admin_original_id');
+    const adminEmail = sessionStorage.getItem('admin_original_email');
+    if (!adminId) {
+      sessionStorage.removeItem('admin_original_id');
+      sessionStorage.removeItem('admin_original_email');
+      window.location.href = '/admin/login';
+      return;
+    }
+    // Limpa sessão atual (usuário impersonado)
+    sessionStorage.removeItem('user_id');
+    sessionStorage.removeItem('profile_id');
+    sessionStorage.removeItem('profile_email');
+    localStorage.removeItem('profile_id');
+    localStorage.removeItem('profile_email');
+    document.cookie = 'user_id=; Path=/; Max-Age=0; SameSite=Lax';
+    // Restaura sessão do admin
+    sessionStorage.setItem('user_id', adminId);
+    sessionStorage.setItem('profile_id', adminId);
+    if (adminEmail) {
+      sessionStorage.setItem('profile_email', adminEmail);
+      localStorage.setItem('profile_email', adminEmail);
+    }
+    localStorage.setItem('profile_id', adminId);
+    const isHttps = window.location.protocol === 'https:';
+    const secureAttr = isHttps ? ' Secure;' : '';
+    document.cookie = `user_id=${encodeURIComponent(adminId)}; Path=/; SameSite=Lax;${secureAttr}`;
+    sessionStorage.removeItem('admin_original_id');
+    sessionStorage.removeItem('admin_original_email');
+    window.location.href = '/admin';
+  };
 
   useEffect(() => {
     const loadUserProfile = async () => {
@@ -128,11 +174,12 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const itemProfile: MenuItem = { href: '/perfil', icon: User, label: 'Meu Perfil' };
   const itemPainelAdmin: MenuItem = { href: '/admin', icon: Shield, label: 'Painel Admin' };
   const itemWebhooks: MenuItem = {
-    label: 'Webhooks',
+    label: 'Integrações',
     icon: Webhook,
     submenu: [
-      { href: '/admin/webhooks/evolution', icon: Webhook, label: 'Eventos' },
+      { href: '/admin/webhooks/evolution', icon: Webhook, label: 'Webhooks Evolution' },
       { href: '/admin/webhooks/normalization-rules', icon: Settings, label: 'Regras de Normalização' },
+      { href: '/admin/meta', icon: BarChart3, label: 'Meta Ads' },
     ],
   };
   const itemFlows: MenuItem = { href: '/admin/flows', icon: Workflow, label: 'Flows (Automações)' };
@@ -142,7 +189,10 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const itemCRM: MenuItem = {
     label: 'CRM',
     icon: Layout,
-    submenu: [{ href: '/crm/kanban', icon: Kanban, label: 'Kanban' }],
+    submenu: [
+      { href: '/crm/kanban', icon: Kanban, label: 'Kanban' },
+      { href: '/crm/transferido', icon: ArrowRightLeft, label: 'Transferido' },
+    ],
   };
   const itemCampanhas: MenuItem = {
     label: 'Campanhas',
@@ -153,20 +203,26 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
       { href: '/campanha/groups', icon: Users, label: 'Grupos' },
     ],
   };
-  // Consultor: apenas Campanha > Grupos
+  // Consultor: Campanha > Mensagem (ativações) + Grupos (igual ao gerente para envio de mensagens)
   const itemCampanhaConsultor: MenuItem = {
     label: 'Campanha',
     icon: Rocket,
-    submenu: [{ href: '/campanha/groups', icon: Users, label: 'Grupos' }],
+    submenu: [
+      { href: '/crm/activations', icon: Activity, label: 'Mensagem' },
+      { href: '/campanha/groups', icon: Users, label: 'Grupos' },
+    ],
   };
   const itemContatosAtivos: MenuItem = { href: '/contacts', icon: Users, label: 'Contatos Ativos' };
   const itemImportarContatos: MenuItem = { href: '/import-contacts', icon: Plus, label: 'Importar Contatos' };
   const itemLimpezaLista: MenuItem = { href: '/list-cleaning', icon: ListOrdered, label: 'Limpeza de Lista' };
   const itemAuditoria: MenuItem = { href: '/admin/audit', icon: ClipboardList, label: 'Auditoria' };
-  const itemAntiSpam: MenuItem = { href: '/anti-spam', icon: Shield, label: 'Anti-Spam' };
+  const itemAntiSpam: MenuItem = { href: '/admin/anti-spam', icon: Shield, label: 'Anti-Spam' };
   const itemGestaoBanca: MenuItem = { href: '/dono-banca', icon: BarChart3, label: 'Gestão de Banca' };
+  const itemGestaoTrafego: MenuItem = { href: '/gestor-trafego', icon: BarChart3, label: 'Gestão de Tráfego' };
   const itemGestaoConsultores: MenuItem = { href: '/gerente', icon: Briefcase, label: 'Gestão de Consultores' };
   const itemMeuDesempenho: MenuItem = { href: '/consultor', icon: BarChart3, label: 'Meu Desempenho' };
+  const itemMetaAds: MenuItem = { href: '/admin/meta', icon: BarChart3, label: 'Meta Ads' };
+  const itemVslRedirect: MenuItem = { href: '/admin/vsl', icon: ExternalLink, label: 'VSL & Redirect' };
 
   // Define menus baseados no status do usuário (matriz de cargos)
   const getMenuItems = (): MenuItem[] => {
@@ -190,23 +246,29 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemAntiSpam,
         itemProfile,
         itemGestaoBanca,
+        itemGestaoTrafego,
+        itemVslRedirect,
         itemGestaoConsultores,
       ];
     }
 
-    // 🛠️ Admin - painel, CRM, campanhas, instâncias (sem Gestão Consultores/Banca, Anti-Spam, Auditoria, Chat Interno, Maturador)
+    // 🛠️ Admin - painel, CRM, campanhas, instâncias + Gestão de Tráfego + Meta Ads
     if (userStatus === 'admin') {
       return [
         itemDashboard,
         itemInstances,
         itemPainelAdmin,
+        itemMetaAds,
+        itemVslRedirect,
         itemAgentesIAAdmin,
         itemCRM,
         itemCampanhas,
         itemContatosAtivos,
         itemImportarContatos,
         itemLimpezaLista,
+        itemAntiSpam,
         itemProfile,
+        itemGestaoTrafego,
       ];
     }
 
@@ -259,6 +321,23 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
       ];
     }
 
+    // 📈 Gestor de Tráfego - Painel igual ao dono da banca + funil Facebook (vinculado a um dono)
+    if (userStatus === 'gestor') {
+      return [
+        itemGestaoTrafego,
+        itemVslRedirect,
+        itemDashboard,
+        itemInstances,
+        itemMaturador,
+        itemAgentesIA,
+        itemCRM,
+        itemCampanhas,
+        itemContatosAtivos,
+        itemImportarContatos,
+        itemProfile,
+      ];
+    }
+
     // 📊 Gerente - Gestão de Consultores + operação (sem Maturador, Flows, Webhooks, Auditoria, Anti-Spam, Chat, Gestão Banca)
     if (userStatus === 'gerente') {
       return [
@@ -270,6 +349,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemCampanhas,
         itemContatosAtivos,
         itemImportarContatos,
+        itemLimpezaLista,
         itemProfile,
       ];
     }
@@ -465,9 +545,11 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
                 );
               }
 
-              // Verifica se é o link "Métricas da Banca" e está carregando
+              // Verifica se é o link "Métricas da Banca" ou "Gestão de Tráfego" e está carregando
               const isDonoBancaLink = item.href === '/dono-banca';
+              const isGestorTrafegoLink = item.href === '/gestor-trafego';
               const isLoadingDonoBanca = loadingRoute === '/dono-banca';
+              const isLoadingGestorTrafego = loadingRoute === '/gestor-trafego';
 
               return (
                 <Link
@@ -477,10 +559,9 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
                     if (window.innerWidth < 1024) {
                       setIsMobileOpen(false);
                     }
-                    // Se for o link "Métricas da Banca", ativa o loading
-                    if (isDonoBancaLink && item.href) {
+                    // Se for o link "Métricas da Banca" ou "Gestão de Tráfego", ativa o loading
+                    if ((isDonoBancaLink || isGestorTrafegoLink) && item.href) {
                       setLoadingRoute(item.href);
-                      // Limpa o loading após um tempo (fallback caso a navegação não ocorra)
                       setTimeout(() => {
                         if (pathname === item.href) {
                           setLoadingRoute(null);
@@ -509,6 +590,30 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
               );
             })}
           </div>
+          
+          {/* Voltar ao admin (quando está acessando conta de outro usuário) */}
+          {isImpersonating && (
+            <div className="mt-auto pt-4 pb-2 border-t border-gray-200">
+              <button
+                onClick={() => {
+                  setIsMobileOpen(false);
+                  handleBackToAdmin();
+                }}
+                className={`
+                  w-full flex items-center gap-3 px-3 py-3 rounded-lg transition-all duration-200
+                  ${isMobileOpen ? '' : isCollapsed ? 'justify-center' : ''}
+                  text-white shadow-md
+                `}
+                style={{ backgroundColor: '#6366f1' }}
+                title={isMobileOpen ? undefined : isCollapsed ? 'Voltar ao admin' : undefined}
+              >
+                <ArrowLeftToLine className="w-5 h-5 flex-shrink-0" />
+                {(isMobileOpen || !isCollapsed) && (
+                  <span className="font-medium whitespace-nowrap">Voltar ao admin</span>
+                )}
+              </button>
+            </div>
+          )}
           
           {/* Botão Sair no final da sidebar */}
           {shouldShowLogout && (

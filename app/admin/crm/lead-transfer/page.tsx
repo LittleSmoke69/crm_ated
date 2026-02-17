@@ -1,0 +1,1681 @@
+'use client';
+
+import React, { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
+import Layout from '@/components/Layout';
+import { useRequireAuth } from '@/utils/useRequireAuth';
+import { useToast } from '@/hooks/useToast';
+import ToastContainer from '@/components/Toast/ToastContainer';
+import {
+  ArrowRightLeft,
+  Loader2,
+  Users,
+  Tag,
+  Search,
+  CheckSquare,
+  AlertCircle,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Building2,
+  User,
+  BarChart3,
+  History,
+  X,
+  Clock,
+  Eye,
+  RefreshCw,
+} from 'lucide-react';
+import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
+
+const MAX_LEADS_SELECT = 200;
+/** Quantidade de itens visíveis no dropdown de bancas (o restante aparece no scroll) */
+const BANCAS_DROPDOWN_VISIBLE = 4;
+/** Itens por página na tabela de histórico de transferências */
+const LOGS_PAGE_SIZE = 10;
+/** Leads por página no modal "Leads da transferência" */
+const MODAL_LEADS_PAGE_SIZE = 10;
+/** Prazo em dias para conversão do lead transferido (após isso pode ser repassado). CRM principal usa 90d. */
+const DAYS_DEADLINE_TRANSFER = 10;
+/** Exibir gráfico de barras "Transferências por banca" na aba Histórico (oculto por enquanto). */
+const SHOW_BAR_CHART_BY_BANCA = false;
+const INACTIVITY_PRESETS = [7, 10, 15, 30, 60, 90] as const;
+const BALANCE_FILTER_OPTIONS = [
+  { value: 'all', label: 'Todos' },
+  { value: 'with_balance', label: 'Com saldo' },
+  { value: 'without_balance', label: 'Sem saldo' },
+] as const;
+
+/** Retorna { daysLeft, expired } para o prazo de transferência (10d) a partir da data de transferência */
+function getTransferDeadlineInfo(createdAt: string | null | undefined): { daysLeft: number; expired: boolean } {
+  if (!createdAt) return { daysLeft: 0, expired: true };
+  const transferredAt = new Date(createdAt);
+  const now = new Date();
+  const diffMs = now.getTime() - transferredAt.getTime();
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  const daysLeft = Math.max(0, DAYS_DEADLINE_TRANSFER - diffDays);
+  const expired = diffDays >= DAYS_DEADLINE_TRANSFER;
+  return { daysLeft, expired };
+}
+const STEPS = [
+  { id: 1, label: 'Banca', short: 'Banca' },
+  { id: 2, label: 'Consultor origem', short: 'Origem' },
+  { id: 3, label: 'Filtros e buscar', short: 'Buscar' },
+  { id: 4, label: 'Selecionar leads', short: 'Selecionar' },
+  { id: 5, label: 'Consultor destino', short: 'Destino' },
+  { id: 6, label: 'Revisar e confirmar', short: 'Revisar' },
+] as const;
+
+function getTemperatureLabel(t: string | null | undefined): string {
+  if (!t) return '-';
+  const map: Record<string, string> = {
+    very_cold: 'Muito frio',
+    cold: 'Frio',
+    cooling: 'Esfriando',
+    active: 'Ativo',
+    hot: 'Quente',
+  };
+  return map[String(t).toLowerCase()] ?? t;
+}
+
+function getStatusLabel(s: string | null | undefined): string {
+  if (!s) return '-';
+  const map: Record<string, string> = {
+    novo: 'Novo',
+    ativo: 'Ativo',
+    deposito_sem_aposta: 'Saldo disponível',
+    deposito_1x: '1º depósito',
+    deposito_2x: '2º depósito',
+    deposito_3x: '3º depósito',
+    contactados: 'Contactado',
+  };
+  return map[String(s).toLowerCase()] ?? s;
+}
+
+interface Banca {
+  id: string;
+  name: string;
+  url: string;
+}
+
+interface Consultant {
+  id: string;
+  email: string;
+  full_name: string;
+}
+
+interface Lead {
+  id: number | string;
+  [key: string]: unknown;
+}
+
+export default function AdminLeadTransferPage() {
+  const router = useRouter();
+  const { checking, userId } = useRequireAuth();
+  const { toasts, showToast, removeToast } = useToast();
+
+  const [bancas, setBancas] = useState<Banca[]>([]);
+  const [bancaId, setBancaId] = useState<string>('');
+  const [consultants, setConsultants] = useState<Consultant[]>([]);
+  const [sourceEmail, setSourceEmail] = useState('');
+  const [targetEmail, setTargetEmail] = useState('');
+  const [tags, setTags] = useState<string[]>([]);
+  const [selectedTag, setSelectedTag] = useState('');
+  const [daysInactive, setDaysInactive] = useState<string>('10');
+  const [balanceFilter, setBalanceFilter] = useState<string>('all');
+  const [quantity, setQuantity] = useState<string>('10');
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [selectedLeadIds, setSelectedLeadIds] = useState<Set<string | number>>(new Set());
+
+  const [bancaSearchQuery, setBancaSearchQuery] = useState('');
+  const [bancaDropdownOpen, setBancaDropdownOpen] = useState(false);
+  const [loadingBancas, setLoadingBancas] = useState(true);
+  const [loadingConsultants, setLoadingConsultants] = useState(false);
+  const [loadingTags, setLoadingTags] = useState(false);
+  const [loadingLeads, setLoadingLeads] = useState(false);
+  const [hasSearchedLeads, setHasSearchedLeads] = useState(false);
+  const [leadSearchQuery, setLeadSearchQuery] = useState('');
+  const [leadFilterStatus, setLeadFilterStatus] = useState<string>('');
+  const [leadFilterTemperature, setLeadFilterTemperature] = useState<string>('');
+  const [leadFilterSaldoMin, setLeadFilterSaldoMin] = useState<string>('');
+  const [leadFilterSaldoMax, setLeadFilterSaldoMax] = useState<string>('');
+  const [leadsPageSize, setLeadsPageSize] = useState<number>(10);
+  const [leadsPage, setLeadsPage] = useState(1);
+  const [transferring, setTransferring] = useState(false);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [transferType, setTransferType] = useState<'TF' | 'TF1' | 'TF2' | 'TF3'>('TF');
+
+  const [managementFrom, setManagementFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 30); return d.toISOString().slice(0, 10); });
+  const [managementTo, setManagementTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const [managementTransferType, setManagementTransferType] = useState('');
+  const [transferLogs, setTransferLogs] = useState<any[]>([]);
+  const [transferStats, setTransferStats] = useState<{
+    totalTransferred: number;
+    byType: Record<string, number>;
+    receivedByTarget?: number;
+    convertedCount?: number;
+    transferidos_com_saldo?: number;
+    transferidos_sem_saldo?: number;
+  } | null>(null);
+  const [loadingLogs, setLoadingLogs] = useState(false);
+  const [loadingStats, setLoadingStats] = useState(false);
+  const [conversionConsultant, setConversionConsultant] = useState('');
+  const [managementLoaded, setManagementLoaded] = useState(false);
+  const [statsByBanca, setStatsByBanca] = useState<{ banca_id: string; banca_name: string; total_leads: number }[]>([]);
+  const [loadingStatsByBanca, setLoadingStatsByBanca] = useState(false);
+  /** Paginação da tabela de histórico */
+  const [logsPage, setLogsPage] = useState(1);
+  /** Modal de detalhes dos leads transferidos */
+  const [selectedLogForModal, setSelectedLogForModal] = useState<any>(null);
+  type ModalEntry = {
+    lead_id: string | number;
+    had_balance: boolean;
+    saldo_snapshot: number | null;
+    name?: string | null;
+    last_name?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    whatsapp?: string | null;
+    status?: string | null;
+    temperature?: string | null;
+    total_depositado?: number | null;
+    total_apostado?: number | null;
+    total_ganho?: number | null;
+    created_at?: string | null;
+  };
+  const [modalEntries, setModalEntries] = useState<ModalEntry[]>([]);
+  const [loadingModalEntries, setLoadingModalEntries] = useState(false);
+  const [modalLeadsPage, setModalLeadsPage] = useState(1);
+  /** Valor mínimo em reais: mostra apenas leads cuja soma dos saldos atinge esse valor (ordem: maior saldo primeiro) */
+  const [minSumBalance, setMinSumBalance] = useState<string>('');
+  /** Atualizando saldos das transferências (backfill) */
+  const [backfillingBalances, setBackfillingBalances] = useState(false);
+
+  const [currentStep, setCurrentStep] = useState(1);
+  const [activeTab, setActiveTab] = useState<'transfer' | 'history'>('transfer');
+  const [confirmAcknowledged, setConfirmAcknowledged] = useState(false);
+  const [showSelectedOnly, setShowSelectedOnly] = useState(false);
+  const [daysInactivePreset, setDaysInactivePreset] = useState<string>('10');
+  const [showSelectedModal, setShowSelectedModal] = useState(false);
+
+  const selectedBanca = bancas.find((b) => b.id === bancaId);
+  const filteredBancas = bancaSearchQuery.trim()
+    ? bancas.filter(
+        (b) =>
+          (b.name || '')
+            .toLowerCase()
+            .includes(bancaSearchQuery.trim().toLowerCase()) ||
+          (b.url || '').toLowerCase().includes(bancaSearchQuery.trim().toLowerCase())
+      )
+    : bancas;
+
+  const headers = (): HeadersInit => ({
+    'Content-Type': 'application/json',
+    'X-User-Id': userId ?? '',
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !userId) return;
+    const loadBancas = async () => {
+      setLoadingBancas(true);
+      try {
+        // Sem my_bancas=1: admin vê todas as bancas do CRM para poder selecionar qualquer uma na transferência
+        const res = await fetch('/api/admin/crm/bancas', { headers: headers() });
+        const json = await res.json();
+        if (res.ok && json.success && Array.isArray(json.data)) {
+          setBancas(json.data);
+          if (json.data.length === 1 && !bancaId) {
+            setBancaId(json.data[0].id);
+            setBancaSearchQuery(json.data[0].name || json.data[0].url || '');
+          }
+        } else {
+          showToast(json?.error ?? 'Erro ao carregar bancas', 'error');
+        }
+      } catch (e) {
+        showToast('Erro ao carregar bancas', 'error');
+      } finally {
+        setLoadingBancas(false);
+      }
+    };
+    loadBancas();
+  }, [userId]);
+
+  const loadConsultants = useCallback(async () => {
+    if (!bancaId || !userId) return;
+    setLoadingConsultants(true);
+    try {
+      const res = await fetch(`/api/admin/crm/consultants?banca_id=${encodeURIComponent(bancaId)}`, {
+        headers: headers(),
+      });
+      const json = await res.json();
+      if (res.ok && json.success && Array.isArray(json.data?.consultants)) {
+        setConsultants(json.data.consultants);
+      } else {
+        showToast(json?.error ?? 'Erro ao carregar consultores', 'error');
+      }
+    } catch (e) {
+      showToast('Erro ao carregar consultores', 'error');
+    } finally {
+      setLoadingConsultants(false);
+    }
+  }, [bancaId, userId]);
+
+  useEffect(() => {
+    if (bancaId) {
+      setSourceEmail('');
+      setTargetEmail('');
+      setTags([]);
+      setSelectedTag('');
+      setHasSearchedLeads(false);
+      loadConsultants();
+    } else {
+      setConsultants([]);
+      setSourceEmail('');
+      setTargetEmail('');
+      setHasSearchedLeads(false);
+    }
+  }, [bancaId, loadConsultants]);
+
+  useEffect(() => {
+    setHasSearchedLeads(false);
+  }, [sourceEmail]);
+
+  const loadTags = async () => {
+    if (!bancaId || !sourceEmail?.trim() || !userId) return;
+    setLoadingTags(true);
+    try {
+      const res = await fetch(
+        `/api/admin/crm/redistribution-tags?banca_id=${encodeURIComponent(bancaId)}&consultant_email=${encodeURIComponent(sourceEmail.trim())}`,
+        { headers: headers() }
+      );
+      const json = await res.json();
+      if (res.ok && json.success && Array.isArray(json.data?.tags)) {
+        setTags(json.data.tags);
+        setSelectedTag('');
+      } else {
+        setTags([]);
+      }
+    } catch {
+      setTags([]);
+    } finally {
+      setLoadingTags(false);
+    }
+  };
+
+  const loadLeads = async () => {
+    if (!bancaId || !sourceEmail?.trim() || !userId) {
+      showToast('Selecione a banca e o consultor origem', 'error');
+      return;
+    }
+    setLoadingLeads(true);
+    setLeads([]);
+    setSelectedLeadIds(new Set());
+    setLeadsPage(1);
+    setLeadSearchQuery('');
+    try {
+      const params = new URLSearchParams();
+      params.set('banca_id', bancaId);
+      params.set('source_consultant_email', sourceEmail.trim());
+      const daysVal = daysInactive.trim();
+      params.set('min_inactive_days', daysVal && daysVal !== '0' ? daysVal : '10');
+      if (selectedTag.trim()) params.set('tag', selectedTag.trim());
+      if (balanceFilter && balanceFilter !== 'all') params.set('balance_filter', balanceFilter);
+      const res = await fetch(`/api/admin/crm/redistribution-leads?${params.toString()}`, {
+        headers: headers(),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        showToast(json?.error ?? 'Erro ao buscar leads', 'error');
+        return;
+      }
+      const list = json.data?.leads ?? [];
+      setLeads(Array.isArray(list) ? list : []);
+    } catch (e) {
+      showToast('Erro ao buscar leads', 'error');
+    } finally {
+      setLoadingLeads(false);
+      setHasSearchedLeads(true);
+    }
+  };
+
+  const sortLeadsByInactivity = (list: Lead[]) => {
+    return [...list].sort((a, b) => {
+      const aDate = (a.created_at as string) || (a.updated_at as string) || '';
+      const bDate = (b.created_at as string) || (b.updated_at as string) || '';
+      return aDate.localeCompare(bDate);
+    });
+  };
+
+  /** Quando minSumBalance está preenchido, usa apenas leads cuja soma dos saldos atinge o valor (ordenado por saldo desc) */
+  const effectiveLeadsForTransfer = React.useMemo(() => {
+    const minSum = parseFloat(String(minSumBalance || '0').replace(',', '.')) || 0;
+    if (minSum <= 0 || leads.length === 0) return leads;
+    const withBalance = leads.map((l) => ({ lead: l, balance: parseFloat(String(l.balance ?? 0)) || 0 }));
+    withBalance.sort((a, b) => b.balance - a.balance);
+    let sum = 0;
+    const result: Lead[] = [];
+    for (const { lead, balance } of withBalance) {
+      result.push(lead);
+      sum += balance;
+      if (sum >= minSum) break;
+    }
+    return result;
+  }, [leads, minSumBalance]);
+
+  const totalBalanceSum = React.useMemo(() => {
+    return effectiveLeadsForTransfer.reduce((acc, l) => acc + (parseFloat(String(l.balance ?? 0)) || 0), 0);
+  }, [effectiveLeadsForTransfer]);
+
+  const sortedLeads = sortLeadsByInactivity(effectiveLeadsForTransfer);
+  const leadSearchLower = leadSearchQuery.trim().toLowerCase();
+  const uniqueStatuses = React.useMemo(() => {
+    const set = new Set<string>();
+    sortedLeads.forEach((l) => {
+      const s = (l.status as string)?.trim?.();
+      if (s) set.add(s);
+    });
+    return Array.from(set).sort((a, b) => getStatusLabel(a).localeCompare(getStatusLabel(b)));
+  }, [sortedLeads]);
+  const uniqueTemperatures = React.useMemo(() => {
+    const set = new Set<string>();
+    sortedLeads.forEach((l) => {
+      const t = (l.temperature as string)?.trim?.();
+      if (t) set.add(t);
+    });
+    return Array.from(set).sort((a, b) => getTemperatureLabel(a).localeCompare(getTemperatureLabel(b)));
+  }, [sortedLeads]);
+  const filteredLeads = React.useMemo(() => {
+    let list = sortedLeads;
+    if (leadSearchLower) {
+      list = list.filter((lead) => {
+        const name = String((lead.name ?? lead.full_name ?? lead.email ?? '')).toLowerCase();
+        const email = String(lead.email ?? '').toLowerCase();
+        return name.includes(leadSearchLower) || email.includes(leadSearchLower);
+      });
+    }
+    if (leadFilterStatus) {
+      list = list.filter((l) => String((l.status as string) ?? '').trim() === leadFilterStatus);
+    }
+    if (leadFilterTemperature) {
+      list = list.filter((l) => String((l.temperature as string) ?? '').trim() === leadFilterTemperature);
+    }
+    const saldoMin = leadFilterSaldoMin.trim() ? parseFloat(leadFilterSaldoMin.replace(',', '.')) : null;
+    const saldoMax = leadFilterSaldoMax.trim() ? parseFloat(leadFilterSaldoMax.replace(',', '.')) : null;
+    if (saldoMin != null && !Number.isNaN(saldoMin)) {
+      list = list.filter((l) => {
+        const b = l.balance as number | null | undefined;
+        if (b == null) return false;
+        return Number(b) >= saldoMin;
+      });
+    }
+    if (saldoMax != null && !Number.isNaN(saldoMax)) {
+      list = list.filter((l) => {
+        const b = l.balance as number | null | undefined;
+        if (b == null) return false;
+        return Number(b) <= saldoMax;
+      });
+    }
+    return list;
+  }, [sortedLeads, leadSearchLower, leadFilterStatus, leadFilterTemperature, leadFilterSaldoMin, leadFilterSaldoMax]);
+  const leadsToShow = showSelectedOnly && selectedLeadIds.size > 0
+    ? filteredLeads.filter((l) => selectedLeadIds.has(String(l.id)))
+    : filteredLeads;
+  const totalFiltered = filteredLeads.length;
+  const totalToShow = leadsToShow.length;
+  const effectivePageSize =
+    leadsPageSize <= 0 ? totalToShow : Math.min(leadsPageSize, totalToShow || 1);
+  const totalPages =
+    effectivePageSize > 0 ? Math.max(1, Math.ceil(totalToShow / effectivePageSize)) : 1;
+  const currentPage = Math.min(Math.max(1, leadsPage), totalPages);
+  const paginatedLeads = leadsToShow.slice(
+    (currentPage - 1) * effectivePageSize,
+    currentPage * effectivePageSize
+  );
+
+  const allOnPageSelected =
+    paginatedLeads.length > 0 &&
+    paginatedLeads.every((l) => selectedLeadIds.has(String(l.id)));
+
+  const toggleAllOnPage = (checked: boolean) => {
+    if (checked) {
+      setSelectedLeadIds((prev) => {
+        const next = new Set(prev);
+        paginatedLeads.forEach((l) => next.add(String(l.id)));
+        return next;
+      });
+    } else {
+      setSelectedLeadIds((prev) => {
+        const next = new Set(prev);
+        paginatedLeads.forEach((l) => next.delete(String(l.id)));
+        return next;
+      });
+    }
+  };
+
+  const handleSelectFirstN = () => {
+    const n = Math.min(MAX_LEADS_SELECT, Math.max(0, parseInt(quantity, 10) || 0));
+    const sorted = sortLeadsByInactivity(leadsToShow);
+    const toSelect = sorted.slice(0, n).map((l) => l.id);
+    setSelectedLeadIds(new Set(toSelect.map(String)));
+  };
+
+  const toggleLead = (id: string | number) => {
+    const key = String(id);
+    setSelectedLeadIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const toggleAllLeads = (checked: boolean) => {
+    if (checked) setSelectedLeadIds(new Set(filteredLeads.map((l) => String(l.id))));
+    else setSelectedLeadIds(new Set());
+  };
+
+  useEffect(() => {
+    setLeadsPage(1);
+  }, [leadSearchQuery, leadFilterStatus, leadFilterTemperature, leadFilterSaldoMin, leadFilterSaldoMax, leadsPageSize]);
+
+  const openConfirmModal = () => {
+    if (selectedLeadIds.size === 0) {
+      showToast('Selecione pelo menos um lead', 'error');
+      return;
+    }
+    if (!targetEmail?.trim()) {
+      showToast('Selecione o consultor destino', 'error');
+      return;
+    }
+    if (sourceEmail?.trim()?.toLowerCase() === targetEmail?.trim()?.toLowerCase()) {
+      showToast('Origem e destino devem ser diferentes', 'error');
+      return;
+    }
+    setShowConfirmModal(true);
+  };
+
+  const confirmTransfer = async () => {
+    if (selectedLeadIds.size === 0 || !targetEmail?.trim() || !userId) return;
+    setTransferring(true);
+    try {
+      const leadIdsArr = Array.from(selectedLeadIds);
+      const leadSnapshots = leadIdsArr.map((id) => {
+        const lead = leads.find((l) => String(l.id) === String(id));
+        const rawBalance = lead?.balance ?? (lead as { saldo?: number | null })?.saldo;
+        const balance = rawBalance != null ? Number(rawBalance) : null;
+        const lastInteraction = (lead?.last_interaction ?? lead?.last_deposit_at ?? lead?.created_at ?? null) as string | null;
+        return { lead_id: id, balance: Number.isFinite(balance) ? balance : null, last_interaction: lastInteraction };
+      });
+      const res = await fetch('/api/admin/crm/redistribute-leads', {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({
+          banca_id: bancaId,
+          source_consultant_email: sourceEmail.trim(),
+          target_consultant_email: targetEmail.trim(),
+          leads_ids: leadIdsArr,
+          transfer_type: transferType,
+          filters_snapshot: {
+            min_inactive_days: daysInactive.trim() || 10,
+            balance_filter: balanceFilter,
+            tag: selectedTag.trim() || null,
+            search: leadSearchQuery.trim() || null,
+          },
+          lead_snapshots: leadSnapshots,
+        }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        const count = json?.data?.count ?? selectedLeadIds.size;
+        showToast(`${count} lead(s) transferido(s) de ${sourceEmail} para ${targetEmail}. Aba Histórico atualizada.`, 'success');
+        setShowConfirmModal(false);
+        setConfirmAcknowledged(false);
+        setSelectedLeadIds(new Set());
+        loadLeads();
+        if (bancaId) {
+          setActiveTab('history');
+          setManagementLoaded(true);
+          await Promise.all([loadTransferLogs(), loadTransferStats()]);
+        }
+      } else {
+        showToast(json?.error ?? 'Erro ao transferir leads', 'error');
+      }
+    } catch (e) {
+      showToast('Erro ao transferir leads', 'error');
+    } finally {
+      setTransferring(false);
+    }
+  };
+
+  const toYYYYMMDD = (s: string) => {
+    const t = s.trim();
+    if (!t) return '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+    const m = t.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+    if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+    return t;
+  };
+
+  const loadTransferLogs = async () => {
+    if (!bancaId || !userId) return;
+    setLoadingLogs(true);
+    try {
+      const params = new URLSearchParams();
+      params.set('banca_id', bancaId);
+      const from = toYYYYMMDD(managementFrom);
+      const to = toYYYYMMDD(managementTo);
+      if (from) params.set('from', from);
+      if (to) params.set('to', to);
+      if (managementTransferType.trim()) params.set('transfer_type', managementTransferType.trim());
+      if (conversionConsultant.trim()) params.set('target_consultant_email', conversionConsultant.trim());
+      const res = await fetch(`/api/admin/crm/transfer-logs?${params.toString()}`, { headers: headers() });
+      const json = await res.json();
+      if (res.ok && json.success && Array.isArray(json.data)) {
+        setTransferLogs(json.data);
+      } else {
+        setTransferLogs([]);
+      }
+    } catch {
+      setTransferLogs([]);
+    } finally {
+      setLoadingLogs(false);
+    }
+  };
+
+  /** Recalcula total saldo: só soma os saldo_snapshot já gravados nas entries desta transferência (não altera o banco). */
+  const runRecalcBalanceForLog = async () => {
+    if (!bancaId || !userId || !selectedLogForModal?.id) return;
+    setBackfillingBalances(true);
+    try {
+      const res = await fetch(
+        `/api/admin/crm/transfer-logs/backfill-balances?banca_id=${encodeURIComponent(bancaId)}&log_id=${encodeURIComponent(selectedLogForModal.id)}`,
+        { method: 'POST', headers: headers() }
+      );
+      const json = await res.json();
+      if (res.ok && json.success) {
+        const total = json.data?.totalBalance;
+        const msg = json.data?.message ?? (total != null ? `Total saldo: R$ ${Number(total).toFixed(2).replace('.', ',')}` : 'Concluído.');
+        showToast(msg, 'success');
+        await loadTransferLogs();
+        await loadTransferStats();
+        const entryRes = await fetch(
+          `/api/admin/crm/transfer-logs/entries?log_id=${encodeURIComponent(selectedLogForModal.id)}&banca_id=${encodeURIComponent(bancaId)}`,
+          { headers: { 'X-User-Id': userId ?? '' } }
+        );
+        const entryJson = await entryRes.json();
+        if (entryRes.ok && entryJson.success && Array.isArray(entryJson.data)) {
+          setModalEntries(entryJson.data);
+        }
+      } else {
+        showToast(json?.error ?? 'Erro ao recalcular saldo.', 'error');
+      }
+    } catch {
+      showToast('Erro ao recalcular saldo.', 'error');
+    } finally {
+      setBackfillingBalances(false);
+    }
+  };
+
+  const loadTransferStatsByBanca = async () => {
+    if (!userId) return;
+    setLoadingStatsByBanca(true);
+    try {
+      const params = new URLSearchParams();
+      const from = toYYYYMMDD(managementFrom);
+      const to = toYYYYMMDD(managementTo);
+      if (from) params.set('from', from);
+      if (to) params.set('to', to);
+      const res = await fetch(`/api/admin/crm/transfer-stats-by-banca?${params.toString()}`, { headers: headers() });
+      const json = await res.json();
+      if (res.ok && json.success && Array.isArray(json.data?.bancas)) {
+        setStatsByBanca(json.data.bancas);
+      } else {
+        setStatsByBanca([]);
+      }
+    } catch {
+      setStatsByBanca([]);
+    } finally {
+      setLoadingStatsByBanca(false);
+    }
+  };
+
+  const loadTransferStats = async () => {
+    if (!bancaId || !userId) return;
+    setLoadingStats(true);
+    try {
+      const params = new URLSearchParams();
+      params.set('banca_id', bancaId);
+      const from = toYYYYMMDD(managementFrom);
+      const to = toYYYYMMDD(managementTo);
+      if (from) params.set('from', from);
+      if (to) params.set('to', to);
+      if (managementTransferType.trim()) params.set('transfer_type', managementTransferType.trim());
+      if (conversionConsultant.trim()) params.set('target_consultant_email', conversionConsultant.trim());
+      const url = `/api/admin/crm/transfer-metrics?${params.toString()}`;
+      const res = await fetch(url, { headers: headers() });
+      const json = await res.json();
+      if (res.ok && json.success && json.data) {
+        const d = json.data;
+        setTransferStats({
+          totalTransferred: d.transferidos_total ?? 0,
+          byType: d.by_type ?? { TF: 0, TF1: 0, TF2: 0, TF3: 0 },
+          receivedByTarget: d.receivedByTarget,
+          convertedCount: d.convertedCount,
+          transferidos_com_saldo: d.transferidos_com_saldo ?? 0,
+          transferidos_sem_saldo: d.transferidos_sem_saldo ?? 0,
+        });
+      } else {
+        setTransferStats({ totalTransferred: 0, byType: { TF: 0, TF1: 0, TF2: 0, TF3: 0 }, transferidos_com_saldo: 0, transferidos_sem_saldo: 0 });
+      }
+    } catch {
+      setTransferStats({ totalTransferred: 0, byType: { TF: 0, TF1: 0, TF2: 0, TF3: 0 }, transferidos_com_saldo: 0, transferidos_sem_saldo: 0 });
+    } finally {
+      setLoadingStats(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab !== 'history' || !SHOW_BAR_CHART_BY_BANCA) return;
+    setManagementLoaded(true);
+    loadTransferStatsByBanca();
+  }, [activeTab, managementFrom, managementTo]);
+
+  useEffect(() => {
+    if (activeTab !== 'history' || !bancaId) return;
+    loadTransferLogs();
+    loadTransferStats();
+  }, [activeTab, bancaId, managementFrom, managementTo, managementTransferType, conversionConsultant]);
+
+  // Leads transferidos mais de uma vez: contar por lead_id nos logs
+  const leadTransferCountMap = React.useMemo(() => {
+    const map = new Map<string, number>();
+    for (const log of transferLogs) {
+      const ids = Array.isArray(log.leads_ids) ? log.leads_ids : [];
+      for (const id of ids) {
+        const key = String(id);
+        map.set(key, (map.get(key) || 0) + 1);
+      }
+    }
+    return map;
+  }, [transferLogs]);
+
+  const totalLogsPages = Math.max(1, Math.ceil(transferLogs.length / LOGS_PAGE_SIZE));
+  const transferLogsPaginated = React.useMemo(
+    () => transferLogs.slice((logsPage - 1) * LOGS_PAGE_SIZE, logsPage * LOGS_PAGE_SIZE),
+    [transferLogs, logsPage]
+  );
+
+  const chartDataByBanca = React.useMemo(() => {
+    const list = [...statsByBanca];
+    list.sort((a, b) => {
+      const hasA = a.total_leads > 0 ? 1 : 0;
+      const hasB = b.total_leads > 0 ? 1 : 0;
+      if (hasB !== hasA) return hasB - hasA;
+      return b.total_leads - a.total_leads;
+    });
+    return list;
+  }, [statsByBanca]);
+
+  const totalModalLeadsPages = Math.max(1, Math.ceil(modalEntries.length / MODAL_LEADS_PAGE_SIZE));
+  const modalEntriesPaginated = React.useMemo(
+    () => modalEntries.slice((modalLeadsPage - 1) * MODAL_LEADS_PAGE_SIZE, modalLeadsPage * MODAL_LEADS_PAGE_SIZE),
+    [modalEntries, modalLeadsPage]
+  );
+
+  useEffect(() => {
+    setLogsPage(1);
+  }, [transferLogs.length]);
+
+  useEffect(() => {
+    setModalLeadsPage(1);
+  }, [modalEntries.length, selectedLogForModal?.id]);
+
+  useEffect(() => {
+    if (!selectedLogForModal || !bancaId || !userId) {
+      setModalEntries([]);
+      return;
+    }
+    let cancelled = false;
+    setLoadingModalEntries(true);
+    fetch(`/api/admin/crm/transfer-logs/entries?log_id=${encodeURIComponent(selectedLogForModal.id)}&banca_id=${encodeURIComponent(bancaId)}`, {
+      headers: { 'X-User-Id': userId ?? '' },
+    })
+      .then((res) => res.json())
+      .then((json) => {
+        if (!cancelled && json.success && Array.isArray(json.data)) {
+          setModalEntries(json.data);
+        } else {
+          setModalEntries([]);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setModalEntries([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingModalEntries(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedLogForModal?.id, bancaId, userId]);
+
+  if (checking || !userId) {
+    return (
+      <Layout>
+        <div className="flex items-center justify-center min-h-[60vh]">
+          <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+        </div>
+      </Layout>
+    );
+  }
+
+  const selectedCount = selectedLeadIds.size;
+  const bancaName = bancas.find((b) => b.id === bancaId)?.name ?? '';
+
+  return (
+    <Layout>
+      <div className="min-h-screen bg-gray-50/50">
+        <div className="p-4 md:p-6 max-w-[1600px] w-full mx-auto space-y-6">
+          <div className="flex items-center gap-2 text-sm">
+            <button
+              type="button"
+              onClick={() => router.push('/admin')}
+              className="text-[#8CD955] font-medium hover:underline"
+            >
+              Admin
+            </button>
+            <span className="text-gray-400">/</span>
+            <span className="text-gray-600 font-medium">Transferência de Leads</span>
+          </div>
+
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div>
+              <h1 className="text-xl md:text-2xl font-bold text-gray-900 flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-[#8CD955]/15 border border-[#8CD955]/30">
+                  <ArrowRightLeft className="w-6 h-6 text-[#8CD955]" />
+                </div>
+                Transferência de Leads
+              </h1>
+              <p className="text-gray-600 text-sm mt-1.5 max-w-xl">
+                Redistribua leads de um consultor para outro na mesma banca.
+              </p>
+            </div>
+          </div>
+
+          {/* Abas: Transferir | Histórico */}
+          <div className="flex gap-1 p-1 bg-gray-100 rounded-xl w-fit">
+            <button
+              type="button"
+              onClick={() => setActiveTab('transfer')}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'transfer' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+            >
+              Transferir
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('history')}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'history' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+            >
+              Histórico & Conversão
+            </button>
+          </div>
+
+          {activeTab === 'history' ? (
+            /* Conteúdo da aba Histórico (Gestão) - colapsado em aba separada */
+            <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm ring-1 ring-gray-100">
+              <div className="mb-4">
+                <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                  <BarChart3 className="w-5 h-5 text-[#8CD955]" />
+                  Histórico e conversão
+                </h2>
+                <p className="text-sm text-gray-600 mt-1">Dados carregados por padrão (últimos 30 dias). Filtros de data, tipo e consultor para refinar.</p>
+              </div>
+              <div className="flex flex-wrap gap-4 items-end mb-6 p-4 rounded-xl bg-gray-50/80 border border-gray-100">
+                <div>
+                  <label className="text-xs font-semibold text-gray-600 block mb-1">De (data)</label>
+                  <input type="date" value={managementFrom} onChange={(e) => setManagementFrom(e.target.value)} className="border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-gray-600 block mb-1">Até (data)</label>
+                  <input type="date" value={managementTo} onChange={(e) => setManagementTo(e.target.value)} className="border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-gray-600 block mb-1">Tipo</label>
+                  <select value={managementTransferType} onChange={(e) => setManagementTransferType(e.target.value)} className="border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[100px]">
+                    <option value="">Todos</option>
+                    <option value="TF">TF</option>
+                    <option value="TF1">TF1</option>
+                    <option value="TF2">TF2</option>
+                    <option value="TF3">TF3</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-gray-600 block mb-1">Consultor (conversão)</label>
+                  <select value={conversionConsultant} onChange={(e) => setConversionConsultant(e.target.value)} className="border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[200px]">
+                    <option value="">Nenhum</option>
+                    {consultants.map((c) => (
+                      <option key={c.id} value={c.email}>{c.full_name || c.email}</option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { if (bancaId) { loadTransferLogs(); loadTransferStats(); } else { showToast('Selecione a banca para aplicar os filtros.', 'info'); } }}
+                  className="px-4 py-2 rounded-xl text-sm font-medium bg-[#8CD955] text-white hover:bg-[#7BC84A] border border-[#8CD955]/50 transition-colors"
+                >
+                  Aplicar filtros
+                </button>
+              </div>
+              <p className="text-xs text-gray-500 mb-4 -mt-2 px-4">Os cards e a tabela abaixo mostram apenas transferências no intervalo De–Até selecionado.</p>
+              {managementLoaded && (
+                <>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                  <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Transferidos (total)</p>
+                    <p className="text-2xl font-bold text-[#8CD955] mt-1">{transferStats?.totalTransferred ?? 0}</p>
+                  </div>
+                  <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Com saldo</p>
+                    <p className="text-2xl font-bold text-emerald-600 mt-1">{transferStats?.transferidos_com_saldo ?? 0}</p>
+                  </div>
+                  <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Sem saldo</p>
+                    <p className="text-2xl font-bold text-gray-600 mt-1">{transferStats?.transferidos_sem_saldo ?? 0}</p>
+                  </div>
+                  <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Convertidos (destino)</p>
+                    <p className="text-2xl font-bold text-[#8CD955] mt-1">
+                      {conversionConsultant ? `${transferStats?.convertedCount ?? 0} / ${transferStats?.receivedByTarget ?? 0}` : '-'}
+                    </p>
+                  </div>
+                </div>
+                {SHOW_BAR_CHART_BY_BANCA && (
+                <div className="mb-6">
+                  <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
+                    <h3 className="text-sm font-bold text-gray-800 mb-3">Transferências por banca (quantidade total de leads)</h3>
+                    <p className="text-xs text-gray-500 mb-3">Bancas com transferências aparecem primeiro, ordenadas pela quantidade de leads.</p>
+                    <div className="min-h-[420px] h-[32rem] max-h-[520px] w-full">
+                      {loadingStatsByBanca ? (
+                        <div className="flex items-center justify-center h-full min-h-[320px]"><Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" /></div>
+                      ) : chartDataByBanca.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center h-full min-h-[320px] text-gray-500 text-sm">Nenhum dado no período</div>
+                      ) : (
+                        <ResponsiveContainer width="100%" height="100%" minHeight={380}>
+                          <BarChart data={chartDataByBanca} margin={{ top: 12, right: 80, left: 12, bottom: 12 }} layout="vertical">
+                            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" horizontal={false} />
+                            <XAxis type="number" allowDecimals={false} stroke="#6b7280" style={{ fontSize: '13px' }} tick={{ fill: '#374151' }} />
+                            <YAxis type="category" dataKey="banca_name" width={160} stroke="#6b7280" style={{ fontSize: '12px' }} tick={{ fill: '#374151' }} />
+                            <Tooltip
+                              content={({ active, payload, label }) => {
+                                if (!active || !payload?.length) return null;
+                                const value = payload[0]?.value ?? payload[0]?.payload?.total_leads ?? 0;
+                                return (
+                                  <div className="bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2 text-sm">
+                                    <p className="font-semibold text-gray-800">{label}</p>
+                                    <p className="text-[#8CD955] font-bold tabular-nums">{Number(value).toLocaleString('pt-BR')} leads</p>
+                                  </div>
+                                );
+                              }}
+                            />
+                            <Bar
+                              dataKey="total_leads"
+                              name="Leads"
+                              fill="#8CD955"
+                              radius={[0, 4, 4, 0]}
+                              label={{ position: 'right', formatter: (v: unknown) => (typeof v === 'number' && v > 0 ? v.toLocaleString('pt-BR') : ''), style: { fontSize: '12px', fill: '#374151', fontWeight: 600 } }}
+                            />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                )}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                  <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
+                    <h3 className="text-sm font-bold text-gray-800 mb-3">Quantidade por tipo</h3>
+                    <div className="h-64">
+                      {loadingStats ? (
+                        <div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" /></div>
+                      ) : (() => {
+                        const byType = transferStats?.byType || {};
+                        const total = transferStats?.totalTransferred ?? 0;
+                        const data = ['TF', 'TF1', 'TF2', 'TF3'].map((t) => ({ name: t, value: byType[t] || 0 })).filter((d) => d.value > 0);
+                        if (data.length === 0) {
+                          return <div className="flex flex-col items-center justify-center h-full text-gray-500 text-sm gap-1"><span>{total === 0 ? 'Nenhuma transferência no período' : 'Nenhum dado por tipo'}</span></div>;
+                        }
+                        const COLORS = ['#8CD955', '#22c55e', '#16a34a', '#15803d'];
+                        return (
+                          <ResponsiveContainer width="100%" height="100%">
+                            <PieChart><Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, percent }) => `${name}: ${((percent || 0) * 100).toFixed(0)}%`}>{data.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}</Pie><Tooltip formatter={(value: number) => [value, 'Leads']} /><Legend /></PieChart>
+                          </ResponsiveContainer>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                  <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
+                    <h3 className="text-sm font-bold text-gray-800 mb-3">Conversão</h3>
+                    {loadingStats ? <div className="flex items-center justify-center h-64"><Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" /></div> : conversionConsultant ? (() => {
+                      const received = transferStats?.receivedByTarget ?? 0;
+                      const converted = transferStats?.convertedCount ?? 0;
+                      const notConverted = Math.max(0, received - converted);
+                      const data = [{ name: 'Convertidos', value: converted, color: '#8CD955' }, { name: 'Sem depósito', value: notConverted, color: '#94a3b8' }].filter((d) => d.value > 0);
+                      if (data.length === 0 && received === 0) return <p className="text-sm text-gray-500 py-4">Nenhum lead transferido para este consultor no período.</p>;
+                      return (
+                        <div className="h-64">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <PieChart><Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80}>{data.map((entry, i) => <Cell key={i} fill={entry.color} />)}</Pie><Tooltip /><Legend /></PieChart>
+                          </ResponsiveContainer>
+                        </div>
+                      );
+                    })() : <p className="text-sm text-gray-500 py-4">Selecione um consultor para ver a conversão.</p>}
+                  </div>
+                </div>
+                </>
+              )}
+              <div className="overflow-x-auto border border-gray-200 rounded-2xl shadow-sm bg-white">
+                <table className="w-full text-sm min-w-[1000px]">
+                  <thead className="bg-gray-100 border-b-2 border-gray-200">
+                    <tr>
+                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 w-[120px]">Banca</th>
+                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 w-[140px]">Data/Hora</th>
+                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 w-[52px]">Tipo</th>
+                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 min-w-[120px]">Origem</th>
+                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 min-w-[120px]">Destino</th>
+                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 w-[90px]">Quem fez</th>
+                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 w-[56px]">Qtd</th>
+                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 w-[100px]">Total saldo</th>
+                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 min-w-[140px]">Leads (IDs)</th>
+                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 w-[90px]">Re-transfer.</th>
+                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 w-[130px]">Prazo 10d</th>
+                      <th className="text-center py-3.5 px-4 font-semibold text-gray-700 w-[100px]">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {loadingLogs ? (
+                      <tr><td colSpan={12} className="p-10 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-[#8CD955]" /></td></tr>
+                    ) : !bancaId ? (
+                      <tr><td colSpan={12} className="p-8 text-center text-gray-500">Selecione a banca para ver o histórico.</td></tr>
+                    ) : transferLogs.length === 0 ? (
+                      <tr><td colSpan={12} className="p-8 text-center text-gray-500">Nenhuma transferência nos filtros. Ajuste data/tipo ou faça uma nova transferência.</td></tr>
+                    ) : (
+                      transferLogsPaginated.map((log) => {
+                        const ids = Array.isArray(log.leads_ids) ? log.leads_ids : [];
+                        const reTransferidos = ids.filter((id: string | number) => (leadTransferCountMap.get(String(id)) || 0) > 1).length;
+                        const deadline = getTransferDeadlineInfo(log.created_at);
+                        const totalSaldo = (log as { total_balance_snapshot?: number | null }).total_balance_snapshot;
+                        const fmtSaldo = totalSaldo != null ? `R$ ${Number(totalSaldo).toFixed(2).replace('.', ',')}` : '-';
+                        const origemNome = (log as { source_consultant_name?: string | null }).source_consultant_name ?? log.source_consultant_email ?? '-';
+                        const destinoNome = (log as { target_consultant_name?: string | null }).target_consultant_name ?? log.target_consultant_email ?? '-';
+                        const quemFez = (log as { performed_by_name?: string | null }).performed_by_name ?? '-';
+                        const bancaLabel = selectedBanca?.name || selectedBanca?.url || bancaName || '-';
+                        return (
+                          <tr key={log.id} className="border-t border-gray-100 hover:bg-gray-50/80 transition-colors">
+                            <td className="py-3 px-4 text-gray-600 truncate max-w-[110px]" title={bancaLabel}>{bancaLabel}</td>
+                            <td className="py-3 px-4 text-gray-600 whitespace-nowrap">{log.created_at ? new Date(log.created_at).toLocaleString('pt-BR') : '-'}</td>
+                            <td className="py-3 px-4 font-medium text-gray-800">{log.transfer_type || 'TF'}</td>
+                            <td className="py-3 px-4 text-gray-600 truncate max-w-[140px]" title={log.source_consultant_email ?? undefined}>{origemNome}</td>
+                            <td className="py-3 px-4 text-gray-600 truncate max-w-[140px]" title={log.target_consultant_email ?? undefined}>{destinoNome}</td>
+                            <td className="py-3 px-4 text-gray-700 truncate max-w-[80px]" title={quemFez}>{(quemFez as string) !== '-' ? quemFez : '-'}</td>
+                            <td className="py-3 px-4 text-gray-600 tabular-nums">{log.count ?? ids.length}</td>
+                            <td className="py-3 px-4 text-gray-600 tabular-nums">{fmtSaldo}</td>
+                            <td className="py-3 px-4 text-gray-600 truncate max-w-[160px] font-mono text-xs" title={ids.join(', ')}>{ids.length ? ids.slice(0, 6).join(', ') + (ids.length > 6 ? ` +${ids.length - 6}` : '') : '-'}</td>
+                            <td className="py-3 px-4">{reTransferidos > 0 ? <span className="text-amber-600 font-medium">{reTransferidos}</span> : '-'}</td>
+                            <td className="py-3 px-4" title="Prazo de 10 dias para conversão a partir da transferência. Após isso o lead pode ser repassado.">
+                              <span className="inline-flex items-center gap-1 text-sm">
+                                <Clock className="w-3.5 h-3.5 flex-shrink-0 text-gray-600" />
+                                <span className="text-red-600 font-medium">
+                                  {deadline.expired ? 'Expirado' : `${deadline.daysLeft} dia(s) restante(s)`}
+                                </span>
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 text-center">
+                              <button
+                                type="button"
+                                onClick={() => setSelectedLogForModal(log)}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-[#8CD955]/15 text-[#6B8E3F] hover:bg-[#8CD955]/25 border border-[#8CD955]/40 transition-colors"
+                                title="Ver detalhes dos leads transferidos"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                                Ver leads
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              {!loadingLogs && bancaId && transferLogs.length > 0 && totalLogsPages > 1 && (
+                <div className="flex flex-wrap items-center justify-between gap-3 mt-4 px-1">
+                  <p className="text-sm text-gray-600">
+                    Exibindo <strong>{(logsPage - 1) * LOGS_PAGE_SIZE + 1}</strong> a <strong>{Math.min(logsPage * LOGS_PAGE_SIZE, transferLogs.length)}</strong> de <strong>{transferLogs.length}</strong> transferências
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setLogsPage((p) => Math.max(1, p - 1))}
+                      disabled={logsPage <= 1}
+                      className="p-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      aria-label="Página anterior"
+                    >
+                      <ChevronLeft className="w-5 h-5" />
+                    </button>
+                    <span className="text-sm font-medium text-gray-700 min-w-[100px] text-center">
+                      Página {logsPage} de {totalLogsPages}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setLogsPage((p) => Math.min(totalLogsPages, p + 1))}
+                      disabled={logsPage >= totalLogsPages}
+                      className="p-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      aria-label="Próxima página"
+                    >
+                      <ChevronRight className="w-5 h-5" />
+                    </button>
+                  </div>
+                </div>
+              )}
+              {selectedLogForModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setSelectedLogForModal(null)} role="dialog" aria-modal="true" aria-labelledby="modal-leads-title">
+                  <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full max-h-[85vh] flex flex-col border border-gray-200" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center justify-between p-4 border-b border-gray-200">
+                      <h2 id="modal-leads-title" className="text-lg font-bold text-gray-900">Leads da transferência</h2>
+                      <button type="button" onClick={() => setSelectedLogForModal(null)} className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors" aria-label="Fechar">
+                        <X className="w-5 h-5" />
+                      </button>
+                    </div>
+                    <div className="p-4 text-sm text-gray-600 border-b border-gray-100">
+                      {selectedLogForModal.created_at && <span>Data: {new Date(selectedLogForModal.created_at).toLocaleString('pt-BR')}</span>}
+                      {(selectedLogForModal as any).target_consultant_name && <span className="ml-4">Destino: {(selectedLogForModal as any).target_consultant_name}</span>}
+                    </div>
+                    <div className="px-4 pt-3 pb-2 flex items-center justify-between gap-4 border-b border-gray-100">
+                      <p className="text-sm font-semibold text-gray-800">
+                        Total saldo: <span className="tabular-nums text-[#8CD955]">
+                          R$ {modalEntries.reduce((s, e) => s + (e.saldo_snapshot != null ? Number(e.saldo_snapshot) : 0), 0).toFixed(2).replace('.', ',')}
+                        </span>
+                      </p>
+                      <button
+                        type="button"
+                        onClick={runRecalcBalanceForLog}
+                        disabled={backfillingBalances}
+                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium bg-[#8CD955]/20 text-[#6B8E3F] hover:bg-[#8CD955]/30 border border-[#8CD955]/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        title="Busca os saldos atuais dos leads desta transferência no CRM, atualiza e soma no total"
+                      >
+                        {backfillingBalances ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                        {backfillingBalances ? 'Recalculando…' : 'Recalcular saldo'}
+                      </button>
+                    </div>
+                    <div className="flex-1 overflow-auto p-4">
+                      {loadingModalEntries ? (
+                        <div className="flex items-center justify-center py-12"><Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" /></div>
+                      ) : modalEntries.length === 0 ? (
+                        <p className="text-gray-500 text-center py-6">Nenhum lead encontrado para esta transferência.</p>
+                      ) : (
+                        <>
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-sm min-w-[640px]">
+                              <thead className="bg-gray-50 border-b border-gray-200">
+                                <tr>
+                                  <th className="text-left py-2.5 px-3 font-semibold text-gray-700 w-14">ID</th>
+                                  <th className="text-left py-2.5 px-3 font-semibold text-gray-700 min-w-[140px]">Nome</th>
+                                  <th className="text-left py-2.5 px-3 font-semibold text-gray-700 min-w-[110px]">Telefone</th>
+                                  <th className="text-left py-2.5 px-3 font-semibold text-gray-700 min-w-[140px]">E-mail</th>
+                                  <th className="text-left py-2.5 px-3 font-semibold text-gray-700 w-20">Status</th>
+                                  <th className="text-left py-2.5 px-3 font-semibold text-gray-700 w-24">Tinha saldo</th>
+                                  <th className="text-right py-2.5 px-3 font-semibold text-gray-700 w-24">Saldo (R$)</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {modalEntriesPaginated.map((entry, idx) => {
+                                  const fullName = [entry.name, entry.last_name].filter(Boolean).join(' ').trim() || '-';
+                                  const phone = entry.phone || entry.whatsapp || '-';
+                                  const email = (entry.email ?? '').trim() || '-';
+                                  const globalIdx = (modalLeadsPage - 1) * MODAL_LEADS_PAGE_SIZE + idx;
+                                  return (
+                                    <tr key={`${entry.lead_id}-${globalIdx}`} className="border-t border-gray-100 hover:bg-gray-50/50">
+                                      <td className="py-2.5 px-3 font-mono text-gray-800 text-xs">{String(entry.lead_id)}</td>
+                                      <td className="py-2.5 px-3 text-gray-800 truncate max-w-[180px]" title={fullName}>{fullName}</td>
+                                      <td className="py-2.5 px-3 text-gray-600 font-mono text-xs truncate max-w-[120px]" title={phone}>{phone}</td>
+                                      <td className="py-2.5 px-3 text-gray-600 text-xs truncate max-w-[160px]" title={email}>{email}</td>
+                                      <td className="py-2.5 px-3 text-gray-600">{entry.status ?? '-'}</td>
+                                      <td className="py-2.5 px-3">{entry.had_balance ? <span className="text-emerald-600 font-medium">Sim</span> : <span className="text-gray-500">Não</span>}</td>
+                                      <td className="py-2.5 px-3 text-right tabular-nums text-gray-700 font-medium">{entry.saldo_snapshot != null ? `R$ ${Number(entry.saldo_snapshot).toFixed(2).replace('.', ',')}` : '-'}</td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                          {totalModalLeadsPages > 1 && (
+                            <div className="flex flex-wrap items-center justify-between gap-3 mt-4 px-1 border-t border-gray-100 pt-3">
+                              <p className="text-sm text-gray-600">
+                                Exibindo <strong>{(modalLeadsPage - 1) * MODAL_LEADS_PAGE_SIZE + 1}</strong> a <strong>{Math.min(modalLeadsPage * MODAL_LEADS_PAGE_SIZE, modalEntries.length)}</strong> de <strong>{modalEntries.length}</strong> leads
+                              </p>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setModalLeadsPage((p) => Math.max(1, p - 1))}
+                                  disabled={modalLeadsPage <= 1}
+                                  className="p-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                  aria-label="Página anterior"
+                                >
+                                  <ChevronLeft className="w-5 h-5" />
+                                </button>
+                                <span className="text-sm font-medium text-gray-700 min-w-[90px] text-center">
+                                  Página {modalLeadsPage} de {totalModalLeadsPages}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setModalLeadsPage((p) => Math.min(totalModalLeadsPages, p + 1))}
+                                  disabled={modalLeadsPage >= totalModalLeadsPages}
+                                  className="p-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                  aria-label="Próxima página"
+                                >
+                                  <ChevronRight className="w-5 h-5" />
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+          /* Aba Transferir: Stepper + conteúdo por passo */
+          <>
+          <div className="flex flex-wrap items-center gap-2 py-3 overflow-x-auto">
+            {STEPS.map((step, idx) => {
+              const isActive = currentStep === step.id;
+              const isPast = currentStep > step.id;
+              const canGo = isPast || isActive;
+              return (
+                <React.Fragment key={step.id}>
+                  {idx > 0 && <ChevronRight className="w-4 h-4 text-gray-300 flex-shrink-0" />}
+                  <button
+                    type="button"
+                    onClick={() => canGo && setCurrentStep(step.id)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex-shrink-0 ${isActive ? 'bg-[#8CD955] text-white' : isPast ? 'bg-gray-200 text-gray-700 hover:bg-gray-300' : 'bg-gray-100 text-gray-400 cursor-default'}`}
+                  >
+                    <span className="w-6 h-6 rounded-full flex items-center justify-center text-xs bg-white/20">{step.id}</span>
+                    <span className="hidden sm:inline">{step.short}</span>
+                  </button>
+                </React.Fragment>
+              );
+            })}
+          </div>
+
+          {/* Step 1: Banca */}
+          {currentStep === 1 && (
+          <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm ring-1 ring-gray-100">
+          <label className="flex items-center gap-2 text-sm font-bold text-gray-800 mb-2">
+            <Building2 className="w-4 h-4 text-[#8CD955]" />
+            Banca
+          </label>
+          <div className="relative max-w-md">
+            <div className="flex items-center border border-gray-300 rounded-lg bg-white focus-within:ring-2 focus-within:ring-[#8CD955] focus-within:border-[#8CD955]">
+              <Search className="w-4 h-4 text-gray-500 flex-shrink-0 ml-3 pointer-events-none" />
+              <input
+                type="text"
+                value={bancaSearchQuery}
+                onChange={(e) => {
+                  setBancaSearchQuery(e.target.value);
+                  setBancaDropdownOpen(true);
+                  if (!e.target.value.trim()) setBancaId('');
+                }}
+                onFocus={() => setBancaDropdownOpen(true)}
+                onBlur={() => setTimeout(() => setBancaDropdownOpen(false), 180)}
+                disabled={loadingBancas}
+                placeholder="Buscar banca por nome..."
+                className="w-full px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-600 border-0 rounded-r-lg focus:ring-0 focus:outline-none disabled:bg-gray-50 disabled:text-gray-600"
+              />
+              <ChevronDown
+                className={`w-4 h-4 text-gray-500 flex-shrink-0 mr-3 transition-transform ${bancaDropdownOpen ? 'rotate-180' : ''}`}
+              />
+            </div>
+            {bancaDropdownOpen && !loadingBancas && (
+              <ul
+                className="absolute z-10 w-full mt-1 overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg py-1"
+                style={{ maxHeight: `calc(${BANCAS_DROPDOWN_VISIBLE} * 2.5rem)` }}
+                role="listbox"
+                onMouseDown={(e) => e.preventDefault()}
+              >
+                {filteredBancas.length === 0 ? (
+                  <li className="px-3 py-2 text-sm text-gray-600">Nenhuma banca encontrada</li>
+                ) : (
+                  filteredBancas.map((b) => (
+                    <li
+                      key={b.id}
+                      role="option"
+                      aria-selected={bancaId === b.id}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        setBancaId(b.id);
+                        setBancaSearchQuery(b.name || b.url || b.id);
+                        setBancaDropdownOpen(false);
+                      }}
+                      className={`px-3 py-2.5 text-sm cursor-pointer hover:bg-gray-100 ${
+                        bancaId === b.id ? 'bg-green-50 text-gray-800 font-medium' : 'text-gray-700'
+                      }`}
+                    >
+                      {b.name || b.url || b.id}
+                    </li>
+                  ))
+                )}
+              </ul>
+            )}
+          </div>
+          {loadingBancas && <p className="text-xs text-gray-500 mt-1">Carregando bancas...</p>}
+            <div className="mt-4 flex justify-end">
+              <button type="button" onClick={() => setCurrentStep(2)} disabled={!bancaId} className="px-4 py-2 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A] disabled:opacity-50">Próximo</button>
+            </div>
+          </div>
+          )}
+
+          {/* Step 2: Apenas consultor origem */}
+          {currentStep === 2 && (
+          <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm ring-1 ring-gray-100 space-y-4">
+            <label className="flex items-center gap-2 text-sm font-bold text-gray-800"><User className="w-4 h-4 text-[#8CD955]" />Consultor origem</label>
+            <p className="text-xs text-gray-500">Todos os usuários atribuídos à banca (cargo, gerente e consultores vinculados)</p>
+            <div className="flex flex-wrap gap-3 items-end">
+              <select value={sourceEmail} onChange={(e) => { setSourceEmail(e.target.value); setTags([]); setSelectedTag(''); }} disabled={!bancaId || loadingConsultants} className="border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[280px] max-w-full">
+                <option value="">{!bancaId ? 'Selecione a banca' : loadingConsultants ? 'Carregando...' : consultants.length === 0 ? 'Nenhum consultor na banca' : 'Selecione o consultor origem'}</option>
+                {consultants.map((c) => {
+                  const label = [c.full_name || c.email, (c as { role?: string }).role && `(${(c as { role?: string }).role})`].filter(Boolean).join(' ');
+                  const gerente = (c as { gerente_nome?: string }).gerente_nome;
+                  const vinculados = (c as { consultores_vinculados?: { full_name: string }[] }).consultores_vinculados;
+                  const suffix = gerente ? ` | Gerente: ${gerente}` : '';
+                  const suffix2 = Array.isArray(vinculados) && vinculados.length > 0 ? ` | ${vinculados.length} consultor(es)` : '';
+                  return <option key={c.id} value={c.email} title={c.email}>{label}{suffix}{suffix2}</option>;
+                })}
+              </select>
+              <button type="button" onClick={loadTags} disabled={!sourceEmail?.trim() || loadingTags} className="px-3 py-2 rounded-xl border border-gray-300 text-gray-700 text-sm hover:bg-gray-50">Carregar tags</button>
+            </div>
+            {tags.length > 0 && (
+              <div>
+                <span className="text-xs text-gray-600 mr-2">Filtrar por tag:</span>
+                <select value={selectedTag} onChange={(e) => setSelectedTag(e.target.value)} className="border border-gray-300 rounded-lg px-2 py-1 text-sm text-gray-800">
+                  <option value="">Todas</option>
+                  {tags.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+            )}
+            <div className="flex gap-2 pt-2">
+              <button type="button" onClick={() => setCurrentStep(1)} className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50">Anterior</button>
+              <button type="button" onClick={() => setCurrentStep(3)} disabled={!sourceEmail?.trim()} className="px-4 py-2 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A] disabled:opacity-50">Próximo: filtros e buscar</button>
+            </div>
+          </div>
+          )}
+
+          {/* Step 3: Filtros e buscar */}
+          {currentStep === 3 && (
+          <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm ring-1 ring-gray-100 space-y-4">
+            <label className="text-sm font-bold text-gray-800 block">Filtros e buscar leads</label>
+          <div className="flex flex-wrap gap-4 items-end">
+            <div>
+              <label className="text-xs font-semibold text-gray-600 block mb-1">Inatividade (dias)</label>
+              <div className="flex flex-wrap gap-2">
+                {INACTIVITY_PRESETS.map((d) => (
+                  <button key={d} type="button" onClick={() => { setDaysInactivePreset(String(d)); setDaysInactive(String(d)); }} className={`px-3 py-1.5 rounded-lg text-sm font-medium ${daysInactivePreset === String(d) ? 'bg-[#8CD955] text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>{d}d</button>
+                ))}
+                <button type="button" onClick={() => setDaysInactivePreset('other')} className={`px-3 py-1.5 rounded-lg text-sm font-medium ${daysInactivePreset === 'other' ? 'bg-[#8CD955] text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>Outro</button>
+              </div>
+              {daysInactivePreset === 'other' && <input type="number" min={0} value={daysInactive} onChange={(e) => setDaysInactive(e.target.value)} placeholder="Ex: 45" className="mt-2 w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800" />}
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-gray-600 block mb-1">Saldo</label>
+              <select value={balanceFilter} onChange={(e) => setBalanceFilter(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]">
+                {BALANCE_FILTER_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-gray-600 block mb-1">Valor mínimo (soma saldo) R$</label>
+              <input type="text" inputMode="decimal" placeholder="Ex: 100" value={minSumBalance} onChange={(e) => setMinSumBalance(e.target.value)} className="w-28 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+              <p className="text-xs text-gray-500 mt-0.5">Leads até somar este valor</p>
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-gray-600 block mb-1">Auto-selecionar (N leads)</label>
+              <input type="number" min={1} max={MAX_LEADS_SELECT} value={quantity} onChange={(e) => setQuantity(String(Math.min(MAX_LEADS_SELECT, Math.max(1, parseInt(e.target.value, 10) || 1))))} className="w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800" />
+              <p className="text-xs text-gray-500 mt-0.5">Máx. {MAX_LEADS_SELECT}</p>
+            </div>
+            <button type="button" onClick={loadLeads} disabled={!sourceEmail?.trim() || loadingLeads} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A] disabled:opacity-50">
+              {loadingLeads ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+              Buscar leads disponíveis
+            </button>
+          </div>
+            {hasSearchedLeads && !loadingLeads && effectiveLeadsForTransfer.length > 0 && (
+              <>
+                <p className="text-sm text-gray-600">
+                  <strong>{effectiveLeadsForTransfer.length}</strong> lead(s) {minSumBalance.trim() ? `(soma mín. R$ ${minSumBalance.trim()})` : ''}. Soma dos saldos: <strong>R$ {totalBalanceSum.toFixed(2).replace('.', ',')}</strong>. Até <strong>{Math.min(parseInt(quantity, 10) || 0, MAX_LEADS_SELECT, effectiveLeadsForTransfer.length)}</strong> serão auto-selecionados no próximo passo.
+                </p>
+                <div className="overflow-x-auto border border-gray-200 rounded-lg mt-3 max-h-[320px] overflow-y-auto">
+                  <table className="w-full text-sm min-w-[520px]">
+                    <thead className="bg-gray-50 border-b border-gray-200 sticky top-0 z-10">
+                      <tr>
+                        <th className="text-left p-2 font-semibold text-gray-700">ID</th>
+                        <th className="text-left p-2 font-semibold text-gray-700">Nome / Email</th>
+                        <th className="text-left p-2 font-semibold text-gray-700">Saldo</th>
+                        <th className="text-left p-2 font-semibold text-gray-700">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {effectiveLeadsForTransfer.slice(0, 100).map((lead) => {
+                        const name = String(lead.name ?? lead.full_name ?? lead.email ?? '-');
+                        const email = String(lead.email ?? '');
+                        const balance = lead.balance != null ? parseFloat(String(lead.balance)) : null;
+                        return (
+                          <tr key={String(lead.id)} className="border-t border-gray-100">
+                            <td className="p-2 font-mono text-gray-600 text-xs">{String(lead.id)}</td>
+                            <td className="p-2 min-w-0 max-w-[200px]">
+                              <span className="block font-medium text-gray-800 truncate" title={name}>{name}</span>
+                              {email ? <span className="block text-xs text-gray-500 truncate" title={email}>{email}</span> : null}
+                            </td>
+                            <td className="p-2 text-gray-700">{balance != null ? `R$ ${Number(balance).toFixed(2).replace('.', ',')}` : '-'}</td>
+                            <td className="p-2">
+                              <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">{getStatusLabel(lead.status as string)}</span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  {effectiveLeadsForTransfer.length > 100 && <p className="text-xs text-gray-500 p-2 border-t border-gray-100">Exibindo 100 de {effectiveLeadsForTransfer.length} leads.</p>}
+                </div>
+              </>
+            )}
+            <div className="flex gap-2 pt-2 border-t border-gray-100">
+              <button type="button" onClick={() => setCurrentStep(2)} className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50">Anterior</button>
+              <button type="button" onClick={() => setCurrentStep(4)} disabled={!hasSearchedLeads || effectiveLeadsForTransfer.length === 0} className="px-4 py-2 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A] disabled:opacity-50">Ir para seleção de leads</button>
+            </div>
+          </div>
+          )}
+
+        {/* Step 4: Tabela de leads + seleção */}
+          {currentStep >= 4 && hasSearchedLeads && !loadingLeads && effectiveLeadsForTransfer.length === 0 && (
+            <div className="bg-white rounded-2xl border border-gray-200 p-6 shadow-sm text-center ring-1 ring-gray-100">
+              <p className="text-gray-600">Nenhum lead encontrado com esses filtros.</p>
+              <p className="text-sm text-gray-500 mt-1">Tente outro consultor, filtros, valor mínimo ou tag.</p>
+              <button type="button" onClick={() => setCurrentStep(3)} className="mt-3 text-[#8CD955] font-medium hover:underline">Voltar aos filtros</button>
+            </div>
+          )}
+          {currentStep >= 4 && effectiveLeadsForTransfer.length > 0 && (
+            <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm ring-1 ring-gray-100">
+            {/* Barra fixa quando há seleção */}
+            {selectedLeadIds.size > 0 && (
+              <div className="mb-4 p-3 rounded-xl bg-[#8CD955]/10 border border-[#8CD955]/30 flex flex-wrap items-center justify-between gap-3">
+                <span className="font-semibold text-gray-800">{selectedLeadIds.size} lead(s) selecionado(s)</span>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setSelectedLeadIds(new Set())} className="px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 text-sm hover:bg-gray-50">Limpar</button>
+                  <button type="button" onClick={() => setShowSelectedModal(true)} className="px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 text-sm hover:bg-gray-50">Ver selecionados</button>
+                  <button type="button" onClick={() => setCurrentStep(5)} className="px-4 py-1.5 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A]">Transferir {selectedLeadIds.size} lead(s)</button>
+                </div>
+              </div>
+            )}
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+                  <input type="text" value={leadSearchQuery} onChange={(e) => setLeadSearchQuery(e.target.value)} placeholder="Buscar por nome ou e-mail..." className="pl-8 pr-3 py-1.5 w-56 bg-gray-100 border border-gray-200 rounded-lg text-sm text-gray-900 placeholder:text-gray-600 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]/40" />
+                </div>
+                <select value={leadFilterStatus} onChange={(e) => setLeadFilterStatus(e.target.value)} className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[140px]">
+                  <option value="">Status: Todos</option>
+                  {uniqueStatuses.map((s) => (
+                    <option key={s} value={s}>{getStatusLabel(s)}</option>
+                  ))}
+                </select>
+                <select value={leadFilterTemperature} onChange={(e) => setLeadFilterTemperature(e.target.value)} className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[140px]">
+                  <option value="">Temperatura: Todas</option>
+                  {uniqueTemperatures.map((t) => (
+                    <option key={t} value={t}>{getTemperatureLabel(t)}</option>
+                  ))}
+                </select>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm text-gray-600 whitespace-nowrap">Saldo:</span>
+                  <input type="text" inputMode="decimal" value={leadFilterSaldoMin} onChange={(e) => setLeadFilterSaldoMin(e.target.value)} placeholder="De (ex: 10)" className="w-20 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                  <span className="text-gray-500">–</span>
+                  <input type="text" inputMode="decimal" value={leadFilterSaldoMax} onChange={(e) => setLeadFilterSaldoMax(e.target.value)} placeholder="Até (ex: 11)" className="w-20 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-sm text-gray-600 whitespace-nowrap">Exibir:</label>
+                  <select value={leadsPageSize} onChange={(e) => setLeadsPageSize(Number(e.target.value))} className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]">
+                    <option value={10}>10</option>
+                    <option value={25}>25</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                    <option value={0}>Todos</option>
+                  </select>
+                </div>
+                <span className="text-sm text-gray-600">
+                  {effectivePageSize >= totalToShow ? `${totalToShow} lead(s)` : `Exibindo ${(currentPage - 1) * effectivePageSize + 1}–${Math.min(currentPage * effectivePageSize, totalToShow)} de ${totalToShow}`}
+                </span>
+              </div>
+              <div className="flex gap-2">
+                <button type="button" onClick={handleSelectFirstN} className="text-sm px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50">
+                  Auto-selecionar {Math.min(parseInt(quantity, 10) || 0, MAX_LEADS_SELECT, totalFiltered)} primeiros
+                </button>
+                <span className="text-xs text-gray-500 self-center">ou</span>
+                <button type="button" onClick={() => toggleAllOnPage(!allOnPageSelected)} className="text-sm px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50">
+                  {allOnPageSelected ? 'Desmarcar esta página' : 'Selecionar esta página'}
+                </button>
+                <button type="button" onClick={() => toggleAllLeads(selectedLeadIds.size < totalFiltered)} className="text-sm px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50">
+                  {selectedLeadIds.size === totalFiltered ? 'Desmarcar todos' : `Selecionar todos (${totalFiltered})`}
+                </button>
+              </div>
+            </div>
+            <div className="overflow-x-auto border border-gray-200 rounded-lg">
+              <table className="w-full text-sm min-w-[720px]">
+                <thead className="bg-gray-100 border-b-2 border-gray-200">
+                  <tr>
+                    <th className="text-left p-3 w-10 align-middle sticky left-0 bg-gray-100 z-10">
+                      <input type="checkbox" checked={allOnPageSelected} onChange={(e) => toggleAllOnPage(e.target.checked)} className="rounded border-gray-400" />
+                    </th>
+                    <th className="text-left p-3 font-semibold text-gray-700 whitespace-nowrap hidden sm:table-cell">ID</th>
+                    <th className="text-left p-3 font-semibold text-gray-700 whitespace-nowrap">Nome / Email</th>
+                    <th className="text-left p-3 font-semibold text-gray-700 whitespace-nowrap">Status</th>
+                    <th className="text-left p-3 font-semibold text-gray-700 whitespace-nowrap">Temperatura</th>
+                    <th className="text-left p-3 font-semibold text-gray-700 whitespace-nowrap hidden md:table-cell">Saldo</th>
+                    <th className="text-left p-3 font-semibold text-gray-700 whitespace-nowrap hidden md:table-cell">Total deposit.</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paginatedLeads.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="p-4 text-center text-gray-500">
+                        Nenhum lead corresponde à busca.
+                      </td>
+                    </tr>
+                  ) : (
+                  paginatedLeads.map((lead) => {
+                    const id = lead.id;
+                    const key = String(id);
+                    const checked = selectedLeadIds.has(key);
+                    const name = (lead.name as string) ?? (lead.full_name as string) ?? (lead.email as string) ?? '-';
+                    const email = (lead.email as string) ?? '';
+                    const status = lead.status as string | null | undefined;
+                    const temperature = lead.temperature as string | null | undefined;
+                    const balance = lead.balance as number | null | undefined;
+                    const totalDepositado = lead.total_depositado as number | null | undefined;
+                    return (
+                      <tr key={key} className={`border-t border-gray-100 ${checked ? 'bg-green-50' : ''}`}>
+                        <td className="p-2 sticky left-0 bg-inherit z-0">
+                          <input type="checkbox" checked={checked} onChange={() => toggleLead(id)} className="rounded border-gray-300" />
+                        </td>
+                        <td className="p-2 font-mono text-gray-600 text-xs hidden sm:table-cell">{key}</td>
+                        <td className="p-2 min-w-0 max-w-[200px]">
+                          <span className="block font-medium text-gray-800 truncate" title={name}>{name}</span>
+                          {email ? <span className="block text-xs text-gray-500 truncate" title={email}>{email}</span> : null}
+                        </td>
+                        <td className="p-2">
+                          <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">{getStatusLabel(status)}</span>
+                        </td>
+                        <td className="p-2">
+                          <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700">{getTemperatureLabel(temperature)}</span>
+                        </td>
+                        <td className="p-2 text-gray-600 hidden md:table-cell">{balance != null ? `R$ ${Number(balance).toFixed(2).replace('.', ',')}` : '-'}</td>
+                        <td className="p-2 text-gray-600 hidden md:table-cell">{totalDepositado != null ? `R$ ${Number(totalDepositado).toFixed(2).replace('.', ',')}` : '-'}</td>
+                      </tr>
+                    );
+                  })
+                  )}
+                </tbody>
+              </table>
+            </div>
+            {totalPages > 1 && (
+              <div className="flex flex-wrap items-center justify-between gap-2 mt-3 pt-3 border-t border-gray-200">
+                <span className="text-xs text-gray-500">
+                  Página {currentPage} de {totalPages}
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setLeadsPage((p) => Math.max(1, p - 1))}
+                    disabled={currentPage <= 1}
+                    className="p-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    aria-label="Página anterior"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                  {Array.from({ length: totalPages }, (_, i) => i + 1)
+                    .filter((p) => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1)
+                    .map((p, idx, arr) => (
+                      <React.Fragment key={p}>
+                        {idx > 0 && arr[idx - 1] !== p - 1 && (
+                          <span className="px-1 text-gray-400">…</span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setLeadsPage(p)}
+                          className={`min-w-[2rem] px-2 py-1.5 rounded-lg text-sm font-medium ${
+                            p === currentPage
+                              ? 'bg-[#8CD955] text-white'
+                              : 'border border-gray-300 text-gray-700 hover:bg-gray-50'
+                          }`}
+                        >
+                          {p}
+                        </button>
+                      </React.Fragment>
+                    ))}
+                  <button
+                    type="button"
+                    onClick={() => setLeadsPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={currentPage >= totalPages}
+                    className="p-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    aria-label="Próxima página"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            )}
+            <div className="mt-4 flex gap-2 pt-3 border-t border-gray-100">
+              <button type="button" onClick={() => setCurrentStep(3)} className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50">Anterior</button>
+            </div>
+          </div>
+        )}
+
+          {/* Step 5: Consultor destino + Revisar e confirmar */}
+          {currentStep >= 5 && (
+          <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm ring-1 ring-gray-100">
+            <label className="flex items-center gap-2 text-sm font-bold text-gray-800 mb-2">
+              <Users className="w-4 h-4 text-[#8CD955]" />
+              Consultor destino
+            </label>
+            <p className="text-xs text-gray-500 mt-0.5 mb-3">Para quem os leads serão transferidos (todos da mesma banca, com cargo e gerente)</p>
+            <select
+              value={targetEmail}
+              onChange={(e) => setTargetEmail(e.target.value)}
+              disabled={!bancaId || loadingConsultants}
+              className="w-full max-w-md border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]"
+            >
+              <option value="" className="text-gray-600">
+                {!bancaId ? 'Selecione a banca' : loadingConsultants ? 'Carregando...' : consultants.length === 0 ? 'Nenhum consultor na banca' : 'Selecione o consultor destino'}
+              </option>
+              {consultants.filter((c) => c.email?.toLowerCase() !== sourceEmail?.toLowerCase()).map((c) => {
+                const label = [c.full_name || c.email, (c as { role?: string }).role && `(${(c as { role?: string }).role})`].filter(Boolean).join(' ');
+                const gerente = (c as { gerente_nome?: string }).gerente_nome;
+                const vinculados = (c as { consultores_vinculados?: { full_name: string }[] }).consultores_vinculados;
+                const suffix = gerente ? ` | Gerente: ${gerente}` : '';
+                const suffix2 = Array.isArray(vinculados) && vinculados.length > 0 ? ` | ${vinculados.length} consultor(es)` : '';
+                return <option key={c.id} value={c.email} title={c.email}>{label}{suffix}{suffix2}</option>;
+              })}
+            </select>
+            <div className="mt-4 flex gap-2">
+              <button type="button" onClick={() => setCurrentStep(4)} className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50">Anterior</button>
+              <button type="button" onClick={openConfirmModal} disabled={selectedCount === 0 || !targetEmail?.trim() || sourceEmail?.trim()?.toLowerCase() === targetEmail?.trim()?.toLowerCase()} className="px-4 py-2 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A] disabled:opacity-50 flex items-center gap-2">
+                <CheckSquare className="w-4 h-4" />
+                Revisar e confirmar ({selectedCount} lead(s))
+              </button>
+            </div>
+          </div>
+          )}
+        </>
+          )}
+
+        </div>
+      </div>
+
+      {/* Modal Ver selecionados */}
+      {showSelectedModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setShowSelectedModal(false)}>
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full max-h-[80vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+              <h3 className="font-bold text-gray-900">Leads selecionados ({selectedLeadIds.size})</h3>
+              <button type="button" onClick={() => setShowSelectedModal(false)} className="p-1 rounded-lg hover:bg-gray-100"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="p-4 overflow-y-auto flex-1">
+              <p className="text-sm text-gray-600 mb-2">IDs: {Array.from(selectedLeadIds).slice(0, 20).join(', ')}{selectedLeadIds.size > 20 ? ` ... +${selectedLeadIds.size - 20} mais` : ''}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de confirmação / Revisão */}
+      {showConfirmModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6">
+            <div className="flex items-center gap-2 text-amber-600 mb-4">
+              <AlertCircle className="w-6 h-6 flex-shrink-0" />
+              <span className="font-semibold">Revisar e confirmar transferência</span>
+            </div>
+            <div className="space-y-3 text-sm text-gray-700 mb-4">
+              <p><strong>Banca:</strong> {bancaName || bancaId}</p>
+              <p><strong>Origem → Destino:</strong> {sourceEmail} → {targetEmail}</p>
+              <p><strong>Quantidade:</strong> {selectedCount} lead(s)</p>
+              <p><strong>Tipo:</strong>
+                <select value={transferType} onChange={(e) => setTransferType(e.target.value as 'TF' | 'TF1' | 'TF2' | 'TF3')} className="ml-2 border border-gray-300 rounded-lg px-2 py-1 text-gray-800">
+                  <option value="TF">TF</option>
+                  <option value="TF1">TF1</option>
+                  <option value="TF2">TF2</option>
+                  <option value="TF3">TF3</option>
+                </select>
+              </p>
+              <p><strong>IDs (amostra):</strong> {Array.from(selectedLeadIds).slice(0, 10).join(', ')}{selectedCount > 10 ? ` ... +${selectedCount - 10} mais` : ''}</p>
+            </div>
+            {selectedCount > 50 && (
+              <label className="flex items-center gap-2 mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200">
+                <input type="checkbox" checked={confirmAcknowledged} onChange={(e) => setConfirmAcknowledged(e.target.checked)} className="rounded border-gray-400" />
+                <span className="text-sm text-amber-800">Entendi que isso altera o responsável por estes leads.</span>
+              </label>
+            )}
+            <p className="text-xs text-gray-500 mb-4">Esta ação será registrada em auditoria.</p>
+            <div className="flex gap-3 justify-end">
+              <button type="button" onClick={() => { setShowConfirmModal(false); setConfirmAcknowledged(false); }} disabled={transferring} className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50">Cancelar</button>
+              <button type="button" onClick={confirmTransfer} disabled={transferring || (selectedCount > 50 && !confirmAcknowledged)} className="px-4 py-2 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A] disabled:opacity-50 flex items-center gap-2">
+                {transferring ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                Confirmar transferência
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <ToastContainer toasts={toasts} onClose={removeToast} />
+    </Layout>
+  );
+}

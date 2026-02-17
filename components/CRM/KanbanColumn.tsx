@@ -22,6 +22,12 @@ interface KanbanColumnProps {
   totalLeads?: number; // Total de leads disponíveis
   onLoadMore?: (columnId: string) => void; // Função para carregar mais leads
   isLoadingMore?: boolean; // Indica se está carregando mais leads
+  /** Usar card compacto (igual CRM principal / Clientes cadastrados) para não deixar a tela grande */
+  compactCards?: boolean;
+  /** Prazo em dias para leads transferidos (10 na página Transferido, 90 no CRM principal) */
+  transferDeadlineDays?: number;
+  /** Altura máxima da área de lista (ex.: "700px") para limitar coluna e mostrar scroll após ~3 leads */
+  maxListHeight?: string;
 }
 
 const KanbanColumn: React.FC<KanbanColumnProps> = ({ 
@@ -40,7 +46,10 @@ const KanbanColumn: React.FC<KanbanColumnProps> = ({
   targetUserId,
   onTagAdded,
   selectedBancaUrl,
-  onOpenSortModal
+  onOpenSortModal,
+  compactCards = false,
+  transferDeadlineDays = 90,
+  maxListHeight,
 }) => {
   const listContainerRef = useRef<HTMLDivElement>(null);
   const [visibleRange, setVisibleRange] = useState({ start: 0, end: 50 });
@@ -176,8 +185,8 @@ const KanbanColumn: React.FC<KanbanColumnProps> = ({
           >
             {title}
           </span>
-          <span className="text-gray-600 text-[11px] font-black bg-white px-3 py-1.5 rounded-xl border border-gray-100 shadow-sm">
-            {count}
+          <span className="text-gray-600 text-[11px] font-black bg-white px-3 py-1.5 rounded-xl border border-gray-100 shadow-sm" title={totalLeads != null ? `${count} exibidos de ${totalLeads} no total` : undefined}>
+            {totalLeads != null ? `${count}/${totalLeads}` : count}
           </span>
         </div>
         <div className="flex items-center gap-1">
@@ -202,7 +211,8 @@ const KanbanColumn: React.FC<KanbanColumnProps> = ({
         className="flex-1 overflow-y-auto p-4 custom-scrollbar min-h-0"
         onScroll={handleScroll}
         style={{
-          position: 'relative'
+          position: 'relative',
+          ...(maxListHeight ? { maxHeight: maxListHeight } : {}),
         }}
       >
         {sortedLeads.length > 0 ? (
@@ -224,6 +234,8 @@ const KanbanColumn: React.FC<KanbanColumnProps> = ({
                       onTagAdded={onTagAdded}
                       selectedBancaUrl={selectedBancaUrl}
                       columnId={id}
+                      compact={compactCards}
+                      transferDeadlineDays={transferDeadlineDays}
                     />
                   </div>
                 ))}
@@ -246,6 +258,8 @@ const KanbanColumn: React.FC<KanbanColumnProps> = ({
                   onTagAdded={onTagAdded}
                   selectedBancaUrl={selectedBancaUrl}
                   columnId={id}
+                  compact={compactCards}
+                  transferDeadlineDays={transferDeadlineDays}
                 />
               ))}
               <div className="h-4 w-full flex-shrink-0" />

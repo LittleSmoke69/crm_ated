@@ -696,9 +696,22 @@ export default function MaturadorSection({ userId }: Props) {
       alert('Selecione ao menos uma instância.');
       return;
     }
-    const toAdd = Array.from(selectedInstanceIds).filter((id) => !isInMaturador(id));
+    const toAdd = Array.from(selectedInstanceIds).filter((id) => {
+      if (isInMaturador(id)) return false;
+      const ev = allEvolutionInstances.find((e: any) => e.id === id);
+      return ev?.phone_number && String(ev.phone_number).trim();
+    });
+    const withoutPhone = Array.from(selectedInstanceIds).filter((id) => {
+      if (isInMaturador(id)) return false;
+      const ev = allEvolutionInstances.find((e: any) => e.id === id);
+      return !ev?.phone_number || !String(ev.phone_number).trim();
+    });
     if (toAdd.length === 0) {
-      alert('As instâncias selecionadas já estão no maturador.');
+      if (withoutPhone.length > 0) {
+        alert('As instâncias selecionadas não têm phone_number configurado. Configure o telefone na instância para usar no maturador.');
+      } else {
+        alert('As instâncias selecionadas já estão no maturador.');
+      }
       return;
     }
     setBulkActioning('maturador');
@@ -767,10 +780,24 @@ export default function MaturadorSection({ userId }: Props) {
       return;
     }
     const toAdd = allEvolutionInstances.filter(
-      (ev: any) => selectedInstanceIds.has(ev.id) && ev.maturation_type !== 'virgem'
+      (ev: any) =>
+        selectedInstanceIds.has(ev.id) &&
+        ev.maturation_type !== 'virgem' &&
+        ev.phone_number &&
+        String(ev.phone_number).trim()
+    );
+    const withoutPhone = allEvolutionInstances.filter(
+      (ev: any) =>
+        selectedInstanceIds.has(ev.id) &&
+        ev.maturation_type !== 'virgem' &&
+        (!ev.phone_number || !String(ev.phone_number).trim())
     );
     if (toAdd.length === 0) {
-      alert('As instâncias selecionadas já estão na auto maturação.');
+      if (withoutPhone.length > 0) {
+        alert('As instâncias selecionadas não têm phone_number configurado. Configure o telefone para usar na auto maturação.');
+      } else {
+        alert('As instâncias selecionadas já estão na auto maturação.');
+      }
       return;
     }
     setBulkActioning('auto');
@@ -970,7 +997,7 @@ export default function MaturadorSection({ userId }: Props) {
           <div className="p-4 border-b border-gray-200">
             <h3 className="text-lg font-semibold text-gray-800">Gerenciar instâncias</h3>
             <p className="text-sm text-gray-500 mt-1">
-              Adicione instâncias ao <strong>Maturador (manual)</strong> ou à <strong>Auto maturação (virgem)</strong> para que elas usem os fluxos de mensagens configurados acima. Todas as instâncias no maturador enviam mensagens quando você dá Start na tela Maturador; as virgens rodam o fluxo automaticamente.
+              Adicione instâncias ao <strong>Maturador (manual)</strong> ou à <strong>Auto maturação (virgem)</strong> para que elas usem os fluxos de mensagens configurados acima. Só podem ser usadas instâncias com <strong>phone_number</strong> configurado (telefone para envio de mensagens pela API Evolution). Todas as instâncias no maturador enviam mensagens quando você dá Start na tela Maturador; as virgens rodam o fluxo automaticamente.
             </p>
           </div>
 
@@ -1102,9 +1129,12 @@ export default function MaturadorSection({ userId }: Props) {
                               {ev.is_master ? 'Mestre' : 'Normal'}
                             </span>
                           </div>
-                          <p className="text-xs text-gray-500 mt-0.5 flex items-center gap-1">
+                          <p className="text-xs text-gray-500 mt-0.5 flex items-center gap-1 flex-wrap">
                             <span className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-green-500' : 'bg-gray-400'}`} />
                             {ev.status || '—'}
+                            {ev.phone_number && (
+                              <span className="font-mono text-gray-600">{ev.phone_number}</span>
+                            )}
                             {inMaturador && ' • Maturador'}
                             {inAutoMaturacao && ' • Virgem'}
                           </p>
@@ -1128,7 +1158,8 @@ export default function MaturadorSection({ userId }: Props) {
                             <button
                               type="button"
                               onClick={() => addToMaturador(ev.id)}
-                              disabled={busy}
+                              disabled={busy || !ev.phone_number}
+                              title={!ev.phone_number ? 'Configure o telefone da instância para usar no maturador' : undefined}
                               className="inline-flex items-center gap-1.5 text-sm font-medium text-[#0A5C5C] bg-[#0A5C5C]/10 hover:bg-[#0A5C5C]/20 border border-[#0A5C5C]/30 rounded-lg px-3 py-2 disabled:opacity-50 transition-colors"
                             >
                               {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <LogIn className="w-4 h-4" />}
@@ -1148,7 +1179,8 @@ export default function MaturadorSection({ userId }: Props) {
                             <button
                               type="button"
                               onClick={() => setAutoMaturacao(ev.id, 'virgem')}
-                              disabled={busy}
+                              disabled={busy || !ev.phone_number}
+                              title={!ev.phone_number ? 'Configure o telefone da instância para usar na auto maturação' : undefined}
                               className="inline-flex items-center gap-1.5 text-sm font-medium text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg px-3 py-2 disabled:opacity-50 transition-colors"
                             >
                               Entrar na auto mat.

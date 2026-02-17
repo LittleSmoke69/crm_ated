@@ -49,6 +49,7 @@ interface MasterInstance {
   id: string | null;
   evolution_instance_id: string | null;
   instance_name: string;
+  phone_number: string | null;
   status: string | null;
   is_master?: boolean;
   is_locked: boolean;
@@ -84,6 +85,11 @@ export default function MaturadorPage() {
   // Paginação das instâncias
   const [instancesPage, setInstancesPage] = useState(1);
   const instancesPerPage = 8;
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Verifica se é admin
   useEffect(() => {
@@ -215,7 +221,7 @@ export default function MaturadorPage() {
 
     const availableInstance = masterInstances.find((i) => i.available);
     if (!availableInstance) {
-      alert('Nenhuma instância mestre disponível no maturador para executar o job.');
+      alert('Nenhuma instância disponível para maturação. Configure o phone_number das instâncias em Admin.');
       return;
     }
 
@@ -382,8 +388,10 @@ export default function MaturadorPage() {
     );
   }
 
-  // Contagem de instâncias disponíveis para job de maturação
-  const availableMasters = masterInstances.filter((i) => i.available && i.is_master);
+  // Contagem de instâncias disponíveis para job de maturação (todas as conectadas com phone_number, não precisa ser mestre)
+  const availableMasters = masterInstances.filter(
+    (i) => i.available && !!(i as any).phone_number
+  );
   const availableInstancesCount = availableMasters.length;
 
   function toggleInstanceSelection(evolutionInstanceId: string) {
@@ -422,7 +430,7 @@ export default function MaturadorPage() {
           <p className="text-slate-500 text-sm mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className="font-medium text-slate-700">{masterInstances.length} instância(s) conectada(s)</span>
             <span className="text-slate-400">·</span>
-            <span className="font-semibold text-indigo-600">{availableInstancesCount} mestre(s) disponível(is)</span>
+            <span className="font-semibold text-indigo-600">{availableInstancesCount} disponível(is) para maturação</span>
           </p>
         </div>
 
@@ -468,7 +476,8 @@ export default function MaturadorPage() {
                     {paginatedInstances.map((instance) => {
                       const isOk = isInstanceOk(instance.status);
                       const isMaster = instance.is_master === true;
-                      const canSelect = isMaster && isOk && !instance.is_locked;
+                      const hasPhone = !!(instance as any).phone_number;
+                      const canSelect = isOk && !instance.is_locked && hasPhone;
                       const evId = instance.evolution_instance_id ?? '';
                       const isSelected = evId && selectedInstanceIds.has(evId);
                       return (
@@ -496,10 +505,16 @@ export default function MaturadorPage() {
                                 <span className={`text-xs px-1.5 py-0.5 rounded ${isMaster ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>
                                   {isMaster ? 'Mestre' : 'Normal'}
                                 </span>
+                                {(instance as any).phone_number && (
+                                  <span className="text-xs text-slate-600 font-mono">
+                                    {(instance as any).phone_number}
+                                  </span>
+                                )}
                               </div>
                               <p className="text-xs text-slate-500 mt-0.5">
                                 {isOk ? 'OK - Conectada' : instance.status || 'Desconectada'}
                                 {instance.is_locked && ' · Em uso'}
+                                {!canSelect && !hasPhone && ' · Sem telefone (configure na instância)'}
                               </p>
                             </div>
                             <button
@@ -588,11 +603,13 @@ export default function MaturadorPage() {
                     }
                     className="px-5 py-2.5 rounded-lg font-medium transition-colors flex items-center justify-center gap-2 bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
                     title={
-                      availableInstancesCount === 0
-                        ? 'Nenhuma instância mestre disponível'
-                        : useVirginMessages && virginMessagesCount === 0
-                          ? 'Configure as mensagens do Auto maturador em Admin'
-                          : ''
+                      mounted
+                        ? availableInstancesCount === 0
+                          ? 'Configure o phone_number das instâncias em Admin'
+                          : useVirginMessages && virginMessagesCount === 0
+                            ? 'Configure as mensagens do Auto maturador em Admin'
+                            : ''
+                        : undefined
                     }
                   >
                     {starting ? (
@@ -622,7 +639,7 @@ export default function MaturadorPage() {
                 )}
               </div>
               {availableInstancesCount === 0 && (
-                <p className="text-sm text-red-600 mt-2">Nenhuma instância mestre disponível para maturação.</p>
+                <p className="text-sm text-red-600 mt-2">Nenhuma instância disponível para maturação. Configure o phone_number das instâncias em Admin.</p>
               )}
               {useVirginMessages && virginMessagesCount === 0 && (
                 <p className="text-sm text-amber-600 mt-2">Configure mensagens em Admin &gt; Maturador (Auto maturador).</p>

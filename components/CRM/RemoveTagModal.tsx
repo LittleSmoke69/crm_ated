@@ -61,10 +61,7 @@ const RemoveTagModal: React.FC<RemoveTagModalProps> = ({
 
       if (result.success) {
         onTagRemoved?.();
-        if (currentTags.length === 1) {
-          // Se era a última tag, fecha o modal
-          onClose();
-        }
+        onClose();
       } else {
         setError(result.error || 'Erro ao remover etiqueta');
       }

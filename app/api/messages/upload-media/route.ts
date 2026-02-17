@@ -57,9 +57,9 @@ export async function POST(req: NextRequest) {
 
     // Validação de tamanho de arquivo
     const MAX_SIZES = {
-      image: 15 * 1024 * 1024, // 15MB
-      video: 60 * 1024 * 1024, // 60MB
-      audio: 15 * 1024 * 1024, // 15MB
+      image: 1024 * 1024 * 1024, // 1GB
+      video: 1024 * 1024 * 1024, // 1GB
+      audio: 1024 * 1024 * 1024, // 1GB
     };
 
     if (size > MAX_SIZES[mediaType as keyof typeof MAX_SIZES]) {

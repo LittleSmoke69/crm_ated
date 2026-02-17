@@ -29,6 +29,7 @@ interface Message {
   send_intelligent?: boolean | null;
   training_asset_id?: string | null;
   training_dataset_item_id?: string | null;
+  ptv_delay?: number | null;
   created_at: string;
   updated_at: string;
   profiles?: {
@@ -36,6 +37,46 @@ interface Message {
     email: string;
     full_name: string | null;
   };
+}
+
+/** Ocultar opção "Envio Inteligente" na UI por enquanto (pode ser reativada depois). */
+const HIDE_SMART_SEND = true;
+
+/** Timeout para upload (10 min) — evita travamento em conexões lentas com arquivos grandes. */
+const UPLOAD_XHR_TIMEOUT_MS = 10 * 60 * 1000;
+
+/** Upload de arquivo para URL assinada com progresso real (evita gargalos e mostra % real). */
+function uploadFileWithProgress(
+  signedUrl: string,
+  file: File,
+  options: { onProgress?: (percent: number) => void }
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', signedUrl);
+    xhr.timeout = UPLOAD_XHR_TIMEOUT_MS;
+    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+
+    xhr.upload.addEventListener('progress', (e) => {
+      if (e.lengthComputable && options.onProgress) {
+        const percent = Math.round((e.loaded / e.total) * 100);
+        options.onProgress(percent);
+      }
+    });
+
+    xhr.addEventListener('load', () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+      } else {
+        reject(new Error(`Upload falhou: ${xhr.status} ${xhr.statusText}`));
+      }
+    });
+    xhr.addEventListener('error', () => reject(new Error('Erro de rede no upload')));
+    xhr.addEventListener('abort', () => reject(new Error('Upload cancelado')));
+    xhr.addEventListener('timeout', () => reject(new Error('Upload demorou muito; tente novamente.')));
+
+    xhr.send(file);
+  });
 }
 
 const ActivationsPage = () => {
@@ -64,6 +105,7 @@ const ActivationsPage = () => {
   const [scheduleFilterCreatedTo, setScheduleFilterCreatedTo] = useState('');
   const [scheduleFilterStatus, setScheduleFilterStatus] = useState<'all' | 'sent' | 'failed'>('all');
   const [scheduleFilterType, setScheduleFilterType] = useState<'all' | 'one_time' | 'recurring'>('all');
+  const [recalculatingRecurring, setRecalculatingRecurring] = useState(false);
 
   // Toast
   const { toasts, showToast, removeToast } = useToast();
@@ -88,6 +130,7 @@ const ActivationsPage = () => {
     message_type: 'text_only',
     attachment_url: null as string | null,
     send_intelligent: false,
+    ptv_delay: 1200,
   });
   const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -173,6 +216,30 @@ const ActivationsPage = () => {
     }
   }, [userId, activeTab]);
 
+  // Recalcula próxima execução de todos os recorrentes (corrige dados antigos)
+  const handleRecalculateRecurring = async () => {
+    if (!userId || !isAdmin) return;
+    setRecalculatingRecurring(true);
+    try {
+      const response = await fetch('/api/crm/activations/schedules/recalculate-recurring', {
+        method: 'POST',
+        headers: { 'X-User-Id': userId },
+      });
+      const data = await response.json();
+      if (response.ok) {
+        showToast(data.message || 'Próximas execuções recalculadas.', 'success');
+        loadSchedules();
+      } else {
+        showToast(data.error || 'Erro ao recalcular.', 'error');
+      }
+    } catch (error) {
+      console.error('Erro ao recalcular recorrentes:', error);
+      showToast('Erro ao recalcular próximas execuções.', 'error');
+    } finally {
+      setRecalculatingRecurring(false);
+    }
+  };
+
   // Filtra mensagens por pesquisa
   const filteredMessages = messages.filter(msg => {
     if (!searchQuery.trim()) return true;
@@ -214,6 +281,25 @@ const ActivationsPage = () => {
     }
     return true;
   });
+
+  // Agrupa por "disparo": mesma mensagem + mesma instância + mesma configuração (um card por disparo, listando todos os grupos)
+  const scheduleGroupKey = (s: any) => {
+    const rec =
+      s.schedule_type === 'recurring'
+        ? [(s.recurring_days || []).join(','), s.recurring_time ?? '', s.timezone ?? ''].join('|')
+        : s.scheduled_at_utc ?? '';
+    return `${s.message_id}|${s.instance_name}|${s.schedule_type}|${rec}`;
+  };
+  const groupedByDisparo = new Map<string, any[]>();
+  for (const s of filteredSchedules) {
+    const key = scheduleGroupKey(s);
+    if (!groupedByDisparo.has(key)) groupedByDisparo.set(key, []);
+    groupedByDisparo.get(key)!.push(s);
+  }
+  const scheduleGroups = Array.from(groupedByDisparo.entries()).map(([key, list]) => ({
+    key,
+    schedules: list,
+  }));
 
   // Seleção
   const handleSelectAll = () => {
@@ -290,6 +376,10 @@ const ActivationsPage = () => {
       showToast('Para o tipo "Vídeo", selecione um arquivo de vídeo.', 'error');
       return;
     }
+    if (formData.message_type === 'ptv' && detectedType !== 'video') {
+      showToast('Vídeo de Bolinha (PTV) exige arquivo de vídeo (MP4, WEBM, OGG).', 'error');
+      return;
+    }
 
     // Se o usuário selecionou explicitamente "Áudio", força áudio
     if (formData.message_type === 'audio' && detectedType !== 'audio') {
@@ -299,9 +389,9 @@ const ActivationsPage = () => {
 
     // Validação de tamanho
     const MAX_SIZES = {
-      image: 15 * 1024 * 1024, // 15MB
-      video: 60 * 1024 * 1024, // 60MB
-      audio: 15 * 1024 * 1024, // 15MB
+      image: 1024 * 1024 * 1024, // 1GB
+      video: 1024 * 1024 * 1024, // 1GB
+      audio: 1024 * 1024 * 1024, // 1GB
     };
 
     if (file.size > MAX_SIZES[detectedType]) {
@@ -352,9 +442,19 @@ const ActivationsPage = () => {
       return;
     }
     
-    // Se for áudio, não precisa de conteúdo de texto
-    if (formData.message_type !== 'audio' && !formData.content.trim()) {
+    // Conteúdo obrigatório exceto para áudio, PTV e vídeo (caption opcional)
+    if (formData.message_type !== 'audio' && formData.message_type !== 'ptv' && formData.message_type !== 'video' && !formData.content.trim()) {
       showToast('Conteúdo é obrigatório', 'error');
+      return;
+    }
+    // PTV exige vídeo anexado
+    if (formData.message_type === 'ptv' && !attachmentFile && !formData.attachment_url) {
+      showToast('Envie um vídeo para o Vídeo de Bolinha (PTV)', 'error');
+      return;
+    }
+    // Vídeo normal exige vídeo anexado
+    if (formData.message_type === 'video' && !attachmentFile && !formData.attachment_url) {
+      showToast('Envie um vídeo para o tipo Vídeo', 'error');
       return;
     }
 
@@ -370,7 +470,7 @@ const ActivationsPage = () => {
       if (attachmentFile && mediaType) {
         setUploadProgress(10);
       }
-      // Mapeia "video" para o tipo existente usado no backend (envio via sendMedia)
+      // Mapeia "video" para text_with_attachment no backend; "ptv" permanece ptv
       const normalizedMessageType =
         formData.message_type === 'video' ? 'text_with_attachment' : formData.message_type;
 
@@ -384,12 +484,13 @@ const ActivationsPage = () => {
           title: formData.title.trim(),
           content: formData.content.trim(),
           category: formData.category,
-          has_attachment: !!attachmentFile,
+          has_attachment: !!attachmentFile || formData.message_type === 'ptv',
           attachment_with_caption: formData.attachment_with_caption,
           mention_all: formData.mention_all,
           message_type: normalizedMessageType,
           send_intelligent: !!formData.send_intelligent,
-          attachment_url: null, // Será atualizado após upload
+          attachment_url: null,
+          ptv_delay: formData.message_type === 'ptv' ? (formData.ptv_delay ?? 1200) : undefined,
         }),
       });
 
@@ -434,31 +535,19 @@ const ActivationsPage = () => {
           const { bucket, path, token, signedUrl } = uploadUrlData.data;
           setUploadProgress(40);
 
-          // 2.2. Fazer upload do arquivo
+          // 2.2. Fazer upload do arquivo (com progresso real para evitar gargalos na UI)
           setUploadStatus(`Enviando ${mediaType === 'image' ? 'imagem' : mediaType === 'video' ? 'vídeo' : 'áudio'}...`);
-          setUploadProgress(50);
-          
-          if (token && path) {
+          if (signedUrl) {
+            await uploadFileWithProgress(signedUrl, attachmentFile, {
+              onProgress: (percent) => setUploadProgress(40 + Math.round(percent * 0.4)), // 40% -> 80%
+            });
+          } else if (token && path) {
             const { error: uploadError } = await supabaseClient.storage
               .from(bucket)
               .uploadToSignedUrl(path, token, attachmentFile);
-
-            if (uploadError) {
-              throw new Error(`Erro no upload: ${uploadError.message}`);
-            }
-          } else if (signedUrl) {
-            // Fallback: upload direto via fetch
-            const uploadResponse = await fetch(signedUrl, {
-              method: 'PUT',
-              body: attachmentFile,
-              headers: {
-                'Content-Type': attachmentFile.type,
-              },
-            });
-
-            if (!uploadResponse.ok) {
-              throw new Error('Erro ao fazer upload do arquivo');
-            }
+            if (uploadError) throw new Error(`Erro no upload: ${uploadError.message}`);
+          } else {
+            throw new Error('URL de upload não fornecida');
           }
 
           setUploadProgress(80);
@@ -541,6 +630,7 @@ const ActivationsPage = () => {
         message_type: 'text_only',
         attachment_url: null,
         send_intelligent: false,
+        ptv_delay: 1200,
       });
       handleRemoveFile();
       await loadMessages();
@@ -565,8 +655,8 @@ const ActivationsPage = () => {
       return;
     }
     
-    // Se for áudio, não precisa de conteúdo de texto
-    if (formData.message_type !== 'audio' && !formData.content.trim()) {
+    // Conteúdo obrigatório exceto para áudio, PTV e vídeo
+    if (formData.message_type !== 'audio' && formData.message_type !== 'ptv' && formData.message_type !== 'video' && !formData.content.trim()) {
       showToast('Conteúdo é obrigatório', 'error');
       return;
     }
@@ -597,7 +687,7 @@ const ActivationsPage = () => {
           attachment_with_caption: formData.attachment_with_caption,
           mention_all: formData.mention_all,
           message_type: formData.message_type,
-          // attachment_url será atualizado após upload se houver arquivo novo
+          ptv_delay: formData.message_type === 'ptv' ? (formData.ptv_delay ?? 1200) : undefined,
         }),
       });
 
@@ -640,31 +730,19 @@ const ActivationsPage = () => {
           const { bucket, path, token, signedUrl } = uploadUrlData.data;
           setUploadProgress(40);
 
-          // 2.2. Fazer upload do arquivo
+          // 2.2. Fazer upload do arquivo (com progresso real)
           setUploadStatus(`Enviando ${mediaType === 'image' ? 'imagem' : mediaType === 'video' ? 'vídeo' : 'áudio'}...`);
-          setUploadProgress(50);
-          
-          if (token && path) {
+          if (signedUrl) {
+            await uploadFileWithProgress(signedUrl, attachmentFile, {
+              onProgress: (percent) => setUploadProgress(40 + Math.round(percent * 0.4)),
+            });
+          } else if (token && path) {
             const { error: uploadError } = await supabaseClient.storage
               .from(bucket)
               .uploadToSignedUrl(path, token, attachmentFile);
-
-            if (uploadError) {
-              throw new Error(`Erro no upload: ${uploadError.message}`);
-            }
-          } else if (signedUrl) {
-            // Fallback: upload direto via fetch
-            const uploadResponse = await fetch(signedUrl, {
-              method: 'PUT',
-              body: attachmentFile,
-              headers: {
-                'Content-Type': attachmentFile.type,
-              },
-            });
-
-            if (!uploadResponse.ok) {
-              throw new Error('Erro ao fazer upload do arquivo');
-            }
+            if (uploadError) throw new Error(`Erro no upload: ${uploadError.message}`);
+          } else {
+            throw new Error('URL de upload não fornecida');
           }
 
           setUploadProgress(80);
@@ -722,6 +800,7 @@ const ActivationsPage = () => {
         message_type: 'text_only',
         attachment_url: null,
         send_intelligent: false,
+        ptv_delay: 1200,
       });
       handleRemoveFile();
       await loadMessages();
@@ -767,7 +846,9 @@ const ActivationsPage = () => {
     
     // Determina o tipo de mensagem baseado na mídia existente
     let messageType = message.message_type || 'text_only';
-    if (message.has_attachment && message.attachment_type) {
+    if (message.message_type === 'ptv') {
+      messageType = 'ptv';
+    } else if (message.has_attachment && message.attachment_type) {
       if (message.attachment_type === 'audio') {
         messageType = 'audio';
       } else {
@@ -785,6 +866,7 @@ const ActivationsPage = () => {
       message_type: messageType,
       attachment_url: message.attachment_url,
       send_intelligent: !!message.send_intelligent,
+      ptv_delay: typeof message.ptv_delay === 'number' && message.ptv_delay >= 0 ? message.ptv_delay : 1200,
     });
 
     // Se a mensagem tem mídia, carregar para preview
@@ -883,13 +965,72 @@ const ActivationsPage = () => {
     }
   };
 
-  // Ver detalhes do agendamento
+  // Ver detalhes do agendamento (pode ser um grupo de schedules do mesmo disparo)
   const [selectedSchedule, setSelectedSchedule] = useState<any | null>(null);
+  const [selectedScheduleGroup, setSelectedScheduleGroup] = useState<any[]>([]);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
-  
-  const handleViewDetails = (schedule: any) => {
-    setSelectedSchedule(schedule);
+
+  const handleViewDetails = (scheduleOrGroup: any | { schedules: any[] }) => {
+    const group = Array.isArray(scheduleOrGroup?.schedules) ? scheduleOrGroup.schedules : [scheduleOrGroup];
+    const first = group[0];
+    if (!first) return;
+    setSelectedSchedule(first);
+    setSelectedScheduleGroup(group);
     setShowDetailsModal(true);
+  };
+
+  const handlePauseScheduleGroup = async (scheduleIds: string[]) => {
+    if (!userId) return;
+    for (const id of scheduleIds) {
+      try {
+        await fetch(`/api/crm/activations/schedules/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+          body: JSON.stringify({ status: 'paused' }),
+        });
+      } catch (e) {
+        console.error('Erro ao pausar agendamento:', e);
+      }
+    }
+    showToast('Disparo pausado.', 'success');
+    loadSchedules();
+  };
+
+  const handleResumeScheduleGroup = async (scheduleIds: string[]) => {
+    if (!userId) return;
+    for (const id of scheduleIds) {
+      try {
+        await fetch(`/api/crm/activations/schedules/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+          body: JSON.stringify({ status: 'scheduled' }),
+        });
+      } catch (e) {
+        console.error('Erro ao retomar agendamento:', e);
+      }
+    }
+    showToast('Disparo retomado.', 'success');
+    loadSchedules();
+  };
+
+  const handleDeleteScheduleGroup = async (scheduleIds: string[]) => {
+    if (!userId) return;
+    const ok = window.confirm(
+      `Excluir este disparo para ${scheduleIds.length} grupo(s)? Todos os agendamentos serão removidos.`
+    );
+    if (!ok) return;
+    for (const id of scheduleIds) {
+      try {
+        await fetch(`/api/crm/activations/schedules/${id}`, {
+          method: 'DELETE',
+          headers: { 'X-User-Id': userId },
+        });
+      } catch (e) {
+        console.error('Erro ao excluir agendamento:', e);
+      }
+    }
+    showToast('Disparo excluído.', 'success');
+    loadSchedules();
   };
 
   const handleEditMessageFromSchedule = async (messageId: string) => {
@@ -909,6 +1050,7 @@ const ActivationsPage = () => {
       }
       
       // Preencher o form com os dados da mensagem
+      const msg = message as Message;
       setFormData({
         title: message.title,
         content: message.content,
@@ -919,6 +1061,7 @@ const ActivationsPage = () => {
         message_type: messageType,
         attachment_url: message.attachment_url,
         send_intelligent: !!message.send_intelligent,
+        ptv_delay: typeof msg.ptv_delay === 'number' && msg.ptv_delay >= 0 ? msg.ptv_delay : 1200,
       });
 
       // Se a mensagem tem mídia, carregar para preview
@@ -985,7 +1128,7 @@ const ActivationsPage = () => {
             <Activity className="w-6 h-6 text-[#8CD955]" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">CRM - Ativações</h1>
+            <h1 className="text-2xl font-bold text-gray-800">Mensagem</h1>
             <p className="text-gray-600">Gerencie suas mensagens personalizadas</p>
           </div>
         </div>
@@ -1035,13 +1178,13 @@ const ActivationsPage = () => {
               </label>
 
               <div className="relative flex-1 md:flex-initial md:w-80">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 w-5 h-5" />
                 <input
                   type="text"
                   placeholder="Pesquisar mensagens..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-gray-700"
+                  className="w-full pl-10 pr-4 py-2 bg-gray-100 border border-gray-200 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-gray-900 placeholder:text-gray-500"
                 />
               </div>
             </div>
@@ -1064,6 +1207,7 @@ const ActivationsPage = () => {
                     message_type: 'text_only',
                     attachment_url: null,
                     send_intelligent: false,
+                    ptv_delay: 1200,
                   });
                   handleRemoveFile();
                   setShowCreateModal(true);
@@ -1232,6 +1376,7 @@ const ActivationsPage = () => {
                       message_type: 'text_only',
                       attachment_url: null,
                       send_intelligent: false,
+                      ptv_delay: 1200,
                     });
                     handleRemoveFile();
                   }}
@@ -1267,7 +1412,10 @@ const ActivationsPage = () => {
                       <div>
                         <div className="flex items-center gap-2 mb-2">
                           <label className="text-sm font-medium text-gray-700">
-                            Mensagem: <span className="text-red-500">*</span>
+                            Mensagem:{' '}
+                            {!(formData.message_type === 'audio' || formData.message_type === 'ptv' || formData.message_type === 'video') && (
+                              <span className="text-red-500">*</span>
+                            )}
                           </label>
                           <div className="w-3 h-3 bg-[#8CD955] rounded-full"></div>
                         </div>
@@ -1275,8 +1423,12 @@ const ActivationsPage = () => {
                           value={formData.content}
                           onChange={(e) => setFormData({ ...formData, content: e.target.value })}
                           className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-gray-700 min-h-[150px] resize-y"
-                          placeholder="Digite o conteúdo da mensagem..."
-                          required
+                          placeholder={
+                            formData.message_type === 'ptv' || formData.message_type === 'video'
+                              ? 'Legenda opcional (deixe em branco para enviar só o vídeo)'
+                              : 'Digite o conteúdo da mensagem...'
+                          }
+                          required={!(formData.message_type === 'audio' || formData.message_type === 'ptv' || formData.message_type === 'video')}
                         />
                       </div>
 
@@ -1316,36 +1468,39 @@ const ActivationsPage = () => {
                           <option value="text_only">Somente textos e/ou anexos</option>
                           <option value="text_with_attachment">Texto com anexo</option>
                           <option value="video">Vídeo</option>
+                          <option value="ptv">Vídeo de Bolinha (PTV)</option>
                           <option value="audio">Áudio</option>
                         </select>
                       </div>
 
-                      {/* Envio Inteligente (treinamento LLM) - só habilita para vídeo */}
-                      <div className="flex items-center justify-between">
-                        <div className="flex flex-col">
-                          <label className="text-sm font-medium text-gray-700 cursor-pointer">
-                            Envio Inteligente
+                      {/* Envio Inteligente (oculto por enquanto) */}
+                      {!HIDE_SMART_SEND && (
+                        <div className="flex items-center justify-between">
+                          <div className="flex flex-col">
+                            <label className="text-sm font-medium text-gray-700 cursor-pointer">
+                              Envio Inteligente
+                            </label>
+                          </div>
+                          <label
+                            className={`relative inline-flex items-center cursor-pointer ${
+                              formData.message_type !== 'video' ? 'opacity-50 pointer-events-none' : ''
+                            }`}
+                            title={
+                              formData.message_type !== 'video'
+                                ? 'Disponível apenas para o tipo Vídeo'
+                                : undefined
+                            }
+                          >
+                            <input
+                              type="checkbox"
+                              checked={!!formData.send_intelligent}
+                              onChange={(e) => setFormData({ ...formData, send_intelligent: e.target.checked })}
+                              className="sr-only peer"
+                            />
+                            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[#8CD955]/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#8CD955]"></div>
                           </label>
                         </div>
-                        <label
-                          className={`relative inline-flex items-center cursor-pointer ${
-                            formData.message_type !== 'video' ? 'opacity-50 pointer-events-none' : ''
-                          }`}
-                          title={
-                            formData.message_type !== 'video'
-                              ? 'Disponível apenas para o tipo Vídeo'
-                              : undefined
-                          }
-                        >
-                          <input
-                            type="checkbox"
-                            checked={!!formData.send_intelligent}
-                            onChange={(e) => setFormData({ ...formData, send_intelligent: e.target.checked })}
-                            className="sr-only peer"
-                          />
-                          <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[#8CD955]/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#8CD955]"></div>
-                        </label>
-                      </div>
+                      )}
 
                       {/* Info box para áudio */}
                       {formData.message_type === 'audio' && (
@@ -1358,10 +1513,10 @@ const ActivationsPage = () => {
                       )}
 
                       {/* Upload de arquivo */}
-                      {(formData.message_type === 'text_with_attachment' || formData.message_type === 'video' || formData.message_type === 'audio') && (
+                      {(formData.message_type === 'text_with_attachment' || formData.message_type === 'video' || formData.message_type === 'ptv' || formData.message_type === 'audio') && (
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-2">
-                            {formData.message_type === 'audio' ? 'Áudio' : formData.message_type === 'video' ? 'Vídeo' : 'Anexo'}
+                            {formData.message_type === 'audio' ? 'Áudio' : formData.message_type === 'ptv' ? 'Vídeo (PTV)' : formData.message_type === 'video' ? 'Vídeo' : 'Anexo'}
                           </label>
                           
                           {!attachmentFile && !mediaPreviewUrl ? (
@@ -1376,7 +1531,7 @@ const ActivationsPage = () => {
                               <p className="text-xs text-gray-500">
                                 {formData.message_type === 'audio' 
                                   ? 'Formatos: MP3, WAV, OGG' 
-                                  : formData.message_type === 'video'
+                                  : formData.message_type === 'video' || formData.message_type === 'ptv'
                                     ? 'Formatos: MP4, WEBM, OGG'
                                   : 'Imagens: JPEG, JPG, PNG, GIF, WEBP | Vídeos: MP4, WEBM, OGG | Áudios: MP3, WAV, OGG'}
                               </p>
@@ -1686,6 +1841,7 @@ const ActivationsPage = () => {
                         message_type: 'text_only',
                         attachment_url: null,
                         send_intelligent: false,
+                        ptv_delay: 1200,
                       });
                       handleRemoveFile();
                     }}
@@ -1699,7 +1855,7 @@ const ActivationsPage = () => {
                     disabled={
                       isUploading || 
                       !formData.title.trim() || 
-                      (formData.message_type !== 'audio' && !formData.content.trim())
+                      (formData.message_type !== 'audio' && formData.message_type !== 'ptv' && formData.message_type !== 'video' && !formData.content.trim())
                     }
                     className="px-6 py-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition-colors shadow-md disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 min-w-[120px] justify-center"
                   >
@@ -1741,13 +1897,13 @@ const ActivationsPage = () => {
             <div className="bg-white rounded-xl shadow-md border border-gray-200 p-4">
               <div className="flex flex-wrap items-center gap-3">
                 <div className="relative flex-1 min-w-[200px]">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
                   <input
                     type="text"
                     placeholder="Buscar por título"
                     value={scheduleSearchTitle}
                     onChange={(e) => setScheduleSearchTitle(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 text-sm"
+                    className="w-full pl-10 pr-4 py-2 bg-gray-100 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-900 placeholder:text-gray-500 text-sm"
                   />
                 </div>
                 <div className="flex items-center gap-2">
@@ -1784,6 +1940,24 @@ const ActivationsPage = () => {
                   <option value="one_time">Pontual</option>
                   <option value="recurring">Recorrente</option>
                 </select>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={handleRecalculateRecurring}
+                    disabled={recalculatingRecurring}
+                    className="px-3 py-2 rounded-lg bg-amber-100 text-amber-800 border border-amber-300 text-sm font-medium hover:bg-amber-200 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
+                    title="Recalcula a data/hora da próxima execução de todos os agendamentos recorrentes (corrige dados antigos)"
+                  >
+                    {recalculatingRecurring ? (
+                      <>
+                        <span className="inline-block w-4 h-4 border-2 border-amber-600 border-t-transparent rounded-full animate-spin" />
+                        Recalculando...
+                      </>
+                    ) : (
+                      <>Recalcular próximas execuções</>
+                    )}
+                  </button>
+                )}
               </div>
             </div>
 
@@ -1803,36 +1977,39 @@ const ActivationsPage = () => {
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredSchedules.map((schedule) => {
+                {scheduleGroups.map(({ key, schedules: groupSchedules }) => {
+                  const schedule = groupSchedules[0];
                   const message = schedule.messages;
                   const isRecurring = schedule.schedule_type === 'recurring';
-                  const isActive = schedule.status === 'scheduled' || schedule.status === 'processing';
-                  const isSent = schedule.status === 'sent';
-                  const isFailed = schedule.status === 'failed';
-                  const isCanceled = schedule.status === 'canceled';
-                  const isPaused = schedule.status === 'paused';
-                  
+                  const isActive = groupSchedules.some((s) => s.status === 'scheduled' || s.status === 'processing');
+                  const isSent = groupSchedules.every((s) => s.status === 'sent');
+                  const isFailed = groupSchedules.some((s) => s.status === 'failed');
+                  const isPaused = groupSchedules.some((s) => s.status === 'paused');
+                  const isCanceled = groupSchedules.every((s) => s.status === 'canceled');
+                  const groupNames = groupSchedules.map((s) => s.group_subject || s.group_id);
+                  const scheduleIds = groupSchedules.map((s) => s.id);
+
                   return (
                     <div
-                      key={schedule.id}
-                      className="bg-white rounded-xl shadow-md border border-gray-200 p-6 hover:shadow-lg transition-shadow"
+                      key={key}
+                      className="bg-white rounded-xl shadow-md border border-gray-200 p-4 sm:p-6 hover:shadow-lg transition-shadow min-w-0 flex flex-col"
                     >
                       {/* Header do Card */}
-                      <div className="flex items-start justify-between mb-4">
-                        <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-start justify-between gap-2 mb-3 sm:mb-4">
+                        <div className="flex flex-wrap items-center gap-2">
                           {isRecurring ? (
-                            <span className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-xs font-medium flex items-center gap-1">
+                            <span className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-xs font-medium flex items-center gap-1 shrink-0">
                               <Clock className="w-3 h-3" />
                               Recorrente
                             </span>
                           ) : (
-                            <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-medium flex items-center gap-1">
+                            <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-medium flex items-center gap-1 shrink-0">
                               <Calendar className="w-3 h-3" />
                               Pontual
                             </span>
                           )}
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           {isActive && (
                             <span className="px-2 py-1 bg-[#8CD955] text-white rounded-full text-xs font-medium">
                               • ATIVO
@@ -1844,8 +2021,8 @@ const ActivationsPage = () => {
                             </span>
                           )}
                           {isFailed && (
-                            <span className="px-2 py-1 bg-red-500 text-white rounded-full text-xs font-medium" title={schedule.last_error ? `Erro completo: ${schedule.last_error}` : undefined}>
-                              Instância desconectada
+                            <span className="px-2 py-1 bg-red-500 text-white rounded-full text-xs font-medium" title={schedule.last_error ? `Erro: ${schedule.last_error}` : undefined}>
+                              Falhou
                             </span>
                           )}
                           {isPaused && (
@@ -1862,56 +2039,50 @@ const ActivationsPage = () => {
                       </div>
 
                       {/* Título */}
-                      <div className="mb-4">
+                      <div className="mb-3 sm:mb-4 min-w-0">
                         <p className="text-xs font-semibold text-gray-500 uppercase mb-1">TÍTULO</p>
-                        <p className="text-gray-800 font-medium">{message?.title || 'Sem título'}</p>
+                        <p className="text-gray-800 font-medium break-words">{message?.title || 'Sem título'}</p>
                       </div>
 
-                      {/* Informações de Criação */}
-                      <div className="mb-4 space-y-2">
-                        <div className="flex items-center gap-2 text-sm text-gray-600">
-                          <Clock className="w-4 h-4" />
-                          <span className="font-medium">CRIAÇÃO:</span>
-                          <span>{formatDateTime(schedule.created_at)}</span>
+                      {/* Grupos deste disparo */}
+                      <div className="mb-3 sm:mb-4 min-w-0">
+                        <p className="text-xs font-semibold text-gray-500 uppercase mb-1">GRUPOS ({groupSchedules.length})</p>
+                        <div className="flex flex-wrap gap-1">
+                          {groupNames.slice(0, 5).map((name, i) => (
+                            <span key={i} className="px-2 py-0.5 bg-gray-100 text-gray-700 rounded text-xs">
+                              {name}
+                            </span>
+                          ))}
+                          {groupNames.length > 5 && (
+                            <span className="px-2 py-0.5 bg-gray-200 text-gray-600 rounded text-xs">
+                              +{groupNames.length - 5}
+                            </span>
+                          )}
                         </div>
-                        {isSent && schedule.sent_at && (
-                          <div className="flex items-center gap-2 text-sm text-gray-600">
-                            <Calendar className="w-4 h-4" />
-                            <span className="font-medium">ÚLTIMA EXECUÇÃO:</span>
-                            <span>{formatDateTime(schedule.sent_at)}</span>
-                          </div>
-                        )}
-                        {!isSent && (
-                          <div className="flex items-center gap-2 text-sm text-gray-600">
-                            <Calendar className="w-4 h-4" />
-                            <span className="font-medium">ÚLTIMA EXECUÇÃO:</span>
-                            <span className="text-gray-400">Nunca executado</span>
-                          </div>
-                        )}
                       </div>
 
                       {/* Informações de Execução */}
-                      <div className="mb-4 space-y-2">
+                      <div className="mb-3 sm:mb-4 space-y-2 min-w-0">
                         {isRecurring ? (
                           <>
-                            <div className="flex items-center gap-2 text-sm text-gray-600">
-                              <Calendar className="w-4 h-4" />
-                              <span className="font-medium">PRÓXIMA EXECUÇÃO:</span>
-                              <span>{schedule.next_run_utc ? formatDateTime(schedule.next_run_utc) : 'Não agendado'}</span>
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-gray-600">
+                              <Calendar className="w-4 h-4 shrink-0" />
+                              <span className="font-medium shrink-0">PRÓXIMA EXECUÇÃO:</span>
+                              <span className="break-words">{schedule.next_run_utc ? formatDateTime(schedule.next_run_utc) : 'Não agendado'}</span>
                             </div>
                             {schedule.recurring_days && schedule.recurring_days.length > 0 && schedule.recurring_time && (
-                              <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 mt-2">
+                              <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 mt-2 min-w-0">
                                 <p className="text-xs font-semibold text-orange-800 mb-1">AGENDAMENTO RECORRENTE</p>
-                                <p className="text-xs text-orange-700">
+                                <p className="text-xs text-orange-700 break-words">
                                   {schedule.recurring_days.map((day: string) => {
                                     const dayMap: Record<string, string> = {
-                                      'monday': 'Segunda-feira',
-                                      'tuesday': 'Terça-feira',
-                                      'wednesday': 'Quarta-feira',
-                                      'thursday': 'Quinta-feira',
-                                      'friday': 'Sexta-feira',
-                                      'saturday': 'Sábado',
-                                      'sunday': 'Domingo',
+                                      monday: 'Seg',
+                                      tuesday: 'Ter',
+                                      wednesday: 'Qua',
+                                      thursday: 'Qui',
+                                      friday: 'Sex',
+                                      saturday: 'Sáb',
+                                      sunday: 'Dom',
                                     };
                                     return dayMap[day] || day;
                                   }).join(', ')} às {schedule.recurring_time}
@@ -1920,58 +2091,46 @@ const ActivationsPage = () => {
                             )}
                           </>
                         ) : (
-                          <div className="flex items-center gap-2 text-sm text-gray-600">
-                            <Calendar className="w-4 h-4" />
-                            <span className="font-medium">DATA PROGRAMADA:</span>
-                            <span>{schedule.scheduled_at_utc ? formatDateTime(schedule.scheduled_at_utc) : 'Não agendado'}</span>
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-gray-600">
+                            <Calendar className="w-4 h-4 shrink-0" />
+                            <span className="font-medium shrink-0">DATA PROGRAMADA:</span>
+                            <span className="break-words">{schedule.scheduled_at_utc ? formatDateTime(schedule.scheduled_at_utc) : 'Não agendado'}</span>
                           </div>
                         )}
-                        <div className="flex items-center gap-2 text-sm text-gray-600">
-                          <Check className="w-4 h-4 text-[#8CD955]" />
-                          <span className="font-medium">EXECUÇÕES:</span>
-                          <span className="text-[#8CD955] font-bold">{schedule.attempts || 0}</span>
-                        </div>
                       </div>
 
-                      {/* Status */}
-                      {isActive && (
-                        <div className="mb-4">
-                          <p className="text-sm text-gray-600">Em execução</p>
-                        </div>
-                      )}
-
                       {/* Ações */}
-                      <div className="flex gap-2 mt-4">
+                      <div className="flex flex-col sm:flex-row flex-wrap gap-2 mt-auto pt-2">
                         {isActive && (
                           <button
-                            onClick={() => handlePauseSchedule(schedule.id)}
-                            className="flex-1 px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+                            onClick={() => handlePauseScheduleGroup(scheduleIds)}
+                            className="w-full sm:flex-1 min-w-0 px-3 py-2 sm:px-4 bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2 text-sm"
                           >
-                            <Pause className="w-4 h-4" />
+                            <Pause className="w-4 h-4 shrink-0" />
                             Pausar
                           </button>
                         )}
                         {isPaused && (
                           <button
-                            onClick={() => handleResumeSchedule(schedule.id)}
-                            className="flex-1 px-4 py-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+                            onClick={() => handleResumeScheduleGroup(scheduleIds)}
+                            className="w-full sm:flex-1 min-w-0 px-3 py-2 sm:px-4 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2 text-sm"
                           >
-                            <Play className="w-4 h-4" />
+                            <Play className="w-4 h-4 shrink-0" />
                             Retomar
                           </button>
                         )}
                         <button
-                          onClick={() => handleViewDetails(schedule)}
-                          className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+                          onClick={() => handleViewDetails({ schedules: groupSchedules })}
+                          className="w-full sm:flex-1 min-w-0 px-3 py-2 sm:px-4 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg font-medium transition-colors flex items-center justify-center gap-2 text-sm"
                         >
-                          <Eye className="w-4 h-4" />
+                          <Eye className="w-4 h-4 shrink-0" />
                           Ver detalhes
                         </button>
                         <button
-                          onClick={() => handleDeleteSchedule(schedule.id)}
-                          className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+                          onClick={() => handleDeleteScheduleGroup(scheduleIds)}
+                          className="w-full sm:flex-1 min-w-0 px-3 py-2 sm:px-4 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg font-medium transition-colors flex items-center justify-center gap-2 text-sm"
                         >
-                          <Trash className="w-4 h-4" />
+                          <Trash className="w-4 h-4 shrink-0" />
                           Excluir
                         </button>
                       </div>
@@ -1991,8 +2150,10 @@ const ActivationsPage = () => {
           onClose={() => {
             setShowDetailsModal(false);
             setSelectedSchedule(null);
+            setSelectedScheduleGroup([]);
           }}
           schedule={selectedSchedule}
+          groupSchedules={selectedScheduleGroup}
           userId={userId}
           onUpdate={loadSchedules}
           onEditMessage={handleEditMessageFromSchedule}

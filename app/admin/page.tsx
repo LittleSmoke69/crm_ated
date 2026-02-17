@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { useRouter } from 'next/navigation';
 import Layout from '@/components/Layout';
@@ -47,9 +47,11 @@ import {
   Target,
   Trophy,
   CheckCircle,
+  Send,
   TrendingUp as TrendingUpIcon,
   Download,
   Loader2,
+  Eraser,
   Star,
   Crown,
   Eye,
@@ -61,7 +63,10 @@ import {
   Phone,
   Building2,
   Edit as EditIcon,
-  LogIn
+  LogIn,
+  ExternalLink,
+  ArrowRightLeft,
+  Headphones as HeadphonesIcon
 } from 'lucide-react';
 import CRMStatCard from '@/components/CRM/CRMStatCard';
 import StatusDistributionChart from '@/components/Charts/StatusDistributionChart';
@@ -72,7 +77,9 @@ import MaturadorSection from '@/components/Admin/MaturadorSection';
 import { Zap } from 'lucide-react';
 import BancaRankingChart from '@/components/Charts/BancaRankingChart';
 import CRMSection from '@/components/Admin/CRMSection';
+import HierarchySection from '@/components/Admin/HierarchySection';
 import EditCampaignModal, { CampaignUpdates } from '@/components/Campaigns/EditCampaignModal';
+import { getStoredUserId } from '@/lib/utils/stored-user-id';
 
 interface AdminStats {
   overview: {
@@ -104,6 +111,12 @@ interface AdminStats {
     pending: number;
     added: number;
     sent: number;
+  };
+  dispatches?: {
+    dispatchedToday: number;
+    nextExecutions: number;
+    failures: number;
+    successTotal: number;
   };
   chartData?: {
     date: string;
@@ -216,8 +229,9 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [users, setUsers] = useState<User[]>([]);
+  const [usersLoadError, setUsersLoadError] = useState<string | null>(null);
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
-  const [activeSection, setActiveSection] = useState<'overview' | 'users' | 'campaigns' | 'settings' | 'proxys' | 'hierarchy' | 'crm' | 'maturador'>('overview');
+  const [activeSection, setActiveSection] = useState<'overview' | 'users' | 'campaigns' | 'settings' | 'proxys' | 'hierarchy' | 'crm' | 'disparo' | 'maturador' | 'loto_assistencia'>('overview');
   const [instances, setInstances] = useState<any[]>([]);
   const [hierarchyData, setHierarchyData] = useState<any>(null);
   const [hierarchyIssues, setHierarchyIssues] = useState<any>(null);
@@ -243,6 +257,23 @@ export default function AdminDashboard() {
   const [showCampaignModal, setShowCampaignModal] = useState(false);
   const [loadingCampaignDetails, setLoadingCampaignDetails] = useState(false);
 
+  // Disparo: filtro de data e dados
+  const [disparoFrom, setDisparoFrom] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 6);
+    return d.toISOString().slice(0, 10);
+  });
+  const [disparoTo, setDisparoTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const [disparoData, setDisparoData] = useState<{
+    summary: { dispatchedToday: number; nextExecutions: number; failures: number; successTotal: number };
+    daily: { date: string; count: number }[];
+    byWeekday: { dayName: string; dayNumber: number; count: number }[];
+    upcoming: { id: string; next_run_utc: string; message_title: string; group_subject: string; instance_name: string; schedule_type: string; created_by: string }[];
+  } | null>(null);
+  const [loadingDisparo, setLoadingDisparo] = useState(false);
+  const [disparoUpcomingPage, setDisparoUpcomingPage] = useState(1);
+  const DISPARO_UPCOMING_PAGE_SIZE = 10;
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const id =
@@ -252,9 +283,9 @@ export default function AdminDashboard() {
     setUserId(id);
   }, []);
 
-  // Admin (não super_admin) vê Dashboard, Usuários e CRM; força seção válida
+  // Admin (não super_admin) vê Dashboard, Usuários, CRM e Disparo; força seção válida
   useEffect(() => {
-    if (!isSuperAdmin && adminStatus === 'admin' && activeSection !== 'overview' && activeSection !== 'users' && activeSection !== 'crm') {
+    if (!isSuperAdmin && adminStatus === 'admin' && activeSection !== 'overview' && activeSection !== 'users' && activeSection !== 'crm' && activeSection !== 'disparo' && activeSection !== 'loto_assistencia') {
       setActiveSection('overview');
     }
   }, [isSuperAdmin, adminStatus, activeSection]);
@@ -312,13 +343,16 @@ export default function AdminDashboard() {
   };
 
   const loadData = async () => {
+    const currentUserId = getStoredUserId() || userId;
+    if (!currentUserId) return;
+    setUsersLoadError(null);
     try {
       const [statsRes, usersRes] = await Promise.all([
         fetch('/api/admin/stats', {
-          headers: { 'X-User-Id': userId! },
+          headers: { 'X-User-Id': currentUserId },
         }),
         fetch('/api/admin/users', {
-          headers: { 'X-User-Id': userId! },
+          headers: { 'X-User-Id': currentUserId },
         }),
       ]);
 
@@ -329,7 +363,12 @@ export default function AdminDashboard() {
 
       if (usersRes.ok) {
         const usersData = await usersRes.json();
-        setUsers(usersData.data || []);
+        setUsers(usersData.data ?? []);
+      } else {
+        const errBody = await usersRes.json().catch(() => ({}));
+        const msg = errBody?.error || `Erro ${usersRes.status} ao carregar usuários`;
+        setUsersLoadError(msg);
+        setUsers([]);
       }
 
       // Carrega instâncias e grupos
@@ -337,8 +376,86 @@ export default function AdminDashboard() {
       loadGroups();
     } catch (error) {
       console.error('Erro ao carregar dados:', error);
+      setUsersLoadError('Falha ao carregar. Tente novamente.');
+      setUsers([]);
     }
   };
+
+  const handleClearUserData = async (targetUserId: string, targetEmail: string) => {
+    if (!confirm(`Limpar todos os dados da conta e do dashboard do usuário ${targetEmail || targetUserId}? Campanhas, contatos, disparos e buscas serão removidos permanentemente.`)) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/admin/users/${targetUserId}/clear-data`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId! },
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        await loadData();
+        alert('Dados do usuário foram limpos.');
+      } else {
+        alert(json?.error || 'Erro ao limpar dados do usuário.');
+      }
+    } catch (e) {
+      console.error('Erro ao limpar dados do usuário:', e);
+      alert('Erro ao limpar dados. Tente novamente.');
+    }
+  };
+
+  const loadDisparoData = useCallback(async () => {
+    if (!userId) return;
+    setLoadingDisparo(true);
+    try {
+      const url = `/api/admin/disparo?from=${disparoFrom}&to=${disparoTo}`;
+      const res = await fetch(url, { headers: { 'X-User-Id': userId } });
+      const json = await res.json();
+      if (res.ok && json.data) setDisparoData(json.data);
+      else setDisparoData(null);
+    } catch (e) {
+      console.error('Erro ao carregar dados de disparo:', e);
+      setDisparoData(null);
+    } finally {
+      setLoadingDisparo(false);
+    }
+  }, [userId, disparoFrom, disparoTo]);
+
+  useEffect(() => {
+    if (activeSection === 'disparo' && userId) loadDisparoData();
+  }, [activeSection, userId, loadDisparoData]);
+
+  useEffect(() => {
+    setDisparoUpcomingPage(1);
+  }, [disparoData?.upcoming?.length]);
+
+  const [lotoAssistenciaInstances, setLotoAssistenciaInstances] = useState<any[]>([]);
+  const [lotoAssistenciaSelectedId, setLotoAssistenciaSelectedId] = useState<string | null>(null);
+  const [lotoAssistenciaMessage, setLotoAssistenciaMessage] = useState<string>('');
+  const [lotoAssistenciaLoading, setLotoAssistenciaLoading] = useState(false);
+  const [lotoAssistenciaSaving, setLotoAssistenciaSaving] = useState(false);
+
+  const loadLotoAssistencia = useCallback(async () => {
+    const currentUserId = getStoredUserId() || userId;
+    if (!currentUserId) return;
+    setLotoAssistenciaLoading(true);
+    try {
+      const res = await fetch('/api/admin/loto-assistencia', { headers: { 'X-User-Id': currentUserId } });
+      const data = await res.json();
+      if (res.ok && data.data) {
+        setLotoAssistenciaInstances(data.data.instances || []);
+        setLotoAssistenciaSelectedId(data.data.selected_instance_id || null);
+        setLotoAssistenciaMessage(data.data.message_template ?? '');
+      }
+    } catch (e) {
+      console.error('Erro ao carregar Loto Assistência:', e);
+    } finally {
+      setLotoAssistenciaLoading(false);
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    if (activeSection === 'loto_assistencia' && userId) loadLotoAssistencia();
+  }, [activeSection, userId, loadLotoAssistencia]);
 
   const loadInstances = async () => {
     setLoadingInstances(true);
@@ -504,13 +621,16 @@ export default function AdminDashboard() {
     if (!userId) return;
     setLoadingFinishedCampaigns(true);
     try {
-      const res = await fetch('/api/admin/campaigns', {
-        headers: { 'X-User-Id': userId },
-      });
+      const opts = { headers: { 'X-User-Id': userId } };
+      let res = await fetch('/api/admin/campaigns', opts);
+      if (!res.ok && res.status >= 500) {
+        await new Promise((r) => setTimeout(r, 1500));
+        res = await fetch('/api/admin/campaigns', opts);
+      }
       if (res.ok) {
         const data = await res.json();
         // Filtra campanhas que já rodaram (completed, failed)
-        const finished = (data.data || []).filter((c: any) => 
+        const finished = (data.data || []).filter((c: any) =>
           c.status === 'completed' || c.status === 'failed'
         );
         setFinishedCampaigns(finished);
@@ -633,6 +753,71 @@ export default function AdminDashboard() {
             </button>
           )}
 
+          {/* Transferência de Leads: super_admin e admin */}
+          {(isSuperAdmin || adminStatus === 'admin') && (
+            <button
+              onClick={() => router.push('/admin/crm/lead-transfer')}
+              className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base text-gray-700 hover:bg-gray-100"
+            >
+              <ArrowRightLeft className="w-4 h-4 sm:w-5 sm:h-5" />
+              <span>Transferência de Leads</span>
+            </button>
+          )}
+
+          {/* Disparo: super_admin e admin - dados de envio de mensagens (Activations) */}
+          {(isSuperAdmin || adminStatus === 'admin') && (
+            <button
+              onClick={() => setActiveSection('disparo')}
+              className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base ${
+                activeSection === 'disparo'
+                  ? 'text-white'
+                  : 'text-gray-700 hover:bg-gray-100'
+              }`}
+              style={activeSection === 'disparo' ? { backgroundColor: '#8CD955' } : {}}
+            >
+              <Send className="w-4 h-4 sm:w-5 sm:h-5" />
+              <span>Disparo</span>
+            </button>
+          )}
+
+          {/* Loto Assistência: apenas admin e super_admin - instância para envio de código (esqueci a senha) */}
+          {(isSuperAdmin || adminStatus === 'admin') && (
+            <button
+              onClick={() => setActiveSection('loto_assistencia')}
+              className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base ${
+                activeSection === 'loto_assistencia'
+                  ? 'text-white'
+                  : 'text-gray-700 hover:bg-gray-100'
+              }`}
+              style={activeSection === 'loto_assistencia' ? { backgroundColor: '#8CD955' } : {}}
+            >
+              <HeadphonesIcon className="w-4 h-4 sm:w-5 sm:h-5" />
+              <span>Loto Assistência</span>
+            </button>
+          )}
+
+          {/* Meta Ads: super_admin e admin */}
+          {(isSuperAdmin || adminStatus === 'admin') && (
+            <button
+              onClick={() => router.push('/admin/meta')}
+              className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base text-gray-700 hover:bg-gray-100"
+            >
+              <TrendingUp className="w-4 h-4 sm:w-5 sm:h-5" />
+              <span>Meta Ads</span>
+            </button>
+          )}
+
+          {/* VSL White Label + Redirect: super_admin e admin (gestor acessa direto /admin/vsl) */}
+          {(isSuperAdmin || adminStatus === 'admin') && (
+            <button
+              onClick={() => router.push('/admin/vsl')}
+              className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base text-gray-700 hover:bg-gray-100"
+            >
+              <ExternalLink className="w-4 h-4 sm:w-5 sm:h-5" />
+              <span>VSL & Redirect</span>
+            </button>
+          )}
+
           {/* Hierarquia, Campanhas, Configurações, Proxys e Maturador: apenas super_admin */}
           {isSuperAdmin && (
             <>
@@ -745,6 +930,38 @@ export default function AdminDashboard() {
                   bgColor="bg-gray-400"
                 />
               </div>
+
+              {(isSuperAdmin || adminStatus === 'admin') && stats.dispatches && (
+                <>
+                  <h2 className="text-base font-semibold text-gray-800 mt-2">Disparos CRM (Activations)</h2>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 w-full">
+                    <MetricCard
+                      title="Disparadas hoje"
+                      value={stats.dispatches.dispatchedToday}
+                      icon={<Send className="w-6 h-6" />}
+                      bgColor="bg-[#8CD955]"
+                    />
+                    <MetricCard
+                      title="Próximas execuções"
+                      value={stats.dispatches.nextExecutions}
+                      icon={<Clock className="w-6 h-6" />}
+                      bgColor="bg-blue-500"
+                    />
+                    <MetricCard
+                      title="Falhas"
+                      value={stats.dispatches.failures}
+                      icon={<AlertCircle className="w-6 h-6" />}
+                      bgColor="bg-red-500"
+                    />
+                    <MetricCard
+                      title="Sucesso (total)"
+                      value={stats.dispatches.successTotal}
+                      icon={<CheckCircle className="w-6 h-6" />}
+                      bgColor="bg-[#8CD955]"
+                    />
+                  </div>
+                </>
+              )}
 
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 w-full">
                 <div className="lg:col-span-2 bg-gradient-to-br from-white to-blue-50 rounded-xl shadow-lg border border-blue-100 p-4 sm:p-6 relative overflow-hidden">
@@ -900,7 +1117,7 @@ export default function AdminDashboard() {
                       <h2 className="text-lg sm:text-xl font-bold text-gray-800">Lista de Instâncias</h2>
                       <div className="flex items-center gap-2 w-full sm:w-auto">
                         <div className="relative flex-1 sm:flex-initial">
-                          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500" />
                           <input
                             type="text"
                             placeholder="Buscar por nome..."
@@ -909,7 +1126,7 @@ export default function AdminDashboard() {
                               setInstancesSearch(e.target.value);
                               setInstancesCurrentPage(1); // Reset para primeira página ao buscar
                             }}
-                            className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 focus:ring-2 focus:ring-purple-500 focus:border-purple-500 w-full sm:w-64"
+                            className="pl-10 pr-4 py-2 bg-gray-100 border border-gray-200 rounded-lg text-sm text-gray-900 placeholder:text-gray-500 focus:ring-2 focus:ring-purple-500 focus:border-purple-500 w-full sm:w-64"
                           />
                         </div>
                         <button
@@ -985,7 +1202,7 @@ export default function AdminDashboard() {
                                         </div>
                                         <div className="text-sm text-gray-500">
                                           {inst.status}
-                                          {evolutionApi && ` • ${evolutionApi.name}`}
+                                          {evolutionApi && ` â€¢ ${evolutionApi.name}`}
                                         </div>
                                         {inst.sent_today > 0 && (
                                           <div className="text-xs text-gray-400 mt-1">
@@ -1155,7 +1372,14 @@ export default function AdminDashboard() {
           )}
 
           {activeSection === 'users' && (
-            <UsersSection users={users} onUserSelect={setSelectedUser} selectedUser={selectedUser} />
+            <UsersSection
+              users={users}
+              onUserSelect={setSelectedUser}
+              selectedUser={selectedUser}
+              onClearUserData={handleClearUserData}
+              usersLoadError={usersLoadError}
+              onRetryLoad={loadData}
+            />
           )}
 
           {activeSection === 'hierarchy' && (
@@ -1164,6 +1388,316 @@ export default function AdminDashboard() {
 
           {activeSection === 'crm' && userId && (
             <CRMSection userId={userId} />
+          )}
+
+          {activeSection === 'disparo' && (isSuperAdmin || adminStatus === 'admin') && (
+            <div className="space-y-6 w-full">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <h1 className="text-xl font-bold text-gray-800">Disparo de mensagens</h1>
+                <a
+                  href="/crm/activations"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-[#8CD955] hover:bg-[#7BC84A] text-white font-medium transition-colors"
+                >
+                  <Send className="w-4 h-4" />
+                  Abrir Mensagem (envio e agendamentos)
+                </a>
+              </div>
+
+              {/* Filtro de data */}
+              <div className="flex flex-wrap items-center gap-3 p-4 bg-white rounded-xl border border-gray-200">
+                <span className="text-sm font-medium text-gray-700">Período:</span>
+                <input
+                  type="date"
+                  value={disparoFrom}
+                  onChange={(e) => setDisparoFrom(e.target.value)}
+                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                />
+                <span className="text-gray-500">até</span>
+                <input
+                  type="date"
+                  value={disparoTo}
+                  onChange={(e) => setDisparoTo(e.target.value)}
+                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const d = new Date();
+                    d.setDate(d.getDate() - 6);
+                    setDisparoFrom(d.toISOString().slice(0, 10));
+                    setDisparoTo(new Date().toISOString().slice(0, 10));
+                  }}
+                  className="px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg"
+                >
+                  Últimos 7 dias
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const d = new Date();
+                    d.setDate(1);
+                    setDisparoFrom(d.toISOString().slice(0, 10));
+                    setDisparoTo(new Date().toISOString().slice(0, 10));
+                  }}
+                  className="px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg"
+                >
+                  Este mês
+                </button>
+                {loadingDisparo && (
+                  <span className="flex items-center gap-2 text-sm text-gray-500">
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    Carregando…
+                  </span>
+                )}
+              </div>
+
+              {loadingDisparo && !disparoData ? (
+                <div className="bg-gray-50 border border-gray-200 rounded-xl p-12 text-center">
+                  <RefreshCw className="w-8 h-8 animate-spin text-[#8CD955] mx-auto mb-2" />
+                  <p className="text-gray-500">Carregando dados de disparo…</p>
+                </div>
+              ) : disparoData ? (
+                <>
+                  {/* Cards resumo */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+                    <MetricCard
+                      title="Disparadas hoje"
+                      value={disparoData.summary.dispatchedToday}
+                      icon={<Send className="w-6 h-6" />}
+                      bgColor="bg-[#8CD955]"
+                    />
+                    <MetricCard
+                      title="Próximas execuções"
+                      value={disparoData.summary.nextExecutions}
+                      icon={<Clock className="w-6 h-6" />}
+                      bgColor="bg-blue-500"
+                    />
+                    <MetricCard
+                      title="Falhas"
+                      value={disparoData.summary.failures}
+                      icon={<AlertCircle className="w-6 h-6" />}
+                      bgColor="bg-red-500"
+                    />
+                    <MetricCard
+                      title="Sucesso (total)"
+                      value={disparoData.summary.successTotal}
+                      icon={<CheckCircle className="w-6 h-6" />}
+                      bgColor="bg-[#8CD955]"
+                    />
+                  </div>
+
+                  {/* Progressão por dia da semana (disparos no período) */}
+                  <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
+                    <h2 className="text-lg font-semibold text-gray-800 mb-4">Disparos por dia da semana (no período)</h2>
+                    <div className="h-64">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={disparoData.byWeekday} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                          <XAxis dataKey="dayName" stroke="#6b7280" style={{ fontSize: '12px' }} />
+                          <YAxis stroke="#6b7280" style={{ fontSize: '12px' }} allowDecimals={false} />
+                          <Tooltip contentStyle={{ backgroundColor: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px' }} />
+                          <Line type="monotone" dataKey="count" name="Disparos" stroke="#8CD955" strokeWidth={2} dot={{ fill: '#8CD955', r: 4 }} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  {/* Dados diários (disparos por dia no período) */}
+                  <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
+                    <h2 className="text-lg font-semibold text-gray-800 mb-4">Disparos por dia (no período)</h2>
+                    <div className="h-56 w-full min-h-[200px]" style={{ minWidth: 320 }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={disparoData.daily || []} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                          <XAxis dataKey="date" stroke="#6b7280" style={{ fontSize: '11px' }} tickFormatter={(v) => (v || '').slice(5)} />
+                          <YAxis stroke="#6b7280" style={{ fontSize: '12px' }} allowDecimals={false} />
+                          <Tooltip contentStyle={{ backgroundColor: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px' }} labelFormatter={(v) => v} />
+                          <Line type="monotone" dataKey="count" name="Disparos" stroke="#3b82f6" strokeWidth={2} dot={{ fill: '#3b82f6', r: 3 }} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  {/* Próximos agendamentos */}
+                  <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
+                    <h2 className="text-lg font-semibold text-gray-800 mb-4">Próximos agendamentos</h2>
+                    {disparoData.upcoming?.length > 0 ? (
+                      <>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="border-b border-gray-200 text-left text-gray-600 font-medium">
+                                <th className="py-2 pr-2">Data / Hora</th>
+                                <th className="py-2 pr-2">Mensagem</th>
+                                <th className="py-2 pr-2">Grupo</th>
+                                <th className="py-2 pr-2">Instância</th>
+                                <th className="py-2 pr-2">Criado por</th>
+                                <th className="py-2">Tipo</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {(() => {
+                                const total = disparoData.upcoming.length;
+                                const totalPages = Math.ceil(total / DISPARO_UPCOMING_PAGE_SIZE) || 1;
+                                const page = Math.min(Math.max(1, disparoUpcomingPage), totalPages);
+                                const start = (page - 1) * DISPARO_UPCOMING_PAGE_SIZE;
+                                const paginated = disparoData.upcoming.slice(start, start + DISPARO_UPCOMING_PAGE_SIZE);
+                                return paginated.map((row) => (
+                                  <tr key={row.id} className="border-b border-gray-100 hover:bg-gray-50">
+                                    <td className="py-2 pr-2 whitespace-nowrap text-gray-800">
+                                      {new Date(row.next_run_utc).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                    </td>
+                                    <td className="py-2 pr-2 max-w-[180px] truncate text-gray-800" title={row.message_title}>{row.message_title}</td>
+                                    <td className="py-2 pr-2 max-w-[140px] truncate text-gray-800" title={row.group_subject}>{row.group_subject}</td>
+                                    <td className="py-2 pr-2 text-gray-800">{row.instance_name}</td>
+                                    <td className="py-2 pr-2 text-gray-800">{row.created_by}</td>
+                                    <td className="py-2 text-gray-800">{row.schedule_type === 'recurring' ? 'Recorrente' : 'Pontual'}</td>
+                                  </tr>
+                                ));
+                              })()}
+                            </tbody>
+                          </table>
+                        </div>
+                        {(() => {
+                          const total = disparoData.upcoming.length;
+                          const totalPages = Math.ceil(total / DISPARO_UPCOMING_PAGE_SIZE) || 1;
+                          const page = Math.min(Math.max(1, disparoUpcomingPage), totalPages);
+                          const start = (page - 1) * DISPARO_UPCOMING_PAGE_SIZE;
+                          const end = Math.min(start + DISPARO_UPCOMING_PAGE_SIZE, total);
+                          return (
+                            <div className="flex flex-wrap items-center justify-between gap-2 mt-4 pt-3 border-t border-gray-200">
+                              <p className="text-sm text-gray-600">
+                                Mostrando {start + 1}–{end} de {total}
+                              </p>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setDisparoUpcomingPage((p) => Math.max(1, p - 1))}
+                                  disabled={disparoUpcomingPage <= 1}
+                                  className="px-3 py-1.5 rounded-lg border border-gray-300 text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                  Anterior
+                                </button>
+                                <span className="text-sm text-gray-600 px-2">
+                                  Página {disparoUpcomingPage} de {totalPages}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setDisparoUpcomingPage((p) => Math.min(totalPages, p + 1))}
+                                  disabled={disparoUpcomingPage >= totalPages}
+                                  className="px-3 py-1.5 rounded-lg border border-gray-300 text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                  Próxima
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </>
+                    ) : (
+                      <p className="text-gray-500 py-4">Nenhum agendamento próximo.</p>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div className="bg-gray-50 border border-gray-200 rounded-xl p-8 text-center text-gray-500">
+                  Não foi possível carregar os dados de disparo.
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeSection === 'loto_assistencia' && (isSuperAdmin || adminStatus === 'admin') && (
+            <div className="space-y-6 w-full">
+              <h1 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                <HeadphonesIcon className="w-6 h-6 text-[#8CD955]" />
+                Loto Assistência
+              </h1>
+              <p className="text-sm text-gray-600">
+                Selecione a instância WhatsApp (mestre) e personalize a mensagem enviada no fluxo &quot;Esqueci a senha&quot;. São listadas todas as instâncias marcadas como mestre no sistema.
+              </p>
+              {lotoAssistenciaLoading ? (
+                <div className="bg-gray-50 border border-gray-200 rounded-xl p-8 text-center">
+                  <Loader2 className="w-8 h-8 animate-spin text-[#8CD955] mx-auto mb-2" />
+                  <p className="text-gray-500">Carregando…</p>
+                </div>
+              ) : (
+                <div className="space-y-6 max-w-2xl">
+                  <div className="bg-white rounded-xl border border-gray-200 p-6">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Instância para envio do código (Esqueci a senha)</label>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <select
+                        value={lotoAssistenciaSelectedId || ''}
+                        onChange={(e) => setLotoAssistenciaSelectedId(e.target.value || null)}
+                        className="flex-1 min-w-[200px] px-3 py-2 border border-gray-300 rounded-lg text-gray-800 bg-white"
+                      >
+                        <option value="">Nenhuma selecionada</option>
+                        {lotoAssistenciaInstances.map((inst: any) => (
+                          <option key={inst.id} value={inst.id}>
+                            {inst.instance_name}
+                            {inst.phone_number ? ` (${inst.phone_number})` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    {lotoAssistenciaInstances.length === 0 && (
+                      <p className="text-sm text-amber-600 mt-2">Nenhuma instância mestre disponível. Marque instâncias como mestre nas Configurações / Evolution.</p>
+                    )}
+                  </div>
+
+                  <div className="bg-white rounded-xl border border-gray-200 p-6">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Mensagem enviada no disparo do código</label>
+                    <p className="text-xs text-gray-500 mb-2">Use <code className="bg-gray-100 px-1 rounded">{'{{Código}}'}</code> no texto para indicar onde o código de 6 dígitos será inserido.</p>
+                    <textarea
+                      value={lotoAssistenciaMessage}
+                      onChange={(e) => setLotoAssistenciaMessage(e.target.value)}
+                      placeholder="Seu código de recuperação de senha Zaploto é: *{{Código}}*. Válido por 15 minutos. Não compartilhe."
+                      rows={4}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-800 bg-white placeholder:text-gray-400 resize-y"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      disabled={lotoAssistenciaSaving}
+                      onClick={async () => {
+                        const currentUserId = getStoredUserId() || userId;
+                        if (!currentUserId) return;
+                        setLotoAssistenciaSaving(true);
+                        try {
+                          const res = await fetch('/api/admin/loto-assistencia', {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json', 'X-User-Id': currentUserId },
+                            body: JSON.stringify({
+                              evolution_instance_id: lotoAssistenciaSelectedId,
+                              message_template: lotoAssistenciaMessage,
+                            }),
+                          });
+                          const data = await res.json();
+                          if (res.ok) {
+                            alert(data.message || 'Salvo.');
+                          } else {
+                            alert(data.error || 'Erro ao salvar');
+                          }
+                        } catch (e) {
+                          alert('Erro ao salvar');
+                        } finally {
+                          setLotoAssistenciaSaving(false);
+                        }
+                      }}
+                      className="px-4 py-2 rounded-lg text-white font-medium disabled:opacity-50 flex items-center gap-2"
+                      style={{ backgroundColor: '#8CD955' }}
+                    >
+                      {lotoAssistenciaSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                      Salvar
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           )}
 
           {activeSection === 'campaigns' && <CampaignsSection userId={userId} />}
@@ -1393,11 +1927,17 @@ const MetricCard = ({ title, value, icon, bgColor }: any) => {
 const UsersSection = ({ 
   users, 
   onUserSelect, 
-  selectedUser 
+  selectedUser,
+  onClearUserData,
+  usersLoadError,
+  onRetryLoad
 }: { 
   users: User[]; 
   onUserSelect: (userId: string | null) => void; 
   selectedUser: string | null;
+  onClearUserData?: (userId: string, email: string) => Promise<void>;
+  usersLoadError?: string | null;
+  onRetryLoad?: () => void;
 }) => {
   const [editingUser, setEditingUser] = useState<string | null>(null);
   const [editFormData, setEditFormData] = useState<any>(null);
@@ -1422,22 +1962,34 @@ const UsersSection = ({
 
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    const currentUserId = sessionStorage.getItem('user_id') || sessionStorage.getItem('profile_id');
-    if (!currentUserId) return;
+    const currentUserId = getStoredUserId();
+    if (!currentUserId) {
+      alert('Sessão inválida. Faça login novamente.');
+      return;
+    }
+
+    if (createFormData.status === 'consultor' && !createFormData.enroller) {
+      alert('Consultor deve ser vinculado a um Gerente. Selecione um gerente na lista.');
+      return;
+    }
 
     setIsCreating(true);
     try {
+      const payload = {
+        ...createFormData,
+        enroller: createFormData.enroller || null,
+      };
       const response = await fetch('/api/admin/users/create', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-User-Id': currentUserId,
         },
-        body: JSON.stringify(createFormData),
+        body: JSON.stringify(payload),
       });
 
       const result = await response.json();
-      if (response.ok) {
+      if (response.ok && result.success) {
         alert('Usuário criado com sucesso!');
         setShowCreateModal(false);
         setCreateCreateFormData({
@@ -1451,11 +2003,12 @@ const UsersSection = ({
         });
         window.location.reload();
       } else {
-        alert(`Erro: ${result.error || 'Erro desconhecido'}`);
+        const msg = result.error || result.message || 'Erro desconhecido';
+        alert(`Erro ao criar usuário: ${msg}`);
       }
     } catch (error) {
       console.error('Erro ao criar usuário:', error);
-      alert('Erro ao criar usuário');
+      alert('Erro ao criar usuário. Verifique a conexão e tente novamente.');
     } finally {
       setIsCreating(false);
     }
@@ -1485,7 +2038,7 @@ const UsersSection = ({
     e?.preventDefault();
     e?.stopPropagation();
     
-    const currentUserId = sessionStorage.getItem('user_id') || sessionStorage.getItem('profile_id');
+    const currentUserId = getStoredUserId();
     if (!currentUserId) {
       alert('Sessão inválida. Por favor, faça login novamente.');
       return;
@@ -1534,7 +2087,7 @@ const UsersSection = ({
   const handleDelete = async (userId: string, email: string) => {
     if (!confirm(`Tem certeza que deseja remover o usuário ${email}? Esta ação é irreversível.`)) return;
 
-    const currentUserId = sessionStorage.getItem('user_id') || sessionStorage.getItem('profile_id');
+    const currentUserId = getStoredUserId();
     if (!currentUserId) return;
 
     try {
@@ -1561,7 +2114,7 @@ const UsersSection = ({
   const handleImpersonate = async (targetUserId: string, userEmail: string) => {
     if (!confirm(`Deseja acessar a conta de ${userEmail}? Você será redirecionado para o dashboard deste usuário.`)) return;
 
-    const currentUserId = sessionStorage.getItem('user_id') || sessionStorage.getItem('profile_id');
+    const currentUserId = getStoredUserId();
     if (!currentUserId) {
       alert('Erro: Não foi possível identificar sua sessão de admin. Por favor, faça login novamente.');
       return;
@@ -1582,12 +2135,13 @@ const UsersSection = ({
       console.log('[Impersonate] Resposta da API:', { status: res.status, ok: res.ok, result });
       
       if (res.ok && result.success) {
-        const { targetUserId: newUserId, targetEmail } = result.data;
+        const { targetUserId: newUserId, targetEmail, adminEmail } = result.data;
         
         console.log('[Impersonate] Sucesso! Configurando sessão para:', { newUserId, targetEmail });
         
-        // Salva o ID do admin original para poder voltar depois (opcional)
+        // Salva o ID e email do admin original para poder voltar depois
         sessionStorage.setItem('admin_original_id', currentUserId);
+        if (adminEmail) sessionStorage.setItem('admin_original_email', adminEmail);
         
         // Limpa dados antigos primeiro
         sessionStorage.removeItem('user_id');
@@ -1720,6 +2274,7 @@ const UsersSection = ({
   const getPotentialEnrollers = (status: string) => {
     if (status === 'consultor') return users.filter(u => u.status === 'gerente');
     if (status === 'gerente') return users.filter(u => u.status === 'dono_banca');
+    if (status === 'gestor') return users.filter(u => u.status === 'dono_banca' || u.status === 'admin');
     if (status === 'auditoria' || status === 'suporte') return users.filter(u => u.status === 'admin');
     return [];
   };
@@ -1747,7 +2302,7 @@ const UsersSection = ({
       {/* Busca */}
         <div className="bg-gray-100 p-4 rounded-xl shadow-sm border border-gray-200">
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 w-5 h-5" />
           <input
             type="text"
             placeholder="Buscar por nome, email, ID ou banca..."
@@ -1756,7 +2311,7 @@ const UsersSection = ({
               setSearchQuery(e.target.value);
               setCurrentPage(1); // Volta para primeira página ao buscar
             }}
-            className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-sm"
+            className="w-full pl-10 pr-4 py-2.5 bg-gray-200 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-sm text-gray-900 placeholder:text-gray-600"
           />
           {searchQuery && (
             <button
@@ -1816,6 +2371,15 @@ const UsersSection = ({
             className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'consultor' ? 'bg-[#8CD955] text-white' : 'bg-emerald-50 text-[#8CD955] hover:bg-emerald-100'}`}
           >
             Consultores
+          </button>
+          <button
+            onClick={() => {
+              setStatusFilter('gestor');
+              setCurrentPage(1);
+            }}
+            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'gestor' ? 'bg-teal-600 text-white' : 'bg-teal-50 text-teal-600 hover:bg-teal-100'}`}
+          >
+            Gestores de Tráfego
           </button>
           <button
             onClick={() => {
@@ -1891,7 +2455,7 @@ const UsersSection = ({
                   <input 
                     type="password" 
                     required
-                    placeholder="••••••••"
+                    placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
                     className="w-full bg-gray-50 border-gray-100 rounded-xl focus:ring-emerald-500 focus:border-emerald-500 p-3 text-sm text-gray-700"
                     value={createFormData.password}
                     onChange={e => setCreateCreateFormData({...createFormData, password: e.target.value})}
@@ -1907,6 +2471,7 @@ const UsersSection = ({
                   >
                     <option value="admin">Admin</option>
                     <option value="dono_banca">Dono de Banca</option>
+                    <option value="gestor">Gestor de Tráfego</option>
                     <option value="gerente">Gerente</option>
                     <option value="consultor">Consultor</option>
                     <option value="auditoria">Auditoria</option>
@@ -1941,17 +2506,27 @@ const UsersSection = ({
                   </>
                 )}
 
-                {(createFormData.status === 'gerente' || createFormData.status === 'consultor') && (
+                {(createFormData.status === 'gerente' || createFormData.status === 'consultor' || createFormData.status === 'gestor') && (
                   <div className="col-span-2 animate-in slide-in-from-top-2 duration-200">
                     <label className="block text-xs font-bold text-gray-500 uppercase mb-1.5 ml-1">
-                      {createFormData.status === 'gerente' ? 'Selecionar Dono de Banca' : 'Selecionar Gerente'} (opcional)
+                      {createFormData.status === 'gerente'
+                        ? 'Selecionar Dono de Banca (opcional)'
+                        : createFormData.status === 'gestor'
+                        ? 'Selecionar Dono de Banca ou Admin (vincula dados da banca)'
+                        : 'Selecionar Gerente *'}
+                      {createFormData.status === 'consultor' && (
+                        <span className="text-amber-600 ml-1">obrigatório</span>
+                      )}
                     </label>
                     <select 
                       className="w-full bg-gray-50 border-gray-100 rounded-xl focus:ring-emerald-500 focus:border-emerald-500 p-3 text-sm text-gray-700"
                       value={createFormData.enroller}
                       onChange={e => setCreateCreateFormData({...createFormData, enroller: e.target.value})}
+                      required={createFormData.status === 'consultor'}
                     >
-                      <option value="">Sem superior (opcional)</option>
+                      <option value="">
+                        {createFormData.status === 'consultor' ? 'Selecione um gerente...' : 'Sem superior (opcional)'}
+                      </option>
                       {getPotentialEnrollers(createFormData.status).map(u => (
                         <option key={u.id} value={u.id}>{u.full_name || u.email}</option>
                       ))}
@@ -2019,6 +2594,19 @@ const UsersSection = ({
             </div>
             <span className="text-sm text-gray-600 font-medium bg-gray-50/80 px-3 py-1 rounded-lg border border-gray-200">{filteredUsers.length} usuários encontrados</span>
           </div>
+
+          {usersLoadError && (
+            <div className="mb-4 p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between gap-4">
+              <div className="flex items-center gap-2 text-amber-800">
+                <AlertCircle className="w-5 h-5 flex-shrink-0" />
+                <span>{usersLoadError}</span>
+              </div>
+              <button type="button" onClick={() => onRetryLoad?.()} className="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 font-medium flex items-center gap-2">
+                <RefreshCw className="w-4 h-4" />
+                Tentar novamente
+              </button>
+            </div>
+          )}
           
           <div className="overflow-x-auto -mx-4 sm:mx-0">
             <table className="w-full min-w-[1000px]">
@@ -2112,6 +2700,7 @@ const UsersSection = ({
                           >
                             <option value="admin">Admin</option>
                             <option value="dono_banca">Dono de Banca</option>
+                            <option value="gestor">Gestor de Tráfego</option>
                             <option value="gerente">Gerente</option>
                             <option value="consultor">Consultor</option>
                             <option value="auditoria">Auditoria</option>
@@ -2176,6 +2765,7 @@ const UsersSection = ({
                           <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
                             user.status === 'admin' ? 'bg-red-100 text-red-700' :
                             user.status === 'dono_banca' ? 'bg-purple-100 text-purple-700' :
+                            user.status === 'gestor' ? 'bg-teal-100 text-teal-700' :
                             user.status === 'gerente' ? 'bg-blue-100 text-blue-700' :
                             user.status === 'auditoria' ? 'bg-orange-100 text-orange-700' :
                             user.status === 'suporte' ? 'bg-cyan-100 text-cyan-700' :
@@ -2322,6 +2912,15 @@ const UsersSection = ({
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
+                            {onClearUserData && (
+                              <button
+                                onClick={() => onClearUserData(user.id, user.email)}
+                                className="p-2 bg-amber-50 text-amber-700 rounded-lg hover:bg-amber-100 border border-amber-100"
+                                title="Limpar dados da conta e do dashboard (campanhas, contatos, disparos, buscas)"
+                              >
+                                <Eraser className="w-4 h-4" />
+                              </button>
+                            )}
                             {user.status === 'consultor' && (
                               <a
                                 href={`/crm/kanban?userId=${user.id}`}
@@ -2377,12 +2976,15 @@ const CampaignsSection = ({ userId }: { userId: string | null }) => {
 
   const loadCampaigns = async () => {
     if (!userId) return;
-    
+
     setLoading(true);
     try {
-      const res = await fetch('/api/admin/campaigns', {
-        headers: { 'X-User-Id': userId },
-      });
+      const opts = { headers: { 'X-User-Id': userId } };
+      let res = await fetch('/api/admin/campaigns', opts);
+      if (!res.ok && res.status >= 500) {
+        await new Promise((r) => setTimeout(r, 1500));
+        res = await fetch('/api/admin/campaigns', opts);
+      }
       if (res.ok) {
         const data = await res.json();
         setCampaigns(data.data || []);
@@ -2690,7 +3292,7 @@ const SettingsSection = () => {
   const loadData = async () => {
     setLoading(true);
     try {
-      const userId = sessionStorage.getItem('user_id') || sessionStorage.getItem('profile_id');
+      const userId = getStoredUserId();
       const [apisRes, usersRes] = await Promise.all([
         fetch('/api/admin/evolution-apis', {
           headers: { 'X-User-Id': userId || '' },
@@ -2718,7 +3320,7 @@ const SettingsSection = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const userId = sessionStorage.getItem('user_id') || sessionStorage.getItem('profile_id');
+    const userId = getStoredUserId();
     
     if (!userId) {
       alert('Sessão inválida. Faça login novamente.');
@@ -2782,7 +3384,7 @@ const SettingsSection = () => {
       return;
     }
 
-    const userId = sessionStorage.getItem('user_id') || sessionStorage.getItem('profile_id');
+    const userId = getStoredUserId();
     
     if (!userId) {
       alert('Sessão inválida. Faça login novamente.');
@@ -2808,7 +3410,7 @@ const SettingsSection = () => {
   };
 
   const handleToggleBlock = async (api: EvolutionApi) => {
-    const userId = sessionStorage.getItem('user_id') || sessionStorage.getItem('profile_id');
+    const userId = getStoredUserId();
     
     if (!userId) {
       alert('Sessão inválida. Faça login novamente.');
@@ -2847,7 +3449,7 @@ const SettingsSection = () => {
   };
 
   const handleAssignUser = async (apiId: string, userId: string, isDefault: boolean) => {
-    const adminUserId = sessionStorage.getItem('user_id') || sessionStorage.getItem('profile_id');
+    const adminUserId = getStoredUserId();
     if (!adminUserId) return;
     
     try {
@@ -2874,7 +3476,7 @@ const SettingsSection = () => {
   };
 
   const handleUnassignUser = async (apiId: string, userId: string) => {
-    const adminUserId = sessionStorage.getItem('user_id') || sessionStorage.getItem('profile_id');
+    const adminUserId = getStoredUserId();
     if (!adminUserId) return;
     
     try {
@@ -3261,7 +3863,7 @@ const ProxySection = () => {
   const loadData = async () => {
     setLoading(true);
     try {
-      const userId = sessionStorage.getItem('user_id') || sessionStorage.getItem('profile_id');
+      const userId = getStoredUserId();
       const [ proxyRes, instanceRes] = await Promise.all([
         fetch('/api/admin/proxy', {
           headers: { 'X-User-Id': userId || '' },
@@ -3289,7 +3891,7 @@ const ProxySection = () => {
 
   const handleSubmitProxy = async (e: React.FormEvent) => {
     e.preventDefault();
-    const userId = sessionStorage.getItem('user_id') || sessionStorage.getItem('profile_id');
+    const userId = getStoredUserId();
     
     if (!userId) {
       alert('Sessão inválida. Faça login novamente.');
@@ -3352,7 +3954,7 @@ const ProxySection = () => {
       return;
     }
 
-    const userId = sessionStorage.getItem('user_id') || sessionStorage.getItem('profile_id');
+    const userId = getStoredUserId();
     
     if (!userId) {
       alert('Sessão inválida. Faça login novamente.');
@@ -3378,7 +3980,7 @@ const ProxySection = () => {
   };
 
     const handleAssignInstance = async (apiId: string, userId: string, isDefault: boolean) => {
-    const adminUserId = sessionStorage.getItem('user_id') || sessionStorage.getItem('profile_id');
+    const adminUserId = getStoredUserId();
     if (!adminUserId) return;
     
     try {
@@ -3405,7 +4007,7 @@ const ProxySection = () => {
   };
 
   const handleUnassignUser = async (apiId: string, userId: string) => {
-    const adminUserId = sessionStorage.getItem('user_id') || sessionStorage.getItem('profile_id');
+    const adminUserId = getStoredUserId();
     if (!adminUserId) return;
     
     try {
@@ -3705,1160 +4307,6 @@ const ProxySection = () => {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-
-const HierarchySection = ({ userId }: { userId: string | null }) => {
-  const [hierarchy, setHierarchy] = useState<any[]>([]);
-  const [issues, setIssues] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [crmBancas, setCrmBancas] = useState<any[]>([]);
-  const [bancaSearch, setBancaSearch] = useState('');
-  const [bancaFilter, setBancaFilter] = useState<'all' | 'sem_dono' | 'com_dono'>('all');
-  const [issuesCurrentPage, setIssuesCurrentPage] = useState(1);
-  const issuesPerPage = 10;
-  const [bancasCurrentPage, setBancasCurrentPage] = useState(1);
-  const bancasPerPage = 5;
-  const [editingUser, setEditingUser] = useState<any>(null);
-  const [showEditModal, setShowEditModal] = useState(false);
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [createFormData, setCreateFormData] = useState({
-    email: '',
-    fullName: '',
-    password: '',
-    status: 'consultor' as 'consultor' | 'gerente' | 'dono_banca',
-    enroller: '',
-    bancaOwnerId: '',
-    bancaName: '',
-    bancaUrl: '',
-    initialBancaIds: [] as string[],
-  });
-  const [editFormData, setEditFormData] = useState({
-    email: '',
-    password: '',
-  });
-  const [crmTimeData, setCrmTimeData] = useState<Record<string, number>>({});
-  const [showFixModal, setShowFixModal] = useState(false);
-  const [fixingIssue, setFixingIssue] = useState<any>(null);
-  const [selectedFixRole, setSelectedFixRole] = useState<'dono_banca' | 'gerente' | 'consultor'>('gerente');
-  const [selectedFixBancaId, setSelectedFixBancaId] = useState<string>('');
-  const [selectedEnroller, setSelectedEnroller] = useState<string>(''); // usado para consultor (gerente)
-  const [allUsers, setAllUsers] = useState<any[]>([]);
-
-  useEffect(() => {
-    if (userId) {
-      loadHierarchyData();
-    }
-  }, [userId]);
-
-  const loadHierarchyData = async () => {
-    setLoading(true);
-    try {
-      const [hierarchyRes, issuesRes, usersRes, bancasRes] = await Promise.all([
-        fetch('/api/admin/users/hierarchy', { headers: { 'X-User-Id': userId! } }),
-        fetch('/api/admin/users/validate-hierarchy', { headers: { 'X-User-Id': userId! } }),
-        fetch('/api/admin/users', { headers: { 'X-User-Id': userId! } }),
-        fetch('/api/admin/crm/bancas?with_users=1', { headers: { 'X-User-Id': userId! } }),
-      ]);
-
-      if (hierarchyRes.ok) {
-        const data = await hierarchyRes.json();
-        setHierarchy(data.data || []);
-      }
-      if (issuesRes.ok) {
-        const data = await issuesRes.json();
-        setIssues(data.data?.issues || []);
-      }
-      if (bancasRes.ok) {
-        const data = await bancasRes.json();
-        setCrmBancas(data.data || []);
-      }
-      if (usersRes.ok) {
-        const data = await usersRes.json();
-        setAllUsers(data.data || []);
-        const crmTimes: Record<string, number> = {};
-        setCrmTimeData(crmTimes);
-      }
-    } catch (error) {
-      console.error('Erro ao carregar hierarquia:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const normalizeBancaUrl = (url?: string | null) => {
-    if (!url) return '';
-    let normalized = String(url).trim();
-    normalized = normalized.replace(/^https?:\/\//i, '');
-    normalized = normalized.replace(/\/api\/crm\/?/i, '');
-    normalized = normalized.replace(/\/+$/, '');
-    return normalized.trim().toLowerCase();
-  };
-
-  const formatTime = (seconds: number = 0) => {
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    if (h > 0) return `${h}h ${m}m`;
-    if (m > 0) return `${m}m`;
-    return '0m';
-  };
-
-  const handleEditUser = (user: any) => {
-    setEditingUser(user);
-    setEditFormData({
-      email: user.email || '',
-      password: '',
-    });
-    setShowEditModal(true);
-  };
-
-  const handleSaveEdit = async () => {
-    if (!editingUser) return;
-    
-    try {
-      const res = await fetch(`/api/admin/users/${editingUser.id}/update`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-User-Id': userId!,
-        },
-        body: JSON.stringify({
-          email: editFormData.email || undefined,
-          password: editFormData.password || undefined,
-        }),
-      });
-
-      const data = await res.json();
-
-      if (res.ok && data.success) {
-        alert('Usuário atualizado com sucesso!');
-        setShowEditModal(false);
-        setEditingUser(null);
-        loadHierarchyData();
-      } else {
-        alert(data.message || 'Erro ao atualizar usuário');
-      }
-    } catch (error) {
-      console.error('Erro ao atualizar usuário:', error);
-      alert('Erro ao atualizar usuário');
-    }
-  };
-
-  const findOwnerByCrmBanca = (crmBancaId: string) => {
-    const banca = (crmBancas || []).find((b: any) => String(b.id) === String(crmBancaId));
-    if (!banca) return null;
-    const bancaUrlNorm = normalizeBancaUrl(banca.url);
-    return (hierarchy || []).find((h: any) => normalizeBancaUrl(h.banca_url) === bancaUrlNorm) || null;
-  };
-
-  const getManagersByCrmBanca = (crmBancaId: string) => {
-    const owner = findOwnerByCrmBanca(crmBancaId);
-    return owner?.subordinates || [];
-  };
-
-  const handleCreateUser = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    try {
-      const res = await fetch('/api/admin/users/create', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-User-Id': userId!,
-        },
-        body: JSON.stringify({
-          email: createFormData.email,
-          fullName: createFormData.fullName,
-          password: createFormData.password,
-          status: createFormData.status,
-          enroller: createFormData.status === 'dono_banca' ? null : (createFormData.enroller || null),
-          bancaName: createFormData.status === 'dono_banca' ? createFormData.bancaName : undefined,
-          bancaUrl: createFormData.status === 'dono_banca' ? createFormData.bancaUrl : undefined,
-          banca_ids: (createFormData.status === 'consultor' || createFormData.status === 'gerente') && createFormData.initialBancaIds?.length ? createFormData.initialBancaIds : undefined,
-        }),
-      });
-
-      const data = await res.json();
-
-      if (res.ok && data.success) {
-        alert(
-          `${
-            createFormData.status === 'dono_banca'
-              ? 'Dono de banca'
-              : createFormData.status === 'gerente'
-              ? 'Gerente'
-              : 'Consultor'
-          } criado com sucesso!`
-        );
-        setShowCreateModal(false);
-        setCreateFormData({
-          email: '',
-          fullName: '',
-          password: '',
-          status: 'consultor',
-          enroller: '',
-          bancaOwnerId: '',
-          bancaName: '',
-          bancaUrl: '',
-          initialBancaIds: [],
-        });
-        loadHierarchyData();
-      } else {
-        alert(data.message || 'Erro ao criar usuário');
-      }
-    } catch (error) {
-      console.error('Erro ao criar usuário:', error);
-      alert('Erro ao criar usuário');
-    }
-  };
-
-  const handleFixIssue = async (issue: any) => {
-    // Busca informações do usuário com problema
-    try {
-      const usersRes = await fetch('/api/admin/users', {
-        headers: { 'X-User-Id': userId! },
-      });
-      
-      if (usersRes.ok) {
-        const usersData = await usersRes.json();
-        const userWithIssue = usersData.data?.find((u: any) => u.email === issue.email);
-        
-        if (userWithIssue) {
-          setFixingIssue({ ...issue, userId: userWithIssue.id, status: userWithIssue.status });
-
-          // Role default
-          const defaultRole =
-            userWithIssue.status === 'consultor'
-              ? 'consultor'
-              : userWithIssue.status === 'dono_banca'
-              ? 'dono_banca'
-              : 'gerente';
-          setSelectedFixRole(defaultRole);
-
-          // Banca default (primeira do CRM)
-          const firstBancaId = (crmBancas && crmBancas.length > 0) ? String(crmBancas[0].id) : '';
-          setSelectedFixBancaId(firstBancaId);
-
-          // Enroller default (para consultor -> primeiro gerente disponível da banca)
-          if (defaultRole === 'consultor' && firstBancaId) {
-            const managers = getManagersByCrmBanca(firstBancaId);
-            if (managers && managers.length > 0) {
-              setSelectedEnroller(managers[0].id);
-            } else {
-              setSelectedEnroller('');
-            }
-          } else {
-            setSelectedEnroller('');
-          }
-          
-          setShowFixModal(true);
-        } else {
-          alert('Usuário não encontrado');
-        }
-      }
-    } catch (error) {
-      console.error('Erro ao buscar informações do usuário:', error);
-      alert('Erro ao buscar informações do usuário');
-    }
-  };
-
-  const handleSaveFix = async () => {
-    if (!fixingIssue) return;
-    if (!selectedFixBancaId) {
-      alert('Selecione uma banca');
-      return;
-    }
-
-    const selectedBanca = (crmBancas || []).find((b: any) => String(b.id) === String(selectedFixBancaId));
-    if (!selectedBanca) {
-      alert('Banca inválida');
-      return;
-    }
-
-    const owner = findOwnerByCrmBanca(selectedFixBancaId);
-
-    if (selectedFixRole === 'gerente' && !owner) {
-      alert('Essa banca ainda não tem Dono cadastrado. Crie o Dono primeiro.');
-      return;
-    }
-
-    if (selectedFixRole === 'consultor') {
-      const managers = getManagersByCrmBanca(selectedFixBancaId);
-      if (!managers || managers.length === 0) {
-        alert('Essa banca ainda não tem Gerentes cadastrados. Crie um Gerente primeiro.');
-        return;
-      }
-      if (!selectedEnroller) {
-        alert('Selecione um gerente');
-        return;
-      }
-    }
-
-    try {
-      const payload: any = {
-        status: selectedFixRole,
-      };
-
-      if (selectedFixRole === 'dono_banca') {
-        payload.enroller = null;
-        payload.bancaName = selectedBanca.name || null;
-        payload.bancaUrl = normalizeBancaUrl(selectedBanca.url || '');
-      } else if (selectedFixRole === 'gerente') {
-        payload.enroller = owner.id;
-      } else if (selectedFixRole === 'consultor') {
-        payload.enroller = selectedEnroller;
-      }
-
-      const res = await fetch(`/api/admin/users/${fixingIssue.userId}/update`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-User-Id': userId!,
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await res.json();
-
-      if (res.ok && data.success) {
-        alert('Problema corrigido com sucesso!');
-        setShowFixModal(false);
-        setFixingIssue(null);
-        setSelectedFixBancaId('');
-        setSelectedFixRole('gerente');
-        setSelectedEnroller('');
-        loadHierarchyData();
-      } else {
-        alert(data.message || 'Erro ao corrigir problema');
-      }
-    } catch (error) {
-      console.error('Erro ao corrigir problema:', error);
-      alert('Erro ao corrigir problema');
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="bg-gray-100 rounded-xl shadow p-6 border border-gray-200 flex items-center justify-center">
-        <RefreshCw className="w-6 h-6 animate-spin text-[#8CD955] mr-3" />
-        <span className="text-gray-600">Carregando dados da hierarquia...</span>
-      </div>
-    );
-  }
-
-  const renderUserCard = (user: any, role: 'dono' | 'gerente' | 'consultor', parentBanca?: any) => {
-    const roleConfig = {
-      dono: { color: 'emerald', bg: 'bg-emerald-500', label: 'Dono de Banca', icon: Building2 },
-      gerente: { color: 'blue', bg: 'bg-blue-500', label: 'Gerente', icon: Users },
-      consultor: { color: 'green', bg: 'bg-green-500', label: 'Consultor', icon: User },
-    };
-    const config = roleConfig[role];
-    const Icon = config.icon;
-    const zaplotoHours = formatTime(user.total_online_time || 0);
-    const crmHours = formatTime(crmTimeData[user.id] || 0);
-
-    return (
-      <div className={`bg-white rounded-xl shadow-md border border-gray-200 p-4 hover:shadow-lg transition-shadow`}>
-        <div className="flex items-start justify-between mb-4">
-          <div className="flex items-center gap-3 flex-1">
-            <div className={`w-12 h-12 rounded-full ${config.bg} text-white flex items-center justify-center font-bold text-sm flex-shrink-0 shadow-lg`}>
-              <Icon className="w-6 h-6" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <h3 className="font-bold text-gray-900 text-base truncate">{user.full_name || user.email}</h3>
-              <span className={`text-xs px-2 py-0.5 rounded-md uppercase font-bold tracking-tighter inline-block mt-1 ${
-                role === 'dono' ? 'bg-emerald-100 text-emerald-700' :
-                role === 'gerente' ? 'bg-blue-100 text-blue-700' :
-                'bg-green-100 text-green-700'
-              }`}>
-                {config.label}
-              </span>
-            </div>
-          </div>
-          <button
-            onClick={() => handleEditUser(user)}
-            className="p-2 text-gray-400 hover:text-[#8CD955] hover:bg-gray-50 rounded-lg transition-colors"
-            title="Editar usuário"
-          >
-            <EditIcon className="w-5 h-5" />
-          </button>
-        </div>
-
-        <div className="space-y-3 border-t border-gray-100 pt-3">
-          <div className="flex items-center gap-2 text-sm text-gray-600">
-            <Mail className="w-4 h-4 text-gray-400" />
-            <span className="truncate">{user.email}</span>
-          </div>
-          
-          <div className="grid grid-cols-2 gap-3">
-            <div className="bg-gray-50 rounded-lg p-2">
-              <div className="flex items-center gap-1 mb-1">
-                <Clock className="w-3 h-3 text-gray-500" />
-                <span className="text-xs font-medium text-gray-600">Zaploto</span>
-              </div>
-              <p className="text-sm font-bold text-gray-800">{zaplotoHours}</p>
-            </div>
-            <div className="bg-gray-50 rounded-lg p-2">
-              <div className="flex items-center gap-1 mb-1">
-                <TrendingUp className="w-3 h-3 text-gray-500" />
-                <span className="text-xs font-medium text-gray-600">CRM</span>
-              </div>
-              <p className="text-sm font-bold text-gray-800">{crmHours}</p>
-            </div>
-          </div>
-
-          {role === 'consultor' && (
-            <a
-              href={`/crm/kanban?userId=${user.id}`}
-              className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] transition-colors text-sm font-medium"
-            >
-              <TrendingUp className="w-4 h-4" />
-              Acessar CRM
-            </a>
-          )}
-        </div>
-      </div>
-    );
-  };
-
-  return (
-    <div className="space-y-6">
-      {/* Relatório de Integridade */}
-      {issues.length > 0 && (
-        <div className="bg-gradient-to-br from-white to-amber-50 rounded-xl shadow-lg border border-amber-100 p-4 sm:p-6 relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-amber-200/20 rounded-full -mr-16 -mt-16"></div>
-          <div className="absolute bottom-0 left-0 w-24 h-24 bg-amber-300/10 rounded-full -ml-12 -mb-12"></div>
-          <div className="relative z-10">
-            <h2 className="text-lg sm:text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
-              <AlertCircle className="w-5 h-5 text-amber-600" />
-              Integridade da Estrutura
-            </h2>
-            <div className="space-y-3">
-              {issues
-                .slice((issuesCurrentPage - 1) * issuesPerPage, issuesCurrentPage * issuesPerPage)
-                .map((issue: any, idx) => (
-                <div key={idx} className="p-4 bg-red-50 border border-red-100 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div>
-                    <p className="font-bold text-red-800 text-sm sm:text-base">{issue.email}</p>
-                    <p className="text-xs sm:text-sm text-red-600">{issue.issue}</p>
-                  </div>
-                  <button 
-                    onClick={() => handleFixIssue(issue)}
-                    className="px-3 py-1.5 bg-white text-red-600 border border-red-200 rounded-lg text-xs font-bold hover:bg-red-50 transition-colors whitespace-nowrap"
-                  >
-                    Corrigir
-                  </button>
-                </div>
-              ))}
-            </div>
-            {issues.length > issuesPerPage && (
-              <div className="mt-4">
-                <Pagination
-                  currentPage={issuesCurrentPage}
-                  totalPages={Math.ceil(issues.length / issuesPerPage)}
-                  onPageChange={setIssuesCurrentPage}
-                  itemsPerPage={issuesPerPage}
-                  totalItems={issues.length}
-                />
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Cards de Bancas */}
-      <div className="space-y-6">
-        {/* Barra de busca e filtros */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
-          <div className="flex-1 relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
-            <input
-              type="text"
-              value={bancaSearch}
-              onChange={(e) => {
-                setBancaSearch(e.target.value);
-                setBancasCurrentPage(1);
-              }}
-              placeholder="Pesquisar banca por nome ou URL..."
-              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700"
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <select
-              value={bancaFilter}
-              onChange={(e) => {
-                setBancaFilter(e.target.value as any);
-                setBancasCurrentPage(1);
-              }}
-              className="px-3 py-2 border border-gray-300 rounded-lg text-gray-700 bg-white"
-              title="Filtro de bancas"
-            >
-              <option value="all">Todas</option>
-              <option value="sem_dono">Sem dono</option>
-              <option value="com_dono">Com dono</option>
-            </select>
-            <button
-              onClick={loadHierarchyData}
-              className="px-3 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-2"
-              title="Recarregar"
-            >
-              <RefreshCw className="w-4 h-4" />
-              <span className="hidden sm:inline">Recarregar</span>
-            </button>
-          </div>
-        </div>
-
-        {crmBancas && crmBancas.length > 0 ? (() => {
-          const filteredBancas = crmBancas.filter((b: any) => {
-            const search = bancaSearch.trim().toLowerCase();
-            if (!search) return true;
-            const name = String(b.name || '').toLowerCase();
-            const url = String(b.url || '').toLowerCase();
-            return name.includes(search) || url.includes(search);
-          });
-
-          const pagedBancas = filteredBancas.slice(
-            (bancasCurrentPage - 1) * bancasPerPage,
-            bancasCurrentPage * bancasPerPage
-          );
-
-          return (
-            <>
-              {pagedBancas.map((crmBanca: any) => {
-              const bancaUrlNorm = normalizeBancaUrl(crmBanca.url);
-              const owner = (hierarchy || []).find((h: any) => normalizeBancaUrl(h.banca_url) === bancaUrlNorm);
-
-              if (bancaFilter === 'sem_dono' && owner) return null;
-              if (bancaFilter === 'com_dono' && !owner) return null;
-
-              return (
-                <div
-                  key={crmBanca.id}
-                  className="bg-gradient-to-br from-white to-emerald-50 rounded-xl shadow-lg border border-emerald-100 p-6 relative overflow-hidden"
-                >
-                  <div className="absolute top-0 right-0 w-40 h-40 bg-emerald-200/20 rounded-full -mr-20 -mt-20"></div>
-                  <div className="absolute bottom-0 left-0 w-32 h-32 bg-emerald-300/10 rounded-full -ml-16 -mb-16"></div>
-
-                  <div className="relative z-10">
-                    {/* Cabeçalho da Banca */}
-                    <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6 pb-4 border-b border-emerald-100">
-                      <div className="flex items-center gap-4">
-                        <div className="w-16 h-16 rounded-full bg-[#8CD955] text-white flex items-center justify-center font-bold text-xl flex-shrink-0 shadow-lg shadow-emerald-100">
-                          {crmBanca.name ? String(crmBanca.name).substring(0, 2).toUpperCase() : 'BK'}
-                        </div>
-                        <div>
-                          <h2 className="text-2xl font-bold text-gray-900 mb-1">{crmBanca.name || 'Banca sem nome'}</h2>
-                          {crmBanca.url && (
-                            <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                              <a
-                                href={`https://${normalizeBancaUrl(crmBanca.url)}`}
-                                target="_blank"
-                                className="text-sm text-[#8CD955] hover:underline font-medium flex items-center gap-1"
-                              >
-                                <Globe className="w-4 h-4" />
-                                {normalizeBancaUrl(crmBanca.url)}
-                              </a>
-                              {!owner && (
-                                <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-md font-bold">
-                                  Sem dono cadastrado
-                                </span>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="flex flex-wrap gap-2">
-                        {!owner && (
-                          <>
-                            <button
-                              onClick={() => {
-                                setCreateFormData(prev => ({
-                                  ...prev,
-                                  status: 'dono_banca',
-                                  enroller: '',
-                                  bancaOwnerId: '',
-                                  bancaName: crmBanca.name || '',
-                                  bancaUrl: normalizeBancaUrl(crmBanca.url || ''),
-                                  initialBancaIds: [],
-                                }));
-                                setShowCreateModal(true);
-                              }}
-                              className="flex items-center gap-2 px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] transition-colors font-medium"
-                            >
-                              <UserPlus className="w-4 h-4" />
-                              Criar Dono
-                            </button>
-                            <button
-                              onClick={() => {
-                                setCreateFormData(prev => ({
-                                  ...prev,
-                                  status: 'gerente',
-                                  enroller: '',
-                                  bancaOwnerId: '',
-                                  bancaName: '',
-                                  bancaUrl: '',
-                                  initialBancaIds: [String(crmBanca.id)],
-                                }));
-                                setShowCreateModal(true);
-                              }}
-                              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
-                            >
-                              <UserPlus className="w-4 h-4" />
-                              Adicionar Gerente
-                            </button>
-                            <button
-                              onClick={() => {
-                                setCreateFormData(prev => ({
-                                  ...prev,
-                                  status: 'consultor',
-                                  enroller: '',
-                                  bancaOwnerId: '',
-                                  bancaName: '',
-                                  bancaUrl: '',
-                                  initialBancaIds: [String(crmBanca.id)],
-                                }));
-                                setShowCreateModal(true);
-                              }}
-                              className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors font-medium"
-                            >
-                              <UserPlus className="w-4 h-4" />
-                              Adicionar Consultor
-                            </button>
-                          </>
-                        )}
-
-                        {owner && (
-                          <button
-                            onClick={() => {
-                              setCreateFormData(prev => ({
-                                ...prev,
-                                status: 'gerente',
-                                enroller: owner.id,
-                                bancaOwnerId: owner.id,
-                                bancaName: owner.banca_name || crmBanca.name || '',
-                                bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''),
-                                initialBancaIds: [String(crmBanca.id)],
-                              }));
-                              setShowCreateModal(true);
-                            }}
-                            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
-                          >
-                            <UserPlus className="w-4 h-4" />
-                            Adicionar Gerente
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Dono da Banca */}
-                    <div className="mb-6">
-                      <h3 className="text-lg font-semibold text-gray-800 mb-3 flex items-center gap-2">
-                        <Building2 className="w-5 h-5 text-emerald-600" />
-                        Dono da Banca
-                      </h3>
-                      {owner ? (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                          {renderUserCard(owner, 'dono')}
-                        </div>
-                      ) : (
-                        <div className="bg-white rounded-xl border border-gray-200 p-6 text-gray-600">
-                          <p className="font-medium">Nenhum dono cadastrado para esta banca.</p>
-                          <p className="text-sm text-gray-500 mt-1">Crie um Dono de Banca ou atribua Gerentes/Consultores diretamente a esta banca.</p>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Gerentes e Consultores atribuídos à banca (sem dono) - via user_bancas */}
-                    {!owner && (
-                      <div className="mb-6">
-                        <h3 className="text-lg font-semibold text-gray-800 mb-3 flex items-center gap-2">
-                          <Users className="w-5 h-5 text-blue-600" />
-                          Gerentes e Consultores nesta banca
-                          {crmBanca.user_ids?.length > 0 && ` (${crmBanca.user_ids.length})`}
-                        </h3>
-                        {crmBanca.user_ids?.length > 0 ? (
-                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                            {(crmBanca.user_ids || []).map((uid: string) => {
-                              const u = allUsers.find((x: any) => x.id === uid);
-                              if (!u) return null;
-                              return (
-                                <div key={uid} className="bg-white rounded-xl border border-gray-200 p-4 flex items-center justify-between gap-2">
-                                  <div className="min-w-0">
-                                    <p className="font-medium text-gray-900 truncate">{u.full_name || u.email}</p>
-                                    <p className="text-xs text-gray-500 truncate">{u.email}</p>
-                                    <span className={`inline-block mt-1 px-2 py-0.5 rounded text-xs font-bold ${
-                                      u.status === 'gerente' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'
-                                    }`}>
-                                      {u.status === 'gerente' ? 'Gerente' : 'Consultor'}
-                                    </span>
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleEditUser(u)}
-                                    className="p-1.5 text-gray-500 hover:bg-gray-100 rounded"
-                                    title="Editar"
-                                  >
-                                    <EditIcon className="w-4 h-4" />
-                                  </button>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        ) : (
-                          <p className="text-sm text-gray-500">Nenhum gerente ou consultor atribuído. Use os botões acima para criar ou adicionar.</p>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Gerentes / Consultores (apenas se houver dono) */}
-                    {owner && owner.subordinates && owner.subordinates.length > 0 && (
-                      <div className="mb-6">
-                        <div className="flex items-center justify-between mb-3">
-                          <h3 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
-                            <Users className="w-5 h-5 text-blue-600" />
-                            Gerentes ({owner.subordinates.length})
-                          </h3>
-                        </div>
-                        <div className="space-y-6">
-                          {owner.subordinates.map((gerente: any) => (
-                            <div key={gerente.id} className="bg-blue-50/30 rounded-lg p-4 border border-blue-100">
-                              {renderUserCard(gerente, 'gerente', owner)}
-                              {gerente.subordinates && gerente.subordinates.length > 0 ? (
-                                <div className="mt-4 pl-4 border-l-2 border-blue-300 space-y-3">
-                                  <div className="flex items-center justify-between mb-3">
-                                    <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide flex items-center gap-2">
-                                      <User className="w-4 h-4 text-green-600" />
-                                      Consultores ({gerente.subordinates.length})
-                                    </h4>
-                                    <button
-                                      onClick={() => {
-                                        setCreateFormData(prev => ({
-                                          ...prev,
-                                          status: 'consultor',
-                                          enroller: gerente.id,
-                                          bancaOwnerId: owner.id,
-                                          bancaName: owner.banca_name || crmBanca.name || '',
-                                          bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''),
-                                          initialBancaIds: [String(crmBanca.id)],
-                                        }));
-                                        setShowCreateModal(true);
-                                      }}
-                                      className="p-1.5 text-green-600 hover:bg-green-50 rounded transition-colors"
-                                      title="Adicionar Consultor"
-                                    >
-                                      <UserPlus className="w-4 h-4" />
-                                    </button>
-                                  </div>
-                                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                    {gerente.subordinates.map((consultor: any) => (
-                                      <div key={consultor.id}>
-                                        {renderUserCard(consultor, 'consultor', owner)}
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              ) : (
-                                <div className="mt-4 pl-4 border-l-2 border-blue-300">
-                                    <button
-                                      onClick={() => {
-                                        setCreateFormData(prev => ({
-                                          ...prev,
-                                          status: 'consultor',
-                                          enroller: gerente.id,
-                                          bancaOwnerId: owner.id,
-                                          bancaName: owner.banca_name || crmBanca.name || '',
-                                          bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''),
-                                          initialBancaIds: [String(crmBanca.id)],
-                                        }));
-                                        setShowCreateModal(true);
-                                      }}
-                                      className="w-full p-3 border-2 border-dashed border-gray-300 rounded-lg text-gray-500 hover:border-green-400 hover:text-green-600 transition-colors text-sm font-medium flex items-center justify-center gap-2"
-                                    >
-                                      <UserPlus className="w-4 h-4" />
-                                      Adicionar Consultor
-                                    </button>
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {owner && (!owner.subordinates || owner.subordinates.length === 0) && (
-                      <div className="text-center py-8 text-gray-500">
-                        <Users className="w-12 h-12 mx-auto mb-3 text-gray-300" />
-                        <p className="font-medium">Nenhum gerente cadastrado</p>
-                        <button
-                          onClick={() => {
-                            setCreateFormData(prev => ({
-                              ...prev,
-                              status: 'gerente',
-                              enroller: owner.id,
-                              bancaOwnerId: owner.id,
-                              bancaName: owner.banca_name || crmBanca.name || '',
-                              bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''),
-                              initialBancaIds: [String(crmBanca.id)],
-                            }));
-                            setShowCreateModal(true);
-                          }}
-                          className="mt-3 text-sm text-[#8CD955] hover:underline"
-                        >
-                          Adicionar primeiro gerente
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-
-              {filteredBancas.length > bancasPerPage && (
-                <Pagination
-                  currentPage={bancasCurrentPage}
-                  totalPages={Math.ceil(filteredBancas.length / bancasPerPage)}
-                  onPageChange={setBancasCurrentPage}
-                  itemsPerPage={bancasPerPage}
-                  totalItems={filteredBancas.length}
-                />
-              )}
-            </>
-          );
-        })() : (
-          <div className="bg-white rounded-xl shadow-lg border border-gray-200 p-12 text-center">
-            <Building2 className="w-16 h-16 mx-auto mb-4 text-gray-300" />
-            <h3 className="text-xl font-bold text-gray-800 mb-2">Nenhuma banca cadastrada no CRM</h3>
-            <p className="text-gray-600">Cadastre bancas em `crm_bancas` para que elas apareçam aqui.</p>
-          </div>
-        )}
-      </div>
-
-      {/* Modal de Edição */}
-      {showEditModal && editingUser && (
-        <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="p-6 border-b border-gray-200 flex items-center justify-between bg-gradient-to-r from-[#8CD955] to-[#7BC84A] text-white">
-              <h2 className="text-xl font-bold flex items-center gap-2">
-                <EditIcon className="w-6 h-6" />
-                Editar Usuário
-              </h2>
-              <button
-                onClick={() => {
-                  setShowEditModal(false);
-                  setEditingUser(null);
-                }}
-                className="hover:bg-white/20 p-1.5 rounded-lg transition-colors"
-              >
-                <X className="w-6 h-6" />
-              </button>
-            </div>
-
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                handleSaveEdit();
-              }}
-              className="p-6 space-y-4"
-            >
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Email
-                </label>
-                <input
-                  type="email"
-                  value={editFormData.email}
-                  onChange={(e) => setEditFormData({ ...editFormData, email: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Nova Senha (deixe em branco para não alterar)
-                </label>
-                <input
-                  type="password"
-                  value={editFormData.password}
-                  onChange={(e) => setEditFormData({ ...editFormData, password: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700"
-                  placeholder="••••••••"
-                />
-              </div>
-
-              <div className="flex justify-end gap-3 pt-4">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowEditModal(false);
-                    setEditingUser(null);
-                  }}
-                  className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] transition-colors font-medium"
-                >
-                  Salvar
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Modal de Criação */}
-      {showCreateModal && (
-        <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="p-6 border-b border-gray-200 flex items-center justify-between bg-gradient-to-r from-blue-600 to-blue-500 text-white">
-              <h2 className="text-xl font-bold flex items-center gap-2">
-                <UserPlus className="w-6 h-6" />
-                Criar {createFormData.status === 'dono_banca' ? 'Dono de Banca' : createFormData.status === 'gerente' ? 'Gerente' : 'Consultor'}
-              </h2>
-              <button
-                onClick={() => {
-                  setShowCreateModal(false);
-                  setCreateFormData({
-                    email: '',
-                    fullName: '',
-                    password: '',
-                    status: 'consultor',
-                    enroller: '',
-                    bancaOwnerId: '',
-                    bancaName: '',
-                    bancaUrl: '',
-                    initialBancaIds: [],
-                  });
-                }}
-                className="hover:bg-white/20 p-1.5 rounded-lg transition-colors"
-              >
-                <X className="w-6 h-6" />
-              </button>
-            </div>
-
-            <form onSubmit={handleCreateUser} className="p-6 space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Nome Completo
-                </label>
-                <input
-                  type="text"
-                  value={createFormData.fullName}
-                  onChange={(e) => setCreateFormData({ ...createFormData, fullName: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700"
-                  placeholder="Nome do usuário"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Email *
-                </label>
-                <input
-                  type="email"
-                  value={createFormData.email}
-                  onChange={(e) => setCreateFormData({ ...createFormData, email: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Senha *
-                </label>
-                <input
-                  type="password"
-                  value={createFormData.password}
-                  onChange={(e) => setCreateFormData({ ...createFormData, password: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700"
-                  required
-                />
-              </div>
-
-              <div className="flex justify-end gap-3 pt-4">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowCreateModal(false);
-                    setCreateFormData({
-                      email: '',
-                      fullName: '',
-                      password: '',
-                      status: 'consultor',
-                      enroller: '',
-                      bancaOwnerId: '',
-                      bancaName: '',
-                      bancaUrl: '',
-                      initialBancaIds: [],
-                    });
-                  }}
-                  className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
-                >
-                  Criar
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Modal de Correção de Problema */}
-      {showFixModal && fixingIssue && (
-        <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="p-6 border-b border-gray-200 flex items-center justify-between bg-gradient-to-r from-amber-600 to-amber-500 text-white">
-              <h2 className="text-xl font-bold flex items-center gap-2">
-                <AlertCircle className="w-6 h-6" />
-                Corrigir Problema
-              </h2>
-              <button
-                onClick={() => {
-                  setShowFixModal(false);
-                  setFixingIssue(null);
-                  setSelectedEnroller('');
-                }}
-                className="hover:bg-white/20 p-1.5 rounded-lg transition-colors"
-              >
-                <X className="w-6 h-6" />
-              </button>
-            </div>
-
-            <div className="p-6 space-y-4">
-              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-                <p className="text-sm font-medium text-red-800 mb-1">Usuário:</p>
-                <p className="text-sm text-red-700">{fixingIssue.email}</p>
-                <p className="text-sm font-medium text-red-800 mt-2 mb-1">Problema:</p>
-                <p className="text-sm text-red-700">{fixingIssue.issue}</p>
-                {fixingIssue.status && (
-                  <>
-                    <p className="text-sm font-medium text-red-800 mt-2 mb-1">Status:</p>
-                    <p className="text-sm text-red-700 capitalize">{fixingIssue.status}</p>
-                  </>
-                )}
-              </div>
-
-              <div className="grid grid-cols-1 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Banca (CRM)</label>
-                  <select
-                    value={selectedFixBancaId}
-                    onChange={(e) => {
-                      setSelectedFixBancaId(e.target.value);
-                      setSelectedEnroller('');
-                    }}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 text-gray-700"
-                  >
-                    <option value="">Selecione...</option>
-                    {(crmBancas || []).map((b: any) => (
-                      <option key={b.id} value={String(b.id)}>
-                        {b.name} ({normalizeBancaUrl(b.url)})
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-gray-500 mt-1">A banca vem da tabela `crm_bancas`.</p>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Cargo</label>
-                  <select
-                    value={selectedFixRole}
-                    onChange={(e) => {
-                      const role = e.target.value as any;
-                      setSelectedFixRole(role);
-                      setSelectedEnroller('');
-                    }}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 text-gray-700"
-                  >
-                    <option value="dono_banca">Dono de banca</option>
-                    <option value="gerente">Gerente</option>
-                    <option value="consultor">Consultor</option>
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  {selectedFixRole === 'gerente'
-                    ? 'Dono da banca (automático)'
-                    : selectedFixRole === 'consultor'
-                    ? 'Selecione o Gerente'
-                    : 'Enroller (não aplicável)'}
-                </label>
-                {selectedFixRole === 'consultor' ? (
-                  <select
-                    value={selectedEnroller}
-                    onChange={(e) => setSelectedEnroller(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 text-gray-700"
-                  >
-                    <option value="">Selecione...</option>
-                    {selectedFixBancaId &&
-                      getManagersByCrmBanca(selectedFixBancaId).map((m: any) => (
-                        <option key={m.id} value={m.id}>
-                          {m.full_name || m.email}
-                        </option>
-                      ))}
-                  </select>
-                ) : (
-                  <div className="w-full px-4 py-2 border border-gray-200 rounded-lg bg-gray-50 text-gray-600 text-sm">
-                    {selectedFixRole === 'gerente'
-                      ? selectedFixBancaId
-                        ? (() => {
-                            const o = findOwnerByCrmBanca(selectedFixBancaId);
-                            return o ? `Dono: ${o.banca_name || o.email}` : 'Esta banca ainda não tem Dono cadastrado';
-                          })()
-                        : 'Selecione uma banca acima'
-                      : 'Para Dono de banca não há enroller'}
-                  </div>
-                )}
-
-                {selectedFixRole === 'consultor' && (
-                  <p className="text-xs text-gray-500 mt-1">Selecione um gerente dessa banca para vincular o consultor.</p>
-                )}
-                {selectedFixRole === 'gerente' && (
-                  <p className="text-xs text-gray-500 mt-1">Gerente é vinculado automaticamente ao Dono da banca selecionada.</p>
-                )}
-                {selectedFixRole === 'dono_banca' && (
-                  <p className="text-xs text-gray-500 mt-1">Ao salvar, o usuário vira Dono e recebe `banca_name/banca_url` da banca selecionada.</p>
-                )}
-              </div>
-
-              <div className="flex justify-end gap-3 pt-4">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowFixModal(false);
-                    setFixingIssue(null);
-                    setSelectedEnroller('');
-                  }}
-                  className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
-                >
-                  Cancelar
-                </button>
-                <button
-                  onClick={handleSaveFix}
-                  disabled={!selectedFixBancaId || (selectedFixRole === 'consultor' && !selectedEnroller)}
-                  className="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Corrigir
-                </button>
-              </div>
-            </div>
           </div>
         </div>
       )}

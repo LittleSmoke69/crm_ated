@@ -9,7 +9,14 @@ interface ContactFeedbackModalProps {
   leadId: string | number;
   leadName: string;
   userId: string;
+  /** Id numérico do lead na API externa (ex.: 28660). Se informado, é usado como user_id na requisição de feedback. */
+  leadOriginalId?: number | string;
+  /** URL da banca (filtro selecionado). Usado como fallback se não houver banca do lead. */
   bancaUrl?: string;
+  /** ID da banca do lead (modal de detalhes). A API resolve em crm_bancas para obter a URL. */
+  bancaId?: string;
+  /** Nome da banca do lead (modal de detalhes). A API resolve em crm_bancas para obter a URL. */
+  bancaName?: string;
   targetUserId?: string;
   initialFeedback?: string;
   feedbackId?: string;
@@ -22,7 +29,10 @@ const ContactFeedbackModal: React.FC<ContactFeedbackModalProps> = ({
   leadId,
   leadName,
   userId,
+  leadOriginalId,
   bancaUrl,
+  bancaId,
+  bancaName,
   targetUserId,
   initialFeedback = '',
   feedbackId,
@@ -57,8 +67,13 @@ const ContactFeedbackModal: React.FC<ContactFeedbackModalProps> = ({
       if (feedbackId) {
         body.id = feedbackId;
       } else {
-        body.user_id = parseInt(leadId.toString());
+        const numericId = leadOriginalId != null
+          ? (typeof leadOriginalId === 'number' ? leadOriginalId : parseInt(String(leadOriginalId), 10))
+          : (typeof leadId === 'string' && leadId.includes('-') ? parseInt(leadId.split('-').pop() ?? '', 10) : parseInt(String(leadId), 10));
+        body.user_id = !Number.isNaN(numericId) ? numericId : parseInt(String(leadId), 10);
         body.banca_url = bancaUrl || null;
+        if (bancaId) body.banca_id = bancaId;
+        if (bancaName?.trim()) body.banca_name = bancaName.trim();
         body.target_user_id = targetUserId || null;
       }
 

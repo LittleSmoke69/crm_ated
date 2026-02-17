@@ -43,7 +43,8 @@ export async function GET(req: NextRequest) {
 
     return successResponse(tree);
   } catch (err: any) {
-    return errorResponse(err.message || 'Erro ao buscar hierarquia', 401);
+    const status = err?.statusCode === 503 ? 503 : 401;
+    return errorResponse(err?.message || 'Erro ao buscar hierarquia', status);
   }
 }
 
@@ -64,7 +65,8 @@ export async function POST(req: NextRequest) {
 
     return successResponse(stats);
   } catch (err: any) {
-    return errorResponse(err.message || 'Erro ao buscar estatísticas', 401);
+    const status = err?.statusCode === 503 ? 503 : 401;
+    return errorResponse(err?.message || 'Erro ao buscar estatísticas', status);
   }
 }
 

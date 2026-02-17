@@ -179,6 +179,26 @@ export async function DELETE(
       requestUserId: userId,
     });
 
+    // Antes de deletar evolution_instances: remove vínculos do maturador (master_instances é CASCADE,
+    // mas maturation_jobs referencia master_instances com RESTRICT — então limpamos jobs e desbloqueamos primeiro)
+    const { data: masterRows } = await supabaseServiceRole
+      .from('master_instances')
+      .select('id')
+      .eq('evolution_instance_id', instance.id);
+
+    if (masterRows && masterRows.length > 0) {
+      for (const master of masterRows) {
+        await supabaseServiceRole
+          .from('master_instances')
+          .update({ is_locked: false, locked_job_id: null, locked_at: null })
+          .eq('id', master.id);
+        await supabaseServiceRole
+          .from('maturation_jobs')
+          .delete()
+          .eq('master_instance_id', master.id);
+      }
+    }
+
     // PRIMEIRO: Deleta no banco do Zaploto (sempre deleta, mesmo se não encontrar na Evolution API depois)
     console.log(`🗑️ [DELETE INSTANCE] Deletando instância ${instanceName} (ID: ${instance.id}) do banco Zaploto...`);
     const { error: deleteError } = await supabaseServiceRole

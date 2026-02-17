@@ -1,7 +1,7 @@
 /**
  * GET /api/admin/audit/participant-exits
  * Consulta auditoria de saídas de participantes (group-participants.update action: remove).
- * Acesso: admin, dono_banca, gerente, auditoria.
+ * Acesso: super_admin, admin, dono_banca, gerente, auditoria.
  *
  * Query params:
  * - banca_id: filtrar por banca (UUID)
@@ -21,7 +21,7 @@ type ListMode = 'recent' | 'unique_phones' | 'groups_evasion';
 
 export async function GET(req: NextRequest) {
   try {
-    await requireStatus(req, ['admin', 'dono_banca', 'gerente', 'auditoria']);
+    await requireStatus(req, ['super_admin', 'admin', 'dono_banca', 'gerente', 'auditoria']);
     const { searchParams } = req.nextUrl;
 
     const bancaId = searchParams.get('banca_id') || undefined;

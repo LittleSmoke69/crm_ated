@@ -91,11 +91,13 @@ async function selectAvailableMasterInstance(
     const instance = Array.isArray(fromPool.evolution_instances)
       ? fromPool.evolution_instances[0]
       : fromPool.evolution_instances;
+    const phoneNumber = (instance as any)?.phone_number;
+    if (!phoneNumber || !String(phoneNumber).trim()) return null;
     return {
       id: fromPool.id,
       evolution_instance_id: fromPool.evolution_instance_id,
       instance_name: (instance as any).instance_name,
-      phone_number: (instance as any).phone_number,
+      phone_number: phoneNumber,
     };
   }
 
@@ -103,14 +105,16 @@ async function selectAvailableMasterInstance(
     .from('evolution_instances')
     .select('id, instance_name, phone_number')
     .eq('is_active', true)
-    .eq('is_master', true)
     .in('status', ['ok', 'open', 'connected'])
+    .not('phone_number', 'is', null)
     .limit(50);
 
   if (evError || !connectedMasters?.length) return null;
 
   let candidates = connectedMasters.filter(
-    (ei: { id: string }) => !preferList || preferList.includes(ei.id)
+    (ei: { id: string; phone_number?: string | null }) =>
+      (!preferList || preferList.includes(ei.id)) &&
+      !!(ei.phone_number && String(ei.phone_number).trim())
   );
 
   const { data: poolRows } = await supabase

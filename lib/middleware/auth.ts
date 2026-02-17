@@ -83,10 +83,21 @@ export async function authenticateRequest(req: NextRequest): Promise<AuthUser | 
   }
 }
 
-/** Indica se o erro é de rede/indisponibilidade (Supabase inacessível) */
+/** Erros que indicam problema de rede/Supabase indisponível (retentar ou 503) */
 function isNetworkOrUnavailableError(err: { message?: string } | null): boolean {
   if (!err?.message) return false;
   const msg = String(err.message).toLowerCase();
+  // Não tratar como rede: erros de schema, JWT ou permissão (retornar 401)
+  if (
+    msg.includes('jwt') ||
+    msg.includes('relation') ||
+    msg.includes('permission') ||
+    msg.includes('row-level') ||
+    msg.includes('pgrst') ||
+    msg.includes('invalid')
+  ) {
+    return false;
+  }
   return (
     msg.includes('fetch failed') ||
     msg.includes('feetch failed') ||
@@ -95,20 +106,23 @@ function isNetworkOrUnavailableError(err: { message?: string } | null): boolean 
     msg.includes('etimedout') ||
     msg.includes('enotfound') ||
     msg.includes('network') ||
-    msg.includes('unavailable')
+    msg.includes('unavailable') ||
+    msg.includes('timeout') ||
+    msg.includes('econnaborted')
   );
 }
 
 const SERVICE_UNAVAILABLE_MSG = 'Serviço temporariamente indisponível. Tente novamente.';
-const VALIDATE_USER_MAX_RETRIES = 3;
-const VALIDATE_USER_RETRY_DELAY_MS = 800;
+const VALIDATE_USER_MAX_RETRIES = 5;
+const VALIDATE_USER_RETRY_DELAY_MS = 1200;
 
 /**
  * Valida se o usuário existe no banco.
- * Em caso de erro de rede (Supabase inacessível), faz até 3 tentativas antes de
+ * Em caso de erro de rede (Supabase inacessível), faz até 5 tentativas antes de
  * lançar 503, para suportar falhas transitórias de rede.
  */
 export async function validateUser(userId: string): Promise<boolean> {
+  let lastError: unknown = null;
   for (let attempt = 1; attempt <= VALIDATE_USER_MAX_RETRIES; attempt++) {
     try {
       const { data, error } = await supabaseServiceRole
@@ -118,11 +132,14 @@ export async function validateUser(userId: string): Promise<boolean> {
         .maybeSingle();
 
       if (error) {
+        lastError = error;
         if (isNetworkOrUnavailableError(error) && attempt < VALIDATE_USER_MAX_RETRIES) {
+          console.warn(`[validateUser] Tentativa ${attempt}/${VALIDATE_USER_MAX_RETRIES} falhou (rede):`, error.message);
           await new Promise((r) => setTimeout(r, VALIDATE_USER_RETRY_DELAY_MS * attempt));
           continue;
         }
         if (isNetworkOrUnavailableError(error)) {
+          console.error('[validateUser] Após retentativas, serviço indisponível. Último erro:', (error as { message?: string }).message);
           const err = new Error(SERVICE_UNAVAILABLE_MSG) as Error & { statusCode?: number };
           err.statusCode = 503;
           throw err;
@@ -136,11 +153,14 @@ export async function validateUser(userId: string): Promise<boolean> {
     } catch (error: unknown) {
       const e = error as { statusCode?: number; message?: string };
       if (e?.statusCode === 503) throw error;
+      lastError = error;
       if (isNetworkOrUnavailableError(e) && attempt < VALIDATE_USER_MAX_RETRIES) {
+        console.warn(`[validateUser] Tentativa ${attempt}/${VALIDATE_USER_MAX_RETRIES} exceção (rede):`, e?.message);
         await new Promise((r) => setTimeout(r, VALIDATE_USER_RETRY_DELAY_MS * attempt));
         continue;
       }
       if (isNetworkOrUnavailableError(e)) {
+        console.error('[validateUser] Após retentativas, serviço indisponível. Última exceção:', e?.message);
         const err = new Error(SERVICE_UNAVAILABLE_MSG) as Error & { statusCode?: number };
         err.statusCode = 503;
         throw err;
@@ -151,6 +171,9 @@ export async function validateUser(userId: string): Promise<boolean> {
     }
   }
 
+  if (lastError) {
+    console.error('[validateUser] Todas as tentativas esgotadas. Último erro:', (lastError as { message?: string }).message);
+  }
   return false;
 }
 

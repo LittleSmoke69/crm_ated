@@ -347,13 +347,13 @@ export default function DetalheConsultor() {
                     <div className="absolute right-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-50 max-h-[400px] overflow-hidden flex flex-col min-w-[250px]">
                       <div className="p-3 border-b border-gray-100">
                         <div className="relative">
-                          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500" />
                           <input
                             type="text"
                             placeholder="Pesquisar banca..."
                             value={bancaSearchTerm}
                             onChange={(e) => setBancaSearchTerm(e.target.value)}
-                            className="w-full pl-10 pr-3 py-2 bg-gray-50 border-none rounded-lg text-sm text-[#8CD955] font-bold focus:ring-2 focus:ring-[#8CD955]/20 outline-none placeholder:text-gray-400"
+                            className="w-full pl-10 pr-3 py-2 bg-gray-100 border border-gray-200 rounded-lg text-sm text-gray-900 font-bold focus:ring-2 focus:ring-[#8CD955]/30 outline-none placeholder:text-gray-500"
                             autoFocus
                           />
                         </div>
@@ -561,7 +561,7 @@ export default function DetalheConsultor() {
               <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
                 <div className="flex items-center gap-2 mb-2">
                   <CheckCircle2 className="w-4 h-4 text-white" />
-                  <p className="text-xs font-bold text-white/90 uppercase">Leads Ativos</p>
+                  <p className="text-xs font-bold text-white/90 uppercase">Clientes Ativos</p>
                 </div>
                 <p className="text-2xl font-bold text-white">{externalKpis.active_leads || 0}</p>
               </div>

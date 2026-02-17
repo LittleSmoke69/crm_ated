@@ -5,6 +5,7 @@ import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils
 import { getBancaUrl } from '@/lib/utils/hierarchy';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { calculateLeadTemperature } from '@/lib/utils/temperature';
+import { getBancasVisiveis } from '@/app/api/crm/bancas/route';
 
 /**
  * GET /api/crm/leads - Busca leads para o Kanban
@@ -41,243 +42,196 @@ export async function GET(req: NextRequest) {
       return errorResponse('Email do consultor não encontrado no perfil.');
     }
 
-    // 4. Busca a banca_url (prioridade para o parâmetro banca_url se fornecido pelo filtro)
-    let bancaUrl = searchParams.get('banca_url');
-    let bancaSource = 'filter';
-    
-    if (!bancaUrl || bancaUrl === 'all') {
-      // Se não foi especificada uma banca no filtro, busca a primeira banca cadastrada na tabela
-      const { data: bancas, error: bancasError } = await supabaseServiceRole
+    // 4. Lista de bancas a consultar: uma (filtro) ou todas (opção "Todas as Bancas"); name usado no modal do lead
+    type BancaParaFetch = { id: string; url: string; name?: string };
+    let listBancas: BancaParaFetch[] = [];
+    const bancaUrlParam = searchParams.get('banca_url');
+
+    if (bancaUrlParam && bancaUrlParam !== 'all') {
+      const { data: single } = await supabaseServiceRole
         .from('crm_bancas')
-        .select('url, name')
-        .limit(1)
-        .order('name', { ascending: true });
-      
-      if (bancasError || !bancas || bancas.length === 0) {
-        // Se não houver bancas cadastradas, tenta usar a banca do perfil do usuário (fallback)
-        console.log('[CRM Leads] Nenhuma banca na tabela crm_bancas, tentando buscar do perfil do usuário');
-        bancaUrl = await getBancaUrl(requesterId);
-        bancaSource = 'profile';
-        if (!bancaUrl) {
-          return errorResponse('Nenhuma banca configurada. Por favor, selecione uma banca no filtro ou cadastre uma banca no painel administrativo.');
+        .select('id, url, name')
+        .eq('url', bancaUrlParam)
+        .maybeSingle();
+      listBancas = single
+        ? [{ id: single.id, url: single.url, name: single.name ?? undefined }]
+        : [{ id: bancaUrlParam.replace(/\W/g, '_').slice(0, 50) || 'single', url: bancaUrlParam }];
+    } else {
+      // "Todas as Bancas": usar apenas a listagem exclusiva enviada pelo cliente (validada em crm_bancas)
+      const bancaUrlsParam = searchParams.get('banca_urls');
+      if (bancaUrlsParam?.trim()) {
+        const urls = bancaUrlsParam.split(',').map((u: string) => u.trim()).filter(Boolean);
+        if (urls.length > 0) {
+          const { data: fromList } = await supabaseServiceRole
+            .from('crm_bancas')
+            .select('id, url, name')
+            .in('url', urls)
+            .order('name', { ascending: true });
+          if (fromList?.length) {
+            listBancas = fromList.map((b: { id: string; url: string; name?: string }) => ({
+              id: b.id,
+              url: b.url,
+              name: b.name ?? undefined,
+            }));
+          }
         }
-      } else {
-        // Usa a primeira banca cadastrada
-        bancaUrl = bancas[0].url;
-        bancaSource = `table:${bancas[0].name}`;
+      }
+      if (listBancas.length === 0) {
+        const visiveis = await getBancasVisiveis(requesterId, requesterProfile);
+        if (visiveis.length > 0) {
+          listBancas = visiveis.map(b => ({ id: b.id, url: b.url, name: b.name }));
+        } else {
+          const { data: first } = await supabaseServiceRole
+            .from('crm_bancas')
+            .select('id, url, name')
+            .limit(1)
+            .order('name', { ascending: true })
+            .single();
+          if (first) listBancas = [{ id: first.id, url: first.url, name: first.name ?? undefined }];
+          else {
+            const bancaFromProfile = await getBancaUrl(requesterId);
+            if (bancaFromProfile) listBancas = [{ id: 'profile', url: bancaFromProfile }];
+          }
+        }
       }
     }
-    
-    if (!bancaUrl) {
-      return errorResponse('Configuração de banca não encontrada. Contate o administrador.');
-    }
-    
-    console.log(`[CRM Leads] URL da banca obtida de: ${bancaSource}, valor original: ${bancaUrl}`);
 
-    // 4. Prepara a chamada para a API externa
+    if (listBancas.length === 0) {
+      return errorResponse('Nenhuma banca configurada. Por favor, selecione uma banca no filtro ou cadastre uma banca no painel administrativo.');
+    }
+
     const apiKey = process.env.CRM_API_KEY;
     if (!apiKey) {
-      console.error('[CRM Leads] ❌ CRM_API_KEY não encontrada no process.env');
       return errorResponse('Chave de API do CRM não configurada no servidor.');
     }
-
-    // Remove espaços e quebras de linha que podem ter sobrado
     const cleanApiKey = apiKey.trim().replace(/\s+/g, '');
-    
-    // Log parcial da API key para debug (mostra apenas início e fim, esconde o meio)
-    const apiKeyPreview = cleanApiKey.length > 20 
-      ? `${cleanApiKey.substring(0, 10)}...${cleanApiKey.substring(cleanApiKey.length - 10)}`
-      : '***';
-    console.log(`[CRM Leads] ✅ CRM_API_KEY encontrada: ${apiKeyPreview} (tamanho: ${cleanApiKey.length} caracteres)`);
-    
-    // Valida se o tamanho está correto (esperado: 140 caracteres)
-    if (cleanApiKey.length !== 140) {
-      console.warn(`[CRM Leads] ⚠️  API Key tem tamanho inesperado: ${cleanApiKey.length} (esperado: 140)`);
-    }
 
-    // Normaliza a URL da banca: remove protocolo e /api/crm se presente (garante apenas domínio)
-    let cleanBancaUrl = bancaUrl.trim();
-    const originalUrl = cleanBancaUrl; // Para logs
-    
-    // Remove protocolo se presente
-    cleanBancaUrl = cleanBancaUrl.replace(/^https?:\/\//i, '');
-    
-    // Remove /api/crm se presente
-    cleanBancaUrl = cleanBancaUrl.replace(/\/api\/crm\/?/i, '');
-    
-    // Remove barras finais
-    cleanBancaUrl = cleanBancaUrl.replace(/\/+$/, '').trim();
-    
-    // Valida que ainda temos um domínio válido
-    if (!cleanBancaUrl || cleanBancaUrl.length === 0) {
-      return errorResponse(`URL da banca inválida: "${originalUrl}". Deve ser apenas o domínio (ex: web.girodasorte.digital)`);
-    }
-    
-    // Adiciona protocolo https://
-    cleanBancaUrl = `https://${cleanBancaUrl}`;
-
-    // Constrói a URL completa da API externa manualmente (sem encoding, como no Postman)
-    // Usa o email do consultor que está sendo visualizado (targetUserId)
-    const baseUrl = `${cleanBancaUrl}/api/crm/get-indicateds-by-consultant`;
     const queryParams: string[] = [];
-    
-    // Adiciona o parâmetro consultant (obrigatório) - SEM encoding, como no Postman
-    // Usa o email do targetUserId (consultor visualizado), não do requesterId
     queryParams.push(`consultant=${targetProfile.email}`);
-    
-    // Configuração de paginação otimizada
     const perPage = 2000;
-    
-    // Repassa filtros opcionais da documentação da API (sem encoding)
     const optionalParams = ['search', 'status', 'from', 'to', 'star_filter', 'affiliate_filter'];
     const baseQueryParams = [...queryParams];
     optionalParams.forEach(param => {
       const value = searchParams.get(param);
-      if (value && value.trim()) {
-        baseQueryParams.push(`${param}=${value.trim()}`);
-      }
+      if (value && value.trim()) baseQueryParams.push(`${param}=${value.trim()}`);
     });
-    
-    // Adiciona per_page aos parâmetros base
     baseQueryParams.push(`per_page=${perPage}`);
 
-    // 5. Busca dados diretamente da API externa com paginação
+    function normalizeBancaUrl(raw: string): string {
+      let u = raw.trim().replace(/^https?:\/\//i, '').replace(/\/api\/crm\/?/i, '').replace(/\/+$/, '').trim();
+      return u ? (u.startsWith('http') ? u : `https://${u}`) : '';
+    }
+
     try {
-      console.log('[CRM Leads] Iniciando busca paginada de leads...');
-      console.log('[CRM Leads] Configuração:', {
-        requesterId: requesterId,
-        targetUserId: targetUserId,
-        bancaSource: bancaSource,
-        bancaUrlOriginal: bancaUrl,
-        bancaUrlNormalizada: cleanBancaUrl,
-        consultant: targetProfile.email,
-        perPage: perPage,
-        filters: {
-          search: searchParams.get('search'),
-          status: searchParams.get('status'),
-          from: searchParams.get('from'),
-          to: searchParams.get('to'),
-          star_filter: searchParams.get('star_filter'),
-          affiliate_filter: searchParams.get('affiliate_filter'),
-        }
+      // Log inicial: resumo da requisição e bancas
+      const fromParam = searchParams.get('from');
+      const toParam = searchParams.get('to');
+      console.log('[CRM Leads] --- Início da requisição ---');
+      console.log('[CRM Leads] Query params:', { from: fromParam, to: toParam, userId: targetUserId, banca_url: bancaUrlParam ?? 'all', consultant: targetProfile.email });
+      console.log('[CRM Leads] Bancas a consultar:', listBancas.length, listBancas.length === 1 ? listBancas[0].url : '(todas)');
+      listBancas.forEach((b, i) => {
+        console.log(`[CRM Leads]   Banca ${i + 1}/${listBancas.length}: id=${b.id} name="${b.name ?? '-'}" url=${b.url}`);
       });
 
-      // Busca todos os dados usando paginação
-      let allLeads: any[] = [];
-      let currentPage = 1;
-      let hasMore = true;
-      let totalFetched = 0;
-      const maxPages = 1000; // Limite de segurança para evitar loops infinitos
+      const allLeads: any[] = [];
 
-      while (hasMore && currentPage <= maxPages) {
-        // Constrói URL para a página atual
-        const pageQueryParams = [...baseQueryParams, `page=${currentPage}`];
-        const externalApiUrl = `${baseUrl}?${pageQueryParams.join('&')}`;
-
-        console.log(`[CRM Leads] Buscando página ${currentPage}... (URL: ${externalApiUrl.substring(0, 150)}...)`);
-        
-        const response = await fetch(externalApiUrl, {
-          method: 'GET',
-          headers: {
-            'X-API-KEY': cleanApiKey,
-            'Accept': 'application/json',
-          },
-          // Timeout de 60 segundos por página (mais tempo para processar)
-          signal: AbortSignal.timeout(60000),
-        });
-
-        if (!response.ok) {
-          // Se for 404 na primeira página, não há dados
-          if (response.status === 404 && currentPage === 1) {
-            console.log('[CRM Leads] 404 da API externa - Nenhum lead encontrado para os filtros aplicados');
-            return successResponse([]);
-          }
-          
-          // Se for 404 em páginas subsequentes, terminamos a paginação
-          if (response.status === 404) {
-            console.log(`[CRM Leads] 404 na página ${currentPage} - Finalizando paginação`);
-            hasMore = false;
-            break;
-          }
-          
-          const errorText = await response.text();
-          console.error(`[CRM Leads] Erro HTTP ${response.status} na página ${currentPage}:`, errorText);
-          
-          // Se já temos dados, retorna o que foi coletado até agora
-          if (allLeads.length > 0) {
-            console.warn(`[CRM Leads] Erro na página ${currentPage}, mas retornando ${allLeads.length} leads já coletados`);
-            break;
-          }
-          
-          return errorResponse(`Erro ao buscar dados da API da banca: ${response.status} ${response.statusText}`);
+      // Carrega cada banca por completo (todas as páginas) e só então passa para a próxima; o load termina quando todas as bancas forem carregadas.
+      for (const banca of listBancas) {
+        const cleanBancaUrl = normalizeBancaUrl(banca.url);
+        const bancaLabel = `${banca.name ?? banca.id} (${banca.id})`;
+        if (!cleanBancaUrl) {
+          console.warn(`[CRM Leads] Banca ignorada (URL vazia/inválida): ${bancaLabel} url="${banca.url}"`);
+          continue;
         }
 
-        const result = await response.json();
-        
-        if (!result.success) {
-          console.error(`[CRM Leads] Resposta não-sucedida na página ${currentPage}:`, result.message);
-          // Se já temos dados, retorna o que foi coletado
-          if (allLeads.length > 0) {
-            console.warn(`[CRM Leads] Resposta não-sucedida na página ${currentPage}, mas retornando ${allLeads.length} leads já coletados`);
-            break;
+        const baseUrl = `${cleanBancaUrl}/api/crm/get-indicateds-by-consultant`;
+        let currentPage = 1;
+        let hasMore = true;
+        const maxPages = 1000;
+        let bancaTotal = 0;
+
+        while (hasMore && currentPage <= maxPages) {
+          const pageQueryParams = [...baseQueryParams, `page=${currentPage}`];
+          const externalApiUrl = `${baseUrl}?${pageQueryParams.join('&')}`;
+
+          if (currentPage === 1) {
+            console.log(`[CRM Leads] Banca ${bancaLabel} | Requisição página ${currentPage} → ${cleanBancaUrl}/api/crm/get-indicateds-by-consultant`);
           }
-          return errorResponse(result.message || 'Erro ao buscar dados da API da banca');
+
+          let response: Response;
+          try {
+            response = await fetch(externalApiUrl, {
+              method: 'GET',
+              headers: { 'X-API-KEY': cleanApiKey, 'Accept': 'application/json' },
+              signal: AbortSignal.timeout(60000),
+            });
+          } catch (fetchErr: any) {
+            console.error(`[CRM Leads] Banca ${bancaLabel} | Erro de rede/timeout:`, fetchErr?.name, fetchErr?.message);
+            if (allLeads.length > 0) break;
+            throw fetchErr;
+          }
+
+          if (!response.ok) {
+            if (response.status === 404) {
+              console.warn(`[CRM Leads] Banca ${bancaLabel} | 404 (endpoint/recurso não encontrado); ignorando banca.`);
+              if (currentPage === 1) break;
+              hasMore = false;
+              break;
+            }
+            const bodyText = await response.text();
+            let bodyPreview = bodyText.slice(0, 300);
+            if (bodyText.length > 300) bodyPreview += '...';
+            console.error(`[CRM Leads] Banca ${bancaLabel} | HTTP ${response.status} ${response.statusText} | body:`, bodyPreview);
+            if (allLeads.length > 0) break;
+            return errorResponse(`Erro ao buscar dados da API da banca: ${response.status} ${response.statusText}`);
+          }
+
+          let result: any;
+          try {
+            result = await response.json();
+          } catch (parseErr: any) {
+            console.error(`[CRM Leads] Banca ${bancaLabel} | Resposta não é JSON válido:`, parseErr?.message);
+            if (allLeads.length > 0) break;
+            return errorResponse('Resposta inválida da API da banca (não é JSON).');
+          }
+
+          if (!result.success) {
+            console.error(`[CRM Leads] Banca ${bancaLabel} | API retornou success=false | message:`, result.message ?? result.error ?? '(vazio)', '| payload:', JSON.stringify(result).slice(0, 200));
+            if (allLeads.length > 0) break;
+            return errorResponse(result.message || 'Erro ao buscar dados da API da banca');
+          }
+          if (!Array.isArray(result.data)) {
+            console.error(`[CRM Leads] Banca ${bancaLabel} | Campo "data" não é array | tipo:`, typeof result.data, '| keys:', result.data != null ? Object.keys(result.data).slice(0, 10) : 'null');
+            if (allLeads.length > 0) break;
+            return errorResponse('Formato de resposta inválido da API da banca: campo "data" não é um array');
+          }
+
+          const pageLeads = result.data || [];
+          if (pageLeads.length < perPage || pageLeads.length === 0) hasMore = false;
+
+          for (const lead of pageLeads) {
+            allLeads.push({
+              ...lead,
+              _originalId: lead.id,
+              _bancaKey: banca.id,
+            });
+            bancaTotal++;
+          }
+          currentPage++;
         }
 
-        // Verifica se tem data como array
-        if (!Array.isArray(result.data)) {
-          console.error(`[CRM Leads] Resposta da página ${currentPage} não contém array de dados:`, result);
-          // Se já temos dados, retorna o que foi coletado
-          if (allLeads.length > 0) {
-            console.warn(`[CRM Leads] Formato inválido na página ${currentPage}, mas retornando ${allLeads.length} leads já coletados`);
-            break;
-          }
-          return errorResponse('Formato de resposta inválido da API da banca: campo "data" não é um array');
-        }
-        
-        const pageLeads = result.data || [];
-        
-        // Se a página retornou menos que perPage, é a última página
-        if (pageLeads.length < perPage) {
-          hasMore = false;
-        }
-        
-        // Se a página retornou 0 leads, terminamos
-        if (pageLeads.length === 0) {
-          hasMore = false;
-        }
-        
-        allLeads = allLeads.concat(pageLeads);
-        totalFetched += pageLeads.length;
-        
-        console.log(`[CRM Leads] Página ${currentPage} carregada: ${pageLeads.length} leads (Total acumulado: ${totalFetched})`);
-        
-        // Se não há mais dados, sai do loop
-        if (!hasMore) {
-          console.log(`[CRM Leads] Paginação concluída. Total de leads coletados: ${totalFetched}`);
-          break;
-        }
-        
-        currentPage++;
+        console.log(`[CRM Leads] Banca ${bancaLabel} | carregada: ${bancaTotal} leads | total acumulado: ${allLeads.length}`);
       }
 
-      // Se chegou ao limite de páginas, avisa mas retorna o que foi coletado
-      if (currentPage > maxPages) {
-        console.warn(`[CRM Leads] Limite de ${maxPages} páginas atingido. Retornando ${totalFetched} leads coletados`);
-      }
-
-      // Se não houver leads, retorna array vazio
       if (allLeads.length === 0) {
-        console.log('[CRM Leads] Nenhum lead encontrado na API externa para os filtros aplicados');
+        console.log('[CRM Leads] Nenhum lead encontrado na API externa para os filtros aplicados.');
+        console.log('[CRM Leads] --- Fim da requisição: 200, 0 leads ---');
         return successResponse([]);
       }
 
       const externalLeads = allLeads;
 
       // Filtra leads pela data considerando fuso horário de São Paulo (UTC-3)
-      const fromParam = searchParams.get('from');
-      const toParam = searchParams.get('to');
-      
       let filteredLeads = externalLeads;
         
         if (fromParam || toParam) {
@@ -316,6 +270,15 @@ export async function GET(req: NextRequest) {
           return !isGhostClient;
         });
 
+      // Exclui leads transferidos: eles aparecem apenas em /crm/transferido
+      const isTransferred = (lead: any) =>
+        lead.transferred === true || lead.transferred === 'true' || lead.transferred === 1;
+      const beforeTransferred = filteredLeads.length;
+      filteredLeads = filteredLeads.filter((lead: any) => !isTransferred(lead));
+      if (beforeTransferred > filteredLeads.length) {
+        console.log(`[CRM Leads] Excluídos ${beforeTransferred - filteredLeads.length} lead(s) transferido(s) (visíveis em /crm/transferido).`);
+      }
+
       // Filtra por tag se tag_id foi fornecido
       const tagId = searchParams.get('tag_id');
       if (tagId) {
@@ -329,87 +292,129 @@ export async function GET(req: NextRequest) {
         if (tagFilterError) {
           console.error('[CRM Leads] Erro ao buscar leads com tag:', tagFilterError);
         } else if (leadTagsWithFilter && leadTagsWithFilter.length > 0) {
-          // Cria um Set com os IDs dos leads que têm a tag
           const leadIdsWithTag = new Set(leadTagsWithFilter.map((lt: any) => lt.lead_external_id.toString()));
-          // Filtra apenas os leads que estão no Set
-          filteredLeads = filteredLeads.filter((lead: any) => leadIdsWithTag.has(lead.id.toString()));
+          const toLeadExternalIdFilter = (lead: any) =>
+            lead._bancaKey != null && lead._originalId != null
+              ? `${lead._bancaKey}-${lead._originalId}`
+              : (lead._originalId ?? lead.id).toString();
+          filteredLeads = filteredLeads.filter((lead: any) => leadIdsWithTag.has(toLeadExternalIdFilter(lead)));
         } else {
           // Se não há leads com a tag, retorna array vazio
           filteredLeads = [];
         }
       }
 
-      // Busca tags associadas aos leads
-      const leadIds = filteredLeads.map((l: any) => l.id.toString());
+      // Busca tags associadas aos leads (compositeId = id que o frontend envia ao adicionar etiqueta; originalId = fallback para registros antigos)
+      const toLeadExternalId = (l: any) =>
+        l._bancaKey != null && l._originalId != null
+          ? `${l._bancaKey}-${l._originalId}`
+          : (l._originalId ?? l.id).toString();
+      const toOriginalId = (l: any) => (l._originalId ?? l.id).toString();
+      const compositeIds = filteredLeads.map(toLeadExternalId);
+      const originalIds = filteredLeads.map(toOriginalId);
       let leadTagsMap: Record<string, any[]> = {};
       let lastFeedbackMap: Record<string, string> = {};
-      
-      if (leadIds.length > 0) {
-        // Busca tags
-        const { data: leadTagAssociations, error: associationsError } = await supabaseServiceRole
-          .from('crm_lead_tags')
-          .select('lead_external_id, tag_id')
-          .eq('user_id', targetUserId)
-          .in('lead_external_id', leadIds);
-        
-        if (associationsError) {
-          console.error('[CRM Leads] Erro ao buscar associações de tags:', associationsError);
-        } else if (leadTagAssociations && leadTagAssociations.length > 0) {
-          const tagIds = [...new Set(leadTagAssociations.map((lt: any) => lt.tag_id))];
-          const { data: tags, error: tagsError } = await supabaseServiceRole
-            .from('crm_tags')
-            .select('id, label, color')
-            .in('id', tagIds);
-          
-          if (tagsError) {
-            console.error('[CRM Leads] Erro ao buscar tags:', tagsError);
-          } else if (tags) {
-            const tagsById: Record<string, any> = {};
-            tags.forEach((tag: any) => {
-              tagsById[tag.id] = tag;
-            });
-            
-            leadTagAssociations.forEach((lt: any) => {
-              const leadId = lt.lead_external_id.toString();
-              const tag = tagsById[lt.tag_id];
-              if (tag) {
-                if (!leadTagsMap[leadId]) {
-                  leadTagsMap[leadId] = [];
-                }
-                leadTagsMap[leadId].push(tag);
-              }
-            });
-          }
-        }
 
-        // Busca a data do último feedback local para cada lead
-        const { data: lastFeedbacks, error: feedbackError } = await supabaseServiceRole
-          .from('crm_feedback')
-          .select('lead_user_id, created_at')
-          .eq('consultant_user_id', targetUserId)
-          .in('lead_user_id', leadIds.map((id: string) => parseInt(id)))
-          .order('created_at', { ascending: false });
+      // Query única: todas as associações lead->tag do user_id (sem filtrar por lead_external_id)
+      const { data: leadTagAssociations, error: associationsError } = await supabaseServiceRole
+        .from('crm_lead_tags')
+        .select('lead_external_id, tag_id')
+        .eq('user_id', targetUserId);
 
-        if (feedbackError) {
-          console.error('[CRM Leads] Erro ao buscar últimos feedbacks:', feedbackError);
-        } else if (lastFeedbacks) {
-          // Como ordenamos por created_at desc, a primeira ocorrência de cada lead_user_id será a mais recente
-          lastFeedbacks.forEach((fb: any) => {
-            const leadId = fb.lead_user_id.toString();
-            if (!lastFeedbackMap[leadId]) {
-              lastFeedbackMap[leadId] = fb.created_at;
+      if (associationsError) {
+        console.error('[CRM Leads] Tags: erro crm_lead_tags:', associationsError.message || associationsError.code);
+      }
+
+      if (leadTagAssociations && leadTagAssociations.length > 0) {
+        const tagIds = [...new Set(leadTagAssociations.map((lt: any) => lt.tag_id))];
+        const { data: tags, error: tagsError } = await supabaseServiceRole
+          .from('crm_tags')
+          .select('id, label, color')
+          .in('id', tagIds);
+
+        if (tagsError) {
+          console.error('[CRM Leads] Tags: erro crm_tags:', tagsError.message || tagsError.code);
+        } else if (tags) {
+          const tagsById: Record<string, { id: string; label: string; color: string }> = {};
+          tags.forEach((tag: any) => {
+            const idStr = tag.id != null ? String(tag.id) : '';
+            const tagNorm = {
+              id: idStr,
+              label: tag.label != null ? String(tag.label) : '',
+              color: tag.color != null ? String(tag.color) : '#6B7280',
+            };
+            tagsById[idStr] = tagNorm;
+            if (tag.id && idStr !== tag.id) tagsById[tag.id] = tagNorm;
+          });
+
+          const pushTagToMap = (key: string, tagObj: { id: string; label: string; color: string }) => {
+            if (!key) return;
+            if (!leadTagsMap[key]) leadTagsMap[key] = [];
+            if (!leadTagsMap[key].some((t) => t.id === tagObj.id)) leadTagsMap[key].push(tagObj);
+          };
+
+          leadTagAssociations.forEach((lt: any) => {
+            const leadExternalId = lt.lead_external_id != null ? String(lt.lead_external_id).trim() : '';
+            const tagIdNorm = lt.tag_id != null ? String(lt.tag_id) : '';
+            const tag = tagsById[tagIdNorm] ?? tagsById[lt.tag_id];
+            if (tag) {
+              pushTagToMap(leadExternalId, tag);
+              const numericSuffix = leadExternalId.includes('-') ? leadExternalId.split('-').pop() : null;
+              if (numericSuffix && /^\d+$/.test(numericSuffix)) pushTagToMap(numericSuffix, tag);
             }
           });
         }
       }
 
-      // Retorna diretamente os dados da API externa (fonte única de verdade)
-      // Mapeia os campos da API externa para o formato esperado
+      // Busca a data do último feedback local para cada lead
+        // crm_feedback.lead_user_id é BIGINT (ID numérico da API externa); leadIds pode conter composite (ex: "bancaId-28660")
+        const numericLeadIds = [...new Set(
+          filteredLeads
+            .map((l: any) => {
+              const raw = l._originalId ?? l.id;
+              const n = typeof raw === 'number' ? raw : parseInt(String(raw), 10);
+              return Number.isNaN(n) ? null : n;
+            })
+            .filter((n): n is number => n !== null)
+        )];
+
+        if (numericLeadIds.length > 0) {
+          const FEEDBACK_BATCH_SIZE = 200;
+          for (let i = 0; i < numericLeadIds.length; i += FEEDBACK_BATCH_SIZE) {
+            const chunk = numericLeadIds.slice(i, i + FEEDBACK_BATCH_SIZE);
+            const { data: lastFeedbacks, error: feedbackError } = await supabaseServiceRole
+              .from('crm_feedback')
+              .select('lead_user_id, created_at')
+              .eq('consultant_user_id', targetUserId)
+              .in('lead_user_id', chunk)
+              .order('created_at', { ascending: false });
+            if (feedbackError) {
+              console.error('[CRM Leads] Erro ao buscar últimos feedbacks (lote):', feedbackError?.message || feedbackError?.code || String(feedbackError));
+              break;
+            }
+            if (lastFeedbacks?.length) {
+              lastFeedbacks.forEach((fb: any) => {
+                const leadId = fb.lead_user_id.toString();
+                if (!lastFeedbackMap[leadId]) {
+                  lastFeedbackMap[leadId] = fb.created_at;
+                }
+              });
+            }
+          }
+        }
+
+      const bancaNameById: Record<string, string> = {};
+      listBancas.forEach(b => {
+        bancaNameById[b.id] = b.name ?? b.url ?? b.id;
+      });
+
       const formattedLeads = filteredLeads.map((l: any) => {
-        const leadId = l.id.toString();
-        const localLastContact = lastFeedbackMap[leadId];
+        const compositeId = l._bancaKey != null && l._originalId != null
+          ? `${l._bancaKey}-${l._originalId}`
+          : (l._originalId ?? l.id).toString();
+        const originalIdStr = (l._originalId ?? l.id).toString();
+        const localLastContact = lastFeedbackMap[originalIdStr];
         
-        // Tenta encontrar a data de interação mais recente
         let lastInteraction = l.last_interaction || l.created_at || new Date(0).toISOString();
         
         if (localLastContact) {
@@ -421,23 +426,29 @@ export async function GET(req: NextRequest) {
           }
         }
 
-        // Calcula a temperatura baseada nas regras de negócio
         const calculatedTemperature = calculateLeadTemperature({
           created_at: l.created_at || new Date().toISOString(),
           total_depositos_count: l.total_depositos_count || 0,
           last_deposit_at: l.last_deposit_at || null,
         });
 
+        const originalId = l._originalId ?? l.id;
         return {
-          id: l.id,
+          id: compositeId,
+          /** Id numérico do lead na API externa (ex.: 28660). Usar em user_id ao salvar feedback. */
+          original_id: typeof originalId === 'number' ? originalId : parseInt(String(originalId), 10) || originalId,
           name: l.name || '',
           last_name: l.last_name || '',
           phone: l.phone || '',
           email: l.email || '',
           status: l.status || 'novo',
-          temperature: calculatedTemperature, // Usa a temperatura calculada baseada nas regras
+          temperature: calculatedTemperature,
+          banca_id: l._bancaKey ?? undefined,
+          banca_name: l._bancaKey ? (bancaNameById[l._bancaKey] ?? undefined) : undefined,
           total_depositado: Math.round((parseFloat(l.total_depositado) || 0) * 100) / 100,
           total_apostado: Math.round((parseFloat(l.total_apostado) || 0) * 100) / 100,
+          total_apostado_loteria: l.total_apostado_loteria != null ? Math.round((parseFloat(String(l.total_apostado_loteria)) || 0) * 100) / 100 : undefined,
+          total_apostado_bichao: l.total_apostado_bichao != null ? Math.round((parseFloat(String(l.total_apostado_bichao)) || 0) * 100) / 100 : undefined,
           total_ganho: parseFloat(l.total_ganho) || 0,
           total_depositos_count: parseInt(l.total_depositos_count) || 0,
           stars: l.user_level ? (parseInt(l.user_level) || 0) : (parseInt(l.stars) || 0),
@@ -455,24 +466,28 @@ export async function GET(req: NextRequest) {
           last_withdraw_value: l.last_withdraw_value ? Math.round((parseFloat(l.last_withdraw_value.toString()) || 0) * 100) / 100 : null,
           total_saque: l.total_saque ? Math.round((parseFloat(l.total_saque.toString()) || 0) * 100) / 100 : null,
           balance: l.balance ? Math.round((parseFloat(l.balance.toString()) || 0) * 100) / 100 : 0,
+          available_withdraw: l.available_withdraw != null ? Math.round((parseFloat(String(l.available_withdraw)) || 0) * 100) / 100 : undefined,
           bonus: l.bonus ? Math.round((parseFloat(l.bonus.toString()) || 0) * 100) / 100 : 0,
           convert: l.convert ? Math.round((parseFloat(l.convert.toString()) || 0) * 100) / 100 : 0,
           total_afiliate: l.total_afiliate ? Math.round((parseFloat(l.total_afiliate.toString()) || 0) * 100) / 100 : 0,
           aposta_estrelas: l.aposta_estrelas ? parseInt(l.aposta_estrelas.toString()) || 0 : 0,
-          tags: leadTagsMap[leadId] || [],
+          tags: (leadTagsMap[compositeId] || leadTagsMap[originalIdStr] || []).map((t: any) => ({
+            id: t.id != null ? String(t.id) : '',
+            label: t.label != null ? String(t.label) : '',
+            color: t.color != null ? String(t.color) : '#6B7280',
+          })),
           has_interaction: l.has_interaction === true || l.has_interaction === 'true' || l.has_interaction === 1 || !!localLastContact || false,
         };
       });
 
-      console.log(`[CRM Leads] Retornando ${formattedLeads.length} leads da API externa`);
+      console.log(`[CRM Leads] 200 OK: ${formattedLeads.length} leads`);
       return successResponse(formattedLeads);
     } catch (syncError: any) {
-      console.error('[CRM Leads] Erro ao buscar dados da API externa:', syncError);
-      
+      console.error('[CRM Leads] Erro ao buscar dados da API externa:', syncError?.name, syncError?.message, syncError?.cause);
+      console.log('[CRM Leads] --- Fim da requisição: 400 (erro API externa) ---');
       if (syncError.name === 'AbortError') {
         return errorResponse('Timeout ao conectar com a API da banca. Tente novamente.');
       }
-      
       return errorResponse(`Erro ao conectar com a API da banca: ${syncError.message || 'Erro desconhecido'}`);
     }
 

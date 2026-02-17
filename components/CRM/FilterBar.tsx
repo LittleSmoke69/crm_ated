@@ -15,13 +15,16 @@ import {
   Tag as TagIcon,
   Clock,
   Thermometer,
-  Sparkles
+  Sparkles,
+  Loader2
 } from 'lucide-react';
 
 interface FilterBarProps {
   onSearch: (term: string) => void;
   onFilterChange: (type: string, value: any) => void;
   initialDateFilter?: { value: string; label: string };
+  /** Chamado quando a lista de bancas terminar de carregar; recebe a listagem exclusiva (para o Kanban usar só essas bancas em "Todas as Bancas"). */
+  onBancasLoaded?: (bancas: { id: string; name: string; url: string }[]) => void;
 }
 
 interface Banca {
@@ -36,7 +39,7 @@ interface Tag {
   color: string;
 }
 
-const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initialDateFilter }) => {
+const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initialDateFilter, onBancasLoaded }) => {
   const [activeFilters, setActiveFilters] = useState<Record<string, any>>(() => {
     if (initialDateFilter) {
       return { date: initialDateFilter };
@@ -48,47 +51,64 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
   const [customStartDate, setCustomStartDate] = useState<string>('');
   const [customEndDate, setCustomEndDate] = useState<string>('');
   const [bancas, setBancas] = useState<Banca[]>([]);
+  const [bancasLoading, setBancasLoading] = useState<boolean>(true);
   const [bancaSearchTerm, setBancaSearchTerm] = useState<string>('');
   const [tags, setTags] = useState<Tag[]>([]);
   const [showCustomValueFilter, setShowCustomValueFilter] = useState(false);
   const [customValueMin, setCustomValueMin] = useState<string>('');
   const [customValueMax, setCustomValueMax] = useState<string>('');
+  const [showCustomValueNextStarFilter, setShowCustomValueNextStarFilter] = useState(false);
+  const [customValueNextStarMin, setCustomValueNextStarMin] = useState<string>('');
+  const [customValueNextStarMax, setCustomValueNextStarMax] = useState<string>('');
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Carrega bancas
+  // Carrega bancas (uma única vez; cleanup aborta requisição em caso de remount ex.: Strict Mode)
   useEffect(() => {
+    const controller = new AbortController();
+    const { signal } = controller;
+
     const loadBancas = async () => {
+      setBancasLoading(true);
+      let loadedBancas: { id: string; name: string; url: string }[] = [];
       try {
         const userId = sessionStorage.getItem('user_id') || localStorage.getItem('profile_id');
         if (!userId) {
-          console.warn('[FilterBar] Usuário não encontrado, não é possível carregar bancas');
+          if (!signal.aborted) {
+            setBancasLoading(false);
+            onBancasLoaded?.([]);
+          }
           return;
         }
-        
+
         const response = await fetch('/api/crm/bancas', {
-          headers: { 'X-User-Id': userId }
+          headers: { 'X-User-Id': userId },
+          signal,
         });
-        
-        if (!response.ok) {
-          console.error('[FilterBar] Erro HTTP ao buscar bancas:', response.status, response.statusText);
-          return;
-        }
-        
+
+        if (signal.aborted) return;
+
+        if (!response.ok) return;
+
         const result = await response.json();
+        if (signal.aborted) return;
+
         if (result.success && Array.isArray(result.data)) {
           setBancas(result.data);
-          if (result.data.length === 0) {
-            console.warn('[FilterBar] Nenhuma banca cadastrada encontrada na tabela crm_bancas');
-          }
-        } else {
-          console.error('[FilterBar] Erro na resposta:', result.error || 'Resposta inválida', result);
+          loadedBancas = result.data;
         }
       } catch (err: any) {
-        console.error('[FilterBar] Erro ao carregar bancas:', err.message || err);
+        if (err?.name === 'AbortError') return;
+      } finally {
+        if (!signal.aborted) {
+          setBancasLoading(false);
+          onBancasLoaded?.(loadedBancas);
+        }
       }
     };
+
     loadBancas();
-  }, []);
+    return () => controller.abort();
+  }, [onBancasLoaded]);
 
   // Carrega tags
   useEffect(() => {
@@ -161,6 +181,11 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
         setCustomValueMin('');
         setCustomValueMax('');
       }
+      if (menuName === 'valueNextStar') {
+        setShowCustomValueNextStarFilter(false);
+        setCustomValueNextStarMin('');
+        setCustomValueNextStarMax('');
+      }
     } else {
       // Abrindo um novo menu
       setOpenMenu(menuName);
@@ -171,6 +196,11 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
         setShowCustomValueFilter(false);
         setCustomValueMin('');
         setCustomValueMax('');
+      }
+      if (menuName !== 'valueNextStar') {
+        setShowCustomValueNextStarFilter(false);
+        setCustomValueNextStarMin('');
+        setCustomValueNextStarMax('');
       }
     }
   };
@@ -195,6 +225,11 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
       setCustomValueMin('');
       setCustomValueMax('');
       onFilterChange(type, null);
+    } else if (type === 'valueNextStar') {
+      setShowCustomValueNextStarFilter(false);
+      setCustomValueNextStarMin('');
+      setCustomValueNextStarMax('');
+      onFilterChange(type, null);
     } else {
       onFilterChange(type, null);
     }
@@ -205,75 +240,100 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
       <div className="bg-white p-3 rounded-2xl shadow-sm border border-gray-100 flex flex-wrap items-center gap-3">
         {/* Search Field */}
         <div className="relative flex-1 min-w-[250px]">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
           <input 
             type="text" 
             placeholder="Buscar por nome, email ou telefone..."
             onChange={(e) => onSearch(e.target.value)}
-            className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-100 rounded-xl text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#8CD955]/20 focus:bg-white focus:text-gray-900 transition-all"
+            className="w-full pl-10 pr-4 py-2.5 bg-gray-100 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 focus:bg-gray-50 focus:border-[#8CD955]/40 transition-all"
           />
         </div>
 
         {/* Banca Filter */}
         <div className="relative">
           <button 
-            onClick={() => toggleMenu('banca')}
+            onClick={() => !bancasLoading && toggleMenu('banca')}
+            disabled={bancasLoading}
             className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-xs font-semibold transition-all shadow-sm ${
-              openMenu === 'banca' ? 'bg-gray-50 border-gray-300 text-[#6AB83D]' : 'bg-white border-gray-100 text-gray-600 hover:bg-gray-50'
+              bancasLoading ? 'bg-gray-50 border-gray-100 text-gray-400 cursor-wait' : openMenu === 'banca' ? 'bg-gray-50 border-gray-300 text-[#6AB83D]' : 'bg-white border-gray-100 text-gray-600 hover:bg-gray-50'
             }`}
           >
-            <Globe className="w-3.5 h-3.5" />
-            {activeFilters.banca?.label || 'Todas as Bancas'}
+            {bancasLoading ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Globe className="w-3.5 h-3.5" />
+            )}
+            {bancasLoading ? 'Buscando bancas...' : (activeFilters.banca?.label || 'Todas as Bancas')}
             <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform ${openMenu === 'banca' ? 'rotate-180' : ''}`} />
           </button>
           {openMenu === 'banca' && (
             <div className="absolute left-0 top-full mt-2 w-56 bg-white rounded-xl shadow-2xl border border-gray-100 z-[35] animate-in fade-in slide-in-from-top-2 duration-200 overflow-hidden flex flex-col max-h-80">
-              {/* Barra de pesquisa */}
-              <div className="p-2 border-b border-gray-100">
-                <div className="relative">
-                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
-                  <input
-                    type="text"
-                    placeholder="Pesquisar bancas..."
-                    value={bancaSearchTerm}
-                    onChange={(e) => setBancaSearchTerm(e.target.value)}
-                    onClick={(e) => e.stopPropagation()}
-                    onKeyDown={(e) => e.stopPropagation()}
-                    className="w-full pl-8 pr-2 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#8CD955]/20 focus:border-[#8CD955] text-gray-800 placeholder:text-gray-400 bg-gray-50 focus:bg-white focus:text-gray-900 transition-all"
-                  />
+              {bancasLoading ? (
+                <div className="flex items-center justify-center gap-2 px-4 py-8 text-gray-500 text-xs">
+                  <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                  <span>Buscando bancas...</span>
                 </div>
-              </div>
-              
-              {/* Lista de bancas com scroll - mostra todas as bancas disponíveis */}
-              <div className="overflow-y-auto max-h-64 custom-scrollbar">
-                {(bancaSearchTerm
-                  ? bancas.filter(b => b.name.toLowerCase().includes(bancaSearchTerm.toLowerCase()))
-                  : bancas
-                ).map(banca => (
-                  <button 
-                    key={banca.id}
-                    onClick={() => {
-                      handleFilterSelect('banca', banca.url, banca.name);
-                      setBancaSearchTerm('');
-                    }}
-                    className={`w-full text-left px-4 py-2.5 text-xs hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold ${
-                      activeFilters.banca?.value === banca.url ? 'bg-gray-50 text-[#6AB83D]' : 'text-gray-600'
-                    }`}
-                  >
-                    {banca.name}
-                  </button>
-                ))}
-                {bancaSearchTerm && bancas.filter(b => b.name.toLowerCase().includes(bancaSearchTerm.toLowerCase())).length === 0 && (
-                  <div className="px-4 py-2 text-[10px] text-gray-400 text-center">
-                    Nenhuma banca encontrada
+              ) : (
+                <>
+                  {/* Barra de pesquisa */}
+                  <div className="p-2 border-b border-gray-100">
+                    <div className="relative">
+                      <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500" />
+                      <input
+                        type="text"
+                        placeholder="Pesquisar bancas..."
+                        value={bancaSearchTerm}
+                        onChange={(e) => setBancaSearchTerm(e.target.value)}
+                        onClick={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => e.stopPropagation()}
+                        className="w-full pl-8 pr-2 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 focus:border-[#8CD955] text-gray-900 placeholder:text-gray-500 bg-gray-100 focus:bg-gray-50 transition-all"
+                      />
+                    </div>
                   </div>
-                )}
-                {!bancaSearchTerm && bancas.length === 0 && (
-                  <div className="px-4 py-2 text-[10px] text-gray-400 text-center">
-                    Nenhuma banca disponível
+                  
+                  {/* Lista de bancas com scroll - opção "Todas as Bancas" + bancas disponíveis */}
+                  <div className="overflow-y-auto max-h-64 custom-scrollbar">
+                    <button
+                      onClick={() => {
+                        handleFilterSelect('banca', 'all', 'Todas as Bancas');
+                        setBancaSearchTerm('');
+                      }}
+                      className={`w-full text-left px-4 py-2.5 text-xs hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold border-b border-gray-100 ${
+                        activeFilters.banca?.value === 'all' || !activeFilters.banca?.value ? 'bg-gray-50 text-[#6AB83D]' : 'text-gray-600'
+                      }`}
+                    >
+                      Todas as Bancas
+                    </button>
+                    {(bancaSearchTerm
+                      ? bancas.filter(b => b.name.toLowerCase().includes(bancaSearchTerm.toLowerCase()))
+                      : bancas
+                    ).map(banca => (
+                      <button 
+                        key={banca.id}
+                        onClick={() => {
+                          handleFilterSelect('banca', banca.url, banca.name);
+                          setBancaSearchTerm('');
+                        }}
+                        className={`w-full text-left px-4 py-2.5 text-xs hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold ${
+                          activeFilters.banca?.value === banca.url ? 'bg-gray-50 text-[#6AB83D]' : 'text-gray-600'
+                        }`}
+                      >
+                        {banca.name}
+                      </button>
+                    ))}
+                    {bancaSearchTerm && bancas.filter(b => b.name.toLowerCase().includes(bancaSearchTerm.toLowerCase())).length === 0 && (
+                      <div className="px-4 py-2 text-[10px] text-gray-400 text-center">
+                        Nenhuma banca encontrada
+                      </div>
+                    )}
+                    {!bancaSearchTerm && bancas.length === 0 && (
+                      <div className="px-4 py-2 text-[10px] text-gray-400 text-center">
+                        Nenhuma banca disponível
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -470,7 +530,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
             }`}
           >
             <DollarSign className="w-3.5 h-3.5" />
-            {activeFilters.value?.label || 'Valor'}
+            {activeFilters.value?.label || 'Total depósito'}
             <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform ${openMenu === 'value' ? 'rotate-180' : ''}`} />
           </button>
           {openMenu === 'value' && (
@@ -559,6 +619,109 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                           setShowCustomValueFilter(false);
                           setCustomValueMin('');
                           setCustomValueMax('');
+                        }}
+                        className="px-3 py-2 bg-gray-200 text-gray-600 rounded-lg text-xs font-bold hover:bg-gray-300 transition-colors"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Valor para próxima estrela (falta para subir de nível) */}
+        <div className="relative">
+          <button 
+            onClick={() => toggleMenu('valueNextStar')}
+            className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-xs font-semibold transition-all shadow-sm ${
+              openMenu === 'valueNextStar' ? 'bg-gray-50 border-gray-300 text-[#6AB83D]' : 'bg-white border-gray-100 text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <Target className="w-3.5 h-3.5" />
+            {activeFilters.valueNextStar?.label || 'Falta p/ Estrela'}
+            <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform ${openMenu === 'valueNextStar' ? 'rotate-180' : ''}`} />
+          </button>
+          {openMenu === 'valueNextStar' && (
+            <div className="absolute left-0 top-full mt-2 w-64 bg-white rounded-xl shadow-2xl border border-gray-100 py-2 z-[35] animate-in fade-in slide-in-from-top-2 duration-200">
+              <button onClick={() => handleFilterSelect('valueNextStar', 'none', 'Não se aplica (máx.)')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold">Não se aplica (máx.)</button>
+              <button onClick={() => handleFilterSelect('valueNextStar', 'low', 'Pouco (Menos de R$50)')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold">Pouco (Menos de R$50)</button>
+              <button onClick={() => handleFilterSelect('valueNextStar', 'medium', 'Médio (R$50 a R$199)')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold">Médio (R$50 a R$199)</button>
+              <button onClick={() => handleFilterSelect('valueNextStar', 'high', 'Alto (R$200 a R$500)')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold">Alto (R$200 a R$500)</button>
+              <button onClick={() => handleFilterSelect('valueNextStar', 'ultra', 'Muito alto (Acima de R$500)')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold">Muito alto (Acima de R$500)</button>
+              <div className="border-t border-gray-100 my-1"></div>
+              <button 
+                onClick={() => setShowCustomValueNextStarFilter(true)}
+                className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold"
+              >
+                Personalizado
+              </button>
+              {showCustomValueNextStarFilter && (
+                <div className="px-4 py-3 border-t border-gray-100 bg-gray-50">
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-500 mb-1.5 uppercase">Falta maior que (R$)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={customValueNextStarMin}
+                        onChange={(e) => setCustomValueNextStarMin(e.target.value)}
+                        placeholder="0.00"
+                        className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] outline-none text-gray-800 placeholder:text-gray-400 bg-white focus:bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-500 mb-1.5 uppercase">Falta menor que (R$)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={customValueNextStarMax}
+                        onChange={(e) => setCustomValueNextStarMax(e.target.value)}
+                        placeholder="0.00"
+                        className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] outline-none text-gray-800 placeholder:text-gray-400 bg-white focus:bg-white"
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          if (customValueNextStarMin || customValueNextStarMax) {
+                            const min = customValueNextStarMin ? parseFloat(customValueNextStarMin) : null;
+                            const max = customValueNextStarMax ? parseFloat(customValueNextStarMax) : null;
+                            if (min !== null && (isNaN(min) || min < 0)) return;
+                            if (max !== null && (isNaN(max) || max < 0)) return;
+                            if (min !== null && max !== null && min > max) return;
+                            let label = 'Personalizado';
+                            if (min !== null && max !== null) {
+                              label = `Falta R$ ${min.toFixed(2)} - R$ ${max.toFixed(2)}`;
+                            } else if (min !== null) {
+                              label = `Falta > R$ ${min.toFixed(2)}`;
+                            } else if (max !== null) {
+                              label = `Falta < R$ ${max.toFixed(2)}`;
+                            }
+                            handleFilterSelect('valueNextStar', { type: 'custom', min, max }, label);
+                            setShowCustomValueNextStarFilter(false);
+                            setCustomValueNextStarMin('');
+                            setCustomValueNextStarMax('');
+                            setOpenMenu(null);
+                          }
+                        }}
+                        disabled={Boolean((!customValueNextStarMin && !customValueNextStarMax) ||
+                                 (customValueNextStarMin && (isNaN(parseFloat(customValueNextStarMin)) || parseFloat(customValueNextStarMin) < 0)) ||
+                                 (customValueNextStarMax && (isNaN(parseFloat(customValueNextStarMax)) || parseFloat(customValueNextStarMax) < 0)) ||
+                                 (customValueNextStarMin && customValueNextStarMax && parseFloat(customValueNextStarMin) > parseFloat(customValueNextStarMax)))}
+                        className="flex-1 px-3 py-2 bg-[#8CD955] text-white rounded-lg text-xs font-bold hover:bg-[#7BC84A] disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+                      >
+                        Aplicar
+                      </button>
+                      <button
+                        onClick={() => {
+                          setShowCustomValueNextStarFilter(false);
+                          setCustomValueNextStarMin('');
+                          setCustomValueNextStarMax('');
                         }}
                         className="px-3 py-2 bg-gray-200 text-gray-600 rounded-lg text-xs font-bold hover:bg-gray-300 transition-colors"
                       >

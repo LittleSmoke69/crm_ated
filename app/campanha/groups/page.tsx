@@ -521,13 +521,13 @@ const GroupsPage = () => {
                 </div>
                 <div className="flex gap-2 w-full sm:w-auto">
                   <div className="relative flex-1 sm:flex-none">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500" />
                     <input
                       type="text"
                       value={savedGroupsSearch}
                       onChange={e => setSavedGroupsSearch(e.target.value)}
                       placeholder="Pesquisar..."
-                      className="w-full sm:w-auto pl-10 pr-4 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 text-gray-700 placeholder:text-gray-400"
+                      className="w-full sm:w-auto pl-10 pr-4 py-2 bg-gray-100 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 text-gray-900 placeholder:text-gray-500"
                     />
                   </div>
                 </div>
@@ -583,13 +583,13 @@ const GroupsPage = () => {
               </div>
               <div className="space-y-3 mb-4">
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500" />
                   <input
                     type="text"
                     value={availGroupsSearch}
                     onChange={e => setAvailGroupsSearch(e.target.value)}
                     placeholder="Pesquisar nos grupos da API..."
-                    className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 placeholder:text-gray-400"
+                    className="w-full pl-10 pr-4 py-2 bg-gray-100 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-900 placeholder:text-gray-500"
                   />
                 </div>
                 <button

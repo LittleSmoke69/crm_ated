@@ -25,13 +25,78 @@ import {
   ChevronDown,
   ChevronUp,
   Copy,
-  Check
+  Check,
+  RefreshCw
 } from 'lucide-react';
 import { Lead } from './types';
 import AddTagModal from './AddTagModal';
 import RemoveTagModal from './RemoveTagModal';
 import ContactFeedbackModal from './ContactFeedbackModal';
 import { getTemperatureLabel, getTemperatureEmoji } from '@/lib/utils/temperature';
+
+/** Níveis Estrela: min_wagered e max_wagered (aposta mínima/máxima para o nível) */
+const STAR_LEVELS = [
+  { level: 1, min: 100, max: 299 },
+  { level: 2, min: 300, max: 699 },
+  { level: 3, min: 700, max: 1199 },
+  { level: 4, min: 1200, max: 4999 },
+  { level: 5, min: 2500, max: 14999 },
+  { level: 6, min: 15000, max: 29999 },
+  { level: 7, min: 30000, max: 50000 },
+] as const;
+
+function getStarLevelInfo(wagered: number): {
+  currentLevel: number;
+  currentMin: number;
+  currentMax: number;
+  nextLevel: number | null;
+  nextMin: number | null;
+  progressPct: number;
+  missingForNext: number | null;
+} {
+  const value = Math.max(0, wagered);
+  const current = [...STAR_LEVELS].reverse().find((r) => value >= r.min && value <= r.max);
+  if (!current) {
+    if (value < STAR_LEVELS[0].min) {
+      const next = STAR_LEVELS[0];
+      const progressPct = (value / next.min) * 100;
+      return {
+        currentLevel: 0,
+        currentMin: 0,
+        currentMax: next.min,
+        nextLevel: next.level,
+        nextMin: next.min,
+        progressPct: Math.min(100, progressPct),
+        missingForNext: next.min - value,
+      };
+    }
+    const last = STAR_LEVELS[STAR_LEVELS.length - 1];
+    return {
+      currentLevel: last.level,
+      currentMin: last.min,
+      currentMax: last.max,
+      nextLevel: null,
+      nextMin: null,
+      progressPct: 100,
+      missingForNext: null,
+    };
+  }
+  const currentIdx = STAR_LEVELS.findIndex((r) => r.level === current.level);
+  const next = currentIdx < STAR_LEVELS.length - 1 ? STAR_LEVELS[currentIdx + 1] : null;
+  const range = current.max - current.min;
+  const progressInLevel = range > 0 ? (value - current.min) / range : 1;
+  const progressPct = Math.min(100, Math.max(0, progressInLevel * 100));
+  const missingForNext = next ? Math.max(0, next.min - value) : null;
+  return {
+    currentLevel: current.level,
+    currentMin: current.min,
+    currentMax: current.max,
+    nextLevel: next?.level ?? null,
+    nextMin: next?.min ?? null,
+    progressPct,
+    missingForNext,
+  };
+}
 
 interface LeadCardProps {
   lead: Lead;
@@ -43,6 +108,10 @@ interface LeadCardProps {
   onTagAdded?: () => void;
   selectedBancaUrl?: string;
   columnId?: string;
+  /** Layout compacto (igual ao CRM principal / Clientes cadastrados) para não deixar a tela grande */
+  compact?: boolean;
+  /** Prazo em dias para leads transferidos (ex.: 10 na página Transferido, 90 no CRM principal) */
+  transferDeadlineDays?: number;
 }
 
 const LeadCard: React.FC<LeadCardProps> = ({ 
@@ -54,7 +123,9 @@ const LeadCard: React.FC<LeadCardProps> = ({
   targetUserId,
   onTagAdded,
   selectedBancaUrl,
-  columnId
+  columnId,
+  compact = false,
+  transferDeadlineDays = 90,
 }) => {
   const [showAddTagModal, setShowAddTagModal] = useState(false);
   const [showRemoveTagModal, setShowRemoveTagModal] = useState(false);
@@ -72,8 +143,28 @@ const LeadCard: React.FC<LeadCardProps> = ({
   const [showMenu, setShowMenu] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [leadDetails, setLeadDetails] = useState<Lead | null>(null);
-  const [loadingDetails, setLoadingDetails] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  /** Tick para contagem regressiva em tempo real do prazo de leads transferidos (1s para contador h/m/s) */
+  const [nowTick, setNowTick] = useState(0);
+  useEffect(() => {
+    if (!lead.transferred || !lead.transferred_at) return;
+    const id = setInterval(() => setNowTick((t) => t + 1), 1000); // atualiza a cada 1 segundo
+    return () => clearInterval(id);
+  }, [lead.transferred, lead.transferred_at]);
+
+  /** Retorna tempo até o próximo dia (quando daysLeft diminui) e formata como "Xh Ym Zs" */
+  const getCountdownToNextDay = (transferredAt: Date): string => {
+    const now = new Date();
+    const msPerDay = 1000 * 60 * 60 * 24;
+    const diffDays = Math.floor((now.getTime() - transferredAt.getTime()) / msPerDay);
+    const nextBoundary = transferredAt.getTime() + (diffDays + 1) * msPerDay;
+    let remaining = Math.max(0, Math.floor((nextBoundary - now.getTime()) / 1000));
+    const h = Math.floor(remaining / 3600);
+    const m = Math.floor((remaining % 3600) / 60);
+    const s = remaining % 60;
+    return `${h}h ${m}m ${s}s`;
+  };
 
   // Estados para os históricos
   const [depositsHistory, setDepositsHistory] = useState<any[]>([]);
@@ -116,57 +207,9 @@ const LeadCard: React.FC<LeadCardProps> = ({
     }
   }, []);
 
-  // Função para buscar detalhes completos do lead
-  const loadLeadDetails = async () => {
-    if (!lead.id) return;
-
-    setLoadingDetails(true);
-    try {
-      const url = new URL('/api/crm/leads', window.location.origin);
-      if (selectedBancaUrl) {
-        url.searchParams.append('banca_url', selectedBancaUrl);
-      }
-
-      const response = await fetch(url.toString());
-      if (response.ok) {
-        const data = await response.json();
-        if (data.data && Array.isArray(data.data)) {
-          // Busca o lead específico pelo ID
-          const leadData = data.data.find((l: any) => l.id.toString() === lead.id.toString());
-          if (leadData) {
-            // Atualiza o lead com os dados completos
-            setLeadDetails({
-              ...lead,
-              last_winner_value: leadData.last_winner_value ? parseFloat(leadData.last_winner_value.toString()) : undefined,
-              last_winner_at: leadData.last_winner_at || null,
-              last_withdraw_at: leadData.last_withdraw_at || null,
-              last_withdraw_value: leadData.last_withdraw_value ? parseFloat(leadData.last_withdraw_value.toString()) : undefined,
-              total_saque: leadData.total_saque ? parseFloat(leadData.total_saque.toString()) : undefined
-            });
-          } else {
-            // Se não encontrou, usa os dados do lead atual
-            setLeadDetails(lead);
-          }
-        } else {
-          // Se não retornou array, usa os dados do lead atual
-          setLeadDetails(lead);
-        }
-      } else {
-        // Em caso de erro na resposta, usa os dados do lead atual
-        setLeadDetails(lead);
-      }
-    } catch (error) {
-      console.error('Erro ao buscar detalhes do lead:', error);
-      // Em caso de erro, usa os dados do lead atual
-      setLeadDetails(lead);
-    } finally {
-      setLoadingDetails(false);
-    }
-  };
-
   // Função para buscar histórico de depósitos
   const loadDepositsHistory = async (page: number = 1, loadAll: boolean = false) => {
-    if (!lead.id) return;
+    if (!consultorUserId || !lead.id) return;
 
     if (page === 1) {
       setLoadingDeposits(true);
@@ -182,7 +225,9 @@ const LeadCard: React.FC<LeadCardProps> = ({
       url.searchParams.append('page', page.toString());
       url.searchParams.append('per_page', '15');
 
-      const response = await fetch(url.toString());
+      const response = await fetch(url.toString(), {
+        headers: { 'X-User-Id': consultorUserId },
+      });
       if (response.ok) {
         const data = await response.json();
         if (data.data && data.data.history) {
@@ -246,7 +291,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
 
   // Função para buscar histórico de saques
   const loadWithdrawsHistory = async (page: number = 1, loadAll: boolean = false) => {
-    if (!lead.id) return;
+    if (!consultorUserId || !lead.id) return;
 
     if (page === 1) {
       setLoadingWithdraws(true);
@@ -262,7 +307,9 @@ const LeadCard: React.FC<LeadCardProps> = ({
       url.searchParams.append('page', page.toString());
       url.searchParams.append('per_page', '15');
 
-      const response = await fetch(url.toString());
+      const response = await fetch(url.toString(), {
+        headers: { 'X-User-Id': consultorUserId },
+      });
       if (response.ok) {
         const data = await response.json();
         if (data.data && data.data.history) {
@@ -326,7 +373,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
 
   // Função para buscar histórico de apostas
   const loadBetsHistory = async (page: number = 1, loadAll: boolean = false) => {
-    if (!lead.id) return;
+    if (!consultorUserId || !lead.id) return;
 
     if (page === 1) {
       setLoadingBets(true);
@@ -342,28 +389,49 @@ const LeadCard: React.FC<LeadCardProps> = ({
       url.searchParams.append('page', page.toString());
       url.searchParams.append('per_page', '15');
 
-      const response = await fetch(url.toString());
+      const response = await fetch(url.toString(), {
+        headers: { 'X-User-Id': consultorUserId },
+      });
       if (response.ok) {
         const data = await response.json();
-        if (data.data && data.data.history) {
-          const newHistory = Array.isArray(data.data.history) ? data.data.history : [];
-          
-          if (page === 1) {
-            setAllBetsData(newHistory);
-            setBetsHistory(newHistory.slice(0, 5)); // Mostra apenas 5 inicialmente
-            setBetsPagination(data.data.pagination);
-          } else {
-            setAllBetsData(prev => [...prev, ...newHistory]);
-            if (loadAll) {
-              setBetsHistory(prev => [...prev, ...newHistory]);
-            }
-            setBetsPagination(data.data.pagination);
-          }
+        const raw = data.data || {};
+        const lotteryRaw = Array.isArray(raw.history) ? raw.history : [];
+        const lotteryHistory = lotteryRaw.map((b: any) => ({
+          ...b,
+          type: b.type || b.game_type || 'lottery',
+          game_type: b.game_type || b.type || 'lottery',
+        }));
+        const bichaoRaw = Array.isArray(raw.bichao_history) ? raw.bichao_history : [];
+        const bichaoHistory = bichaoRaw.map((b: any) => ({
+          ...b,
+          type: 'bichao',
+          game_type: 'bichao',
+          premio: b.premio_a_receber != null ? b.premio_a_receber : null,
+        }));
+        const merged = [...lotteryHistory, ...bichaoHistory].sort((a, b) => {
+          const dateA = new Date(a.date || a.created_at || 0).getTime();
+          const dateB = new Date(b.date || b.created_at || 0).getTime();
+          return dateB - dateA;
+        });
+
+        const pagination = raw.pagination || {};
+        const bichaoPagination = raw.bichao_pagination || {};
+        const combinedPagination = {
+          ...pagination,
+          last_page: Math.max(pagination.last_page || 1, bichaoPagination.last_page || 1),
+          total: (pagination.total || 0) + (bichaoPagination.total || 0),
+        };
+
+        if (page === 1) {
+          setAllBetsData(merged);
+          setBetsHistory(merged.slice(0, 5));
+          setBetsPagination(combinedPagination);
         } else {
-          if (page === 1) {
-            setBetsHistory([]);
-            setAllBetsData([]);
+          setAllBetsData(prev => [...prev, ...merged]);
+          if (loadAll) {
+            setBetsHistory(prev => [...prev, ...merged]);
           }
+          setBetsPagination(combinedPagination);
         }
       } else {
         if (page === 1) {
@@ -413,6 +481,14 @@ const LeadCard: React.FC<LeadCardProps> = ({
     ]);
   };
 
+  /** ID numérico do lead para APIs de feedback (crm_feedback.lead_user_id). Evita composite "bancaId-28660". */
+  const leadNumericIdForFeedback =
+    lead.original_id != null
+      ? String(lead.original_id)
+      : typeof lead.id === 'string' && lead.id.includes('-')
+        ? (lead.id.split('-').pop() ?? String(lead.id))
+        : String(lead.id);
+
   // Função para buscar feedback quando o botão for clicado
   const loadFeedback = async () => {
     if (!consultorUserId || !lead.id) return;
@@ -420,7 +496,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
     setLoadingFeedback(true);
     try {
       const url = new URL('/api/crm/leads/feedback', window.location.origin);
-      url.searchParams.append('user_id', lead.id.toString());
+      url.searchParams.append('user_id', leadNumericIdForFeedback);
       if (selectedBancaUrl) {
         url.searchParams.append('banca_url', selectedBancaUrl);
       }
@@ -461,7 +537,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
     setLoadingAllFeedbacks(true);
     try {
       const url = new URL('/api/crm/leads/feedback', window.location.origin);
-      url.searchParams.append('user_id', lead.id.toString());
+      url.searchParams.append('user_id', leadNumericIdForFeedback);
       if (selectedBancaUrl) {
         url.searchParams.append('banca_url', selectedBancaUrl);
       }
@@ -782,7 +858,218 @@ const LeadCard: React.FC<LeadCardProps> = ({
     return 'border-gray-200 bg-gray-100 shadow-sm';
   };
 
+  // Layout compacto: cabeçalho → métricas → nível estrela → tags → telefone → rodapé (data, último depósito/cronômetro, Chamar)
+  const compactCard = (() => {
+    const temperature = lead.temperature || 'cold';
+    const tempLabel = getTemperatureLabel(temperature);
+    const tempEmoji = getTemperatureEmoji(temperature);
+    const wagered = Number((lead as any).aposta_estrelas) ?? 0;
+    const starInfo = getStarLevelInfo(wagered);
+    const levelLabel = starInfo.currentLevel === 0 ? 'Iniciante' : `${starInfo.currentLevel} ${starInfo.currentLevel === 1 ? 'Estrela' : 'Estrelas'}`;
+    const lastDepositText = lead.last_deposit_at ? formatRelativeDate(lead.last_deposit_at, 'Nunca') : 'Nunca depositou';
+    const createdDateFormatted = formatCreatedDate(lead.created_at || lead.createdAt);
+    return (
+      <div
+        draggable
+        onDragStart={(e) => onDragStart(e, lead.id)}
+        className={`rounded-2xl border-2 p-4 hover:shadow-xl transition-all cursor-grab active:cursor-grabbing group mb-4 bg-white ${getCardStyle()}`}
+      >
+        {/* 1. Cabeçalho: Avatar, Nome, Estrelas, Direto/Afiliado, Eye, Menu */}
+        <div className="flex items-start gap-3 mb-4">
+          <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm shrink-0 border-2 border-white shadow-sm" style={{ color: '#166534', backgroundColor: '#dcfce7' }}>
+            {getInitials(lead.name)}
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-bold text-gray-900 truncate leading-tight" title={lead.name}>{lead.name}</p>
+            <div className="flex items-center gap-1.5 mt-1">
+              {[...Array(5)].map((_, i) => (
+                <button key={i} type="button" onClick={(e) => { e.stopPropagation(); onStarsChange?.(lead.id, i + 1); }} className="focus:outline-none">
+                  <Star className="w-3.5 h-3.5" fill={i < (lead.stars || 0) ? '#fbbf24' : 'none'} stroke={i < (lead.stars || 0) ? '#fbbf24' : '#e5e7eb'} strokeWidth={2} />
+                </button>
+              ))}
+              <span className="text-[10px] font-black uppercase text-gray-400 ml-1">{lead.is_affiliate ? 'Afiliado' : 'Direto'}</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-0.5 shrink-0">
+            <button type="button" onClick={(e) => { e.stopPropagation(); setLeadDetails(lead); setShowDetailsModal(true); loadAllHistories(); }} className="p-1.5 text-gray-400 hover:text-[#8CD955] hover:bg-[#8CD955]/10 rounded-lg" title="Ver detalhes">
+              <Eye className="w-4 h-4" />
+            </button>
+            <div className="relative">
+              <button type="button" onClick={(e) => { e.stopPropagation(); setShowMenu(!showMenu); }} className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg">
+                <MoreVertical className="w-4 h-4" />
+              </button>
+              {showMenu && (
+                <div className="absolute right-0 top-full mt-1 w-40 bg-white rounded-xl shadow-xl border border-gray-100 py-1.5 z-50">
+                  <button onClick={() => { setShowAddTagModal(true); setShowMenu(false); }} className="w-full text-left px-3 py-1.5 text-xs text-gray-600 hover:bg-[#8CD955]/10 flex items-center gap-2 font-bold">
+                    <TagIcon className="w-3.5 h-3.5" /> Adicionar Etiqueta
+                  </button>
+                  {lead.tags && lead.tags.length > 0 && (
+                    <button onClick={() => { setShowRemoveTagModal(true); setShowMenu(false); }} className="w-full text-left px-3 py-1.5 text-xs text-gray-600 hover:bg-red-50 hover:text-red-600 flex items-center gap-2 font-bold">
+                      <XIcon className="w-3.5 h-3.5" /> Remover Etiqueta
+                    </button>
+                  )}
+                  {hasInteraction && (
+                    <button onClick={async () => { setShowMenu(false); setShowAllFeedbacksModal(true); await loadAllFeedbacks(); }} className="w-full text-left px-3 py-1.5 text-xs text-gray-600 hover:bg-blue-50 flex items-center gap-2 font-bold">
+                      <MessageSquare className="w-3.5 h-3.5" /> Ver Feedbacks
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* 2. Métricas: Depósitos (com Nx), Apostas, Ganhos */}
+        <div className="grid grid-cols-3 gap-2 mb-3">
+          <div className="bg-gray-50 rounded-xl p-2.5 border border-gray-100 min-w-0 relative">
+            <p className="text-[9px] text-gray-500 uppercase font-black tracking-tight mb-0.5">Depósitos</p>
+            {lead.total_depositos_count !== undefined && (
+              <span className="absolute top-1.5 right-1.5 bg-[#8CD955] text-white text-[8px] font-black px-1.5 py-0.5 rounded-md">
+                {lead.total_depositos_count}x
+              </span>
+            )}
+            <p className="text-xs font-black text-gray-800 truncate">{formatCurrency(lead.total_depositado)}</p>
+          </div>
+          <div className="bg-gray-50 rounded-xl p-2.5 border border-gray-100 min-w-0">
+            <p className="text-[9px] text-gray-500 uppercase font-black tracking-tight mb-0.5">Apostas</p>
+            <p className="text-xs font-black text-gray-800 truncate">{formatCurrency(lead.total_apostado)}</p>
+          </div>
+          <div className="bg-[#8CD955]/15 rounded-xl p-2.5 border border-[#8CD955]/30 min-w-0">
+            <p className="text-[9px] text-[#166534] uppercase font-black tracking-tight mb-0.5">Ganhos</p>
+            <p className="text-xs font-black text-[#166534] truncate">{formatCurrency(lead.total_ganho)}</p>
+          </div>
+        </div>
+
+        {/* 3. Barra Nível Estrela: Nível • Falta R$ + barra de progresso + Próximo */}
+        {(lead as any).aposta_estrelas !== undefined && (lead as any).aposta_estrelas !== null && (
+          <div className="mb-3 rounded-xl px-3 py-2.5 overflow-hidden" style={{ backgroundColor: '#8CD955' }}>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <Star className="w-4 h-4 shrink-0" fill="#ffffff" stroke="#ffffff" strokeWidth={1.5} />
+                <span className="text-xs font-black text-white truncate">Nível Estrela • {levelLabel}</span>
+              </div>
+              {starInfo.nextLevel !== null && starInfo.missingForNext !== null && (
+                <span className="text-[10px] font-bold text-white shrink-0">Falta {formatCurrency(starInfo.missingForNext)}</span>
+              )}
+            </div>
+            {/* Barrinha de progresso: preenchido branco = progresso; resto = verde mais claro */}
+            <div className="h-2 rounded-full overflow-hidden mt-2" style={{ backgroundColor: 'rgba(255, 255, 255, 0.35)' }}>
+              <div
+                className="h-full rounded-full transition-all duration-500 ease-out"
+                style={{ width: `${Math.min(100, Math.max(0, starInfo.progressPct))}%`, backgroundColor: '#ffffff' }}
+              />
+            </div>
+            {starInfo.nextLevel !== null && (
+              <p className="text-[10px] font-semibold text-white/95 mt-1.5 truncate">
+                Próximo: {starInfo.nextLevel} {starInfo.nextLevel === 1 ? 'Estrela' : 'Estrelas'} ({formatCurrency(starInfo.nextMin || 0)})
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* 4. Tags: Temperatura (FRIO etc) + Contactado + Etiquetas do lead */}
+        <div className="flex flex-wrap items-center gap-1.5 mb-3">
+          {(() => {
+            const isCold = temperature === 'cold' || temperature === 'very_cold' || temperature === 'cooling';
+            const tempIcon = isCold ? <Snowflake className="w-3 h-3" /> : <Flame className="w-3 h-3" />;
+            const tempColors = temperature === 'hot' ? 'text-red-700 bg-red-100 border-red-200/50' : temperature === 'active' ? 'text-orange-700 bg-orange-100 border-orange-200/50' : temperature === 'cooling' ? 'text-purple-700 bg-purple-100 border-purple-200/50' : 'text-blue-700 bg-blue-100 border-blue-200/50';
+            return (
+              <span className={`flex items-center gap-1.5 text-[10px] font-black px-2.5 py-1 rounded-full uppercase tracking-tight border ${tempColors}`}>
+                {tempIcon}
+                {tempLabel}
+              </span>
+            );
+          })()}
+          {lead.has_interaction === true && (
+            <span className="flex items-center gap-1.5 text-[10px] font-black text-green-700 bg-green-100 px-2.5 py-1 rounded-full uppercase tracking-tight border border-green-200/50">
+              <CheckCircle2 className="w-3 h-3" />
+              Contactado
+            </span>
+          )}
+          {lead.tags && lead.tags.length > 0 && lead.tags.map((tag) => (
+            <span
+              key={tag.id}
+              className="flex items-center gap-1.5 text-[10px] font-black px-2.5 py-1 rounded-full uppercase tracking-tight border"
+              style={{
+                backgroundColor: `${tag.color}20`,
+                color: tag.color,
+                borderColor: `${tag.color}50`
+              }}
+            >
+              <TagIcon className="w-3 h-3" />
+              {tag.label}
+            </span>
+          ))}
+        </div>
+
+        {/* 5. Telefone: borda tracejada, ícone verde, número, copiar */}
+        <div className="flex items-center gap-2 text-sm font-bold bg-gray-50 border-2 border-dashed border-gray-200 px-3 py-2.5 rounded-xl mb-3 hover:bg-[#8CD955]/5 hover:border-[#8CD955]/40 transition-all group/phone">
+          <Phone className="w-4 h-4 text-[#8CD955] shrink-0" />
+          <span className="flex-1 truncate text-gray-800">{formatPhone(lead.phone)}</span>
+          {lead.phone && (
+            <button type="button" onClick={(e) => { e.stopPropagation(); copyPhone(); }} className="p-1.5 rounded-lg hover:bg-[#8CD955]/20 text-gray-500 hover:text-[#8CD955]" title="Copiar">
+              <Copy className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+
+        {/* 6. Rodapé: Data | Último depósito ou Cronômetro (transferido) | Botão Chamar */}
+        <div className="flex items-center justify-between gap-3 pt-2 border-t border-gray-100">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5 text-[10px] text-gray-500 font-bold">
+              <Clock className="w-3.5 h-3.5 shrink-0 text-gray-400" />
+              <span>{createdDateFormatted}</span>
+            </div>
+            {lead.transferred && lead.transferred_at ? (
+              <div className="flex items-center gap-1.5 text-[10px] font-bold mt-0.5 flex-wrap" title={`Prazo para conversão: ${transferDeadlineDays} dias. Contador em tempo real até o próximo dia.`}>
+                <RefreshCw className="w-3.5 h-3.5 shrink-0 text-gray-400" />
+                {(() => {
+                  const transferredAt = new Date(lead.transferred_at);
+                  const now = new Date();
+                  const diffDays = Math.floor((now.getTime() - transferredAt.getTime()) / (1000 * 60 * 60 * 24));
+                  const daysLeft = Math.max(0, transferDeadlineDays - diffDays);
+                  const expired = diffDays >= transferDeadlineDays;
+                  const countdown = !expired ? getCountdownToNextDay(transferredAt) : '';
+                  return (
+                    <>
+                      <span className="text-gray-500">Prazo {transferDeadlineDays}d:</span>
+                      {expired ? <span className="text-red-600">Expirado</span> : (
+                        <>
+                          <span className="text-red-600">{daysLeft} dia(s)</span>
+                          {countdown && <span className="text-gray-500 tabular-nums">{countdown}</span>}
+                        </>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 text-[10px] text-gray-500 font-medium mt-0.5">
+                <RefreshCw className="w-3.5 h-3.5 shrink-0 text-gray-400" />
+                <span>Último depósito: {lastDepositText}</span>
+              </div>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowContactFeedbackModal(true);
+              setTimeout(() => { window.open(`https://wa.me/55${(lead.phone || '').replace(/\D/g, '')}`, '_blank'); }, 100);
+            }}
+            className="flex items-center justify-center gap-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white py-2.5 px-4 rounded-xl text-xs font-black transition-all shadow-md shrink-0"
+          >
+            <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"/></svg>
+            Chamar
+          </button>
+        </div>
+      </div>
+    );
+  })();
+
   return (
+    <React.Fragment>
+      {compact ? compactCard : (
     <div 
       draggable
       onDragStart={(e) => onDragStart(e, lead.id)}
@@ -806,32 +1093,27 @@ const LeadCard: React.FC<LeadCardProps> = ({
               <span className="truncate">{lead.name}</span>
               {isVIP && <span className="text-indigo-600 shrink-0">💎</span>}
             </h4>
-            <div className="flex items-center gap-2 mt-1.5">
-            <div className="flex">
-              {[...Array(10)].map((_, i) => (
-                <button
-                  key={i}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onStarsChange?.(lead.id, i + 1);
-                  }}
-                  className="focus:outline-none transition-transform active:scale-125"
-                >
-                  <Star 
-                    className="w-2.5 h-2.5"
-                    fill={i < (lead.stars || 0) ? "#fbbf24" : "none"}
-                    stroke={i < (lead.stars || 0) ? "#fbbf24" : "#e5e7eb"}
-                    strokeWidth={2}
-                  />
-                </button>
-              ))}
-            </div>
-            {(lead as any).aposta_estrelas !== undefined && (lead as any).aposta_estrelas !== null && (
-              <span className="text-[10px] font-black text-gray-700 ml-1 px-2 py-0.5 rounded-md bg-gray-50 border border-gray-200">
-                Saldo: {formatCurrency((lead as any).aposta_estrelas || 0)}
-              </span>
-            )}
-              <span className={`text-[10px] font-black uppercase tracking-widest ml-1 px-2 py-0.5 rounded-md ${
+            <div className="flex flex-wrap items-center gap-2 mt-1.5 min-w-0">
+              <div className="flex shrink-0">
+                {[...Array(10)].map((_, i) => (
+                  <button
+                    key={i}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onStarsChange?.(lead.id, i + 1);
+                    }}
+                    className="focus:outline-none transition-transform active:scale-125"
+                  >
+                    <Star 
+                      className="w-2.5 h-2.5"
+                      fill={i < (lead.stars || 0) ? "#fbbf24" : "none"}
+                      stroke={i < (lead.stars || 0) ? "#fbbf24" : "#e5e7eb"}
+                      strokeWidth={2}
+                    />
+                  </button>
+                ))}
+              </div>
+              <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md shrink-0 ${
                 lead.is_affiliate ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-400'
               }`}>
                 {lead.is_affiliate ? 'Afiliado' : 'Direto'}
@@ -845,6 +1127,30 @@ const LeadCard: React.FC<LeadCardProps> = ({
                 </span>
               </div>
             )}
+            {/* Timer para leads transferidos: contagem regressiva em tempo real (10d em Transferido, 90d no CRM principal) */}
+            {lead.transferred && lead.transferred_at && (() => {
+              const transferredAt = new Date(lead.transferred_at);
+              const now = new Date();
+              const diffMs = now.getTime() - transferredAt.getTime();
+              const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+              const daysLeft = Math.max(0, transferDeadlineDays - diffDays);
+              const expired = diffDays >= transferDeadlineDays;
+              const label = `${transferDeadlineDays}d`;
+              const countdown = !expired ? getCountdownToNextDay(transferredAt) : '';
+              return (
+                <div className="mt-1.5 flex items-center gap-1.5 text-gray-600" title={`Prazo para conversão: ${transferDeadlineDays} dias a partir da transferência. Contador em tempo real até o próximo dia. Após isso o lead pode ser repassado.`}>
+                  <Clock className="w-3.5 h-3.5 flex-shrink-0" />
+                  <span className="text-[10px] font-bold flex flex-wrap items-center gap-1.5">
+                    Prazo {label}: {expired ? <span className="text-red-600">Expirado</span> : (
+                      <>
+                        <span className="text-red-600">{daysLeft} dia(s) restante(s)</span>
+                        {countdown && <span className="text-gray-500 tabular-nums">{countdown}</span>}
+                      </>
+                    )}
+                  </span>
+                </div>
+              );
+            })()}
           </div>
         </div>
         
@@ -853,13 +1159,12 @@ const LeadCard: React.FC<LeadCardProps> = ({
           <button 
             onClick={async (e) => {
               e.stopPropagation();
-              // Reseta os estados de visualização
               setShowAllDeposits(false);
               setShowAllWithdraws(false);
               setShowAllBets(false);
+              setLeadDetails(lead);
               setShowDetailsModal(true);
-              await loadLeadDetails();
-              await loadAllHistories();
+              loadAllHistories();
             }}
             className="p-1.5 text-gray-400 hover:text-[#8CD955] hover:bg-[#8CD955]/10 rounded-lg transition-colors"
             title="Ver detalhes do lead"
@@ -917,7 +1222,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
         </div>
       </div>
 
-      {/* Stats Section - Visual mais limpo e espaçado */}
+      {/* Stats Section - Depósitos, Apostas, Ganhos */}
       <div className="grid grid-cols-3 gap-2 mb-5">
         <div className="bg-gray-50/50 rounded-xl p-2.5 border border-gray-100 shadow-inner relative min-w-0">
           <p className="text-[9px] text-gray-400 uppercase font-black tracking-tighter mb-1 truncate">Depósitos</p>
@@ -937,6 +1242,45 @@ const LeadCard: React.FC<LeadCardProps> = ({
           <p className="text-sm font-black text-[#8CD955] truncate">{formatCurrency(lead.total_ganho)}</p>
         </div>
       </div>
+
+      {/* Nível Estrela - barra de progresso e valor que falta (aposta estrela) */}
+      {(lead as any).aposta_estrelas !== undefined && (lead as any).aposta_estrelas !== null && (() => {
+        const wagered = Number((lead as any).aposta_estrelas) || 0;
+        const info = getStarLevelInfo(wagered);
+        const isMaxLevel = info.nextLevel === null;
+        const levelLabel = info.currentLevel === 0
+          ? 'Iniciante'
+          : `${info.currentLevel} ${info.currentLevel === 1 ? 'Estrela' : 'Estrelas'}`;
+        return (
+          <div className="mb-5 rounded-xl p-3 border overflow-hidden" style={{ backgroundColor: '#8CD955', borderColor: 'rgba(140, 217, 85, 0.6)' }}>
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <Star className="w-4 h-4 shrink-0" fill="#ffffff" stroke="#ffffff" strokeWidth={1.5} />
+                <span className="text-xs font-black truncate" style={{ color: '#ffffff' }}>Nível Estrela · {levelLabel}</span>
+              </div>
+              {!isMaxLevel && info.missingForNext !== null && (
+                <span className="text-[10px] font-bold shrink-0" style={{ color: '#ffffff' }} title="Valor que falta para o próximo nível">
+                  Falta {formatCurrency(info.missingForNext)}
+                </span>
+              )}
+            </div>
+            <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: 'rgba(255, 255, 255, 0.35)' }}>
+              <div
+                className="h-full rounded-full transition-all duration-500 ease-out"
+                style={{ width: `${info.progressPct}%`, backgroundColor: '#ffffff' }}
+              />
+            </div>
+            {!isMaxLevel && info.nextLevel !== null && (
+              <p className="text-[10px] font-semibold mt-1.5 truncate" style={{ color: '#ffffff' }}>
+                Próximo: {info.nextLevel} {info.nextLevel === 1 ? 'Estrela' : 'Estrelas'} ({formatCurrency(info.nextMin || 0)})
+              </p>
+            )}
+            {isMaxLevel && (
+              <p className="text-[10px] font-semibold mt-1.5" style={{ color: '#ffffff' }}>Nível máximo alcançado</p>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Tags & Temperature */}
       <div className="flex flex-wrap items-center gap-2.5 mb-5">
@@ -1127,7 +1471,8 @@ const LeadCard: React.FC<LeadCardProps> = ({
           </button>
         </div>
       </div>
-
+    </div>
+      ) }
       {/* Add Tag Modal */}
       <AddTagModal
         isOpen={showAddTagModal}
@@ -1164,7 +1509,10 @@ const LeadCard: React.FC<LeadCardProps> = ({
           leadId={lead.id}
           leadName={lead.name}
           userId={consultorUserId}
+          leadOriginalId={lead.original_id}
           bancaUrl={selectedBancaUrl}
+          bancaId={lead.banca_id}
+          bancaName={lead.banca_name}
           targetUserId={targetUserId}
           initialFeedback={editingFeedback?.feedback || ''}
           feedbackId={editingFeedback?.id}
@@ -1528,6 +1876,12 @@ const LeadCard: React.FC<LeadCardProps> = ({
                       {lead.temperature ? `${getTemperatureEmoji(lead.temperature)} ${getTemperatureLabel(lead.temperature)}` : '-'}
                     </p>
                   </div>
+                  {lead.banca_name && (
+                    <div className="sm:col-span-2">
+                      <p className="text-xs font-bold text-gray-500 uppercase mb-1">Cadastrado na banca</p>
+                      <p className="text-sm font-semibold text-gray-800">{lead.banca_name}</p>
+                    </div>
+                  )}
                   {(lead as any).user_level && (
                     <div>
                       <p className="text-xs font-bold text-gray-500 uppercase mb-1">Nível do Usuário</p>
@@ -1543,128 +1897,174 @@ const LeadCard: React.FC<LeadCardProps> = ({
                 </div>
               </div>
 
-              {/* Informações Financeiras */}
+              {/* Informações Financeiras - fluxo: Entrada → Apostas → Resultados → Bônus/Outros */}
               <div className="bg-green-50 rounded-lg sm:rounded-xl p-4 sm:p-5">
                 <h3 className="text-base sm:text-lg font-bold text-gray-800 mb-3 sm:mb-4 flex items-center gap-2">
                   <Target className="w-4 h-4 sm:w-5 sm:h-5 text-[#8CD955] shrink-0" />
                   <span>Informações Financeiras</span>
                 </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
-                  <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
-                    <p className="text-xs font-bold text-gray-500 uppercase mb-1">Total Depositado</p>
-                    <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency(lead.total_depositado || 0)}</p>
-                  </div>
-                  <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
-                    <p className="text-xs font-bold text-gray-500 uppercase mb-1">Total Apostado</p>
-                    <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency(lead.total_apostado || 0)}</p>
-                  </div>
-                  <div className="bg-white rounded-lg p-3 sm:p-4 border border-[#8CD955]/30">
-                    <p className="text-xs font-bold text-gray-500 uppercase mb-1">Total Ganho</p>
-                    <p className="text-base sm:text-lg font-bold text-[#8CD955]">{formatCurrency(lead.total_ganho || 0)}</p>
-                  </div>
-                  <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
-                    <p className="text-xs font-bold text-gray-500 uppercase mb-1">Qtd. Depósitos</p>
-                    <p className="text-base sm:text-lg font-bold text-gray-800">{lead.total_depositos_count || 0}</p>
-                  </div>
-                  <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
-                    <p className="text-xs font-bold text-gray-500 uppercase mb-1">Saldo Banca</p>
-                    <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency((leadDetails || lead).balance || 0)}</p>
-                  </div>
-                  <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
-                    <p className="text-xs font-bold text-gray-500 uppercase mb-1">Bonus Ganho</p>
-                    <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency((leadDetails || lead).bonus || 0)}</p>
-                  </div>
-                  <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
-                    <p className="text-xs font-bold text-gray-500 uppercase mb-1">Valor Convertido</p>
-                    <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency((leadDetails || lead).convert || 0)}</p>
-                  </div>
-                  <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
-                    <p className="text-xs font-bold text-gray-500 uppercase mb-1">Total Afiliados</p>
-                    <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency((leadDetails || lead).total_afiliate || 0)}</p>
-                  </div>
-                  {lead.last_deposit_at && (
-                    <div className="bg-white rounded-lg p-3 sm:p-4 border-2 border-gray-200 sm:col-span-2 lg:col-span-1">
-                      <p className="text-xs font-bold text-gray-500 uppercase mb-2">Último Depósito</p>
-                      <p className="text-xs sm:text-sm font-semibold text-gray-700 mb-1">
-                        Data: <span className="text-gray-900">{formatRelativeDate(lead.last_deposit_at, 'Nunca depositou')}</span>
-                      </p>
-                      {lead.last_deposit_value && (
-                        <p className="text-base sm:text-lg font-bold text-gray-800">
-                          Valor: {formatCurrency(lead.last_deposit_value)}
+                {(() => {
+                  const L = leadDetails || lead;
+                  const hasLoteriaBichao = (L as any).total_apostado_loteria != null || (L as any).total_apostado_bichao != null;
+                  return (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+                      {/* Entrada */}
+                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                        <p className="text-xs font-bold text-gray-500 uppercase mb-1">Total Depositado</p>
+                        <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency(L.total_depositado || 0)}</p>
+                      </div>
+                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                        <p className="text-xs font-bold text-gray-500 uppercase mb-1">Qtd. Depósitos</p>
+                        <p className="text-base sm:text-lg font-bold text-gray-800">{L.total_depositos_count ?? 0}</p>
+                      </div>
+                      <div className="bg-white rounded-lg p-3 sm:p-4 border-2 border-gray-200">
+                        <p className="text-xs font-bold text-gray-500 uppercase mb-2">Último Depósito</p>
+                        <p className="text-xs sm:text-sm font-semibold text-gray-700 mb-1">
+                          Data: <span className="text-gray-900">{L.last_deposit_at ? formatRelativeDate(L.last_deposit_at, 'Nunca') : 'Nunca'}</span>
                         </p>
+                        <p className="text-base sm:text-lg font-bold text-gray-800">
+                          Valor: {L.last_deposit_value != null ? formatCurrency(L.last_deposit_value) : 'R$ 0,00'}
+                        </p>
+                      </div>
+                      {/* Apostas */}
+                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                        <p className="text-xs font-bold text-gray-500 uppercase mb-1">Total Apostado</p>
+                        <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency(L.total_apostado || 0)}</p>
+                      </div>
+                      {hasLoteriaBichao && (
+                        <>
+                          <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                            <p className="text-xs font-bold text-gray-500 uppercase mb-1">Apostado Loteria</p>
+                            <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency((L as any).total_apostado_loteria ?? 0)}</p>
+                          </div>
+                          <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                            <p className="text-xs font-bold text-gray-500 uppercase mb-1">Apostado Bichão</p>
+                            <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency((L as any).total_apostado_bichao ?? 0)}</p>
+                          </div>
+                        </>
                       )}
+                      {/* Resultados */}
+                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-[#8CD955]/30">
+                        <p className="text-xs font-bold text-gray-500 uppercase mb-1">Total Ganho</p>
+                        <p className="text-base sm:text-lg font-bold text-[#8CD955]">{formatCurrency(L.total_ganho || 0)}</p>
+                      </div>
+                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                        <p className="text-xs font-bold text-gray-500 uppercase mb-1">Total Saque</p>
+                        <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency(L.total_saque ?? 0)}</p>
+                      </div>
+                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                        <p className="text-xs font-bold text-gray-500 uppercase mb-1">Saldo Banca</p>
+                        <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency(L.balance ?? 0)}</p>
+                      </div>
+                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                        <p className="text-xs font-bold text-gray-500 uppercase mb-1">Disponível para Saque</p>
+                        <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency((L as any).available_withdraw ?? 0)}</p>
+                      </div>
+                      {/* Bônus e outros */}
+                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                        <p className="text-xs font-bold text-gray-500 uppercase mb-1">Bonus Ganho</p>
+                        <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency(L.bonus ?? 0)}</p>
+                      </div>
+                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                        <p className="text-xs font-bold text-gray-500 uppercase mb-1">Valor Convertido</p>
+                        <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency(L.convert ?? 0)}</p>
+                      </div>
+                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                        <p className="text-xs font-bold text-gray-500 uppercase mb-1">Total Afiliados</p>
+                        <p className="text-base sm:text-lg font-bold text-gray-800" title="Quantidade de pessoas que se cadastraram pelo link deste cliente">{L.total_afiliate ?? 0}</p>
+                      </div>
                     </div>
-                  )}
-                </div>
+                  );
+                })()}
               </div>
 
-              {/* Classificações e Status */}
-              <div className="bg-blue-50 rounded-lg sm:rounded-xl p-4 sm:p-5">
-                <h3 className="text-base sm:text-lg font-bold text-gray-800 mb-3 sm:mb-4 flex items-center gap-2">
+              {/* Classificações - Nível Estrela, valor no programa, tipo de cliente, avaliação */}
+              <div className="rounded-lg sm:rounded-xl p-4 sm:p-5 border border-gray-200 bg-gradient-to-b from-gray-50 to-white">
+                <h3 className="text-base sm:text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
                   <Star className="w-4 h-4 sm:w-5 sm:h-5 text-[#8CD955] shrink-0" />
                   <span>Classificações</span>
                 </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                  <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
-                    <p className="text-xs font-bold text-gray-500 uppercase mb-2">Estrelas</p>
-                    <div className="flex items-center gap-1 flex-wrap">
-                      {[...Array(10)].map((_, i) => (
-                        <Star 
-                          key={i}
-                          className="w-3 h-3 sm:w-4 sm:h-4 shrink-0"
-                          fill={i < (lead.stars || 0) ? "#fbbf24" : "none"}
-                          stroke={i < (lead.stars || 0) ? "#fbbf24" : "#e5e7eb"}
-                          strokeWidth={2}
+
+                {/* Bloco principal: Nível Estrela (programa) + valor acumulado */}
+                {((leadDetails || lead) as any).aposta_estrelas !== undefined && ((leadDetails || lead) as any).aposta_estrelas !== null ? (() => {
+                  const wagered = Number(((leadDetails || lead) as any).aposta_estrelas) || 0;
+                  const info = getStarLevelInfo(wagered);
+                  const isMaxLevel = info.nextLevel === null;
+                  const levelLabel = info.currentLevel === 0
+                    ? 'Iniciante'
+                    : `${info.currentLevel} ${info.currentLevel === 1 ? 'Estrela' : 'Estrelas'}`;
+                  return (
+                    <div className="rounded-xl p-4 sm:p-5 mb-4 overflow-hidden" style={{ backgroundColor: '#8CD955', border: '1px solid rgba(140, 217, 85, 0.6)' }}>
+                      <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+                        <div className="flex items-center gap-2">
+                          <Star className="w-6 h-6 shrink-0" fill="#ffffff" stroke="#ffffff" strokeWidth={1.5} />
+                          <span className="text-lg sm:text-xl font-black" style={{ color: '#ffffff' }}>{levelLabel}</span>
+                        </div>
+                        {!isMaxLevel && info.missingForNext !== null && (
+                          <span className="text-sm font-bold" style={{ color: '#ffffff' }}>
+                            Falta {formatCurrency(info.missingForNext)}
+                          </span>
+                        )}
+                      </div>
+                      <div className="mb-3">
+                        <p className="text-[10px] uppercase font-bold tracking-wider opacity-90 mb-0.5" style={{ color: '#ffffff' }}>Valor no programa (apostado)</p>
+                        <p className="text-2xl sm:text-3xl font-black tabular-nums" style={{ color: '#ffffff' }}>{formatCurrency(wagered)}</p>
+                      </div>
+                      <div className="h-3 rounded-full overflow-hidden mb-2" style={{ backgroundColor: 'rgba(255, 255, 255, 0.35)' }}>
+                        <div
+                          className="h-full rounded-full transition-all duration-500 ease-out"
+                          style={{ width: `${info.progressPct}%`, backgroundColor: '#ffffff' }}
                         />
-                      ))}
-                      <span className="ml-2 text-xs sm:text-sm font-semibold text-gray-800 shrink-0">({lead.stars || 0}/10)</span>
-                    </div>
-                  </div>
-                  {((leadDetails || lead) as any).aposta_estrelas !== undefined && ((leadDetails || lead) as any).aposta_estrelas !== null && (
-                    <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
-                      <p className="text-xs font-bold text-gray-500 uppercase mb-1">Saldo</p>
-                      <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency(((leadDetails || lead) as any).aposta_estrelas || 0)}</p>
-                    </div>
-                  )}
-                  <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
-                    <p className="text-xs font-bold text-gray-500 uppercase mb-2">Tipo de Cliente</p>
-                    <div className="flex flex-wrap gap-1.5 sm:gap-2">
-                      {isVIP && (
-                        <span className="px-2 sm:px-3 py-1 bg-indigo-100 text-indigo-700 text-xs font-bold rounded-lg">💎 VIP</span>
-                      )}
-                      {isHighValue && (
-                        <span className="px-2 sm:px-3 py-1 bg-amber-100 text-amber-700 text-xs font-bold rounded-lg">💰 Alto Valor</span>
-                      )}
-                      {isOpportunity && (
-                        <span className="px-2 sm:px-3 py-1 bg-orange-100 text-orange-700 text-xs font-bold rounded-lg">🎯 Oportunidade</span>
-                      )}
-                      {isAlert && (
-                        <span className="px-2 sm:px-3 py-1 bg-red-100 text-red-700 text-xs font-bold rounded-lg">⚠️ Alerta</span>
-                      )}
-                      {lead.is_affiliate ? (
-                        <span className="px-2 sm:px-3 py-1 bg-amber-100 text-amber-700 text-xs font-bold rounded-lg">Afiliado</span>
+                      </div>
+                      {!isMaxLevel && info.nextLevel !== null ? (
+                        <p className="text-xs font-semibold opacity-95" style={{ color: '#ffffff' }}>
+                          Próximo: {info.nextLevel} {info.nextLevel === 1 ? 'Estrela' : 'Estrelas'} — meta {formatCurrency(info.nextMin || 0)}
+                        </p>
                       ) : (
-                        <span className="px-2 sm:px-3 py-1 bg-gray-100 text-gray-600 text-xs font-bold rounded-lg">Direto</span>
+                        <p className="text-xs font-semibold opacity-95" style={{ color: '#ffffff' }}>Nível máximo</p>
                       )}
                     </div>
+                  );
+                })() : (
+                  <div className="rounded-xl p-4 sm:p-5 mb-4 bg-gray-100 border border-gray-200">
+                    <p className="text-sm font-semibold text-gray-500">Sem dados de nível estrela (aposta no programa)</p>
                   </div>
-                  {lead.affiliate_name && (
-                    <div className="sm:col-span-2 bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
-                      <p className="text-xs font-bold text-gray-500 uppercase mb-1">Indicado por</p>
-                      <p className="text-sm font-semibold text-amber-600 break-words">{lead.affiliate_name}</p>
-                    </div>
-                  )}
+                )}
+
+                {/* Tipo de cliente - uma linha de badges */}
+                <div className="mb-4">
+                  <p className="text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-2">Tipo de cliente</p>
+                  <div className="flex flex-wrap gap-2">
+                    {isVIP && (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-100 text-indigo-800 text-sm font-bold rounded-lg border border-indigo-200/60">💎 VIP</span>
+                    )}
+                    {isHighValue && (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-100 text-amber-800 text-sm font-bold rounded-lg border border-amber-200/60">💰 Alto Valor</span>
+                    )}
+                    {isOpportunity && (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-orange-100 text-orange-800 text-sm font-bold rounded-lg border border-orange-200/60">🎯 Oportunidade</span>
+                    )}
+                    {isAlert && (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-red-100 text-red-800 text-sm font-bold rounded-lg border border-red-200/60">⚠️ Alerta</span>
+                    )}
+                    {lead.is_affiliate ? (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-100 text-amber-800 text-sm font-bold rounded-lg border border-amber-200/60">Afiliado</span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gray-200 text-gray-700 text-sm font-bold rounded-lg border border-gray-300/60">Direto</span>
+                    )}
+                  </div>
                 </div>
+
+                {lead.affiliate_name && (
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <p className="text-[10px] uppercase font-bold text-gray-500 tracking-wider mb-1">Indicado por</p>
+                    <p className="text-sm font-semibold text-amber-700 break-words">{lead.affiliate_name}</p>
+                  </div>
+                )}
               </div>
 
-              {/* Saques e Vitórias */}
-              {loadingDetails ? (
-                <div className="bg-yellow-50 rounded-lg sm:rounded-xl p-4 sm:p-5 flex items-center justify-center min-h-[120px]">
-                  <Loader2 className="w-5 h-5 sm:w-6 sm:h-6 text-[#8CD955] animate-spin" />
-                  <span className="ml-2 text-sm sm:text-base text-gray-600">Carregando detalhes...</span>
-                </div>
-              ) : (
-                <div className="bg-yellow-50 rounded-lg sm:rounded-xl p-4 sm:p-5">
+              {/* Saques e Vitórias - dados do lead já vêm do card (sem nova busca na API) */}
+              <div className="bg-yellow-50 rounded-lg sm:rounded-xl p-4 sm:p-5">
                   <h3 className="text-base sm:text-lg font-bold text-gray-800 mb-3 sm:mb-4 flex items-center gap-2">
                     <Target className="w-4 h-4 sm:w-5 sm:h-5 text-[#8CD955] shrink-0" />
                     <span>Saques e Vitórias</span>
@@ -1692,18 +2092,24 @@ const LeadCard: React.FC<LeadCardProps> = ({
                           : 'R$ 0,00'}
                       </p>
                     </div>
-                    {/* Último Ganho - Apenas Valor */}
+                    {/* Último Ganho - Data e Valor */}
                     <div className="bg-white rounded-lg p-3 sm:p-4 border-2 border-[#8CD955]/30">
-                      <p className="text-xs font-bold text-gray-500 uppercase mb-1">Último Ganho</p>
+                      <p className="text-xs font-bold text-gray-500 uppercase mb-2">Último Ganho</p>
+                      <p className="text-xs sm:text-sm font-semibold text-gray-700 mb-1">
+                        Data: <span className="text-gray-900">
+                          {(leadDetails || lead).last_winner_at
+                            ? formatRelativeDate((leadDetails || lead).last_winner_at!, 'Nunca')
+                            : 'Nunca'}
+                        </span>
+                      </p>
                       <p className="text-base sm:text-lg font-bold text-[#8CD955]">
-                        {(leadDetails || lead).last_winner_value 
+                        Valor: {(leadDetails || lead).last_winner_value
                           ? formatCurrency((leadDetails || lead).last_winner_value!)
                           : 'R$ 0,00'}
                       </p>
                     </div>
                   </div>
                 </div>
-              )}
 
               {/* Informações do Consultor */}
               {((lead as any).consultant_name || (lead as any).consultant_email) && (
@@ -1937,33 +2343,64 @@ const LeadCard: React.FC<LeadCardProps> = ({
                         <table className="min-w-full divide-y divide-gray-200">
                           <thead className="bg-gray-50">
                             <tr>
-                              <th className="px-3 py-2 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">ID</th>
-                              <th className="px-3 py-2 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">Valor</th>
-                              <th className="px-3 py-2 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">Prêmio</th>
-                              <th className="px-3 py-2 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">Status</th>
-                              <th className="px-3 py-2 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">Tipo</th>
-                              <th className="px-3 py-2 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">Data</th>
+                              <th className="px-3 py-2 text-left text-xs font-bold text-gray-700 uppercase tracking-wider whitespace-nowrap">Jogo</th>
+                              <th className="px-3 py-2 text-left text-xs font-bold text-gray-700 uppercase tracking-wider whitespace-nowrap">ID</th>
+                              <th className="px-3 py-2 text-left text-xs font-bold text-gray-700 uppercase tracking-wider whitespace-nowrap">Valor</th>
+                              <th className="px-3 py-2 text-left text-xs font-bold text-gray-700 uppercase tracking-wider whitespace-nowrap">Prêmio</th>
+                              <th className="px-3 py-2 text-left text-xs font-bold text-gray-700 uppercase tracking-wider whitespace-nowrap">Status</th>
+                              <th className="px-3 py-2 text-left text-xs font-bold text-gray-700 uppercase tracking-wider whitespace-nowrap">Tipo / Detalhe</th>
+                              <th className="px-3 py-2 text-left text-xs font-bold text-gray-700 uppercase tracking-wider whitespace-nowrap">Data</th>
                             </tr>
                           </thead>
                           <tbody className="bg-white divide-y divide-gray-100">
-                            {betsHistory.map((bet: any) => (
-                              <tr key={bet.id} className="hover:bg-gray-50 transition-colors">
-                                <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-800">#{bet.id}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-sm font-bold text-gray-800">{formatCurrency(bet.value)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-sm font-bold text-[#8CD955]">{formatCurrency(bet.premio)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap">
-                                  <span className={`px-2 py-1 rounded-lg text-xs font-bold ${
-                                    bet.status_code === 1 || bet.status_code === '1'
-                                      ? 'bg-green-100 text-green-700'
-                                      : 'bg-yellow-100 text-yellow-700'
-                                  }`}>
-                                    {bet.status}
-                                  </span>
-                                </td>
-                                <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-600">{bet.type_game || '-'}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-600">{formatDateTime(bet.date || bet.created_at)}</td>
-                              </tr>
-                            ))}
+                            {betsHistory.map((bet: any) => {
+                              const betType = bet.type || bet.game_type;
+                              const isBichao = betType === 'bichao';
+                              const rowKey = `${betType || 'lottery'}-${bet.id}`;
+                              let statusLabel = 'Pendente';
+                              let statusCls = 'bg-yellow-100 text-yellow-700';
+                              if (isBichao) {
+                                statusLabel = bet.is_winner === true || bet.is_winner === 'true' ? 'Premiado' : 'Perdeu';
+                                statusCls = statusLabel === 'Premiado' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700';
+                              } else {
+                                const isWinner = bet.is_winner === true || bet.is_winner === 'true';
+                                const isChecked = bet.checked === true || bet.checked === 'true';
+                                const competitionDate = bet.competition_date ? new Date(bet.competition_date) : null;
+                                const now = new Date();
+                                const drawDone =
+                                  !!bet.winning_ticket_drawed_at ||
+                                  (competitionDate && competitionDate.getTime() <= now.getTime()) ||
+                                  isChecked;
+                                if (isWinner) {
+                                  statusLabel = 'Premiado';
+                                  statusCls = 'bg-green-100 text-green-700';
+                                } else if (drawDone) {
+                                  statusLabel = 'Perdeu';
+                                  statusCls = 'bg-red-100 text-red-700';
+                                }
+                              }
+                              const tipoDetalhe = isBichao
+                                ? [bet.modalidade, bet.horario, bet.banca].filter(Boolean).join(' · ') || '-'
+                                : (bet.type_game || '-');
+                              const premioVal = bet.premio != null ? bet.premio : (isBichao ? bet.premio_a_receber : null);
+                              return (
+                                <tr key={rowKey} className="hover:bg-gray-50 transition-colors">
+                                  <td className="px-3 py-2 whitespace-nowrap">
+                                    <span className={`px-2 py-0.5 rounded text-xs font-bold ${isBichao ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800'}`}>
+                                      {isBichao ? 'Bichão' : 'Loteria'}
+                                    </span>
+                                  </td>
+                                  <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-800">#{bet.id}</td>
+                                  <td className="px-3 py-2 whitespace-nowrap text-sm font-bold text-gray-800">{formatCurrency(bet.value)}</td>
+                                  <td className="px-3 py-2 whitespace-nowrap text-sm font-bold text-[#8CD955]">{premioVal != null ? formatCurrency(premioVal) : '-'}</td>
+                                  <td className="px-3 py-2 whitespace-nowrap">
+                                    <span className={`px-2 py-1 rounded-lg text-xs font-bold ${statusCls}`}>{statusLabel}</span>
+                                  </td>
+                                  <td className="px-3 py-2 text-sm text-gray-600 max-w-[180px] truncate" title={tipoDetalhe}>{tipoDetalhe}</td>
+                                  <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-600">{formatDateTime(bet.date || bet.created_at)}</td>
+                                </tr>
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>
@@ -2047,7 +2484,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
           </div>
         </div>
       )}
-    </div>
+    </React.Fragment>
   );
 };
 

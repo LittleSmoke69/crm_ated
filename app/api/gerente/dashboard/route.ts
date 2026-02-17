@@ -1,9 +1,16 @@
 import { NextRequest } from 'next/server';
 import { requireStatus, getUserProfile } from '@/lib/middleware/permissions';
+import { getEffectiveDonoIdForGestor } from '@/lib/middleware/gestor-owner';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { getHierarchyPath } from '@/lib/utils/hierarchy';
+import { getHierarchyPath, isInHierarchy } from '@/lib/utils/hierarchy';
 import { getConsultorsByManager } from '@/lib/utils/hierarchy';
+
+function normalizeBancaUrl(url: string | null | undefined): string {
+  if (!url) return '';
+  let s = String(url).trim().replace(/^https?:\/\//i, '').replace(/\/api\/crm\/?/i, '').replace(/\/+$/, '').trim();
+  return s ? `https://${s}`.toLowerCase() : '';
+}
 
 /**
  * Busca métricas de um consultor com retry automático para erros 429
@@ -174,7 +181,57 @@ async function getUserWithdrawals(bancaUrl: string, oddsUserId: number, apiKey: 
 export async function GET(req: NextRequest) {
   const startTime = Date.now();
   try {
-    const { userId } = await requireStatus(req, ['gerente']);
+    const { userId, profile } = await requireStatus(req, ['gerente', 'gestor']);
+    let effectiveUserId = userId;
+
+    // Gestor: deve enviar X-Effective-Gerente-Id para ver o dashboard desse gerente (acesso ao CRM dos gerentes da banca)
+    if (profile?.status === 'gestor') {
+      const effectiveGerenteId = (req.headers.get('X-Effective-Gerente-Id') ?? req.headers.get('x-effective-gerente-id'))?.trim();
+      if (!effectiveGerenteId) {
+        return errorResponse('Gestor deve informar o gerente (header X-Effective-Gerente-Id) para acessar o dashboard.', 400);
+      }
+      let ownerId: string | null = await getEffectiveDonoIdForGestor(profile.id);
+      if (!ownerId) {
+        const profileId = profile.id;
+        let { data: userBancas } = await supabaseServiceRole
+          .from('user_bancas')
+          .select('banca_id')
+          .eq('user_id', profileId);
+        if ((userBancas?.length ?? 0) === 0) {
+          const { data: fallback } = await supabaseServiceRole
+            .from('user_bancas')
+            .select('banca_id')
+            .eq('user_id', userId);
+          userBancas = fallback ?? [];
+        }
+        const firstBancaId = userBancas?.[0]?.banca_id;
+        if (firstBancaId) {
+          const { data: banca } = await supabaseServiceRole
+            .from('crm_bancas')
+            .select('id, url')
+            .eq('id', firstBancaId)
+            .single();
+          if (banca?.url) {
+            const { data: donos } = await supabaseServiceRole
+              .from('profiles')
+              .select('id, banca_url')
+              .eq('status', 'dono_banca');
+            const found = (donos || []).find(
+              (d: { banca_url?: string | null }) => normalizeBancaUrl(d.banca_url) === normalizeBancaUrl(banca.url)
+            );
+            if (found) ownerId = found.id;
+          }
+        }
+      }
+      if (!ownerId) {
+        return errorResponse('Gestor deve estar vinculado a um Dono de Banca ou ter bancas atribuídas.', 403);
+      }
+      const canAccess = await isInHierarchy(ownerId, effectiveGerenteId);
+      if (!canAccess) {
+        return errorResponse('Acesso negado. Este gerente não pertence à sua banca.', 403);
+      }
+      effectiveUserId = effectiveGerenteId;
+    }
 
     // Busca parâmetros da query string
     const { searchParams } = req.nextUrl;
@@ -195,15 +252,15 @@ export async function GET(req: NextRequest) {
     let bancaUrl = bancaUrlFilter;
     
     if (!bancaUrl) {
-      const hierarchyPath = await getHierarchyPath(userId);
+      const hierarchyPath = await getHierarchyPath(effectiveUserId);
       const donoBanca = hierarchyPath.find(p => p.status === 'dono_banca');
       
       if (!donoBanca) {
         return successResponse({
           gerenteInfo: {
-            id: userId,
-            email: (await getUserProfile(userId))?.email || '',
-            name: (await getUserProfile(userId))?.full_name || '',
+            id: effectiveUserId,
+            email: (await getUserProfile(effectiveUserId))?.email || '',
+            name: (await getUserProfile(effectiveUserId))?.full_name || '',
           },
           consultores: [],
           gerenteTotalKpis: null,
@@ -229,7 +286,7 @@ export async function GET(req: NextRequest) {
     console.log('[Gerente Dashboard API] 🔑 API Key:', apiKeyPreview);
 
     // 3. Busca consultores do gerente (filtrado se necessário)
-    let consultores = await getConsultorsByManager(userId);
+    let consultores = await getConsultorsByManager(effectiveUserId);
     
     // Filtra por consultor específico se fornecido
     if (consultorIdFilter) {
@@ -333,6 +390,8 @@ export async function GET(req: NextRequest) {
           externalKpis,
           externalKpisError,
           statusCode, // Armazena o código de status para identificar erros 429
+          lastSeenAt: (c as { last_seen_at?: string | null }).last_seen_at ?? null,
+          totalOnlineTime: (c as { total_online_time?: number | null }).total_online_time ?? 0,
         };
       })
     );
@@ -507,7 +566,7 @@ export async function GET(req: NextRequest) {
     });
 
     // 6. Busca dados do gerente (reutilizado depois)
-    const gerenteProfile = await getUserProfile(userId);
+    const gerenteProfile = await getUserProfile(effectiveUserId);
 
     // ============================================
     // 7. MONTA chartData APENAS COM DADOS DO RESUMO GERAL
@@ -556,7 +615,7 @@ export async function GET(req: NextRequest) {
 
     return successResponse({
       gerenteInfo: {
-        id: userId,
+        id: effectiveUserId,
         email: gerenteProfile?.email || '',
         name: gerenteProfile?.full_name || '',
       },

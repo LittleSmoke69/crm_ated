@@ -42,12 +42,17 @@ export async function POST(req: NextRequest) {
 
     const { data: instance, error: fetchErr } = await supabaseServiceRole
       .from('evolution_instances')
-      .select('id, instance_name, is_active')
+      .select('id, instance_name, is_active, phone_number')
       .eq('id', evolutionInstanceId)
       .single();
 
     if (fetchErr || !instance) {
       return errorResponse('Instância não encontrada', 404);
+    }
+
+    const hasPhoneNumber = !!(instance.phone_number && String(instance.phone_number).trim());
+    if (!hasPhoneNumber) {
+      return errorResponse('Instância sem phone_number. Configure o telefone da instância para usá-la no maturador e auto maturador.', 400);
     }
 
     const { data: existing } = await supabaseServiceRole
@@ -89,6 +94,9 @@ export async function POST(req: NextRequest) {
 /**
  * DELETE - Remove instância do maturador
  * Body: { evolution_instance_id: string }
+ *
+ * Remove primeiro os jobs de maturação vinculados a esta instância mestre (e em cascata
+ * steps e messages), desbloqueia a instância e então remove o registro em master_instances.
  */
 export async function DELETE(req: NextRequest) {
   try {
@@ -116,10 +124,29 @@ export async function DELETE(req: NextRequest) {
       return errorResponse('Instância não está no maturador', 404);
     }
 
+    const masterId = row.id;
+
+    // 1) Desbloqueia a instância (libera locked_job_id) para não deixar job órfão travado
+    await supabaseServiceRole
+      .from('master_instances')
+      .update({ is_locked: false, locked_job_id: null, locked_at: null })
+      .eq('id', masterId);
+
+    // 2) Remove jobs de maturação que usam esta instância (cascade remove steps e messages)
+    const { error: jobsDeleteErr } = await supabaseServiceRole
+      .from('maturation_jobs')
+      .delete()
+      .eq('master_instance_id', masterId);
+
+    if (jobsDeleteErr) {
+      return errorResponse(`Erro ao remover jobs do maturador: ${jobsDeleteErr.message}`, 500);
+    }
+
+    // 3) Remove a instância mestre
     const { error: deleteErr } = await supabaseServiceRole
       .from('master_instances')
       .delete()
-      .eq('id', row.id);
+      .eq('id', masterId);
 
     if (deleteErr) {
       return errorResponse(`Erro ao remover do maturador: ${deleteErr.message}`, 500);

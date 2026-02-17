@@ -96,7 +96,11 @@ export async function GET(req: NextRequest) {
     const { data: campaigns, error } = await query;
 
     if (error) {
-      return errorResponse(`Erro ao buscar campanhas: ${error.message}`);
+      console.error('[Admin Campaigns] Erro Supabase:', error.message, 'code:', error.code);
+      return errorResponse(
+        `Erro ao buscar campanhas: ${error.message}`,
+        500
+      );
     }
 
     if (!campaigns || campaigns.length === 0) {

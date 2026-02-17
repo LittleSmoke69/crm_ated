@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { requireAuth } from './auth';
 
-export type UserStatus = 'super_admin' | 'admin' | 'consultor' | 'gerente' | 'dono_banca' | 'auditoria' | 'suporte';
+export type UserStatus = 'super_admin' | 'admin' | 'consultor' | 'gerente' | 'dono_banca' | 'gestor' | 'auditoria' | 'suporte';
 
 export interface UserProfile {
   id: string;
@@ -51,9 +51,9 @@ export async function getUserProfile(userId: string): Promise<UserProfile | null
           await new Promise((r) => setTimeout(r, GET_PROFILE_RETRY_DELAY_MS * attempt));
           continue;
         }
-        console.error('[getUserProfile] Erro ao buscar perfil:', error.message);
+        console.error('[getUserProfile] Erro ao buscar perfil:', error.message, `(tentativa ${attempt}/${GET_PROFILE_MAX_RETRIES})`);
         console.error('[getUserProfile] UserId:', userId);
-        console.error('[getUserProfile] Error code:', error.code);
+        if (error.code) console.error('[getUserProfile] Error code:', error.code);
         return null;
       }
 
@@ -64,12 +64,12 @@ export async function getUserProfile(userId: string): Promise<UserProfile | null
 
       return data as UserProfile;
     } catch (error: unknown) {
-      const e = error as { message?: string };
+      const e = error as { message?: string; code?: string };
       if (isNetworkOrUnavailableError(e) && attempt < GET_PROFILE_MAX_RETRIES) {
         await new Promise((r) => setTimeout(r, GET_PROFILE_RETRY_DELAY_MS * attempt));
         continue;
       }
-      console.error('[getUserProfile] Erro inesperado:', e?.message);
+      console.error('[getUserProfile] Erro inesperado (rede?):', e?.message, `(tentativa ${attempt}/${GET_PROFILE_MAX_RETRIES})`);
       console.error('[getUserProfile] UserId:', userId);
       return null;
     }
@@ -122,6 +122,26 @@ export async function requireAdmin(req: NextRequest): Promise<{ userId: string; 
     throw new Error('Acesso negado. Apenas SuperAdmin ou Admin podem acessar o painel administrativo.');
   }
 
+  return { userId, profile };
+}
+
+/**
+ * Requer que o usuário seja SuperAdmin, Admin ou Auditoria (acesso ao Anti-Spam)
+ */
+export async function requireAntiSpamAccess(req: NextRequest): Promise<{ userId: string; profile: UserProfile }> {
+  const { userId } = await requireAuth(req);
+  let profile = await getUserProfile(userId);
+  if (!profile) {
+    await new Promise((r) => setTimeout(r, 400));
+    profile = await getUserProfile(userId);
+  }
+  if (!profile) {
+    throw new Error('Perfil não encontrado');
+  }
+  const allowed = profile.status === 'super_admin' || profile.status === 'admin' || profile.status === 'auditoria';
+  if (!allowed) {
+    throw new Error('Acesso negado. Apenas SuperAdmin, Admin ou Auditoria podem acessar o Anti-Spam.');
+  }
   return { userId, profile };
 }
 
@@ -230,8 +250,8 @@ export async function getSubordinateIds(userId: string): Promise<string[]> {
     return data?.map(u => u.id) || [];
   }
 
-  // Consultor não tem subordinados
-  if (profile.status === 'consultor') {
+  // Consultor e Gestor não têm subordinados (gestor visualiza dados do dono da banca via enroller)
+  if (profile.status === 'consultor' || profile.status === 'gestor') {
     return [];
   }
 
@@ -259,8 +279,8 @@ export async function getSubordinates(userId: string): Promise<UserProfile[]> {
     return (data as UserProfile[]) || [];
   }
 
-  // Consultor não tem subordinados
-  if (profile.status === 'consultor') {
+  // Consultor e Gestor não têm subordinados
+  if (profile.status === 'consultor' || profile.status === 'gestor') {
     return [];
   }
 
@@ -316,9 +336,12 @@ export async function validateHierarchy(userId: string, status: UserStatus, enro
     return { valid: true };
   }
 
-  // Consultor, Gerente e Dono de banca podem ter enroller NULL (sem superior)
+  // Gerente, Dono de banca e Gestor podem ter enroller NULL (sem superior). Consultor sempre deve ter um Gerente.
   if (enroller === null) {
-    if (status === 'dono_banca' || status === 'consultor' || status === 'gerente') {
+    if (status === 'consultor') {
+      return { valid: false, error: 'Consultor deve ser atribuído a um Gerente' };
+    }
+    if (status === 'dono_banca' || status === 'gerente' || status === 'gestor') {
       return { valid: true };
     }
     return { valid: false, error: `${status} deve ter um enroller` };
@@ -343,6 +366,11 @@ export async function validateHierarchy(userId: string, status: UserStatus, enro
     // Dono de banca pode ter outro Dono de banca como enroller (estrutura superior)
     if (enrollerProfile.status !== 'dono_banca' && enrollerProfile.status !== 'admin') {
       return { valid: false, error: 'Dono de banca deve ter outro Dono de banca ou Admin como enroller' };
+    }
+  } else if (status === 'gestor') {
+    // Gestor de tráfego deve ter Dono de banca ou Admin como enroller (para ver dados da banca)
+    if (enrollerProfile.status !== 'dono_banca' && enrollerProfile.status !== 'admin') {
+      return { valid: false, error: 'Gestor de tráfego deve ter Dono de banca ou Admin como enroller' };
     }
   }
 

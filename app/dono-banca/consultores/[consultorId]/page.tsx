@@ -441,7 +441,7 @@ export default function DetalheConsultor() {
               <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
                 <div className="flex items-center gap-2 mb-2">
                   <CheckCircle2 className="w-4 h-4 text-white" />
-                  <p className="text-xs font-bold text-white/90 uppercase">Leads Ativos</p>
+                  <p className="text-xs font-bold text-white/90 uppercase">Clientes Ativos</p>
                 </div>
                 <p className="text-2xl font-bold text-white">{externalKpis.active_leads || 0}</p>
               </div>

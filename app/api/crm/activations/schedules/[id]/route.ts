@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { calculateNextRecurringRun } from '@/lib/utils/recurring-schedule';
 
 export const runtime = 'nodejs';
 
@@ -25,10 +26,10 @@ export async function PATCH(
       return errorResponse('Pelo menos um campo deve ser fornecido para atualização', 400);
     }
 
-    // Verifica se o agendamento pertence ao usuário
+    // Verifica se o agendamento pertence ao usuário (recorrente precisa de mais campos para recálculo)
     const { data: schedule, error: checkError } = await supabaseServiceRole
       .from('message_schedules')
-      .select('id, user_id, schedule_type')
+      .select('id, user_id, schedule_type, status, timezone, cron_expr, recurring_days, recurring_time')
       .eq('id', id)
       .single();
 
@@ -41,22 +42,67 @@ export async function PATCH(
     }
 
     // Monta objeto de atualização
-    const updateData: any = {
+    const updateData: Record<string, unknown> = {
       updated_at: new Date().toISOString(),
     };
 
     if (status !== undefined) {
       updateData.status = status;
+      // Ao reativar recorrente (paused → scheduled), recalcula next_run_utc com a lógica corrigida
+      if (
+        schedule.schedule_type === 'recurring' &&
+        schedule.status === 'paused' &&
+        status === 'scheduled'
+      ) {
+        const tz = (schedule.timezone as string) || 'America/Sao_Paulo';
+        const recurringTime =
+          typeof schedule.recurring_time === 'string'
+            ? schedule.recurring_time
+            : '';
+        const nextRunUTC = calculateNextRecurringRun(
+          (schedule.cron_expr as string) || '',
+          tz,
+          schedule.recurring_days ?? [],
+          recurringTime,
+          () => {}
+        );
+        if (nextRunUTC) {
+          updateData.next_run_utc = nextRunUTC;
+        }
+      }
     }
 
     if (scheduled_at_utc !== undefined && schedule.schedule_type === 'once') {
       updateData.scheduled_at_utc = scheduled_at_utc;
-      // Atualiza next_run_utc também para agendamentos pontuais
       updateData.next_run_utc = scheduled_at_utc;
     }
 
     if (instance_name !== undefined) {
       updateData.instance_name = instance_name;
+      // Ao trocar instância em disparo failed ou paused, reativar: status → scheduled e limpar erro
+      if (schedule.status === 'failed' || schedule.status === 'paused') {
+        updateData.status = 'scheduled';
+        updateData.last_error = null;
+        updateData.attempts = 0;
+        // Para recorrente, recalcular próxima execução
+        if (schedule.schedule_type === 'recurring') {
+          const tz = (schedule.timezone as string) || 'America/Sao_Paulo';
+          const recurringTime =
+            typeof schedule.recurring_time === 'string'
+              ? schedule.recurring_time
+              : '';
+          const nextRunUTC = calculateNextRecurringRun(
+            (schedule.cron_expr as string) || '',
+            tz,
+            schedule.recurring_days ?? [],
+            recurringTime,
+            () => {}
+          );
+          if (nextRunUTC) {
+            updateData.next_run_utc = nextRunUTC;
+          }
+        }
+      }
     }
 
     if (group_id !== undefined) {
