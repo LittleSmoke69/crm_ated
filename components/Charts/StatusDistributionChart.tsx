@@ -18,9 +18,22 @@ interface StatusDistributionChartProps {
 const DEFAULT_COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 
 export default function StatusDistributionChart({ data, colors = DEFAULT_COLORS }: StatusDistributionChartProps) {
+  // Ordem para distribuição por quantidade de depósitos (CRM Admin)
+  const depositsCountOrder = [
+    'Apenas cadastraram',
+    'Depositaram 1x',
+    'Depositaram 2x',
+    'Depositaram 3x',
+    'Depositaram 4x',
+    'Depositaram 5x',
+    'Depositaram 6x a 9x',
+    'Depositaram 10x+',
+  ];
+  const isDepositsCount = data && depositsCountOrder.some(key => key in (data || {}));
+
   // Detecta se é dados de engajamento ou status
-  const isEngagement = data && Object.keys(data).some(key => 
-    key.toLowerCase().includes('cadastrado') || 
+  const isEngagement = data && !isDepositsCount && Object.keys(data).some(key =>
+    key.toLowerCase().includes('cadastrado') ||
     key.toLowerCase().includes('jogaram') ||
     key.toLowerCase().includes('depositou') ||
     key.toLowerCase().includes('deposito') ||
@@ -29,18 +42,21 @@ export default function StatusDistributionChart({ data, colors = DEFAULT_COLORS 
 
   let chartData: Array<{ name: string; value: number }> = [];
 
-  if (isEngagement) {
+  if (isDepositsCount && data) {
+    chartData = depositsCountOrder
+      .map(name => ({ name, value: data[name] || 0 }))
+      .filter(item => item.value > 0);
+  } else if (isEngagement) {
     // Para engajamento: mostra todos os valores na ordem correta
     const engagementOrder = [
-      'Deposito 1x', 
-      'Deposito 2x', 
-      'Deposito 3x', 
-      'Deposito 5x', 
+      'Deposito 1x',
+      'Deposito 2x',
+      'Deposito 3x',
+      'Deposito 5x',
       'Deposito 10x+',
-      // Mantém compatibilidade com categorias antigas
-      'Cadastrados', 
-      'Jogaram 1x', 
-      'Jogaram 2x', 
+      'Cadastrados',
+      'Jogaram 1x',
+      'Jogaram 2x',
       'Jogaram 3x+'
     ];
     chartData = engagementOrder
@@ -48,7 +64,7 @@ export default function StatusDistributionChart({ data, colors = DEFAULT_COLORS 
         name,
         value: data[name] || 0
       }))
-      .filter(item => item.value > 0); // Remove itens com valor zero
+      .filter(item => item.value > 0);
   } else {
     // Para status: agrupa e normaliza para mostrar apenas "Ativo" e "Novo"
     const statusMap: Record<string, number> = {

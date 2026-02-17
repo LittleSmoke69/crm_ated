@@ -15,7 +15,8 @@ interface RemoveTagModalProps {
   leadId: string | number;
   currentTags: Tag[];
   targetUserId?: string;
-  onTagRemoved?: () => void;
+  /** Chamado com o id da etiqueta removida; o parent pode atualizar o estado local sem refetch. */
+  onTagRemoved?: (tagId: string) => void;
 }
 
 const RemoveTagModal: React.FC<RemoveTagModalProps> = ({
@@ -60,7 +61,7 @@ const RemoveTagModal: React.FC<RemoveTagModalProps> = ({
       const result = await response.json();
 
       if (result.success) {
-        onTagRemoved?.();
+        onTagRemoved?.(tagId);
         onClose();
       } else {
         setError(result.error || 'Erro ao remover etiqueta');

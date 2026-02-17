@@ -16,7 +16,9 @@ interface KanbanColumnProps {
   onDragStart: (e: React.DragEvent, leadId: string | number) => void;
   onDrop: (e: React.DragEvent, status: string) => void;
   targetUserId?: string;
-  onTagAdded?: () => void;
+  onTagAdded?: (leadId: string | number, addedTag: { id: string; label: string; color: string }) => void;
+  onTagRemoved?: (leadId: string | number, tagId: string) => void;
+  onRefresh?: () => void;
   selectedBancaUrl?: string;
   onOpenSortModal?: (columnId: string) => void;
   totalLeads?: number; // Total de leads disponíveis
@@ -45,6 +47,8 @@ const KanbanColumn: React.FC<KanbanColumnProps> = ({
   onDrop,
   targetUserId,
   onTagAdded,
+  onTagRemoved,
+  onRefresh,
   selectedBancaUrl,
   onOpenSortModal,
   compactCards = false,
@@ -232,6 +236,8 @@ const KanbanColumn: React.FC<KanbanColumnProps> = ({
                       onDragStart={onDragStart}
                       targetUserId={targetUserId}
                       onTagAdded={onTagAdded}
+                      onTagRemoved={onTagRemoved}
+                      onRefresh={onRefresh}
                       selectedBancaUrl={selectedBancaUrl}
                       columnId={id}
                       compact={compactCards}
@@ -256,6 +262,8 @@ const KanbanColumn: React.FC<KanbanColumnProps> = ({
                   onDragStart={onDragStart}
                   targetUserId={targetUserId}
                   onTagAdded={onTagAdded}
+                  onTagRemoved={onTagRemoved}
+                  onRefresh={onRefresh}
                   selectedBancaUrl={selectedBancaUrl}
                   columnId={id}
                   compact={compactCards}

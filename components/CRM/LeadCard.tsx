@@ -105,7 +105,12 @@ interface LeadCardProps {
   onStarsChange?: (id: string | number, stars: number) => void;
   onDragStart: (e: React.DragEvent, id: string | number) => void;
   targetUserId?: string;
-  onTagAdded?: () => void;
+  /** Chamado ao adicionar etiqueta; recebe leadId e a tag. Atualize o estado local para evitar refetch. */
+  onTagAdded?: (leadId: string | number, addedTag: { id: string; label: string; color: string }) => void;
+  /** Chamado ao remover etiqueta; recebe leadId e tagId. Atualize o estado local para evitar refetch. */
+  onTagRemoved?: (leadId: string | number, tagId: string) => void;
+  /** Chamado quando feedback é salvo/removido; opcional refetch dos leads. */
+  onRefresh?: () => void;
   selectedBancaUrl?: string;
   columnId?: string;
   /** Layout compacto (igual ao CRM principal / Clientes cadastrados) para não deixar a tela grande */
@@ -122,6 +127,8 @@ const LeadCard: React.FC<LeadCardProps> = ({
   onDragStart,
   targetUserId,
   onTagAdded,
+  onTagRemoved,
+  onRefresh,
   selectedBancaUrl,
   columnId,
   compact = false,
@@ -207,9 +214,16 @@ const LeadCard: React.FC<LeadCardProps> = ({
     }
   }, []);
 
+  /** URL da banca para histórico: prioriza a banca em que o lead está cadastrado (cadastro na banca). */
+  const bancaUrlForHistory = lead.banca_url?.trim() || selectedBancaUrl?.trim() || undefined;
+
   // Função para buscar histórico de depósitos
   const loadDepositsHistory = async (page: number = 1, loadAll: boolean = false) => {
-    if (!consultorUserId || !lead.id) return;
+    const leadIdUsed = lead.original_id != null ? String(lead.original_id) : (typeof lead.id === 'string' && lead.id.includes('-') ? (lead.id.split('-').pop() ?? String(lead.id)) : String(lead.id));
+    if (!consultorUserId || !leadIdUsed) {
+      console.log('[LeadCard Histórico] Depósitos: não carregou — consultorUserId ou leadId ausente', { consultorUserId: !!consultorUserId, leadId: lead.id, original_id: lead.original_id });
+      return;
+    }
 
     if (page === 1) {
       setLoadingDeposits(true);
@@ -217,14 +231,15 @@ const LeadCard: React.FC<LeadCardProps> = ({
       setLoadingMoreDeposits(true);
     }
 
-    try {
-      const url = new URL(`/api/crm/leads/${lead.id}/deposits`, window.location.origin);
-      if (selectedBancaUrl) {
-        url.searchParams.append('banca_url', selectedBancaUrl);
-      }
-      url.searchParams.append('page', page.toString());
-      url.searchParams.append('per_page', '15');
+    const url = new URL(`/api/crm/leads/${leadIdUsed}/deposits`, window.location.origin);
+    if (bancaUrlForHistory) {
+      url.searchParams.append('banca_url', bancaUrlForHistory);
+    }
+    url.searchParams.append('page', page.toString());
+    url.searchParams.append('per_page', '15');
+    console.log('[LeadCard Histórico] Depósitos: carregando', { leadIdUsado: leadIdUsed, lead_id: lead.id, original_id: lead.original_id, page, banca_url: bancaUrlForHistory || '(default)' });
 
+    try {
       const response = await fetch(url.toString(), {
         headers: { 'X-User-Id': consultorUserId },
       });
@@ -232,7 +247,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
         const data = await response.json();
         if (data.data && data.data.history) {
           const newHistory = Array.isArray(data.data.history) ? data.data.history : [];
-          
+          console.log('[LeadCard Histórico] Depósitos: ok', { page, totalItens: newHistory.length, pagination: data.data.pagination });
           if (page === 1) {
             setAllDepositsData(newHistory);
             setDepositsHistory(newHistory.slice(0, 5)); // Mostra apenas 5 inicialmente
@@ -249,15 +264,17 @@ const LeadCard: React.FC<LeadCardProps> = ({
             setDepositsHistory([]);
             setAllDepositsData([]);
           }
+          console.log('[LeadCard Histórico] Depósitos: resposta ok mas sem data.data.history', { page });
         }
       } else {
+        console.warn('[LeadCard Histórico] Depósitos: resposta não ok', { status: response.status, statusText: response.statusText, page });
         if (page === 1) {
           setDepositsHistory([]);
           setAllDepositsData([]);
         }
       }
     } catch (error) {
-      console.error('Erro ao buscar histórico de depósitos:', error);
+      console.error('[LeadCard Histórico] Depósitos: erro ao buscar histórico', error);
       if (page === 1) {
         setDepositsHistory([]);
         setAllDepositsData([]);
@@ -291,7 +308,11 @@ const LeadCard: React.FC<LeadCardProps> = ({
 
   // Função para buscar histórico de saques
   const loadWithdrawsHistory = async (page: number = 1, loadAll: boolean = false) => {
-    if (!consultorUserId || !lead.id) return;
+    const leadIdUsed = lead.original_id != null ? String(lead.original_id) : (typeof lead.id === 'string' && lead.id.includes('-') ? (lead.id.split('-').pop() ?? String(lead.id)) : String(lead.id));
+    if (!consultorUserId || !leadIdUsed) {
+      console.log('[LeadCard Histórico] Saques: não carregou — consultorUserId ou leadId ausente', { consultorUserId: !!consultorUserId, leadId: lead.id, original_id: lead.original_id });
+      return;
+    }
 
     if (page === 1) {
       setLoadingWithdraws(true);
@@ -299,14 +320,15 @@ const LeadCard: React.FC<LeadCardProps> = ({
       setLoadingMoreWithdraws(true);
     }
 
-    try {
-      const url = new URL(`/api/crm/leads/${lead.id}/withdraws`, window.location.origin);
-      if (selectedBancaUrl) {
-        url.searchParams.append('banca_url', selectedBancaUrl);
-      }
-      url.searchParams.append('page', page.toString());
-      url.searchParams.append('per_page', '15');
+    const url = new URL(`/api/crm/leads/${leadIdUsed}/withdraws`, window.location.origin);
+    if (bancaUrlForHistory) {
+      url.searchParams.append('banca_url', bancaUrlForHistory);
+    }
+    url.searchParams.append('page', page.toString());
+    url.searchParams.append('per_page', '15');
+    console.log('[LeadCard Histórico] Saques: carregando', { leadIdUsado: leadIdUsed, lead_id: lead.id, original_id: lead.original_id, page, banca_url: bancaUrlForHistory || '(default)' });
 
+    try {
       const response = await fetch(url.toString(), {
         headers: { 'X-User-Id': consultorUserId },
       });
@@ -314,7 +336,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
         const data = await response.json();
         if (data.data && data.data.history) {
           const newHistory = Array.isArray(data.data.history) ? data.data.history : [];
-          
+          console.log('[LeadCard Histórico] Saques: ok', { page, totalItens: newHistory.length, pagination: data.data.pagination });
           if (page === 1) {
             setAllWithdrawsData(newHistory);
             setWithdrawsHistory(newHistory.slice(0, 5)); // Mostra apenas 5 inicialmente
@@ -331,15 +353,17 @@ const LeadCard: React.FC<LeadCardProps> = ({
             setWithdrawsHistory([]);
             setAllWithdrawsData([]);
           }
+          console.log('[LeadCard Histórico] Saques: resposta ok mas sem data.data.history', { page });
         }
       } else {
+        console.warn('[LeadCard Histórico] Saques: resposta não ok', { status: response.status, statusText: response.statusText, page });
         if (page === 1) {
           setWithdrawsHistory([]);
           setAllWithdrawsData([]);
         }
       }
     } catch (error) {
-      console.error('Erro ao buscar histórico de saques:', error);
+      console.error('[LeadCard Histórico] Saques: erro ao buscar histórico', error);
       if (page === 1) {
         setWithdrawsHistory([]);
         setAllWithdrawsData([]);
@@ -373,7 +397,11 @@ const LeadCard: React.FC<LeadCardProps> = ({
 
   // Função para buscar histórico de apostas
   const loadBetsHistory = async (page: number = 1, loadAll: boolean = false) => {
-    if (!consultorUserId || !lead.id) return;
+    const leadIdUsed = lead.original_id != null ? String(lead.original_id) : (typeof lead.id === 'string' && lead.id.includes('-') ? (lead.id.split('-').pop() ?? String(lead.id)) : String(lead.id));
+    if (!consultorUserId || !leadIdUsed) {
+      console.log('[LeadCard Histórico] Apostas: não carregou — consultorUserId ou leadId ausente', { consultorUserId: !!consultorUserId, leadId: lead.id, original_id: lead.original_id });
+      return;
+    }
 
     if (page === 1) {
       setLoadingBets(true);
@@ -381,14 +409,15 @@ const LeadCard: React.FC<LeadCardProps> = ({
       setLoadingMoreBets(true);
     }
 
-    try {
-      const url = new URL(`/api/crm/leads/${lead.id}/bets`, window.location.origin);
-      if (selectedBancaUrl) {
-        url.searchParams.append('banca_url', selectedBancaUrl);
-      }
-      url.searchParams.append('page', page.toString());
-      url.searchParams.append('per_page', '15');
+    const url = new URL(`/api/crm/leads/${leadIdUsed}/bets`, window.location.origin);
+    if (bancaUrlForHistory) {
+      url.searchParams.append('banca_url', bancaUrlForHistory);
+    }
+    url.searchParams.append('page', page.toString());
+    url.searchParams.append('per_page', '15');
+    console.log('[LeadCard Histórico] Apostas: carregando', { leadIdUsado: leadIdUsed, lead_id: lead.id, original_id: lead.original_id, page, banca_url: bancaUrlForHistory || '(default)' });
 
+    try {
       const response = await fetch(url.toString(), {
         headers: { 'X-User-Id': consultorUserId },
       });
@@ -422,6 +451,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
           total: (pagination.total || 0) + (bichaoPagination.total || 0),
         };
 
+        console.log('[LeadCard Histórico] Apostas: ok', { page, totalItens: merged.length, pagination: combinedPagination });
         if (page === 1) {
           setAllBetsData(merged);
           setBetsHistory(merged.slice(0, 5));
@@ -434,13 +464,14 @@ const LeadCard: React.FC<LeadCardProps> = ({
           setBetsPagination(combinedPagination);
         }
       } else {
+        console.warn('[LeadCard Histórico] Apostas: resposta não ok', { status: response.status, statusText: response.statusText, page });
         if (page === 1) {
           setBetsHistory([]);
           setAllBetsData([]);
         }
       }
     } catch (error) {
-      console.error('Erro ao buscar histórico de apostas:', error);
+      console.error('[LeadCard Histórico] Apostas: erro ao buscar histórico', error);
       if (page === 1) {
         setBetsHistory([]);
         setAllBetsData([]);
@@ -474,11 +505,21 @@ const LeadCard: React.FC<LeadCardProps> = ({
 
   // Função para carregar todos os históricos
   const loadAllHistories = async () => {
+    const leadIdUsed = lead.original_id != null ? String(lead.original_id) : (typeof lead.id === 'string' && lead.id.includes('-') ? (lead.id.split('-').pop() ?? String(lead.id)) : String(lead.id));
+    console.log('[LeadCard Histórico] Carregando todos os históricos (detalhe do lead)', {
+      lead_id: lead.id,
+      original_id: lead.original_id,
+      leadIdUsado: leadIdUsed,
+      leadName: lead.name,
+      banca_url: bancaUrlForHistory || '(default)',
+      banca_do_lead: lead.banca_url || '(não informada)',
+    });
     await Promise.all([
       loadDepositsHistory(),
       loadWithdrawsHistory(),
       loadBetsHistory()
     ]);
+    console.log('[LeadCard Histórico] Finalizado carregamento dos três históricos');
   };
 
   /** ID numérico do lead para APIs de feedback (crm_feedback.lead_user_id). Evita composite "bancaId-28660". */
@@ -578,8 +619,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
       if (result.success) {
         // Remove da lista local
         setAllFeedbacks(prev => prev.filter(fb => fb.id !== feedbackId));
-        // Se era o feedback principal sendo visualizado, recarrega
-        onTagAdded?.();
+        onRefresh?.();
       } else {
         alert(result.error || 'Erro ao excluir feedback');
       }
@@ -1480,8 +1520,8 @@ const LeadCard: React.FC<LeadCardProps> = ({
         leadId={lead.id}
         currentTags={lead.tags || []}
         targetUserId={targetUserId}
-        onTagAdded={() => {
-          onTagAdded?.();
+        onTagAdded={(addedTag) => {
+          onTagAdded?.(lead.id, addedTag);
           setShowAddTagModal(false);
         }}
       />
@@ -1493,8 +1533,8 @@ const LeadCard: React.FC<LeadCardProps> = ({
         leadId={lead.id}
         currentTags={lead.tags || []}
         targetUserId={targetUserId}
-        onTagRemoved={() => {
-          onTagAdded?.();
+        onTagRemoved={(tagId) => {
+          onTagRemoved?.(lead.id, tagId);
         }}
       />
 
@@ -1517,9 +1557,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
           initialFeedback={editingFeedback?.feedback || ''}
           feedbackId={editingFeedback?.id}
           onFeedbackSaved={() => {
-            // Recarrega os leads após salvar feedback
-            onTagAdded?.();
-            // Se o modal de todos os feedbacks estiver aberto, atualiza a lista
+            onRefresh?.();
             if (showAllFeedbacksModal) {
               loadAllFeedbacks();
             }

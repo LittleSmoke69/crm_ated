@@ -404,8 +404,10 @@ export async function GET(req: NextRequest) {
         }
 
       const bancaNameById: Record<string, string> = {};
+      const bancaUrlById: Record<string, string> = {};
       listBancas.forEach(b => {
         bancaNameById[b.id] = b.name ?? b.url ?? b.id;
+        if (b.url?.trim()) bancaUrlById[b.id] = normalizeBancaUrl(b.url);
       });
 
       const formattedLeads = filteredLeads.map((l: any) => {
@@ -445,6 +447,8 @@ export async function GET(req: NextRequest) {
           temperature: calculatedTemperature,
           banca_id: l._bancaKey ?? undefined,
           banca_name: l._bancaKey ? (bancaNameById[l._bancaKey] ?? undefined) : undefined,
+          /** URL da banca em que o lead está cadastrado; usar para histórico depósito/saque/aposta. */
+          banca_url: l._bancaKey ? (bancaUrlById[l._bancaKey] ?? undefined) : undefined,
           total_depositado: Math.round((parseFloat(l.total_depositado) || 0) * 100) / 100,
           total_apostado: Math.round((parseFloat(l.total_apostado) || 0) * 100) / 100,
           total_apostado_loteria: l.total_apostado_loteria != null ? Math.round((parseFloat(String(l.total_apostado_loteria)) || 0) * 100) / 100 : undefined,

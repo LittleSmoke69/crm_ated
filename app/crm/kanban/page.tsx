@@ -417,7 +417,8 @@ const KanbanContent = () => {
             total_afiliate: l.total_afiliate ? parseFloat(l.total_afiliate) : 0,
             aposta_estrelas: l.aposta_estrelas ? parseInt(l.aposta_estrelas.toString()) || 0 : 0,
             banca_id: l.banca_id,
-            banca_name: l.banca_name
+            banca_name: l.banca_name,
+            banca_url: l.banca_url
           };
         });
 
@@ -871,6 +872,18 @@ const KanbanContent = () => {
     console.log(`Lead ${leadId} atualizado para ${newStars} estrelas`);
   };
 
+  const handleTagAdded = (leadId: string | number, addedTag: { id: string; label: string; color: string }) => {
+    setRawLeads(prev =>
+      prev.map(l => (l.id === leadId ? { ...l, tags: [...(l.tags || []), addedTag] } : l))
+    );
+  };
+
+  const handleTagRemoved = (leadId: string | number, tagId: string) => {
+    setRawLeads(prev =>
+      prev.map(l => (l.id === leadId ? { ...l, tags: (l.tags || []).filter(t => t.id !== tagId) } : l))
+    );
+  };
+
   const onDrop = (e: React.DragEvent, newStatus: string) => {
     e.preventDefault();
     const leadId = e.dataTransfer.getData('leadId');
@@ -1063,7 +1076,9 @@ const KanbanContent = () => {
                   onDragStart={onDragStart}
                   onDrop={onDrop}
                   targetUserId={targetUserId || undefined}
-                  onTagAdded={() => loadLeads(false)}
+                  onTagAdded={handleTagAdded}
+                  onTagRemoved={handleTagRemoved}
+                  onRefresh={() => loadLeads(false)}
                   selectedBancaUrl={filters.banca ? (typeof filters.banca === 'object' ? filters.banca.value : filters.banca) : undefined}
                   onOpenSortModal={handleOpenSortModal}
                   totalLeads={column.totalLeads}

@@ -169,6 +169,7 @@ const TransferidoContent = () => {
             aposta_estrelas: l.aposta_estrelas,
             banca_id: l.banca_id,
             banca_name: l.banca_name,
+            banca_url: l.banca_url,
             original_id: l.original_id,
             tag_de_redistribuicao: l.tag_de_redistribuicao ?? null,
             transferred: l.transferred ?? false,
@@ -562,6 +563,16 @@ const TransferidoContent = () => {
   const handleStarsChange = (leadId: string | number, newStars: number) => {
     setRawLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, stars: newStars } : l)));
   };
+  const handleTagAdded = (leadId: string | number, addedTag: { id: string; label: string; color: string }) => {
+    setRawLeads((prev) =>
+      prev.map((l) => (l.id === leadId ? { ...l, tags: [...(l.tags || []), addedTag] } : l))
+    );
+  };
+  const handleTagRemoved = (leadId: string | number, tagId: string) => {
+    setRawLeads((prev) =>
+      prev.map((l) => (l.id === leadId ? { ...l, tags: (l.tags || []).filter((t) => t.id !== tagId) } : l))
+    );
+  };
   const handleOpenSortModal = (columnId: string) => {
     const currentSort = columnSorts[columnId];
     setSortingColumnId(columnId);
@@ -696,7 +707,9 @@ const TransferidoContent = () => {
                     onDragStart={onDragStart}
                     onDrop={onDrop}
                     targetUserId={userId || undefined}
-                    onTagAdded={() => loadLeads(true)}
+                    onTagAdded={handleTagAdded}
+                    onTagRemoved={handleTagRemoved}
+                    onRefresh={() => loadLeads(true)}
                     selectedBancaUrl={filters.banca ? (typeof filters.banca === 'object' ? filters.banca.value : filters.banca) : undefined}
                     onOpenSortModal={handleOpenSortModal}
                     totalLeads={column.totalLeads}

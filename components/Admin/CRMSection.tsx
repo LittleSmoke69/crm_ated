@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Globe, 
   Layout as LayoutIcon,
@@ -21,7 +21,11 @@ import {
   AlertCircle,
   CheckCircle2,
   Tag as TagIcon,
-  Edit2
+  Edit2,
+  Search,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 import StatusDistributionChart from '@/components/Charts/StatusDistributionChart';
 import TemporalEvolutionChart from '@/components/Charts/TemporalEvolutionChart';
@@ -33,6 +37,225 @@ interface Banca {
   id: string;
   name: string;
   url: string;
+}
+
+/** Converte YYYY-MM-DD → dd/MM/yyyy */
+function formatDateDDMMYYYY(yyyyMmDd: string): string {
+  if (!yyyyMmDd || yyyyMmDd.length < 10) return '';
+  const [y, m, d] = yyyyMmDd.split('-');
+  return `${d ?? ''}/${m ?? ''}/${y ?? ''}`;
+}
+
+/** Converte dd/MM/yyyy ou dd-MM-yyyy → YYYY-MM-DD. Retorna '' se inválido. */
+function parseDDMMYYYYToISO(input: string): string {
+  const digits = input.replace(/\D/g, '');
+  if (digits.length !== 8) return '';
+  const dd = digits.slice(0, 2);
+  const mm = digits.slice(2, 4);
+  const yy = digits.slice(4, 8);
+  const d = parseInt(dd, 10);
+  const m = parseInt(mm, 10);
+  const y = parseInt(yy, 10);
+  if (d < 1 || d > 31 || m < 1 || m > 12 || y < 1900 || y > 2100) return '';
+  const month = m < 10 ? `0${m}` : String(m);
+  const day = d < 10 ? `0${d}` : String(d);
+  return `${y}-${month}-${day}`;
+}
+
+/** Formata 8 dígitos como dd/mm/yyyy */
+function formatDigitsToDDMMYYYY(digits: string): string {
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4, 8)}`;
+}
+
+const MESES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+
+/** Retorna a data de hoje no fuso de São Paulo (YYYY-MM-DD). */
+function getTodaySãoPaulo(): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+}
+
+/** Retorna dias do mês para exibir no calendário (com vazios no início) */
+function getCalendarDays(year: number, month: number): (number | null)[] {
+  const first = new Date(year, month, 1);
+  const last = new Date(year, month + 1, 0);
+  const startPad = first.getDay();
+  const days: (number | null)[] = Array(startPad).fill(null);
+  for (let d = 1; d <= last.getDate(); d++) days.push(d);
+  return days;
+}
+
+/** Input de data com calendário ao clicar (dd/MM/yyyy). maxDate em YYYY-MM-DD limita seleção até essa data (ex.: hoje em SP). */
+function DateInputDDMMYYYY({ value, onChange, className = '', maxDate }: { value: string; onChange: (yyyyMmDd: string) => void; className?: string; maxDate?: string }) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const valueDate = value ? (() => { const [y, m, d] = value.split('-').map(Number); return { y, m: m - 1, d }; })() : null;
+  const [view, setView] = useState(() => {
+    const today = new Date();
+    return valueDate ? { year: valueDate.y, month: valueDate.m } : { year: today.getFullYear(), month: today.getMonth() };
+  });
+  const displayValue = value ? formatDateDDMMYYYY(value) : '';
+  useEffect(() => {
+    const onOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onOutside);
+    return () => document.removeEventListener('mousedown', onOutside);
+  }, []);
+  useEffect(() => {
+    if (open && value && value.length >= 10) {
+      const [y, m] = value.split('-').map(Number);
+      setView({ year: y, month: m - 1 });
+    }
+  }, [open, value]);
+  const selectDay = (day: number) => {
+    const m = view.month + 1;
+    const mm = m < 10 ? `0${m}` : String(m);
+    const dd = day < 10 ? `0${day}` : String(day);
+    onChange(`${view.year}-${mm}-${dd}`);
+    setOpen(false);
+  };
+  const prevMonth = () => {
+    if (view.month === 0) setView({ year: view.year - 1, month: 11 });
+    else setView({ ...view, month: view.month - 1 });
+  };
+  const nextMonth = () => {
+    if (view.month === 11) setView({ year: view.year + 1, month: 0 });
+    else setView({ ...view, month: view.month + 1 });
+  };
+  const days = getCalendarDays(view.year, view.month);
+  const todaySP = getTodaySãoPaulo();
+  const todayStr = maxDate ?? todaySP;
+  return (
+    <div className="relative" ref={containerRef}>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => setOpen((o) => !o)}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen((o) => !o); } }}
+        className={`flex items-center bg-transparent text-sm font-semibold text-gray-700 cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 rounded ${className}`}
+      >
+        <span className={displayValue ? '' : 'text-gray-400'}>{displayValue || 'dd/mm/aaaa'}</span>
+      </div>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-50 p-3 min-w-[260px]">
+          <div className="flex items-center justify-between mb-3">
+            <button type="button" onClick={prevMonth} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-600">
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+            <span className="text-sm font-bold text-gray-800">{MESES[view.month]} {view.year}</span>
+            <button type="button" onClick={nextMonth} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-600">
+              <ChevronRight className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="grid grid-cols-7 gap-0.5 text-center">
+            {DIAS_SEMANA.map((d) => (
+              <div key={d} className="text-[10px] font-semibold text-gray-500 py-1">{d}</div>
+            ))}
+            {days.map((day, i) => {
+              if (day === null) return <div key={`e-${i}`} />;
+              const iso = `${view.year}-${String(view.month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+              const isSelected = value === iso;
+              const isToday = todaySP === iso;
+              const isAfterMax = maxDate && iso > maxDate;
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => !isAfterMax && selectDay(day)}
+                  disabled={isAfterMax}
+                  className={`w-8 h-8 rounded-lg text-sm font-medium transition-colors ${
+                    isAfterMax ? 'text-gray-300 cursor-not-allowed' : isSelected ? 'bg-[#8CD955] text-white' : isToday ? 'bg-gray-200 text-gray-800' : 'hover:bg-gray-100 text-gray-700'
+                  }`}
+                >
+                  {day}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Select de bancas com campo de pesquisa */
+function BancaSelectWithSearch({ bancas, value, onChange }: { bancas: Banca[]; value: string; onChange: (url: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const containerRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const selected = value === 'all' ? null : bancas.find((b) => b.url === value);
+  const label = selected ? selected.name : 'Todas as bancas';
+  const filtered = search.trim()
+    ? bancas.filter((b) => b.name.toLowerCase().includes(search.toLowerCase()))
+    : bancas;
+  useEffect(() => {
+    if (open) {
+      setSearch('');
+      setTimeout(() => searchInputRef.current?.focus(), 50);
+    }
+  }, [open]);
+  useEffect(() => {
+    const onOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onOutside);
+    return () => document.removeEventListener('mousedown', onOutside);
+  }, []);
+  return (
+    <div className="relative" ref={containerRef}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="pl-9 pr-8 py-2 w-full min-w-[200px] bg-gray-50 border border-gray-100 rounded-lg text-sm font-semibold text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 flex items-center justify-between gap-2"
+      >
+        <span className="truncate">{label}</span>
+        <ChevronDown className={`w-4 h-4 shrink-0 text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 overflow-hidden">
+          <div className="p-2 border-b border-gray-100">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Pesquisar banca..."
+                className="w-full pl-8 pr-3 py-2 bg-gray-50 border border-gray-100 rounded-lg text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30"
+              />
+            </div>
+          </div>
+          <div className="max-h-56 overflow-y-auto py-1">
+            <button
+              type="button"
+              onClick={() => { onChange('all'); setOpen(false); }}
+              className={`w-full px-4 py-2.5 text-left text-sm font-medium hover:bg-gray-50 ${value === 'all' ? 'bg-emerald-50 text-[#6AB83D]' : 'text-gray-700'}`}
+            >
+              Todas as bancas
+            </button>
+            {filtered.map((b) => (
+              <button
+                key={b.id}
+                type="button"
+                onClick={() => { onChange(b.url); setOpen(false); }}
+                className={`w-full px-4 py-2.5 text-left text-sm font-medium hover:bg-gray-50 truncate ${value === b.url ? 'bg-emerald-50 text-[#6AB83D]' : 'text-gray-700'}`}
+              >
+                {b.name}
+              </button>
+            ))}
+            {filtered.length === 0 && (
+              <p className="px-4 py-3 text-sm text-gray-500">Nenhuma banca encontrada</p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 interface Tag {
@@ -138,9 +361,10 @@ export default function CRMSection({ userId }: CRMSectionProps) {
   
   // Filters
   const [selectedBanca, setSelectedBanca] = useState('all');
-  const [dateFrom, setDateFrom] = useState(new Date().toISOString().split('T')[0]);
-  const [dateTo, setDateTo] = useState(new Date().toISOString().split('T')[0]);
-  
+  const [dateFrom, setDateFrom] = useState(() => getTodaySãoPaulo());
+  const [dateTo, setDateTo] = useState(() => getTodaySãoPaulo());
+  const [top5Sort, setTop5Sort] = useState<string>('vendas');
+
   // Dashboard Data
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [chartData, setChartData] = useState<any>(null);
@@ -159,17 +383,55 @@ export default function CRMSection({ userId }: CRMSectionProps) {
   const [isSubmittingTag, setIsSubmittingTag] = useState(false);
   const [activeTab, setActiveTab] = useState<'bancas' | 'tags'>('bancas');
 
-  useEffect(() => {
-    if (userId) {
-      loadInitialData();
-    }
-  }, [userId]);
+  const initialLoadInFlightRef = useRef(false);
+  const dashboardLoadInFlightRef = useRef(false);
 
   useEffect(() => {
-    if (userId) {
-      loadDashboard();
+    if (!userId) return;
+    if (initialLoadInFlightRef.current) return;
+    initialLoadInFlightRef.current = true;
+    loadInitialData().finally(() => {
+      initialLoadInFlightRef.current = false;
+    });
+  }, [userId]);
+
+  type ConsultantMetricsRow = {
+    name: string;
+    email: string;
+    bancas: string[];
+    total_deposited: number;
+    total_leads: number;
+    total_apostado: number;
+    total_apostado_bichao: number;
+    /** Quantidade de clientes com mais de 1 estrela. */
+    clientes_estrelas: number;
+    total_afiliate: number;
+  };
+  const getSortValueForRow = (row: ConsultantMetricsRow, key: string): number => {
+    switch (key) {
+      case 'vendas': return row.total_deposited;
+      case 'cadastro': return row.total_leads;
+      case 'apostas': return row.total_apostado;
+      case 'apostas_bicho': return row.total_apostado_bichao;
+      case 'vendas_bicho': return row.total_apostado_bichao;
+      case 'estrelas': return row.clientes_estrelas ?? 0;
+      case 'afiliados': return row.total_afiliate;
+      default: return row.total_deposited;
     }
-  }, [selectedBanca, dateFrom, dateTo, userId]);
+  };
+  const top5List = useMemo((): Top5Item[] => {
+    const list = chartData?.consultants_metrics as ConsultantMetricsRow[] | undefined;
+    if (!list || !Array.isArray(list) || list.length === 0) return [];
+    return [...list]
+      .sort((a, b) => getSortValueForRow(b, top5Sort) - getSortValueForRow(a, top5Sort))
+      .slice(0, 5)
+      .map((row) => ({
+        name: row.name,
+        email: row.email,
+        value: getSortValueForRow(row, top5Sort),
+        bancas: row.bancas,
+      }));
+  }, [chartData?.consultants_metrics, top5Sort]);
 
   const loadInitialData = async () => {
     try {
@@ -204,7 +466,6 @@ export default function CRMSection({ userId }: CRMSectionProps) {
       setMetricsLoading(true);
       const url = new URL('/api/admin/crm/dashboard', window.location.origin);
       if (selectedBanca !== 'all') url.searchParams.append('banca_url', selectedBanca);
-      // Usa date_from e date_to conforme curl especificado
       url.searchParams.append('date_from', dateFrom);
       url.searchParams.append('date_to', dateTo);
 
@@ -366,34 +627,39 @@ export default function CRMSection({ userId }: CRMSectionProps) {
       <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative">
-            <Globe className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-            <select 
-              value={selectedBanca}
-              onChange={(e) => setSelectedBanca(e.target.value)}
-              className="pl-9 pr-8 py-2 bg-gray-50 border border-gray-100 rounded-lg text-sm font-semibold text-gray-700 focus:outline-none appearance-none cursor-pointer hover:bg-gray-100 transition-colors"
-            >
-              <option value="all">Todas as bancas</option>
-              {bancas.map(b => (
-                <option key={b.id} value={b.url}>{b.name}</option>
-              ))}
-            </select>
+            <Globe className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none z-10" />
+            <BancaSelectWithSearch bancas={bancas} value={selectedBanca} onChange={setSelectedBanca} />
           </div>
 
           <div className="flex items-center gap-2 bg-gray-50 border border-gray-100 px-3 py-2 rounded-lg">
-            <Calendar className="w-4 h-4 text-gray-400" />
-            <input 
-              type="date" 
+            <Calendar className="w-4 h-4 text-gray-400 shrink-0" />
+            <DateInputDDMMYYYY
               value={dateFrom}
-              onChange={(e) => setDateFrom(e.target.value)}
-              className="bg-transparent text-sm font-semibold text-gray-700 focus:outline-none cursor-pointer"
+              onChange={setDateFrom}
+              maxDate={getTodaySãoPaulo()}
+              className="w-28 bg-transparent text-sm font-semibold text-gray-700 focus:outline-none"
             />
             <span className="text-gray-300">—</span>
-            <input 
-              type="date" 
+            <DateInputDDMMYYYY
               value={dateTo}
-              onChange={(e) => setDateTo(e.target.value)}
-              className="bg-transparent text-sm font-semibold text-gray-700 focus:outline-none cursor-pointer"
+              onChange={setDateTo}
+              maxDate={getTodaySãoPaulo()}
+              className="w-28 bg-transparent text-sm font-semibold text-gray-700 focus:outline-none"
             />
+            <button
+              type="button"
+              onClick={() => {
+                if (!dashboardLoadInFlightRef.current) {
+                  dashboardLoadInFlightRef.current = true;
+                  loadDashboard().finally(() => { dashboardLoadInFlightRef.current = false; });
+                }
+              }}
+              disabled={metricsLoading}
+              className="ml-1 px-4 py-2 rounded-lg font-bold text-sm bg-[#8CD955] text-white hover:bg-[#7BC84A] disabled:opacity-50 transition-colors flex items-center gap-2"
+            >
+              {metricsLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+              Buscar
+            </button>
           </div>
         </div>
 
@@ -658,7 +924,16 @@ export default function CRMSection({ userId }: CRMSectionProps) {
         </div>
       ) : (
         /* Dashboard View */
-        <div className="space-y-6">
+        <div className="relative">
+          {metricsLoading && (
+            <div className="absolute inset-0 z-20 flex items-center justify-center rounded-xl bg-white/90 backdrop-blur-sm">
+              <div className="flex flex-col items-center gap-3">
+                <Loader2 className="w-10 h-10 text-[#8CD955] animate-spin" />
+                <span className="text-sm font-medium text-gray-600">Carregando dados...</span>
+              </div>
+            </div>
+          )}
+          <div className="space-y-6">
           {/* KPI Rows */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <MetricCard 
@@ -714,23 +989,56 @@ export default function CRMSection({ userId }: CRMSectionProps) {
             />
           </div>
 
-          {/* Charts Row 1 */}
+          {/* Top 5 Consultores - linha inteira com filtro por métrica */}
+          <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+              <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2">
+                <Trophy className="w-4 h-4 text-amber-500" />
+                Top 5 Consultores
+              </h3>
+              <div className="flex items-center gap-2">
+                <label htmlFor="top5-sort" className="text-xs font-semibold text-gray-500 whitespace-nowrap">Filtrar por:</label>
+                <select
+                  id="top5-sort"
+                  value={top5Sort}
+                  onChange={(e) => setTop5Sort(e.target.value)}
+                  className="px-3 py-2 bg-gray-50 border border-gray-100 rounded-lg text-sm font-medium text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30"
+                >
+                  <option value="vendas">Por vendas</option>
+                  <option value="cadastro">Por cadastro</option>
+                  <option value="apostas">Por apostas</option>
+                  <option value="apostas_bicho">Por apostas bicho</option>
+                  <option value="vendas_bicho">Por vendas bicho</option>
+                  <option value="estrelas">Por clientes estrelas</option>
+                  <option value="afiliados">Por clientes com afiliados</option>
+                </select>
+              </div>
+            </div>
+            {!chartData ? (
+              <div className="flex items-center justify-center py-16 text-gray-300">
+                <RefreshCw className="w-8 h-8 animate-spin mr-2" />
+                Carregando...
+              </div>
+            ) : top5List.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12 text-gray-500">
+                <Trophy className="w-12 h-12 text-gray-300 mb-2" />
+                <p className="text-sm font-medium">Nenhum consultor no período</p>
+              </div>
+            ) : (
+              <Top5ConsultoresCards list={top5List} showBancas={selectedBanca === 'all'} sortKey={top5Sort} />
+            )}
+          </div>
+
+          {/* Demais gráficos */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <ChartBox title="Distribuição de Leads" icon={LayoutIcon} iconColor="text-purple-500">
               {chartData?.status_distribution ? <StatusDistributionChart data={chartData.status_distribution} /> : <LoadingChart />}
             </ChartBox>
 
-            <ChartBox title="Top 5 Consultores" icon={Trophy} iconColor="text-amber-500">
-              {chartData?.top_consultants ? <BancaRankingChart data={chartData.top_consultants} prefix="R$ " /> : <LoadingChart />}
-            </ChartBox>
-
             <ChartBox title="Lucratividade por Consultor" icon={Target} iconColor="text-[#8CD955]">
               {chartData?.consultant_profitability ? <BancaRankingChart data={chartData.consultant_profitability} prefix="R$ " /> : <LoadingChart />}
             </ChartBox>
-          </div>
 
-          {/* Charts Row 2 */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <ChartBox title="Evolução Temporal" icon={TrendingUp} iconColor="text-orange-500">
               {chartData?.temporal_evolution ? <TemporalEvolutionChart data={chartData.temporal_evolution} /> : <LoadingChart />}
             </ChartBox>
@@ -742,6 +1050,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
             <ChartBox title="Atividade por Dia" icon={Calendar} iconColor="text-indigo-500">
               {chartData?.activity_by_weekday ? <ActivityByWeekdayChart data={chartData.activity_by_weekday} /> : <LoadingChart />}
             </ChartBox>
+          </div>
           </div>
         </div>
       )}
@@ -768,6 +1077,180 @@ function LoadingChart() {
     <div className="h-full flex items-center justify-center text-gray-300 text-xs italic">
       <RefreshCw className="w-4 h-4 animate-spin mr-2" />
       Carregando...
+    </div>
+  );
+}
+
+/** Item do Top 5: name, email, value, bancas opcional. */
+interface Top5Item {
+  name: string;
+  email?: string;
+  value: number;
+  bancas?: string[];
+}
+
+const TOP5_SORT_MONEY_KEYS = ['vendas', 'apostas', 'apostas_bicho', 'vendas_bicho'];
+
+function formatTop5Value(value: number, sortKey: string): string {
+  if (TOP5_SORT_MONEY_KEYS.includes(sortKey)) {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
+  }
+  return new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 0 }).format(value);
+}
+
+function Top5ConsultoresCards({ list, showBancas = true, sortKey = 'vendas' }: { list: Top5Item[]; showBancas?: boolean; sortKey?: string }) {
+  const firstValue = list[0]?.value ?? 0;
+  return (
+    <div className="space-y-3">
+      {list.map((consultant, index) => {
+        const position = index + 1;
+        const getRankStyle = () => {
+          switch (position) {
+            case 1:
+              return {
+                rankBg: 'bg-gradient-to-br from-amber-400 to-amber-600',
+                rankText: 'text-white',
+                cardBg: 'bg-gradient-to-br from-amber-50 to-amber-100/50',
+                cardBorder: 'border-amber-200',
+                medal: '🥇',
+                shadow: 'shadow-lg shadow-amber-200/50',
+              };
+            case 2:
+              return {
+                rankBg: 'bg-gradient-to-br from-gray-300 to-gray-500',
+                rankText: 'text-white',
+                cardBg: 'bg-gradient-to-br from-gray-50 to-gray-100/50',
+                cardBorder: 'border-gray-200',
+                medal: '🥈',
+                shadow: 'shadow-md shadow-gray-200/50',
+              };
+            case 3:
+              return {
+                rankBg: 'bg-gradient-to-br from-orange-300 to-orange-500',
+                rankText: 'text-white',
+                cardBg: 'bg-gradient-to-br from-orange-50 to-orange-100/50',
+                cardBorder: 'border-orange-200',
+                medal: '🥉',
+                shadow: 'shadow-md shadow-orange-200/50',
+              };
+            default:
+              return {
+                rankBg: 'bg-gradient-to-br from-blue-400 to-blue-600',
+                rankText: 'text-white',
+                cardBg: 'bg-gradient-to-br from-blue-50 to-blue-100/50',
+                cardBorder: 'border-blue-200',
+                medal: null,
+                shadow: 'shadow-sm',
+              };
+          }
+        };
+        const style = getRankStyle();
+        const initials = consultant.name
+          .split(/\s+/)
+          .map((n) => n[0])
+          .join('')
+          .toUpperCase()
+          .slice(0, 2) || '?';
+        const bancasLabel = consultant.bancas?.length
+          ? consultant.bancas.join(', ')
+          : null;
+        return (
+          <div
+            key={index}
+            className={`relative ${style.cardBg} ${style.cardBorder} border-2 rounded-xl p-3 transition-all hover:scale-[1.01] ${style.shadow}`}
+          >
+            <div className="flex items-center gap-3">
+              <div
+                className={`${style.rankBg} ${style.rankText} w-10 h-10 rounded-lg flex items-center justify-center font-bold text-sm shrink-0 shadow-md`}
+              >
+                {style.medal ? (
+                  <span className="text-xl">{style.medal}</span>
+                ) : (
+                  <span>#{position}</span>
+                )}
+              </div>
+              <div
+                className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-xs text-white shadow-md ${
+                  position === 1
+                    ? 'bg-gradient-to-br from-amber-500 to-amber-700'
+                    : position === 2
+                      ? 'bg-gradient-to-br from-gray-400 to-gray-600'
+                      : position === 3
+                        ? 'bg-gradient-to-br from-orange-400 to-orange-600'
+                        : 'bg-gradient-to-br from-blue-500 to-blue-700'
+                }`}
+              >
+                {initials}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex flex-wrap items-baseline gap-1.5">
+                  <h3 className="font-bold text-gray-800 text-sm truncate">
+                    {consultant.name}
+                  </h3>
+                  {consultant.email && (
+                    <span className="text-xs text-gray-500 truncate" title={consultant.email}>
+                      ({consultant.email})
+                    </span>
+                  )}
+                </div>
+                <p className="mt-0.5 text-base font-extrabold text-emerald-600">
+                  {formatTop5Value(consultant.value, sortKey)}
+                </p>
+                {showBancas && bancasLabel && (
+                  <p className="text-[10px] text-gray-500 mt-0.5 truncate" title={bancasLabel}>
+                    Banca(s): {bancasLabel}
+                  </p>
+                )}
+              </div>
+              {position <= 3 && (
+                <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/80 backdrop-blur-sm border border-white/50 shrink-0">
+                  <Trophy
+                    className={`w-3 h-3 ${
+                      position === 1
+                        ? 'text-amber-500'
+                        : position === 2
+                          ? 'text-gray-500'
+                          : 'text-orange-500'
+                    }`}
+                  />
+                  <span className="text-[10px] font-bold text-gray-700">
+                    {position === 1 ? 'Campeão' : position === 2 ? 'Vice' : '3º Lugar'}
+                  </span>
+                </div>
+              )}
+            </div>
+            {position > 1 && firstValue > 0 && (
+              <div className="mt-2 pt-2 border-t border-white/50">
+                <div className="flex items-center justify-between text-[10px] text-gray-600 mb-0.5">
+                  <span>Progresso em relação ao 1º lugar</span>
+                  <span className="font-bold">
+                    {((consultant.value / firstValue) * 100).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 1 })}%
+                  </span>
+                </div>
+                <div className="w-full bg-white/60 rounded-full h-1.5 overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      position === 2
+                        ? 'bg-gradient-to-r from-gray-400 to-gray-500'
+                        : position === 3
+                          ? 'bg-gradient-to-r from-orange-400 to-orange-500'
+                          : 'bg-gradient-to-r from-blue-400 to-blue-500'
+                    }`}
+                    style={{
+                      width: `${(consultant.value / firstValue) * 100}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
