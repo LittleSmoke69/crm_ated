@@ -72,6 +72,11 @@ function formatDigitsToDDMMYYYY(digits: string): string {
 const MESES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 
+/** Retorna a data de hoje no fuso de São Paulo (YYYY-MM-DD). */
+function getTodaySãoPaulo(): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+}
+
 /** Retorna dias do mês para exibir no calendário (com vazios no início) */
 function getCalendarDays(year: number, month: number): (number | null)[] {
   const first = new Date(year, month, 1);
@@ -82,8 +87,8 @@ function getCalendarDays(year: number, month: number): (number | null)[] {
   return days;
 }
 
-/** Input de data com calendário ao clicar (dd/MM/yyyy) */
-function DateInputDDMMYYYY({ value, onChange, className = '' }: { value: string; onChange: (yyyyMmDd: string) => void; className?: string }) {
+/** Input de data com calendário ao clicar (dd/MM/yyyy). maxDate em YYYY-MM-DD limita seleção até essa data (ex.: hoje em SP). */
+function DateInputDDMMYYYY({ value, onChange, className = '', maxDate }: { value: string; onChange: (yyyyMmDd: string) => void; className?: string; maxDate?: string }) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const valueDate = value ? (() => { const [y, m, d] = value.split('-').map(Number); return { y, m: m - 1, d }; })() : null;
@@ -121,8 +126,8 @@ function DateInputDDMMYYYY({ value, onChange, className = '' }: { value: string;
     else setView({ ...view, month: view.month + 1 });
   };
   const days = getCalendarDays(view.year, view.month);
-  const today = new Date();
-  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  const todaySP = getTodaySãoPaulo();
+  const todayStr = maxDate ?? todaySP;
   return (
     <div className="relative" ref={containerRef}>
       <div
@@ -153,14 +158,16 @@ function DateInputDDMMYYYY({ value, onChange, className = '' }: { value: string;
               if (day === null) return <div key={`e-${i}`} />;
               const iso = `${view.year}-${String(view.month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
               const isSelected = value === iso;
-              const isToday = todayStr === iso;
+              const isToday = todaySP === iso;
+              const isAfterMax = maxDate && iso > maxDate;
               return (
                 <button
                   key={i}
                   type="button"
-                  onClick={() => selectDay(day)}
+                  onClick={() => !isAfterMax && selectDay(day)}
+                  disabled={isAfterMax}
                   className={`w-8 h-8 rounded-lg text-sm font-medium transition-colors ${
-                    isSelected ? 'bg-[#8CD955] text-white' : isToday ? 'bg-gray-200 text-gray-800' : 'hover:bg-gray-100 text-gray-700'
+                    isAfterMax ? 'text-gray-300 cursor-not-allowed' : isSelected ? 'bg-[#8CD955] text-white' : isToday ? 'bg-gray-200 text-gray-800' : 'hover:bg-gray-100 text-gray-700'
                   }`}
                 >
                   {day}
@@ -354,8 +361,8 @@ export default function CRMSection({ userId }: CRMSectionProps) {
   
   // Filters
   const [selectedBanca, setSelectedBanca] = useState('all');
-  const [dateFrom, setDateFrom] = useState(new Date().toISOString().split('T')[0]);
-  const [dateTo, setDateTo] = useState(new Date().toISOString().split('T')[0]);
+  const [dateFrom, setDateFrom] = useState(() => getTodaySãoPaulo());
+  const [dateTo, setDateTo] = useState(() => getTodaySãoPaulo());
   const [top5Sort, setTop5Sort] = useState<string>('vendas');
 
   // Dashboard Data
@@ -387,15 +394,6 @@ export default function CRMSection({ userId }: CRMSectionProps) {
       initialLoadInFlightRef.current = false;
     });
   }, [userId]);
-
-  useEffect(() => {
-    if (!userId) return;
-    if (dashboardLoadInFlightRef.current) return;
-    dashboardLoadInFlightRef.current = true;
-    loadDashboard().finally(() => {
-      dashboardLoadInFlightRef.current = false;
-    });
-  }, [selectedBanca, dateFrom, dateTo, userId]);
 
   type ConsultantMetricsRow = {
     name: string;
@@ -638,14 +636,30 @@ export default function CRMSection({ userId }: CRMSectionProps) {
             <DateInputDDMMYYYY
               value={dateFrom}
               onChange={setDateFrom}
+              maxDate={getTodaySãoPaulo()}
               className="w-28 bg-transparent text-sm font-semibold text-gray-700 focus:outline-none"
             />
             <span className="text-gray-300">—</span>
             <DateInputDDMMYYYY
               value={dateTo}
               onChange={setDateTo}
+              maxDate={getTodaySãoPaulo()}
               className="w-28 bg-transparent text-sm font-semibold text-gray-700 focus:outline-none"
             />
+            <button
+              type="button"
+              onClick={() => {
+                if (!dashboardLoadInFlightRef.current) {
+                  dashboardLoadInFlightRef.current = true;
+                  loadDashboard().finally(() => { dashboardLoadInFlightRef.current = false; });
+                }
+              }}
+              disabled={metricsLoading}
+              className="ml-1 px-4 py-2 rounded-lg font-bold text-sm bg-[#8CD955] text-white hover:bg-[#7BC84A] disabled:opacity-50 transition-colors flex items-center gap-2"
+            >
+              {metricsLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+              Buscar
+            </button>
           </div>
         </div>
 
