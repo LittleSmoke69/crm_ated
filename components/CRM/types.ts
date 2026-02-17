@@ -63,6 +63,8 @@ export interface Lead {
   /** Banca em que o lead está cadastrado (preenchido quando há múltiplas bancas ou filtro "Todas as Bancas") */
   banca_id?: string;
   banca_name?: string;
+  /** URL da banca em que o lead está cadastrado; usar para histórico depósito/saque/aposta. */
+  banca_url?: string;
   /** Id numérico do lead na API externa (ex.: 28660). Usar como user_id ao salvar feedback. */
   original_id?: number | string;
   /** Campos de lead transferido (página Transferido) */

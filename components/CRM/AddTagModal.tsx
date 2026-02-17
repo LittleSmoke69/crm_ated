@@ -15,7 +15,8 @@ interface AddTagModalProps {
   leadId: string | number;
   currentTags: Tag[];
   targetUserId?: string;
-  onTagAdded?: () => void;
+  /** Chamado com a etiqueta adicionada; o parent pode atualizar o estado local sem refetch. */
+  onTagAdded?: (addedTag: Tag) => void;
 }
 
 const AddTagModal: React.FC<AddTagModalProps> = ({
@@ -44,12 +45,11 @@ const AddTagModal: React.FC<AddTagModalProps> = ({
   useEffect(() => {
     if (!addedTag) return;
     const t = setTimeout(() => {
-      onTagAdded?.();
       setAddedTag(null);
       onClose();
     }, 1800);
     return () => clearTimeout(t);
-  }, [addedTag, onTagAdded, onClose]);
+  }, [addedTag, onClose]);
 
   const loadTags = async () => {
     try {
@@ -122,11 +122,12 @@ const AddTagModal: React.FC<AddTagModalProps> = ({
       const result = await response.json();
 
       if (result.success) {
-        onTagAdded?.();
         const tagAdded = tags.find(t => t.id === tagId);
         if (tagAdded) {
+          onTagAdded?.(tagAdded);
           setAddedTag(tagAdded);
         } else {
+          onTagAdded?.({ id: tagId, label: '', color: '#6B7280' });
           onClose();
         }
       } else {
@@ -143,7 +144,6 @@ const AddTagModal: React.FC<AddTagModalProps> = ({
   if (!isOpen) return null;
 
   const handleCloseAfterSuccess = () => {
-    onTagAdded?.();
     setAddedTag(null);
     onClose();
   };

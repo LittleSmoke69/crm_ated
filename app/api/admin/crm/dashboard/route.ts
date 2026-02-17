@@ -22,6 +22,8 @@ function normalizeBancaUrl(url: string): string {
 /** Lead com banca de origem e campos opcionais do CRM (estrelas, afiliados). */
 type LeadWithBanca = IndicatedLead & {
   banca_name?: string;
+  banca_id?: string;
+  banca_url?: string;
   aposta_estrelas?: number;
   total_afiliate?: number;
 };
@@ -250,8 +252,10 @@ export async function GET(req: NextRequest) {
         .from('crm_bancas')
         .select('id, url, name')
         .not('url', 'is', null);
-      const bancaRow = (bancasList ?? []).find((b: { url: string }) => normalizeBancaUrl(b.url) === cleanUrl);
+      const bancaRow = (bancasList ?? []).find((b: { id: string; url: string; name: string | null }) => normalizeBancaUrl(b.url) === cleanUrl) as { id: string; url: string; name: string | null } | undefined;
       const bancaName = bancaRow?.name ?? null;
+      const bancaId = bancaRow?.id ?? undefined;
+      const bancaUrlForLead = bancaRow?.url?.trim() ? normalizeBancaUrl(bancaRow.url) : undefined;
       let leadsRaw: IndicatedLead[] = [];
       try {
         leadsRaw = await fetchIndicatedsByPeriod(cleanUrl, from, to);
@@ -259,9 +263,12 @@ export async function GET(req: NextRequest) {
         console.error('Erro ao buscar indicados da banca:', err);
         return successResponse(emptyResponse());
       }
-      const leads: LeadWithBanca[] = bancaName
-        ? leadsRaw.map((l) => ({ ...l, banca_name: bancaName }))
-        : leadsRaw.map((l) => ({ ...l }));
+      const leads: LeadWithBanca[] = leadsRaw.map((l) => ({
+        ...l,
+        ...(bancaName && { banca_name: bancaName }),
+        ...(bancaId && { banca_id: bancaId }),
+        ...(bancaUrlForLead && { banca_url: bancaUrlForLead }),
+      }));
       const metrics = computeExternalMetricsFromLeads(leads);
       const chartData = buildChartDataFromLeads(leads);
       return successResponse({
@@ -302,7 +309,14 @@ export async function GET(req: NextRequest) {
         try {
           const leads = await fetchIndicatedsByPeriod(cleanUrl, from, to);
           const bancaName = b.name?.trim() || null;
-          allLeads.push(...leads.map((l) => ({ ...l, banca_name: bancaName ?? undefined })));
+          const bancaId = b.id ?? undefined;
+          const bancaUrlForLead = b.url?.trim() ? cleanUrl : undefined;
+          allLeads.push(...leads.map((l) => ({
+            ...l,
+            ...(bancaName && { banca_name: bancaName }),
+            ...(bancaId && { banca_id: bancaId }),
+            ...(bancaUrlForLead && { banca_url: bancaUrlForLead }),
+          })));
         } catch (err) {
           console.error(`Erro ao buscar indicados (${b.url}):`, err);
         }
