@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Phone, AlertCircle } from 'lucide-react';
+import { Phone, AlertCircle } from 'lucide-react';
 
 interface TelefoneModalProps {
   isOpen: boolean;
@@ -9,6 +9,7 @@ interface TelefoneModalProps {
   onSave: (telefone: string) => Promise<void>;
 }
 
+/** Modal obrigatório: usuário precisa cadastrar o telefone para continuar usando o Zaploto. */
 const TelefoneModal: React.FC<TelefoneModalProps> = ({ isOpen, onClose, onSave }) => {
   const [telefone, setTelefone] = useState('');
   const [loading, setLoading] = useState(false);
@@ -65,25 +66,16 @@ const TelefoneModal: React.FC<TelefoneModalProps> = ({ isOpen, onClose, onSave }
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style={{ pointerEvents: 'auto' }}>
       <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 relative animate-in fade-in zoom-in duration-200">
-        {/* Botão fechar */}
-        <button
-          onClick={onClose}
-          className="absolute top-4 right-4 p-2 text-gray-400 hover:text-gray-600 transition-colors"
-          aria-label="Fechar"
-        >
-          <X className="w-5 h-5" />
-        </button>
-
-        {/* Header */}
+        {/* Header - sem botão fechar: preenchimento obrigatório */}
         <div className="flex items-center gap-3 mb-6">
           <div className="p-3 bg-[#8CD955] bg-opacity-10 rounded-xl">
             <Phone className="w-6 h-6 text-[#8CD955]" />
           </div>
           <div>
             <h2 className="text-xl font-bold text-gray-900">Cadastre seu telefone</h2>
-            <p className="text-sm text-gray-500">Número pessoal</p>
+            <p className="text-sm text-gray-500">Obrigatório para continuar no Zaploto</p>
           </div>
         </div>
 
@@ -130,22 +122,14 @@ const TelefoneModal: React.FC<TelefoneModalProps> = ({ isOpen, onClose, onSave }
             </div>
           )}
 
-          {/* Botões */}
-          <div className="flex gap-3 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={loading}
-              className="flex-1 px-4 py-3 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-xl font-medium transition-colors disabled:opacity-50"
-            >
-              Depois
-            </button>
+          {/* Botão único: obrigatório preencher para continuar */}
+          <div className="pt-2">
             <button
               type="submit"
-              disabled={loading || !telefone.trim()}
-              className="flex-1 px-4 py-3 bg-[#8CD955] hover:bg-[#7BC844] text-white rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={loading || !telefone.trim() || telefone.length < 10}
+              className="w-full px-4 py-3 bg-[#8CD955] hover:bg-[#7BC844] text-white rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {loading ? 'Salvando...' : 'Salvar'}
+              {loading ? 'Salvando...' : 'Continuar'}
             </button>
           </div>
         </form>

@@ -98,8 +98,7 @@ export async function POST(req: NextRequest) {
           .in('id', validIds);
         const idsToInsert = (existing || []).map((b: { id: string }) => b.id);
         if (idsToInsert.length > 0) {
-          const rows = idsToInsert.map((banca_id: string) => ({ user_id: newUser.id, banca_id }));
-          await supabaseServiceRole.from('user_bancas').insert(rows);
+          await supabaseServiceRole.from('user_bancas').upsert({ user_id: newUser.id, banca_ids: idsToInsert }, { onConflict: 'user_id' });
         }
       }
     }

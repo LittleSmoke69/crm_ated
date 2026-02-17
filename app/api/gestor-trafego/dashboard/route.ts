@@ -117,18 +117,17 @@ export async function GET(req: NextRequest) {
       }
       if (!bancaId && !donoId) {
         const profileId = profile.id;
-        let { data: userBancas } = await supabaseServiceRole
+        let { data: ubRow } = await supabaseServiceRole
           .from('user_bancas')
-          .select('banca_id')
-          .eq('user_id', profileId);
-        if ((userBancas?.length ?? 0) === 0 && userId !== profileId) {
-          const { data: fallback } = await supabaseServiceRole
-            .from('user_bancas')
-            .select('banca_id')
-            .eq('user_id', userId);
-          userBancas = fallback ?? [];
+          .select('banca_ids')
+          .eq('user_id', profileId)
+          .maybeSingle();
+        if ((!ubRow?.banca_ids?.length) && userId !== profileId) {
+          const { data: fallback } = await supabaseServiceRole.from('user_bancas').select('banca_ids').eq('user_id', userId).maybeSingle();
+          ubRow = fallback ?? ubRow;
         }
-        const firstBancaId = userBancas?.[0]?.banca_id;
+        const bancaIdsArr = Array.isArray(ubRow?.banca_ids) ? ubRow.banca_ids : [];
+        const firstBancaId = bancaIdsArr[0];
         if (firstBancaId) {
           const { data: banca } = await supabaseServiceRole
             .from('crm_bancas')

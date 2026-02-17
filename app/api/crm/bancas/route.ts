@@ -196,14 +196,15 @@ async function filtrarBancasComLeadDoConsultor(
  * Retorna as bancas em que o usuário está atribuído (user_bancas -> crm_bancas).
  */
 async function getBancasDoUsuario(userId: string): Promise<BancaRow[]> {
-  const { data: userBancas, error } = await supabaseServiceRole
+  const { data: row, error } = await supabaseServiceRole
     .from('user_bancas')
-    .select('banca_id')
-    .eq('user_id', userId);
+    .select('banca_ids')
+    .eq('user_id', userId)
+    .maybeSingle();
 
-  if (error || !userBancas?.length) return [];
+  if (error || !Array.isArray(row?.banca_ids) || row.banca_ids.length === 0) return [];
 
-  const bancaIds = userBancas.map((ub: { banca_id: string }) => ub.banca_id);
+  const bancaIds = row.banca_ids as string[];
   const { data: bancas, error: bancasError } = await supabaseServiceRole
     .from('crm_bancas')
     .select('id, name, url')

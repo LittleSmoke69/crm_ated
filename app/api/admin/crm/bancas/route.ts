@@ -22,15 +22,16 @@ export async function GET(req: NextRequest) {
 
     let bancas: { id: string; name: string; url: string }[];
     if (myBancasOnly && profile.status === 'admin') {
-      const { data: userBancaIds, error: ubError } = await supabaseServiceRole
+      const { data: row, error: ubError } = await supabaseServiceRole
         .from('user_bancas')
-        .select('banca_id')
-        .eq('user_id', userId);
-      if (ubError || !userBancaIds?.length) {
+        .select('banca_ids')
+        .eq('user_id', userId)
+        .maybeSingle();
+      if (ubError || !Array.isArray(row?.banca_ids) || row.banca_ids.length === 0) {
         console.log(`${LOG_PREFIX} GET my_bancas → 0 (no access)`);
         return successResponse([]);
       }
-      const bancaIds = userBancaIds.map((ub: { banca_id: string }) => ub.banca_id);
+      const bancaIds = row.banca_ids as string[];
       const { data: list, error } = await supabaseServiceRole
         .from('crm_bancas')
         .select('*')
@@ -73,13 +74,16 @@ export async function GET(req: NextRequest) {
 
     const { data: userBancas } = await supabaseServiceRole
       .from('user_bancas')
-      .select('banca_id, user_id');
+      .select('user_id, banca_ids');
 
     const userIdsByBancaId = new Map<string, string[]>();
-    (userBancas || []).forEach((ub: { banca_id: string; user_id: string }) => {
-      const list = userIdsByBancaId.get(ub.banca_id) || [];
-      list.push(ub.user_id);
-      userIdsByBancaId.set(ub.banca_id, list);
+    (userBancas || []).forEach((ub: { user_id: string; banca_ids: string[] }) => {
+      const ids = Array.isArray(ub.banca_ids) ? ub.banca_ids : [];
+      ids.forEach((bancaId: string) => {
+        const list = userIdsByBancaId.get(bancaId) || [];
+        list.push(ub.user_id);
+        userIdsByBancaId.set(bancaId, list);
+      });
     });
 
     const bancasWithUsers = bancas.map((b) => ({

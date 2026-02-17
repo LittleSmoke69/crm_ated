@@ -42,10 +42,17 @@ import FinancialMetricsBarChart from '@/components/Charts/FinancialMetricsBarCha
 import LeadsDistributionChart from '@/components/Charts/LeadsDistributionChart';
 import Funnel3DChart from '@/components/Charts/Funnel3DChart';
 
+interface ConsultorOutraBanca {
+  id: string;
+  email: string;
+  full_name: string | null;
+}
+
 interface Gerente {
   id: string;
   email: string;
   full_name: string | null;
+  consultoresEmOutrasBancas?: ConsultorOutraBanca[];
   metrics: {
     campaigns: number;
     contacts: number;
@@ -500,6 +507,32 @@ export default function GestorTrafegoClient({
     g.email.toLowerCase().includes(searchTerm.toLowerCase()) || 
     (g.full_name?.toLowerCase().includes(searchTerm.toLowerCase()))
   );
+
+  const [addingToBancaUserId, setAddingToBancaUserId] = useState<string | null>(null);
+
+  const handleAddConsultantToBanca = async (consultantId: string) => {
+    const id = bancaId;
+    if (!id) return;
+    setAddingToBancaUserId(consultantId);
+    try {
+      const res = await fetch(`/api/gestor-trafego/bancas/${id}/add-user`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: consultantId }),
+        credentials: 'include',
+      });
+      const result = await res.json();
+      if (result.success) {
+        await checkAuthorization();
+      } else {
+        console.error(result.error || 'Erro ao atribuir');
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setAddingToBancaUserId(null);
+    }
+  };
 
   const handleSyncMetaAds = async () => {
     const id = effectiveBancaId;
@@ -1629,7 +1662,8 @@ export default function GestorTrafegoClient({
                   </tr>
                 ) : (
                   filteredGerentes.map((gerente) => (
-                    <tr key={gerente.id} className="hover:bg-gray-50 transition-colors group">
+                    <React.Fragment key={gerente.id}>
+                    <tr className="hover:bg-gray-50 transition-colors group">
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-3">
                           <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700 font-bold">
@@ -1674,6 +1708,38 @@ export default function GestorTrafegoClient({
                         </a>
                       </td>
                     </tr>
+                    {gerente.consultoresEmOutrasBancas && gerente.consultoresEmOutrasBancas.length > 0 && (
+                      <tr className="bg-amber-50/60 border-l-4 border-amber-300">
+                        <td colSpan={7} className="px-6 py-3 text-sm">
+                          <p className="font-semibold text-amber-800 mb-2 flex items-center gap-1.5">
+                            <Users className="w-4 h-4" />
+                            Consultores deste gerente em outras bancas (ainda não atribuídos a {bancaName || 'esta banca'})
+                          </p>
+                          <ul className="space-y-1.5">
+                            {gerente.consultoresEmOutrasBancas.map((c) => (
+                              <li key={c.id} className="flex items-center justify-between gap-3 flex-wrap bg-white/80 rounded-lg px-3 py-2 border border-amber-100">
+                                <span className="text-gray-700">{c.full_name || c.email}</span>
+                                <span className="text-gray-500 text-xs">{c.email}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleAddConsultantToBanca(c.id)}
+                                  disabled={!!addingToBancaUserId || !bancaId}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                >
+                                  {addingToBancaUserId === c.id ? (
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                  ) : (
+                                    <Plus className="w-4 h-4" />
+                                  )}
+                                  Atribuir à {bancaName || 'banca'}
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        </td>
+                      </tr>
+                    )}
+                    </React.Fragment>
                   ))
                 )}
               </tbody>
@@ -1733,6 +1799,30 @@ export default function GestorTrafegoClient({
                       </p>
                     </div>
                   </div>
+                  {gerente.consultoresEmOutrasBancas && gerente.consultoresEmOutrasBancas.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-amber-200 bg-amber-50/60 rounded-xl p-3">
+                      <p className="text-xs font-semibold text-amber-800 mb-2 flex items-center gap-1">
+                        <Users className="w-3.5 h-3.5" />
+                        Em outras bancas (atribuir a {bancaName || 'esta banca'})
+                      </p>
+                      <ul className="space-y-2">
+                        {gerente.consultoresEmOutrasBancas.map((c) => (
+                          <li key={c.id} className="flex items-center justify-between gap-2 flex-wrap bg-white/90 rounded-lg px-2.5 py-2 border border-amber-100">
+                            <span className="text-gray-700 text-sm truncate">{c.full_name || c.email}</span>
+                            <button
+                              type="button"
+                              onClick={() => handleAddConsultantToBanca(c.id)}
+                              disabled={!!addingToBancaUserId || !bancaId}
+                              className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500 text-white text-xs font-medium hover:bg-amber-600 disabled:opacity-50"
+                            >
+                              {addingToBancaUserId === c.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
+                              Atribuir
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
               ))
             )}

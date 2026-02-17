@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
 
     const { data: users, error: usersError } = await supabaseServiceRole
       .from('profiles')
-      .select('id, email, full_name, status, enroller, created_at, last_seen_at, total_online_time')
+      .select('id, email, full_name, status, enroller, created_at, last_seen_at, total_online_time, total_crm_time')
       .order('created_at', { ascending: false });
 
     if (usersError) {

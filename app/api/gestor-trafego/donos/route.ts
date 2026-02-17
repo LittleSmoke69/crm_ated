@@ -72,11 +72,12 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const { data: userBancas } = await supabaseServiceRole
+    const { data: ubRow } = await supabaseServiceRole
       .from('user_bancas')
-      .select('banca_id')
-      .eq('user_id', userId!);
-    const bancaIds = (userBancas || []).map((r: { banca_id: string }) => r.banca_id);
+      .select('banca_ids')
+      .eq('user_id', userId!)
+      .maybeSingle();
+    const bancaIds = Array.isArray(ubRow?.banca_ids) ? (ubRow.banca_ids as string[]) : [];
     if (bancaIds.length > 0) {
       const { data: bancas } = await supabaseServiceRole
         .from('crm_bancas')
