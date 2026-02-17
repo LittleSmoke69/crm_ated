@@ -11,9 +11,9 @@ export async function PUT(req: NextRequest) {
   try {
     const { userId, profile } = await requireAuthWithProfile(req);
 
-    const allowed = ['consultor', 'gerente', 'super_admin'].includes(profile?.status || '');
+    const allowed = ['consultor', 'gerente', 'gestor', 'super_admin'].includes(profile?.status || '');
     if (!allowed) {
-      return errorResponse('Apenas consultores, gerentes e super admins podem alterar suas bancas', 403);
+      return errorResponse('Apenas consultores, gerentes, gestores e super admins podem alterar suas bancas', 403);
     }
 
     const body = await req.json();
@@ -40,27 +40,13 @@ export async function PUT(req: NextRequest) {
       }
     }
 
-    // Remove associações atuais e insere as novas
-    const { error: deleteError } = await supabaseServiceRole
+    const { error: upsertError } = await supabaseServiceRole
       .from('user_bancas')
-      .delete()
-      .eq('user_id', userId);
+      .upsert({ user_id: userId, banca_ids: bancaIds }, { onConflict: 'user_id' });
 
-    if (deleteError) {
-      console.error('[PUT /api/user/bancas] Erro ao remover bancas antigas:', deleteError);
+    if (upsertError) {
+      console.error('[PUT /api/user/bancas] Erro ao salvar bancas:', upsertError);
       return errorResponse('Erro ao atualizar bancas', 500);
-    }
-
-    if (bancaIds.length > 0) {
-      const rows = bancaIds.map((banca_id: string) => ({ user_id: userId, banca_id }));
-      const { error: insertError } = await supabaseServiceRole
-        .from('user_bancas')
-        .insert(rows);
-
-      if (insertError) {
-        console.error('[PUT /api/user/bancas] Erro ao inserir bancas:', insertError);
-        return errorResponse('Erro ao salvar bancas', 500);
-      }
     }
 
     return successResponse({

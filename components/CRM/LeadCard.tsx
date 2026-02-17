@@ -898,6 +898,20 @@ const LeadCard: React.FC<LeadCardProps> = ({
     return 'border-gray-200 bg-gray-100 shadow-sm';
   };
 
+  /** Cor da primeira etiqueta para destacar o card quando tiver tags; borda em todos os lados */
+  const tagAccentColor = lead.tags?.length ? lead.tags[0].color : null;
+  const hasBloqueadoTag = lead.tags?.some((t) => t.label.toUpperCase() === 'BLOQUEADO') ?? false;
+  const tagCardEffect =
+    tagAccentColor
+      ? {
+          boxShadow: `0 4px 24px -4px ${tagAccentColor}50, 0 0 0 2px ${tagAccentColor}40`,
+          border: `2px solid ${tagAccentColor}`,
+          ...(hasBloqueadoTag ? { opacity: 0.65 } : {}),
+        }
+      : hasBloqueadoTag
+        ? { opacity: 0.65 }
+        : undefined;
+
   // Layout compacto: cabeçalho → métricas → nível estrela → tags → telefone → rodapé (data, último depósito/cronômetro, Chamar)
   const compactCard = (() => {
     const temperature = lead.temperature || 'cold';
@@ -913,6 +927,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
         draggable
         onDragStart={(e) => onDragStart(e, lead.id)}
         className={`rounded-2xl border-2 p-4 hover:shadow-xl transition-all cursor-grab active:cursor-grabbing group mb-4 bg-white ${getCardStyle()}`}
+        style={tagCardEffect}
       >
         {/* 1. Cabeçalho: Avatar, Nome, Estrelas, Direto/Afiliado, Eye, Menu */}
         <div className="flex items-start gap-3 mb-4">
@@ -1114,6 +1129,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
       draggable
       onDragStart={(e) => onDragStart(e, lead.id)}
       className={`rounded-2xl border-2 p-5 hover:shadow-2xl transition-all cursor-grab active:cursor-grabbing group mb-6 ${getCardStyle()}`}
+      style={tagCardEffect}
     >
       {/* Header: Avatar, Name, Stars */}
       <div className="flex items-start justify-between mb-4 gap-2">

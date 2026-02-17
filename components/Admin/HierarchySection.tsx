@@ -56,7 +56,6 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
     email: '',
     password: '',
   });
-  const [crmTimeData, setCrmTimeData] = useState<Record<string, number>>({});
   const [showFixModal, setShowFixModal] = useState(false);
   const [fixingIssue, setFixingIssue] = useState<any>(null);
   const [selectedFixRole, setSelectedFixRole] = useState<'dono_banca' | 'gerente' | 'consultor'>('gerente');
@@ -252,13 +251,12 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
   };
 
   const getManagersByCrmBanca = (crmBancaId: string) => {
-    const owner = findOwnerByCrmBanca(crmBancaId);
-    if (owner?.subordinates?.length) return owner.subordinates;
     const banca = (crmBancas || []).find((b: any) => String(b.id) === String(crmBancaId));
     if (!banca?.user_ids?.length) return [];
-    return (banca.user_ids || [])
+    const gerentesNaBanca = (banca.user_ids || [])
       .map((uid: string) => allUsers.find((x: any) => x.id === uid))
       .filter((u: any) => u && u.status === 'gerente');
+    return gerentesNaBanca;
   };
 
   const handleCreateUser = async (e: React.FormEvent) => {
@@ -481,22 +479,28 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
       const errors: string[] = [];
 
       for (const assignSelectedUserId of assignSelectedUserIds) {
-        const res = await fetch(`/api/admin/users/${assignSelectedUserId}/update`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId! },
-          body: JSON.stringify(payload),
-        });
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-          const u = (allUsers || []).find((x: any) => x.id === assignSelectedUserId);
-          errors.push(u ? `${u.full_name || u.email}: ${data.message || 'Erro'}` : data.message || 'Erro');
-          continue;
-        }
+        let patchPayload = { ...payload };
         if (assignFormData.status === 'gerente' || assignFormData.status === 'consultor') {
           const getRes = await fetch(`/api/admin/users/${assignSelectedUserId}/bancas`, { headers: { 'X-User-Id': userId! } });
           const getData = await getRes.json();
           const currentIds = (getData.data?.banca_ids || []) as string[];
-          if (!currentIds.includes(assignFormData.bancaId)) {
+          const isAddingBanca = !currentIds.includes(assignFormData.bancaId);
+          if (currentIds.length > 0 && isAddingBanca && 'enroller' in patchPayload) {
+            const { enroller: _, ...rest } = patchPayload;
+            patchPayload = rest as Record<string, unknown>;
+          }
+          const res = await fetch(`/api/admin/users/${assignSelectedUserId}/update`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', 'X-User-Id': userId! },
+            body: JSON.stringify(patchPayload),
+          });
+          const data = await res.json();
+          if (!res.ok || !data.success) {
+            const u = (allUsers || []).find((x: any) => x.id === assignSelectedUserId);
+            errors.push(u ? `${u.full_name || u.email}: ${data.message || 'Erro'}` : data.message || 'Erro');
+            continue;
+          }
+          if (isAddingBanca) {
             const putRes = await fetch(`/api/admin/users/${assignSelectedUserId}/bancas`, {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json', 'X-User-Id': userId! },
@@ -508,6 +512,18 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
               errors.push(u ? `${u.full_name || u.email}: ${putData.error || 'Erro ao vincular'}` : putData.error || 'Erro');
               continue;
             }
+          }
+        } else {
+          const res = await fetch(`/api/admin/users/${assignSelectedUserId}/update`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', 'X-User-Id': userId! },
+            body: JSON.stringify(patchPayload),
+          });
+          const data = await res.json();
+          if (!res.ok || !data.success) {
+            const u = (allUsers || []).find((x: any) => x.id === assignSelectedUserId);
+            errors.push(u ? `${u.full_name || u.email}: ${data.message || 'Erro'}` : data.message || 'Erro');
+            continue;
           }
         }
         successCount++;
@@ -543,7 +559,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
     const config = roleConfig[role];
     const Icon = config.icon;
     const zaplotoHours = formatTime(user.total_online_time || 0);
-    const crmHours = formatTime(crmTimeData[user.id] || 0);
+    const crmHours = formatTime((user as { total_crm_time?: number | null }).total_crm_time ?? 0);
     const showRemoveFromBanca = bancaId && (role === 'gerente' || role === 'consultor');
     return (
       <div className="bg-white rounded-xl shadow-md border border-gray-200 p-4 hover:shadow-lg transition-shadow">
@@ -921,17 +937,53 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                         </div>
                       )}
 
-                      {owner && owner.subordinates && owner.subordinates.length > 0 && (
+                      {owner && (
                         <div className="mb-6">
                           <h3 className="text-lg font-semibold text-gray-800 mb-3 flex items-center gap-2">
                             <Users className="w-5 h-5 text-blue-600" />
-                            Gerentes ({owner.subordinates.length})
+                            Gerentes e Consultores nesta banca
                           </h3>
-                          <div className="space-y-6">
-                            {owner.subordinates.map((gerente: any) => (
+                          {(() => {
+                            const gerentesInBanca = (crmBanca.user_ids || [])
+                              .map((uid: string) => allUsers.find((x: any) => x.id === uid))
+                              .filter((u: any) => u && u.status === 'gerente');
+                            const gerenteIdsInBanca = new Set(gerentesInBanca.map((g: any) => g.id));
+                            const consultoresNaBanca = (crmBanca.user_ids || [])
+                              .map((uid: string) => allUsers.find((x: any) => x.id === uid))
+                              .filter((u: any) => u && u.status === 'consultor');
+                            const consultoresLigadosAosGerentes = (allUsers || []).filter(
+                              (u: any) => u.status === 'consultor' && u.enroller && gerenteIdsInBanca.has(u.enroller)
+                            );
+                            const consultoresEmGerente = new Map<string, any[]>();
+                            gerentesInBanca.forEach((g: any) => {
+                              const subs = consultoresLigadosAosGerentes.filter((c: any) => c.enroller === g.id);
+                              consultoresEmGerente.set(g.id, subs);
+                            });
+                            const consultoresSemGerenteNaBanca = consultoresNaBanca.filter((c: any) => !gerenteIdsInBanca.has(c.enroller));
+                            const gerentesComConsultores = gerentesInBanca.map((gerente: any) => ({
+                              ...gerente,
+                              subordinates: consultoresEmGerente.get(gerente.id) || [],
+                            }));
+                            const total = gerentesInBanca.length + consultoresLigadosAosGerentes.length + consultoresSemGerenteNaBanca.length;
+                            if (total === 0) {
+                              return (
+                                <div className="text-center py-8 text-gray-500">
+                                  <Users className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+                                  <p className="font-medium">Nenhum gerente cadastrado nesta banca</p>
+                                  <div className="mt-3 flex items-center justify-center gap-4">
+                                    <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'gerente', enroller: owner.id, bancaOwnerId: owner.id, bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className="text-sm text-[#8CD955] hover:underline">Adicionar primeiro gerente</button>
+                                    <span className="text-gray-400">ou</span>
+                                    <button onClick={() => handleOpenAssignModal({ status: 'gerente', enroller: owner.id, bancaId: String(crmBanca.id), bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), ownerId: owner.id })} className="text-sm text-blue-600 hover:underline">Atribuir usuário existente</button>
+                                  </div>
+                                </div>
+                              );
+                            }
+                            return (
+                              <div className="space-y-6">
+                                {gerentesComConsultores.map((gerente: any) => (
                               <div key={gerente.id} className="bg-blue-50/30 rounded-lg p-4 border border-blue-100">
                                 {renderUserCard(gerente, 'gerente', crmBanca.id)}
-                                {gerente.subordinates && gerente.subordinates.length > 0 ? (
+                                    {gerente.subordinates && gerente.subordinates.length > 0 ? (
                                   <div className="mt-4 pl-4 border-l-2 border-blue-300 space-y-3">
                                     <div className="flex items-center justify-between mb-3">
                                       <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide flex items-center gap-2">
@@ -939,7 +991,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                                         Consultores ({gerente.subordinates.length})
                                       </h4>
                                       <div className="flex items-center gap-1">
-                                        {owner.subordinates && owner.subordinates.length > 1 && (
+                                        {gerentesComConsultores.length > 1 && (
                                           <button onClick={() => openMoveConsultantsModal(owner, gerente, crmBanca)} className="p-1.5 text-amber-600 hover:bg-amber-50 rounded transition-colors" title="Mover consultores para outro gerente"><ArrowRightLeft className="w-4 h-4" /></button>
                                         )}
                                         <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'consultor', enroller: gerente.id, bancaOwnerId: owner.id, bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className="p-1.5 text-green-600 hover:bg-green-50 rounded transition-colors" title="Adicionar Consultor"><UserPlus className="w-4 h-4" /></button>
@@ -961,22 +1013,25 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                                       </button>
                                     </div>
                                   </div>
+                                    )}
+                                  </div>
+                                ))}
+                                {consultoresSemGerenteNaBanca.length > 0 && (
+                                  <div className="bg-gray-50/50 rounded-lg p-4 border border-gray-200">
+                                    <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-3 flex items-center gap-2">
+                                      <User className="w-4 h-4 text-gray-600" />
+                                      Consultores diretos (sem gerente nesta banca)
+                                    </h4>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                      {consultoresSemGerenteNaBanca.map((c: any) => (
+                                        <div key={c.id}>{renderUserCard(c, 'consultor', crmBanca.id)}</div>
+                                      ))}
+                                    </div>
+                                  </div>
                                 )}
                               </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {owner && (!owner.subordinates || owner.subordinates.length === 0) && (
-                        <div className="text-center py-8 text-gray-500">
-                          <Users className="w-12 h-12 mx-auto mb-3 text-gray-300" />
-                          <p className="font-medium">Nenhum gerente cadastrado</p>
-                          <div className="mt-3 flex items-center justify-center gap-4">
-                            <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'gerente', enroller: owner.id, bancaOwnerId: owner.id, bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className="text-sm text-[#8CD955] hover:underline">Adicionar primeiro gerente</button>
-                            <span className="text-gray-400">ou</span>
-                            <button onClick={() => handleOpenAssignModal({ status: 'gerente', enroller: owner.id, bancaId: String(crmBanca.id), bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), ownerId: owner.id })} className="text-sm text-blue-600 hover:underline">Atribuir usuário existente</button>
-                          </div>
+                            );
+                          })()}
                         </div>
                       )}
                     </div>
@@ -1171,17 +1226,28 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                     if (!u.email) return false;
                     return !search || (u.email || '').toLowerCase().includes(search) || (u.full_name || '').toLowerCase().includes(search);
                   });
-                  return filtered.length > 0 ? filtered.map((u: any) => (
-                    <button key={u.id} type="button" onClick={() => toggleAssignUser(u.id)} className={`w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-gray-50 transition-colors ${assignSelectedUserIds.includes(u.id) ? 'bg-teal-50 border-l-4 border-teal-500' : ''}`}>
-                      <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center font-bold text-gray-600 flex-shrink-0">{(u.full_name || u.email)[0]?.toUpperCase() || '?'}</div>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium text-gray-900 truncate">{u.full_name || 'Sem nome'}</p>
-                        <p className="text-xs text-gray-500 truncate">{u.email}</p>
-                        <span className="inline-block mt-1 px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">{u.status}</span>
-                      </div>
-                      {assignSelectedUserIds.includes(u.id) && <CheckCircle2 className="w-5 h-5 text-teal-600 flex-shrink-0" />}
-                    </button>
-                  )) : (
+                  const selectedGerenteId = assignFormData.status === 'consultor' ? assignFormData.enroller : null;
+                  return filtered.length > 0 ? filtered.map((u: any) => {
+                    const alreadyAssignedToThisGerente = selectedGerenteId && u.status === 'consultor' && u.enroller === selectedGerenteId;
+                    return (
+                      <button key={u.id} type="button" onClick={() => toggleAssignUser(u.id)} className={`w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-gray-50 transition-colors ${assignSelectedUserIds.includes(u.id) ? 'bg-teal-50 border-l-4 border-teal-500' : ''} ${alreadyAssignedToThisGerente ? 'border-l-4 border-amber-400 bg-amber-50/50' : ''}`}>
+                        <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center font-bold text-gray-600 flex-shrink-0">{(u.full_name || u.email)[0]?.toUpperCase() || '?'}</div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-gray-900 truncate">{u.full_name || 'Sem nome'}</p>
+                          <p className="text-xs text-gray-500 truncate">{u.email}</p>
+                          <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                            <span className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">{u.status}</span>
+                            {alreadyAssignedToThisGerente && (
+                              <span className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200" title="Este consultor já está atribuído a este gerente">
+                                Já atribuído
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        {assignSelectedUserIds.includes(u.id) && <CheckCircle2 className="w-5 h-5 text-teal-600 flex-shrink-0" />}
+                      </button>
+                    );
+                  }) : (
                     <div className="px-4 py-8 text-center text-gray-500 text-sm">Nenhum usuário encontrado. Verifique se há usuários cadastrados.</div>
                   );
                 })()}

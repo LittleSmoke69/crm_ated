@@ -1,11 +1,13 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import { usePathname } from 'next/navigation';
 import Sidebar from './Sidebar';
 import { useSidebar } from '@/contexts/SidebarContext';
 import { Menu, X, LogOut } from 'lucide-react';
 import Logo from './Logo';
 import TelefoneModal from './TelefoneModal';
+import BancasModal from './BancasModal';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -13,11 +15,15 @@ interface LayoutProps {
 }
 
 const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
+  const pathname = usePathname();
   const [sidebarWidth, setSidebarWidth] = useState(80);
   const { isCollapsed, setIsCollapsed, isMobileOpen, setIsMobileOpen } = useSidebar();
   const [isMobile, setIsMobile] = useState(false);
   const [showTelefoneModal, setShowTelefoneModal] = useState(false);
+  const [showBancasModal, setShowBancasModal] = useState(false);
   const [hasCheckedTelefone, setHasCheckedTelefone] = useState(false);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [userStatus, setUserStatus] = useState<'consultor' | 'gerente' | 'gestor' | 'super_admin' | null>(null);
 
   useEffect(() => {
     const checkMobile = () => {
@@ -58,16 +64,17 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
     };
   }, [isMobile]);
 
-  // Verifica se usuário tem telefone cadastrado
+  // Verifica se usuário tem telefone e bancas (consultor/gerente)
   useEffect(() => {
     if (typeof window === 'undefined' || hasCheckedTelefone) return;
 
-    const checkTelefone = async () => {
-      const userId = sessionStorage.getItem('user_id') || 
-                     sessionStorage.getItem('profile_id') || 
-                     localStorage.getItem('profile_id');
-      
-      if (!userId) {
+    const checkProfile = async () => {
+      const uid =
+        sessionStorage.getItem('user_id') ||
+        sessionStorage.getItem('profile_id') ||
+        localStorage.getItem('profile_id');
+
+      if (!uid) {
         setHasCheckedTelefone(true);
         return;
       }
@@ -75,35 +82,41 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
       try {
         const response = await fetch('/api/user/profile', {
           method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-User-Id': userId,
-          },
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': uid },
           credentials: 'include',
         });
 
         if (response.ok) {
           const result = await response.json();
           if (result.success && result.data) {
-            // Se não tem telefone, mostra o modal
-            if (!result.data.telefone) {
+            const d = result.data;
+            setUserId(uid);
+            const canSeeBancasModal = ['consultor', 'gerente', 'gestor', 'super_admin'].includes(d.status || '');
+            if (canSeeBancasModal) {
+              setUserStatus(d.status);
+            }
+
+            if (!d.telefone) {
               setShowTelefoneModal(true);
+            } else if (
+              canSeeBancasModal &&
+              (d.needs_bancas_choice === true || (Array.isArray(d.bancas) && d.bancas.length === 0))
+            ) {
+              setShowBancasModal(true);
             }
           }
         }
       } catch (error) {
-        console.error('Erro ao verificar telefone:', error);
+        console.error('Erro ao verificar perfil:', error);
       } finally {
         setHasCheckedTelefone(true);
       }
     };
 
-    // Aguarda um pouco antes de verificar para não atrapalhar o carregamento inicial
-    const timeout = setTimeout(checkTelefone, 1000);
-    return () => clearTimeout(timeout);
+    checkProfile();
   }, [hasCheckedTelefone]);
 
-  // Heartbeat para rastrear tempo logado
+  // Heartbeat para rastrear tempo logado (Zaploto e CRM)
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
@@ -111,10 +124,15 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
       const id = sessionStorage.getItem('user_id') || localStorage.getItem('profile_id');
       if (!id) return;
 
+      const isCrmPage =
+        typeof pathname === 'string' &&
+        (pathname.startsWith('/crm') || pathname.startsWith('/consultor') || pathname.startsWith('/gerente'));
+
       try {
         await fetch('/api/user/heartbeat', {
           method: 'POST',
-          headers: { 'X-User-Id': id },
+          headers: { 'X-User-Id': id, 'Content-Type': 'application/json' },
+          body: isCrmPage ? JSON.stringify({ context: 'crm' }) : undefined,
         });
       } catch (err) {
         // Ignora erros de heartbeat para não atrapalhar o usuário
@@ -123,7 +141,7 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
 
     // Envia o primeiro heartbeat após 10s para confirmar que o usuário realmente entrou
     const initialTimeout = setTimeout(sendHeartbeat, 10000);
-    
+
     // Envia heartbeats subsequentes a cada 60 segundos
     const heartbeatInterval = setInterval(sendHeartbeat, 60000);
 
@@ -131,23 +149,19 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
       clearTimeout(initialTimeout);
       clearInterval(heartbeatInterval);
     };
-  }, []);
+  }, [pathname]);
 
   const handleSaveTelefone = async (telefone: string) => {
-    const userId = sessionStorage.getItem('user_id') || 
-                   sessionStorage.getItem('profile_id') || 
-                   localStorage.getItem('profile_id');
-    
-    if (!userId) {
-      throw new Error('Usuário não autenticado');
-    }
+    const uid =
+      sessionStorage.getItem('user_id') ||
+      sessionStorage.getItem('profile_id') ||
+      localStorage.getItem('profile_id');
+
+    if (!uid) throw new Error('Usuário não autenticado');
 
     const response = await fetch('/api/user/telefone', {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-User-Id': userId,
-      },
+      headers: { 'Content-Type': 'application/json', 'X-User-Id': uid },
       credentials: 'include',
       body: JSON.stringify({ telefone }),
     });
@@ -156,6 +170,46 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
       const result = await response.json();
       throw new Error(result.error || 'Erro ao salvar telefone');
     }
+
+    // Logo após salvar telefone, verifica se precisa do modal de bancas (gerente/consultor sem nenhuma banca)
+    try {
+      const profileRes = await fetch('/api/user/profile', {
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': uid },
+        credentials: 'include',
+      });
+      if (profileRes.ok) {
+        const pr = await profileRes.json();
+        const d = pr.success ? pr.data : null;
+        const canSeeBancasModal = d && ['consultor', 'gerente', 'gestor', 'super_admin'].includes(d.status || '');
+        const needsBancas =
+          d?.needs_bancas_choice === true || (Array.isArray(d?.bancas) && d.bancas.length === 0);
+        if (canSeeBancasModal && needsBancas) {
+          setUserId(uid);
+          setUserStatus(d.status);
+          setShowBancasModal(true);
+        }
+      }
+    } catch {
+      // Ignora erro na verificação de bancas
+    }
+  };
+
+  const handleSaveBancas = async (bancaIds: string[]) => {
+    if (!userId) throw new Error('Usuário não autenticado');
+
+    const response = await fetch('/api/user/bancas', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+      credentials: 'include',
+      body: JSON.stringify({ banca_ids: bancaIds }),
+    });
+
+    if (!response.ok) {
+      const result = await response.json();
+      throw new Error(result.error || 'Erro ao salvar bancas');
+    }
+
+    setShowBancasModal(false);
   };
 
   return (
@@ -193,6 +247,17 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
         onClose={() => setShowTelefoneModal(false)}
         onSave={handleSaveTelefone}
       />
+
+      {/* Modal de bancas (consultor/gerente/gestor) - após telefone; exibido quando precisa escolher bancas */}
+      {showBancasModal && userId && (
+        <BancasModal
+          isOpen={showBancasModal}
+          onClose={() => setShowBancasModal(false)}
+          onSave={handleSaveBancas}
+          userStatus={userStatus || 'consultor'}
+          userId={userId}
+        />
+      )}
     </div>
   );
 };

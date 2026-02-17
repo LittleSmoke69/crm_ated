@@ -316,8 +316,21 @@ export async function getDashboardDataFromIndicatedsOnly(
         });
       }
       gerenteMetrics.conversion_rate = gerenteMetrics.total_leads > 0 ? (gerenteMetrics.active_leads / gerenteMetrics.total_leads) * 100 : 0;
+      let consultoresEmOutrasBancas: Array<{ id: string; email: string; full_name: string | null }> = [];
+      if ((gerenteConsultants || []).length > 0) {
+        const consultantIds = (gerenteConsultants || []).map((c: { id: string }) => c.id);
+        const { data: ubRows } = await supabaseServiceRole
+          .from('user_bancas')
+          .select('user_id, banca_ids')
+          .in('user_id', consultantIds);
+        const userIdsInThisBanca = new Set(
+          (ubRows || []).filter((r: { user_id: string; banca_ids: string[] }) => Array.isArray(r.banca_ids) && r.banca_ids.includes(bancaId)).map((r: { user_id: string }) => r.user_id)
+        );
+        consultoresEmOutrasBancas = (gerenteConsultants || []).filter((c: { id: string }) => !userIdsInThisBanca.has(c.id)).map((c: { id: string; email: string; full_name: string | null }) => ({ id: c.id, email: c.email, full_name: c.full_name }));
+      }
       gerentesComMetricas.push({
         ...gerente,
+        consultoresEmOutrasBancas,
         metrics: {
           campaigns: 0,
           contacts: gerenteMetrics.total_leads,
@@ -339,7 +352,7 @@ export async function getDashboardDataFromIndicatedsOnly(
       });
     }
   } else {
-    const { data: userBancas } = await supabaseServiceRole.from('user_bancas').select('user_id').eq('banca_id', bancaId);
+    const { data: userBancas } = await supabaseServiceRole.from('user_bancas').select('user_id').filter('banca_ids', 'cs', JSON.stringify([bancaId]));
     const userIdsInBanca = (userBancas || []).map((r: { user_id: string }) => r.user_id);
     if (userIdsInBanca.length === 0) {
       gerentesComMetricas = [];
@@ -395,6 +408,35 @@ export async function getDashboardDataFromIndicatedsOnly(
           if (gerenteProfile) gerentesToShow.push({ gerente: gerenteProfile, consultants });
         }
       }
+      // Consultores em outras bancas: por gerente, subordinados que não têm esta banca em banca_ids
+      const consultoresEmOutrasBancasByGerente = new Map<string, Array<{ id: string; email: string; full_name: string | null }>>();
+      for (const { gerente } of gerentesToShow) {
+        if (gerente.id === '__consultores_diretos__') continue;
+        const subIds = await getSubordinateIds(gerente.id);
+        if (subIds.length === 0) continue;
+        const { data: subProfiles } = await supabaseServiceRole
+          .from('profiles')
+          .select('id, email, full_name, status')
+          .in('id', subIds)
+          .eq('status', 'consultor');
+        const consultantIds = (subProfiles || []).map((p: { id: string }) => p.id);
+        if (consultantIds.length === 0) continue;
+        const { data: ubRows } = await supabaseServiceRole
+          .from('user_bancas')
+          .select('user_id, banca_ids')
+          .in('user_id', consultantIds);
+        const userIdsInThisBanca = new Set(
+          (ubRows || [])
+            .filter((r: { user_id: string; banca_ids: string[] }) => Array.isArray(r.banca_ids) && r.banca_ids.includes(bancaId))
+            .map((r: { user_id: string }) => r.user_id)
+        );
+        const notInBancaIds = consultantIds.filter((id: string) => !userIdsInThisBanca.has(id));
+        const consultantsNotInBanca = (subProfiles || []).filter((p: { id: string }) => notInBancaIds.includes(p.id));
+        if (consultantsNotInBanca.length > 0) {
+          consultoresEmOutrasBancasByGerente.set(gerente.id, consultantsNotInBanca.map((p: { id: string; email: string; full_name: string | null }) => ({ id: p.id, email: p.email, full_name: p.full_name })));
+        }
+      }
+
       for (const { gerente, consultants: gerenteConsultants } of gerentesToShow) {
         const consultorsCount = gerenteConsultants?.length || 0;
         let gerenteMetrics = { total_leads: 0, total_deposited: 0, total_bets: 0, total_prizes: 0, active_leads: 0, net_profit: 0, conversion_rate: 0, total_depositos_count: 0 };
@@ -418,8 +460,10 @@ export async function getDashboardDataFromIndicatedsOnly(
           });
         }
         gerenteMetrics.conversion_rate = gerenteMetrics.total_leads > 0 ? (gerenteMetrics.active_leads / gerenteMetrics.total_leads) * 100 : 0;
+        const consultoresEmOutrasBancas = gerente.id !== '__consultores_diretos__' ? (consultoresEmOutrasBancasByGerente.get(gerente.id) || []) : [];
         gerentesComMetricas.push({
           ...gerente,
+          consultoresEmOutrasBancas,
           metrics: {
             campaigns: 0,
             contacts: gerenteMetrics.total_leads,
@@ -485,6 +529,13 @@ export async function getDonoBancaDashboardData({ userId, dateFrom, dateTo, meta
   if (!donoProfile || donoProfile.status !== 'dono_banca') {
     throw new Error('Acesso negado. Perfil não encontrado ou não é dono de banca.');
   }
+
+  let bancaIdDono: string | undefined;
+  const { data: bancasDono } = await supabaseServiceRole.from('crm_bancas').select('id, url');
+  const bancaMatchDono = (bancasDono || []).find(
+    (b: { url: string }) => normalizeBancaUrl(b.url) === normalizeBancaUrl(donoProfile?.banca_url ?? '')
+  );
+  bancaIdDono = bancaMatchDono?.id;
 
   // ============================================
   // RESUMO GERAL: Busca métricas agregadas de TODA a banca
@@ -717,8 +768,22 @@ export async function getDonoBancaDashboardData({ userId, dateFrom, dateTo, meta
         });
       }
 
+      let consultoresEmOutrasBancas: Array<{ id: string; email: string; full_name: string | null }> = [];
+      if (bancaIdDono && (gerenteConsultants || []).length > 0) {
+        const consultantIds = (gerenteConsultants || []).map((c: { id: string }) => c.id);
+        const { data: ubRows } = await supabaseServiceRole
+          .from('user_bancas')
+          .select('user_id, banca_ids')
+          .in('user_id', consultantIds);
+        const userIdsInThisBanca = new Set(
+          (ubRows || []).filter((r: { user_id: string; banca_ids: string[] }) => Array.isArray(r.banca_ids) && r.banca_ids.includes(bancaIdDono!)).map((r: { user_id: string }) => r.user_id)
+        );
+        consultoresEmOutrasBancas = (gerenteConsultants || []).filter((c: { id: string }) => !userIdsInThisBanca.has(c.id)).map((c: { id: string; email: string; full_name: string | null }) => ({ id: c.id, email: c.email, full_name: c.full_name }));
+      }
+
       return {
         ...gerente,
+        consultoresEmOutrasBancas,
         metrics: {
           campaigns: 0,
           contacts: gerenteMetrics.total_leads,
@@ -858,11 +923,11 @@ export async function getDashboardDataByBancaId({ bancaId, dateFrom, dateTo, met
     return { ...data, bancaId: data.bancaId ?? bancaId };
   }
 
-  // Sem dono: usa gerentes/consultores atribuídos à banca via user_bancas
+  // Sem dono: usa gerentes/consultores atribuídos à banca via user_bancas (banca_ids JSONB)
   const { data: userBancas } = await supabaseServiceRole
     .from('user_bancas')
     .select('user_id')
-    .eq('banca_id', bancaId);
+    .filter('banca_ids', 'cs', JSON.stringify([bancaId]));
 
   const userIdsInBanca = (userBancas || []).map((r: { user_id: string }) => r.user_id);
   if (userIdsInBanca.length === 0) {

@@ -3,12 +3,18 @@
 import React, { useEffect, useState } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import Layout from '@/components/Layout';
-import { User, Mail, Phone, Building2, Shield, Loader2, Edit2, Save, X, Search } from 'lucide-react';
+import { User, Mail, Phone, Building2, Shield, Loader2, Edit2, Save, X, Search, UserCircle } from 'lucide-react';
 
 interface BancaItem {
   id?: string;
   name: string;
   url: string | null;
+}
+
+interface GerenteInfo {
+  id: string;
+  email: string;
+  full_name: string | null;
 }
 
 interface UserProfile {
@@ -19,7 +25,11 @@ interface UserProfile {
   status: string | null;
   created_at: string;
   bancas: BancaItem[];
+  gerente?: GerenteInfo | null;
+  needs_bancas_choice?: boolean;
 }
+
+const ROLES_COM_BANCAS = ['consultor', 'gerente', 'gestor', 'super_admin'] as const;
 
 const PerfilPage = () => {
   const { checking, userId } = useRequireAuth();
@@ -96,14 +106,14 @@ const PerfilPage = () => {
 
   useEffect(() => {
     if (!userId || !profile) return;
-    const canLoad = ['consultor', 'gerente', 'super_admin'].includes(profile.status || '');
+    const canLoad = ROLES_COM_BANCAS.includes(profile.status as any) || profile.needs_bancas_choice === true;
     if (!canLoad) return;
     loadBancasList();
-  }, [userId, profile?.status]);
+  }, [userId, profile?.status, profile?.needs_bancas_choice]);
 
-  // Sincroniza seleção com as bancas do perfil (consultor/gerente/super_admin)
+  // Sincroniza seleção com as bancas do perfil (consultor/gerente/gestor/super_admin)
   useEffect(() => {
-    if (!profile || !['consultor', 'gerente', 'super_admin'].includes(profile.status || '') || !bancasLoaded) return;
+    if (!profile || !ROLES_COM_BANCAS.includes(profile.status as any) || !bancasLoaded) return;
     const ids = new Set<string>();
     profile.bancas.forEach((b) => {
       if (b.id) ids.add(b.id);
@@ -170,6 +180,7 @@ const PerfilPage = () => {
       admin: 'Administrador',
       dono_banca: 'Dono de Banca',
       gerente: 'Gerente',
+      gestor: 'Gestor',
       consultor: 'Consultor',
       auditoria: 'Auditoria',
       suporte: 'Suporte',
@@ -183,6 +194,7 @@ const PerfilPage = () => {
       admin: 'bg-purple-100 text-purple-700',
       dono_banca: 'bg-blue-100 text-blue-700',
       gerente: 'bg-green-100 text-green-700',
+      gestor: 'bg-teal-100 text-teal-700',
       consultor: 'bg-yellow-100 text-yellow-700',
       auditoria: 'bg-orange-100 text-orange-700',
       suporte: 'bg-gray-100 text-gray-700',
@@ -190,10 +202,8 @@ const PerfilPage = () => {
     return colors[status || ''] || 'bg-gray-100 text-gray-700';
   };
 
-  const canEditBancas =
-    profile?.status === 'consultor' ||
-    profile?.status === 'gerente' ||
-    profile?.status === 'super_admin';
+  const canEditBancas = profile ? ROLES_COM_BANCAS.includes(profile.status as any) : false;
+  const showBancasSection = canEditBancas || profile?.needs_bancas_choice === true;
 
   const toggleBanca = (bancaId: string) => {
     setSelectedBancaIds((prev) => {
@@ -398,16 +408,33 @@ const PerfilPage = () => {
               </div>
             </div>
 
-            {/* Bancas */}
+            {/* Meu gerente (consultor) */}
+            {profile.status === 'consultor' && profile.gerente && (
+              <div className="flex items-start gap-4 p-4 bg-gray-50 rounded-xl">
+                <div className="p-2 bg-emerald-100 rounded-lg">
+                  <UserCircle className="w-5 h-5 text-emerald-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <label className="block text-sm font-medium text-gray-500 mb-1">Meu gerente</label>
+                  <p className="text-gray-900 font-medium">{profile.gerente.full_name || profile.gerente.email}</p>
+                  {profile.gerente.email && (
+                    <p className="text-sm text-gray-500">{profile.gerente.email}</p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Bancas (consultor, gerente, gestor, super_admin ou quando precisa escolher) */}
+            {showBancasSection && (
             <div className="flex items-start gap-4 p-4 bg-gray-50 rounded-xl">
               <div className="p-2 bg-purple-100 rounded-lg">
                 <Building2 className="w-5 h-5 text-purple-600" />
               </div>
               <div className="flex-1 min-w-0">
                 <label className="block text-sm font-medium text-gray-500 mb-2">
-                  {canEditBancas ? 'Bancas em que atuo' : profile.bancas.length === 1 ? 'Banca' : 'Bancas'}
+                  {canEditBancas || profile.needs_bancas_choice ? 'Bancas em que atuo' : profile.bancas.length === 1 ? 'Banca' : 'Bancas'}
                 </label>
-                {canEditBancas ? (
+                {(canEditBancas || profile.needs_bancas_choice) ? (
                   <div className="flex items-center justify-between gap-3 flex-wrap">
                     <div className="flex-1 min-w-0">
                       {profile.bancas.length > 0 ? (
@@ -455,6 +482,7 @@ const PerfilPage = () => {
                 )}
               </div>
             </div>
+            )}
 
             {/* Modal de seleção de bancas */}
             {modalBancasOpen && (

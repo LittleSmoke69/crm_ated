@@ -13,22 +13,24 @@ export async function getUserBancas(userId: string): Promise<BancaInfo[]> {
   const profile = await getUserProfile(userId);
   if (!profile) return [];
 
-  // Consultor, Gerente e Super Admin podem ter bancas escolhidas em user_bancas
-  if (profile.status === 'consultor' || profile.status === 'gerente' || profile.status === 'super_admin') {
-    const { data: userBancas, error } = await supabaseServiceRole
+  // Consultor, Gerente, Gestor e Super Admin podem ter bancas escolhidas em user_bancas (banca_ids JSONB)
+  if (['consultor', 'gerente', 'gestor', 'super_admin'].includes(profile.status || '')) {
+    const { data: row, error } = await supabaseServiceRole
       .from('user_bancas')
-      .select('banca_id, crm_bancas(id, name, url)')
-      .eq('user_id', userId);
+      .select('banca_ids')
+      .eq('user_id', userId)
+      .maybeSingle();
 
-    if (!error && userBancas && userBancas.length > 0) {
-      return userBancas
-        .map((ub: { banca_id: string; crm_bancas: { id: string; name: string; url: string } | { id: string; name: string; url: string }[] | null }) => {
-          const raw = ub.crm_bancas;
-          const b = Array.isArray(raw) ? raw[0] : raw;
-          if (!b) return null;
-          return { id: b.id, name: b.name, url: b.url };
-        })
-        .filter(Boolean) as BancaInfo[];
+    if (!error && row?.banca_ids && Array.isArray(row.banca_ids) && row.banca_ids.length > 0) {
+      const ids = row.banca_ids as string[];
+      const { data: bancas, error: bancasError } = await supabaseServiceRole
+        .from('crm_bancas')
+        .select('id, name, url')
+        .in('id', ids);
+      if (!bancasError && bancas?.length) {
+        const byId = new Map(bancas.map((b: { id: string; name: string; url: string }) => [b.id, { id: b.id, name: b.name, url: b.url }]));
+        return ids.map((id) => byId.get(id)).filter(Boolean) as BancaInfo[];
+      }
     }
   }
 

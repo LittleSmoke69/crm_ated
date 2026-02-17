@@ -69,18 +69,16 @@ export async function POST(req: NextRequest) {
 
     // Gestor: verifica se tem acesso à banca (user_bancas ou dono)
     const profileId = profile.id;
-    let { data: userBancas } = await supabaseServiceRole
+    let { data: ubRow } = await supabaseServiceRole
       .from('user_bancas')
-      .select('banca_id')
-      .eq('user_id', profileId);
-    if ((userBancas?.length ?? 0) === 0 && userId !== profileId) {
-      const { data: fallback } = await supabaseServiceRole
-        .from('user_bancas')
-        .select('banca_id')
-        .eq('user_id', userId);
-      userBancas = fallback ?? [];
+      .select('banca_ids')
+      .eq('user_id', profileId)
+      .maybeSingle();
+    if ((!ubRow?.banca_ids?.length) && userId !== profileId) {
+      const { data: fallback } = await supabaseServiceRole.from('user_bancas').select('banca_ids').eq('user_id', userId).maybeSingle();
+      ubRow = fallback ?? ubRow;
     }
-    const assignedBancaIds = new Set((userBancas || []).map((r: { banca_id: string }) => r.banca_id));
+    const assignedBancaIds = new Set(Array.isArray(ubRow?.banca_ids) ? (ubRow.banca_ids as string[]) : []);
 
     if (assignedBancaIds.has(bancaId)) {
       const result = await runSync(bancaId, body?.date_preset || 'last_30d');

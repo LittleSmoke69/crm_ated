@@ -49,26 +49,13 @@ export async function PUT(
       }
     }
 
-    const { error: deleteError } = await supabaseServiceRole
+    const { error: upsertError } = await supabaseServiceRole
       .from('user_bancas')
-      .delete()
-      .eq('user_id', userId);
+      .upsert({ user_id: userId, banca_ids: bancaIds }, { onConflict: 'user_id' });
 
-    if (deleteError) {
-      console.error('[PUT /api/admin/users/[userId]/bancas] Erro ao remover:', deleteError);
+    if (upsertError) {
+      console.error('[PUT /api/admin/users/[userId]/bancas] Erro ao salvar:', upsertError);
       return errorResponse('Erro ao atualizar bancas', 500);
-    }
-
-    if (bancaIds.length > 0) {
-      const rows = bancaIds.map((banca_id: string) => ({ user_id: userId, banca_id }));
-      const { error: insertError } = await supabaseServiceRole
-        .from('user_bancas')
-        .insert(rows);
-
-      if (insertError) {
-        console.error('[PUT /api/admin/users/[userId]/bancas] Erro ao inserir:', insertError);
-        return errorResponse('Erro ao salvar bancas', 500);
-      }
     }
 
     return successResponse({
@@ -102,16 +89,17 @@ export async function GET(
       return successResponse({ banca_ids: [] });
     }
 
-    const { data: rows, error } = await supabaseServiceRole
+    const { data: row, error } = await supabaseServiceRole
       .from('user_bancas')
-      .select('banca_id')
-      .eq('user_id', userId);
+      .select('banca_ids')
+      .eq('user_id', userId)
+      .maybeSingle();
 
     if (error) {
       return errorResponse('Erro ao listar bancas', 500);
     }
 
-    const banca_ids = (rows || []).map((r: { banca_id: string }) => r.banca_id);
+    const banca_ids = Array.isArray(row?.banca_ids) ? (row.banca_ids as string[]) : [];
     return successResponse({ banca_ids });
   } catch (err: unknown) {
     return serverErrorResponse(err);

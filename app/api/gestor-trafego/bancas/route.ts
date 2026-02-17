@@ -39,20 +39,20 @@ export async function GET(req: NextRequest) {
     }
     const profileId = profile.id;
 
-    let { data: userBancas } = await supabaseServiceRole
+    let { data: ubRow } = await supabaseServiceRole
       .from('user_bancas')
-      .select('banca_id')
-      .eq('user_id', profileId);
+      .select('banca_ids')
+      .eq('user_id', profileId)
+      .maybeSingle();
 
-    if ((userBancas?.length ?? 0) === 0 && userId !== profileId) {
-      const { data: fallback } = await supabaseServiceRole
-        .from('user_bancas')
-        .select('banca_id')
-        .eq('user_id', userId);
-      userBancas = fallback ?? [];
+    if (!Array.isArray(ubRow?.banca_ids) || ubRow.banca_ids.length === 0) {
+      if (userId !== profileId) {
+        const { data: fallback } = await supabaseServiceRole.from('user_bancas').select('banca_ids').eq('user_id', userId).maybeSingle();
+        ubRow = fallback ?? ubRow;
+      }
     }
 
-    const bancaIds = (userBancas || []).map((r: { banca_id: string }) => r.banca_id);
+    const bancaIds = Array.isArray(ubRow?.banca_ids) ? (ubRow.banca_ids as string[]) : [];
     if (bancaIds.length === 0) {
       return successResponse([]);
     }

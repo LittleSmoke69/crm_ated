@@ -24,17 +24,18 @@ export async function GET(req: NextRequest) {
     const ctx = await requireAdminLeadTransferContext(req, bancaId);
     console.log(`${LOG_PREFIX} GET context: userId=${ctx.userId}, bancaId=${ctx.bancaId}, crmBaseUrl=${ctx.crmBaseUrl}, bancaName=${ctx.bancaName ?? 'n/a'}`);
 
+    // banca_ids é JSONB (array de UUIDs). Filtro "cs" (contains) exige JSON válido para evitar erro 22P02.
     const { data: userBancas, error: ubError } = await supabaseServiceRole
       .from('user_bancas')
       .select('user_id')
-      .eq('banca_id', ctx.bancaId);
+      .filter('banca_ids', 'cs', JSON.stringify([ctx.bancaId]));
 
     if (ubError) {
       console.error(`${LOG_PREFIX} GET user_bancas error:`, ubError);
       return errorResponse('Erro ao buscar consultores da banca.', 500);
     }
 
-    const userIds = [...new Set((userBancas ?? []).map((ub: { user_id: string }) => ub.user_id))];
+    const userIds = (userBancas ?? []).map((ub: { user_id: string }) => ub.user_id);
     console.log(`${LOG_PREFIX} GET user_bancas: ${userBancas?.length ?? 0} rows, unique userIds=${userIds.length}`);
     if (userIds.length === 0) {
       console.log(`${LOG_PREFIX} GET success: 0 consultants (no users in banca)`);

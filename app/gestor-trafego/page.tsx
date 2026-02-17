@@ -52,12 +52,13 @@ export default async function GestorTrafegoPage() {
     }
     if (!canSelectDono) {
       const profileIdToUse = profile.id;
-      let { data: ub } = await supabaseServiceRole.from('user_bancas').select('banca_id').eq('user_id', profileIdToUse);
-      if ((ub?.length ?? 0) === 0 && userId !== profileIdToUse) {
-        const { data: fallback } = await supabaseServiceRole.from('user_bancas').select('banca_id').eq('user_id', userId);
-        ub = fallback ?? [];
+      let { data: ubRow } = await supabaseServiceRole.from('user_bancas').select('banca_ids').eq('user_id', profileIdToUse).maybeSingle();
+      if (!ubRow?.banca_ids?.length && userId !== profileIdToUse) {
+        const { data: fallback } = await supabaseServiceRole.from('user_bancas').select('banca_ids').eq('user_id', userId).maybeSingle();
+        ubRow = fallback ?? ubRow;
       }
-      userBancas = ub ?? [];
+      const ids = Array.isArray(ubRow?.banca_ids) ? (ubRow.banca_ids as string[]) : [];
+      userBancas = ids.map((banca_id: string) => ({ banca_id }));
       canSelectDono = userBancas.length > 0;
     }
     if (canSelectDono) {
