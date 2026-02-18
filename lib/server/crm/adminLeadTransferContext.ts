@@ -88,6 +88,7 @@ export async function requireAdminLeadTransferContext(
 /**
  * Verifica se um email pertence a um consultor da banca (user_bancas + profiles).
  * Considera: 1) usuário em user_bancas; 2) consultor cujo gerente (enroller) está na banca.
+ * Usa o modelo user_bancas com uma linha por usuário e banca_ids (JSONB).
  */
 export async function isConsultantInBanca(bancaId: string, consultantEmail: string): Promise<boolean> {
   const { data: profiles } = await supabaseServiceRole
@@ -109,7 +110,7 @@ export async function isConsultantInBanca(bancaId: string, consultantEmail: stri
     .eq('user_id', userId)
     .maybeSingle();
 
-  const userBancaIds = Array.isArray(ub?.banca_ids) ? (ub.banca_ids as string[]) : [];
+  const userBancaIds: string[] = Array.isArray(ub?.banca_ids) ? (ub.banca_ids as string[]) : [];
   if (userBancaIds.includes(bancaId)) {
     console.log(`${LOG_PREFIX} isConsultantInBanca: bancaId=${bancaId}, consultantEmail=${consultantEmail}, userId=${userId}, inBanca=true (user_bancas)`);
     return true;
@@ -122,7 +123,7 @@ export async function isConsultantInBanca(bancaId: string, consultantEmail: stri
       .select('banca_ids')
       .eq('user_id', enrollerId)
       .maybeSingle();
-    const enrollerBancaIds = Array.isArray(enrollerUb?.banca_ids) ? (enrollerUb.banca_ids as string[]) : [];
+    const enrollerBancaIds: string[] = Array.isArray(enrollerUb?.banca_ids) ? (enrollerUb.banca_ids as string[]) : [];
     if (enrollerBancaIds.includes(bancaId)) {
       console.log(`${LOG_PREFIX} isConsultantInBanca: bancaId=${bancaId}, consultantEmail=${consultantEmail}, userId=${userId}, inBanca=true (gerente na banca)`);
       return true;

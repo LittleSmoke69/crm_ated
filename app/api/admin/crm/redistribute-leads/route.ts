@@ -11,6 +11,10 @@ const leadSnapshotSchema = z.object({
   lead_id: z.union([z.number(), z.string()]),
   balance: z.union([z.number(), z.null()]).optional(),
   last_interaction: z.union([z.string(), z.null()]).optional(),
+  total_depositado: z.union([z.number(), z.null()]).optional(),
+  total_apostado: z.union([z.number(), z.null()]).optional(),
+  total_ganho: z.union([z.number(), z.null()]).optional(),
+  available_withdraw: z.union([z.number(), z.null()]).optional(),
 });
 const bodySchema = z.object({
   banca_id: z.string().uuid(),
@@ -108,13 +112,24 @@ export async function POST(req: NextRequest) {
     } else {
       console.log(`${LOG_PREFIX} POST audit log inserted: banca_id=${ctx.bancaId}, performed_by=${ctx.userId}, count=${count}`);
       if (insertedLog?.id && Array.isArray(leads_ids) && leads_ids.length > 0) {
-        const snapshotByLeadId = new Map<string, { balance?: number | null; last_interaction?: string | null }>();
+        const snapshotByLeadId = new Map<string, {
+          balance?: number | null;
+          last_interaction?: string | null;
+          total_depositado?: number | null;
+          total_apostado?: number | null;
+          total_ganho?: number | null;
+          available_withdraw?: number | null;
+        }>();
         if (Array.isArray(lead_snapshots)) {
           for (const s of lead_snapshots) {
             const id = String(s.lead_id);
             snapshotByLeadId.set(id, {
               balance: s.balance ?? null,
               last_interaction: s.last_interaction ?? null,
+              total_depositado: s.total_depositado ?? null,
+              total_apostado: s.total_apostado ?? null,
+              total_ganho: s.total_ganho ?? null,
+              available_withdraw: s.available_withdraw ?? null,
             });
           }
         }
@@ -133,6 +148,10 @@ export async function POST(req: NextRequest) {
             saldo_snapshot: balance,
             last_interaction_snapshot: snap?.last_interaction ?? null,
             had_balance: hadBalance,
+            total_depositado_snapshot: snap?.total_depositado != null ? Number(snap.total_depositado) : null,
+            total_apostado_snapshot: snap?.total_apostado != null ? Number(snap.total_apostado) : null,
+            total_ganho_snapshot: snap?.total_ganho != null ? Number(snap.total_ganho) : null,
+            available_withdraw_snapshot: snap?.available_withdraw != null ? Number(snap.available_withdraw) : null,
           };
         });
         const { error: entriesError } = await supabaseServiceRole
