@@ -156,6 +156,8 @@ export default function AdminLeadTransferPage() {
   const [loadingConsultants, setLoadingConsultants] = useState(false);
   const [loadingTags, setLoadingTags] = useState(false);
   const [loadingLeads, setLoadingLeads] = useState(false);
+  const [enrichmentLoading, setEnrichmentLoading] = useState(false);
+  const loadLeadsIdRef = useRef(0);
   const [hasSearchedLeads, setHasSearchedLeads] = useState(false);
   const [leadSearchQuery, setLeadSearchQuery] = useState('');
   const [leadFilterStatus, setLeadFilterStatus] = useState<string>('');
@@ -454,7 +456,10 @@ export default function AdminLeadTransferPage() {
       showToast('Selecione a banca e o consultor origem', 'error');
       return;
     }
+    loadLeadsIdRef.current += 1;
+    const currentLoadId = loadLeadsIdRef.current;
     setLoadingLeads(true);
+    setEnrichmentLoading(false);
     setLeads([]);
     setSelectedLeadIds(new Set());
     setLeadsPage(1);
@@ -476,6 +481,39 @@ export default function AdminLeadTransferPage() {
       }
       const list = json.data?.leads ?? [];
       setLeads(Array.isArray(list) ? list : []);
+      const enrichmentDeferred = json.data?.enrichmentDeferred === true;
+      const totalEnrichmentPages = Number(json.data?.totalEnrichmentPages) || 0;
+
+      if (enrichmentDeferred && totalEnrichmentPages > 0 && currentLoadId === loadLeadsIdRef.current) {
+        setEnrichmentLoading(true);
+        (async () => {
+          for (let page = 1; page <= totalEnrichmentPages; page++) {
+            if (currentLoadId !== loadLeadsIdRef.current) break;
+            try {
+              const ep = new URLSearchParams();
+              ep.set('banca_id', bancaId);
+              ep.set('source_consultant_email', sourceEmail.trim());
+              ep.set('page', String(page));
+              const er = await fetch(`/api/admin/crm/redistribution-leads/enrichment?${ep.toString()}`, { headers: headers() });
+              const ej = await er.json();
+              if (currentLoadId !== loadLeadsIdRef.current) break;
+              if (!er.ok) continue;
+              const details: Lead[] = Array.isArray(ej.data?.details) ? ej.data.details : [];
+              if (details.length === 0) continue;
+              setLeads((prev) => {
+                const map = new Map(details.map((d) => [String(d.id), d]));
+                return prev.map((lead) => {
+                  const d = map.get(String(lead.id));
+                  return d ? { ...lead, ...d } : lead;
+                });
+              });
+            } catch {
+              // ignora erro de uma página; continua as próximas
+            }
+          }
+          if (currentLoadId === loadLeadsIdRef.current) setEnrichmentLoading(false);
+        })();
+      }
     } catch (e) {
       showToast('Erro ao buscar leads', 'error');
     } finally {
@@ -1691,6 +1729,12 @@ export default function AdminLeadTransferPage() {
                 <p className="text-sm text-gray-600">
                   <strong>{filteredLeads.length}</strong> lead(s) {minSumBalance.trim() ? `(soma mín. R$ ${minSumBalance.trim()})` : ''}. Soma dos saldos: <strong>R$ {totalFilteredBalanceSum.toFixed(2).replace('.', ',')}</strong>. Até <strong>{Math.min(parseInt(quantity, 10) || 0, MAX_LEADS_SELECT, filteredLeads.length)}</strong> serão auto-selecionados no próximo passo.
                 </p>
+                {enrichmentLoading && (
+                  <p className="text-xs text-amber-600 mt-1 flex items-center gap-1">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden />
+                    Carregando detalhes em segundo plano… (saldo, totais etc. serão atualizados em breve)
+                  </p>
+                )}
                 <div className="overflow-x-auto border border-gray-200 rounded-lg mt-3 max-h-[320px] overflow-y-auto">
                   <table className="w-full text-sm min-w-[520px]">
                     <thead className="bg-gray-50 border-b border-gray-200 sticky top-0 z-10">

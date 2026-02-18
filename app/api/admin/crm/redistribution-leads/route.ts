@@ -43,6 +43,13 @@ const querySchema = z.object({
 
 const LOG_PREFIX = '[lead-transfer][redistribution-leads]';
 
+/** Tamanho de cada página ao buscar detalhes no CRM (requisições menores evitam timeout Netlify). */
+const DETAIL_PAGE_SIZE = 1500;
+/** Máximo de páginas de detalhes para manter a função dentro do timeout típico do Netlify (~26s). */
+const MAX_DETAIL_PAGES = 12;
+/** Acima deste número de leads, retornamos a lista imediatamente e o detalhamento é feito em background pelo front. */
+const ENRICHMENT_DEFERRED_THRESHOLD = 5000;
+
 /**
  * GET /api/admin/crm/redistribution-leads
  * Proxy para CRM: listar leads disponíveis para redistribuição.
@@ -145,24 +152,43 @@ export async function GET(req: NextRequest) {
     }
 
     let leadsOut = result.data ?? [];
+    const totalLeadsFromCrm = leadsOut.length;
+    const deferEnrichment = totalLeadsFromCrm > ENRICHMENT_DEFERRED_THRESHOLD;
 
-    if (leadsOut.length > 0) {
-      const detailsResult = await client.getIndicatedsByConsultant(source_consultant_email, 2000);
-      if (detailsResult.success && Array.isArray(detailsResult.data) && detailsResult.data.length > 0) {
-        const detailsById = new Map<string, Record<string, unknown>>();
-        for (const d of detailsResult.data) {
+    if (leadsOut.length > 0 && !deferEnrichment) {
+      const detailsById = new Map<string, Record<string, unknown>>();
+      let page = 1;
+      let hasMore = true;
+
+      while (hasMore && page <= MAX_DETAIL_PAGES) {
+        const detailsResult = await client.getIndicatedsByConsultant(source_consultant_email, DETAIL_PAGE_SIZE, page);
+        if (!detailsResult.success || !Array.isArray(detailsResult.data)) break;
+        const chunk = detailsResult.data;
+        for (const d of chunk) {
           const id = d?.id != null ? String(d.id) : '';
           if (id) detailsById.set(id, d as Record<string, unknown>);
         }
+        const lastPage = detailsResult.pagination?.last_page ?? 1;
+        if (chunk.length < DETAIL_PAGE_SIZE || page >= lastPage) hasMore = false;
+        else page++;
+      }
+
+      if (page > MAX_DETAIL_PAGES && hasMore) {
+        console.log(`${LOG_PREFIX} GET detail fetch capped at ${MAX_DETAIL_PAGES} pages (${detailsById.size} details) to avoid Netlify timeout; remaining leads keep base data only`);
+      }
+      if (detailsById.size > 0) {
         leadsOut = leadsOut.map((lead: Record<string, unknown>) => {
           const id = lead?.id != null ? String(lead.id) : '';
           const detail = detailsById.get(id);
           return (detail ? { ...lead, ...detail } : lead) as typeof leadsOut[0];
         });
-        console.log(`${LOG_PREFIX} GET enriched ${leadsOut.length} lead(s) with get-indicateds-by-consultant (matched ${detailsById.size} details)`);
+        console.log(`${LOG_PREFIX} GET enriched ${leadsOut.length} lead(s) with get-indicateds-by-consultant (matched ${detailsById.size} details, ${page} page(s))`);
       } else {
         console.log(`${LOG_PREFIX} GET getIndicatedsByConsultant skipped or empty, returning leads without detail`);
       }
+    }
+    if (deferEnrichment) {
+      console.log(`${LOG_PREFIX} GET returning ${totalLeadsFromCrm} lead(s) immediately (enrichment deferred to frontend, threshold=${ENRICHMENT_DEFERRED_THRESHOLD})`);
     }
 
     if (balance_filter === 'with_balance') {
@@ -245,10 +271,16 @@ export async function GET(req: NextRequest) {
     const leadCount = leadsOut.length;
     const leadIds = leadsOut.map((l: RedistributionLead) => l.id);
     console.log(`${LOG_PREFIX} GET success: ${leadCount} lead(s)`, { leadIds: leadIds.slice(0, 50), truncated: leadIds.length > 50 });
+    const totalEnrichmentPages = Math.ceil(totalLeadsFromCrm / DETAIL_PAGE_SIZE);
     return successResponse({
       leads: leadsOut,
       success: result.success,
       message: result.message,
+      ...(deferEnrichment && {
+        enrichmentDeferred: true,
+        enrichmentPageSize: DETAIL_PAGE_SIZE,
+        totalEnrichmentPages,
+      }),
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
