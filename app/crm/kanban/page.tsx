@@ -9,6 +9,8 @@ import KanbanColumn from '@/components/CRM/KanbanColumn';
 import SortColumnModal from '@/components/CRM/SortColumnModal';
 import { Lead, Column, ThermalStatus } from '@/components/CRM/types';
 import { useSearchParams } from 'next/navigation';
+import { useToast } from '@/hooks/useToast';
+import ToastContainer from '@/components/Toast/ToastContainer';
 
 type SortField =
   | 'created_at'
@@ -190,7 +192,8 @@ const KanbanContent = () => {
   const { checking, userId } = useRequireAuth();
   const searchParams = useSearchParams();
   const targetUserId = searchParams.get('userId');
-  
+  const { toasts, showToast, removeToast } = useToast();
+
   const [rawLeads, setRawLeads] = useState<Lead[]>([]); // Leads da API (banca+período) - filtros aplicados localmente
   const [loading, setLoading] = useState(false); // true apenas quando a requisição de leads estiver em andamento
   const [filterLoading, setFilterLoading] = useState(false); // Loading ao mudar banca/período
@@ -478,7 +481,10 @@ const KanbanContent = () => {
                 if (thisLoadId === loadIdRef.current) current = null;
               }
             }
-            if (thisLoadId === loadIdRef.current) setBackgroundLoading(false);
+            if (thisLoadId === loadIdRef.current) {
+              setBackgroundLoading(false);
+              showToast('Todos os leads foram carregados.', 'success');
+            }
           })();
         }
       } else {
@@ -500,7 +506,7 @@ const KanbanContent = () => {
         setFilterLoading(false);
       }
     }
-  }, [userId, targetUserId, filters, exclusiveBancasList, formatApiLeadsToLead]);
+  }, [userId, targetUserId, filters, exclusiveBancasList, formatApiLeadsToLead, showToast]);
 
   const handleBancasLoaded = useCallback((bancas: { id: string; name: string; url: string }[]) => {
     setExclusiveBancasList(bancas);
@@ -1069,9 +1075,12 @@ const KanbanContent = () => {
           )}
 
           {backgroundLoading && (
-            <div className="mb-4 py-2 px-3 bg-gray-50 border border-gray-100 text-gray-600 rounded-xl flex items-center gap-2 text-xs animate-in fade-in">
-              <RefreshCw className="w-3.5 h-3.5 animate-spin flex-shrink-0" />
-              <span>Carregando mais leads em segundo plano...</span>
+            <div className="mb-4 py-3 px-4 bg-[#8CD955]/15 border-2 border-[#8CD955]/50 text-gray-800 rounded-xl flex items-center gap-3 text-sm font-medium animate-in fade-in shadow-sm">
+              <RefreshCw className="w-5 h-5 animate-spin text-[#8CD955] flex-shrink-0" />
+              <div>
+                <p className="font-semibold">Carregando mais leads em segundo plano</p>
+                <p className="text-xs text-gray-600 font-normal mt-0.5">Você já pode usar o quadro; novos leads aparecerão automaticamente.</p>
+              </div>
             </div>
           )}
 
@@ -1394,6 +1403,7 @@ const KanbanContent = () => {
             </div>
           </div>
         )}
+      <ToastContainer toasts={toasts} onClose={removeToast} />
     </Layout>
   );
 };
