@@ -72,8 +72,8 @@ function formatDigitsToDDMMYYYY(digits: string): string {
 const MESES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 
-/** Retorna a data de hoje no fuso de São Paulo (YYYY-MM-DD). */
-function getTodaySãoPaulo(): string {
+/** Retorna a data de hoje no fuso de São Paulo (YYYY-MM-DD). Exportado para uso em lead-transfer. */
+export function getTodaySãoPaulo(): string {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
 }
 
@@ -87,8 +87,8 @@ function getCalendarDays(year: number, month: number): (number | null)[] {
   return days;
 }
 
-/** Input de data com calendário ao clicar (dd/MM/yyyy). maxDate em YYYY-MM-DD limita seleção até essa data (ex.: hoje em SP). */
-function DateInputDDMMYYYY({ value, onChange, className = '', maxDate }: { value: string; onChange: (yyyyMmDd: string) => void; className?: string; maxDate?: string }) {
+/** Input de data com calendário ao clicar (dd/MM/yyyy). maxDate em YYYY-MM-DD limita seleção até essa data (ex.: hoje em SP). Exportado para uso em lead-transfer. */
+export function DateInputDDMMYYYY({ value, onChange, className = '', maxDate }: { value: string; onChange: (yyyyMmDd: string) => void; className?: string; maxDate?: string }) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const valueDate = value ? (() => { const [y, m, d] = value.split('-').map(Number); return { y, m: m - 1, d }; })() : null;

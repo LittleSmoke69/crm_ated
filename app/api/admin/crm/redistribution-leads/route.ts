@@ -4,7 +4,20 @@ import { requireAdminLeadTransferContext, isConsultantInBanca } from '@/lib/serv
 import { createCrmRedistributionClient, type RedistributionLead } from '@/lib/server/crm/crmRedistributionClient';
 import { z } from 'zod';
 
-const balanceFilterEnum = z.enum(['all', 'with_balance', 'without_balance']);
+const balanceFilterEnum = z.enum(['all', 'with_balance', 'without_balance', 'range']);
+const apostaFilterEnum = z.enum(['all', 'with_bet', 'without_bet', 'range']);
+const numericFilterEnum = z.enum(['all', 'with_value', 'without_value', 'range']);
+const optionalNumber = z
+  .union([
+    z.string().transform((s) => {
+      if (s === '' || s == null) return null;
+      const n = parseFloat(String(s).replace(',', '.'));
+      return Number.isFinite(n) ? n : null;
+    }),
+    z.null(),
+  ])
+  .optional();
+
 const querySchema = z.object({
   banca_id: z.string().uuid(),
   source_consultant_email: z.string().email(),
@@ -12,6 +25,20 @@ const querySchema = z.object({
   min_inactive_days: z.union([z.coerce.number().int().min(0), z.null()]).optional().transform((v) => (v == null ? undefined : v)),
   tag: z.union([z.string(), z.null()]).optional().transform((v) => (v == null ? undefined : v)),
   balance_filter: balanceFilterEnum.optional().default('all'),
+  saldo_min: optionalNumber,
+  saldo_max: optionalNumber,
+  aposta_filter: apostaFilterEnum.optional().default('all'),
+  aposta_min: optionalNumber,
+  aposta_max: optionalNumber,
+  total_depositado_filter: numericFilterEnum.optional().default('all'),
+  total_depositado_min: optionalNumber,
+  total_depositado_max: optionalNumber,
+  available_withdraw_filter: numericFilterEnum.optional().default('all'),
+  available_withdraw_min: optionalNumber,
+  available_withdraw_max: optionalNumber,
+  total_ganho_filter: numericFilterEnum.optional().default('all'),
+  total_ganho_min: optionalNumber,
+  total_ganho_max: optionalNumber,
 });
 
 const LOG_PREFIX = '[lead-transfer][redistribution-leads]';
@@ -36,6 +63,20 @@ export async function GET(req: NextRequest) {
       min_inactive_days: searchParams.get('min_inactive_days') ?? null,
       tag: searchParams.get('tag') ?? null,
       balance_filter: searchParams.get('balance_filter') ?? 'all',
+      saldo_min: searchParams.get('saldo_min') ?? null,
+      saldo_max: searchParams.get('saldo_max') ?? null,
+      aposta_filter: searchParams.get('aposta_filter') ?? 'all',
+      aposta_min: searchParams.get('aposta_min') ?? null,
+      aposta_max: searchParams.get('aposta_max') ?? null,
+      total_depositado_filter: searchParams.get('total_depositado_filter') ?? 'all',
+      total_depositado_min: searchParams.get('total_depositado_min') ?? null,
+      total_depositado_max: searchParams.get('total_depositado_max') ?? null,
+      available_withdraw_filter: searchParams.get('available_withdraw_filter') ?? 'all',
+      available_withdraw_min: searchParams.get('available_withdraw_min') ?? null,
+      available_withdraw_max: searchParams.get('available_withdraw_max') ?? null,
+      total_ganho_filter: searchParams.get('total_ganho_filter') ?? 'all',
+      total_ganho_min: searchParams.get('total_ganho_min') ?? null,
+      total_ganho_max: searchParams.get('total_ganho_max') ?? null,
     });
 
     if (!parsed.success) {
@@ -46,9 +87,30 @@ export async function GET(req: NextRequest) {
       return errorResponse(msg, 400);
     }
 
-    const { banca_id, source_consultant_email, days_inactive, min_inactive_days, tag, balance_filter } = parsed.data;
+    const {
+      banca_id,
+      source_consultant_email,
+      days_inactive,
+      min_inactive_days,
+      tag,
+      balance_filter,
+      saldo_min,
+      saldo_max,
+      aposta_filter,
+      aposta_min,
+      aposta_max,
+      total_depositado_filter,
+      total_depositado_min,
+      total_depositado_max,
+      available_withdraw_filter,
+      available_withdraw_min,
+      available_withdraw_max,
+      total_ganho_filter,
+      total_ganho_min,
+      total_ganho_max,
+    } = parsed.data;
     const effectiveDaysInactive = days_inactive ?? min_inactive_days ?? 10;
-    console.log(`${LOG_PREFIX} GET parsed params: banca_id=${banca_id}, source_consultant_email=${source_consultant_email}, days_inactive=${effectiveDaysInactive}, balance_filter=${balance_filter}, tag=${tag ?? 'n/a'}`);
+    console.log(`${LOG_PREFIX} GET parsed params: banca_id=${banca_id}, source_consultant_email=${source_consultant_email}, days_inactive=${effectiveDaysInactive}, balance_filter=${balance_filter}, tag=${tag ?? 'n/a'}, saldo_min=${saldo_min ?? 'n/a'}, saldo_max=${saldo_max ?? 'n/a'}, aposta_filter=${aposta_filter}, total_depositado_filter=${total_depositado_filter}, available_withdraw_filter=${available_withdraw_filter}`);
     console.log(`${LOG_PREFIX} GET resolving context for banca_id=${banca_id}`);
 
     const ctx = await requireAdminLeadTransferContext(req, banca_id);
@@ -107,6 +169,69 @@ export async function GET(req: NextRequest) {
       leadsOut = leadsOut.filter((l: RedistributionLead) => (parseFloat(String(l.balance ?? l.saldo ?? 0)) || 0) > 0);
     } else if (balance_filter === 'without_balance') {
       leadsOut = leadsOut.filter((l: RedistributionLead) => (parseFloat(String(l.balance ?? l.saldo ?? 0)) || 0) <= 0);
+    }
+
+    if (saldo_min != null && Number.isFinite(saldo_min)) {
+      leadsOut = leadsOut.filter((l: RedistributionLead) => (parseFloat(String(l.balance ?? l.saldo ?? 0)) || 0) >= saldo_min);
+    }
+    if (saldo_max != null && Number.isFinite(saldo_max)) {
+      leadsOut = leadsOut.filter((l: RedistributionLead) => (parseFloat(String(l.balance ?? l.saldo ?? 0)) || 0) <= saldo_max);
+    }
+
+    if (aposta_filter && aposta_filter !== 'all') {
+      leadsOut = leadsOut.filter((l: RedistributionLead) => {
+        const aposta = parseFloat(String((l as Record<string, unknown>).total_apostado ?? 0)) || 0;
+        if (aposta_filter === 'with_bet') return aposta > 0;
+        if (aposta_filter === 'without_bet') return aposta <= 0;
+        if (aposta_filter === 'range') {
+          if (aposta_min != null && Number.isFinite(aposta_min) && aposta < aposta_min) return false;
+          if (aposta_max != null && Number.isFinite(aposta_max) && aposta > aposta_max) return false;
+          return true;
+        }
+        return true;
+      });
+    }
+
+    if (total_depositado_filter && total_depositado_filter !== 'all') {
+      leadsOut = leadsOut.filter((l: RedistributionLead) => {
+        const v = parseFloat(String((l as Record<string, unknown>).total_depositado ?? 0)) || 0;
+        if (total_depositado_filter === 'with_value') return v > 0;
+        if (total_depositado_filter === 'without_value') return v <= 0;
+        if (total_depositado_filter === 'range') {
+          if (total_depositado_min != null && Number.isFinite(total_depositado_min) && v < total_depositado_min) return false;
+          if (total_depositado_max != null && Number.isFinite(total_depositado_max) && v > total_depositado_max) return false;
+          return true;
+        }
+        return true;
+      });
+    }
+
+    if (available_withdraw_filter && available_withdraw_filter !== 'all') {
+      leadsOut = leadsOut.filter((l: RedistributionLead) => {
+        const v = parseFloat(String((l as Record<string, unknown>).available_withdraw ?? 0)) || 0;
+        if (available_withdraw_filter === 'with_value') return v > 0;
+        if (available_withdraw_filter === 'without_value') return v <= 0;
+        if (available_withdraw_filter === 'range') {
+          if (available_withdraw_min != null && Number.isFinite(available_withdraw_min) && v < available_withdraw_min) return false;
+          if (available_withdraw_max != null && Number.isFinite(available_withdraw_max) && v > available_withdraw_max) return false;
+          return true;
+        }
+        return true;
+      });
+    }
+
+    if (total_ganho_filter && total_ganho_filter !== 'all') {
+      leadsOut = leadsOut.filter((l: RedistributionLead) => {
+        const v = parseFloat(String((l as Record<string, unknown>).total_ganho ?? 0)) || 0;
+        if (total_ganho_filter === 'with_value') return v > 0;
+        if (total_ganho_filter === 'without_value') return v <= 0;
+        if (total_ganho_filter === 'range') {
+          if (total_ganho_min != null && Number.isFinite(total_ganho_min) && v < total_ganho_min) return false;
+          if (total_ganho_max != null && Number.isFinite(total_ganho_max) && v > total_ganho_max) return false;
+          return true;
+        }
+        return true;
+      });
     }
 
     // Garantir que cada lead tenha "balance" numérico (CRM pode retornar "saldo"), para o frontend e lead_snapshots na transferência

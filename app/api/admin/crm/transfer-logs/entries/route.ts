@@ -47,7 +47,7 @@ export async function GET(req: NextRequest) {
 
     const { data: entries, error } = await supabaseServiceRole
       .from('admin_lead_transfer_entries')
-      .select('lead_id, had_balance, saldo_snapshot, target_consultant_email')
+      .select('lead_id, had_balance, saldo_snapshot, target_consultant_email, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot')
       .eq('banca_id', resolved.bancaId)
       .eq('transfer_log_id', logId)
       .order('lead_id', { ascending: true });
@@ -88,13 +88,26 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const list = rawList.map((e: { lead_id: string | number; had_balance?: boolean; saldo_snapshot?: number | null }) => {
+    type EntryRow = {
+      lead_id: string | number;
+      had_balance?: boolean;
+      saldo_snapshot?: number | null;
+      total_depositado_snapshot?: number | null;
+      total_apostado_snapshot?: number | null;
+      total_ganho_snapshot?: number | null;
+      available_withdraw_snapshot?: number | null;
+    };
+    const list = rawList.map((e: EntryRow) => {
       const leadId = String(e.lead_id ?? '');
       const detail = detailByLeadId.get(leadId) ?? {};
       return {
         lead_id: e.lead_id,
         had_balance: e.had_balance === true,
         saldo_snapshot: e.saldo_snapshot != null ? Number(e.saldo_snapshot) : null,
+        total_depositado_snapshot: e.total_depositado_snapshot != null ? Number(e.total_depositado_snapshot) : null,
+        total_apostado_snapshot: e.total_apostado_snapshot != null ? Number(e.total_apostado_snapshot) : null,
+        total_ganho_snapshot: e.total_ganho_snapshot != null ? Number(e.total_ganho_snapshot) : null,
+        available_withdraw_snapshot: e.available_withdraw_snapshot != null ? Number(e.available_withdraw_snapshot) : null,
         name: detail.name ?? null,
         last_name: detail.last_name ?? null,
         email: detail.email ?? null,
