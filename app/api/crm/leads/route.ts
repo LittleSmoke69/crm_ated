@@ -224,7 +224,7 @@ export async function GET(req: NextRequest) {
         }
         if (allLeads.length === 0) {
           console.log('[CRM Leads] only_responded: nenhum lead na primeira página das bancas.');
-          return successResponse([], { meta: { next: listBancas.length > 0 ? { banca_index: 0, page: 2 } : null } });
+          return successResponse([], { meta: { next: listBancas.length > 0 ? { banca_index: 0, page: 1 } : null } });
         }
         // Filtros e formatação abaixo; depois filtrar por has_interaction e retornar com meta.next
       } else {
@@ -521,8 +521,9 @@ export async function GET(req: NextRequest) {
         const respondedOnly = formattedLeads.filter(
           (l: any) => l.has_interaction === true || l.has_interaction === 'true' || l.has_interaction === 1
         );
+        // Cliente carrega em background a partir da página 1 (não da 2), para não pular os leads da primeira página
         responseMeta = {
-          next: listBancas.length > 0 ? { banca_index: 0, page: 2 } : null,
+          next: listBancas.length > 0 ? { banca_index: 0, page: 1 } : null,
         };
         console.log(`[CRM Leads] 200 OK (only_responded): ${respondedOnly.length} leads, meta.next para background`);
         return successResponse(respondedOnly, { meta: responseMeta });

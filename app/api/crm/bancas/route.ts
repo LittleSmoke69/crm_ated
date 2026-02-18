@@ -15,6 +15,8 @@ const BANCAS_CACHE_TTL_MS = 90_000;
 const EXTERNAL_API_CONCURRENCY = 10;
 
 const bancasCache = new Map<string, { data: BancaRow[]; expires: number }>();
+/** Evita requisições duplicadas: mesma cacheKey em paralelo reutiliza a mesma Promise. */
+const bancasInFlight = new Map<string, Promise<BancaRow[]>>();
 
 function getCachedBancas(cacheKey: string): BancaRow[] | null {
   const entry = bancasCache.get(cacheKey);
@@ -64,6 +66,31 @@ function normalizarUrlBanca(raw: string): string {
   return u.startsWith('http') ? u : `https://${u}`;
 }
 
+/** Monta o curl completo para reprodução (sem mascarar dados). */
+function buildCurlExample(method: string, url: string, apiKey: string): string {
+  const key = (apiKey || '').trim();
+  return `curl -s -X ${method} "${url}" -H "X-API-KEY: ${key || 'YOUR_API_KEY'}" -H "Accept: application/json"`;
+}
+
+/** Chama get-indicateds-by-consultant na URL e retorna status e corpo da resposta. */
+async function fetchGetIndicatedsResponse(
+  url: string,
+  apiKey: string
+): Promise<{ status: number; body: string }> {
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { 'X-API-KEY': (apiKey || '').trim(), Accept: 'application/json' },
+      signal: AbortSignal.timeout(15000),
+    });
+    const body = await res.text();
+    return { status: res.status, body };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { status: -1, body: `Erro: ${msg}` };
+  }
+}
+
 /**
  * Chama a API user-consultant-info na URL da banca para um email.
  * Retorna o corpo da resposta (sucesso, existe, usuario, etc.) ou null em caso de erro.
@@ -84,6 +111,7 @@ async function chamarUserConsultantInfo(
     });
     if (res.status === 404) {
       console.warn('[CRM Bancas] user-consultant-info 404 (endpoint não encontrado):', base);
+      console.warn('[CRM Bancas] curl utilizado:', buildCurlExample('GET', url, apiKey));
       return null;
     }
     if (!res.ok) {
@@ -114,7 +142,7 @@ async function bancaTemConsultoresAbaixoDoGerente(
 
 /**
  * Verifica se o consultor tem lead na banca via get-indicateds-by-consultant.
- * Chamada feita SEM from/to (sem data determinada), para considerar qualquer lead em qualquer período.
+ * Requisito do filtro de bancas: per_page=1 e SEM from/to (sem data), para considerar qualquer lead em qualquer período.
  * Retorna true se a API retorna success === true e há pelo menos 1 lead (data.length > 0).
  */
 async function bancaTemLeadDoConsultor(
@@ -125,6 +153,7 @@ async function bancaTemLeadDoConsultor(
   const base = normalizarUrlBanca(bancaUrl);
   if (!base) return false;
   try {
+    // Apenas consultant e per_page=1; não enviar from/to para verificação de bancas do consultor
     const url = `${base}/api/crm/get-indicateds-by-consultant?consultant=${encodeURIComponent(email)}&per_page=1`;
     const res = await fetch(url, {
       method: 'GET',
@@ -133,6 +162,7 @@ async function bancaTemLeadDoConsultor(
     });
     if (res.status === 404) {
       console.warn('[CRM Bancas] get-indicateds-by-consultant 404 (endpoint não encontrado):', base);
+      console.warn('[CRM Bancas] curl utilizado:', buildCurlExample('GET', url, apiKey));
       return false;
     }
     if (!res.ok) {
@@ -184,12 +214,25 @@ async function filtrarBancasComLeadDoConsultor(
     console.warn('[CRM Bancas] CRM_API_KEY não definida; fallback: bancas do usuário ou todas.');
     return [];
   }
+  if (bancas.length > 0) {
+    const base = normalizarUrlBanca(bancas[0].url);
+    if (base) {
+      const url = `${base}/api/crm/get-indicateds-by-consultant?consultant=${encodeURIComponent(email)}&per_page=1`;
+      console.log('[CRM Bancas] Modelo de curl utilizado em todas as bancas para filtrar:');
+      console.log('[CRM Bancas] ', buildCurlExample('GET', url, apiKey));
+    }
+  }
   const resultados = await mapWithConcurrency(
     bancas,
     EXTERNAL_API_CONCURRENCY,
     async (banca) => ((await bancaTemLeadDoConsultor(banca.url, email, apiKey)) ? banca : null)
   );
-  return resultados.filter((b): b is BancaRow => b !== null);
+  const bancasQuePassaram = resultados.filter((b): b is BancaRow => b !== null);
+  console.log('[CRM Bancas] Bancas que passaram pelo filtro:', bancasQuePassaram.length);
+  bancasQuePassaram.forEach((b, i) => {
+    console.log(`[CRM Bancas]   ${i + 1}. ${(b.name ?? b.id) || b.id} (id: ${b.id}) | ${b.url}`);
+  });
+  return bancasQuePassaram;
 }
 
 /**
@@ -217,44 +260,60 @@ async function getBancasDoUsuario(userId: string): Promise<BancaRow[]> {
 
 /**
  * Retorna a lista de bancas visíveis para o usuário (mesma lógica do GET).
- * Usado pelo GET /api/crm/bancas e por GET /api/crm/leads quando banca_url=all.
+ * Consultor/Gerente: chama API externa (get-indicateds-by-consultant) por banca; status 200 = passa no filtro, 404 = não tem conta na banca.
  */
 export async function getBancasVisiveis(userId: string, profile: UserProfile | null): Promise<BancaRow[]> {
+  console.log('[CRM Bancas] getBancasVisiveis chamado | userId:', userId, '| perfil:', profile?.status ?? 'null', '| email:', profile?.email ? `${profile.email.slice(0, 3)}***` : 'n/a');
   const { data: todasBancas, error } = await supabaseServiceRole
     .from('crm_bancas')
     .select('id, name, url')
     .order('name', { ascending: true });
 
-  if (error || !todasBancas?.length) return [];
+  if (error || !todasBancas?.length) {
+    console.log('[CRM Bancas] Nenhuma banca em crm_bancas ou erro:', error?.message ?? 'sem dados');
+    return [];
+  }
   const bancas = excluirBancaPorNome(todasBancas as BancaRow[], NOME_BANCA_EXCLUIDA_BUSCA);
 
+  const apiKey = process.env.CRM_API_KEY?.trim() ?? '';
+  const email = profile?.email?.trim();
+
+  if ((profile?.status === 'consultor' || profile?.status === 'gerente') && email && apiKey) {
+    console.log('[CRM Bancas] Bancas que vão passar pelo filtro (fonte: crm_bancas):', bancas.length);
+    const bancasVisiveis: BancaRow[] = [];
+    for (let i = 0; i < bancas.length; i++) {
+      const b = bancas[i];
+      const base = normalizarUrlBanca(b.url);
+      if (!base) continue;
+      const urlExterna = `${base}/api/crm/get-indicateds-by-consultant?consultant=${encodeURIComponent(email)}&per_page=1`;
+      const { status, body } = await fetchGetIndicatedsResponse(urlExterna, apiKey);
+      if (status === 200) {
+        bancasVisiveis.push(b);
+        console.log(`[CRM Bancas]   ${i + 1}. ${(b.name ?? b.id) || b.id} (id: ${b.id}) | ${b.url} — passou no filtro (status 200)`);
+      } else if (status === 404) {
+        console.log(`[CRM Bancas]   ${i + 1}. ${(b.name ?? b.id) || b.id} (id: ${b.id}) | ${b.url} — não tem conta na banca (status 404)`);
+        console.log('[CRM Bancas]     Curl:', buildCurlExample('GET', urlExterna, apiKey));
+        console.log('[CRM Bancas]     Resposta body:', body);
+      } else {
+        console.log(`[CRM Bancas]   ${i + 1}. ${(b.name ?? b.id) || b.id} (id: ${b.id}) | ${b.url} — não passou (status ${status})`);
+        console.log('[CRM Bancas]     Curl:', buildCurlExample('GET', urlExterna, apiKey));
+        console.log('[CRM Bancas]     Resposta body:', body);
+      }
+    }
+    console.log('[CRM Bancas] Bancas que passaram pelo filtro (status 200):', bancasVisiveis.length);
+    if (bancasVisiveis.length > 0) return bancasVisiveis;
+    const fallback = await getBancasDoUsuario(userId);
+    return fallback.length > 0 ? fallback : bancas;
+  }
+
   if (profile?.status === 'consultor') {
-    const email = profile.email?.trim();
-    if (!email) {
-      const fallback = await getBancasDoUsuario(userId);
-      return fallback.length > 0 ? fallback : bancas;
-    }
-    // Busca em TODAS as bancas, com chamada SEM from/to, para incluir no dropdown as que tiverem lead
-    const bancasComLead = await filtrarBancasComLeadDoConsultor(bancas, email);
-    if (bancasComLead.length > 0) {
-      return bancasComLead;
-    }
     const fallback = await getBancasDoUsuario(userId);
     return fallback.length > 0 ? fallback : bancas;
   }
 
   if (profile?.status === 'gerente') {
-    const email = profile.email?.trim();
-    if (!email) {
-      const fallback = await getBancasDoUsuario(userId);
-      return fallback.length > 0 ? fallback : bancas;
-    }
-    const bancasVisiveis = await filtrarBancasParaGerente(bancas, email);
-    if (bancasVisiveis.length === 0) {
-      const fallback = await getBancasDoUsuario(userId);
-      return fallback.length > 0 ? fallback : bancas;
-    }
-    return bancasVisiveis;
+    const fallback = await getBancasDoUsuario(userId);
+    return fallback.length > 0 ? fallback : bancas;
   }
 
   return bancas;
@@ -262,10 +321,7 @@ export async function getBancasVisiveis(userId: string, profile: UserProfile | n
 
 /**
  * GET /api/crm/bancas - Lista bancas para filtro do CRM e modal "Bancas em que atuo" no perfil.
- * - Consultor: chama get-indicateds-by-consultant em TODAS as bancas SEM from/to (sem data), para trazer
- *   bancas onde o consultor tem pelo menos um lead; essas entram no dropdown. Fallback: user_bancas ou todas.
- * - Gerente: tenta filtrar por API externa (user-consultant-info); se CRM_API_KEY ausente ou resultado vazio,
- *   faz fallback: bancas do usuário (user_bancas) e, se ainda vazio, todas as crm_bancas.
+ * - Consultor/Gerente: chama API externa (get-indicateds-by-consultant) em cada banca; status 200 = passa no filtro, 404 = não tem conta na banca. Fallback: user_bancas ou todas.
  * - super_admin / admin: retorna todas as bancas de crm_bancas.
  */
 export async function GET(req: NextRequest) {
@@ -276,13 +332,27 @@ export async function GET(req: NextRequest) {
     const cacheKey = `bancas:${userId}:${profile?.status ?? ''}:${profile?.email ?? ''}`;
     const cached = getCachedBancas(cacheKey);
     if (cached !== null) {
+      console.log('[CRM Bancas] GET /api/crm/bancas solicitado | Cache HIT');
+      console.log('[CRM Bancas] Bancas que passaram pelo filtro (última consulta):', cached.length);
+      cached.forEach((b: BancaRow, i: number) => {
+        console.log(`[CRM Bancas]   ${i + 1}. ${(b.name ?? b.id) || b.id} (id: ${b.id}) | ${b.url} — passou no filtro`);
+      });
       const res = successResponse(cached);
       res.headers.set('Cache-Control', 'private, max-age=60');
       res.headers.set('X-Cache', 'HIT');
       return res;
     }
 
-    const bancas = await getBancasVisiveis(userId, profile);
+    let promise = bancasInFlight.get(cacheKey);
+    if (!promise) {
+      promise = getBancasVisiveis(userId, profile).finally(() => {
+        bancasInFlight.delete(cacheKey);
+      });
+      bancasInFlight.set(cacheKey, promise);
+    }
+
+    console.log('[CRM Bancas] GET /api/crm/bancas solicitado | Cache MISS — recalculando bancas visíveis');
+    const bancas = await promise;
     setCachedBancas(cacheKey, bancas);
 
     const res = successResponse(bancas);

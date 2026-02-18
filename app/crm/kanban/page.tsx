@@ -104,6 +104,13 @@ const getDefaultColumns = (leads: Lead[] = []): Column[] => {
       ).length
     },
     { 
+      id: 'saque_disponivel', 
+      title: '💸 Saque Disponível', 
+      color: 'teal', 
+      leads: leads.filter(l => (parseFloat(String(l.available_withdraw ?? 0)) || 0) > 0).slice(0, 100),
+      totalLeads: leads.filter(l => (parseFloat(String(l.available_withdraw ?? 0)) || 0) > 0).length
+    },
+    { 
       id: 'deposito_1x', 
       title: '💰 1º Depósito', 
       color: 'emerald', 
@@ -351,6 +358,7 @@ const KanbanContent = () => {
         last_withdraw_value: l.last_withdraw_value ? parseFloat(l.last_withdraw_value) : undefined,
         total_saque: l.total_saque ? parseFloat(l.total_saque) : undefined,
         balance: l.balance ? parseFloat(l.balance) : 0,
+        available_withdraw: l.available_withdraw != null ? Math.round((parseFloat(String(l.available_withdraw)) || 0) * 100) / 100 : undefined,
         bonus: l.bonus ? parseFloat(l.bonus) : 0,
         convert: l.convert ? parseFloat(l.convert) : 0,
         total_afiliate: l.total_afiliate ? parseFloat(l.total_afiliate) : 0,
@@ -815,12 +823,16 @@ const KanbanContent = () => {
       }
     }
 
-    // Filtro de Tags
+    // Filtro de Tags (Com etiquetas / Sem etiquetas / etiqueta específica)
     if (filters.tags) {
-      const tagId = typeof filters.tags === 'object' ? filters.tags.value : filters.tags;
-      if (tagId) {
+      const tagValue = typeof filters.tags === 'object' ? filters.tags.value : filters.tags;
+      if (tagValue === '__has_any') {
+        formattedLeads = formattedLeads.filter(l => (l.tags || []).length > 0);
+      } else if (tagValue === '__none') {
+        formattedLeads = formattedLeads.filter(l => (l.tags || []).length === 0);
+      } else if (tagValue) {
         formattedLeads = formattedLeads.filter(l =>
-          (l.tags || []).some((t: { id: string }) => t.id === tagId)
+          (l.tags || []).some((t: { id: string }) => t.id === tagValue)
         );
       }
     }
@@ -857,6 +869,10 @@ const KanbanContent = () => {
       (() => {
         const filtered = formattedLeads.filter(l => (l.total_depositado || 0) > (l.total_apostado || 0) || (l.balance ?? 0) > 0);
         return { id: 'deposito_sem_aposta', title: '💰 Com Saldo Disponível', color: 'red', leads: filtered, totalLeads: filtered.length };
+      })(),
+      (() => {
+        const filtered = formattedLeads.filter(l => (parseFloat(String(l.available_withdraw ?? 0)) || 0) > 0);
+        return { id: 'saque_disponivel', title: '💸 Saque Disponível', color: 'teal', leads: filtered, totalLeads: filtered.length };
       })(),
       (() => {
         const filtered = formattedLeads.filter(l => (l.total_depositos_count || 0) === 1 && (l.total_depositado || 0) <= (l.total_apostado || 0));

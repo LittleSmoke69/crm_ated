@@ -863,6 +863,26 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           </button>
           {openMenu === 'tags' && (
             <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-xl shadow-2xl border border-gray-100 py-2 z-[35] animate-in fade-in slide-in-from-top-2 duration-200 max-h-[300px] overflow-y-auto">
+              {/* Opções de presença de etiquetas */}
+              <button
+                onClick={() => handleFilterSelect('tags', '__has_any', 'Com etiquetas')}
+                className={`w-full text-left px-4 py-2.5 text-xs hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold flex items-center gap-2 border-b border-gray-100 ${
+                  activeFilters.tags?.value === '__has_any' ? 'bg-gray-50 text-[#6AB83D]' : 'text-gray-600'
+                }`}
+              >
+                <TagIcon className="w-3 h-3 shrink-0" />
+                Com etiquetas
+              </button>
+              <button
+                onClick={() => handleFilterSelect('tags', '__none', 'Sem etiquetas')}
+                className={`w-full text-left px-4 py-2.5 text-xs hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold flex items-center gap-2 border-b border-gray-100 ${
+                  activeFilters.tags?.value === '__none' ? 'bg-gray-50 text-[#6AB83D]' : 'text-gray-600'
+                }`}
+              >
+                <TagIcon className="w-3 h-3 shrink-0 opacity-50" />
+                Sem etiquetas
+              </button>
+              {/* Etiquetas específicas */}
               {tags.length === 0 ? (
                 <div className="px-4 py-2 text-xs text-gray-400">Nenhuma etiqueta cadastrada</div>
               ) : (
@@ -870,7 +890,9 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                   <button 
                     key={tag.id}
                     onClick={() => handleFilterSelect('tags', tag.id, tag.label)}
-                    className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold flex items-center gap-2"
+                    className={`w-full text-left px-4 py-2.5 text-xs hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold flex items-center gap-2 ${
+                      activeFilters.tags?.value === tag.id ? 'bg-gray-50 text-[#6AB83D]' : 'text-gray-600'
+                    }`}
                   >
                     <div 
                       className="w-3 h-3 rounded-full shrink-0" 

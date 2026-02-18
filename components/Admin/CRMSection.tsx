@@ -374,6 +374,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
   const [newUrl, setNewUrl] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showManagement, setShowManagement] = useState(false);
+  const [editingBanca, setEditingBanca] = useState<Banca | null>(null);
   
   // Tags state
   const [tags, setTags] = useState<Tag[]>([]);
@@ -484,31 +485,64 @@ export default function CRMSection({ userId }: CRMSectionProps) {
     }
   };
 
-  const handleAddBanca = async (e: React.FormEvent) => {
+  const handleEditBanca = (banca: Banca) => {
+    setEditingBanca(banca);
+    setNewName(banca.name);
+    setNewUrl(banca.url);
+  };
+
+  const handleCancelEditBanca = () => {
+    setEditingBanca(null);
+    setNewName('');
+    setNewUrl('');
+  };
+
+  const handleSubmitBanca = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newName || !newUrl) return;
+    if (!newName?.trim() || !newUrl?.trim()) return;
 
     try {
       setIsSubmitting(true);
-      const response = await fetch('/api/admin/crm/bancas', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'X-User-Id': userId
-        },
-        body: JSON.stringify({ name: newName, url: newUrl })
-      });
-      
-      const result = await response.json();
-      if (result.success) {
-        setBancas(prev => [...prev, result.data]);
-        setNewName('');
-        setNewUrl('');
-        setSuccess('Banca adicionada com sucesso!');
-        setTimeout(() => setSuccess(null), 3000);
+      if (editingBanca) {
+        const response = await fetch(`/api/admin/crm/bancas?id=${encodeURIComponent(editingBanca.id)}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-User-Id': userId
+          },
+          body: JSON.stringify({ name: newName.trim(), url: newUrl.trim() })
+        });
+        const result = await response.json();
+        if (result.success) {
+          setBancas(prev => prev.map(b => b.id === editingBanca.id ? result.data : b));
+          handleCancelEditBanca();
+          setSuccess('Banca atualizada com sucesso!');
+          setTimeout(() => setSuccess(null), 3000);
+        } else {
+          setError(result.error || 'Erro ao atualizar banca');
+        }
+      } else {
+        const response = await fetch('/api/admin/crm/bancas', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-User-Id': userId
+          },
+          body: JSON.stringify({ name: newName.trim(), url: newUrl.trim() })
+        });
+        const result = await response.json();
+        if (result.success) {
+          setBancas(prev => [...prev, result.data]);
+          setNewName('');
+          setNewUrl('');
+          setSuccess('Banca adicionada com sucesso!');
+          setTimeout(() => setSuccess(null), 3000);
+        } else {
+          setError(result.error || 'Erro ao adicionar banca');
+        }
       }
     } catch (err) {
-      setError('Erro ao adicionar banca');
+      setError(editingBanca ? 'Erro ao atualizar banca' : 'Erro ao adicionar banca');
     } finally {
       setIsSubmitting(false);
     }
@@ -731,10 +765,10 @@ export default function CRMSection({ userId }: CRMSectionProps) {
               <div className="lg:col-span-1">
                 <div className="bg-white rounded-xl p-6 border border-gray-100 shadow-sm">
                   <h2 className="text-lg font-bold mb-6 flex items-center gap-2 text-gray-800">
-                    <Plus className="w-5 h-5 text-[#8CD955]" />
-                    Nova Banca
+                    {editingBanca ? <Edit2 className="w-5 h-5 text-[#8CD955]" /> : <Plus className="w-5 h-5 text-[#8CD955]" />}
+                    {editingBanca ? 'Editar Banca' : 'Nova Banca'}
                   </h2>
-              <form onSubmit={handleAddBanca} className="space-y-4">
+              <form onSubmit={handleSubmitBanca} className="space-y-4">
                 <div>
                   <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">Nome</label>
                   <input 
@@ -746,25 +780,37 @@ export default function CRMSection({ userId }: CRMSectionProps) {
                   />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">URL (Apenas Domínio)</label>
+                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">URL</label>
                   <input 
                     type="text" 
                     value={newUrl}
                     onChange={(e) => setNewUrl(e.target.value)}
-                    placeholder="Ex: web.girodasorte.digital"
+                    placeholder="Ex: web.girodasorte.digital ou https://..."
                     className="w-full bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:bg-white transition-all"
                   />
                   <p className="mt-1.5 text-[10px] text-gray-400 font-medium ml-1">
-                    * Apenas o domínio, sem https:// e sem /api/crm
+                    * Será salva exatamente como digitada (Nova Banca e Editar Banca)
                   </p>
                 </div>
-                <button 
-                  disabled={isSubmitting}
-                  className="w-full bg-[#8CD955] hover:bg-[#7BC84A] text-white py-3.5 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-gray-100"
-                >
-                  {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                  CADASTRAR BANCA
-                </button>
+                <div className="flex gap-2">
+                  <button 
+                    type="submit"
+                    disabled={isSubmitting}
+                    className="flex-1 bg-[#8CD955] hover:bg-[#7BC84A] text-white py-3.5 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-gray-100"
+                  >
+                    {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : editingBanca ? <Edit2 className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+                    {editingBanca ? 'ATUALIZAR BANCA' : 'CADASTRAR BANCA'}
+                  </button>
+                  {editingBanca && (
+                    <button 
+                      type="button"
+                      onClick={handleCancelEditBanca}
+                      className="px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 py-3.5 rounded-xl font-bold text-sm transition-all"
+                    >
+                      Cancelar
+                    </button>
+                  )}
+                </div>
               </form>
             </div>
           </div>
@@ -789,12 +835,22 @@ export default function CRMSection({ userId }: CRMSectionProps) {
                         <p className="text-xs text-gray-400 font-medium">{b.url}</p>
                       </div>
                     </div>
-                    <button 
-                      onClick={() => handleDeleteBanca(b.id)}
-                      className="p-2.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button 
+                        onClick={() => handleEditBanca(b)}
+                        className="p-2.5 text-gray-300 hover:text-[#8CD955] hover:bg-emerald-50 rounded-lg transition-all"
+                        title="Editar banca"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                      </button>
+                      <button 
+                        onClick={() => handleDeleteBanca(b.id)}
+                        className="p-2.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
+                        title="Excluir banca"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                 ))}
                 {bancas.length === 0 && (

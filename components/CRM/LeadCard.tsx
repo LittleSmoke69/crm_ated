@@ -2012,7 +2012,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
                       </div>
                       <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
                         <p className="text-xs font-bold text-gray-500 uppercase mb-1">Disponível para Saque</p>
-                        <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency((L as any).available_withdraw ?? 0)}</p>
+                        <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency(L.available_withdraw ?? 0)}</p>
                       </div>
                       {/* Bônus e outros */}
                       <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
