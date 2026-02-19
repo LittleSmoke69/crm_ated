@@ -709,7 +709,7 @@ const KanbanContent = () => {
       }
       return null;
     };
-    let ok = 0;
+    const successfulLeads: Lead[] = [];
     let err = 0;
     for (const lead of selectedLeads) {
       const bancaUrl = lead.banca_url;
@@ -735,12 +735,13 @@ const KanbanContent = () => {
           }),
         });
         const data = await res.json();
-        if (data?.success) ok++;
+        if (data?.success) successfulLeads.push(lead);
         else err++;
       } catch {
         err++;
       }
     }
+    const ok = successfulLeads.length;
     if (ok > 0) {
       showToast(
         err > 0
@@ -750,6 +751,32 @@ const KanbanContent = () => {
       );
       if (selectedLeads.length === 1 && spinSelectedLead) {
         setSpinHistory(prev => [{ quantity: spinQuantity, date: new Date().toISOString() }, ...prev]);
+      }
+      // Aplicar etiqueta "Recebeu bonus de Giro" nos leads que receberam giros com sucesso
+      try {
+        const tagRes = await fetch('/api/crm/tags/ensure-giro-bonus', { headers: { 'X-User-Id': userId as string } });
+        const tagData = await tagRes.json();
+        if (tagData?.success && tagData?.data?.tagId) {
+          const tagId = tagData.data.tagId;
+          const targetUid = targetUserId || userId;
+          for (const lead of successfulLeads) {
+            try {
+              await fetch('/api/crm/leads/tags', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-User-Id': userId as string },
+                body: JSON.stringify({
+                  leadId: String(lead.id),
+                  tagId,
+                  targetUserId: targetUid,
+                }),
+              });
+            } catch {
+              // ignora falha ao adicionar etiqueta por lead
+            }
+          }
+        }
+      } catch {
+        // ignora se não conseguir obter/criar a etiqueta
       }
     }
     if (err > 0) {
