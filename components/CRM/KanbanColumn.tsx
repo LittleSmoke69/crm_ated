@@ -126,6 +126,7 @@ const KanbanColumn: React.FC<KanbanColumnProps> = ({
       case 'rose': return 'bg-rose-100 text-rose-700';
       case 'orange': return 'bg-orange-100 text-orange-700';
       case 'indigo': return 'bg-indigo-100 text-indigo-700';
+      case 'teal': return 'bg-teal-100 text-teal-700';
       case 'zinc': return 'bg-zinc-200 text-zinc-700';
       default: return 'bg-gray-100 text-gray-700';
     }
@@ -151,6 +152,7 @@ const KanbanColumn: React.FC<KanbanColumnProps> = ({
       case 'rose': return 'bg-rose-50/50';
       case 'orange': return 'bg-orange-50/50';
       case 'indigo': return 'bg-indigo-50/50';
+      case 'teal': return 'bg-teal-50/50';
       case 'zinc': return 'bg-zinc-50/50';
       default: return 'bg-gray-50/50';
     }
@@ -169,6 +171,7 @@ const KanbanColumn: React.FC<KanbanColumnProps> = ({
       case 'rose': return 'border-rose-200';
       case 'orange': return 'border-orange-200';
       case 'indigo': return 'border-indigo-200';
+      case 'teal': return 'border-teal-200';
       case 'zinc': return 'border-zinc-200';
       default: return 'border-gray-200';
     }

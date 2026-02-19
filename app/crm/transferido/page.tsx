@@ -429,11 +429,15 @@ const TransferidoContent = () => {
       }
     }
 
-    // Filtro de Tags
+    // Filtro de Tags (Com etiquetas / Sem etiquetas / etiqueta específica)
     if (filters.tags) {
-      const tagId = typeof filters.tags === 'object' ? filters.tags.value : filters.tags;
-      if (tagId) {
-        formattedLeads = formattedLeads.filter((l) => (l.tags || []).some((t: { id: string }) => t.id === tagId));
+      const tagValue = typeof filters.tags === 'object' ? filters.tags.value : filters.tags;
+      if (tagValue === '__has_any') {
+        formattedLeads = formattedLeads.filter((l) => (l.tags || []).length > 0);
+      } else if (tagValue === '__none') {
+        formattedLeads = formattedLeads.filter((l) => (l.tags || []).length === 0);
+      } else if (tagValue) {
+        formattedLeads = formattedLeads.filter((l) => (l.tags || []).some((t: { id: string }) => t.id === tagValue));
       }
     }
 

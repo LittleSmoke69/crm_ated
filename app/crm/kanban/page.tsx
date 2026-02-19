@@ -9,6 +9,8 @@ import KanbanColumn from '@/components/CRM/KanbanColumn';
 import SortColumnModal from '@/components/CRM/SortColumnModal';
 import { Lead, Column, ThermalStatus } from '@/components/CRM/types';
 import { useSearchParams } from 'next/navigation';
+import { useToast } from '@/hooks/useToast';
+import ToastContainer from '@/components/Toast/ToastContainer';
 
 type SortField =
   | 'created_at'
@@ -102,6 +104,13 @@ const getDefaultColumns = (leads: Lead[] = []): Column[] => {
       ).length
     },
     { 
+      id: 'saque_disponivel', 
+      title: '💸 Saque Disponível', 
+      color: 'teal', 
+      leads: leads.filter(l => (parseFloat(String(l.available_withdraw ?? 0)) || 0) > 0).slice(0, 100),
+      totalLeads: leads.filter(l => (parseFloat(String(l.available_withdraw ?? 0)) || 0) > 0).length
+    },
+    { 
       id: 'deposito_1x', 
       title: '💰 1º Depósito', 
       color: 'emerald', 
@@ -190,10 +199,12 @@ const KanbanContent = () => {
   const { checking, userId } = useRequireAuth();
   const searchParams = useSearchParams();
   const targetUserId = searchParams.get('userId');
-  
+  const { toasts, showToast, removeToast } = useToast();
+
   const [rawLeads, setRawLeads] = useState<Lead[]>([]); // Leads da API (banca+período) - filtros aplicados localmente
   const [loading, setLoading] = useState(false); // true apenas quando a requisição de leads estiver em andamento
   const [filterLoading, setFilterLoading] = useState(false); // Loading ao mudar banca/período
+  const [backgroundLoading, setBackgroundLoading] = useState(false); // true quando o resto dos leads está carregando em segundo plano
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filters, setFilters] = useState<Record<string, any>>(() => {
@@ -225,6 +236,8 @@ const KanbanContent = () => {
   const [showStatusModal, setShowStatusModal] = useState(false);
 
   const isInitialLoadRef = useRef<boolean>(true);
+  /** Cancela o carregamento em background quando uma nova busca é iniciada (ex.: mudança de filtro). */
+  const loadIdRef = useRef(0);
 
   // CRM Bancas precisa carregar por completo antes de carregar Leads (dropdown de bancas define o contexto)
   const [bancasReady, setBancasReady] = useState(false);
@@ -308,32 +321,71 @@ const KanbanContent = () => {
   // Métricas são calculadas localmente baseadas nos leads filtrados
   // Não precisa mais da função loadMetrics da API
 
-  const loadLeads = useCallback(async (isFilterChange = false) => {
-    try {
-      if (isFilterChange) {
-        setFilterLoading(true);
-      } else {
-        setLoading(true);
-      }
-      setError(null);
+  /** Converte um lote da API para o formato Lead do Kanban. */
+  const formatApiLeadsToLead = useCallback((leads: any[]): Lead[] => {
+    return (leads || []).map(l => {
+      const firstName = l.name || '';
+      const lastName = (l.last_name && l.last_name !== 'null') ? l.last_name : '';
+      const fullName = `${firstName} ${lastName}`.trim() || 'Sem nome';
+      return {
+        id: l.id,
+        name: fullName,
+        phone: l.phone || '',
+        email: l.email || '',
+        status: l.status || 'novo',
+        createdAt: l.created_at,
+        thermalStatus: (l.temperature as ThermalStatus) || 'cold',
+        tags: l.tags || [],
+        interactions: 0,
+        lastInteractionAt: l.last_interaction || l.created_at,
+        isFavorite: false,
+        alertStatus: 'idle',
+        total_depositado: Math.round((parseFloat(l.total_depositado) || 0) * 100) / 100,
+        total_apostado: Math.round((parseFloat(l.total_apostado) || 0) * 100) / 100,
+        total_ganho: parseFloat(l.total_ganho) || 0,
+        total_depositos_count: parseInt(l.total_depositos_count) || 0,
+        stars: l.user_level ? parseInt(l.user_level) : (l.stars ? parseInt(l.stars) : 0),
+        is_affiliate: !!l.affiliate_name || l.is_affiliate === true || l.affiliate === 'yes' || l.affiliate_filter === 'yes',
+        affiliate_name: l.affiliate_name,
+        temperature: l.temperature,
+        has_interaction: l.has_interaction === true || l.has_interaction === 'true' || l.has_interaction === 1,
+        last_deposit_at: l.last_deposit_at || null,
+        last_deposit_value: l.last_deposit_value || null,
+        created_at: l.created_at,
+        last_winner_value: l.last_winner_value ? parseFloat(l.last_winner_value) : undefined,
+        last_winner_at: l.last_winner_at || null,
+        last_withdraw_at: l.last_withdraw_at || null,
+        last_withdraw_value: l.last_withdraw_value ? parseFloat(l.last_withdraw_value) : undefined,
+        total_saque: l.total_saque ? parseFloat(l.total_saque) : undefined,
+        balance: l.balance ? parseFloat(l.balance) : 0,
+        available_withdraw: l.available_withdraw != null ? Math.round((parseFloat(String(l.available_withdraw)) || 0) * 100) / 100 : undefined,
+        bonus: l.bonus ? parseFloat(l.bonus) : 0,
+        convert: l.convert ? parseFloat(l.convert) : 0,
+        total_afiliate: l.total_afiliate ? parseFloat(l.total_afiliate) : 0,
+        aposta_estrelas: l.aposta_estrelas ? parseInt(l.aposta_estrelas.toString()) || 0 : 0,
+        banca_id: l.banca_id,
+        banca_name: l.banca_name,
+        banca_url: l.banca_url
+      };
+    });
+  }, []);
 
-      // API recebe APENAS banca e período; demais filtros são aplicados localmente
+  const loadLeads = useCallback(async (isFilterChange = false) => {
+    loadIdRef.current += 1;
+    const thisLoadId = loadIdRef.current;
+
+    const buildBaseUrl = () => {
       const url = new URL('/api/crm/leads', window.location.origin);
       if (targetUserId) url.searchParams.append('userId', targetUserId);
-
-      // Banca: uma específica ou "Todas as Bancas" (nesse caso enviamos só as URLs da listagem exclusiva)
       const bancaValue = filters.banca ? (typeof filters.banca === 'object' ? filters.banca.value : filters.banca) : null;
       if (bancaValue && bancaValue !== 'all') {
         url.searchParams.append('banca_url', bancaValue);
       } else if (exclusiveBancasList.length > 0) {
         url.searchParams.append('banca_urls', exclusiveBancasList.map(b => b.url).join(','));
       }
-
-      // Período (date)
       const dateValue = filters.date ? (typeof filters.date === 'object' ? filters.date.value : filters.date) : 'diario';
       const nowSP = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
       const today = nowSP.toISOString().split('T')[0];
-
       if (dateValue === 'diario') {
         url.searchParams.append('from', today);
         url.searchParams.append('to', today);
@@ -365,72 +417,40 @@ const KanbanContent = () => {
           url.searchParams.append('to', parts[2]);
         }
       }
+      return url;
+    };
 
-      const response = await fetch(url.toString(), {
+    try {
+      if (isFilterChange) {
+        setFilterLoading(true);
+      } else {
+        setLoading(true);
+      }
+      setError(null);
+      setBackgroundLoading(false);
+
+      const baseUrl = buildBaseUrl();
+      baseUrl.searchParams.append('only_responded', '1');
+
+      const response = await fetch(baseUrl.toString(), {
         headers: { 'X-User-Id': userId as string }
       });
-      
       const result = await response.json();
-      
+
+      if (thisLoadId !== loadIdRef.current) return;
+
       if (result.success) {
         const leads: any[] = result.data || [];
-        console.log('[Kanban] Leads recebidos da API (banca+período):', leads.length);
-
-        const formattedLeads: Lead[] = leads.map(l => {
-          const firstName = l.name || '';
-          const lastName = (l.last_name && l.last_name !== 'null') ? l.last_name : '';
-          const fullName = `${firstName} ${lastName}`.trim() || 'Sem nome';
-
-          return {
-            id: l.id,
-            name: fullName,
-            phone: l.phone || '',
-            email: l.email || '',
-            status: l.status || 'novo',
-            createdAt: l.created_at,
-            thermalStatus: (l.temperature as ThermalStatus) || 'cold',
-            tags: l.tags || [],
-            interactions: 0,
-            lastInteractionAt: l.last_interaction || l.created_at,
-            isFavorite: false,
-            alertStatus: 'idle',
-            total_depositado: Math.round((parseFloat(l.total_depositado) || 0) * 100) / 100,
-            total_apostado: Math.round((parseFloat(l.total_apostado) || 0) * 100) / 100,
-            total_ganho: parseFloat(l.total_ganho) || 0,
-            total_depositos_count: parseInt(l.total_depositos_count) || 0,
-            stars: l.user_level ? parseInt(l.user_level) : (l.stars ? parseInt(l.stars) : 0),
-            is_affiliate: !!l.affiliate_name || l.is_affiliate === true || l.affiliate === 'yes' || l.affiliate_filter === 'yes',
-            affiliate_name: l.affiliate_name,
-            temperature: l.temperature,
-            has_interaction: l.has_interaction === true || l.has_interaction === 'true' || l.has_interaction === 1,
-            last_deposit_at: l.last_deposit_at || null,
-            last_deposit_value: l.last_deposit_value || null,
-            created_at: l.created_at,
-            last_winner_value: l.last_winner_value ? parseFloat(l.last_winner_value) : undefined,
-            last_winner_at: l.last_winner_at || null,
-            last_withdraw_at: l.last_withdraw_at || null,
-            last_withdraw_value: l.last_withdraw_value ? parseFloat(l.last_withdraw_value) : undefined,
-            total_saque: l.total_saque ? parseFloat(l.total_saque) : undefined,
-            balance: l.balance ? parseFloat(l.balance) : 0,
-            bonus: l.bonus ? parseFloat(l.bonus) : 0,
-            convert: l.convert ? parseFloat(l.convert) : 0,
-            total_afiliate: l.total_afiliate ? parseFloat(l.total_afiliate) : 0,
-            aposta_estrelas: l.aposta_estrelas ? parseInt(l.aposta_estrelas.toString()) || 0 : 0,
-            banca_id: l.banca_id,
-            banca_name: l.banca_name,
-            banca_url: l.banca_url
-          };
-        });
-
+        const formattedLeads = formatApiLeadsToLead(leads);
+        console.log('[Kanban] Primeira carga (já respondidos):', formattedLeads.length, 'leads');
         setRawLeads(formattedLeads);
 
-        // Se estiver vendo o CRM de outro usuário, busca o nome dele
         if (targetUserId && targetUserId !== userId) {
           const profileRes = await fetch(`/api/admin/users/${targetUserId}`, {
             headers: { 'X-User-Id': userId as string }
           });
           const profileResult = await profileRes.json();
-          if (profileResult.success && profileResult.data?.user) {
+          if (thisLoadId === loadIdRef.current && profileResult.success && profileResult.data?.user) {
             setConsultorInfo({
               name: profileResult.data.user.full_name || 'Consultor',
               email: profileResult.data.user.email
@@ -439,11 +459,45 @@ const KanbanContent = () => {
         } else {
           setConsultorInfo(null);
         }
+
+        const next = result.meta?.next;
+        if (next && typeof next.banca_index === 'number' && typeof next.page === 'number') {
+          setBackgroundLoading(true);
+          (async () => {
+            let current: { banca_index: number; page: number } | null = { banca_index: next.banca_index, page: next.page };
+            const headers = { 'X-User-Id': userId as string };
+            while (current && thisLoadId === loadIdRef.current) {
+              const chunkUrl = buildBaseUrl();
+              chunkUrl.searchParams.set('banca_index', String(current.banca_index));
+              chunkUrl.searchParams.set('page', String(current.page));
+              try {
+                const chunkRes = await fetch(chunkUrl.toString(), { headers });
+                const chunkResult = await chunkRes.json();
+                if (thisLoadId !== loadIdRef.current) break;
+                if (chunkResult.success && Array.isArray(chunkResult.data)) {
+                  const newLeads = formatApiLeadsToLead(chunkResult.data);
+                  if (newLeads.length > 0) {
+                    setRawLeads(prev => {
+                      const byId = new Map(prev.map(l => [l.id, l]));
+                      newLeads.forEach(l => byId.set(l.id, l));
+                      return Array.from(byId.values());
+                    });
+                  }
+                }
+                current = chunkResult.meta?.next ?? null;
+              } catch {
+                if (thisLoadId === loadIdRef.current) current = null;
+              }
+            }
+            if (thisLoadId === loadIdRef.current) {
+              setBackgroundLoading(false);
+              showToast('Todos os leads foram carregados.', 'success');
+            }
+          })();
+        }
       } else {
         const errorMessage = result.error || 'Erro ao carregar leads';
         console.error('[Kanban] Erro ao carregar leads:', errorMessage, result);
-        
-        // Se o erro for 404 ou "No indicateds found", não é um erro real, apenas não há dados
         if (errorMessage.includes('404') || errorMessage.includes('No indicateds found') || errorMessage.includes('Nenhum lead')) {
           setError(null);
           setRawLeads([]);
@@ -453,12 +507,14 @@ const KanbanContent = () => {
       }
     } catch (err) {
       console.error('[Kanban] Erro de conexão:', err);
-      setError('Erro de conexão com o servidor');
+      if (thisLoadId === loadIdRef.current) setError('Erro de conexão com o servidor');
     } finally {
-      setLoading(false);
-      setFilterLoading(false);
+      if (thisLoadId === loadIdRef.current) {
+        setLoading(false);
+        setFilterLoading(false);
+      }
     }
-  }, [userId, targetUserId, filters, exclusiveBancasList]);
+  }, [userId, targetUserId, filters, exclusiveBancasList, formatApiLeadsToLead, showToast]);
 
   const handleBancasLoaded = useCallback((bancas: { id: string; name: string; url: string }[]) => {
     setExclusiveBancasList(bancas);
@@ -767,12 +823,16 @@ const KanbanContent = () => {
       }
     }
 
-    // Filtro de Tags
+    // Filtro de Tags (Com etiquetas / Sem etiquetas / etiqueta específica)
     if (filters.tags) {
-      const tagId = typeof filters.tags === 'object' ? filters.tags.value : filters.tags;
-      if (tagId) {
+      const tagValue = typeof filters.tags === 'object' ? filters.tags.value : filters.tags;
+      if (tagValue === '__has_any') {
+        formattedLeads = formattedLeads.filter(l => (l.tags || []).length > 0);
+      } else if (tagValue === '__none') {
+        formattedLeads = formattedLeads.filter(l => (l.tags || []).length === 0);
+      } else if (tagValue) {
         formattedLeads = formattedLeads.filter(l =>
-          (l.tags || []).some((t: { id: string }) => t.id === tagId)
+          (l.tags || []).some((t: { id: string }) => t.id === tagValue)
         );
       }
     }
@@ -809,6 +869,10 @@ const KanbanContent = () => {
       (() => {
         const filtered = formattedLeads.filter(l => (l.total_depositado || 0) > (l.total_apostado || 0) || (l.balance ?? 0) > 0);
         return { id: 'deposito_sem_aposta', title: '💰 Com Saldo Disponível', color: 'red', leads: filtered, totalLeads: filtered.length };
+      })(),
+      (() => {
+        const filtered = formattedLeads.filter(l => (parseFloat(String(l.available_withdraw ?? 0)) || 0) > 0);
+        return { id: 'saque_disponivel', title: '💸 Saque Disponível', color: 'teal', leads: filtered, totalLeads: filtered.length };
       })(),
       (() => {
         const filtered = formattedLeads.filter(l => (l.total_depositos_count || 0) === 1 && (l.total_depositado || 0) <= (l.total_apostado || 0));
@@ -1023,6 +1087,16 @@ const KanbanContent = () => {
           {error && (
             <div className="mb-4 p-3 bg-red-50 border border-red-100 text-red-600 rounded-xl flex items-center gap-2 text-sm animate-in fade-in slide-in-from-top-1">
               <AlertCircle className="w-4 h-4" /> {error}
+            </div>
+          )}
+
+          {backgroundLoading && (
+            <div className="mb-4 py-3 px-4 bg-[#8CD955]/15 border-2 border-[#8CD955]/50 text-gray-800 rounded-xl flex items-center gap-3 text-sm font-medium animate-in fade-in shadow-sm">
+              <RefreshCw className="w-5 h-5 animate-spin text-[#8CD955] flex-shrink-0" />
+              <div>
+                <p className="font-semibold">Carregando mais leads em segundo plano</p>
+                <p className="text-xs text-gray-600 font-normal mt-0.5">Você já pode usar o quadro; novos leads aparecerão automaticamente.</p>
+              </div>
             </div>
           )}
 
@@ -1345,6 +1419,7 @@ const KanbanContent = () => {
             </div>
           </div>
         )}
+      <ToastContainer toasts={toasts} onClose={removeToast} />
     </Layout>
   );
 };

@@ -113,29 +113,15 @@ export async function POST(req: NextRequest) {
       return errorResponse('Nome e URL são obrigatórios', 400);
     }
 
-    // Normaliza a URL: remove protocolo, remove /api/crm, remove barras finais, mantém apenas o domínio
-    let normalizedUrl = url.trim();
-    
-    // Remove protocolo se presente
-    normalizedUrl = normalizedUrl.replace(/^https?:\/\//i, '');
-    
-    // Remove /api/crm se presente
-    normalizedUrl = normalizedUrl.replace(/\/api\/crm\/?/i, '');
-    
-    // Remove barras finais
-    normalizedUrl = normalizedUrl.replace(/\/+$/, '');
-    
-    // Remove espaços
-    normalizedUrl = normalizedUrl.trim();
-    
-    // Valida se ainda tem um domínio válido
-    if (!normalizedUrl || normalizedUrl.length === 0) {
-      return errorResponse('URL inválida. Forneça apenas o domínio (ex: web.girodasorte.digital)', 400);
+    // Salva a URL exatamente como o usuário digitou (apenas trim de espaços)
+    const urlToSave = typeof url === 'string' ? url.trim() : '';
+    if (!urlToSave) {
+      return errorResponse('URL é obrigatória', 400);
     }
 
     const { data, error } = await supabaseServiceRole
       .from('crm_bancas')
-      .insert({ name, url: normalizedUrl })
+      .insert({ name: name.trim(), url: urlToSave })
       .select()
       .single();
 
@@ -144,6 +130,58 @@ export async function POST(req: NextRequest) {
     }
 
     return successResponse(data, 'Banca criada com sucesso');
+  } catch (err: any) {
+    return serverErrorResponse(err);
+  }
+}
+
+/**
+ * PATCH /api/admin/crm/bancas - Atualiza uma banca (nome e/ou url)
+ * Query: id - ID da banca
+ * Body: { name?, url? } - pelo menos um obrigatório
+ */
+export async function PATCH(req: NextRequest) {
+  try {
+    await requireAdmin(req);
+
+    const { searchParams } = new URL(req.url);
+    const id = searchParams.get('id');
+
+    if (!id) {
+      return errorResponse('ID da banca é obrigatório', 400);
+    }
+
+    const body = await req.json();
+    const { name, url } = body;
+
+    if (!name && url === undefined) {
+      return errorResponse('Informe nome ou URL para atualizar', 400);
+    }
+
+    const updates: { name?: string; url?: string } = {};
+    if (typeof name === 'string' && name.trim()) updates.name = name.trim();
+    if (typeof url === 'string') {
+      // Salva a URL exatamente como o usuário digitou (apenas trim)
+      const urlToSave = url.trim();
+      if (urlToSave.length > 0) updates.url = urlToSave;
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return errorResponse('Nenhum dado válido para atualizar', 400);
+    }
+
+    const { data, error } = await supabaseServiceRole
+      .from('crm_bancas')
+      .update(updates)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) {
+      return errorResponse(`Erro ao atualizar banca: ${error.message}`);
+    }
+
+    return successResponse(data, 'Banca atualizada com sucesso');
   } catch (err: any) {
     return serverErrorResponse(err);
   }
