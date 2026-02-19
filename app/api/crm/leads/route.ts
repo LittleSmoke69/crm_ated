@@ -472,6 +472,8 @@ export async function GET(req: NextRequest) {
           id: compositeId,
           /** Id numérico do lead na API externa (ex.: 28660). Usar em user_id ao salvar feedback. */
           original_id: typeof originalId === 'number' ? originalId : parseInt(String(originalId), 10) || originalId,
+          /** Id numérico do consultor na API externa (para spin-transfer e send-spins). */
+          consultant_id: l.consultant_id != null ? Number(l.consultant_id) : undefined,
           name: l.name || '',
           last_name: l.last_name || '',
           phone: l.phone || '',

@@ -67,6 +67,8 @@ export interface Lead {
   banca_url?: string;
   /** Id numérico do lead na API externa (ex.: 28660). Usar como user_id ao salvar feedback. */
   original_id?: number | string;
+  /** Id numérico do consultor na API externa (ex.: 21206). Usar em spin-transfer e send-spins. */
+  consultant_id?: number | null;
   /** Campos de lead transferido (página Transferido) */
   tag_de_redistribuicao?: string | null;
   transferred?: boolean;

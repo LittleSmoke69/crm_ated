@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback, Suspense } from 'react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { Kanban as KanbanIcon, Plus, Users, Target, CheckCircle2, MessageSquare, AlertCircle, Eye, RefreshCw, X } from 'lucide-react';
+import { Kanban as KanbanIcon, Plus, Users, Target, CheckCircle2, MessageSquare, AlertCircle, Eye, RefreshCw, X, Gift, Loader2, Search } from 'lucide-react';
 import FilterBar from '@/components/CRM/FilterBar';
 import KanbanColumn from '@/components/CRM/KanbanColumn';
 import SortColumnModal from '@/components/CRM/SortColumnModal';
@@ -234,6 +234,15 @@ const KanbanContent = () => {
   
   // Estado para controlar o modal informativo de status
   const [showStatusModal, setShowStatusModal] = useState(false);
+  // Modal Enviar Giros (Roleta)
+  const [showSpinModal, setShowSpinModal] = useState(false);
+  const [spinSelectedLeadIds, setSpinSelectedLeadIds] = useState<Set<string>>(new Set());
+  const [spinSearchTerm, setSpinSearchTerm] = useState('');
+  const [spinQuantity, setSpinQuantity] = useState<number>(5);
+  const [spinHistory, setSpinHistory] = useState<{ quantity: number; date: string }[]>([]);
+  const [spinHistoryLoading, setSpinHistoryLoading] = useState(false);
+  const [spinSending, setSpinSending] = useState(false);
+  const [spinError, setSpinError] = useState<string | null>(null);
 
   const isInitialLoadRef = useRef<boolean>(true);
   /** Cancela o carregamento em background quando uma nova busca é iniciada (ex.: mudança de filtro). */
@@ -365,7 +374,8 @@ const KanbanContent = () => {
         aposta_estrelas: l.aposta_estrelas ? parseInt(l.aposta_estrelas.toString()) || 0 : 0,
         banca_id: l.banca_id,
         banca_name: l.banca_name,
-        banca_url: l.banca_url
+        banca_url: l.banca_url,
+        consultant_id: l.consultant_id != null ? Number(l.consultant_id) : undefined,
       };
     });
   }, []);
@@ -566,6 +576,187 @@ const KanbanContent = () => {
     setSortField(null);
     setSortDirection('asc');
   };
+
+  // Leads com banca (para listagem do modal)
+  const spinEligibleLeads = useMemo(() => rawLeads.filter(l => l.banca_url), [rawLeads]);
+  // Lista filtrada pela pesquisa (nome ou e-mail)
+  const spinFilteredLeads = useMemo(() => {
+    const term = spinSearchTerm.trim().toLowerCase();
+    if (!term) return spinEligibleLeads;
+    return spinEligibleLeads.filter(l =>
+      (l.name || '').toLowerCase().includes(term) || (l.email || '').toLowerCase().includes(term)
+    );
+  }, [spinEligibleLeads, spinSearchTerm]);
+  // Um único lead selecionado (para exibir histórico)
+  const spinSelectedLead = useMemo(() => {
+    if (spinSelectedLeadIds.size !== 1) return null;
+    const id = Array.from(spinSelectedLeadIds)[0];
+    return rawLeads.find(l => String(l.id) === String(id)) ?? null;
+  }, [rawLeads, spinSelectedLeadIds]);
+
+  /** Id do lead para APIs (mesmo critério do feedback): original_id ou sufixo numérico do id composto. */
+  const getLeadIdForApi = useCallback((lead: Lead): string | number => {
+    if (lead.original_id != null) return typeof lead.original_id === 'number' ? lead.original_id : String(lead.original_id);
+    if (typeof lead.id === 'string' && lead.id.includes('-')) return lead.id.split('-').pop() ?? lead.id;
+    return lead.id;
+  }, []);
+
+  // Carregar histórico de giros ao selecionar lead; resolver consultant_id se necessário
+  const [resolvedConsultantId, setResolvedConsultantId] = useState<number | null>(null);
+  useEffect(() => {
+    if (!showSpinModal || !spinSelectedLead) {
+      setSpinHistory([]);
+      setResolvedConsultantId(null);
+      return;
+    }
+    const lead = spinSelectedLead;
+    const bancaUrl = lead.banca_url;
+    if (!bancaUrl) {
+      setSpinHistory([]);
+      setSpinError('Lead sem banca definida.');
+      return;
+    }
+    setSpinError(null);
+    let consultantId = lead.consultant_id != null ? Number(lead.consultant_id) : null;
+
+    const fetchHistory = async (cid: number) => {
+      setSpinHistoryLoading(true);
+      try {
+        const url = new URL('/api/crm/spin-transfer-history', window.location.origin);
+        url.searchParams.set('consultant_id', String(cid));
+        url.searchParams.set('lead_id', String(getLeadIdForApi(lead)));
+        url.searchParams.set('banca_url', bancaUrl);
+        url.searchParams.set('per_page', '15');
+        url.searchParams.set('page', '1');
+        if (targetUserId) url.searchParams.set('userId', targetUserId);
+        const res = await fetch(url.toString(), { headers: { 'X-User-Id': userId as string } });
+        const data = await res.json();
+        const list = Array.isArray(data?.data?.data) ? data.data.data : (Array.isArray(data?.data) ? data.data : []);
+        if (data?.success && list.length >= 0) {
+          setSpinHistory(list.map((h: any) => ({
+            quantity: h.quantity ?? h.spins_count ?? 0,
+            date: h.created_at ?? h.sent_at ?? h.date ?? '',
+          })));
+        } else {
+          setSpinHistory([]);
+        }
+      } catch {
+        setSpinHistory([]);
+      } finally {
+        setSpinHistoryLoading(false);
+      }
+    };
+
+    if (consultantId != null) {
+      setResolvedConsultantId(consultantId);
+      fetchHistory(consultantId);
+      return;
+    }
+    // Buscar consultant_id na API
+    const resolveAndFetch = async () => {
+      try {
+        const url = new URL('/api/crm/consultant-external-id', window.location.origin);
+        url.searchParams.set('userId', targetUserId || (userId as string));
+        url.searchParams.set('banca_url', bancaUrl);
+        const res = await fetch(url.toString(), { headers: { 'X-User-Id': userId as string } });
+        const data = await res.json();
+        if (data?.success && data?.data?.consultant_id != null) {
+          const cid = Number(data.data.consultant_id);
+          setResolvedConsultantId(cid);
+          await fetchHistory(cid);
+        } else {
+          setSpinError('Não foi possível obter o id do consultor para esta banca.');
+          setSpinHistory([]);
+        }
+      } catch {
+        setSpinError('Erro ao obter id do consultor.');
+        setSpinHistory([]);
+      } finally {
+        setSpinHistoryLoading(false);
+      }
+    };
+    setSpinHistoryLoading(true);
+    setResolvedConsultantId(null);
+    setSpinHistory([]);
+    resolveAndFetch();
+  }, [showSpinModal, spinSelectedLeadIds.size, spinSelectedLead, targetUserId, userId]);
+
+  const handleSendSpins = useCallback(async () => {
+    const selectedLeads = spinEligibleLeads.filter(l => spinSelectedLeadIds.has(String(l.id)));
+    if (selectedLeads.length === 0 || spinQuantity < 1) return;
+    setSpinSending(true);
+    setSpinError(null);
+    const consultantIdByBanca = new Map<string, number>();
+    const getConsultantId = async (lead: Lead): Promise<number | null> => {
+      const bancaUrl = lead.banca_url;
+      if (!bancaUrl) return null;
+      if (lead.consultant_id != null) return Number(lead.consultant_id);
+      const cached = consultantIdByBanca.get(bancaUrl);
+      if (cached != null) return cached;
+      try {
+        const url = new URL('/api/crm/consultant-external-id', window.location.origin);
+        url.searchParams.set('userId', targetUserId || (userId as string));
+        url.searchParams.set('banca_url', bancaUrl);
+        const res = await fetch(url.toString(), { headers: { 'X-User-Id': userId as string } });
+        const data = await res.json();
+        if (data?.success && data?.data?.consultant_id != null) {
+          const cid = Number(data.data.consultant_id);
+          consultantIdByBanca.set(bancaUrl, cid);
+          return cid;
+        }
+      } catch {
+        // ignore
+      }
+      return null;
+    };
+    let ok = 0;
+    let err = 0;
+    for (const lead of selectedLeads) {
+      const bancaUrl = lead.banca_url;
+      if (!bancaUrl) {
+        err++;
+        continue;
+      }
+      const consultantId = await getConsultantId(lead);
+      if (consultantId == null) {
+        err++;
+        continue;
+      }
+      try {
+        const res = await fetch('/api/crm/send-spins-to-lead', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId as string },
+          body: JSON.stringify({
+            consultant_id: consultantId,
+            lead_id: getLeadIdForApi(lead),
+            quantity: Number(spinQuantity),
+            banca_url: bancaUrl,
+            userId: targetUserId || userId,
+          }),
+        });
+        const data = await res.json();
+        if (data?.success) ok++;
+        else err++;
+      } catch {
+        err++;
+      }
+    }
+    if (ok > 0) {
+      showToast(
+        err > 0
+          ? `${spinQuantity} giro(s) enviados para ${ok} lead(s). ${err} falha(s).`
+          : `${spinQuantity} giro(s) enviado(s) para ${ok} lead(s).`,
+        'success'
+      );
+      if (selectedLeads.length === 1 && spinSelectedLead) {
+        setSpinHistory(prev => [{ quantity: spinQuantity, date: new Date().toISOString() }, ...prev]);
+      }
+    }
+    if (err > 0) {
+      setSpinError(err === selectedLeads.length ? 'Falha ao enviar giros.' : `Falha para ${err} de ${selectedLeads.length} lead(s).`);
+    }
+    setSpinSending(false);
+  }, [spinEligibleLeads, spinSelectedLeadIds, spinQuantity, spinSelectedLead, targetUserId, userId, showToast, getLeadIdForApi]);
 
   // Função para carregar mais leads em uma coluna (apenas atualiza limite local, sem API)
   const handleLoadMore = (columnId: string) => {
@@ -1052,6 +1243,14 @@ const KanbanContent = () => {
                 <Eye className="w-3.5 h-3.5" />
                 <span>Informações <span className="hidden xs:inline">de Status</span></span>
               </button>
+              <button 
+                onClick={() => { setShowSpinModal(true); setSpinError(null); setSpinSelectedLeadIds(new Set()); setSpinSearchTerm(''); setSpinHistory([]); }}
+                className="whitespace-nowrap flex items-center gap-2 bg-amber-500 text-white px-3 py-2 rounded-xl text-[11px] md:text-sm font-bold hover:bg-amber-600 transition-all shadow-md shadow-gray-100 flex-shrink-0"
+                title="Enviar giros da roleta para um lead"
+              >
+                <Gift className="w-3.5 h-3.5" />
+                <span>Enviar Giros <span className="hidden xs:inline">(Roleta)</span></span>
+              </button>
             </div>
           </div>
 
@@ -1419,6 +1618,185 @@ const KanbanContent = () => {
             </div>
           </div>
         )}
+
+      {/* Modal Enviar Giros (Roleta) */}
+      {showSpinModal && (
+        <div
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => !spinSending && setShowSpinModal(false)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl max-w-md w-full max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between rounded-t-2xl">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-amber-100 rounded-lg">
+                  <Gift className="w-5 h-5 text-amber-600" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-gray-800">Enviar Giros (Roleta)</h2>
+                  <p className="text-xs text-gray-500">Selecione o lead e a quantidade de giros</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => !spinSending && setShowSpinModal(false)}
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">Pesquisar lead</label>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <input
+                    type="text"
+                    value={spinSearchTerm}
+                    onChange={(e) => setSpinSearchTerm(e.target.value)}
+                    placeholder="Nome ou e-mail..."
+                    className="w-full pl-9 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-amber-400/40"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider">Leads</label>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setSpinSelectedLeadIds(new Set(spinFilteredLeads.map(l => String(l.id))))}
+                      className="text-[10px] font-bold text-amber-600 hover:text-amber-700"
+                    >
+                      Selecionar todos
+                    </button>
+                    <span className="text-gray-300">|</span>
+                    <button
+                      type="button"
+                      onClick={() => setSpinSelectedLeadIds(new Set())}
+                      className="text-[10px] font-bold text-gray-500 hover:text-gray-700"
+                    >
+                      Desmarcar
+                    </button>
+                  </div>
+                </div>
+                <div className="bg-gray-50 border border-gray-200 rounded-xl max-h-44 overflow-y-auto">
+                  {spinFilteredLeads.length === 0 ? (
+                    <p className="p-4 text-sm text-gray-500 text-center">Nenhum lead encontrado.</p>
+                  ) : (
+                    <ul className="divide-y divide-gray-100 py-1">
+                      {spinFilteredLeads.map((lead) => {
+                        const idStr = String(lead.id);
+                        const checked = spinSelectedLeadIds.has(idStr);
+                        return (
+                          <li key={idStr}>
+                            <label className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-100 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => {
+                                  setSpinSelectedLeadIds(prev => {
+                                    const next = new Set(prev);
+                                    if (next.has(idStr)) next.delete(idStr);
+                                    else next.add(idStr);
+                                    return next;
+                                  });
+                                }}
+                                className="w-4 h-4 rounded border-gray-300 text-amber-500 focus:ring-amber-400"
+                              />
+                              <span className="text-sm text-gray-800 truncate flex-1">
+                                {lead.name || 'Sem nome'}
+                                {lead.email ? (
+                                  <span className="text-gray-500 font-normal"> — {lead.email}</span>
+                                ) : null}
+                              </span>
+                            </label>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
+                {spinSelectedLeadIds.size > 0 && (
+                  <p className="mt-1.5 text-xs text-gray-500">
+                    {spinSelectedLeadIds.size} lead(s) selecionado(s)
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">Quantidade de giros (por lead)</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={spinQuantity}
+                  onChange={(e) => setSpinQuantity(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-amber-400/40"
+                />
+              </div>
+
+              {spinError && (
+                <div className="p-3 bg-red-50 border border-red-100 text-red-600 rounded-xl text-sm flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                  {spinError}
+                </div>
+              )}
+
+              {/* Mini histórico de giros (apenas quando um único lead está selecionado) */}
+              {spinSelectedLeadIds.size === 1 && spinSelectedLead && (
+                <div>
+                  <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Histórico de giros enviados (lead selecionado)</h3>
+                  <div className="bg-gray-50 border border-gray-100 rounded-xl overflow-hidden max-h-40 overflow-y-auto">
+                    {spinHistoryLoading ? (
+                      <div className="p-4 flex items-center justify-center gap-2 text-gray-500 text-sm">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Carregando...
+                      </div>
+                    ) : spinHistory.length === 0 ? (
+                      <p className="p-4 text-sm text-gray-500 text-center">Nenhum giro enviado ainda para este lead.</p>
+                    ) : (
+                      <ul className="divide-y divide-gray-100">
+                        {spinHistory.map((h, i) => (
+                          <li key={i} className="px-4 py-2.5 flex items-center justify-between text-sm">
+                            <span className="font-medium text-gray-800">{h.quantity} giro(s)</span>
+                            <span className="text-gray-500">
+                              {h.date ? new Date(h.date).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '-'}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-6 py-4 rounded-b-2xl flex gap-2">
+              <button
+                type="button"
+                onClick={() => !spinSending && setShowSpinModal(false)}
+                className="flex-1 py-3 bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold rounded-xl transition-colors"
+              >
+                Fechar
+              </button>
+              <button
+                type="button"
+                onClick={handleSendSpins}
+                disabled={spinSending || spinSelectedLeadIds.size === 0 || spinQuantity < 1}
+                className="flex-1 py-3 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white font-bold rounded-xl transition-colors flex items-center justify-center gap-2"
+              >
+                {spinSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Gift className="w-4 h-4" />}
+                {spinSending ? 'Enviando...' : `Enviar giros${spinSelectedLeadIds.size > 0 ? ` (${spinSelectedLeadIds.size})` : ''}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <ToastContainer toasts={toasts} onClose={removeToast} />
     </Layout>
   );

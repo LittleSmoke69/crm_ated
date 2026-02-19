@@ -1060,7 +1060,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
                   onChange={(e) => setTop5Sort(e.target.value)}
                   className="px-3 py-2 bg-gray-50 border border-gray-100 rounded-lg text-sm font-medium text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30"
                 >
-                  <option value="vendas">Por vendas</option>
+                  <option value="vendas">Por total depositado</option>
                   <option value="cadastro">Por cadastro</option>
                   <option value="apostas">Por apostas</option>
                   <option value="apostas_bicho">Por apostas bicho</option>

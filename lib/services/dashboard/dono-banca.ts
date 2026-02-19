@@ -107,6 +107,8 @@ export async function fetchIndicatedsByPeriod(
     if (dateFrom) params.set('from', dateFrom);
     if (dateTo) params.set('to', dateTo);
     const url = `${baseUrl}?${params.toString()}`;
+    const curlCmd = `curl -X GET "${url}" -H "Accept: application/json" -H "X-API-KEY: ${apiKey ?? '<CRM_API_KEY>'}"`;
+    console.log(`[fetchIndicatedsByPeriod] GET get-indicateds-by-consultant | page=${page} | curl:\n${curlCmd}`);
     const res = await fetch(url, {
       method: 'GET',
       headers: { Accept: 'application/json', ...(apiKey && { 'X-API-KEY': apiKey }) },
