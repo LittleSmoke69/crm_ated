@@ -1092,7 +1092,7 @@ export default function AdminLeadTransferPage() {
                 <p className="text-sm text-gray-600 mt-1">Dados carregados por padrão (últimos 30 dias). Filtros de data, tipo e consultor para refinar.</p>
               </div>
               {/* Seleção de período: clique abre calendário (sem digitar data) */}
-              <div className="flex flex-wrap items-center gap-3 p-4 bg-white rounded-xl border border-gray-200 mb-6">
+              <div className="flex flex-wrap items-end gap-3 p-4 bg-white rounded-xl border border-gray-200 mb-6">
                 <span className="text-sm font-medium text-gray-700">Período:</span>
                 <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 px-3 py-2 rounded-lg">
                   <Calendar className="w-4 h-4 text-gray-400 shrink-0" aria-hidden />
