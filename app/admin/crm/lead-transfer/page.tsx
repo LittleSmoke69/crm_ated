@@ -27,7 +27,7 @@ import {
   RefreshCw,
   Calendar,
 } from 'lucide-react';
-import { DateInputDDMMYYYY, getTodaySãoPaulo } from '@/components/Admin/CRMSection';
+import { DateInputDDMMYYYY, getTodaySãoPaulo, getLast30DaysRangeSãoPaulo } from '@/components/Admin/CRMSection';
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 
 const MAX_LEADS_SELECT = 200;
@@ -182,8 +182,8 @@ export default function AdminLeadTransferPage() {
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [transferType, setTransferType] = useState<'TF' | 'TF1' | 'TF2' | 'TF3'>('TF');
 
-  const [managementFrom, setManagementFrom] = useState(() => getTodaySãoPaulo());
-  const [managementTo, setManagementTo] = useState(() => getTodaySãoPaulo());
+  const [managementFrom, setManagementFrom] = useState(() => getLast30DaysRangeSãoPaulo().from);
+  const [managementTo, setManagementTo] = useState(() => getLast30DaysRangeSãoPaulo().to);
   const [managementTransferType, setManagementTransferType] = useState('');
   const [transferLogs, setTransferLogs] = useState<any[]>([]);
   const [transferStats, setTransferStats] = useState<{

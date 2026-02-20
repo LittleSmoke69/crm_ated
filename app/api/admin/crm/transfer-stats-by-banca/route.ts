@@ -3,6 +3,7 @@ import { requireAdmin } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { getAdminBancaId } from '@/lib/server/crm/adminLeadTransferContext';
+import { normalizeDateParam, dateToStartOfDaySãoPauloISO, dateToEndOfDaySãoPauloISO } from '@/lib/server/crm/transfer-date-utils';
 
 const LOG_PREFIX = '[admin][transfer-stats-by-banca]';
 
@@ -15,8 +16,8 @@ export async function GET(req: NextRequest) {
   try {
     const { userId, profile } = await requireAdmin(req);
     const { searchParams } = req.nextUrl;
-    const fromParam = searchParams.get('from')?.trim();
-    const toParam = searchParams.get('to')?.trim();
+    const fromParam = normalizeDateParam(searchParams.get('from'));
+    const toParam = normalizeDateParam(searchParams.get('to'));
 
     const { data: bancas } = await supabaseServiceRole
       .from('crm_bancas')
@@ -34,8 +35,8 @@ export async function GET(req: NextRequest) {
         .from('admin_lead_transfer_logs')
         .select('id')
         .eq('banca_id', banca.id);
-      if (fromParam) logQuery = logQuery.gte('created_at', `${fromParam}T00:00:00.000Z`);
-      if (toParam) logQuery = logQuery.lte('created_at', `${toParam}T23:59:59.999Z`);
+      if (fromParam) logQuery = logQuery.gte('created_at', dateToStartOfDaySãoPauloISO(fromParam));
+      if (toParam) logQuery = logQuery.lte('created_at', dateToEndOfDaySãoPauloISO(toParam));
       const { data: logs } = await logQuery;
       const logIds = (logs ?? []).map((r: { id: string }) => r.id);
       if (logIds.length === 0) {
