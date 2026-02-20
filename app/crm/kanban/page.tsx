@@ -1270,10 +1270,10 @@ const KanbanContent = () => {
                 <Eye className="w-3.5 h-3.5" />
                 <span>Informações <span className="hidden xs:inline">de Status</span></span>
               </button>
-              <button 
-                onClick={() => { setShowSpinModal(true); setSpinError(null); setSpinSelectedLeadIds(new Set()); setSpinSearchTerm(''); setSpinHistory([]); }}
-                className="whitespace-nowrap flex items-center gap-2 bg-amber-500 text-white px-3 py-2 rounded-xl text-[11px] md:text-sm font-bold hover:bg-amber-600 transition-all shadow-md shadow-gray-100 flex-shrink-0"
-                title="Enviar giros da roleta para um lead"
+              <button
+                disabled
+                className="whitespace-nowrap flex items-center gap-2 bg-gray-300 text-gray-500 px-3 py-2 rounded-xl text-[11px] md:text-sm font-bold cursor-not-allowed opacity-60 shadow-sm flex-shrink-0"
+                title="Enviar giros desabilitado"
               >
                 <Gift className="w-3.5 h-3.5" />
                 <span>Enviar Giros <span className="hidden xs:inline">(Roleta)</span></span>
