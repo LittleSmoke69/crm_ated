@@ -4,6 +4,7 @@ import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { getAdminBancaId } from '@/lib/server/crm/adminLeadTransferContext';
 import { createCrmRedistributionClient } from '@/lib/server/crm/crmRedistributionClient';
+import { normalizeDateParam, dateToStartOfDaySãoPauloISO, dateToEndOfDaySãoPauloISO } from '@/lib/server/crm/transfer-date-utils';
 
 const LOG_PREFIX = '[admin][transfer-conversion-stats]';
 
@@ -28,8 +29,8 @@ export async function GET(req: NextRequest) {
       return errorResponse('Banca não encontrada ou sem permissão.');
     }
 
-    const fromParam = searchParams.get('from')?.trim();
-    const toParam = searchParams.get('to')?.trim();
+    const fromParam = normalizeDateParam(searchParams.get('from'));
+    const toParam = normalizeDateParam(searchParams.get('to'));
     const targetConsultantEmail = searchParams.get('target_consultant_email')?.trim() || null;
 
     let query = supabaseServiceRole
@@ -38,10 +39,10 @@ export async function GET(req: NextRequest) {
       .eq('banca_id', resolved.bancaId);
 
     if (fromParam) {
-      query = query.gte('created_at', `${fromParam}T00:00:00.000Z`);
+      query = query.gte('created_at', dateToStartOfDaySãoPauloISO(fromParam));
     }
     if (toParam) {
-      query = query.lte('created_at', `${toParam}T23:59:59.999Z`);
+      query = query.lte('created_at', dateToEndOfDaySãoPauloISO(toParam));
     }
 
     let list: { count?: number; transfer_type?: string | null; target_consultant_email?: string | null }[] = [];

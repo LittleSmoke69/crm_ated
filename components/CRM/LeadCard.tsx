@@ -26,7 +26,11 @@ import {
   ChevronUp,
   Copy,
   Check,
-  RefreshCw
+  RefreshCw,
+  Gift,
+  Ticket,
+  Layers,
+  Package
 } from 'lucide-react';
 import { Lead } from './types';
 import AddTagModal from './AddTagModal';
@@ -151,6 +155,16 @@ const LeadCard: React.FC<LeadCardProps> = ({
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [leadDetails, setLeadDetails] = useState<Lead | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  // Adicionar bônus (dropdown no modal de detalhe)
+  const [bonusDropdownOpen, setBonusDropdownOpen] = useState(false);
+  const [selectedBonusType, setSelectedBonusType] = useState<'giros' | 'rifa' | 'raspadinha' | 'caixinha' | null>(null);
+  const [bonusGirosQuantity, setBonusGirosQuantity] = useState(5);
+  const [bonusGirosSending, setBonusGirosSending] = useState(false);
+  const [bonusGirosError, setBonusGirosError] = useState<string | null>(null);
+  const [bonusGirosSuccessMessage, setBonusGirosSuccessMessage] = useState<string | null>(null);
+  const [bonusGirosHistory, setBonusGirosHistory] = useState<{ quantity: number; date: string }[]>([]);
+  const [bonusGirosHistoryLoading, setBonusGirosHistoryLoading] = useState(false);
+  const bonusDropdownRef = useRef<HTMLDivElement>(null);
 
   /** Tick para contagem regressiva em tempo real do prazo de leads transferidos (1s para contador h/m/s) */
   const [nowTick, setNowTick] = useState(0);
@@ -529,6 +543,145 @@ const LeadCard: React.FC<LeadCardProps> = ({
       : typeof lead.id === 'string' && lead.id.includes('-')
         ? (lead.id.split('-').pop() ?? String(lead.id))
         : String(lead.id);
+
+  /** Id do lead para APIs (spin-transfer, send-spins): original_id ou sufixo numérico do id composto. */
+  const getLeadIdForApi = (l: Lead): string | number => {
+    if (l.original_id != null) return typeof l.original_id === 'number' ? l.original_id : String(l.original_id);
+    if (typeof l.id === 'string' && l.id.includes('-')) return l.id.split('-').pop() ?? l.id;
+    return l.id;
+  };
+
+  const bancaUrlForBonus = lead.banca_url?.trim() || selectedBancaUrl?.trim() || undefined;
+
+  const handleSendBonusGiros = async () => {
+    if (!consultorUserId || !bancaUrlForBonus || bonusGirosQuantity < 1) return;
+    setBonusGirosSending(true);
+    setBonusGirosError(null);
+    try {
+      let consultantId = lead.consultant_id != null ? Number(lead.consultant_id) : null;
+      if (consultantId == null) {
+        const res = await fetch(
+          `/api/crm/consultant-external-id?userId=${encodeURIComponent(targetUserId || consultorUserId)}&banca_url=${encodeURIComponent(bancaUrlForBonus)}`,
+          { headers: { 'X-User-Id': consultorUserId } }
+        );
+        const data = await res.json();
+        if (data?.success && data?.data?.consultant_id != null) consultantId = Number(data.data.consultant_id);
+      }
+      if (consultantId == null) {
+        setBonusGirosError('Não foi possível obter o id do consultor.');
+        setBonusGirosSending(false);
+        return;
+      }
+      const res = await fetch('/api/crm/send-spins-to-lead', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': consultorUserId },
+        body: JSON.stringify({
+          consultant_id: consultantId,
+          lead_id: getLeadIdForApi(lead),
+          quantity: Number(bonusGirosQuantity),
+          banca_url: bancaUrlForBonus,
+          userId: targetUserId || consultorUserId,
+        }),
+      });
+      const data = await res.json();
+      if (!data?.success) {
+        setBonusGirosError(data?.error || 'Erro ao enviar giros.');
+        setBonusGirosSending(false);
+        return;
+      }
+      const tagRes = await fetch('/api/crm/tags/ensure-giro-bonus', { headers: { 'X-User-Id': consultorUserId } });
+      const tagData = await tagRes.json();
+      if (tagData?.success && tagData?.data?.tagId) {
+        await fetch('/api/crm/leads/tags', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': consultorUserId },
+          body: JSON.stringify({
+            leadId: String(lead.id),
+            tagId: tagData.data.tagId,
+            targetUserId: targetUserId || consultorUserId,
+          }),
+        });
+      }
+      setSelectedBonusType(null);
+      setBonusGirosError(null);
+      setBonusGirosSuccessMessage(`${bonusGirosQuantity} giro(s) enviado(s) com sucesso!`);
+      setBonusGirosHistory(prev => [{ quantity: bonusGirosQuantity, date: new Date().toISOString() }, ...prev]);
+    } catch {
+      setBonusGirosError('Erro ao enviar giros.');
+    } finally {
+      setBonusGirosSending(false);
+    }
+  };
+
+  useEffect(() => {
+    const onOutside = (e: MouseEvent) => {
+      if (bonusDropdownRef.current && !bonusDropdownRef.current.contains(e.target as Node)) setBonusDropdownOpen(false);
+    };
+    if (showDetailsModal) {
+      document.addEventListener('mousedown', onOutside);
+      return () => document.removeEventListener('mousedown', onOutside);
+    }
+  }, [showDetailsModal]);
+
+  // Carregar histórico de giros ao selecionar "Adicionar Giros"
+  useEffect(() => {
+    if (!showDetailsModal || selectedBonusType !== 'giros' || !bancaUrlForBonus || !consultorUserId) {
+      setBonusGirosHistory([]);
+      return;
+    }
+    let consultantId = lead.consultant_id != null ? Number(lead.consultant_id) : null;
+    const fetchHistory = async (cid: number) => {
+      setBonusGirosHistoryLoading(true);
+      try {
+        const url = new URL('/api/crm/spin-transfer-history', window.location.origin);
+        url.searchParams.set('consultant_id', String(cid));
+        url.searchParams.set('lead_id', String(getLeadIdForApi(lead)));
+        url.searchParams.set('banca_url', bancaUrlForBonus);
+        url.searchParams.set('per_page', '15');
+        url.searchParams.set('page', '1');
+        if (targetUserId) url.searchParams.set('userId', targetUserId);
+        const res = await fetch(url.toString(), { headers: { 'X-User-Id': consultorUserId } });
+        const data = await res.json();
+        const list = Array.isArray(data?.data?.data) ? data.data.data : (Array.isArray(data?.data) ? data.data : []);
+        if (data?.success) {
+          setBonusGirosHistory(
+            list.map((h: any) => ({
+              quantity: h.quantity ?? h.spins_count ?? 0,
+              date: h.created_at ?? h.sent_at ?? h.date ?? '',
+            }))
+          );
+        } else {
+          setBonusGirosHistory([]);
+        }
+      } catch {
+        setBonusGirosHistory([]);
+      } finally {
+        setBonusGirosHistoryLoading(false);
+      }
+    };
+    if (consultantId != null) {
+      fetchHistory(consultantId);
+      return;
+    }
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/crm/consultant-external-id?userId=${encodeURIComponent(targetUserId || consultorUserId)}&banca_url=${encodeURIComponent(bancaUrlForBonus)}`,
+          { headers: { 'X-User-Id': consultorUserId } }
+        );
+        const data = await res.json();
+        if (data?.success && data?.data?.consultant_id != null) {
+          await fetchHistory(Number(data.data.consultant_id));
+        } else {
+          setBonusGirosHistory([]);
+          setBonusGirosHistoryLoading(false);
+        }
+      } catch {
+        setBonusGirosHistory([]);
+        setBonusGirosHistoryLoading(false);
+      }
+    })();
+  }, [showDetailsModal, selectedBonusType, bancaUrlForBonus, consultorUserId, targetUserId, lead.id, lead.original_id, lead.consultant_id]);
 
   // Função para buscar feedback quando o botão for clicado
   const loadFeedback = async () => {
@@ -1815,7 +1968,11 @@ const LeadCard: React.FC<LeadCardProps> = ({
           onClick={() => {
             setShowDetailsModal(false);
             setLeadDetails(null);
-            // Reseta os estados de visualização
+            setSelectedBonusType(null);
+            setBonusDropdownOpen(false);
+            setBonusGirosError(null);
+            setBonusGirosSuccessMessage(null);
+            setBonusGirosHistory([]);
             setShowAllDeposits(false);
             setShowAllWithdraws(false);
             setShowAllBets(false);
@@ -1850,7 +2007,10 @@ const LeadCard: React.FC<LeadCardProps> = ({
                 onClick={() => {
                   setShowDetailsModal(false);
                   setLeadDetails(null);
-                  // Reseta os estados de visualização
+                  setSelectedBonusType(null);
+                  setBonusDropdownOpen(false);
+                  setBonusGirosSuccessMessage(null);
+                  setBonusGirosHistory([]);
                   setShowAllDeposits(false);
                   setShowAllWithdraws(false);
                   setShowAllBets(false);
@@ -1949,6 +2109,155 @@ const LeadCard: React.FC<LeadCardProps> = ({
                     </div>
                   )}
                 </div>
+              </div>
+
+              {/* Adicionar bônus */}
+              <div className="relative bg-amber-50 rounded-lg sm:rounded-xl p-4 sm:p-5 border border-amber-100">
+                {bonusGirosSending && (
+                  <div className="absolute inset-0 bg-white/80 backdrop-blur-[2px] rounded-lg sm:rounded-xl z-10 flex items-center justify-center">
+                    <div className="flex flex-col items-center gap-2 text-amber-600">
+                      <Loader2 className="w-8 h-8 animate-spin" />
+                      <span className="text-sm font-semibold">Enviando giros...</span>
+                    </div>
+                  </div>
+                )}
+                {bonusGirosSuccessMessage && (
+                  <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-xl flex items-center gap-2 text-green-800 text-sm font-medium">
+                    <CheckCircle2 className="w-5 h-5 text-green-600 shrink-0" />
+                    {bonusGirosSuccessMessage}
+                  </div>
+                )}
+                <h3 className="text-base sm:text-lg font-bold text-gray-800 mb-3 sm:mb-4 flex items-center gap-2">
+                  <Gift className="w-4 h-4 sm:w-5 sm:h-5 text-amber-600 shrink-0" />
+                  <span>Adicionar bônus</span>
+                </h3>
+                <div className="relative" ref={bonusDropdownRef}>
+                  <button
+                    type="button"
+                    onClick={() => setBonusDropdownOpen((o) => !o)}
+                    className="w-full sm:w-auto min-w-[200px] flex items-center justify-between gap-2 px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm font-semibold text-gray-800 hover:border-amber-300 focus:outline-none focus:ring-2 focus:ring-amber-400/40"
+                  >
+                    <span>Escolher bônus...</span>
+                    <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${bonusDropdownOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                  {bonusDropdownOpen && (
+                    <div className="absolute top-full left-0 mt-1 w-full sm:min-w-[260px] bg-white border border-gray-200 rounded-xl shadow-lg z-20 py-1">
+                      <button
+                        type="button"
+                        onClick={() => { setSelectedBonusType('giros'); setBonusDropdownOpen(false); setBonusGirosError(null); setBonusGirosSuccessMessage(null); }}
+                        className="w-full px-4 py-2.5 text-left text-sm font-medium text-gray-800 hover:bg-amber-50 flex items-center gap-2"
+                      >
+                        <Gift className="w-4 h-4 text-amber-600" />
+                        Adicionar Giros
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setSelectedBonusType('rifa'); setBonusDropdownOpen(false); }}
+                        className="w-full px-4 py-2.5 text-left text-sm font-medium text-gray-500 hover:bg-gray-50 flex items-center gap-2"
+                      >
+                        <Ticket className="w-4 h-4 text-gray-400" />
+                        Adicionar Rifa
+                        <span className="text-xs text-gray-400 ml-auto">Em breve</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setSelectedBonusType('raspadinha'); setBonusDropdownOpen(false); }}
+                        className="w-full px-4 py-2.5 text-left text-sm font-medium text-gray-500 hover:bg-gray-50 flex items-center gap-2"
+                      >
+                        <Layers className="w-4 h-4 text-gray-400" />
+                        Adicionar Raspadinha
+                        <span className="text-xs text-gray-400 ml-auto">Em breve</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setSelectedBonusType('caixinha'); setBonusDropdownOpen(false); }}
+                        className="w-full px-4 py-2.5 text-left text-sm font-medium text-gray-500 hover:bg-gray-50 flex items-center gap-2"
+                      >
+                        <Package className="w-4 h-4 text-gray-400" />
+                        Adicionar caixinha surpresa
+                        <span className="text-xs text-gray-400 ml-auto">Em breve</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {selectedBonusType === 'giros' && (
+                  <div className="mt-4 p-4 bg-white rounded-xl border border-amber-100 space-y-3">
+                    <p className="text-sm font-semibold text-gray-800">Enviar giros (roleta) para este lead</p>
+                    {bonusGirosSending && (
+                      <p className="text-sm text-amber-600 flex items-center gap-2">
+                        <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                        Aguarde a confirmação...
+                      </p>
+                    )}
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Quantidade</label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={bonusGirosQuantity}
+                        onChange={(e) => setBonusGirosQuantity(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                        className="w-full max-w-[120px] px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-amber-400/40"
+                      />
+                    </div>
+                    {bonusGirosError && (
+                      <p className="text-sm text-red-600 flex items-center gap-1">
+                        <AlertCircle className="w-4 h-4 shrink-0" />
+                        {bonusGirosError}
+                      </p>
+                    )}
+                    {!bancaUrlForBonus && (
+                      <p className="text-sm text-amber-700">Selecione uma banca no filtro para enviar giros.</p>
+                    )}
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleSendBonusGiros}
+                        disabled={bonusGirosSending || !bancaUrlForBonus || bonusGirosQuantity < 1}
+                        className="px-4 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-sm font-bold rounded-lg flex items-center gap-2"
+                      >
+                        {bonusGirosSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Gift className="w-4 h-4" />}
+                        {bonusGirosSending ? 'Enviando...' : 'Enviar giros'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setSelectedBonusType(null); setBonusGirosError(null); }}
+                        className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-semibold rounded-lg"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                    {/* Histórico de giros enviados */}
+                    <div className="mt-4 pt-4 border-t border-amber-100">
+                      <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Histórico de giros enviados</p>
+                      <div className="bg-gray-50 rounded-lg border border-gray-100 max-h-36 overflow-y-auto">
+                        {bonusGirosHistoryLoading ? (
+                          <div className="p-4 flex items-center justify-center gap-2 text-gray-500 text-sm">
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            Carregando...
+                          </div>
+                        ) : bonusGirosHistory.length === 0 ? (
+                          <p className="p-4 text-sm text-gray-500 text-center">Nenhum giro enviado ainda para este lead.</p>
+                        ) : (
+                          <ul className="divide-y divide-gray-100">
+                            {bonusGirosHistory.map((h, i) => (
+                              <li key={i} className="px-4 py-2.5 flex items-center justify-between text-sm">
+                                <span className="font-medium text-gray-800">{h.quantity} giro(s)</span>
+                                <span className="text-gray-500">
+                                  {h.date ? new Date(h.date).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '-'}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {(selectedBonusType === 'rifa' || selectedBonusType === 'raspadinha' || selectedBonusType === 'caixinha') && (
+                  <div className="mt-4 p-4 bg-white rounded-xl border border-gray-100">
+                    <p className="text-sm text-gray-500">Recurso em breve. Em breve você poderá adicionar este bônus pelo detalhe do lead.</p>
+                  </div>
+                )}
               </div>
 
               {/* Informações Financeiras - fluxo: Entrada → Apostas → Resultados → Bônus/Outros */}

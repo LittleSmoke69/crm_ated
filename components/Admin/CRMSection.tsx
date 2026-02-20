@@ -77,6 +77,16 @@ export function getTodaySãoPaulo(): string {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
 }
 
+/** Retorna { from, to } para período dos últimos 30 dias em São Paulo (YYYY-MM-DD). Exportado para lead-transfer. */
+export function getLast30DaysRangeSãoPaulo(): { from: string; to: string } {
+  const now = new Date();
+  const to = now.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+  const fromDate = new Date(now);
+  fromDate.setDate(fromDate.getDate() - 30);
+  const from = fromDate.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+  return { from, to };
+}
+
 /** Retorna dias do mês para exibir no calendário (com vazios no início) */
 function getCalendarDays(year: number, month: number): (number | null)[] {
   const first = new Date(year, month, 1);
@@ -1060,7 +1070,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
                   onChange={(e) => setTop5Sort(e.target.value)}
                   className="px-3 py-2 bg-gray-50 border border-gray-100 rounded-lg text-sm font-medium text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30"
                 >
-                  <option value="vendas">Por vendas</option>
+                  <option value="vendas">Por total depositado</option>
                   <option value="cadastro">Por cadastro</option>
                   <option value="apostas">Por apostas</option>
                   <option value="apostas_bicho">Por apostas bicho</option>

@@ -4,18 +4,9 @@ import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { getAdminBancaId } from '@/lib/server/crm/adminLeadTransferContext';
 import { createCrmRedistributionClient } from '@/lib/server/crm/crmRedistributionClient';
+import { normalizeDateParam, dateToStartOfDaySãoPauloISO, dateToEndOfDaySãoPauloISO } from '@/lib/server/crm/transfer-date-utils';
 
 const LOG_PREFIX = '[admin][transfer-metrics]';
-
-/** Normaliza string de data para YYYY-MM-DD (aceita YYYY-MM-DD ou DD/MM/YYYY). */
-function normalizeDateParam(value: string | null | undefined): string | null {
-  const s = value?.trim();
-  if (!s) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  const ddmmyy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-  if (ddmmyy) return `${ddmmyy[3]}-${ddmmyy[2].padStart(2, '0')}-${ddmmyy[1].padStart(2, '0')}`;
-  return null;
-}
 
 /**
  * GET /api/admin/crm/transfer-metrics
@@ -46,8 +37,8 @@ export async function GET(req: NextRequest) {
       .from('admin_lead_transfer_logs')
       .select('id')
       .eq('banca_id', resolved.bancaId);
-    if (fromParam) idsOnlyQuery = idsOnlyQuery.gte('created_at', `${fromParam}T00:00:00.000Z`);
-    if (toParam) idsOnlyQuery = idsOnlyQuery.lte('created_at', `${toParam}T23:59:59.999Z`);
+    if (fromParam) idsOnlyQuery = idsOnlyQuery.gte('created_at', dateToStartOfDaySãoPauloISO(fromParam));
+    if (toParam) idsOnlyQuery = idsOnlyQuery.lte('created_at', dateToEndOfDaySãoPauloISO(toParam));
     if (transferType && ['TF', 'TF1', 'TF2', 'TF3'].includes(transferType)) {
       idsOnlyQuery = idsOnlyQuery.eq('transfer_type', transferType);
     }
