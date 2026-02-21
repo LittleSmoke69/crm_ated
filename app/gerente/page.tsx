@@ -24,6 +24,7 @@ import {
   Trash2,
   Search,
   ArrowUpRight,
+  ArrowRightLeft,
   Pencil,
   Wallet,
   Trophy,
@@ -125,9 +126,13 @@ export default function GerentePage() {
   const [editFormError, setEditFormError] = useState('');
   const [editFormSuccess, setEditFormSuccess] = useState('');
   const [isEditSubmitting, setIsEditSubmitting] = useState(false);
+
+  // Modal Resumo do consultor (nome, email, leads, depositado, lucro + ações)
+  const [resumoModalConsultor, setResumoModalConsultor] = useState<ConsultorMetric | null>(null);
   
   // Filtros de banca e consultor
   const [bancas, setBancas] = useState<Array<{ id: string; name: string; url: string }>>([]);
+  const [bancasLoading, setBancasLoading] = useState(true);
   const [allConsultores, setAllConsultores] = useState<ConsultorMetric[]>([]);
   const [selectedBanca, setSelectedBanca] = useState<string>('');
   const [selectedConsultor, setSelectedConsultor] = useState<string>('all');
@@ -137,8 +142,8 @@ export default function GerentePage() {
 
   // Filtros locais da tabela
   const [tableSearchTerm, setTableSearchTerm] = useState('');
-  const [sortBy, setSortBy] = useState<'name' | 'leads' | 'deposited' | 'profit'>('profit');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [sortBy, setSortBy] = useState<'name' | 'leads' | 'deposited' | 'profit'>('name');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
 
   // Calcula as datas baseado no filtro selecionado
   const getDateRange = () => {
@@ -248,6 +253,7 @@ export default function GerentePage() {
   }, [showDatePicker, showBancaFilter, showConsultorFilter]);
 
   const loadBancas = async () => {
+    setBancasLoading(true);
     try {
       const response = await fetch('/api/crm/bancas', {
         headers: { 'X-User-Id': userId as string }
@@ -259,6 +265,8 @@ export default function GerentePage() {
       }
     } catch (error) {
       console.error('Erro ao carregar bancas:', error);
+    } finally {
+      setBancasLoading(false);
     }
   };
 
@@ -540,7 +548,7 @@ export default function GerentePage() {
             <div className="relative banca-filter-container">
               <button
                 onClick={async () => {
-                  if (!showBancaFilter && bancas.length === 0) {
+                  if (!showBancaFilter && bancas.length === 0 && !bancasLoading) {
                     await loadBancas();
                   }
                   setShowBancaFilter(!showBancaFilter);
@@ -549,61 +557,80 @@ export default function GerentePage() {
                     setBancaSearchTerm('');
                   }
                 }}
-                className="flex items-center gap-2 bg-white border border-gray-200 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 hover:bg-gray-50 transition-all shadow-sm"
+                disabled={bancasLoading}
+                className="flex items-center gap-2 bg-white border border-gray-200 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 hover:bg-gray-50 transition-all shadow-sm disabled:opacity-80 disabled:cursor-wait"
               >
-                <Filter className="w-4 h-4 text-[#8CD955]" />
-                {bancas.find(b => b.url === selectedBanca)?.name || 'Selecione uma Banca'}
-                <ChevronDown className="w-4 h-4" />
+                {bancasLoading ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-[#8CD955] border-t-transparent" />
+                    <span>Carregando bancas...</span>
+                  </>
+                ) : (
+                  <>
+                    <Filter className="w-4 h-4 text-[#8CD955]" />
+                    {bancas.find(b => b.url === selectedBanca)?.name || 'Selecione uma Banca'}
+                    <ChevronDown className="w-4 h-4" />
+                  </>
+                )}
               </button>
               
               {showBancaFilter && (
                 <div className="absolute right-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-50 min-w-[280px] max-h-[400px] overflow-hidden flex flex-col">
-                  <div className="p-3 border-b border-gray-100">
-                    <div className="relative">
-                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500" />
-                      <input
-                        type="text"
-                        placeholder="Pesquisar banca..."
-                        value={bancaSearchTerm}
-                        onChange={(e) => setBancaSearchTerm(e.target.value)}
-                        className="w-full pl-10 pr-3 py-2 bg-gray-100 border border-gray-200 rounded-lg text-sm text-gray-900 font-bold focus:ring-2 focus:ring-[#8CD955]/30 outline-none placeholder:text-gray-500"
-                        autoFocus
-                      />
+                  {bancasLoading ? (
+                    <div className="p-6 flex flex-col items-center justify-center gap-3 text-center">
+                      <div className="animate-spin rounded-full h-10 w-10 border-2 border-[#8CD955] border-t-transparent" />
+                      <p className="text-sm font-medium text-gray-700">Verificando bancas disponíveis</p>
+                      <p className="text-xs text-gray-500">Carregando as bancas em que você pode trabalhar...</p>
                     </div>
-                  </div>
-                  
-                  <div className="overflow-y-auto max-h-[320px] p-2">
-                    {bancas
-                      .filter((banca) => 
-                        banca.name.toLowerCase().includes(bancaSearchTerm.toLowerCase())
-                      )
-                      .length > 0 ? (
-                      bancas
-                        .filter((banca) => 
-                          banca.name.toLowerCase().includes(bancaSearchTerm.toLowerCase())
-                        )
-                        .map((banca) => (
-                          <button
-                            key={banca.id}
-                            onClick={() => {
-                              setSelectedBanca(banca.url);
-                              setShowBancaFilter(false);
-                              setBancaSearchTerm('');
-                              // Os dados serão carregados automaticamente pelo useEffect quando selectedBanca mudar
-                            }}
-                            className={`w-full text-left px-4 py-2.5 rounded-lg text-sm transition-colors hover:bg-gray-50 ${
-                              selectedBanca === banca.url ? 'bg-[#8CD95515] text-[#8CD955] font-bold' : 'text-gray-700'
-                            }`}
-                          >
-                            {banca.name}
-                          </button>
-                        ))
-                    ) : (
-                      <div className="px-4 py-8 text-center text-sm text-gray-500">
-                        Nenhuma banca encontrada
+                  ) : (
+                    <>
+                      <div className="p-3 border-b border-gray-100">
+                        <div className="relative">
+                          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500" />
+                          <input
+                            type="text"
+                            placeholder="Pesquisar banca..."
+                            value={bancaSearchTerm}
+                            onChange={(e) => setBancaSearchTerm(e.target.value)}
+                            className="w-full pl-10 pr-3 py-2 bg-gray-100 border border-gray-200 rounded-lg text-sm text-gray-900 font-bold focus:ring-2 focus:ring-[#8CD955]/30 outline-none placeholder:text-gray-500"
+                            autoFocus
+                          />
+                        </div>
                       </div>
-                    )}
-                  </div>
+                      
+                      <div className="overflow-y-auto max-h-[320px] p-2">
+                        {bancas
+                          .filter((banca) => 
+                            banca.name.toLowerCase().includes(bancaSearchTerm.toLowerCase())
+                          )
+                          .length > 0 ? (
+                          bancas
+                            .filter((banca) => 
+                              banca.name.toLowerCase().includes(bancaSearchTerm.toLowerCase())
+                            )
+                            .map((banca) => (
+                              <button
+                                key={banca.id}
+                                onClick={() => {
+                                  setSelectedBanca(banca.url);
+                                  setShowBancaFilter(false);
+                                  setBancaSearchTerm('');
+                                }}
+                                className={`w-full text-left px-4 py-2.5 rounded-lg text-sm transition-colors hover:bg-gray-50 ${
+                                  selectedBanca === banca.url ? 'bg-[#8CD95515] text-[#8CD955] font-bold' : 'text-gray-700'
+                                }`}
+                              >
+                                {banca.name}
+                              </button>
+                            ))
+                        ) : (
+                          <div className="px-4 py-8 text-center text-sm text-gray-500">
+                            Nenhuma banca encontrada
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -1108,7 +1135,7 @@ export default function GerentePage() {
               <table className="w-full text-left border-collapse min-w-full">
                 <thead>
                   <tr className="bg-gray-50/30">
-                    <th 
+                    <th
                       onClick={() => toggleSort('name')}
                       className="px-6 py-4 text-xs font-bold text-gray-400 uppercase cursor-pointer hover:text-[#8CD955] transition-colors"
                     >
@@ -1117,136 +1144,60 @@ export default function GerentePage() {
                         {sortBy === 'name' && (sortOrder === 'asc' ? <ChevronDown className="w-3 h-3 rotate-180" /> : <ChevronDown className="w-3 h-3" />)}
                       </div>
                     </th>
-                    <th 
-                      onClick={() => toggleSort('leads')}
-                      className="px-6 py-4 text-xs font-bold text-gray-400 uppercase text-center cursor-pointer hover:text-[#8CD955] transition-colors"
-                    >
-                      <div className="flex items-center justify-center gap-1">
-                        Leads
-                        {sortBy === 'leads' && (sortOrder === 'asc' ? <ChevronDown className="w-3 h-3 rotate-180" /> : <ChevronDown className="w-3 h-3" />)}
-                      </div>
-                    </th>
-                    <th 
-                      onClick={() => toggleSort('deposited')}
-                      className="px-6 py-4 text-xs font-bold text-gray-400 uppercase text-center cursor-pointer hover:text-[#8CD955] transition-colors"
-                    >
-                      <div className="flex items-center justify-center gap-1">
-                        Depositado
-                        {sortBy === 'deposited' && (sortOrder === 'asc' ? <ChevronDown className="w-3 h-3 rotate-180" /> : <ChevronDown className="w-3 h-3" />)}
-                      </div>
-                    </th>
-                    <th 
-                      onClick={() => toggleSort('profit')}
-                      className="px-6 py-4 text-xs font-bold text-gray-400 uppercase text-center cursor-pointer hover:text-[#8CD955] transition-colors"
-                    >
-                      <div className="flex items-center justify-center gap-1">
-                        Lucro
-                        {sortBy === 'profit' && (sortOrder === 'asc' ? <ChevronDown className="w-3 h-3 rotate-180" /> : <ChevronDown className="w-3 h-3" />)}
-                      </div>
-                    </th>
                     <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase text-center">Último acesso</th>
                     <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase text-center">Horas online</th>
-                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase text-right">Ações</th>
+                    <th className="px-4 py-4 text-xs font-bold text-gray-400 uppercase text-right min-w-[120px]">
+                      Ações
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {processedMetrics.map((consultor) => (
-                  <tr key={consultor.id} className="hover:bg-gray-50/50 transition-colors">
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-full bg-[#8CD95515] text-[#8CD955] flex items-center justify-center font-bold text-sm">
-                          {(consultor.name || consultor.email)[0].toUpperCase()}
-                        </div>
-                        <div>
-                          <p className="font-bold text-gray-800 text-sm">{consultor.name || 'Sem nome'}</p>
-                          <p className="text-[11px] text-gray-400">{consultor.email}</p>
-                        </div>
-                      </div>
-                    </td>
-                    
-                      {consultor.externalKpisError ? (
-                      <td colSpan={5} className="px-6 py-4">
-                        <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 max-w-xs mx-auto">
-                          <div className="flex items-center gap-2 text-amber-700">
-                            <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
-                            <p className="text-[10px] leading-tight font-medium text-center">Consultor não cadastrado na banca selecionada</p>
+                    <tr key={consultor.id} className="hover:bg-gray-50/50 transition-colors">
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-full bg-[#8CD95515] text-[#8CD955] flex items-center justify-center font-bold text-sm">
+                            {(consultor.name || consultor.email)[0].toUpperCase()}
+                          </div>
+                          <div>
+                            <p className="font-bold text-gray-800 text-sm">{consultor.name || 'Sem nome'}</p>
+                            <p className="text-[11px] text-gray-400">{consultor.email}</p>
                           </div>
                         </div>
                       </td>
-                    ) : (
-                      <>
-                        <td className="px-6 py-4 text-center">
-                          <span className="font-bold text-gray-700">
-                            {consultor.externalKpis?.total_leads || 0}
-                          </span>
-                    </td>
-                        <td className="px-6 py-4 text-center">
-                          <span className="font-bold text-[#8CD955]">
-                            R$ {(consultor.externalKpis?.total_deposited || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                          </span>
-                    </td>
-                    <td className="px-6 py-4 text-center">
-                          <span className="font-bold text-blue-600">
-                            R$ {(consultor.externalKpis?.net_profit || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                          </span>
-                    </td>
-                      </>
-                    )}
-                    <td className="px-6 py-4 text-center">
-                      <span className="text-xs text-gray-600">
-                        {consultor.lastSeenAt
-                          ? new Date(consultor.lastSeenAt).toLocaleString('pt-BR', {
-                              day: '2-digit',
-                              month: '2-digit',
-                              year: 'numeric',
-                              hour: '2-digit',
-                              minute: '2-digit'
-                            })
-                          : '—'}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 text-center">
-                      <span className="text-xs font-medium text-gray-700">
-                        {formatTime(consultor.totalOnlineTime || 0)}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <div className="flex items-center justify-end gap-2">
+                      <td className="px-6 py-4 text-center">
+                        <span className="text-xs text-gray-600">
+                          {consultor.lastSeenAt
+                            ? new Date(consultor.lastSeenAt).toLocaleString('pt-BR', {
+                                day: '2-digit',
+                                month: '2-digit',
+                                year: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                              })
+                            : '—'}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-center">
+                        <span className="text-xs font-medium text-gray-700">
+                          {formatTime(consultor.totalOnlineTime || 0)}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 align-middle text-right">
                         <button
-                          onClick={() => openEditModal(consultor)}
-                          className="inline-flex items-center gap-1.5 text-amber-600 hover:text-amber-700 font-bold text-xs bg-amber-50 px-3 py-1.5 rounded-lg transition-colors border border-amber-200 hover:border-amber-300"
+                          type="button"
+                          onClick={() => setResumoModalConsultor(consultor)}
+                          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold text-gray-700 bg-gray-100 hover:bg-[#8CD95515] hover:text-[#8CD955] border border-gray-200 hover:border-[#8CD955]/30 transition-colors"
                         >
-                          <Pencil className="w-3.5 h-3.5" />
-                          Editar
+                          <BarChart3 className="w-4 h-4" />
+                          Resumo
                         </button>
-                        <Link
-                          href={`/gerente/consultor/${consultor.id}`}
-                          className="inline-flex items-center gap-1.5 text-blue-600 hover:text-blue-700 font-bold text-xs bg-blue-50 px-3 py-1.5 rounded-lg transition-colors border border-blue-200 hover:border-blue-300"
-                        >
-                          <Info className="w-3.5 h-3.5" />
-                          Detalhes
-                        </Link>
-                        <Link
-                          href={`/crm/kanban?userId=${consultor.id}`}
-                          className="inline-flex items-center gap-1.5 text-[#8CD955] hover:text-[#7BC84A] font-bold text-xs bg-[#8CD95515] px-3 py-1.5 rounded-lg transition-colors border border-[#8CD955]/30"
-                        >
-                          <Eye className="w-3.5 h-3.5" />
-                          Ver CRM
-                        </Link>
-                        <button
-                          onClick={() => openDeleteModal(consultor)}
-                          className="inline-flex items-center gap-1.5 text-red-600 hover:text-red-700 font-bold text-xs bg-red-50 px-3 py-1.5 rounded-lg transition-colors border border-red-200 hover:border-red-300"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          Deletar
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           ) : (
             <div className="hidden md:block p-8 text-center">
               <AlertCircle className="w-12 h-12 text-gray-400 mx-auto mb-4" />
@@ -1260,84 +1211,34 @@ export default function GerentePage() {
           {processedMetrics && processedMetrics.length > 0 ? (
             <div className="md:hidden divide-y divide-gray-100">
               {processedMetrics.map((consultor) => (
-              <div key={consultor.id} className="p-4 space-y-4">
-                <div className="flex items-center justify-between">
+                <div key={consultor.id} className="p-4 space-y-3">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-[#8CD95515] text-[#8CD955] flex items-center justify-center font-bold text-base">
+                    <div className="w-10 h-10 rounded-full bg-[#8CD95515] text-[#8CD955] flex items-center justify-center font-bold text-base shrink-0">
                       {(consultor.name || consultor.email)[0].toUpperCase()}
                     </div>
-                    <div>
-                      <p className="font-bold text-gray-800">{consultor.name || 'Sem nome'}</p>
-                      <p className="text-xs text-gray-400">{consultor.email}</p>
+                    <div className="min-w-0 flex-1">
+                      <p className="font-bold text-gray-800 truncate">{consultor.name || 'Sem nome'}</p>
+                      <p className="text-xs text-gray-400 truncate">{consultor.email}</p>
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => setResumoModalConsultor(consultor)}
+                      className="shrink-0 inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-bold text-gray-700 bg-gray-100 hover:bg-[#8CD95515] hover:text-[#8CD955] border border-gray-200 transition-colors"
+                    >
+                      <BarChart3 className="w-4 h-4" />
+                      Resumo
+                    </button>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => openEditModal(consultor)}
-                      className="p-2 text-amber-600 bg-amber-50 rounded-xl border border-amber-200"
-                    >
-                      <Pencil className="w-5 h-5" />
-                    </button>
-                    <Link
-                      href={`/gerente/consultor/${consultor.id}`}
-                      className="p-2 text-blue-600 bg-blue-50 rounded-xl border border-blue-200"
-                    >
-                      <Info className="w-5 h-5" />
-                    </Link>
-                    <Link
-                      href={`/crm/kanban?userId=${consultor.id}`}
-                      className="p-2 text-[#8CD955] bg-[#8CD95515] rounded-xl"
-                    >
-                      <Eye className="w-5 h-5" />
-                    </Link>
-                    <button
-                      onClick={() => openDeleteModal(consultor)}
-                      className="p-2 text-red-600 bg-red-50 rounded-xl border border-red-200"
-                    >
-                      <Trash2 className="w-5 h-5" />
-                    </button>
+                  <div className="flex gap-4 text-xs text-gray-600">
+                    <div className="flex items-center gap-1">
+                      <Clock className="w-3.5 h-3.5" />
+                      <span>{consultor.lastSeenAt ? new Date(consultor.lastSeenAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}</span>
+                    </div>
+                    <div>
+                      <span className="font-medium text-gray-700">{formatTime(consultor.totalOnlineTime || 0)}</span> online
+                    </div>
                   </div>
                 </div>
-
-                {consultor.externalKpisError ? (
-                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
-                    <div className="flex items-center gap-2 text-amber-700">
-                      <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                      <p className="text-xs font-medium">Consultor não cadastrado na banca selecionada</p>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <div className="grid grid-cols-3 gap-2">
-                      <div className="bg-gray-50 p-2.5 rounded-xl border border-gray-100 text-center">
-                        <p className="text-[9px] font-bold text-gray-400 uppercase mb-1">Leads</p>
-                        <p className="text-sm font-bold text-gray-700">{consultor.externalKpis?.total_leads || 0}</p>
-                      </div>
-                      <div className="bg-[#8CD95510] p-2.5 rounded-xl border border-[#8CD955]/20 text-center">
-                        <p className="text-[9px] font-bold text-[#8CD955] uppercase mb-1">Depositado</p>
-                        <p className="text-sm font-bold text-[#8CD955]">
-                          R$ {(consultor.externalKpis?.total_deposited || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                        </p>
-                      </div>
-                      <div className="bg-blue-50 p-2.5 rounded-xl border border-blue-100 text-center">
-                        <p className="text-[9px] font-bold text-blue-600 uppercase mb-1">Lucro</p>
-                        <p className="text-sm font-bold text-blue-700">
-                          R$ {(consultor.externalKpis?.net_profit || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex gap-2 text-xs">
-                      <div className="flex items-center gap-1 text-gray-600">
-                        <Clock className="w-3.5 h-3.5" />
-                        <span>{consultor.lastSeenAt ? new Date(consultor.lastSeenAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}</span>
-                      </div>
-                      <div className="text-gray-600">
-                        <span className="font-medium">{formatTime(consultor.totalOnlineTime || 0)}</span> online
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
               ))}
             </div>
           ) : (
@@ -1350,6 +1251,109 @@ export default function GerentePage() {
           )}
           </div>
         </div>
+
+        {/* Modal Resumo do consultor */}
+        {resumoModalConsultor && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200">
+              <div className="p-5 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-[#A8E677] to-[#8CD955] text-white">
+                <h2 className="text-lg font-bold flex items-center gap-2">
+                  <BarChart3 className="w-5 h-5" />
+                  Resumo
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setResumoModalConsultor(null)}
+                  className="hover:bg-white/20 p-1.5 rounded-xl transition-colors"
+                  aria-label="Fechar"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-5 space-y-4">
+                <div>
+                  <p className="font-bold text-gray-900 text-base">{resumoModalConsultor.name || 'Sem nome'}</p>
+                  <p className="text-sm text-gray-500">{resumoModalConsultor.email}</p>
+                </div>
+                {resumoModalConsultor.externalKpisError ? (
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+                    <div className="flex items-center gap-2 text-amber-700">
+                      <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                      <p className="text-sm font-medium">Consultor não cadastrado na banca selecionada</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="bg-gray-50 p-3 rounded-xl border border-gray-100 text-center">
+                      <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Leads</p>
+                      <p className="text-base font-bold text-gray-800">{resumoModalConsultor.externalKpis?.total_leads ?? 0}</p>
+                    </div>
+                    <div className="bg-[#8CD95510] p-3 rounded-xl border border-[#8CD955]/20 text-center">
+                      <p className="text-[10px] font-bold text-[#8CD955] uppercase mb-1">Depositado</p>
+                      <p className="text-base font-bold text-[#8CD955]">
+                        R$ {(resumoModalConsultor.externalKpis?.total_deposited ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                      </p>
+                    </div>
+                    <div className="bg-blue-50 p-3 rounded-xl border border-blue-100 text-center">
+                      <p className="text-[10px] font-bold text-blue-600 uppercase mb-1">Lucro</p>
+                      <p className="text-base font-bold text-blue-700">
+                        R$ {(resumoModalConsultor.externalKpis?.net_profit ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                      </p>
+                    </div>
+                  </div>
+                )}
+                <div className="pt-2 space-y-2">
+                  <Link
+                    href={`/crm/kanban?userId=${resumoModalConsultor.id}`}
+                    onClick={() => setResumoModalConsultor(null)}
+                    className="flex items-center gap-2 w-full px-4 py-3 rounded-xl text-sm font-bold text-[#8CD955] bg-[#8CD95515] border border-[#8CD955]/30 hover:bg-[#8CD95525] transition-colors"
+                  >
+                    <Eye className="w-4 h-4" />
+                    Acessar o Kanban
+                  </Link>
+                  <Link
+                    href={`/crm/transferido?userId=${resumoModalConsultor.id}`}
+                    onClick={() => setResumoModalConsultor(null)}
+                    className="flex items-center gap-2 w-full px-4 py-3 rounded-xl text-sm font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 transition-colors"
+                  >
+                    <ArrowRightLeft className="w-4 h-4" />
+                    Acessar Transferidos
+                  </Link>
+                  <Link
+                    href={`/gerente/consultor/${resumoModalConsultor.id}`}
+                    onClick={() => setResumoModalConsultor(null)}
+                    className="flex items-center gap-2 w-full px-4 py-3 rounded-xl text-sm font-bold text-blue-600 bg-blue-50 border border-blue-200 hover:bg-blue-100 transition-colors"
+                  >
+                    <Info className="w-4 h-4" />
+                    Mais detalhes
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setResumoModalConsultor(null);
+                      openEditModal(resumoModalConsultor);
+                    }}
+                    className="flex items-center gap-2 w-full px-4 py-3 rounded-xl text-sm font-bold text-amber-600 bg-amber-50 border border-amber-200 hover:bg-amber-100 transition-colors"
+                  >
+                    <Pencil className="w-4 h-4" />
+                    Editar consultor
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setResumoModalConsultor(null);
+                      openDeleteModal(resumoModalConsultor);
+                    }}
+                    className="flex items-center gap-2 w-full px-4 py-3 rounded-xl text-sm font-bold text-red-600 bg-red-50 border border-red-200 hover:bg-red-100 transition-colors"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    Excluir consultor
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Modal de Cadastro */}
         {isModalOpen && (
