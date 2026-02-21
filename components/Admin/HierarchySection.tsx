@@ -618,6 +618,213 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
     );
   };
 
+  const renderBancaCard = (crmBanca: any) => {
+    const bancaUrlNorm = normalizeBancaUrl(crmBanca.url);
+    const owner = (hierarchy || []).find((h: any) => normalizeBancaUrl(h.banca_url) === bancaUrlNorm);
+    const gestoresInBanca = (crmBanca.user_ids || []).filter((uid: string) => allUsers.find((x: any) => x.id === uid)?.status === 'gestor');
+    const gestoresAvailable = (allUsers || []).filter((u: any) => u.status === 'gestor' && !gestoresInBanca.includes(u.id));
+    const gerentesInBanca = (crmBanca.user_ids || [])
+      .map((uid: string) => allUsers.find((x: any) => x.id === uid))
+      .filter((u: any) => u && u.status === 'gerente');
+    const gerenteIdsInBanca = new Set(gerentesInBanca.map((g: any) => g.id));
+    const consultoresNaBanca = (crmBanca.user_ids || [])
+      .map((uid: string) => allUsers.find((x: any) => x.id === uid))
+      .filter((u: any) => u && u.status === 'consultor');
+    const consultoresLigadosAosGerentes = (allUsers || []).filter(
+      (u: any) => u.status === 'consultor' && u.enroller && gerenteIdsInBanca.has(u.enroller)
+    );
+    const consultoresEmGerente = new Map<string, any[]>();
+    gerentesInBanca.forEach((g: any) => {
+      const subs = consultoresLigadosAosGerentes.filter((c: any) => c.enroller === g.id);
+      consultoresEmGerente.set(g.id, subs);
+    });
+    const consultoresSemGerenteNaBanca = consultoresNaBanca.filter((c: any) => !gerenteIdsInBanca.has(c.enroller));
+    const gerentesComConsultores = gerentesInBanca.map((gerente: any) => ({
+      ...gerente,
+      subordinates: consultoresEmGerente.get(gerente.id) || [],
+    }));
+
+    return (
+      <div key={crmBanca.id} className="bg-gradient-to-br from-white to-emerald-50 rounded-xl shadow-lg border border-emerald-100 p-4 sm:p-6 relative overflow-hidden">
+        <div className="relative z-10">
+          <div className="flex flex-col gap-4 mb-4 sm:mb-6 pb-4 border-b border-emerald-100">
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-4">
+              <div className="flex items-center gap-3 sm:gap-4 min-w-0">
+                <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-full bg-[#8CD955] text-white flex items-center justify-center font-bold text-lg sm:text-xl flex-shrink-0 shadow-lg shadow-emerald-100">
+                  {crmBanca.name ? String(crmBanca.name).substring(0, 2).toUpperCase() : 'BK'}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-1 truncate">{crmBanca.name || 'Banca sem nome'}</h2>
+                  {crmBanca.url && (
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                      <a href={`https://${normalizeBancaUrl(crmBanca.url)}`} target="_blank" rel="noreferrer" className="text-sm text-[#8CD955] hover:underline font-medium flex items-center gap-1">
+                        <Globe className="w-4 h-4" />
+                        {normalizeBancaUrl(crmBanca.url)}
+                      </a>
+                      {!owner && <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-md font-bold">Sem dono cadastrado</span>}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-1.5 sm:gap-2">
+                {!owner ? (
+                  <>
+                    <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'dono_banca', enroller: '', bancaOwnerId: '', bancaName: crmBanca.name || '', bancaUrl: normalizeBancaUrl(crmBanca.url || ''), initialBancaIds: [] })); setShowCreateModal(true); }} className="flex items-center gap-1.5 sm:gap-2 px-3 py-2.5 sm:px-4 sm:py-2 text-sm bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] transition-colors font-medium touch-manipulation min-h-[44px] sm:min-h-0">
+                      <UserPlus className="w-4 h-4 flex-shrink-0" /> <span>Criar Dono</span>
+                    </button>
+                    <button onClick={() => handleOpenAssignModal({ status: 'dono_banca', enroller: '', bancaId: String(crmBanca.id), bancaName: crmBanca.name || '', bancaUrl: normalizeBancaUrl(crmBanca.url || ''), ownerId: '' })} className="flex items-center gap-2 px-4 py-2 bg-emerald-700/90 text-white rounded-lg hover:bg-emerald-700 transition-colors font-medium border border-emerald-600">
+                      <UserCheck className="w-4 h-4" /> Atribuir Dono
+                    </button>
+                    <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'gerente', enroller: '', bancaOwnerId: '', bancaName: '', bancaUrl: '', initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium">
+                      <UserPlus className="w-4 h-4" /> Adicionar Gerente
+                    </button>
+                    <button onClick={() => handleOpenAssignModal({ status: 'gerente', enroller: '', bancaId: String(crmBanca.id), bancaName: '', bancaUrl: '', ownerId: '' })} className="flex items-center gap-2 px-4 py-2 bg-blue-700/90 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium border border-blue-600">
+                      <UserCheck className="w-4 h-4" /> Atribuir Gerente
+                    </button>
+                    <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'consultor', enroller: '', bancaOwnerId: '', bancaName: '', bancaUrl: '', initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors font-medium">
+                      <UserPlus className="w-4 h-4" /> Adicionar Consultor
+                    </button>
+                    <button onClick={() => { const managers = getManagersByCrmBanca(String(crmBanca.id)); handleOpenAssignModal({ status: 'consultor', enroller: managers?.length ? managers[0].id : '', bancaId: String(crmBanca.id), bancaName: crmBanca.name || '', bancaUrl: normalizeBancaUrl(crmBanca.url || ''), ownerId: '' }); }} className="flex items-center gap-2 px-4 py-2 bg-green-700/90 text-white rounded-lg hover:bg-green-700 transition-colors font-medium border border-green-600">
+                      <UserCheck className="w-4 h-4" /> Atribuir Consultor
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'gerente', enroller: owner.id, bancaOwnerId: owner.id, bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium">
+                      <UserPlus className="w-4 h-4" /> Adicionar Gerente
+                    </button>
+                    <button onClick={() => handleOpenAssignModal({ status: 'gerente', enroller: owner.id, bancaId: String(crmBanca.id), bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), ownerId: owner.id })} className="flex items-center gap-2 px-4 py-2 bg-blue-700/90 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium border border-blue-600">
+                      <UserCheck className="w-4 h-4" /> Atribuir Gerente
+                    </button>
+                    <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'consultor', enroller: owner.id, bancaOwnerId: owner.id, bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors font-medium">
+                      <UserPlus className="w-4 h-4" /> Adicionar Consultor
+                    </button>
+                    <button onClick={() => { const managers = getManagersByCrmBanca(String(crmBanca.id)); handleOpenAssignModal({ status: 'consultor', enroller: managers?.length ? managers[0].id : '', bancaId: String(crmBanca.id), bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), ownerId: owner.id }); }} className="flex items-center gap-2 px-4 py-2 bg-green-700/90 text-white rounded-lg hover:bg-green-700 transition-colors font-medium border border-green-600">
+                      <UserCheck className="w-4 h-4" /> Atribuir Consultor
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="mb-6">
+            <h3 className="text-lg font-semibold text-gray-800 mb-3 flex items-center gap-2">
+              <Building2 className="w-5 h-5 text-emerald-600" />
+              Dono da Banca
+            </h3>
+            {owner ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">{renderUserCard(owner, 'dono')}</div>
+            ) : (
+              <div className="bg-white rounded-xl border border-gray-200 p-6 text-gray-600">
+                <p className="font-medium">Nenhum dono cadastrado para esta banca.</p>
+                <p className="text-sm text-gray-500 mt-1">Crie um Dono de Banca ou atribua Gerentes/Consultores diretamente a esta banca.</p>
+              </div>
+            )}
+          </div>
+
+          <div className="mb-6">
+            <h3 className="text-lg font-semibold text-gray-800 mb-3 flex items-center gap-2">
+              <TrendingUp className="w-5 h-5 text-teal-600" />
+              Gestores desta banca
+              {gestoresInBanca.length > 0 && ` (${gestoresInBanca.length})`}
+            </h3>
+            {(() => {
+              const gestores = (crmBanca.user_ids || []).map((uid: string) => allUsers.find((x: any) => x.id === uid)).filter((u: any) => u && u.status === 'gestor');
+              const available = (allUsers || []).filter((u: any) => u.status === 'gestor' && !gestores.some((g: any) => g.id === u.id));
+              return (
+                <>
+                  {gestores.length > 0 && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 mb-3">
+                      {gestores.map((u: any) => (
+                        <div key={u.id} className="bg-white rounded-xl border border-teal-100 p-4 flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="font-medium text-gray-900 truncate">{u.full_name || u.email}</p>
+                            <p className="text-xs text-gray-500 truncate">{u.email}</p>
+                            <span className="inline-block mt-1 px-2 py-0.5 rounded text-xs font-bold bg-teal-100 text-teal-700">Gestor</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <button type="button" onClick={() => handleEditUser(u)} className="p-1.5 text-gray-500 hover:bg-gray-100 rounded" title="Editar"><EditIcon className="w-4 h-4" /></button>
+                            <button type="button" onClick={() => removeGestorFromBanca(u.id, crmBanca.id)} disabled={gestorBancaLoading === crmBanca.id} className="p-1.5 text-red-500 hover:bg-red-50 rounded disabled:opacity-50" title="Remover gestor da banca"><X className="w-4 h-4" /></button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-medium text-gray-600">Adicionar gestor:</span>
+                    <select value="" onChange={(e) => { const v = e.target.value; if (v) addGestorToBanca(v, crmBanca.id); e.target.value = ''; }} disabled={gestorBancaLoading === crmBanca.id || gestoresAvailable.length === 0} className="bg-white border border-gray-200 px-3 py-2 rounded-lg text-sm font-medium text-gray-700 min-w-[200px] disabled:opacity-50">
+                      <option value="">{gestoresAvailable.length === 0 ? 'Nenhum gestor disponível' : 'Selecione um gestor'}</option>
+                      {gestoresAvailable.map((u: any) => <option key={u.id} value={u.id}>{u.full_name || u.email}</option>)}
+                    </select>
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+
+          {(owner || gerentesInBanca.length > 0 || consultoresLigadosAosGerentes.length > 0 || consultoresSemGerenteNaBanca.length > 0) && (
+            <div className="mb-6">
+              <h3 className="text-lg font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                <Users className="w-5 h-5 text-blue-600" />
+                Gerentes e Consultores nesta banca
+              </h3>
+              {gerentesComConsultores.length === 0 && consultoresSemGerenteNaBanca.length === 0 ? (
+                <p className="text-sm text-gray-500">Nenhum gerente ou consultor atribuído. Use os botões acima para criar ou adicionar.</p>
+              ) : (
+                <div className="space-y-6">
+                  {gerentesComConsultores.map((gerente: any) => (
+                    <div key={gerente.id} className="bg-blue-50/30 rounded-lg p-4 border border-blue-100">
+                      {renderUserCard(gerente, 'gerente', crmBanca.id)}
+                      {gerente.subordinates && gerente.subordinates.length > 0 && (
+                        <div className="mt-4 pl-4 border-l-2 border-blue-300 space-y-3">
+                          <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide flex items-center gap-2">
+                            <User className="w-4 h-4 text-green-600" />
+                            Consultores ({gerente.subordinates.length})
+                          </h4>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+                            {gerente.subordinates.map((consultor: any) => (
+                              <div key={consultor.id}>{renderUserCard(consultor, 'consultor', crmBanca.id)}</div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {(!gerente.subordinates || gerente.subordinates.length === 0) && (
+                        <div className="mt-4 pl-4 border-l-2 border-blue-300">
+                          <div className="flex gap-2">
+                            <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'consultor', enroller: gerente.id, bancaOwnerId: owner?.id || '', bancaName: owner?.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner?.banca_url || crmBanca.url || ''), initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className="flex-1 p-3 border-2 border-dashed border-gray-300 rounded-lg text-gray-500 hover:border-green-400 hover:text-green-600 transition-colors text-sm font-medium flex items-center justify-center gap-2">
+                              <UserPlus className="w-4 h-4" /> Adicionar Consultor
+                            </button>
+                            <button onClick={() => handleOpenAssignModal({ status: 'consultor', enroller: gerente.id, bancaId: String(crmBanca.id), bancaName: owner?.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner?.banca_url || crmBanca.url || ''), ownerId: owner?.id || '' })} className="flex-1 p-3 border-2 border-dashed border-green-300 rounded-lg text-green-600 hover:border-green-500 hover:bg-green-50 transition-colors text-sm font-medium flex items-center justify-center gap-2">
+                              <UserCheck className="w-4 h-4" /> Atribuir Consultor
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {consultoresSemGerenteNaBanca.length > 0 && (
+                    <div className="bg-gray-50/50 rounded-lg p-4 border border-gray-200">
+                      <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-3 flex items-center gap-2">
+                        <User className="w-4 h-4 text-gray-600" />
+                        Consultores diretos (sem gerente nesta banca)
+                      </h4>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+                        {consultoresSemGerenteNaBanca.map((c: any) => (
+                          <div key={c.id}>{renderUserCard(c, 'consultor', crmBanca.id)}</div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   let bancasWhenLoaded: React.ReactNode = null;
   if (dataLoaded && crmBancas && crmBancas.length > 0) {
     const filteredBancas = crmBancas.filter((b: any) => {
@@ -634,7 +841,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
         if (bancaFilter === 'com_dono' && !owner) return false;
         return true;
       })
-      .map((crmBanca: any) => null as React.ReactNode);
+      .map((crmBanca: any) => renderBancaCard(crmBanca));
     bancasWhenLoaded = (
       <>
         {bancasList}
