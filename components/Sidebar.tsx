@@ -76,6 +76,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
                           pathname?.startsWith('/admin/webhooks') ||
                           pathname?.startsWith('/admin/meta') ||
                           pathname?.startsWith('/admin/crm/lead-transfer') ||
+                          pathname?.startsWith('/admin/hierarchy') ||
                           onSignOut !== undefined;
 
   // Função de logout padrão
@@ -223,6 +224,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const itemMeuDesempenho: MenuItem = { href: '/consultor', icon: BarChart3, label: 'Meu Desempenho' };
   const itemMetaAds: MenuItem = { href: '/admin/meta', icon: BarChart3, label: 'Meta Ads' };
   const itemVslRedirect: MenuItem = { href: '/admin/vsl', icon: ExternalLink, label: 'VSL & Redirect' };
+  const itemHierarquia: MenuItem = { href: '/admin/hierarchy', icon: BarChart3, label: 'Hierarquia' };
 
   // Define menus baseados no status do usuário (matriz de cargos)
   const getMenuItems = (): MenuItem[] => {
@@ -233,6 +235,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemInstances,
         itemMaturador,
         itemPainelAdmin,
+        itemHierarquia,
         itemWebhooks,
         itemFlows,
         itemAgentesIAAdmin,
@@ -258,6 +261,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemDashboard,
         itemInstances,
         itemPainelAdmin,
+        itemHierarquia,
         itemMetaAds,
         itemVslRedirect,
         itemAgentesIAAdmin,
@@ -272,10 +276,11 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
       ];
     }
 
-    // 🎧 Suporte - atendimento e operação (sem Flows, Webhooks, Auditoria, Anti-Spam, Gestão)
+    // 🎧 Suporte - atendimento, operação e Hierarquia (alterações na rede)
     if (userStatus === 'suporte') {
       return [
         itemDashboard,
+        itemHierarquia,
         itemInstances,
         itemMaturador,
         itemAgentesIA,

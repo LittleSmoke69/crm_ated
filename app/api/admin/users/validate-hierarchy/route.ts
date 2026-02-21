@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { requireAdmin } from '@/lib/middleware/permissions';
+import { requireAdminOrSuporte } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { validateHierarchy, hasHierarchyCycle, getUserProfile } from '@/lib/middleware/permissions';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
@@ -9,7 +9,7 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
  */
 export async function POST(req: NextRequest) {
   try {
-    await requireAdmin(req);
+    await requireAdminOrSuporte(req);
     const body = await req.json();
     const { userId, status, enroller } = body;
 
@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
  */
 export async function GET(req: NextRequest) {
   try {
-    await requireAdmin(req);
+    await requireAdminOrSuporte(req);
 
     const { data: allUsers } = await supabaseServiceRole
       .from('profiles')

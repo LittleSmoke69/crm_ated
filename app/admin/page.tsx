@@ -77,7 +77,6 @@ import MaturadorSection from '@/components/Admin/MaturadorSection';
 import { Zap } from 'lucide-react';
 import BancaRankingChart from '@/components/Charts/BancaRankingChart';
 import CRMSection from '@/components/Admin/CRMSection';
-import HierarchySection from '@/components/Admin/HierarchySection';
 import EditCampaignModal, { CampaignUpdates } from '@/components/Campaigns/EditCampaignModal';
 import { getStoredUserId } from '@/lib/utils/stored-user-id';
 
@@ -231,11 +230,8 @@ export default function AdminDashboard() {
   const [users, setUsers] = useState<User[]>([]);
   const [usersLoadError, setUsersLoadError] = useState<string | null>(null);
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
-  const [activeSection, setActiveSection] = useState<'overview' | 'users' | 'campaigns' | 'settings' | 'proxys' | 'hierarchy' | 'crm' | 'disparo' | 'maturador' | 'loto_assistencia'>('overview');
+  const [activeSection, setActiveSection] = useState<'overview' | 'users' | 'campaigns' | 'settings' | 'proxys' | 'crm' | 'disparo' | 'maturador' | 'loto_assistencia'>('overview');
   const [instances, setInstances] = useState<any[]>([]);
-  const [hierarchyData, setHierarchyData] = useState<any>(null);
-  const [hierarchyIssues, setHierarchyIssues] = useState<any>(null);
-  const [loadingHierarchy, setLoadingHierarchy] = useState(false);
   const [groups, setGroups] = useState<{ dbGroups: any[]; evolutionGroups: any[] }>({ dbGroups: [], evolutionGroups: [] });
   const [loadingInstances, setLoadingInstances] = useState(false);
   const [loadingGroups, setLoadingGroups] = useState(false);
@@ -818,22 +814,9 @@ export default function AdminDashboard() {
             </button>
           )}
 
-          {/* Hierarquia, Campanhas, Configurações, Proxys e Maturador: apenas super_admin */}
+          {/* Campanhas, Configurações, Proxys e Maturador: apenas super_admin */}
           {isSuperAdmin && (
             <>
-              <button
-                onClick={() => setActiveSection('hierarchy')}
-                className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base ${
-                  activeSection === 'hierarchy'
-                    ? 'text-white'
-                    : 'text-gray-700 hover:bg-gray-100'
-                }`}
-                style={activeSection === 'hierarchy' ? { backgroundColor: '#8CD955' } : {}}
-              >
-                <BarChart3 className="w-4 h-4 sm:w-5 sm:h-5" />
-                <span>Hierarquia</span>
-              </button>
-
               <button
                 onClick={() => setActiveSection('campaigns')}
                 className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base ${
@@ -1380,10 +1363,6 @@ export default function AdminDashboard() {
               usersLoadError={usersLoadError}
               onRetryLoad={loadData}
             />
-          )}
-
-          {activeSection === 'hierarchy' && (
-            <HierarchySection userId={userId} />
           )}
 
           {activeSection === 'crm' && userId && (
@@ -2025,7 +2004,8 @@ const UsersSection = ({
       email: user.email,
       fullName: user.full_name,
       bancaName: user.banca_name || '',
-      bancaUrl: user.banca_url || ''
+      bancaUrl: user.banca_url || '',
+      password: ''
     });
   };
 
@@ -2678,6 +2658,13 @@ const UsersSection = ({
                             value={editFormData.email || ''}
                             onChange={e => setEditFormData({...editFormData, email: e.target.value})}
                             placeholder="Email"
+                            className="w-full px-2 py-1 text-sm border rounded text-gray-700"
+                          />
+                          <input
+                            type="password"
+                            value={editFormData.password || ''}
+                            onChange={e => setEditFormData({...editFormData, password: e.target.value})}
+                            placeholder="Nova senha (deixe em branco para não alterar)"
                             className="w-full px-2 py-1 text-sm border rounded text-gray-700"
                           />
                         </div>

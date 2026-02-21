@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { requireAdmin } from '@/lib/middleware/permissions';
+import { requireAdminOrSuporte } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { validateHierarchy, hasHierarchyCycle, UserStatus } from '@/lib/middleware/permissions';
@@ -11,7 +11,7 @@ import { randomUUID } from 'crypto';
  */
 export async function POST(req: NextRequest) {
   try {
-    await requireAdmin(req);
+    await requireAdminOrSuporte(req);
 
     const body = await req.json();
     const { email, fullName, password, status, enroller, bancaName, bancaUrl, banca_ids: bancaIds } = body;

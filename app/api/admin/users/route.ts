@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
-import { requireAdmin } from '@/lib/middleware/permissions';
+import bcrypt from 'bcryptjs';
+import { requireAdmin, requireAdminOrSuporte } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { validateHierarchy, hasHierarchyCycle } from '@/lib/middleware/permissions';
@@ -17,7 +18,7 @@ const DEFAULT_SETTINGS = {
  */
 export async function GET(req: NextRequest) {
   try {
-    await requireAdmin(req);
+    await requireAdminOrSuporte(req);
 
     const { data: users, error: usersError } = await supabaseServiceRole
       .from('profiles')
@@ -95,17 +96,18 @@ export async function GET(req: NextRequest) {
  */
 export async function PATCH(req: NextRequest) {
   try {
-    await requireAdmin(req);
+    await requireAdminOrSuporte(req);
 
     const body = await req.json();
-    const { targetUserId, maxLeadsPerDay, maxInstances, isActive, status, enroller, email, fullName, bancaName, bancaUrl } = body;
+    const { targetUserId, maxLeadsPerDay, maxInstances, isActive, status, enroller, email, fullName, bancaName, bancaUrl, password } = body;
 
     if (!targetUserId) {
       return errorResponse('targetUserId é obrigatório', 400);
     }
 
-    // Se status ou enroller ou email ou fullName ou banca foram fornecidos, valida/prepara atualização de perfil
-    if (status || enroller !== undefined || email || fullName !== undefined || bancaName !== undefined || bancaUrl !== undefined) {
+    // Se status ou enroller ou email ou fullName ou banca ou password foram fornecidos, valida/prepara atualização de perfil
+    const hasPassword = password && typeof password === 'string' && password.trim();
+    if (status || enroller !== undefined || email || fullName !== undefined || bancaName !== undefined || bancaUrl !== undefined || hasPassword) {
       const { data: currentUser } = await supabaseServiceRole
         .from('profiles')
         .select('status, enroller')
@@ -139,6 +141,11 @@ export async function PATCH(req: NextRequest) {
       if (fullName !== undefined) profileUpdate.full_name = fullName || null;
       if (bancaName !== undefined) profileUpdate.banca_name = bancaName || null;
       if (bancaUrl !== undefined) profileUpdate.banca_url = bancaUrl || null;
+
+      // Atualiza senha se fornecida
+      if (hasPassword) {
+        profileUpdate.password_hash = bcrypt.hashSync(password.trim(), bcrypt.genSaltSync(10));
+      }
 
       const { error: profileError } = await supabaseServiceRole
         .from('profiles')

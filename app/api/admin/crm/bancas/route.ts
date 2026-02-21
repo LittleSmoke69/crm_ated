@@ -1,9 +1,9 @@
 import { NextRequest } from 'next/server';
-import { requireAdmin } from '@/lib/middleware/permissions';
+import { requireAdmin, requireAdminOrSuporte } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
-const LOG_PREFIX = '[lead-transfer][bancas]';
+const LOG_PREFIX = '[admin][crm][bancas]';
 
 /**
  * GET /api/admin/crm/bancas - Lista bancas
@@ -13,7 +13,7 @@ const LOG_PREFIX = '[lead-transfer][bancas]';
  */
 export async function GET(req: NextRequest) {
   try {
-    const { userId, profile } = await requireAdmin(req);
+    const { userId, profile } = await requireAdminOrSuporte(req);
 
     const { searchParams } = new URL(req.url);
     const withUsers = searchParams.get('with_users') === '1';

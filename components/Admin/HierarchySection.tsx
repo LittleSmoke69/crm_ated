@@ -138,18 +138,18 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
   const loadInitialData = async () => {
     setInitialLoading(true);
     try {
-      const [issuesRes, bancasRes] = await Promise.all([
-        fetch('/api/admin/users/validate-hierarchy', { headers: { 'X-User-Id': userId! } }),
-        fetch('/api/admin/crm/bancas', { headers: { 'X-User-Id': userId! } }),
-      ]);
-      if (issuesRes.ok) {
-        const data = await issuesRes.json();
-        setIssues(data.data?.issues || []);
-      }
+      // 1. Bancas primeiro (necessário para o dropdown e hierarquia)
+      const bancasRes = await fetch('/api/admin/crm/bancas', { headers: { 'X-User-Id': userId! } });
       if (bancasRes.ok) {
         const data = await bancasRes.json();
         setCrmBancasBasic(data.data || []);
         setCrmBancas(data.data || []);
+      }
+      // 2. Integridade da Estrutura em seguida
+      const issuesRes = await fetch('/api/admin/users/validate-hierarchy', { headers: { 'X-User-Id': userId! } });
+      if (issuesRes.ok) {
+        const data = await issuesRes.json();
+        setIssues(data.data?.issues || []);
       }
     } catch (error) {
       console.error('Erro ao carregar dados iniciais:', error);
@@ -562,53 +562,53 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
     const crmHours = formatTime((user as { total_crm_time?: number | null }).total_crm_time ?? 0);
     const showRemoveFromBanca = bancaId && (role === 'gerente' || role === 'consultor');
     return (
-      <div className="bg-white rounded-xl shadow-md border border-gray-200 p-4 hover:shadow-lg transition-shadow">
-        <div className="flex items-start justify-between mb-4">
-          <div className="flex items-center gap-3 flex-1">
-            <div className={`w-12 h-12 rounded-full ${config.bg} text-white flex items-center justify-center font-bold text-sm flex-shrink-0 shadow-lg`}>
-              <Icon className="w-6 h-6" />
+      <div className="bg-white rounded-xl shadow-md border border-gray-200 p-3 sm:p-4 hover:shadow-lg transition-shadow overflow-hidden">
+        <div className="flex items-start justify-between gap-2 mb-3 sm:mb-4">
+          <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0">
+            <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full ${config.bg} text-white flex items-center justify-center font-bold text-sm flex-shrink-0 shadow-lg`}>
+              <Icon className="w-5 h-5 sm:w-6 sm:h-6" />
             </div>
             <div className="flex-1 min-w-0">
-              <h3 className="font-bold text-gray-900 text-base truncate">{user.full_name || user.email}</h3>
-              <span className={`text-xs px-2 py-0.5 rounded-md uppercase font-bold tracking-tighter inline-block mt-1 ${role === 'dono' ? 'bg-emerald-100 text-emerald-700' : role === 'gerente' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
+              <h3 className="font-bold text-gray-900 text-sm sm:text-base truncate">{user.full_name || user.email}</h3>
+              <span className={`text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5 rounded-md uppercase font-bold tracking-tighter inline-block mt-0.5 sm:mt-1 ${role === 'dono' ? 'bg-emerald-100 text-emerald-700' : role === 'gerente' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
                 {config.label}
               </span>
             </div>
           </div>
-          <div className="flex items-center gap-1 flex-shrink-0">
-            <button onClick={() => handleEditUser(user)} className="p-2 text-gray-400 hover:text-[#8CD955] hover:bg-gray-50 rounded-lg transition-colors" title="Editar usuário">
+          <div className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0">
+            <button onClick={() => handleEditUser(user)} className="p-2.5 sm:p-2 min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 flex items-center justify-center text-gray-400 hover:text-[#8CD955] hover:bg-gray-50 rounded-lg transition-colors touch-manipulation" title="Editar usuário">
               <EditIcon className="w-5 h-5" />
             </button>
             {showRemoveFromBanca && (
-              <button type="button" onClick={() => removeGestorFromBanca(user.id, bancaId)} disabled={gestorBancaLoading === bancaId} className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50" title="Remover da banca">
+              <button type="button" onClick={() => removeGestorFromBanca(user.id, bancaId)} disabled={gestorBancaLoading === bancaId} className="p-2.5 sm:p-2 min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 flex items-center justify-center text-red-500 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50 touch-manipulation" title="Remover da banca">
                 <X className="w-5 h-5" />
               </button>
             )}
           </div>
         </div>
-        <div className="space-y-3 border-t border-gray-100 pt-3">
-          <div className="flex items-center gap-2 text-sm text-gray-600">
-            <Mail className="w-4 h-4 text-gray-400" />
+        <div className="space-y-2 sm:space-y-3 border-t border-gray-100 pt-2 sm:pt-3">
+          <div className="flex items-center gap-2 text-xs sm:text-sm text-gray-600 min-w-0">
+            <Mail className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-gray-400 flex-shrink-0" />
             <span className="truncate">{user.email}</span>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="bg-gray-50 rounded-lg p-2">
-              <div className="flex items-center gap-1 mb-1">
-                <Clock className="w-3 h-3 text-gray-500" />
-                <span className="text-xs font-medium text-gray-600">Zaploto</span>
+          <div className="grid grid-cols-2 gap-2 sm:gap-3">
+            <div className="bg-gray-50 rounded-lg p-2 min-w-0">
+              <div className="flex items-center gap-1 mb-0.5">
+                <Clock className="w-3 h-3 text-gray-500 flex-shrink-0" />
+                <span className="text-[10px] sm:text-xs font-medium text-gray-600 truncate">Zaploto</span>
               </div>
-              <p className="text-sm font-bold text-gray-800">{zaplotoHours}</p>
+              <p className="text-xs sm:text-sm font-bold text-gray-800">{zaplotoHours}</p>
             </div>
-            <div className="bg-gray-50 rounded-lg p-2">
-              <div className="flex items-center gap-1 mb-1">
-                <TrendingUp className="w-3 h-3 text-gray-500" />
-                <span className="text-xs font-medium text-gray-600">CRM</span>
+            <div className="bg-gray-50 rounded-lg p-2 min-w-0">
+              <div className="flex items-center gap-1 mb-0.5">
+                <TrendingUp className="w-3 h-3 text-gray-500 flex-shrink-0" />
+                <span className="text-[10px] sm:text-xs font-medium text-gray-600 truncate">CRM</span>
               </div>
-              <p className="text-sm font-bold text-gray-800">{crmHours}</p>
+              <p className="text-xs sm:text-sm font-bold text-gray-800">{crmHours}</p>
             </div>
           </div>
           {role === 'consultor' && (
-            <a href={`/crm/kanban?userId=${user.id}`} className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] transition-colors text-sm font-medium">
+            <a href={`/crm/kanban?userId=${user.id}`} className="w-full flex items-center justify-center gap-2 px-3 py-3 sm:py-2 min-h-[44px] bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] transition-colors text-xs sm:text-sm font-medium touch-manipulation active:scale-[0.98]">
               <TrendingUp className="w-4 h-4" />
               Acessar CRM
             </a>
@@ -618,85 +618,69 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
     );
   };
 
-  return (
-    <div className="space-y-6">
-      <div className="bg-gradient-to-br from-white to-amber-50 rounded-xl shadow-lg border border-amber-100 p-4 sm:p-6 relative overflow-hidden">
-        <div className="relative z-10">
-          <h2 className="text-lg sm:text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
-            <AlertCircle className="w-5 h-5 text-amber-600" />
-            Integridade da Estrutura
-          </h2>
-          {initialLoading ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="w-8 h-8 animate-spin text-amber-500 mr-2" />
-              <span className="text-gray-600">Carregando integridade...</span>
-            </div>
-          ) : issues.length > 0 ? (
-            <>
-            <div className="mb-4">
-              <div className="relative max-w-md">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-5 h-5" />
-                <input type="text" value={issuesSearch} onChange={(e) => { setIssuesSearch(e.target.value); setIssuesCurrentPage(1); }} placeholder="Buscar por email ou nome..." className="w-full pl-10 pr-4 py-2 bg-white border border-amber-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 text-gray-900 placeholder:text-gray-500" />
-              </div>
-            </div>
-            <div className="space-y-3">
-              {(() => {
-                const search = issuesSearch.trim().toLowerCase();
-                const filtered = search ? issues.filter((i: any) => (String(i.email || '').toLowerCase().includes(search)) || (String(i.full_name || '').toLowerCase().includes(search)) || (String(i.issue || '').toLowerCase().includes(search))) : issues;
-                return filtered.slice((issuesCurrentPage - 1) * issuesPerPage, issuesCurrentPage * issuesPerPage).map((issue: any, idx: number) => (
-                <div key={idx} className="p-4 bg-red-50 border border-red-100 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div>
-                    <p className="font-bold text-red-800 text-sm sm:text-base">{issue.email}</p>
-                    <p className="text-xs sm:text-sm text-red-600">{issue.issue}</p>
-                  </div>
-                  <button onClick={() => handleFixIssue(issue)} className="px-3 py-1.5 bg-white text-red-600 border border-red-200 rounded-lg text-xs font-bold hover:bg-red-50 transition-colors whitespace-nowrap">
-                    Corrigir
-                  </button>
-                </div>
-              ));
-              })()}
-            </div>
-            {(() => {
-              const search = issuesSearch.trim().toLowerCase();
-              const filtered = search ? issues.filter((i: any) => (String(i.email || '').toLowerCase().includes(search)) || (String(i.full_name || '').toLowerCase().includes(search)) || (String(i.issue || '').toLowerCase().includes(search))) : issues;
-              return filtered.length > issuesPerPage ? (
-              <div className="mt-4">
-                <Pagination currentPage={issuesCurrentPage} totalPages={Math.ceil(filtered.length / issuesPerPage)} onPageChange={setIssuesCurrentPage} itemsPerPage={issuesPerPage} totalItems={filtered.length} />
-              </div>
-            ) : null;
-              })()}
-            </>
-          ) : (
-            <p className="text-sm text-gray-500 py-4">Nenhum problema de integridade encontrado.</p>
-          )}
-        </div>
+  let bancasWhenLoaded: React.ReactNode = null;
+  if (dataLoaded && crmBancas && crmBancas.length > 0) {
+    const filteredBancas = crmBancas.filter((b: any) => {
+      const search = bancaSearch.trim().toLowerCase();
+      if (!search) return true;
+      return String(b.name || '').toLowerCase().includes(search) || String(b.url || '').toLowerCase().includes(search);
+    });
+    const pagedBancas = filteredBancas.slice((bancasCurrentPage - 1) * bancasPerPage, bancasCurrentPage * bancasPerPage);
+    const bancasList = pagedBancas
+      .filter((crmBanca: any) => {
+        const bancaUrlNorm = normalizeBancaUrl(crmBanca.url);
+        const owner = (hierarchy || []).find((h: any) => normalizeBancaUrl(h.banca_url) === bancaUrlNorm);
+        if (bancaFilter === 'sem_dono' && owner) return false;
+        if (bancaFilter === 'com_dono' && !owner) return false;
+        return true;
+      })
+      .map((crmBanca: any) => null as React.ReactNode);
+    bancasWhenLoaded = (
+      <>
+        {bancasList}
+        {filteredBancas.length > bancasPerPage && (
+          <Pagination currentPage={bancasCurrentPage} totalPages={Math.ceil(filteredBancas.length / bancasPerPage)} onPageChange={setBancasCurrentPage} itemsPerPage={bancasPerPage} totalItems={filteredBancas.length} />
+        )}
+      </>
+    );
+  } else if (dataLoaded) {
+    bancasWhenLoaded = (
+      <div className="bg-white rounded-xl shadow-lg border border-gray-200 p-12 text-center">
+        <Building2 className="w-16 h-16 mx-auto mb-4 text-gray-300" />
+        <h3 className="text-xl font-bold text-gray-800 mb-2">Nenhuma banca cadastrada no CRM</h3>
+        <p className="text-gray-600">Cadastre bancas em crm_bancas para que elas apareçam aqui.</p>
       </div>
+    );
+  }
 
+  return (
+    <div className="space-y-6 min-w-0 overflow-x-hidden">
+      {/* Bancas e Hierarquia - exibido primeiro */}
       <div className="space-y-6">
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 flex flex-col gap-3">
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-3 sm:p-4 flex flex-col gap-3">
           <div className="flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
-            <div className="flex-1 relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-5 h-5" />
-              <input type="text" value={bancaSearch} onChange={(e) => { setBancaSearch(e.target.value); setBancasCurrentPage(1); }} placeholder="Pesquisar banca por nome ou URL..." className="w-full pl-10 pr-4 py-2 bg-gray-100 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-900 placeholder:text-gray-500" />
+            <div className="flex-1 relative w-full min-w-0">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-5 h-5 pointer-events-none" />
+              <input type="text" value={bancaSearch} onChange={(e) => { setBancaSearch(e.target.value); setBancasCurrentPage(1); }} placeholder="Pesquisar banca por nome ou URL..." className="w-full min-w-0 pl-10 pr-4 py-2.5 sm:py-2 text-base sm:text-sm bg-gray-100 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-900 placeholder:text-gray-500" />
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <select value={selectedBancaMode} onChange={(e) => { setSelectedBancaMode(e.target.value); setBancasCurrentPage(1); }} disabled={initialLoading} className="px-3 py-2 border border-gray-300 rounded-lg text-gray-700 bg-white min-w-[180px] disabled:opacity-60" title="Bancas a carregar">
-                <option value="all">{initialLoading ? 'Carregando...' : 'Todas as bancas'}</option>
+            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+              <select value={selectedBancaMode} onChange={(e) => { setSelectedBancaMode(e.target.value); setBancasCurrentPage(1); }} disabled={initialLoading} className="flex-1 sm:flex-none px-3 py-2.5 sm:py-2 text-base sm:text-sm border border-gray-300 rounded-lg text-gray-700 bg-white min-w-0 sm:min-w-[180px] disabled:opacity-60 touch-manipulation" title="Bancas a carregar">
+                <option value="all">{initialLoading ? 'Carregando bancas...' : 'Todas as bancas'}</option>
                 {!initialLoading && (crmBancasBasic || []).map((b: any) => (
                   <option key={b.id} value={b.id}>{b.name || b.url || b.id}</option>
                 ))}
               </select>
-              <button onClick={handleLoadData} disabled={initialLoading || dataLoading} className="px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] transition-colors flex items-center gap-2 font-medium disabled:opacity-70" title="Carregar dados">
-                {dataLoading ? <><Loader2 className="w-4 h-4 animate-spin" /> Carregando...</> : <><RefreshCw className="w-4 h-4" /> Carregar dados</>}
+              <button onClick={handleLoadData} disabled={initialLoading || dataLoading} className="px-4 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] transition-colors flex items-center justify-center gap-2 font-medium disabled:opacity-70 text-sm touch-manipulation" title="Carregar dados da hierarquia">
+                {dataLoading ? <><Loader2 className="w-4 h-4 animate-spin" /> <span>Carregando...</span></> : <><RefreshCw className="w-4 h-4" /> <span>Carregar dados</span></>}
               </button>
               {dataLoaded && (
                 <>
-                  <select value={bancaFilter} onChange={(e) => { setBancaFilter(e.target.value as any); setBancasCurrentPage(1); }} className="px-3 py-2 border border-gray-300 rounded-lg text-gray-700 bg-white" title="Filtro de bancas">
+                  <select value={bancaFilter} onChange={(e) => { setBancaFilter(e.target.value as any); setBancasCurrentPage(1); }} className="px-3 py-2.5 sm:py-2 text-base sm:text-sm border border-gray-300 rounded-lg text-gray-700 bg-white touch-manipulation" title="Filtro de bancas">
                     <option value="all">Todas</option>
                     <option value="sem_dono">Sem dono</option>
                     <option value="com_dono">Com dono</option>
                   </select>
-                  <button onClick={() => loadHierarchyData(true)} disabled={dataLoading} className="px-3 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-2" title="Recarregar">
+                  <button onClick={() => loadHierarchyData(true)} disabled={dataLoading} className="px-3 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-2 touch-manipulation" title="Recarregar">
                     <RefreshCw className="w-4 h-4" />
                     <span className="hidden sm:inline">Recarregar</span>
                   </button>
@@ -705,352 +689,26 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
             </div>
           </div>
           {!dataLoaded && (
-            <p className="text-sm text-gray-600">Selecione &quot;Todas as bancas&quot; ou uma banca específica e clique em <strong>Carregar dados</strong> para exibir as informações. Isso torna a busca mais rápida.</p>
+            <p className="text-sm text-gray-600">Selecione &quot;Todas as bancas&quot; ou uma banca específica e clique em <strong>Carregar dados</strong> para exibir a hierarquia.</p>
           )}
         </div>
 
         {dataLoading ? (
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
             <Loader2 className="w-12 h-12 mx-auto mb-4 text-[#8CD955] animate-spin" />
-            <p className="text-gray-600">Carregando bancas e hierarquia...</p>
+            <p className="text-gray-600">Carregando hierarquia...</p>
           </div>
         ) : !dataLoaded ? (
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
             <Building2 className="w-16 h-16 mx-auto mb-4 text-gray-300" />
             <p className="text-gray-600">Selecione uma opção acima e clique em <strong>Carregar dados</strong> para visualizar as bancas e a hierarquia.</p>
           </div>
-        ) : crmBancas && crmBancas.length > 0 ? (() => {
-          const filteredBancas = crmBancas.filter((b: any) => {
-            const search = bancaSearch.trim().toLowerCase();
-            if (!search) return true;
-            return String(b.name || '').toLowerCase().includes(search) || String(b.url || '').toLowerCase().includes(search);
-          });
-          const pagedBancas = filteredBancas.slice((bancasCurrentPage - 1) * bancasPerPage, bancasCurrentPage * bancasPerPage);
-          return (
-            <>
-              {pagedBancas.map((crmBanca: any) => {
-                const bancaUrlNorm = normalizeBancaUrl(crmBanca.url);
-                const owner = (hierarchy || []).find((h: any) => normalizeBancaUrl(h.banca_url) === bancaUrlNorm);
-                if (bancaFilter === 'sem_dono' && owner) return null;
-                if (bancaFilter === 'com_dono' && !owner) return null;
-                return (
-                  <div key={crmBanca.id} className="bg-gradient-to-br from-white to-emerald-50 rounded-xl shadow-lg border border-emerald-100 p-6 relative overflow-hidden">
-                    <div className="relative z-10">
-                      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6 pb-4 border-b border-emerald-100">
-                        <div className="flex items-center gap-4">
-                          <div className="w-16 h-16 rounded-full bg-[#8CD955] text-white flex items-center justify-center font-bold text-xl flex-shrink-0 shadow-lg shadow-emerald-100">
-                            {crmBanca.name ? String(crmBanca.name).substring(0, 2).toUpperCase() : 'BK'}
-                          </div>
-                          <div>
-                            <h2 className="text-2xl font-bold text-gray-900 mb-1">{crmBanca.name || 'Banca sem nome'}</h2>
-                            {crmBanca.url && (
-                              <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                                <a href={`https://${normalizeBancaUrl(crmBanca.url)}`} target="_blank" rel="noreferrer" className="text-sm text-[#8CD955] hover:underline font-medium flex items-center gap-1">
-                                  <Globe className="w-4 h-4" />
-                                  {normalizeBancaUrl(crmBanca.url)}
-                                </a>
-                                {!owner && <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-md font-bold">Sem dono cadastrado</span>}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          {!owner && (
-                            <>
-                              <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'dono_banca', enroller: '', bancaOwnerId: '', bancaName: crmBanca.name || '', bancaUrl: normalizeBancaUrl(crmBanca.url || ''), initialBancaIds: [] })); setShowCreateModal(true); }} className="flex items-center gap-2 px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] transition-colors font-medium">
-                                <UserPlus className="w-4 h-4" /> Criar Dono
-                              </button>
-                              <button onClick={() => handleOpenAssignModal({ status: 'dono_banca', enroller: '', bancaId: String(crmBanca.id), bancaName: crmBanca.name || '', bancaUrl: normalizeBancaUrl(crmBanca.url || ''), ownerId: '' })} className="flex items-center gap-2 px-4 py-2 bg-emerald-700/90 text-white rounded-lg hover:bg-emerald-700 transition-colors font-medium border border-emerald-600">
-                                <UserCheck className="w-4 h-4" /> Atribuir Dono
-                              </button>
-                              <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'gerente', enroller: '', bancaOwnerId: '', bancaName: '', bancaUrl: '', initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium">
-                                <UserPlus className="w-4 h-4" /> Adicionar Gerente
-                              </button>
-                              <button onClick={() => handleOpenAssignModal({ status: 'gerente', enroller: '', bancaId: String(crmBanca.id), bancaName: '', bancaUrl: '', ownerId: '' })} className="flex items-center gap-2 px-4 py-2 bg-blue-700/90 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium border border-blue-600">
-                                <UserCheck className="w-4 h-4" /> Atribuir Gerente
-                              </button>
-                              <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'consultor', enroller: '', bancaOwnerId: '', bancaName: '', bancaUrl: '', initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors font-medium">
-                                <UserPlus className="w-4 h-4" /> Adicionar Consultor
-                              </button>
-                              <button onClick={() => { const managers = getManagersByCrmBanca(String(crmBanca.id)); handleOpenAssignModal({ status: 'consultor', enroller: managers?.length ? managers[0].id : '', bancaId: String(crmBanca.id), bancaName: crmBanca.name || '', bancaUrl: normalizeBancaUrl(crmBanca.url || ''), ownerId: '' }); }} className="flex items-center gap-2 px-4 py-2 bg-green-700/90 text-white rounded-lg hover:bg-green-700 transition-colors font-medium border border-green-600">
-                                <UserCheck className="w-4 h-4" /> Atribuir Consultor
-                              </button>
-                            </>
-                          )}
-                          {owner && (
-                            <>
-                              <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'gerente', enroller: owner.id, bancaOwnerId: owner.id, bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium">
-                                <UserPlus className="w-4 h-4" /> Adicionar Gerente
-                              </button>
-                              <button onClick={() => handleOpenAssignModal({ status: 'gerente', enroller: owner.id, bancaId: String(crmBanca.id), bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), ownerId: owner.id })} className="flex items-center gap-2 px-4 py-2 bg-blue-700/90 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium border border-blue-600">
-                                <UserCheck className="w-4 h-4" /> Atribuir Gerente
-                              </button>
-                              <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'consultor', enroller: owner.id, bancaOwnerId: owner.id, bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors font-medium">
-                                <UserPlus className="w-4 h-4" /> Adicionar Consultor
-                              </button>
-                              <button onClick={() => { const managers = getManagersByCrmBanca(String(crmBanca.id)); handleOpenAssignModal({ status: 'consultor', enroller: managers?.length ? managers[0].id : '', bancaId: String(crmBanca.id), bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), ownerId: owner.id }); }} className="flex items-center gap-2 px-4 py-2 bg-green-700/90 text-white rounded-lg hover:bg-green-700 transition-colors font-medium border border-green-600">
-                                <UserCheck className="w-4 h-4" /> Atribuir Consultor
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="mb-6">
-                        <h3 className="text-lg font-semibold text-gray-800 mb-3 flex items-center gap-2">
-                          <Building2 className="w-5 h-5 text-emerald-600" />
-                          Dono da Banca
-                        </h3>
-                        {owner ? (
-                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">{renderUserCard(owner, 'dono')}</div>
-                        ) : (
-                          <div className="bg-white rounded-xl border border-gray-200 p-6 text-gray-600">
-                            <p className="font-medium">Nenhum dono cadastrado para esta banca.</p>
-                            <p className="text-sm text-gray-500 mt-1">Crie um Dono de Banca ou atribua Gerentes/Consultores diretamente a esta banca.</p>
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="mb-6">
-                        <h3 className="text-lg font-semibold text-gray-800 mb-3 flex items-center gap-2">
-                          <TrendingUp className="w-5 h-5 text-teal-600" />
-                          Gestores desta banca
-                          {((crmBanca.user_ids || []).filter((uid: string) => allUsers.find((x: any) => x.id === uid)?.status === 'gestor').length) > 0 && ` (${(crmBanca.user_ids || []).filter((uid: string) => allUsers.find((x: any) => x.id === uid)?.status === 'gestor').length})`}
-                        </h3>
-                        {(() => {
-                          const gestoresInBanca = (crmBanca.user_ids || []).filter((uid: string) => allUsers.find((x: any) => x.id === uid)?.status === 'gestor');
-                          const gestoresAvailable = (allUsers || []).filter((u: any) => u.status === 'gestor' && !gestoresInBanca.includes(u.id));
-                          return (
-                            <>
-                              {gestoresInBanca.length > 0 && (
-                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-3">
-                                  {gestoresInBanca.map((uid: string) => {
-                                    const u = allUsers.find((x: any) => x.id === uid);
-                                    if (!u) return null;
-                                    return (
-                                      <div key={uid} className="bg-white rounded-xl border border-teal-100 p-4 flex items-center justify-between gap-2">
-                                        <div className="min-w-0">
-                                          <p className="font-medium text-gray-900 truncate">{u.full_name || u.email}</p>
-                                          <p className="text-xs text-gray-500 truncate">{u.email}</p>
-                                          <span className="inline-block mt-1 px-2 py-0.5 rounded text-xs font-bold bg-teal-100 text-teal-700">Gestor</span>
-                                        </div>
-                                        <div className="flex items-center gap-1">
-                                          <button type="button" onClick={() => handleEditUser(u)} className="p-1.5 text-gray-500 hover:bg-gray-100 rounded" title="Editar"><EditIcon className="w-4 h-4" /></button>
-                                          <button type="button" onClick={() => removeGestorFromBanca(uid, crmBanca.id)} disabled={gestorBancaLoading === crmBanca.id} className="p-1.5 text-red-500 hover:bg-red-50 rounded disabled:opacity-50" title="Remover gestor da banca"><X className="w-4 h-4" /></button>
-                                        </div>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className="text-sm font-medium text-gray-600">Adicionar gestor:</span>
-                                <select value="" onChange={(e) => { const v = e.target.value; if (v) addGestorToBanca(v, crmBanca.id); e.target.value = ''; }} disabled={gestorBancaLoading === crmBanca.id || gestoresAvailable.length === 0} className="bg-white border border-gray-200 px-3 py-2 rounded-lg text-sm font-medium text-gray-700 min-w-[200px] disabled:opacity-50">
-                                  <option value="">{gestoresAvailable.length === 0 ? 'Nenhum gestor disponível' : 'Selecione um gestor'}</option>
-                                  {gestoresAvailable.map((u: any) => <option key={u.id} value={u.id}>{u.full_name || u.email}</option>)}
-                                </select>
-                              </div>
-                            </>
-                          );
-                        })()}
-                      </div>
-
-                      {!owner && (
-                        <div className="mb-6">
-                          <h3 className="text-lg font-semibold text-gray-800 mb-3 flex items-center gap-2">
-                            <Users className="w-5 h-5 text-blue-600" />
-                            Gerentes e Consultores nesta banca
-                          </h3>
-                          {(() => {
-                            const gerentesInBanca = (crmBanca.user_ids || [])
-                              .map((uid: string) => allUsers.find((x: any) => x.id === uid))
-                              .filter((u: any) => u && u.status === 'gerente');
-                            const gerenteIdsInBanca = new Set(gerentesInBanca.map((g: any) => g.id));
-                            const consultoresNaBanca = (crmBanca.user_ids || [])
-                              .map((uid: string) => allUsers.find((x: any) => x.id === uid))
-                              .filter((u: any) => u && u.status === 'consultor');
-                            const consultoresLigadosAosGerentes = (allUsers || []).filter(
-                              (u: any) => u.status === 'consultor' && u.enroller && gerenteIdsInBanca.has(u.enroller)
-                            );
-                            const consultoresEmGerente = new Map<string, any[]>();
-                            gerentesInBanca.forEach((g: any) => {
-                              const subs = consultoresLigadosAosGerentes.filter((c: any) => c.enroller === g.id);
-                              consultoresEmGerente.set(g.id, subs);
-                            });
-                            const consultoresSemGerenteNaBanca = consultoresNaBanca.filter((c: any) => !gerenteIdsInBanca.has(c.enroller));
-                            const gerentesComConsultores = gerentesInBanca.map((gerente: any) => ({
-                              ...gerente,
-                              subordinates: consultoresEmGerente.get(gerente.id) || [],
-                            }));
-                            const total = gerentesInBanca.length + consultoresLigadosAosGerentes.length + consultoresSemGerenteNaBanca.length;
-                            if (total === 0) {
-                              return <p className="text-sm text-gray-500">Nenhum gerente ou consultor atribuído. Use os botões acima para criar ou adicionar.</p>;
-                            }
-                            return (
-                              <div className="space-y-6">
-                                {gerentesComConsultores.map((gerente: any) => (
-                                  <div key={gerente.id} className="bg-blue-50/30 rounded-lg p-4 border border-blue-100">
-                                    {renderUserCard(gerente, 'gerente', crmBanca.id)}
-                                    {gerente.subordinates && gerente.subordinates.length > 0 && (
-                                      <div className="mt-4 pl-4 border-l-2 border-blue-300 space-y-3">
-                                        <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide flex items-center gap-2">
-                                          <User className="w-4 h-4 text-green-600" />
-                                          Consultores ({gerente.subordinates.length})
-                                        </h4>
-                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                          {gerente.subordinates.map((consultor: any) => (
-                                            <div key={consultor.id}>{renderUserCard(consultor, 'consultor', crmBanca.id)}</div>
-                                          ))}
-                                        </div>
-                                      </div>
-                                    )}
-                                    {(!gerente.subordinates || gerente.subordinates.length === 0) && (
-                                      <div className="mt-4 pl-4 border-l-2 border-blue-300">
-                                        <div className="flex gap-2">
-                                          <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'consultor', enroller: gerente.id, bancaOwnerId: '', bancaName: crmBanca.name || '', bancaUrl: normalizeBancaUrl(crmBanca.url || ''), initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className="flex-1 p-3 border-2 border-dashed border-gray-300 rounded-lg text-gray-500 hover:border-green-400 hover:text-green-600 transition-colors text-sm font-medium flex items-center justify-center gap-2">
-                                            <UserPlus className="w-4 h-4" /> Adicionar Consultor
-                                          </button>
-                                          <button onClick={() => handleOpenAssignModal({ status: 'consultor', enroller: gerente.id, bancaId: String(crmBanca.id), bancaName: crmBanca.name || '', bancaUrl: normalizeBancaUrl(crmBanca.url || ''), ownerId: '' })} className="flex-1 p-3 border-2 border-dashed border-green-300 rounded-lg text-green-600 hover:border-green-500 hover:bg-green-50 transition-colors text-sm font-medium flex items-center justify-center gap-2">
-                                            <UserCheck className="w-4 h-4" /> Atribuir Consultor
-                                          </button>
-                                        </div>
-                                      </div>
-                                    )}
-                                  </div>
-                                ))}
-                                {consultoresSemGerenteNaBanca.length > 0 && (
-                                  <div className="bg-gray-50/50 rounded-lg p-4 border border-gray-200">
-                                    <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-3 flex items-center gap-2">
-                                      <User className="w-4 h-4 text-gray-600" />
-                                      Consultores diretos (sem gerente na banca)
-                                    </h4>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                      {consultoresSemGerenteNaBanca.map((c: any) => (
-                                        <div key={c.id}>{renderUserCard(c, 'consultor', crmBanca.id)}</div>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })()}
-                        </div>
-                      )}
-
-                      {owner && (
-                        <div className="mb-6">
-                          <h3 className="text-lg font-semibold text-gray-800 mb-3 flex items-center gap-2">
-                            <Users className="w-5 h-5 text-blue-600" />
-                            Gerentes e Consultores nesta banca
-                          </h3>
-                          {(() => {
-                            const gerentesInBanca = (crmBanca.user_ids || [])
-                              .map((uid: string) => allUsers.find((x: any) => x.id === uid))
-                              .filter((u: any) => u && u.status === 'gerente');
-                            const gerenteIdsInBanca = new Set(gerentesInBanca.map((g: any) => g.id));
-                            const consultoresNaBanca = (crmBanca.user_ids || [])
-                              .map((uid: string) => allUsers.find((x: any) => x.id === uid))
-                              .filter((u: any) => u && u.status === 'consultor');
-                            const consultoresLigadosAosGerentes = (allUsers || []).filter(
-                              (u: any) => u.status === 'consultor' && u.enroller && gerenteIdsInBanca.has(u.enroller)
-                            );
-                            const consultoresEmGerente = new Map<string, any[]>();
-                            gerentesInBanca.forEach((g: any) => {
-                              const subs = consultoresLigadosAosGerentes.filter((c: any) => c.enroller === g.id);
-                              consultoresEmGerente.set(g.id, subs);
-                            });
-                            const consultoresSemGerenteNaBanca = consultoresNaBanca.filter((c: any) => !gerenteIdsInBanca.has(c.enroller));
-                            const gerentesComConsultores = gerentesInBanca.map((gerente: any) => ({
-                              ...gerente,
-                              subordinates: consultoresEmGerente.get(gerente.id) || [],
-                            }));
-                            const total = gerentesInBanca.length + consultoresLigadosAosGerentes.length + consultoresSemGerenteNaBanca.length;
-                            if (total === 0) {
-                              return (
-                                <div className="text-center py-8 text-gray-500">
-                                  <Users className="w-12 h-12 mx-auto mb-3 text-gray-300" />
-                                  <p className="font-medium">Nenhum gerente cadastrado nesta banca</p>
-                                  <div className="mt-3 flex items-center justify-center gap-4">
-                                    <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'gerente', enroller: owner.id, bancaOwnerId: owner.id, bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className="text-sm text-[#8CD955] hover:underline">Adicionar primeiro gerente</button>
-                                    <span className="text-gray-400">ou</span>
-                                    <button onClick={() => handleOpenAssignModal({ status: 'gerente', enroller: owner.id, bancaId: String(crmBanca.id), bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), ownerId: owner.id })} className="text-sm text-blue-600 hover:underline">Atribuir usuário existente</button>
-                                  </div>
-                                </div>
-                              );
-                            }
-                            return (
-                              <div className="space-y-6">
-                                {gerentesComConsultores.map((gerente: any) => (
-                              <div key={gerente.id} className="bg-blue-50/30 rounded-lg p-4 border border-blue-100">
-                                {renderUserCard(gerente, 'gerente', crmBanca.id)}
-                                    {gerente.subordinates && gerente.subordinates.length > 0 ? (
-                                  <div className="mt-4 pl-4 border-l-2 border-blue-300 space-y-3">
-                                    <div className="flex items-center justify-between mb-3">
-                                      <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide flex items-center gap-2">
-                                        <User className="w-4 h-4 text-green-600" />
-                                        Consultores ({gerente.subordinates.length})
-                                      </h4>
-                                      <div className="flex items-center gap-1">
-                                        {gerentesComConsultores.length > 1 && (
-                                          <button onClick={() => openMoveConsultantsModal(owner, gerente, crmBanca)} className="p-1.5 text-amber-600 hover:bg-amber-50 rounded transition-colors" title="Mover consultores para outro gerente"><ArrowRightLeft className="w-4 h-4" /></button>
-                                        )}
-                                        <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'consultor', enroller: gerente.id, bancaOwnerId: owner.id, bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className="p-1.5 text-green-600 hover:bg-green-50 rounded transition-colors" title="Adicionar Consultor"><UserPlus className="w-4 h-4" /></button>
-                                        <button onClick={() => handleOpenAssignModal({ status: 'consultor', enroller: gerente.id, bancaId: String(crmBanca.id), bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), ownerId: owner.id })} className="p-1.5 text-green-700 hover:bg-green-50 rounded transition-colors" title="Atribuir Consultor"><UserCheck className="w-4 h-4" /></button>
-                                      </div>
-                                    </div>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                      {gerente.subordinates.map((consultor: any) => <div key={consultor.id}>{renderUserCard(consultor, 'consultor', crmBanca.id)}</div>)}
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <div className="mt-4 pl-4 border-l-2 border-blue-300">
-                                    <div className="flex gap-2">
-                                      <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'consultor', enroller: gerente.id, bancaOwnerId: owner.id, bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className="flex-1 p-3 border-2 border-dashed border-gray-300 rounded-lg text-gray-500 hover:border-green-400 hover:text-green-600 transition-colors text-sm font-medium flex items-center justify-center gap-2">
-                                        <UserPlus className="w-4 h-4" /> Adicionar Consultor
-                                      </button>
-                                      <button onClick={() => handleOpenAssignModal({ status: 'consultor', enroller: gerente.id, bancaId: String(crmBanca.id), bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), ownerId: owner.id })} className="flex-1 p-3 border-2 border-dashed border-green-300 rounded-lg text-green-600 hover:border-green-500 hover:bg-green-50 transition-colors text-sm font-medium flex items-center justify-center gap-2">
-                                        <UserCheck className="w-4 h-4" /> Atribuir Consultor
-                                      </button>
-                                    </div>
-                                  </div>
-                                    )}
-                                  </div>
-                                ))}
-                                {consultoresSemGerenteNaBanca.length > 0 && (
-                                  <div className="bg-gray-50/50 rounded-lg p-4 border border-gray-200">
-                                    <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-3 flex items-center gap-2">
-                                      <User className="w-4 h-4 text-gray-600" />
-                                      Consultores diretos (sem gerente nesta banca)
-                                    </h4>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                      {consultoresSemGerenteNaBanca.map((c: any) => (
-                                        <div key={c.id}>{renderUserCard(c, 'consultor', crmBanca.id)}</div>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })()}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-              {filteredBancas.length > bancasPerPage && (
-                <Pagination currentPage={bancasCurrentPage} totalPages={Math.ceil(filteredBancas.length / bancasPerPage)} onPageChange={setBancasCurrentPage} itemsPerPage={bancasPerPage} totalItems={filteredBancas.length} />
-              )}
-            </>
-          );
-        })() : (
-          <div className="bg-white rounded-xl shadow-lg border border-gray-200 p-12 text-center">
-            <Building2 className="w-16 h-16 mx-auto mb-4 text-gray-300" />
-            <h3 className="text-xl font-bold text-gray-800 mb-2">Nenhuma banca cadastrada no CRM</h3>
-            <p className="text-gray-600">Cadastre bancas em `crm_bancas` para que elas apareçam aqui.</p>
-          </div>
-        )}
+        ) : (
+          bancasWhenLoaded
+        )
+      }
       </div>
+
 
       {showEditModal && editingUser && (
         <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
