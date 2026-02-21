@@ -37,6 +37,10 @@ const BANCAS_DROPDOWN_VISIBLE = 4;
 const LOGS_PAGE_SIZE = 10;
 /** Leads por página no modal "Leads da transferência" */
 const MODAL_LEADS_PAGE_SIZE = 10;
+/** Valor de leadsPageSize quando o usuário escolhe "Personalizado" (input livre). */
+const PAGE_SIZE_CUSTOM = -1;
+/** Limite máximo para o valor personalizado de itens por página. */
+const MAX_CUSTOM_PAGE_SIZE = 10000;
 /** Prazo em dias para conversão do lead transferido (após isso pode ser repassado). CRM principal usa 90d. */
 const DAYS_DEADLINE_TRANSFER = 10;
 /** Exibir gráfico de barras "Transferências por banca" na aba Histórico (oculto por enquanto). */
@@ -177,6 +181,7 @@ export default function AdminLeadTransferPage() {
   const [leadFilterTotalPremioMin, setLeadFilterTotalPremioMin] = useState<string>('');
   const [leadFilterTotalPremioMax, setLeadFilterTotalPremioMax] = useState<string>('');
   const [leadsPageSize, setLeadsPageSize] = useState<number>(10);
+  const [customPageSizeInput, setCustomPageSizeInput] = useState<string>('100');
   const [leadsPage, setLeadsPage] = useState(1);
   const [transferring, setTransferring] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -671,8 +676,12 @@ export default function AdminLeadTransferPage() {
     : filteredLeads;
   const totalFiltered = filteredLeads.length;
   const totalToShow = leadsToShow.length;
+  const rawPageSize =
+    leadsPageSize === PAGE_SIZE_CUSTOM
+      ? Math.max(1, Math.min(MAX_CUSTOM_PAGE_SIZE, parseInt(customPageSizeInput, 10) || 10))
+      : leadsPageSize;
   const effectivePageSize =
-    leadsPageSize <= 0 ? totalToShow : Math.min(leadsPageSize, totalToShow || 1);
+    rawPageSize <= 0 ? totalToShow : Math.min(rawPageSize, totalToShow || 1);
   const totalPages =
     effectivePageSize > 0 ? Math.max(1, Math.ceil(totalToShow / effectivePageSize)) : 1;
   const currentPage = Math.min(Math.max(1, leadsPage), totalPages);
@@ -725,7 +734,7 @@ export default function AdminLeadTransferPage() {
 
   useEffect(() => {
     setLeadsPage(1);
-  }, [leadSearchQuery, leadFilterStatus, leadFilterTemperature, balanceFilter, leadFilterSaldoMin, leadFilterSaldoMax, leadFilterAposta, leadFilterApostaMin, leadFilterApostaMax, leadFilterTotalDepositado, leadFilterTotalDepositadoMin, leadFilterTotalDepositadoMax, leadFilterSaqueDisponivel, leadFilterSaqueDisponivelMin, leadFilterSaqueDisponivelMax, leadFilterTotalPremio, leadFilterTotalPremioMin, leadFilterTotalPremioMax, leadsPageSize]);
+  }, [leadSearchQuery, leadFilterStatus, leadFilterTemperature, balanceFilter, leadFilterSaldoMin, leadFilterSaldoMax, leadFilterAposta, leadFilterApostaMin, leadFilterApostaMax, leadFilterTotalDepositado, leadFilterTotalDepositadoMin, leadFilterTotalDepositadoMax, leadFilterSaqueDisponivel, leadFilterSaqueDisponivelMin, leadFilterSaqueDisponivelMax, leadFilterTotalPremio, leadFilterTotalPremioMin, leadFilterTotalPremioMax, leadsPageSize, customPageSizeInput]);
 
   const openConfirmModal = () => {
     if (selectedLeadIds.size === 0) {
@@ -1940,13 +1949,32 @@ export default function AdminLeadTransferPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <label className="text-sm text-gray-600 whitespace-nowrap">Exibir:</label>
-                  <select value={leadsPageSize} onChange={(e) => setLeadsPageSize(Number(e.target.value))} className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]">
+                  <select
+                    value={leadsPageSize}
+                    onChange={(e) => setLeadsPageSize(Number(e.target.value))}
+                    className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]"
+                  >
                     <option value={10}>10</option>
                     <option value={25}>25</option>
                     <option value={50}>50</option>
                     <option value={100}>100</option>
+                    <option value={200}>200</option>
+                    <option value={300}>300</option>
+                    <option value={500}>500</option>
+                    <option value={PAGE_SIZE_CUSTOM}>Personalizado</option>
                     <option value={0}>Todos</option>
                   </select>
+                  {leadsPageSize === PAGE_SIZE_CUSTOM && (
+                    <input
+                      type="number"
+                      min={1}
+                      max={MAX_CUSTOM_PAGE_SIZE}
+                      value={customPageSizeInput}
+                      onChange={(e) => setCustomPageSizeInput(e.target.value.replace(/\D/g, '').slice(0, 5) || '')}
+                      placeholder="Qtd"
+                      className="w-20 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]"
+                    />
+                  )}
                 </div>
                 <span className="text-sm text-gray-600">
                   {effectivePageSize >= totalToShow ? `${totalToShow} lead(s)` : `Exibindo ${(currentPage - 1) * effectivePageSize + 1}–${Math.min(currentPage * effectivePageSize, totalToShow)} de ${totalToShow}`}
