@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { requireAdmin } from '@/lib/middleware/permissions';
+import { requireAdminOrSuporte } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { getHierarchyTree, getHierarchyStats } from '@/lib/utils/hierarchy';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
@@ -9,7 +9,7 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
  */
 export async function GET(req: NextRequest) {
   try {
-    const { userId } = await requireAdmin(req);
+    const { userId } = await requireAdminOrSuporte(req);
 
     // Busca todos os usuários para construir a árvore completa
     const { data: allUsers } = await supabaseServiceRole
@@ -53,7 +53,7 @@ export async function GET(req: NextRequest) {
  */
 export async function POST(req: NextRequest) {
   try {
-    await requireAdmin(req);
+    await requireAdminOrSuporte(req);
     const body = await req.json();
     const { userId } = body;
 

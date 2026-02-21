@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { requireAdmin } from '@/lib/middleware/permissions';
+import { requireAdminOrSuporte } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { validateHierarchy, hasHierarchyCycle, UserStatus } from '@/lib/middleware/permissions';
@@ -13,7 +13,7 @@ export async function PATCH(
   { params }: { params: Promise<{ userId: string }> }
 ) {
   try {
-    await requireAdmin(req);
+    await requireAdminOrSuporte(req);
     const { userId } = await params;
     const body = await req.json();
     const { email, fullName, password, status, enroller, isActive, bancaName, bancaUrl } = body;
@@ -127,7 +127,7 @@ export async function DELETE(
   { params }: { params: Promise<{ userId: string }> }
 ) {
   try {
-    await requireAdmin(req);
+    await requireAdminOrSuporte(req);
     const { userId } = await params;
 
     // Verifica se usuário tem subordinados

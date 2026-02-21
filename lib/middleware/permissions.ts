@@ -88,6 +88,11 @@ export function hasFullAdminAccess(profile: UserProfile | null): boolean {
   return profile?.status === 'super_admin' || profile?.status === 'admin';
 }
 
+/** Acesso à hierarquia e alterações na rede: super_admin, admin e suporte. */
+export function hasHierarchyAccess(profile: UserProfile | null): boolean {
+  return profile?.status === 'super_admin' || profile?.status === 'admin' || profile?.status === 'suporte';
+}
+
 /**
  * Verifica se o usuário pode acessar o painel admin (apenas super_admin ou admin)
  */
@@ -122,6 +127,25 @@ export async function requireAdmin(req: NextRequest): Promise<{ userId: string; 
     throw new Error('Acesso negado. Apenas SuperAdmin ou Admin podem acessar o painel administrativo.');
   }
 
+  return { userId, profile };
+}
+
+/**
+ * Requer que o usuário seja SuperAdmin, Admin ou Suporte (acesso à Hierarquia e alterações na rede)
+ */
+export async function requireAdminOrSuporte(req: NextRequest): Promise<{ userId: string; profile: UserProfile }> {
+  const { userId } = await requireAuth(req);
+  let profile = await getUserProfile(userId);
+  if (!profile) {
+    await new Promise((r) => setTimeout(r, 400));
+    profile = await getUserProfile(userId);
+  }
+  if (!profile) {
+    throw new Error('Perfil não encontrado');
+  }
+  if (!hasHierarchyAccess(profile)) {
+    throw new Error('Acesso negado. Apenas SuperAdmin, Admin ou Suporte podem acessar a Hierarquia.');
+  }
   return { userId, profile };
 }
 

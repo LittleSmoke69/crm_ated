@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { requireAdmin } from '@/lib/middleware/permissions';
+import { requireAdminOrSuporte } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
@@ -13,7 +13,7 @@ export async function PUT(
   { params }: { params: Promise<{ userId: string }> }
 ) {
   try {
-    await requireAdmin(req);
+    await requireAdminOrSuporte(req);
     const { userId } = await params;
 
     const { data: profile } = await supabaseServiceRole
@@ -76,7 +76,7 @@ export async function GET(
   { params }: { params: Promise<{ userId: string }> }
 ) {
   try {
-    await requireAdmin(req);
+    await requireAdminOrSuporte(req);
     const { userId } = await params;
 
     const { data: profile } = await supabaseServiceRole
