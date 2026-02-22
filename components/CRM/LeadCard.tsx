@@ -210,6 +210,11 @@ const LeadCard: React.FC<LeadCardProps> = ({
   const [depositsPagination, setDepositsPagination] = useState<any>(null);
   const [withdrawsPagination, setWithdrawsPagination] = useState<any>(null);
   const [betsPagination, setBetsPagination] = useState<any>(null);
+  const [betsFilterWonOnly, setBetsFilterWonOnly] = useState(false);
+  const [selectedBetForModal, setSelectedBetForModal] = useState<any>(null);
+  const [betsPeriodPreset, setBetsPeriodPreset] = useState<'all' | '7d' | '30d' | '90d' | 'custom'>('all');
+  const [betsPeriodStart, setBetsPeriodStart] = useState<string>('');
+  const [betsPeriodEnd, setBetsPeriodEnd] = useState<string>('');
 
   // Obtém o userId do consultor
   const [consultorUserId, setConsultorUserId] = useState<string | null>(null);
@@ -516,6 +521,62 @@ const LeadCard: React.FC<LeadCardProps> = ({
       }
     }
   };
+
+  /** Retorna true se a aposta foi premiada (cliente ganhou). */
+  const isBetWinner = (bet: any): boolean => {
+    const betType = bet.type || bet.game_type;
+    const isBichao = betType === 'bichao';
+    if (isBichao) return bet.is_winner === true || bet.is_winner === 'true';
+    if (bet.is_winner === true || bet.is_winner === 'true') return true;
+    return false;
+  };
+
+  /** Lista de apostas exibida na tabela (filtrada por "apenas ganhos" e por período). */
+  const betsDisplayList = React.useMemo(() => {
+    let list = betsHistory;
+    if (betsFilterWonOnly) list = list.filter(isBetWinner);
+
+    const now = new Date();
+    let startDate: Date | null = null;
+    let endDate: Date | null = null;
+    if (betsPeriodPreset === 'custom' && betsPeriodStart) {
+      startDate = new Date(betsPeriodStart);
+      startDate.setHours(0, 0, 0, 0);
+    }
+    if (betsPeriodPreset === 'custom' && betsPeriodEnd) {
+      endDate = new Date(betsPeriodEnd);
+      endDate.setHours(23, 59, 59, 999);
+    }
+    if (betsPeriodPreset === '7d') {
+      endDate = new Date(now);
+      endDate.setHours(23, 59, 59, 999);
+      startDate = new Date(now);
+      startDate.setDate(startDate.getDate() - 7);
+      startDate.setHours(0, 0, 0, 0);
+    }
+    if (betsPeriodPreset === '30d') {
+      endDate = new Date(now);
+      endDate.setHours(23, 59, 59, 999);
+      startDate = new Date(now);
+      startDate.setDate(startDate.getDate() - 30);
+      startDate.setHours(0, 0, 0, 0);
+    }
+    if (betsPeriodPreset === '90d') {
+      endDate = new Date(now);
+      endDate.setHours(23, 59, 59, 999);
+      startDate = new Date(now);
+      startDate.setDate(startDate.getDate() - 90);
+      startDate.setHours(0, 0, 0, 0);
+    }
+
+    if (startDate == null && endDate == null) return list;
+    return list.filter((bet: any) => {
+      const betDate = new Date(bet.date || bet.created_at || 0);
+      if (startDate != null && betDate < startDate) return false;
+      if (endDate != null && betDate > endDate) return false;
+      return true;
+    });
+  }, [betsHistory, betsFilterWonOnly, betsPeriodPreset, betsPeriodStart, betsPeriodEnd]);
 
   // Função para carregar todos os históricos
   const loadAllHistories = async () => {
@@ -1974,6 +2035,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
             setBonusGirosSuccessMessage(null);
             setBonusGirosHistory([]);
             setShowAllDeposits(false);
+            setSelectedBetForModal(null);
             setShowAllWithdraws(false);
             setShowAllBets(false);
           }}
@@ -2013,6 +2075,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
                   setBonusGirosHistory([]);
                   setShowAllDeposits(false);
                   setShowAllWithdraws(false);
+                  setSelectedBetForModal(null);
                   setShowAllBets(false);
                 }}
                 className="p-2 hover:bg-gray-100 rounded-lg transition-colors shrink-0 ml-2"
@@ -2111,7 +2174,129 @@ const LeadCard: React.FC<LeadCardProps> = ({
                 </div>
               </div>
 
-              {/* Adicionar bônus - desabilitado (seção oculta) */}
+              {/* Adicionar bônus - dropdown sempre visível; só Roleta ativo */}
+              <div className="bg-amber-50 rounded-lg sm:rounded-xl p-4 sm:p-5 border border-amber-200/60">
+                <h3 className="text-base sm:text-lg font-bold text-gray-800 mb-3 sm:mb-4 flex items-center gap-2">
+                  <Gift className="w-4 h-4 sm:w-5 sm:h-5 text-amber-600 shrink-0" />
+                  <span>Adicionar bônus</span>
+                </h3>
+                <div className="space-y-4">
+                  {/* Dropdown sempre visível */}
+                  <div className="relative" ref={bonusDropdownRef}>
+                    <button
+                      type="button"
+                      onClick={() => setBonusDropdownOpen((o) => !o)}
+                      className="flex items-center justify-between gap-2 w-full sm:w-auto min-w-[200px] px-4 py-2.5 bg-amber-100 hover:bg-amber-200 text-amber-800 font-bold rounded-xl border border-amber-300 transition-colors"
+                    >
+                      <span>{selectedBonusType === 'giros' ? 'Bonus de Roleta' : 'Escolher bônus'}</span>
+                      <ChevronDown className={`w-4 h-4 shrink-0 transition-transform ${bonusDropdownOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    {bonusDropdownOpen && (
+                      <div className="absolute top-full left-0 mt-1 min-w-[260px] bg-white border border-amber-200 rounded-xl shadow-lg z-20 py-1">
+                        <button
+                          type="button"
+                          onClick={() => { setSelectedBonusType('giros'); setBonusDropdownOpen(false); }}
+                          className="w-full flex items-center justify-between gap-3 px-4 py-2.5 text-left text-sm font-medium text-gray-800 hover:bg-amber-50 transition-colors"
+                        >
+                          <span className="flex items-center gap-3">
+                            <Gift className="w-4 h-4 text-amber-600 shrink-0" />
+                            Adicionar Giros (Roleta)
+                          </span>
+                        </button>
+                        <div className="w-full flex items-center justify-between gap-3 px-4 py-2.5 text-left text-sm text-gray-400 cursor-not-allowed border-t border-gray-100">
+                          <span className="flex items-center gap-3">
+                            <Ticket className="w-4 h-4 text-gray-300 shrink-0" />
+                            Adicionar Rifa
+                          </span>
+                          <span className="text-xs">Em breve</span>
+                        </div>
+                        <div className="w-full flex items-center justify-between gap-3 px-4 py-2.5 text-left text-sm text-gray-400 cursor-not-allowed">
+                          <span className="flex items-center gap-3">
+                            <Layers className="w-4 h-4 text-gray-300 shrink-0" />
+                            Adicionar Raspadinha
+                          </span>
+                          <span className="text-xs">Em breve</span>
+                        </div>
+                        <div className="w-full flex items-center justify-between gap-3 px-4 py-2.5 text-left text-sm text-gray-400 cursor-not-allowed border-b border-gray-100">
+                          <span className="flex items-center gap-3">
+                            <Package className="w-4 h-4 text-gray-300 shrink-0" />
+                            Adicionar caixinha surpresa
+                          </span>
+                          <span className="text-xs">Em breve</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Formulário e valor quando Roleta selecionado */}
+                  {selectedBonusType === 'giros' && (
+                    <div className="space-y-3 pt-2 border-t border-amber-200/60" ref={bonusDropdownRef}>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <label className="flex flex-col gap-1">
+                          <span className="text-sm font-bold text-gray-800">Quantidade (giros)</span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={999}
+                            value={bonusGirosQuantity}
+                            onChange={(e) => setBonusGirosQuantity(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                            className="w-20 px-2 py-1.5 bg-gray-200 border border-gray-500 rounded-lg text-sm font-bold text-gray-900 placeholder:text-gray-600"
+                          />
+                        </label>
+                        <div className="flex items-end gap-2">
+                          <button
+                            type="button"
+                            onClick={handleSendBonusGiros}
+                            disabled={bonusGirosSending || !bancaUrlForBonus}
+                            className="flex items-center gap-2 px-4 py-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-xl transition-colors"
+                          >
+                            {bonusGirosSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Gift className="w-4 h-4" />}
+                            {bonusGirosSending ? 'Enviando...' : 'Enviar giros'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setSelectedBonusType(null); setBonusGirosError(null); setBonusGirosSuccessMessage(null); setBonusDropdownOpen(false); }}
+                            className="px-3 py-2 text-gray-600 hover:bg-gray-200 rounded-lg text-sm font-medium"
+                          >
+                            Limpar
+                          </button>
+                        </div>
+                      </div>
+                      {bonusGirosError && (
+                        <p className="text-sm text-red-600 font-medium flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4 shrink-0" />
+                          {bonusGirosError}
+                        </p>
+                      )}
+                      {bonusGirosSuccessMessage && (
+                        <p className="text-sm text-[#8CD955] font-medium flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 shrink-0" />
+                          {bonusGirosSuccessMessage}
+                        </p>
+                      )}
+                      {bonusGirosHistoryLoading ? (
+                        <div className="flex items-center gap-2 text-sm text-gray-500">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Carregando histórico...
+                        </div>
+                      ) : bonusGirosHistory.length > 0 && (
+                        <div>
+                          <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Histórico de giros enviados (este lead)</p>
+                          <ul className="space-y-1 text-sm">
+                            {bonusGirosHistory.slice(0, 10).map((h, i) => (
+                              <li key={i} className="flex items-center gap-2 text-gray-700">
+                                <Gift className="w-3.5 h-3.5 text-amber-500" />
+                                <span className="font-medium">{h.quantity} giro(s)</span>
+                                <span className="text-gray-500">{h.date ? new Date(h.date).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
 
               {/* Informações Financeiras - fluxo: Entrada → Apostas → Resultados → Bônus/Outros */}
               <div className="bg-green-50 rounded-lg sm:rounded-xl p-4 sm:p-5">
@@ -2554,6 +2739,85 @@ const LeadCard: React.FC<LeadCardProps> = ({
                   <p className="text-sm text-gray-500 text-center py-4">Nenhuma aposta encontrada</p>
                 ) : (
                   <>
+                    <div className="flex flex-col gap-3 mb-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">Filtrar:</span>
+                        <button
+                          type="button"
+                          onClick={() => setBetsFilterWonOnly(false)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${!betsFilterWonOnly ? 'bg-gray-700 text-white' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'}`}
+                        >
+                          Todos
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setBetsFilterWonOnly(true)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${betsFilterWonOnly ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'}`}
+                        >
+                          Apenas jogos ganhos
+                        </button>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">Período:</span>
+                        <button
+                          type="button"
+                          onClick={() => setBetsPeriodPreset('all')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${betsPeriodPreset === 'all' ? 'bg-gray-700 text-white' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'}`}
+                        >
+                          Todos
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setBetsPeriodPreset('7d')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${betsPeriodPreset === '7d' ? 'bg-gray-700 text-white' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'}`}
+                        >
+                          Últimos 7 dias
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setBetsPeriodPreset('30d')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${betsPeriodPreset === '30d' ? 'bg-gray-700 text-white' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'}`}
+                        >
+                          Últimos 30 dias
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setBetsPeriodPreset('90d')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${betsPeriodPreset === '90d' ? 'bg-gray-700 text-white' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'}`}
+                        >
+                          Últimos 90 dias
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setBetsPeriodPreset('custom')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${betsPeriodPreset === 'custom' ? 'bg-gray-700 text-white' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'}`}
+                        >
+                          Personalizado
+                        </button>
+                        {betsPeriodPreset === 'custom' && (
+                          <div className="flex flex-wrap items-center gap-2 ml-1">
+                            <input
+                              type="date"
+                              value={betsPeriodStart}
+                              onChange={(e) => setBetsPeriodStart(e.target.value)}
+                              className="px-2 py-1.5 border border-gray-300 rounded-lg text-xs font-medium text-gray-800"
+                            />
+                            <span className="text-gray-400 text-xs">até</span>
+                            <input
+                              type="date"
+                              value={betsPeriodEnd}
+                              onChange={(e) => setBetsPeriodEnd(e.target.value)}
+                              className="px-2 py-1.5 border border-gray-300 rounded-lg text-xs font-medium text-gray-800"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    {betsDisplayList.length === 0 ? (
+                      <p className="text-sm text-gray-500 text-center py-4">
+                        Nenhuma aposta{betsFilterWonOnly ? ' ganha' : ''}{betsPeriodPreset !== 'all' ? ' no período' : ''} para exibir
+                      </p>
+                    ) : (
                     <div className="overflow-x-auto -mx-4 sm:mx-0">
                       <div className="inline-block min-w-full align-middle">
                         <table className="min-w-full divide-y divide-gray-200">
@@ -2569,7 +2833,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
                             </tr>
                           </thead>
                           <tbody className="bg-white divide-y divide-gray-100">
-                            {betsHistory.map((bet: any) => {
+                            {betsDisplayList.map((bet: any) => {
                               const betType = bet.type || bet.game_type;
                               const isBichao = betType === 'bichao';
                               const rowKey = `${betType || 'lottery'}-${bet.id}`;
@@ -2599,8 +2863,13 @@ const LeadCard: React.FC<LeadCardProps> = ({
                                 ? [bet.modalidade, bet.horario, bet.banca].filter(Boolean).join(' · ') || '-'
                                 : (bet.type_game || '-');
                               const premioVal = bet.premio != null ? bet.premio : (isBichao ? bet.premio_a_receber : null);
+                              const isPremiadoRow = statusLabel === 'Premiado';
                               return (
-                                <tr key={rowKey} className="hover:bg-gray-50 transition-colors">
+                                <tr
+                                  key={rowKey}
+                                  onClick={() => setSelectedBetForModal(bet)}
+                                  className={`transition-colors cursor-pointer ${isPremiadoRow ? 'bg-green-50/80 hover:bg-green-100/80 border-l-4 border-l-green-500' : 'hover:bg-gray-50'}`}
+                                >
                                   <td className="px-3 py-2 whitespace-nowrap">
                                     <span className={`px-2 py-0.5 rounded text-xs font-bold ${isBichao ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800'}`}>
                                       {isBichao ? 'Bichão' : 'Loteria'}
@@ -2621,6 +2890,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
                         </table>
                       </div>
                     </div>
+                    )}
                     {allBetsData.length > 5 && (
                       <div className="mt-4 flex justify-center">
                         <button
@@ -2650,6 +2920,123 @@ const LeadCard: React.FC<LeadCardProps> = ({
                   </>
                 )}
               </div>
+
+              {/* Modal detalhe do bilhete - estilo Meu Recibo */}
+              {selectedBetForModal && (() => {
+                const b = selectedBetForModal;
+                const isBichao = (b.type || b.game_type) === 'bichao';
+                const isPremiado = isBetWinner(b);
+                const gameTypeLabel = isBichao ? 'Bichão' : (b.type_game || 'Loto Prêmio');
+                const statusLabel = isPremiado ? 'Aposta Concluída' : (b.checked === true || b.checked === 'true' ? 'Aposta não premiada' : 'Aposta pendente');
+                const premioVal = b.premio != null ? b.premio : (isBichao ? b.premio_a_receber : null);
+                const participantName = (lead.name || '').toUpperCase();
+                const dezenasRaw = b.numbers ?? b.dezenas ?? b.selected_numbers ?? b.dezenas_jogadas;
+                const dezenasList: string[] = Array.isArray(dezenasRaw)
+                  ? dezenasRaw.map((n: any) => String(n))
+                  : typeof dezenasRaw === 'string' ? dezenasRaw.replace(/\s/g, ',').split(',').filter(Boolean) : [];
+                const concurso = b.concurso ?? b.contest_id ?? b.competition_id ?? b.type_game ?? '-';
+                const sorteioDate = b.winning_ticket_drawed_at || b.competition_date;
+                return (
+                  <div
+                    className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4"
+                    onClick={() => setSelectedBetForModal(null)}
+                  >
+                    <div
+                      className={`bg-transparent rounded-2xl max-w-md w-full max-h-[90vh] overflow-hidden flex flex-col items-stretch ${isPremiado ? 'ring-2 ring-green-500/50 ring-offset-2 ring-offset-transparent' : ''}`}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {/* Header - azul padrão ou verde quando premiado */}
+                      <div className={`rounded-t-2xl px-4 py-4 flex items-center justify-between ${isPremiado ? 'bg-green-700' : 'bg-[#1e3a5f]'}`}>
+                        <div className="flex items-center gap-2">
+                          <h2 className="text-xl font-bold text-white">Meu Recibo</h2>
+                          {isPremiado && (
+                            <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-white/20 text-white border border-white/30">
+                              Premiado
+                            </span>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedBetForModal(null)}
+                          className="p-2 hover:bg-white/10 rounded-lg transition-colors text-white"
+                        >
+                          <XIcon className="w-5 h-5" />
+                        </button>
+                      </div>
+                      {/* Card branco - borda verde sutil quando premiado */}
+                      <div className={`bg-white rounded-b-2xl shadow-xl p-4 sm:p-5 -mt-1 relative z-10 space-y-4 ${isPremiado ? 'border-2 border-t-0 border-green-200 rounded-t-none' : ''}`}>
+                        {/* Banner tipo de jogo - verde quando premiado */}
+                        <div className="flex justify-center">
+                          <span className={`inline-block px-4 py-1.5 rounded-full text-sm font-bold ${isPremiado ? 'bg-green-100 text-green-800' : isBichao ? 'bg-amber-100 text-amber-800' : 'bg-amber-400/90 text-green-900'}`}>
+                            {gameTypeLabel}
+                          </span>
+                        </div>
+                        <p className={`text-center text-base font-bold ${isPremiado ? 'text-green-700' : 'text-gray-800'}`}>{statusLabel}</p>
+                        {/* Participante */}
+                        <div className="flex items-center gap-3">
+                          <div className="w-12 h-12 rounded-full bg-sky-100 flex items-center justify-center shrink-0">
+                            <span className="text-lg font-bold text-sky-700">{getInitials(lead.name || '?')}</span>
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-xs text-gray-500">Participante</p>
+                            <p className="text-sm font-bold text-gray-900 truncate">{participantName || 'Cliente'}</p>
+                            <p className="text-xs text-gray-500">ID do jogo #{b.id}</p>
+                          </div>
+                        </div>
+                        {/* Valor apostado e Valor do prêmio */}
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="bg-gray-50 rounded-xl p-3 border border-gray-100">
+                            <p className="text-xs font-medium text-gray-500 mb-0.5">Valor apostado</p>
+                            <p className="text-base font-bold text-gray-900">{formatCurrency(b.value)}</p>
+                          </div>
+                          <div className={`rounded-xl p-3 border-2 ${isPremiado ? 'bg-green-50 border-green-500' : 'bg-white border-blue-500/60'}`}>
+                            <p className="text-xs font-medium text-gray-500 mb-0.5">Valor do prêmio</p>
+                            <p className={`text-base font-bold ${isPremiado ? 'text-green-700' : 'text-[#1e3a5f]'}`}>{premioVal != null ? formatCurrency(premioVal) : '-'}</p>
+                          </div>
+                        </div>
+                        {/* Concurso e Qtde dezenas */}
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="bg-gray-50 rounded-xl p-3 border border-gray-100">
+                            <p className="text-xs font-medium text-gray-500 mb-0.5">Concurso</p>
+                            <p className="text-sm font-bold text-gray-900">{concurso}</p>
+                          </div>
+                          <div className="bg-gray-50 rounded-xl p-3 border border-gray-100">
+                            <p className="text-xs font-medium text-gray-500 mb-0.5">Qtde dezenas</p>
+                            <p className="text-sm font-bold text-gray-900">{dezenasList.length > 0 ? dezenasList.length : '-'}</p>
+                          </div>
+                        </div>
+                        {/* Emitido em e Sorteio */}
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="bg-gray-50 rounded-xl p-3 border border-gray-100">
+                            <p className="text-xs font-medium text-gray-500 mb-0.5">Emitido em</p>
+                            <p className="text-sm font-bold text-gray-900">{formatDateTime(b.date || b.created_at)}</p>
+                          </div>
+                          <div className="bg-gray-50 rounded-xl p-3 border border-gray-100">
+                            <p className="text-xs font-medium text-gray-500 mb-0.5">Sorteio</p>
+                            <p className="text-sm font-bold text-gray-900">{sorteioDate ? formatDateTime(sorteioDate) : '-'}</p>
+                          </div>
+                        </div>
+                        {/* Dezenas jogadas - círculos verdes quando premiado */}
+                        {dezenasList.length > 0 && (
+                          <div>
+                            <p className="text-xs font-bold text-gray-700 uppercase tracking-wider mb-2">Dezenas jogadas</p>
+                            <div className="grid grid-cols-5 gap-2">
+                              {dezenasList.map((num, idx) => (
+                                <div
+                                  key={idx}
+                                  className={`w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold shrink-0 ${isPremiado ? 'bg-green-600' : 'bg-[#1e3a5f]'}`}
+                                >
+                                  {num.padStart(2, '0')}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Etiquetas */}
               {lead.tags && lead.tags.length > 0 && (
@@ -2687,7 +3074,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
                 onClick={() => {
                   setShowDetailsModal(false);
                   setLeadDetails(null);
-                  // Reseta os estados de visualização
+                  setSelectedBetForModal(null);
                   setShowAllDeposits(false);
                   setShowAllWithdraws(false);
                   setShowAllBets(false);

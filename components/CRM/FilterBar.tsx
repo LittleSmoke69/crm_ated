@@ -40,6 +40,7 @@ interface Tag {
 }
 
 const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initialDateFilter, onBancasLoaded }) => {
+  const [searchInputValue, setSearchInputValue] = useState('');
   const [activeFilters, setActiveFilters] = useState<Record<string, any>>(() => {
     if (initialDateFilter) {
       return { date: initialDateFilter };
@@ -244,7 +245,10 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           <input 
             type="text" 
             placeholder="Buscar por nome, email ou telefone..."
-            onChange={(e) => onSearch(e.target.value)}
+            value={searchInputValue}
+            onChange={(e) => setSearchInputValue(e.target.value)}
+            onBlur={() => onSearch(searchInputValue)}
+            onKeyDown={(e) => { if (e.key === 'Enter') onSearch(searchInputValue); }}
             className="w-full pl-10 pr-4 py-2.5 bg-gray-100 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 focus:bg-gray-50 focus:border-[#8CD955]/40 transition-all"
           />
         </div>

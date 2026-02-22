@@ -1271,9 +1271,10 @@ const KanbanContent = () => {
                 <span>Informações <span className="hidden xs:inline">de Status</span></span>
               </button>
               <button
-                disabled
-                className="whitespace-nowrap flex items-center gap-2 bg-gray-300 text-gray-500 px-3 py-2 rounded-xl text-[11px] md:text-sm font-bold cursor-not-allowed opacity-60 shadow-sm flex-shrink-0"
-                title="Enviar giros desabilitado"
+                onClick={() => setShowSpinModal(true)}
+                disabled={loading || filterLoading}
+                className="whitespace-nowrap flex items-center gap-2 bg-orange-500 hover:bg-orange-600 border border-orange-600 px-3 py-2 rounded-xl text-[11px] md:text-sm font-bold text-white shadow-sm flex-shrink-0 transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-orange-500 disabled:hover:border-orange-600"
+                title={loading || filterLoading ? 'Aguarde o carregamento dos clientes' : 'Enviar giros (roleta) para leads'}
               >
                 <Gift className="w-3.5 h-3.5" />
                 <span>Enviar Giros <span className="hidden xs:inline">(Roleta)</span></span>
@@ -1814,7 +1815,7 @@ const KanbanContent = () => {
                 type="button"
                 onClick={handleSendSpins}
                 disabled={spinSending || spinSelectedLeadIds.size === 0 || spinQuantity < 1}
-                className="flex-1 py-3 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white font-bold rounded-xl transition-colors flex items-center justify-center gap-2"
+                className="flex-1 py-3 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white font-bold rounded-xl transition-colors flex items-center justify-center gap-2"
               >
                 {spinSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Gift className="w-4 h-4" />}
                 {spinSending ? 'Enviando...' : `Enviar giros${spinSelectedLeadIds.size > 0 ? ` (${spinSelectedLeadIds.size})` : ''}`}
