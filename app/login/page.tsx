@@ -20,8 +20,9 @@ function getLandingRouteByStatus(status: string | null | undefined): string {
     case 'consultor':
       return '/crm/kanban';
     case 'auditoria':
-    case 'suporte':
       return '/admin';
+    case 'suporte':
+      return '/admin/hierarchy';
     default:
       return '/';
   }
