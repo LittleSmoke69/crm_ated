@@ -623,12 +623,7 @@ export default function DonoBancaHierarquia({
             </div>
           )}
           
-          <div className="relative">
-            {loadingMetrics && (
-              <div className="absolute inset-0 bg-white/80 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
-              </div>
-            )}
+          <div>
             {externalMetrics ? (
               <div className="bg-gradient-to-br from-[#A8E677] to-[#8CD955] p-6 rounded-2xl shadow-lg border border-[#8CD955]/40">
               <div className="flex items-center gap-2 mb-6">
@@ -731,6 +726,13 @@ export default function DonoBancaHierarquia({
                 </div>
               </div>
             </div>
+            ) : loadingMetrics && !externalMetrics ? (
+              <div className="bg-gradient-to-br from-[#A8E677] to-[#8CD955] p-6 rounded-2xl shadow-lg border border-[#8CD955]/40">
+                <div className="text-center py-8 flex flex-col items-center gap-3">
+                  <div className="animate-spin rounded-full h-8 w-8 border-2 border-white border-t-transparent" />
+                  <p className="text-white font-medium">Carregando métricas da banca...</p>
+                </div>
+              </div>
             ) : (
               <div className="bg-gradient-to-br from-[#A8E677] to-[#8CD955] p-6 rounded-2xl shadow-lg border border-[#8CD955]/40">
                 <div className="text-center py-8">
@@ -744,13 +746,7 @@ export default function DonoBancaHierarquia({
 
         {/* Gráficos Detalhados do Resumo Geral */}
         {externalMetrics && (
-          <div className="relative">
-            {loadingMetrics && (
-              <div className="absolute inset-0 bg-white/80 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
-              </div>
-            )}
-            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
               <h2 className="text-lg font-bold text-gray-800 mb-6 flex items-center gap-2">
                 <BarChart3 className="w-5 h-5 text-[#8CD955]" />
                 Análise Detalhada do Resumo Geral
@@ -784,17 +780,10 @@ export default function DonoBancaHierarquia({
                 </div>
               </div>
             </div>
-          </div>
         )}
 
         {/* Top 5 Consultores por Vendas - Design Visual */}
-        <div className="relative">
-          {loadingMetrics && (
-            <div className="absolute inset-0 bg-white/80 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
-            </div>
-          )}
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
             <h2 className="text-lg font-bold text-gray-800 mb-6 flex items-center gap-2">
               <Trophy className="w-5 h-5 text-amber-500" />
               Top 5 Consultores por Vendas
@@ -945,17 +934,25 @@ export default function DonoBancaHierarquia({
           </div>
         </div>
 
-        {/* Stats Summary Internos */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-            <div className="flex items-center gap-3 mb-2">
-              <div className="p-2 bg-blue-50 rounded-lg">
-                <Briefcase className="w-5 h-5 text-blue-600" />
-              </div>
-              <span className="text-sm font-medium text-gray-500">Total de Gerentes</span>
+        {/* Gerentes e Consultores - carregamento em segundo plano (overlay só aqui) */}
+        <div className="relative">
+          {loadingMetrics && (
+            <div className="absolute inset-0 bg-white/85 backdrop-blur-sm rounded-2xl z-10 flex flex-col items-center justify-center gap-3 min-h-[280px]">
+              <div className="animate-spin rounded-full h-10 w-10 border-2 border-[#8CD955] border-t-transparent" />
+              <p className="text-sm font-bold text-gray-700">Carregando gerentes e consultores...</p>
             </div>
-            <p className="text-2xl font-bold text-gray-800">{gerentes.length}</p>
-          </div>
+          )}
+          {/* Stats Summary Internos */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+              <div className="flex items-center gap-3 mb-2">
+                <div className="p-2 bg-blue-50 rounded-lg">
+                  <Briefcase className="w-5 h-5 text-blue-600" />
+                </div>
+                <span className="text-sm font-medium text-gray-500">Total de Gerentes</span>
+              </div>
+              <p className="text-2xl font-bold text-gray-800">{gerentes.length}</p>
+            </div>
           
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
             <div className="flex items-center gap-3 mb-2">
@@ -1184,7 +1181,6 @@ export default function DonoBancaHierarquia({
             )}
           </div>
         </div>
-
 
         {/* Modal de Cadastro */}
         {isModalOpen && (
