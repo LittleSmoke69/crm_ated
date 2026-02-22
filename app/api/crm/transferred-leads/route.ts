@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
-import { getUserProfile } from '@/lib/middleware/permissions';
+import { canAccessUser, getUserProfile } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { getBancaUrl } from '@/lib/utils/hierarchy';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
@@ -13,21 +13,36 @@ const LOG_PREFIX = '[CRM Transferred Leads]';
  * GET /api/crm/transferred-leads
  * Busca leads da mesma forma que o CRM principal (mesma API, mesmas bancas).
  * Retorna apenas leads com transferred === true (visíveis só em /crm/transferido).
- * Mesma estrutura de resposta do /api/crm/leads para compatibilidade com o Kanban.
+ * Suporta userId na query: quando informado (ex.: gerente vendo transferidos de um consultor), usa o email desse consultor.
  */
 export async function GET(req: NextRequest) {
   try {
-    const { userId } = await requireAuth(req);
+    const { userId: requesterId } = await requireAuth(req);
     const { searchParams } = req.nextUrl;
+    const targetUserId = searchParams.get('userId') || requesterId;
 
-    const profile = await getUserProfile(userId);
-    if (!profile?.email) {
-      console.warn(`${LOG_PREFIX} Email não encontrado no perfil para userId=${userId}`);
-      return errorResponse('Email do usuário não encontrado no perfil.');
+    const requesterProfile = await getUserProfile(requesterId);
+    if (!requesterProfile) {
+      return errorResponse('Perfil do usuário não encontrado.');
     }
-    const userEmail = profile.email.trim();
 
-    console.log(`${LOG_PREFIX} Início | userId=${userId} email=${userEmail} queryParams=${JSON.stringify(Object.fromEntries(searchParams.entries()))}`);
+    if (targetUserId !== requesterId) {
+      const hasPermission = await canAccessUser(requesterId, targetUserId);
+      if (!hasPermission) {
+        return errorResponse('Acesso negado. Você não tem permissão para visualizar os transferidos deste consultor.', 403);
+      }
+    }
+
+    // Perfil do consultor cujos transferidos queremos buscar (quando userId na URL = esse consultor)
+    const targetProfile = await getUserProfile(targetUserId);
+    if (!targetProfile?.email) {
+      console.warn(`${LOG_PREFIX} Email não encontrado no perfil para userId=${targetUserId}`);
+      return errorResponse('Email do consultor não encontrado no perfil.');
+    }
+    // E-mail usado em TODAS as pesquisas na API externa: sempre do consultor (target), nunca do requester
+    const consultantEmail = targetProfile.email.trim();
+
+    console.log(`${LOG_PREFIX} Início | requesterId=${requesterId} targetUserId=${targetUserId} consultantEmail=${consultantEmail} (API externa usa este email) queryParams=${JSON.stringify(Object.fromEntries(searchParams.entries()))}`);
 
     // Mesma lógica de bancas do CRM principal (/api/crm/leads)
     type BancaParaFetch = { id: string; url: string; name?: string };
@@ -63,7 +78,7 @@ export async function GET(req: NextRequest) {
         }
       }
       if (listBancas.length === 0) {
-        const visiveis = await getBancasVisiveis(userId, profile);
+        const visiveis = await getBancasVisiveis(requesterId, requesterProfile);
         if (visiveis.length > 0) {
           listBancas = visiveis.map(b => ({ id: b.id, url: b.url, name: b.name }));
         } else {
@@ -75,7 +90,7 @@ export async function GET(req: NextRequest) {
             .single();
           if (first) listBancas = [{ id: first.id, url: first.url, name: first.name ?? undefined }];
           else {
-            const bancaFromProfile = await getBancaUrl(userId);
+            const bancaFromProfile = await getBancaUrl(requesterId);
             if (bancaFromProfile) listBancas = [{ id: 'profile', url: bancaFromProfile }];
           }
         }
@@ -97,7 +112,7 @@ export async function GET(req: NextRequest) {
     const fromParam = searchParams.get('from');
     const toParam = searchParams.get('to');
     const queryParams: string[] = [
-      `consultant=${encodeURIComponent(profile.email)}`,
+      `consultant=${encodeURIComponent(consultantEmail)}`,
       `per_page=${perPage}`,
     ];
     if (fromParam?.trim()) queryParams.push(`from=${encodeURIComponent(fromParam.trim())}`);
@@ -231,7 +246,7 @@ export async function GET(req: NextRequest) {
     const { data: leadTagAssociations } = await supabaseServiceRole
       .from('crm_lead_tags')
       .select('lead_external_id, tag_id')
-      .eq('user_id', userId);
+      .eq('user_id', targetUserId);
     if (leadTagAssociations?.length) {
       const tagIds = [...new Set(leadTagAssociations.map((lt: any) => lt.tag_id))];
       const { data: tags } = await supabaseServiceRole
@@ -274,7 +289,7 @@ export async function GET(req: NextRequest) {
         .from('admin_lead_transfer_entries')
         .select('lead_id, created_at')
         .in('lead_id', leadIdsForLookup)
-        .eq('target_consultant_email', userEmail)
+        .eq('target_consultant_email', consultantEmail)
         .in('banca_id', bancaIdsForLookup)
         .order('created_at', { ascending: false });
       if (entries?.length) {

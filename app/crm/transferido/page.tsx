@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useMemo, useCallback, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { ArrowRightLeft, AlertCircle, Eye, RefreshCw, X, MessageSquare } from 'lucide-react';
@@ -47,6 +48,8 @@ function getMissingForNextStar(apostaEstrelas: number): number | null {
 
 const TransferidoContent = () => {
   const { checking, userId } = useRequireAuth();
+  const searchParams = useSearchParams();
+  const targetUserId = searchParams.get('userId') || undefined;
   const [rawLeads, setRawLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -80,6 +83,9 @@ const TransferidoContent = () => {
     setError(null);
     try {
       const url = new URL('/api/crm/transferred-leads', window.location.origin);
+      if (targetUserId) {
+        url.searchParams.append('userId', targetUserId);
+      }
       const bancaValue = filters.banca ? (typeof filters.banca === 'object' ? filters.banca.value : filters.banca) : null;
       if (bancaValue && bancaValue !== 'all') {
         url.searchParams.append('banca_url', bancaValue);
@@ -195,7 +201,7 @@ const TransferidoContent = () => {
       setLoading(false);
       setFilterLoading(false);
     }
-  }, [userId, filters.banca, filters.date, exclusiveBancasList]);
+  }, [userId, targetUserId, filters.banca, filters.date, exclusiveBancasList]);
 
   useEffect(() => {
     console.log('[Transferido] useEffect load | userId:', !!userId, 'bancasReady:', bancasReady, 'bancaKey:', bancaKey, 'dateKey:', dateKey);

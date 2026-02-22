@@ -61,6 +61,8 @@ const KanbanColumn: React.FC<KanbanColumnProps> = ({
   const itemHeight = 220; // Altura estimada de cada card com espaçamento
   const VIRTUALIZATION_THRESHOLD = 100; // Só virtualiza se tiver mais de 100 leads
   const ITEMS_PER_VIEW = 10; // Quantos itens renderizar por vez (com overscan)
+  /** Último length conhecido: evita resetar o range ao crescer a lista (carregar mais / background). */
+  const prevLengthRef = useRef(0);
 
   // Os leads já vêm ordenados da página principal
   const sortedLeads = leads;
@@ -100,16 +102,23 @@ const KanbanColumn: React.FC<KanbanColumnProps> = ({
     }
   };
 
-  // Inicializa o range visível
+  // Inicializa o range visível só quando necessário; ao crescer a lista (carregar mais), não reseta
   useEffect(() => {
-    if (sortedLeads.length > VIRTUALIZATION_THRESHOLD && listContainerRef.current) {
+    if (sortedLeads.length <= VIRTUALIZATION_THRESHOLD || !listContainerRef.current) {
+      prevLengthRef.current = sortedLeads.length;
+      return;
+    }
+    const prevLen = prevLengthRef.current;
+    prevLengthRef.current = sortedLeads.length;
+    // Só redefine para o topo quando a lista encolheu ou quando ainda não estava virtualizando
+    const shouldReset = prevLen <= VIRTUALIZATION_THRESHOLD || sortedLeads.length < prevLen;
+    if (shouldReset) {
       const container = listContainerRef.current;
-      const start = 0;
       const end = Math.min(
         sortedLeads.length,
         Math.ceil(container.clientHeight / itemHeight) + ITEMS_PER_VIEW
       );
-      setVisibleRange({ start, end });
+      setVisibleRange({ start: 0, end });
     }
   }, [sortedLeads.length, itemHeight]);
   // Map column colors to Tailwind classes or inline styles
