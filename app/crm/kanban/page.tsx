@@ -1271,9 +1271,9 @@ const KanbanContent = () => {
                 <span>Informações <span className="hidden xs:inline">de Status</span></span>
               </button>
               <button
-                disabled
-                className="whitespace-nowrap flex items-center gap-2 bg-gray-300 text-gray-500 px-3 py-2 rounded-xl text-[11px] md:text-sm font-bold cursor-not-allowed opacity-60 shadow-sm flex-shrink-0"
-                title="Enviar giros desabilitado"
+                onClick={() => setShowSpinModal(true)}
+                className="whitespace-nowrap flex items-center gap-2 bg-white border border-gray-200 px-3 py-2 rounded-xl text-[11px] md:text-sm font-bold text-gray-700 hover:bg-[#8CD95515] hover:text-[#8CD955] hover:border-[#8CD955]/30 shadow-sm flex-shrink-0 transition-colors"
+                title="Enviar giros (roleta) para leads"
               >
                 <Gift className="w-3.5 h-3.5" />
                 <span>Enviar Giros <span className="hidden xs:inline">(Roleta)</span></span>

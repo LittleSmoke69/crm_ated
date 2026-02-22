@@ -2111,7 +2111,86 @@ const LeadCard: React.FC<LeadCardProps> = ({
                 </div>
               </div>
 
-              {/* Adicionar bônus - desabilitado (seção oculta) */}
+              {/* Enviar giros ao cliente */}
+              <div className="bg-amber-50 rounded-lg sm:rounded-xl p-4 sm:p-5 border border-amber-200/60">
+                <h3 className="text-base sm:text-lg font-bold text-gray-800 mb-3 sm:mb-4 flex items-center gap-2">
+                  <Gift className="w-4 h-4 sm:w-5 sm:h-5 text-amber-600 shrink-0" />
+                  <span>Enviar giros ao cliente</span>
+                </h3>
+                {selectedBonusType !== 'giros' ? (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedBonusType('giros')}
+                    className="flex items-center gap-2 px-4 py-2.5 bg-amber-100 hover:bg-amber-200 text-amber-800 font-bold rounded-xl border border-amber-300 transition-colors"
+                  >
+                    <Gift className="w-4 h-4" />
+                    Enviar giros (Roleta)
+                  </button>
+                ) : (
+                  <div className="space-y-3" ref={bonusDropdownRef}>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <label className="flex items-center gap-2">
+                        <span className="text-sm font-bold text-gray-700">Quantidade</span>
+                        <input
+                          type="number"
+                          min={1}
+                          max={999}
+                          value={bonusGirosQuantity}
+                          onChange={(e) => setBonusGirosQuantity(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                          className="w-20 px-2 py-1.5 border border-gray-300 rounded-lg text-sm font-semibold"
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        onClick={handleSendBonusGiros}
+                        disabled={bonusGirosSending || !bancaUrlForBonus}
+                        className="flex items-center gap-2 px-4 py-2 bg-[#8CD955] hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-xl transition-colors"
+                      >
+                        {bonusGirosSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Gift className="w-4 h-4" />}
+                        {bonusGirosSending ? 'Enviando...' : 'Enviar giros'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setSelectedBonusType(null); setBonusGirosError(null); setBonusGirosSuccessMessage(null); }}
+                        className="px-3 py-2 text-gray-600 hover:bg-gray-200 rounded-lg text-sm font-medium"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                    {bonusGirosError && (
+                      <p className="text-sm text-red-600 font-medium flex items-center gap-2">
+                        <AlertCircle className="w-4 h-4 shrink-0" />
+                        {bonusGirosError}
+                      </p>
+                    )}
+                    {bonusGirosSuccessMessage && (
+                      <p className="text-sm text-[#8CD955] font-medium flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 shrink-0" />
+                        {bonusGirosSuccessMessage}
+                      </p>
+                    )}
+                    {bonusGirosHistoryLoading ? (
+                      <div className="flex items-center gap-2 text-sm text-gray-500">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Carregando histórico...
+                      </div>
+                    ) : bonusGirosHistory.length > 0 && (
+                      <div>
+                        <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Histórico de giros enviados (este lead)</p>
+                        <ul className="space-y-1 text-sm">
+                          {bonusGirosHistory.slice(0, 10).map((h, i) => (
+                            <li key={i} className="flex items-center gap-2 text-gray-700">
+                              <Gift className="w-3.5 h-3.5 text-amber-500" />
+                              <span className="font-medium">{h.quantity} giro(s)</span>
+                              <span className="text-gray-500">{h.date ? new Date(h.date).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
 
               {/* Informações Financeiras - fluxo: Entrada → Apostas → Resultados → Bônus/Outros */}
               <div className="bg-green-50 rounded-lg sm:rounded-xl p-4 sm:p-5">
