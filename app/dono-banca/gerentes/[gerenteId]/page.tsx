@@ -19,7 +19,8 @@ import {
   BarChart3,
   Trophy,
   Loader2,
-  Kanban
+  Kanban,
+  ArrowRightLeft
 } from 'lucide-react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
@@ -654,6 +655,13 @@ export default function DetalheGerente() {
                           Acessar CRM
                         </>
                       )}
+                    </button>
+                    <button 
+                      onClick={() => router.push(`/crm/transferido?userId=${consultor.id}`)}
+                      className="w-full mt-2 py-2 bg-white border border-gray-100 rounded-lg text-xs font-bold text-gray-500 hover:bg-emerald-600 hover:text-white hover:border-emerald-600 transition-all flex items-center justify-center gap-2"
+                    >
+                      <ArrowRightLeft className="w-3.5 h-3.5" />
+                      Acessar Transferidos
                     </button>
                   </div>
                 ))}
