@@ -400,7 +400,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
     <>
       <ToastContainer toasts={toasts} onClose={removeToast} />
       <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-3 sm:p-4 overflow-y-auto">
-        <div className="bg-gray-100 border border-gray-200 rounded-2xl w-full max-w-md sm:max-w-lg shadow-2xl flex flex-col min-h-0 max-h-[calc(100vh-1.5rem)] my-auto overflow-hidden">
+        <div className="bg-gray-100 border border-gray-200 rounded-2xl w-full max-w-md sm:max-w-lg shadow-2xl flex flex-col min-h-0 max-h-[calc(100vh-2rem)] my-auto overflow-y-auto overflow-x-hidden">
         {/* Header */}
         <div className="p-4 border-b border-gray-200 flex items-center justify-between flex-shrink-0">
           <div className="flex-1 pr-2">
@@ -485,7 +485,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
         </div>
 
         {/* Lista de Grupos - scroll interno; altura limitada para o footer ficar sempre visível */}
-        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-2 py-2 custom-scrollbar" style={{ minHeight: '180px', maxHeight: '38vh' }}>
+        <div className="flex-1 min-h-[100px] overflow-y-auto overflow-x-hidden px-2 py-2 custom-scrollbar" style={{ maxHeight: '220px' }}>
           {loading ? (
             <div className="flex flex-col items-center justify-center min-h-[200px] py-12 gap-3">
               <Loader2 className="w-8 h-8 text-[#8CD955] animate-spin" />

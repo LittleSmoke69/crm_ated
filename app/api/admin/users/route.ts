@@ -4,6 +4,7 @@ import { requireAdmin, requireAdminOrSuporte } from '@/lib/middleware/permission
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { validateHierarchy, hasHierarchyCycle } from '@/lib/middleware/permissions';
+import { getEffectiveZaplotoId } from '@/lib/tenant-context';
 
 const DEFAULT_SETTINGS = {
   max_leads_per_day: 100,
@@ -18,11 +19,13 @@ const DEFAULT_SETTINGS = {
  */
 export async function GET(req: NextRequest) {
   try {
-    await requireAdminOrSuporte(req);
+    const { profile } = await requireAdminOrSuporte(req);
+    const zaplotoId = getEffectiveZaplotoId(req, profile);
 
     const { data: users, error: usersError } = await supabaseServiceRole
       .from('profiles')
-      .select('id, email, full_name, status, enroller, created_at, last_seen_at, total_online_time, total_crm_time')
+      .select('id, email, full_name, status, enroller, created_at, last_seen_at, total_online_time, total_crm_time, zaploto_id')
+      .or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`)
       .order('created_at', { ascending: false });
 
     if (usersError) {

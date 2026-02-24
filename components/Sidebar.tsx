@@ -126,6 +126,14 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
     window.location.href = '/admin';
   };
 
+  const [dynamicSidebar, setDynamicSidebar] = useState<{ items: MenuItem[]; useLegacy: boolean } | null>(null);
+
+  const iconMap: Record<string, any> = {
+    LayoutDashboard, MessageSquare, Rocket, Users, Plus, Shield, Webhook, Workflow, Bot, Layout,
+    Kanban, Activity, BarChart3, Briefcase, Settings, FlaskConical, User, ListOrdered, ClipboardList,
+    ArrowLeftToLine, ExternalLink, ArrowRightLeft,
+  };
+
   useEffect(() => {
     const loadUserProfile = async () => {
       if (typeof window === 'undefined') return;
@@ -136,6 +144,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
       
       if (!userId) {
         setUserStatus(null);
+        setDynamicSidebar(null);
         return;
       }
 
@@ -163,6 +172,41 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
 
     loadUserProfile();
   }, []);
+
+  useEffect(() => {
+    const loadSidebar = async () => {
+      if (typeof window === 'undefined' || !userStatus) return;
+      const userId = sessionStorage.getItem('user_id') || sessionStorage.getItem('profile_id') || localStorage.getItem('profile_id');
+      if (!userId) return;
+      try {
+        const res = await fetch('/api/zaploto/sidebar', { headers: { 'X-User-Id': userId }, credentials: 'include' });
+        const json = await res.json();
+        if (json.success && !json.data?.useLegacy && Array.isArray(json.data?.items) && json.data.items.length > 0) {
+          const toMenuItem = (it: { label: string; href?: string | null; icon_name?: string | null; submenu?: { label: string; href?: string | null; icon_name?: string | null }[] }): MenuItem => {
+            const Icon = (it.icon_name && iconMap[it.icon_name]) || LayoutDashboard;
+            const sub = it.submenu?.map((s: { label: string; href?: string | null; icon_name?: string | null }) => ({
+              href: s.href || '/',
+              icon: (s.icon_name && iconMap[s.icon_name]) || Settings,
+              label: s.label,
+            }));
+            return {
+              label: it.label,
+              href: it.href || undefined,
+              icon: Icon,
+              submenu: sub,
+            };
+          };
+          const items = json.data.items.map((it: unknown) => toMenuItem(it as Parameters<typeof toMenuItem>[0]));
+          setDynamicSidebar({ items, useLegacy: false });
+        } else {
+          setDynamicSidebar({ items: [], useLegacy: true });
+        }
+      } catch {
+        setDynamicSidebar({ items: [], useLegacy: true });
+      }
+    };
+    loadSidebar();
+  }, [userStatus]);
 
   const toggleSubmenu = (label: string) => {
     setOpenSubmenu(openSubmenu === label ? null : label);
@@ -380,7 +424,9 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
     ];
   };
 
-  const menuItems = getMenuItems();
+  const menuItems = (dynamicSidebar && !dynamicSidebar.useLegacy && dynamicSidebar.items.length > 0)
+    ? dynamicSidebar.items
+    : getMenuItems();
 
   // Abrir o submenu se algum item dele estiver ativo
   useEffect(() => {

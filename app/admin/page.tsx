@@ -79,6 +79,8 @@ import BancaRankingChart from '@/components/Charts/BancaRankingChart';
 import CRMSection from '@/components/Admin/CRMSection';
 import EditCampaignModal, { CampaignUpdates } from '@/components/Campaigns/EditCampaignModal';
 import { getStoredUserId } from '@/lib/utils/stored-user-id';
+import { useAdminTenantSwitcher } from '@/contexts/AdminTenantSwitcherContext';
+import { TenantSwitcher } from '@/components/Admin/TenantSwitcher';
 
 interface AdminStats {
   overview: {
@@ -221,6 +223,7 @@ export default function AdminDashboard() {
   const { checking } = useRequireAuth();
   const router = useRouter();
   const { isCollapsed, setIsCollapsed, isMobileOpen, setIsMobileOpen } = useSidebar();
+  const { getTenantHeader } = useAdminTenantSwitcher() || { getTenantHeader: () => ({}) };
   const [userId, setUserId] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminStatus, setAdminStatus] = useState<string | null>(null);
@@ -279,10 +282,14 @@ export default function AdminDashboard() {
     setUserId(id);
   }, []);
 
-  // Admin (não super_admin) vê Dashboard, Usuários, CRM e Disparo; força seção válida
+  // Admin (não super_admin): seções permitidas. Auditoria: apenas overview (Transferência via link).
   useEffect(() => {
-    if (!isSuperAdmin && adminStatus === 'admin' && activeSection !== 'overview' && activeSection !== 'users' && activeSection !== 'crm' && activeSection !== 'disparo' && activeSection !== 'loto_assistencia') {
-      setActiveSection('overview');
+    if (isSuperAdmin) return;
+    const adminAllowed = ['overview', 'users', 'crm', 'disparo', 'loto_assistencia', 'settings'];
+    const auditoriaAllowed = ['overview'];
+    const allowed = adminStatus === 'auditoria' ? auditoriaAllowed : adminAllowed;
+    if (adminStatus === 'admin' || adminStatus === 'auditoria') {
+      if (!allowed.includes(activeSection)) setActiveSection('overview');
     }
   }, [isSuperAdmin, adminStatus, activeSection]);
 
@@ -345,10 +352,10 @@ export default function AdminDashboard() {
     try {
       const [statsRes, usersRes] = await Promise.all([
         fetch('/api/admin/stats', {
-          headers: { 'X-User-Id': currentUserId },
+          headers: { ...getTenantHeader(), 'X-User-Id': currentUserId },
         }),
         fetch('/api/admin/users', {
-          headers: { 'X-User-Id': currentUserId },
+          headers: { ...getTenantHeader(), 'X-User-Id': currentUserId },
         }),
       ]);
 
@@ -687,6 +694,7 @@ export default function AdminDashboard() {
             <p className="text-sm sm:text-base text-gray-600">Gerenciamento completo do sistema</p>
           </div>
           <div className="flex items-center gap-2 sm:gap-4 flex-shrink-0">
+            {isSuperAdmin && <TenantSwitcher />}
             <button className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-white rounded-lg shadow border border-gray-200 hover:bg-gray-50 text-sm sm:text-base">
               <Calendar className="w-4 h-4" />
               <span className="hidden sm:inline">Últimos 7 dias</span>
@@ -749,8 +757,8 @@ export default function AdminDashboard() {
             </button>
           )}
 
-          {/* Transferência de Leads: super_admin e admin */}
-          {(isSuperAdmin || adminStatus === 'admin') && (
+          {/* Transferência de Leads: super_admin, admin e auditoria (auditoria: apenas visualização do histórico) */}
+          {(isSuperAdmin || adminStatus === 'admin' || adminStatus === 'auditoria') && (
             <button
               onClick={() => router.push('/admin/crm/lead-transfer')}
               className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base text-gray-700 hover:bg-gray-100"
@@ -814,7 +822,23 @@ export default function AdminDashboard() {
             </button>
           )}
 
-          {/* Campanhas, Configurações, Proxys e Maturador: apenas super_admin */}
+          {/* Configurações: super_admin (edição) ou admin (somente visualização Evolution API) */}
+          {(isSuperAdmin || adminStatus === 'admin') && (
+            <button
+              onClick={() => setActiveSection('settings')}
+              className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base ${
+                activeSection === 'settings'
+                  ? 'text-white'
+                  : 'text-gray-700 hover:bg-gray-100'
+              }`}
+              style={activeSection === 'settings' ? { backgroundColor: '#8CD955' } : {}}
+            >
+              <Settings className="w-4 h-4 sm:w-5 sm:h-5" />
+              <span>Configurações</span>
+            </button>
+          )}
+
+          {/* Campanhas, Proxys, Maturador e White Label: apenas super_admin */}
           {isSuperAdmin && (
             <>
               <button
@@ -828,19 +852,6 @@ export default function AdminDashboard() {
               >
                 <BarChart3 className="w-4 h-4 sm:w-5 sm:h-5" />
                 <span>Campanhas</span>
-              </button>
-
-              <button
-                onClick={() => setActiveSection('settings')}
-                className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base ${
-                  activeSection === 'settings'
-                    ? 'text-white'
-                    : 'text-gray-700 hover:bg-gray-100'
-                }`}
-                style={activeSection === 'settings' ? { backgroundColor: '#8CD955' } : {}}
-              >
-                <Settings className="w-4 h-4 sm:w-5 sm:h-5" />
-                <span>Configurações</span>
               </button>
 
               <button
@@ -867,6 +878,14 @@ export default function AdminDashboard() {
               >
                 <Zap className="w-4 h-4 sm:w-5 sm:h-5" />
                 <span>Maturador</span>
+              </button>
+
+              <button
+                onClick={() => router.push('/admin/zaploto')}
+                className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base text-gray-700 hover:bg-gray-100"
+              >
+                <Globe className="w-4 h-4 sm:w-5 sm:h-5" />
+                <span>White Label & Cargos</span>
               </button>
             </>
           )}
@@ -3260,6 +3279,7 @@ const SettingsSection = () => {
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingApi, setEditingApi] = useState<EvolutionApi | null>(null);
+  const [canEditEvolutionApi, setCanEditEvolutionApi] = useState(true);
   const router = useRouter();
   const [formData, setFormData] = useState({
     name: '',
@@ -3269,7 +3289,21 @@ const SettingsSection = () => {
     is_active: true,
     is_blocked_for_instances: false,
   });
-  
+
+  useEffect(() => {
+    const loadPermission = async () => {
+      try {
+        const uid = getStoredUserId();
+        if (!uid) return;
+        const res = await fetch('/api/zaploto/admin-step-permission?step=settings', { headers: { 'X-User-Id': uid } });
+        const json = await res.json();
+        if (json.success && json.data) setCanEditEvolutionApi(!!json.data.can_execute);
+      } catch {
+        setCanEditEvolutionApi(true);
+      }
+    };
+    loadPermission();
+  }, []);
 
   useEffect(() => {
     loadData();
@@ -3529,17 +3563,24 @@ const SettingsSection = () => {
               <Settings className="w-6 h-6 text-cyan-600" />
               <h2 className="text-xl sm:text-2xl font-bold text-gray-800">APIs Evolution</h2>
             </div>
-            <button
-              onClick={() => {
-                setEditingApi(null);
-                setFormData({ name: '', base_url: '', api_key_global: '', description: '', is_active: true, is_blocked_for_instances: false });
-                setShowAddModal(true);
-              }}
-              className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 text-sm sm:text-base w-full sm:w-auto shadow-md shadow-cyan-100 transition-all"
-            >
-              <Plus className="w-4 h-4 sm:w-5 sm:h-5" />
-              Adicionar API
-            </button>
+            <div className="flex items-center gap-2">
+              {!canEditEvolutionApi && (
+                <span className="text-sm text-amber-600">Somente visualização: sem permissão para alterar APIs Evolution</span>
+              )}
+              <button
+                onClick={() => {
+                  if (!canEditEvolutionApi) return;
+                  setEditingApi(null);
+                  setFormData({ name: '', base_url: '', api_key_global: '', description: '', is_active: true, is_blocked_for_instances: false });
+                  setShowAddModal(true);
+                }}
+                disabled={!canEditEvolutionApi}
+                className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base w-full sm:w-auto shadow-md shadow-cyan-100 transition-all"
+              >
+                <Plus className="w-4 h-4 sm:w-5 sm:h-5" />
+                Adicionar API
+              </button>
+            </div>
           </div>
 
           <div className="overflow-x-auto -mx-4 sm:mx-0">
@@ -3592,27 +3633,30 @@ const SettingsSection = () => {
                     <td className="p-3 sm:p-4">
                       <div className="flex gap-2">
                         <button
-                          onClick={() => handleToggleBlock(api)}
-                          className={`p-2 rounded ${
+                          onClick={() => canEditEvolutionApi && handleToggleBlock(api)}
+                          disabled={!canEditEvolutionApi}
+                          className={`p-2 rounded disabled:opacity-50 disabled:cursor-not-allowed ${
                             api.is_blocked_for_instances
                               ? 'text-orange-600 hover:bg-orange-50'
                               : 'text-gray-600 hover:bg-gray-50'
                           }`}
-                          title={api.is_blocked_for_instances ? 'Desbloquear para criação de instâncias' : 'Bloquear para criação de instâncias'}
+                          title={!canEditEvolutionApi ? 'Sem permissão' : api.is_blocked_for_instances ? 'Desbloquear para criação de instâncias' : 'Bloquear para criação de instâncias'}
                         >
                           <Lock className={`w-4 h-4 ${api.is_blocked_for_instances ? '' : 'opacity-50'}`} />
                         </button>
                         <button
-                          onClick={() => handleEdit(api)}
-                          className="p-2 text-[#8CD955] hover:bg-emerald-50 rounded"
-                          title="Editar"
+                          onClick={() => canEditEvolutionApi && handleEdit(api)}
+                          disabled={!canEditEvolutionApi}
+                          className="p-2 text-[#8CD955] hover:bg-emerald-50 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                          title={!canEditEvolutionApi ? 'Sem permissão' : 'Editar'}
                         >
                           <Edit className="w-4 h-4" />
                         </button>
                         <button
-                          onClick={() => handleDelete(api.id)}
-                          className="p-2 text-red-600 hover:bg-red-50 rounded"
-                          title="Deletar"
+                          onClick={() => canEditEvolutionApi && handleDelete(api.id)}
+                          disabled={!canEditEvolutionApi}
+                          className="p-2 text-red-600 hover:bg-red-50 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                          title={!canEditEvolutionApi ? 'Sem permissão' : 'Deletar'}
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -3648,7 +3692,8 @@ const SettingsSection = () => {
                   <div className="text-xs sm:text-sm text-gray-500">{user.full_name || 'Sem nome'}</div>
                 </div>
                 <select
-                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-700 w-full sm:w-auto"
+                  disabled={!canEditEvolutionApi}
+                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-700 w-full sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed"
                   value={user.evolution_apis.find(ua => ua.is_default)?.evolution_apis?.id || ''}
                   onChange={async (e) => {
                     const apiId = e.target.value;

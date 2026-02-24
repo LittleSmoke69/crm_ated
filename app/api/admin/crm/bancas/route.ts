@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { requireAdmin, requireAdminOrSuporte } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { getEffectiveZaplotoId } from '@/lib/tenant-context';
 
 const LOG_PREFIX = '[admin][crm][bancas]';
 
@@ -14,6 +15,7 @@ const LOG_PREFIX = '[admin][crm][bancas]';
 export async function GET(req: NextRequest) {
   try {
     const { userId, profile } = await requireAdminOrSuporte(req);
+    const zaplotoId = getEffectiveZaplotoId(req, profile);
 
     const { searchParams } = new URL(req.url);
     const withUsers = searchParams.get('with_users') === '1';
@@ -36,6 +38,7 @@ export async function GET(req: NextRequest) {
         .from('crm_bancas')
         .select('*')
         .in('id', bancaIds)
+        .or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`)
         .order('name', { ascending: true });
       if (error) {
         console.error(`${LOG_PREFIX} GET my_bancas db error:`, error.message);
@@ -48,6 +51,7 @@ export async function GET(req: NextRequest) {
           .from('crm_bancas')
           .select('*')
           .eq('id', bancaId)
+          .or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`)
           .maybeSingle();
         if (error) {
           console.error(`${LOG_PREFIX} GET single db error:`, error.message);
@@ -58,6 +62,7 @@ export async function GET(req: NextRequest) {
         const { data: list, error } = await supabaseServiceRole
           .from('crm_bancas')
           .select('*')
+          .or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`)
           .order('name', { ascending: true });
         if (error) {
           console.error(`${LOG_PREFIX} GET all db error:`, error.message);

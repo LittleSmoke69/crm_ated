@@ -27,11 +27,13 @@ export async function PUT(
     }
 
     const body = await req.json();
-    const bancaIds = body?.banca_ids;
+    const rawBancaIds = body?.banca_ids;
 
-    if (!Array.isArray(bancaIds)) {
+    if (!Array.isArray(rawBancaIds)) {
       return errorResponse('banca_ids deve ser um array de IDs (UUID)', 400);
     }
+
+    const bancaIds = rawBancaIds.map((id: unknown) => String(id));
 
     if (bancaIds.length > 0) {
       const { data: existing, error: checkError } = await supabaseServiceRole
@@ -42,8 +44,8 @@ export async function PUT(
       if (checkError) {
         return errorResponse('Erro ao validar bancas', 500);
       }
-      const validIds = (existing || []).map((b: { id: string }) => b.id);
-      const invalid = bancaIds.filter((id: string) => !validIds.includes(id));
+      const validIds = (existing || []).map((b: { id: string }) => String(b.id));
+      const invalid = bancaIds.filter((id) => !validIds.includes(id));
       if (invalid.length > 0) {
         return errorResponse(`IDs inválidos: ${invalid.join(', ')}`, 400);
       }
