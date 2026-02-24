@@ -161,9 +161,15 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         });
 
         if (response.ok) {
-          const result = await response.json();
-          if (result.success && result.data?.status) {
-            setUserStatus(result.data.status as UserStatus);
+          const text = await response.text();
+          if (!text.trim()) return;
+          try {
+            const result = JSON.parse(text);
+            if (result.success && result.data?.status) {
+              setUserStatus(result.data.status as UserStatus);
+            }
+          } catch {
+            // resposta vazia ou inválida
           }
         }
       } catch (error) {
@@ -182,7 +188,16 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
       if (!userId) return;
       try {
         const res = await fetch('/api/zaploto/sidebar', { headers: { 'X-User-Id': userId }, credentials: 'include' });
-        const json = await res.json();
+        const text = await res.text();
+        let json: { success?: boolean; data?: { useLegacy?: boolean; items?: unknown[] } } = {};
+        if (text.trim()) {
+          try {
+            json = JSON.parse(text);
+          } catch {
+            setDynamicSidebar({ items: [], useLegacy: true });
+            return;
+          }
+        }
         if (json.success && !json.data?.useLegacy && Array.isArray(json.data?.items) && json.data.items.length > 0) {
           const toMenuItem = (it: { label: string; href?: string | null; icon_name?: string | null; submenu?: { label: string; href?: string | null; icon_name?: string | null }[] }): MenuItem => {
             const Icon = (it.icon_name && iconMap[it.icon_name]) || LayoutDashboard;

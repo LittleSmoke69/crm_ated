@@ -31,7 +31,7 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
       setIsMobile(mobile);
       if (!mobile) setIsMobileOpen(false);
     };
-    
+
     checkMobile();
     window.addEventListener('resize', checkMobile);
     return () => window.removeEventListener('resize', checkMobile);
@@ -87,13 +87,22 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
         });
 
         if (response.ok) {
-          const result = await response.json();
+          const text = await response.text();
+          let result: { success?: boolean; data?: { status?: string; telefone?: string; needs_bancas_choice?: boolean; bancas?: unknown[] } } = {};
+          if (text.trim()) {
+            try {
+              result = JSON.parse(text);
+            } catch {
+              setHasCheckedTelefone(true);
+              return;
+            }
+          }
           if (result.success && result.data) {
             const d = result.data;
             setUserId(uid);
-            const canSeeBancasModal = ['consultor', 'gerente', 'gestor', 'super_admin'].includes(d.status || '');
+            const canSeeBancasModal = !!(d.status && ['consultor', 'gerente', 'gestor', 'super_admin'].includes(d.status));
             if (canSeeBancasModal) {
-              setUserStatus(d.status);
+              setUserStatus(d.status as 'consultor' | 'gerente' | 'gestor' | 'super_admin');
             }
 
             if (!d.telefone) {
@@ -167,7 +176,15 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
     });
 
     if (!response.ok) {
-      const result = await response.json();
+      const text = await response.text();
+      let result: { error?: string } = {};
+      if (text.trim()) {
+        try {
+          result = JSON.parse(text);
+        } catch {
+          // ignora
+        }
+      }
       throw new Error(result.error || 'Erro ao salvar telefone');
     }
 
@@ -178,14 +195,24 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
         credentials: 'include',
       });
       if (profileRes.ok) {
-        const pr = await profileRes.json();
+        const profileText = await profileRes.text();
+        let pr: { success?: boolean; data?: { status?: string; needs_bancas_choice?: boolean; bancas?: unknown[] } } = {};
+        if (profileText.trim()) {
+          try {
+            pr = JSON.parse(profileText);
+          } catch {
+            // ignora
+          }
+        }
         const d = pr.success ? pr.data : null;
         const canSeeBancasModal = d && ['consultor', 'gerente', 'gestor', 'super_admin'].includes(d.status || '');
         const needsBancas =
           d?.needs_bancas_choice === true || (Array.isArray(d?.bancas) && d.bancas.length === 0);
         if (canSeeBancasModal && needsBancas) {
           setUserId(uid);
-          setUserStatus(d.status);
+          if (d.status) {
+            setUserStatus(d.status as 'consultor' | 'gerente' | 'gestor' | 'super_admin');
+          }
           setShowBancasModal(true);
         }
       }
@@ -195,21 +222,48 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
   };
 
   const handleSaveBancas = async (bancaIds: string[]) => {
-    if (!userId) throw new Error('Usuário não autenticado');
-
-    const response = await fetch('/api/user/bancas', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-      credentials: 'include',
-      body: JSON.stringify({ banca_ids: bancaIds }),
-    });
-
-    if (!response.ok) {
-      const result = await response.json();
-      throw new Error(result.error || 'Erro ao salvar bancas');
+    if (!userId) {
+      console.warn('[handleSaveBancas] Tentativa de salvar sem userId');
+      throw new Error('Usuário não autenticado');
     }
 
-    setShowBancasModal(false);
+    console.log('[handleSaveBancas] Iniciando salvamento de bancas:', { userId, bancaIds });
+
+    try {
+      const response = await fetch('/api/user/bancas', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        credentials: 'include',
+        body: JSON.stringify({ banca_ids: bancaIds }),
+      });
+
+      console.log('[handleSaveBancas] Resposta recebida:', {
+        status: response.status,
+        ok: response.ok,
+        statusText: response.statusText
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        console.error('[handleSaveBancas] Erro na resposta da API:', text);
+
+        let result: { error?: string } = {};
+        if (text.trim()) {
+          try {
+            result = JSON.parse(text);
+          } catch (e) {
+            console.error('[handleSaveBancas] Falha ao parsear erro JSON:', e);
+          }
+        }
+        throw new Error(result.error || `Erro ${response.status}: ${response.statusText}`);
+      }
+
+      console.log('[handleSaveBancas] Bancas salvas com sucesso!');
+      setShowBancasModal(false);
+    } catch (error: any) {
+      console.error('[handleSaveBancas] Exceção capturada:', error);
+      throw error;
+    }
   };
 
   return (
@@ -229,11 +283,11 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
       </header>
 
       <Sidebar onSignOut={onSignOut} />
-      
+
       <main
         className="flex-1 transition-all duration-300 min-h-screen min-w-0"
-        style={{ 
-          paddingLeft: isMobile ? '0px' : `${sidebarWidth}px` 
+        style={{
+          paddingLeft: isMobile ? '0px' : `${sidebarWidth}px`
         }}
       >
         <div className="p-4 sm:p-6 lg:p-8">

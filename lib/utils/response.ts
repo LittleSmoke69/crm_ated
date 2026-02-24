@@ -10,8 +10,8 @@ export interface ApiResponse<T = any> {
 }
 
 export function successResponse<T>(
-  data: T, 
-  messageOrOptions?: string | { message?: string; pagination?: any; meta?: any }, 
+  data: T,
+  messageOrOptions?: string | { message?: string; pagination?: any; meta?: any },
   status: number = 200
 ): NextResponse {
   let message: string | undefined;
@@ -49,12 +49,22 @@ export function errorResponse(error: string | Error, status: number = 400): Next
   );
 }
 
-export function serverErrorResponse(error: string | Error | unknown): NextResponse {
+export function serverErrorResponse(error: string | Error | any): NextResponse {
   const err = typeof error === 'object' && error !== null && 'statusCode' in error
-    ? (error as Error & { statusCode?: number })
+    ? (error as any)
     : null;
   const status = err?.statusCode === 503 ? 503 : 500;
-  const message = error instanceof Error ? error.message : String(error);
+
+  let message: string;
+  if (error instanceof Error) {
+    message = error.message;
+  } else if (typeof error === 'object' && error !== null) {
+    // Tenta pegar message, hint ou details de erros do Supabase/PG
+    message = error.message || error.details || error.hint || JSON.stringify(error);
+  } else {
+    message = String(error);
+  }
+
   return errorResponse(message, status);
 }
 
