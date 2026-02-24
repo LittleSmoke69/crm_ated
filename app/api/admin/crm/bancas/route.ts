@@ -48,7 +48,7 @@ export async function GET(req: NextRequest) {
         console.error(`${LOG_PREFIX} GET my_bancas db error:`, error.message);
         return errorResponse(`Erro ao buscar bancas: ${error.message}`);
       }
-      bancas = (list ?? []) as BancaRow[];
+      bancas = (list ?? []) as unknown as BancaRow[];
     } else {
       if (bancaId) {
         const { data: single, error } = await supabaseServiceRole
@@ -61,7 +61,7 @@ export async function GET(req: NextRequest) {
           console.error(`${LOG_PREFIX} GET single db error:`, error.message);
           return errorResponse(`Erro ao buscar banca: ${error.message}`);
         }
-        bancas = single ? [single as BancaRow] : [];
+        bancas = single ? [single as unknown as BancaRow] : [];
       } else {
         const { data: list, error } = await supabaseServiceRole
           .from('crm_bancas')
@@ -72,7 +72,7 @@ export async function GET(req: NextRequest) {
           console.error(`${LOG_PREFIX} GET all db error:`, error.message);
           return errorResponse(`Erro ao buscar bancas: ${error.message}`);
         }
-        bancas = (list ?? []) as BancaRow[];
+        bancas = (list ?? []) as unknown as BancaRow[];
       }
     }
 
