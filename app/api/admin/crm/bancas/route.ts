@@ -22,7 +22,11 @@ export async function GET(req: NextRequest) {
     const myBancasOnly = searchParams.get('my_bancas') === '1';
     const bancaId = searchParams.get('banca_id')?.trim() || null;
 
-    let bancas: { id: string; name: string; url: string }[];
+    // Para o dropdown/filtro usamos apenas id, name, url (resposta mais rápida)
+    const selectFields = withUsers ? '*' : 'id, name, url';
+    type BancaRow = { id: string; name: string; url: string; [k: string]: unknown };
+
+    let bancas: BancaRow[];
     if (myBancasOnly && profile.status === 'admin') {
       const { data: row, error: ubError } = await supabaseServiceRole
         .from('user_bancas')
@@ -36,7 +40,7 @@ export async function GET(req: NextRequest) {
       const bancaIds = row.banca_ids as string[];
       const { data: list, error } = await supabaseServiceRole
         .from('crm_bancas')
-        .select('*')
+        .select(selectFields)
         .in('id', bancaIds)
         .or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`)
         .order('name', { ascending: true });
@@ -44,12 +48,12 @@ export async function GET(req: NextRequest) {
         console.error(`${LOG_PREFIX} GET my_bancas db error:`, error.message);
         return errorResponse(`Erro ao buscar bancas: ${error.message}`);
       }
-      bancas = list ?? [];
+      bancas = (list ?? []) as BancaRow[];
     } else {
       if (bancaId) {
         const { data: single, error } = await supabaseServiceRole
           .from('crm_bancas')
-          .select('*')
+          .select(selectFields)
           .eq('id', bancaId)
           .or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`)
           .maybeSingle();
@@ -57,18 +61,18 @@ export async function GET(req: NextRequest) {
           console.error(`${LOG_PREFIX} GET single db error:`, error.message);
           return errorResponse(`Erro ao buscar banca: ${error.message}`);
         }
-        bancas = single ? [single] : [];
+        bancas = single ? [single as BancaRow] : [];
       } else {
         const { data: list, error } = await supabaseServiceRole
           .from('crm_bancas')
-          .select('*')
+          .select(selectFields)
           .or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`)
           .order('name', { ascending: true });
         if (error) {
           console.error(`${LOG_PREFIX} GET all db error:`, error.message);
           return errorResponse(`Erro ao buscar bancas: ${error.message}`);
         }
-        bancas = list ?? [];
+        bancas = (list ?? []) as BancaRow[];
       }
     }
 

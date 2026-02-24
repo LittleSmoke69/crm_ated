@@ -880,11 +880,14 @@ export default function AdminLeadTransferPage() {
       const json = await res.json();
       if (res.ok && json.success && Array.isArray(json.data)) {
         setTransferLogs(json.data);
+        setManagementLoaded(true);
       } else {
         setTransferLogs([]);
+        setManagementLoaded(true);
       }
     } catch {
       setTransferLogs([]);
+      setManagementLoaded(true);
     } finally {
       setLoadingLogs(false);
     }
@@ -1102,6 +1105,7 @@ export default function AdminLeadTransferPage() {
 
   useEffect(() => {
     if (activeTab !== 'history' || !bancaId) return;
+    setManagementLoaded(true);
     loadTransferLogs();
     loadTransferStats();
   }, [activeTab, bancaId, managementFrom, managementTo, managementTransferType, conversionConsultant]);
