@@ -52,3 +52,24 @@ export async function getUserBancas(userId: string): Promise<BancaInfo[]> {
 
   return bancas;
 }
+
+/**
+ * Salva as bancas escolhidas pelo usuário na tabela user_bancas.
+ */
+export async function saveUserBancas(userId: string, bancaIds: string[]) {
+  const { error } = await supabaseServiceRole
+    .from('user_bancas')
+    .upsert({
+      user_id: userId,
+      banca_ids: bancaIds
+    }, {
+      onConflict: 'user_id'
+    });
+
+  if (error) {
+    console.error('[saveUserBancas] Erro raw do Supabase:', error);
+    throw error;
+  }
+
+  return { success: true };
+}

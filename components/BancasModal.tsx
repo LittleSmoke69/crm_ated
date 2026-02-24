@@ -40,11 +40,19 @@ const BancasModal: React.FC<BancasModalProps> = ({
     if (isOpen && userId) {
       setError(null);
       setLoadingBancas(true);
-      fetch('/api/crm/bancas', {
+      fetch('/api/crm/bancas?ignoreFilter=true', {
         headers: { 'X-User-Id': userId },
         credentials: 'include',
       })
-        .then((res) => res.json())
+        .then(async (res) => {
+          const text = await res.text();
+          if (!text.trim()) return { success: false, data: [] };
+          try {
+            return JSON.parse(text) as { success?: boolean; data?: BancaItem[] };
+          } catch {
+            return { success: false, data: [] };
+          }
+        })
         .then((data) => {
           if (data.success && Array.isArray(data.data)) {
             setBancas(data.data.filter((b: BancaItem) => b.id));
@@ -65,10 +73,10 @@ const BancasModal: React.FC<BancasModalProps> = ({
 
   const filteredBancas = searchTerm.trim()
     ? bancas.filter(
-        (b) =>
-          (b.name && b.name.toLowerCase().includes(searchTerm.toLowerCase().trim())) ||
-          (b.url && b.url.toLowerCase().includes(searchTerm.toLowerCase().trim()))
-      )
+      (b) =>
+        (b.name && b.name.toLowerCase().includes(searchTerm.toLowerCase().trim())) ||
+        (b.url && b.url.toLowerCase().includes(searchTerm.toLowerCase().trim()))
+    )
     : bancas;
 
   const handleToggle = (id: string) => {

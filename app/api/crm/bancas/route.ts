@@ -370,8 +370,17 @@ export async function GET(req: NextRequest) {
     }
 
     console.log('[CRM Bancas] GET /api/crm/bancas solicitado | Cache MISS — recalculando bancas visíveis');
-    const bancas = await promise;
-    setCachedBancas(cacheKey, bancas);
+    const ignoreFilter = req.nextUrl.searchParams.get('ignoreFilter') === 'true';
+    const bancas = ignoreFilter
+      ? await (async () => {
+        const { data } = await supabaseServiceRole.from('crm_bancas').select('id, name, url').order('name', { ascending: true });
+        return excluirBancaPorNome((data || []) as BancaRow[], NOME_BANCA_EXCLUIDA_BUSCA);
+      })()
+      : await promise;
+
+    if (!ignoreFilter) {
+      setCachedBancas(cacheKey, bancas);
+    }
 
     const res = successResponse(bancas);
     res.headers.set('Cache-Control', 'private, max-age=60');

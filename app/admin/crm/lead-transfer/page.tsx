@@ -190,6 +190,10 @@ export default function AdminLeadTransferPage() {
   const [managementFrom, setManagementFrom] = useState(() => getLast30DaysRangeSãoPaulo().from);
   const [managementTo, setManagementTo] = useState(() => getLast30DaysRangeSãoPaulo().to);
   const [managementTransferType, setManagementTransferType] = useState('');
+  /** Filtro de prazo por dias: 'all' | '1' | '5' | '10' | 'custom' | 'expired'. Valores numéricos = faltando até N dias. */
+  const [managementPrazoFilter, setManagementPrazoFilter] = useState<'all' | '1' | '5' | '10' | 'custom' | 'expired'>('all');
+  /** Quando managementPrazoFilter === 'custom', dias restantes máximos (ex.: 7 = faltando até 7 dias). */
+  const [managementPrazoCustomDays, setManagementPrazoCustomDays] = useState<string>('7');
   const [transferLogs, setTransferLogs] = useState<any[]>([]);
   const [transferStats, setTransferStats] = useState<{
     totalTransferred: number;
@@ -1112,10 +1116,26 @@ export default function AdminLeadTransferPage() {
     return map;
   }, [transferLogs]);
 
-  const totalLogsPages = Math.max(1, Math.ceil(transferLogs.length / LOGS_PAGE_SIZE));
+  /** Lista de logs filtrada por prazo (dias restantes ou expirados). A paginação usa esta lista. */
+  const transferLogsFiltered = React.useMemo(() => {
+    if (managementPrazoFilter === 'all') return transferLogs;
+    if (managementPrazoFilter === 'expired') {
+      return transferLogs.filter((log) => getTransferDeadlineInfo(log.created_at).expired);
+    }
+    const maxDays =
+      managementPrazoFilter === 'custom'
+        ? Math.max(1, Math.min(DAYS_DEADLINE_TRANSFER, parseInt(managementPrazoCustomDays, 10) || 1))
+        : parseInt(managementPrazoFilter, 10);
+    return transferLogs.filter((log) => {
+      const { daysLeft, expired } = getTransferDeadlineInfo(log.created_at);
+      return !expired && daysLeft >= 1 && daysLeft <= maxDays;
+    });
+  }, [transferLogs, managementPrazoFilter, managementPrazoCustomDays]);
+
+  const totalLogsPages = Math.max(1, Math.ceil(transferLogsFiltered.length / LOGS_PAGE_SIZE));
   const transferLogsPaginated = React.useMemo(
-    () => transferLogs.slice((logsPage - 1) * LOGS_PAGE_SIZE, logsPage * LOGS_PAGE_SIZE),
-    [transferLogs, logsPage]
+    () => transferLogsFiltered.slice((logsPage - 1) * LOGS_PAGE_SIZE, logsPage * LOGS_PAGE_SIZE),
+    [transferLogsFiltered, logsPage]
   );
 
   const chartDataByBanca = React.useMemo(() => {
@@ -1137,7 +1157,7 @@ export default function AdminLeadTransferPage() {
 
   useEffect(() => {
     setLogsPage(1);
-  }, [transferLogs.length]);
+  }, [transferLogs.length, managementPrazoFilter, managementPrazoCustomDays]);
 
   useEffect(() => {
     setModalLeadsPage(1);
@@ -1241,61 +1261,119 @@ export default function AdminLeadTransferPage() {
                   <BarChart3 className="w-5 h-5 text-[#8CD955]" />
                   Histórico e conversão
                 </h2>
-                <p className="text-sm text-gray-600 mt-1">Dados carregados por padrão (últimos 30 dias). Filtros de data, tipo e consultor para refinar.</p>
+                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">Dados carregados por padrão (últimos 30 dias). Use os filtros para refinar por período, tipo, consultor e prazo.</p>
               </div>
-              {/* Seleção de período: clique abre calendário (sem digitar data) */}
-              <div className="flex flex-wrap items-end gap-3 p-4 bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] mb-6">
-                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Período:</span>
-                <div className="flex items-center gap-2 bg-gray-50 dark:bg-[#333] border border-gray-200 dark:border-[#555] px-3 py-2 rounded-lg">
-                  <Calendar className="w-4 h-4 text-gray-400 shrink-0" aria-hidden />
-                  <DateInputDDMMYYYY
-                    value={managementFrom}
-                    onChange={setManagementFrom}
-                    maxDate={getTodaySãoPaulo()}
-                    className="w-28 bg-transparent text-sm font-semibold text-gray-700 dark:text-gray-200"
-                  />
-                  <span className="text-gray-300 dark:text-gray-500">—</span>
-                  <DateInputDDMMYYYY
-                    value={managementTo}
-                    onChange={setManagementTo}
-                    maxDate={getTodaySãoPaulo()}
-                    className="w-28 bg-transparent text-sm font-semibold text-gray-700 dark:text-gray-200"
-                  />
+              {/* Filtros: mesmo layout para todos (label + controle + legenda) */}
+              <div className="p-4 rounded-xl border border-gray-200 dark:border-[#404040] mb-6 bg-gray-50/50 dark:bg-[#1f1f1f]/50">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-4 items-end">
+                  {/* Período — layout igual ao Prazo */}
+                  <div className="lg:col-span-3">
+                    <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1.5 flex items-center gap-1">
+                      <Calendar className="w-3.5 h-3.5" /> Período
+                    </label>
+                    <div className="flex items-center gap-2 border border-gray-300 dark:border-[#555] dark:bg-[#333] rounded-lg px-3 py-2 bg-white">
+                      <DateInputDDMMYYYY
+                        value={managementFrom}
+                        onChange={setManagementFrom}
+                        maxDate={getTodaySãoPaulo()}
+                        className="w-28 bg-transparent text-sm font-medium text-gray-700 dark:text-gray-200"
+                      />
+                      <span className="text-gray-400 dark:text-gray-500">—</span>
+                      <DateInputDDMMYYYY
+                        value={managementTo}
+                        onChange={setManagementTo}
+                        maxDate={getTodaySãoPaulo()}
+                        className="w-28 bg-transparent text-sm font-medium text-gray-700 dark:text-gray-200"
+                      />
+                    </div>
+                    <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">Data inicial e final</p>
+                  </div>
+                  {/* Tipo — layout igual ao Prazo */}
+                  <div className="lg:col-span-2">
+                    <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1.5 flex items-center gap-1">
+                      <Tag className="w-3.5 h-3.5" /> Tipo
+                    </label>
+                    <select
+                      value={managementTransferType}
+                      onChange={(e) => setManagementTransferType(e.target.value)}
+                      className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                    >
+                      <option value="">Todos</option>
+                      <option value="TF">TF</option>
+                      <option value="TF1">TF1</option>
+                      <option value="TF2">TF2</option>
+                      <option value="TF3">TF3</option>
+                    </select>
+                    <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">TF, TF1, TF2, TF3</p>
+                  </div>
+                  {/* Consultor (conversão) — layout igual ao Prazo */}
+                  <div className="lg:col-span-3">
+                    <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1.5 flex items-center gap-1">
+                      <User className="w-3.5 h-3.5" /> Consultor (conversão)
+                    </label>
+                    <button
+                      type="button"
+                      onClick={openConversionConsultantModal}
+                      disabled={!bancaId || loadingConsultants}
+                      className="w-full flex items-center gap-2 border border-gray-300 dark:border-[#555] rounded-lg px-3 py-2 text-sm text-left bg-white dark:bg-[#333] dark:text-white hover:bg-gray-50 dark:hover:bg-[#404040] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <span className="truncate text-gray-800 dark:text-white">
+                        {!bancaId ? 'Selecione a banca' : loadingConsultants ? 'Carregando...' : consultants.length === 0 ? 'Nenhum consultor' : conversionConsultant ? (consultants.find((c) => c.email === conversionConsultant)?.full_name || conversionConsultant) : 'Selecionar consultor'}
+                      </span>
+                      <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0 ml-auto" />
+                    </button>
+                    <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">Consultor destino para conversão</p>
+                  </div>
+                  {/* Prazo — layout padrão */}
+                  <div className="lg:col-span-2">
+                    <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1.5 flex items-center gap-1">
+                      <Clock className="w-3.5 h-3.5" /> Prazo
+                    </label>
+                    <div className="flex gap-2 items-center">
+                      <select
+                        value={managementPrazoFilter}
+                        onChange={(e) => setManagementPrazoFilter(e.target.value as 'all' | '1' | '5' | '10' | 'custom' | 'expired')}
+                        className="flex-1 min-w-0 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                      >
+                        <option value="all">Todos</option>
+                        <option value="1">1 dia</option>
+                        <option value="5">5 dias</option>
+                        <option value="10">10 dias</option>
+                        <option value="custom">Personalizado</option>
+                        <option value="expired">Expirados</option>
+                      </select>
+                      {managementPrazoFilter === 'custom' && (
+                        <div className="flex items-center gap-1 shrink-0">
+                          <input
+                            type="number"
+                            min={1}
+                            max={DAYS_DEADLINE_TRANSFER}
+                            value={managementPrazoCustomDays}
+                            onChange={(e) => setManagementPrazoCustomDays(e.target.value.replace(/\D/g, '').slice(0, 2) || '1')}
+                            className="w-12 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-2 text-sm text-center tabular-nums focus:ring-2 focus:ring-[#8CD955]"
+                            title="Faltando até quantos dias para expirar"
+                          />
+                          <span className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">dias</span>
+                        </div>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">Dias que faltam para expirar</p>
+                  </div>
+                  {/* Botão Aplicar — alinhado ao mesmo layout (items-end) */}
+                  <div className="lg:col-span-2 flex flex-col justify-end">
+                    <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1.5 invisible">Ação</label>
+                    <button
+                      type="button"
+                      onClick={() => { if (bancaId) { loadTransferLogs(); loadTransferStats(); } else { showToast('Selecione a banca para aplicar os filtros.', 'info'); } }}
+                      className="w-full px-4 py-2 rounded-lg text-sm font-medium bg-[#8CD955] text-white hover:bg-[#7BC84A] border border-[#8CD955]/50 transition-colors shadow-sm focus:ring-2 focus:ring-[#8CD955] focus:ring-offset-1 dark:focus:ring-offset-[#2a2a2a]"
+                    >
+                      Aplicar filtros
+                    </button>
+                    <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">Atualiza dados e tabela</p>
+                  </div>
                 </div>
-                <div className="border-l border-gray-200 dark:border-[#404040] pl-3 ml-1">
-                  <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Tipo</label>
-                  <select value={managementTransferType} onChange={(e) => setManagementTransferType(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[100px]">
-                    <option value="">Todos</option>
-                    <option value="TF">TF</option>
-                    <option value="TF1">TF1</option>
-                    <option value="TF2">TF2</option>
-                    <option value="TF3">TF3</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Consultor (conversão)</label>
-                  <button
-                    type="button"
-                    onClick={openConversionConsultantModal}
-                    disabled={!bancaId || loadingConsultants}
-                    className="flex items-center gap-2 min-w-[200px] max-w-full border border-gray-300 dark:border-[#555] rounded-lg px-3 py-2 text-sm text-left bg-white dark:bg-[#333] dark:text-white hover:bg-gray-50 dark:hover:bg-[#404040] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <User className="w-4 h-4 text-gray-500 dark:text-gray-400 flex-shrink-0" />
-                    <span className="truncate text-gray-800 dark:text-white">
-                      {!bancaId ? 'Selecione a banca' : loadingConsultants ? 'Carregando...' : consultants.length === 0 ? 'Nenhum consultor' : conversionConsultant ? (consultants.find((c) => c.email === conversionConsultant)?.full_name || conversionConsultant) : 'Selecionar consultor (conversão)'}
-                    </span>
-                    <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0 ml-auto" />
-                  </button>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => { if (bancaId) { loadTransferLogs(); loadTransferStats(); } else { showToast('Selecione a banca para aplicar os filtros.', 'info'); } }}
-                  className="px-4 py-2 rounded-lg text-sm font-medium bg-[#8CD955] text-white hover:bg-[#7BC84A] border border-[#8CD955]/50 transition-colors"
-                >
-                  Aplicar filtros
-                </button>
               </div>
-              <p className="text-xs text-gray-500 mb-4 -mt-2 px-4">Os cards e a tabela abaixo mostram apenas transferências no intervalo do período selecionado.</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-4 -mt-2">Os cards e a tabela usam o período selecionado. O filtro &quot;Prazo&quot; mostra itens por dias restantes (1, 5, 10 ou personalizado) ou apenas expirados.</p>
               {managementLoaded && (
                 <>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
@@ -1427,6 +1505,8 @@ export default function AdminLeadTransferPage() {
                       <tr><td colSpan={12} className="p-8 text-center text-gray-500 dark:text-white">Selecione a banca para ver o histórico.</td></tr>
                     ) : transferLogs.length === 0 ? (
                       <tr><td colSpan={12} className="p-8 text-center text-gray-500 dark:text-white">Nenhuma transferência nos filtros. Ajuste data/tipo ou faça uma nova transferência.</td></tr>
+                    ) : transferLogsFiltered.length === 0 ? (
+                      <tr><td colSpan={12} className="p-8 text-center text-gray-500 dark:text-white">Nenhuma transferência corresponde ao filtro de prazo. Ajuste &quot;Prazo&quot; ou aplique &quot;Todos&quot;.</td></tr>
                     ) : (
                       transferLogsPaginated.map((log) => {
                         const ids = Array.isArray(log.leads_ids) ? log.leads_ids : [];
@@ -1476,10 +1556,13 @@ export default function AdminLeadTransferPage() {
                   </tbody>
                 </table>
               </div>
-              {!loadingLogs && bancaId && transferLogs.length > 0 && totalLogsPages > 1 && (
+              {!loadingLogs && bancaId && transferLogsFiltered.length > 0 && totalLogsPages > 1 && (
                 <div className="flex flex-wrap items-center justify-between gap-3 mt-4 px-1">
                   <p className="text-sm text-gray-600 dark:text-white">
-                    Exibindo <strong>{(logsPage - 1) * LOGS_PAGE_SIZE + 1}</strong> a <strong>{Math.min(logsPage * LOGS_PAGE_SIZE, transferLogs.length)}</strong> de <strong>{transferLogs.length}</strong> transferências
+                    Exibindo <strong>{(logsPage - 1) * LOGS_PAGE_SIZE + 1}</strong> a <strong>{Math.min(logsPage * LOGS_PAGE_SIZE, transferLogsFiltered.length)}</strong> de <strong>{transferLogsFiltered.length}</strong> transferências
+                    {transferLogsFiltered.length !== transferLogs.length && (
+                      <span className="text-gray-500 dark:text-gray-400"> (filtro de prazo aplicado)</span>
+                    )}
                   </p>
                   <div className="flex items-center gap-2">
                     <button
