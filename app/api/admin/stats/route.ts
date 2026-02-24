@@ -3,6 +3,7 @@ import { requireAdmin } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { rateLimitService } from '@/lib/services/rate-limit-service';
+import { getEffectiveZaplotoId } from '@/lib/tenant-context';
 
 /**
  * GET /api/admin/stats - Retorna estatísticas gerais do sistema.
@@ -10,13 +11,31 @@ import { rateLimitService } from '@/lib/services/rate-limit-service';
  */
 export async function GET(req: NextRequest) {
   try {
-    const { userId } = await requireAdmin(req);
+    const { profile } = await requireAdmin(req);
+    const zaplotoId = getEffectiveZaplotoId(req, profile);
 
     const now = new Date();
     const startOfTodayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
     const endOfTodayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0, 0));
 
-    // Busca todas as estatísticas (incluindo disparos CRM / message_schedules)
+    const { data: tenantProfiles } = await supabaseServiceRole
+      .from('profiles')
+      .select('id')
+      .or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`);
+    const tenantUserIds = (tenantProfiles || []).map((p: { id: string }) => p.id);
+
+    if (tenantUserIds.length === 0) {
+      return successResponse({
+        overview: { totalUsers: 0, totalCampaigns: 0, totalContacts: 0, totalInstances: 0, totalGroups: 0 },
+        campaigns: { total: 0, running: 0, paused: 0, completed: 0, failed: 0, totalProcessed: 0, totalFailed: 0, totalAdded: 0, successRate: 0 },
+        instances: { total: 0, connected: 0, disconnected: 0 },
+        contacts: { total: 0, pending: 0, added: 0, sent: 0 },
+        dispatches: { dispatchedToday: 0, nextExecutions: 0, failures: 0, successTotal: 0 },
+        chartData: [],
+      });
+    }
+
+    // Busca todas as estatísticas (filtradas por tenant)
     const [
       usersResult,
       campaignsResult,
@@ -31,17 +50,19 @@ export async function GET(req: NextRequest) {
       dispatchesFailedResult,
       dispatchesSuccessTotalResult,
     ] = await Promise.all([
-      supabaseServiceRole.from('profiles').select('id', { count: 'exact', head: true }),
-      supabaseServiceRole.from('campaigns').select('id', { count: 'exact', head: true }),
-      supabaseServiceRole.from('searches').select('id', { count: 'exact', head: true }),
-      supabaseServiceRole.from('evolution_instances').select('id', { count: 'exact', head: true }),
-      supabaseServiceRole.from('whatsapp_groups').select('id', { count: 'exact', head: true }),
+      supabaseServiceRole.from('profiles').select('id', { count: 'exact', head: true }).or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`),
+      supabaseServiceRole.from('campaigns').select('id', { count: 'exact', head: true }).in('user_id', tenantUserIds),
+      supabaseServiceRole.from('searches').select('id', { count: 'exact', head: true }).in('user_id', tenantUserIds),
+      supabaseServiceRole.from('evolution_instances').select('id', { count: 'exact', head: true }).in('user_id', tenantUserIds),
+      supabaseServiceRole.from('whatsapp_groups').select('id', { count: 'exact', head: true }).in('user_id', tenantUserIds),
       supabaseServiceRole
         .from('campaigns')
-        .select('status, processed_contacts, failed_contacts, total_contacts'),
+        .select('status, processed_contacts, failed_contacts, total_contacts')
+        .in('user_id', tenantUserIds),
       supabaseServiceRole
         .from('evolution_instances')
-        .select('status, is_active'),
+        .select('status, is_active')
+        .in('user_id', tenantUserIds),
       supabaseServiceRole
         .from('campaign_contacts')
         .select('status'),

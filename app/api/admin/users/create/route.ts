@@ -11,7 +11,7 @@ import { randomUUID } from 'crypto';
  */
 export async function POST(req: NextRequest) {
   try {
-    await requireAdminOrSuporte(req);
+    const { profile } = await requireAdminOrSuporte(req);
 
     const body = await req.json();
     const { email, fullName, password, status, enroller, bancaName, bancaUrl, banca_ids: bancaIds } = body;
@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
     const passwordHash = bcrypt.hashSync(password, bcrypt.genSaltSync(10));
     const newUserId = randomUUID();
 
-    // Cria usuário
+    // Cria usuário (zaploto_id do admin que cria, para isolamento white label)
     const insertData: any = {
       user_id: newUserId,
       email: email.trim().toLowerCase(),
@@ -58,6 +58,7 @@ export async function POST(req: NextRequest) {
       password_hash: passwordHash,
       status: status,
       enroller: enroller || null,
+      zaploto_id: profile?.zaploto_id || null,
       created_at: new Date().toISOString(),
     };
 

@@ -239,6 +239,7 @@ export default function AdminLeadTransferPage() {
 
   const [currentStep, setCurrentStep] = useState(1);
   const [activeTab, setActiveTab] = useState<'transfer' | 'history'>('transfer');
+  const [canExecuteTransfer, setCanExecuteTransfer] = useState(true);
   const [confirmAcknowledged, setConfirmAcknowledged] = useState(false);
   const [showSelectedOnly, setShowSelectedOnly] = useState(false);
   const [daysInactivePreset, setDaysInactivePreset] = useState<string>('90');
@@ -272,6 +273,28 @@ export default function AdminLeadTransferPage() {
     'Content-Type': 'application/json',
     'X-User-Id': userId ?? '',
   });
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !userId) return;
+    const loadPermission = async () => {
+      try {
+        const res = await fetch('/api/zaploto/admin-step-permission?step=lead_transfer', { headers: headers() });
+        const json = await res.json();
+        if (json.success && json.data) {
+          const { visible, can_execute } = json.data;
+          if (!visible) {
+            router.replace('/admin');
+            return;
+          }
+          setCanExecuteTransfer(!!can_execute);
+          if (!can_execute) setActiveTab('history');
+        }
+      } catch {
+        setCanExecuteTransfer(true);
+      }
+    };
+    loadPermission();
+  }, [userId, router]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !userId) return;
@@ -1487,7 +1510,7 @@ export default function AdminLeadTransferPage() {
             {STEPS.map((step, idx) => {
               const isActive = currentStep === step.id;
               const isPast = currentStep > step.id;
-              const canGo = isPast || isActive;
+              const canGo = (isPast || isActive) && (canExecuteTransfer || step.id === 1);
               return (
                 <React.Fragment key={step.id}>
                   {idx > 0 && <ChevronRight className="w-4 h-4 text-gray-300 flex-shrink-0" />}
@@ -1565,8 +1588,11 @@ export default function AdminLeadTransferPage() {
             )}
           </div>
           {loadingBancas && <p className="text-xs text-gray-500 mt-1">Carregando bancas...</p>}
-            <div className="mt-4 flex justify-end">
-              <button type="button" onClick={() => setCurrentStep(2)} disabled={!bancaId} className="px-4 py-2 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A] disabled:opacity-50">Próximo</button>
+            <div className="mt-4 flex justify-end gap-2 items-center">
+              {!canExecuteTransfer && (
+                <span className="text-sm text-amber-600">Somente visualização: sem permissão para executar transferência</span>
+              )}
+              <button type="button" onClick={() => setCurrentStep(2)} disabled={!bancaId || !canExecuteTransfer} className="px-4 py-2 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A] disabled:opacity-50">Próximo</button>
             </div>
           </div>
           )}
@@ -1849,7 +1875,7 @@ export default function AdminLeadTransferPage() {
                 <div className="flex gap-2">
                   <button type="button" onClick={() => setSelectedLeadIds(new Set())} className="px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 text-sm hover:bg-gray-50">Limpar</button>
                   <button type="button" onClick={() => setShowSelectedModal(true)} className="px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 text-sm hover:bg-gray-50">Ver selecionados</button>
-                  <button type="button" onClick={() => setCurrentStep(5)} className="px-4 py-1.5 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A]">Transferir {selectedLeadIds.size} lead(s)</button>
+                  <button type="button" onClick={() => setCurrentStep(5)} disabled={!canExecuteTransfer} className="px-4 py-1.5 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A] disabled:opacity-50">Transferir {selectedLeadIds.size} lead(s)</button>
                 </div>
               </div>
             )}
@@ -2414,7 +2440,7 @@ export default function AdminLeadTransferPage() {
             <p className="text-xs text-gray-500 mb-4">Esta ação será registrada em auditoria.</p>
             <div className="flex gap-3 justify-end">
               <button type="button" onClick={() => { setShowConfirmModal(false); setConfirmAcknowledged(false); }} disabled={transferring} className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50">Cancelar</button>
-              <button type="button" onClick={confirmTransfer} disabled={transferring || (selectedCount > 50 && !confirmAcknowledged)} className="px-4 py-2 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A] disabled:opacity-50 flex items-center gap-2">
+              <button type="button" onClick={confirmTransfer} disabled={transferring || !canExecuteTransfer || (selectedCount > 50 && !confirmAcknowledged)} className="px-4 py-2 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A] disabled:opacity-50 flex items-center gap-2">
                 {transferring ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                 Confirmar transferência
               </button>

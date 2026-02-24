@@ -14,6 +14,7 @@ export interface UserProfile {
   banca_url?: string | null;
   banca_name?: string | null;
   telefone?: string | null;
+  zaploto_id?: string | null;
 }
 
 const GET_PROFILE_MAX_RETRIES = 3;
@@ -42,7 +43,7 @@ export async function getUserProfile(userId: string): Promise<UserProfile | null
     try {
       const { data, error } = await supabaseServiceRole
         .from('profiles')
-        .select('id, email, full_name, status, enroller, created_at, banca_url, banca_name, telefone')
+        .select('id, email, full_name, status, enroller, created_at, banca_url, banca_name, telefone, zaploto_id')
         .eq('id', userId)
         .single();
 
@@ -83,9 +84,9 @@ export function isSuperAdmin(profile: UserProfile | null): boolean {
   return profile?.status === 'super_admin';
 }
 
-/** Acesso ao painel administrativo: apenas super_admin e admin. Dono de banca não acessa. */
+/** Acesso ao painel administrativo: super_admin, admin e auditoria (auditoria com permissões restritas por step). */
 export function hasFullAdminAccess(profile: UserProfile | null): boolean {
-  return profile?.status === 'super_admin' || profile?.status === 'admin';
+  return profile?.status === 'super_admin' || profile?.status === 'admin' || profile?.status === 'auditoria';
 }
 
 /** Acesso à hierarquia e alterações na rede: super_admin, admin e suporte. */

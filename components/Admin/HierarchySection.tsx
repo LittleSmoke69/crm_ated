@@ -485,7 +485,9 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
           const getData = await getRes.json();
           const currentIds = (getData.data?.banca_ids || []) as string[];
           const isAddingBanca = !currentIds.includes(assignFormData.bancaId);
-          if (currentIds.length > 0 && isAddingBanca && 'enroller' in patchPayload) {
+          const selectedUser = (allUsers || []).find((x: any) => x.id === assignSelectedUserId);
+          const sameRoleAddingBanca = selectedUser?.status === assignFormData.status && currentIds.length > 0 && isAddingBanca;
+          if (sameRoleAddingBanca && 'enroller' in patchPayload) {
             const { enroller: _, ...rest } = patchPayload;
             patchPayload = rest as Record<string, unknown>;
           }
@@ -497,19 +499,22 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
           const data = await res.json();
           if (!res.ok || !data.success) {
             const u = (allUsers || []).find((x: any) => x.id === assignSelectedUserId);
-            errors.push(u ? `${u.full_name || u.email}: ${data.message || 'Erro'}` : data.message || 'Erro');
+            const msg = data.message || data.error || 'Erro';
+            errors.push(u ? `${u.full_name || u.email}: ${msg}` : msg);
             continue;
           }
           if (isAddingBanca) {
+            const bancaIdsToSend = [...currentIds, assignFormData.bancaId].map((id) => String(id));
             const putRes = await fetch(`/api/admin/users/${assignSelectedUserId}/bancas`, {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json', 'X-User-Id': userId! },
-              body: JSON.stringify({ banca_ids: [...currentIds, assignFormData.bancaId] }),
+              body: JSON.stringify({ banca_ids: bancaIdsToSend }),
             });
             if (!putRes.ok) {
               const putData = await putRes.json();
               const u = (allUsers || []).find((x: any) => x.id === assignSelectedUserId);
-              errors.push(u ? `${u.full_name || u.email}: ${putData.error || 'Erro ao vincular'}` : putData.error || 'Erro');
+              const putMsg = putData.message || putData.error || 'Erro ao vincular';
+              errors.push(u ? `${u.full_name || u.email}: ${putMsg}` : putMsg);
               continue;
             }
           }
@@ -522,7 +527,8 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
           const data = await res.json();
           if (!res.ok || !data.success) {
             const u = (allUsers || []).find((x: any) => x.id === assignSelectedUserId);
-            errors.push(u ? `${u.full_name || u.email}: ${data.message || 'Erro'}` : data.message || 'Erro');
+            const msg = data.message || data.error || 'Erro';
+            errors.push(u ? `${u.full_name || u.email}: ${msg}` : msg);
             continue;
           }
         }
