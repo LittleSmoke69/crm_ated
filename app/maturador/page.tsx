@@ -59,7 +59,7 @@ interface MasterInstance {
 export default function MaturadorPage() {
   const { userId, checking } = useRequireAuth();
   const router = useRouter();
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [canAccess, setCanAccess] = useState(false);
   const [jobs, setJobs] = useState<MaturationJob[]>([]);
   const [plans, setPlans] = useState<MaturationPlan[]>([]);
   const [masterInstances, setMasterInstances] = useState<MasterInstance[]>([]);
@@ -100,16 +100,16 @@ export default function MaturadorPage() {
     }
 
     if (userId) {
-      checkAdmin();
+      checkAccess();
     }
   }, [userId, checking, router]);
 
-  // Carrega dados quando confirmado como admin
+  // Carrega dados quando confirmado que pode acessar
   useEffect(() => {
-    if (isAdmin && userId) {
+    if (canAccess && userId) {
       loadData();
     }
-  }, [isAdmin, userId, statusFilter]);
+  }, [canAccess, userId, statusFilter]);
 
   // Polling: atualiza a lista de jobs enquanto houver algum rodando (para refletir steps e conclusão)
   const hasRunningJobs = jobs.some((j) => j.status === 'running');
@@ -117,14 +117,14 @@ export default function MaturadorPage() {
     loadDataRef.current = loadData;
   });
   useEffect(() => {
-    if (!isAdmin || !userId || !hasRunningJobs) return;
+    if (!canAccess || !userId || !hasRunningJobs) return;
     const interval = setInterval(() => loadDataRef.current?.(), 3500);
     return () => clearInterval(interval);
-  }, [isAdmin, userId, hasRunningJobs]);
+  }, [canAccess, userId, hasRunningJobs]);
 
-  async function checkAdmin() {
+  async function checkAccess() {
     try {
-      const response = await fetch('/api/admin/check', {
+      const response = await fetch('/api/maturation/can-access', {
         headers: {
           'Content-Type': 'application/json',
           'X-User-Id': userId || '',
@@ -132,18 +132,18 @@ export default function MaturadorPage() {
       });
 
       const result = await response.json();
-      
-      if (!result.success || !result.data?.isAdmin) {
-        setIsAdmin(false);
+
+      if (!result.success || !result.data?.canAccess) {
+        setCanAccess(false);
         setLoading(false);
         setTimeout(() => router.push('/'), 2000);
         return;
       }
 
-      setIsAdmin(true);
+      setCanAccess(true);
     } catch (error) {
-      console.error('Erro ao verificar admin:', error);
-      setIsAdmin(false);
+      console.error('Erro ao verificar acesso ao Maturador:', error);
+      setCanAccess(false);
       setLoading(false);
       setTimeout(() => router.push('/'), 2000);
     }
@@ -382,16 +382,16 @@ export default function MaturadorPage() {
     });
   }
 
-  // Se não é admin, mostra mensagem de acesso negado
-  if (!isAdmin && !loading) {
+  // Sem permissão (nem admin nem cargo com Maturador na sidebar): acesso negado
+  if (!canAccess && !loading) {
     return (
       <Layout>
         <div className="flex items-center justify-center min-h-[60vh]">
           <div className="text-center">
             <AlertTriangle className="w-16 h-16 text-yellow-500 mx-auto mb-4" />
-            <h2 className="text-xl font-semibold text-gray-700 mb-2">Acesso Restrito</h2>
-            <p className="text-gray-500">Esta página é exclusiva para administradores.</p>
-            <p className="text-gray-400 text-sm mt-2">Redirecionando...</p>
+            <h2 className="text-xl font-semibold text-gray-700 dark:text-gray-200 mb-2">Acesso negado</h2>
+            <p className="text-gray-500 dark:text-gray-400">Você não tem permissão para acessar o Maturador.</p>
+            <p className="text-gray-400 dark:text-gray-500 text-sm mt-2">Redirecionando...</p>
           </div>
         </div>
       </Layout>

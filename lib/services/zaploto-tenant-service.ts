@@ -210,6 +210,37 @@ export async function getAdminStepsForRole(
   return steps.sort((a, b) => a.sort_order - b.sort_order);
 }
 
+/**
+ * Retorna códigos dos itens da sidebar visíveis para o role.
+ * Usado para regra: "quem tem item da sidebar visível tem acesso total àquela funcionalidade".
+ */
+export async function getVisibleSidebarCodesForRole(
+  zaplotoId: string,
+  roleId: string
+): Promise<Set<string>> {
+  const { data: roleSidebar } = await supabaseServiceRole
+    .from('zaploto_role_sidebar')
+    .select('sidebar_item_id')
+    .eq('zaploto_id', zaplotoId)
+    .eq('role_id', roleId)
+    .eq('visible', true);
+
+  if (!roleSidebar?.length) return new Set();
+
+  const ids = roleSidebar.map((r: { sidebar_item_id: string }) => r.sidebar_item_id);
+  const { data: items } = await supabaseServiceRole
+    .from('zaploto_sidebar_items')
+    .select('code')
+    .in('id', ids);
+
+  const codes = new Set<string>();
+  for (const i of items || []) {
+    const code = (i as { code: string }).code;
+    if (code) codes.add(code);
+  }
+  return codes;
+}
+
 /** Retorna permissão (visible, can_execute) para um step específico */
 export async function getAdminStepPermission(
   zaplotoId: string,
@@ -226,6 +257,15 @@ export async function getAdminStepPermission(
     .eq('code', stepCode)
     .maybeSingle();
   if (!step) return { visible: false, can_execute: false };
+
+  // Regra: se o cargo tem permissão de ver o item na sidebar, tem acesso total àquela funcionalidade
+  const sidebarCodes = await getVisibleSidebarCodesForRole(zaplotoId, role.id);
+  if (sidebarCodes.has('painel_admin')) {
+    return { visible: true, can_execute: true };
+  }
+  if (sidebarCodes.has(stepCode)) {
+    return { visible: true, can_execute: true };
+  }
 
   const { data } = await supabaseServiceRole
     .from('zaploto_role_admin_steps')

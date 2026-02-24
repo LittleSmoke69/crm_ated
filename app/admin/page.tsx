@@ -2756,10 +2756,10 @@ const UsersSection = ({
                           />
                         </div>
                       ) : (
-                        <div>
-                          <div className="font-bold text-gray-800 text-sm">{user.full_name || 'Sem nome'}</div>
-                          <div className="text-xs text-gray-500">{user.email}</div>
-                          <div className="text-[10px] text-gray-400 mt-1 font-mono">{user.id}</div>
+                        <div className="text-gray-800 dark:text-white">
+                          <div className="font-bold text-sm">{user.full_name || 'Sem nome'}</div>
+                          <div className="text-xs opacity-90">{user.email}</div>
+                          <div className="text-[10px] opacity-80 mt-1 font-mono">{user.id}</div>
                         </div>
                       )}
                     </td>
