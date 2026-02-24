@@ -29,115 +29,20 @@ export interface FlowCanvasWithSelectionProps {
   onNodeClick?: (nodeId: string) => void;
   onNodeAdd?: (nodeType: string, position: { x: number; y: number }) => void;
   readonly?: boolean;
-  executingNodes?: Set<string>; // IDs dos nodes que estão sendo executados
-  completedNodes?: Set<string>; // IDs dos nodes que foram completados
-  failedNodes?: Set<string>; // IDs dos nodes que falharam
+  executingNodes?: Set<string>;
+  completedNodes?: Set<string>;
+  failedNodes?: Set<string>;
 }
 
-// Node customizado: Webhook Trigger
-const WebhookTriggerNode: React.FC<NodeProps & { executing?: boolean; completed?: boolean; failed?: boolean }> = ({ data, selected, executing, completed, failed }) => {
-  const borderClass = getBorderClass(executing || false, completed || false, failed || false, selected || false, 'border-blue-500', 'border-blue-200');
-  return (
-    <div className={`relative px-4 py-3 bg-blue-50 border-2 rounded-lg min-w-[200px] transition-all ${borderClass}`}>
-      <ExecutionIndicator executing={executing || false} />
-      <Handle type="source" position={Position.Right} />
-      <div className="flex items-center gap-2 mb-2 relative z-10">
-        <Workflow className={`w-5 h-5 text-blue-600 ${executing ? 'animate-spin' : ''}`} />
-        <div className="font-semibold text-blue-900">{data?.label || 'Webhook Trigger'}</div>
-        {executing && (
-          <div className="ml-auto w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-        )}
-        {completed && (
-          <div className="ml-auto w-2 h-2 bg-green-600 rounded-full" />
-        )}
-        {failed && (
-          <div className="ml-auto w-2 h-2 bg-red-500 rounded-full" />
-        )}
-      </div>
-      <div className="text-xs text-blue-700 relative z-10">
-        {data?.config?.filters?.event_type || 'Todos os eventos'}
-      </div>
-      {data?.config?.filters?.action && (
-        <div className="text-xs text-blue-600 mt-1 relative z-10">
-          Action: {data.config.filters.action}
-        </div>
-      )}
-    </div>
-  );
-};
-
-// Node customizado: Switch
-const SwitchNode: React.FC<NodeProps & { executing?: boolean; completed?: boolean; failed?: boolean }> = ({ data, selected, executing, completed, failed }) => {
-  const rules = data?.config?.rules || [];
-  const borderClass = getBorderClass(executing || false, completed || false, failed || false, selected || false, 'border-purple-500', 'border-purple-200');
-  return (
-    <div className={`relative px-4 py-3 bg-purple-50 border-2 rounded-lg min-w-[200px] transition-all ${borderClass}`}>
-      <ExecutionIndicator executing={executing || false} />
-      <Handle type="target" position={Position.Left} />
-      <div className="flex items-center gap-2 mb-2 relative z-10">
-        <GitBranch className={`w-5 h-5 text-purple-600 ${executing ? 'animate-pulse' : ''}`} />
-        <div className="font-semibold text-purple-900">{data?.label || 'Switch'}</div>
-        {executing && (
-          <div className="ml-auto w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-        )}
-        {completed && (
-          <div className="ml-auto w-2 h-2 bg-green-600 rounded-full" />
-        )}
-        {failed && (
-          <div className="ml-auto w-2 h-2 bg-red-500 rounded-full" />
-        )}
-      </div>
-      {rules.length > 0 && (
-        <div className="text-xs text-purple-700 relative z-10">
-          {rules.length} regra(s)
-        </div>
-      )}
-      {/* Handles de saída dinâmicos baseados nas regras */}
-      {rules.map((rule: any, idx: number) => (
-        <Handle
-          key={idx}
-          type="source"
-          position={Position.Right}
-          id={rule.output || `rule-${idx}`}
-          style={{ top: `${60 + idx * 25}px` }}
-        />
-      ))}
-    </div>
-  );
-};
-
-// Node customizado: Random Picker
-const RandomPickerNode: React.FC<NodeProps & { executing?: boolean; completed?: boolean; failed?: boolean }> = ({ data, selected, executing, completed, failed }) => {
-  const borderClass = getBorderClass(executing || false, completed || false, failed || false, selected || false, 'border-orange-500', 'border-orange-200');
-  return (
-    <div className={`relative px-4 py-3 bg-orange-50 border-2 rounded-lg min-w-[200px] transition-all ${borderClass}`}>
-      <ExecutionIndicator executing={executing || false} />
-      <Handle type="target" position={Position.Left} />
-      <Handle type="source" position={Position.Right} />
-      <div className="flex items-center gap-2 mb-2 relative z-10">
-        <Shuffle className={`w-5 h-5 text-orange-600 ${executing ? 'animate-spin' : ''}`} />
-        <div className="font-semibold text-orange-900">{data?.label || 'Random Picker'}</div>
-        {executing && (
-          <div className="ml-auto w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-        )}
-        {completed && (
-          <div className="ml-auto w-2 h-2 bg-green-600 rounded-full" />
-        )}
-        {failed && (
-          <div className="ml-auto w-2 h-2 bg-red-500 rounded-full" />
-        )}
-      </div>
-      {data?.config?.messages && (
-        <div className="text-xs text-orange-700 relative z-10">
-          {data.config.messages.length} mensagem(ns)
-        </div>
-      )}
-    </div>
-  );
-};
-
 // Helper para classes de borda baseado no estado de execução
-const getBorderClass = (executing: boolean, completed: boolean, failed: boolean, selected: boolean, defaultSelected: string, defaultUnselected: string) => {
+const getBorderClass = (
+  executing: boolean,
+  completed: boolean,
+  failed: boolean,
+  selected: boolean,
+  defaultSelected: string,
+  defaultUnselected: string
+) => {
   if (executing) return 'border-green-500 border-4 shadow-lg shadow-green-500/50 animate-pulse';
   if (completed) return 'border-green-600 border-2';
   if (failed) return 'border-red-500 border-2';
@@ -156,28 +61,121 @@ const ExecutionIndicator: React.FC<{ executing: boolean }> = ({ executing }) => 
   );
 };
 
-// Node customizado: Send Message
-const SendMessageNode: React.FC<NodeProps & { executing?: boolean; completed?: boolean; failed?: boolean }> = ({ data, selected, executing, completed, failed }) => {
-  const borderClass = getBorderClass(executing || false, completed || false, failed || false, selected || false, 'border-green-500', 'border-green-200');
+// Node customizado: Webhook Trigger
+const WebhookTriggerNode: React.FC<NodeProps & { executing?: boolean; completed?: boolean; failed?: boolean }> = ({ data, selected, executing, completed, failed }) => {
+  const borderClass = getBorderClass(
+    executing || false, completed || false, failed || false, selected || false,
+    'border-blue-500',
+    'border-blue-200 dark:border-blue-800'
+  );
   return (
-    <div className={`relative px-4 py-3 bg-green-50 border-2 rounded-lg min-w-[200px] transition-all ${borderClass}`}>
+    <div className={`relative px-4 py-3 bg-blue-50 dark:bg-blue-950 border-2 rounded-lg min-w-[200px] transition-all ${borderClass}`}>
+      <ExecutionIndicator executing={executing || false} />
+      <Handle type="source" position={Position.Right} />
+      <div className="flex items-center gap-2 mb-2 relative z-10">
+        <Workflow className={`w-5 h-5 text-blue-600 dark:text-blue-400 ${executing ? 'animate-spin' : ''}`} />
+        <div className="font-semibold text-blue-900 dark:text-blue-100">{data?.label || 'Webhook Trigger'}</div>
+        {executing && <div className="ml-auto w-2 h-2 bg-green-500 rounded-full animate-pulse" />}
+        {completed && <div className="ml-auto w-2 h-2 bg-green-600 rounded-full" />}
+        {failed && <div className="ml-auto w-2 h-2 bg-red-500 rounded-full" />}
+      </div>
+      <div className="text-xs text-blue-700 dark:text-blue-300 relative z-10">
+        {data?.config?.filters?.event_type || 'Todos os eventos'}
+      </div>
+      {data?.config?.filters?.action && (
+        <div className="text-xs text-blue-600 dark:text-blue-400 mt-1 relative z-10">
+          Action: {data.config.filters.action}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Node customizado: Switch
+const SwitchNode: React.FC<NodeProps & { executing?: boolean; completed?: boolean; failed?: boolean }> = ({ data, selected, executing, completed, failed }) => {
+  const rules = data?.config?.rules || [];
+  const borderClass = getBorderClass(
+    executing || false, completed || false, failed || false, selected || false,
+    'border-purple-500',
+    'border-purple-200 dark:border-purple-800'
+  );
+  return (
+    <div className={`relative px-4 py-3 bg-purple-50 dark:bg-purple-950 border-2 rounded-lg min-w-[200px] transition-all ${borderClass}`}>
       <ExecutionIndicator executing={executing || false} />
       <Handle type="target" position={Position.Left} />
       <div className="flex items-center gap-2 mb-2 relative z-10">
-        <Send className={`w-5 h-5 text-green-600 ${executing ? 'animate-bounce' : ''}`} />
-        <div className="font-semibold text-green-900">{data?.label || 'Send Message'}</div>
-        {executing && (
-          <div className="ml-auto w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-        )}
-        {completed && (
-          <div className="ml-auto w-2 h-2 bg-green-600 rounded-full" />
-        )}
-        {failed && (
-          <div className="ml-auto w-2 h-2 bg-red-500 rounded-full" />
-        )}
+        <GitBranch className={`w-5 h-5 text-purple-600 dark:text-purple-400 ${executing ? 'animate-pulse' : ''}`} />
+        <div className="font-semibold text-purple-900 dark:text-purple-100">{data?.label || 'Switch'}</div>
+        {executing && <div className="ml-auto w-2 h-2 bg-green-500 rounded-full animate-pulse" />}
+        {completed && <div className="ml-auto w-2 h-2 bg-green-600 rounded-full" />}
+        {failed && <div className="ml-auto w-2 h-2 bg-red-500 rounded-full" />}
+      </div>
+      {rules.length > 0 && (
+        <div className="text-xs text-purple-700 dark:text-purple-300 relative z-10">
+          {rules.length} regra(s)
+        </div>
+      )}
+      {rules.map((rule: any, idx: number) => (
+        <Handle
+          key={idx}
+          type="source"
+          position={Position.Right}
+          id={rule.output || `rule-${idx}`}
+          style={{ top: `${60 + idx * 25}px` }}
+        />
+      ))}
+    </div>
+  );
+};
+
+// Node customizado: Random Picker
+const RandomPickerNode: React.FC<NodeProps & { executing?: boolean; completed?: boolean; failed?: boolean }> = ({ data, selected, executing, completed, failed }) => {
+  const borderClass = getBorderClass(
+    executing || false, completed || false, failed || false, selected || false,
+    'border-orange-500',
+    'border-orange-200 dark:border-orange-800'
+  );
+  return (
+    <div className={`relative px-4 py-3 bg-orange-50 dark:bg-orange-950 border-2 rounded-lg min-w-[200px] transition-all ${borderClass}`}>
+      <ExecutionIndicator executing={executing || false} />
+      <Handle type="target" position={Position.Left} />
+      <Handle type="source" position={Position.Right} />
+      <div className="flex items-center gap-2 mb-2 relative z-10">
+        <Shuffle className={`w-5 h-5 text-orange-600 dark:text-orange-400 ${executing ? 'animate-spin' : ''}`} />
+        <div className="font-semibold text-orange-900 dark:text-orange-100">{data?.label || 'Random Picker'}</div>
+        {executing && <div className="ml-auto w-2 h-2 bg-green-500 rounded-full animate-pulse" />}
+        {completed && <div className="ml-auto w-2 h-2 bg-green-600 rounded-full" />}
+        {failed && <div className="ml-auto w-2 h-2 bg-red-500 rounded-full" />}
+      </div>
+      {data?.config?.messages && (
+        <div className="text-xs text-orange-700 dark:text-orange-300 relative z-10">
+          {data.config.messages.length} mensagem(ns)
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Node customizado: Send Message
+const SendMessageNode: React.FC<NodeProps & { executing?: boolean; completed?: boolean; failed?: boolean }> = ({ data, selected, executing, completed, failed }) => {
+  const borderClass = getBorderClass(
+    executing || false, completed || false, failed || false, selected || false,
+    'border-green-500',
+    'border-green-200 dark:border-green-800'
+  );
+  return (
+    <div className={`relative px-4 py-3 bg-green-50 dark:bg-green-950 border-2 rounded-lg min-w-[200px] transition-all ${borderClass}`}>
+      <ExecutionIndicator executing={executing || false} />
+      <Handle type="target" position={Position.Left} />
+      <div className="flex items-center gap-2 mb-2 relative z-10">
+        <Send className={`w-5 h-5 text-green-600 dark:text-green-400 ${executing ? 'animate-bounce' : ''}`} />
+        <div className="font-semibold text-green-900 dark:text-green-100">{data?.label || 'Send Message'}</div>
+        {executing && <div className="ml-auto w-2 h-2 bg-green-500 rounded-full animate-pulse" />}
+        {completed && <div className="ml-auto w-2 h-2 bg-green-600 rounded-full" />}
+        {failed && <div className="ml-auto w-2 h-2 bg-red-500 rounded-full" />}
       </div>
       {data?.config?.instance_name && (
-        <div className="text-xs text-green-700 truncate relative z-10">
+        <div className="text-xs text-green-700 dark:text-green-300 truncate relative z-10">
           Instância: {data.config.instance_name}
         </div>
       )}
@@ -187,27 +185,25 @@ const SendMessageNode: React.FC<NodeProps & { executing?: boolean; completed?: b
 
 // Node customizado: Generate Image
 const GenerateImageNode: React.FC<NodeProps & { executing?: boolean; completed?: boolean; failed?: boolean }> = ({ data, selected, executing, completed, failed }) => {
-  const borderClass = getBorderClass(executing || false, completed || false, failed || false, selected || false, 'border-pink-500', 'border-pink-200');
+  const borderClass = getBorderClass(
+    executing || false, completed || false, failed || false, selected || false,
+    'border-pink-500',
+    'border-pink-200 dark:border-pink-800'
+  );
   return (
-    <div className={`relative px-4 py-3 bg-pink-50 border-2 rounded-lg min-w-[200px] transition-all ${borderClass}`}>
+    <div className={`relative px-4 py-3 bg-pink-50 dark:bg-pink-950 border-2 rounded-lg min-w-[200px] transition-all ${borderClass}`}>
       <ExecutionIndicator executing={executing || false} />
       <Handle type="target" position={Position.Left} />
       <Handle type="source" position={Position.Right} />
       <div className="flex items-center gap-2 mb-2 relative z-10">
-        <Image className={`w-5 h-5 text-pink-600 ${executing ? 'animate-pulse' : ''}`} />
-        <div className="font-semibold text-pink-900">{data?.label || 'Generate Image'}</div>
-        {executing && (
-          <div className="ml-auto w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-        )}
-        {completed && (
-          <div className="ml-auto w-2 h-2 bg-green-600 rounded-full" />
-        )}
-        {failed && (
-          <div className="ml-auto w-2 h-2 bg-red-500 rounded-full" />
-        )}
+        <Image className={`w-5 h-5 text-pink-600 dark:text-pink-400 ${executing ? 'animate-pulse' : ''}`} />
+        <div className="font-semibold text-pink-900 dark:text-pink-100">{data?.label || 'Generate Image'}</div>
+        {executing && <div className="ml-auto w-2 h-2 bg-green-500 rounded-full animate-pulse" />}
+        {completed && <div className="ml-auto w-2 h-2 bg-green-600 rounded-full" />}
+        {failed && <div className="ml-auto w-2 h-2 bg-red-500 rounded-full" />}
       </div>
       {data?.config?.prompt && (
-        <div className="text-xs text-pink-700 truncate relative z-10">
+        <div className="text-xs text-pink-700 dark:text-pink-300 truncate relative z-10">
           {data.config.prompt.substring(0, 30)}...
         </div>
       )}
@@ -217,27 +213,25 @@ const GenerateImageNode: React.FC<NodeProps & { executing?: boolean; completed?:
 
 // Node customizado: Generate Video
 const GenerateVideoNode: React.FC<NodeProps & { executing?: boolean; completed?: boolean; failed?: boolean }> = ({ data, selected, executing, completed, failed }) => {
-  const borderClass = getBorderClass(executing || false, completed || false, failed || false, selected || false, 'border-indigo-500', 'border-indigo-200');
+  const borderClass = getBorderClass(
+    executing || false, completed || false, failed || false, selected || false,
+    'border-indigo-500',
+    'border-indigo-200 dark:border-indigo-800'
+  );
   return (
-    <div className={`relative px-4 py-3 bg-indigo-50 border-2 rounded-lg min-w-[200px] transition-all ${borderClass}`}>
+    <div className={`relative px-4 py-3 bg-indigo-50 dark:bg-indigo-950 border-2 rounded-lg min-w-[200px] transition-all ${borderClass}`}>
       <ExecutionIndicator executing={executing || false} />
       <Handle type="target" position={Position.Left} />
       <Handle type="source" position={Position.Right} />
       <div className="flex items-center gap-2 mb-2 relative z-10">
-        <Video className={`w-5 h-5 text-indigo-600 ${executing ? 'animate-pulse' : ''}`} />
-        <div className="font-semibold text-indigo-900">{data?.label || 'Generate Video'}</div>
-        {executing && (
-          <div className="ml-auto w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-        )}
-        {completed && (
-          <div className="ml-auto w-2 h-2 bg-green-600 rounded-full" />
-        )}
-        {failed && (
-          <div className="ml-auto w-2 h-2 bg-red-500 rounded-full" />
-        )}
+        <Video className={`w-5 h-5 text-indigo-600 dark:text-indigo-400 ${executing ? 'animate-pulse' : ''}`} />
+        <div className="font-semibold text-indigo-900 dark:text-indigo-100">{data?.label || 'Generate Video'}</div>
+        {executing && <div className="ml-auto w-2 h-2 bg-green-500 rounded-full animate-pulse" />}
+        {completed && <div className="ml-auto w-2 h-2 bg-green-600 rounded-full" />}
+        {failed && <div className="ml-auto w-2 h-2 bg-red-500 rounded-full" />}
       </div>
       {data?.config?.prompt && (
-        <div className="text-xs text-indigo-700 truncate relative z-10">
+        <div className="text-xs text-indigo-700 dark:text-indigo-300 truncate relative z-10">
           {data.config.prompt.substring(0, 30)}...
         </div>
       )}
@@ -247,27 +241,25 @@ const GenerateVideoNode: React.FC<NodeProps & { executing?: boolean; completed?:
 
 // Node customizado: Wait Video
 const WaitVideoNode: React.FC<NodeProps & { executing?: boolean; completed?: boolean; failed?: boolean }> = ({ data, selected, executing, completed, failed }) => {
-  const borderClass = getBorderClass(executing || false, completed || false, failed || false, selected || false, 'border-yellow-500', 'border-yellow-200');
+  const borderClass = getBorderClass(
+    executing || false, completed || false, failed || false, selected || false,
+    'border-yellow-500',
+    'border-yellow-200 dark:border-yellow-800'
+  );
   return (
-    <div className={`relative px-4 py-3 bg-yellow-50 border-2 rounded-lg min-w-[200px] transition-all ${borderClass}`}>
+    <div className={`relative px-4 py-3 bg-yellow-50 dark:bg-yellow-950 border-2 rounded-lg min-w-[200px] transition-all ${borderClass}`}>
       <ExecutionIndicator executing={executing || false} />
       <Handle type="target" position={Position.Left} />
       <Handle type="source" position={Position.Right} />
       <div className="flex items-center gap-2 mb-2 relative z-10">
-        <Clock className={`w-5 h-5 text-yellow-600 ${executing ? 'animate-spin' : ''}`} />
-        <div className="font-semibold text-yellow-900">{data?.label || 'Wait Video'}</div>
-        {executing && (
-          <div className="ml-auto w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-        )}
-        {completed && (
-          <div className="ml-auto w-2 h-2 bg-green-600 rounded-full" />
-        )}
-        {failed && (
-          <div className="ml-auto w-2 h-2 bg-red-500 rounded-full" />
-        )}
+        <Clock className={`w-5 h-5 text-yellow-600 dark:text-yellow-400 ${executing ? 'animate-spin' : ''}`} />
+        <div className="font-semibold text-yellow-900 dark:text-yellow-100">{data?.label || 'Wait Video'}</div>
+        {executing && <div className="ml-auto w-2 h-2 bg-green-500 rounded-full animate-pulse" />}
+        {completed && <div className="ml-auto w-2 h-2 bg-green-600 rounded-full" />}
+        {failed && <div className="ml-auto w-2 h-2 bg-red-500 rounded-full" />}
       </div>
       {data?.config?.job_id && (
-        <div className="text-xs text-yellow-700 truncate font-mono relative z-10">
+        <div className="text-xs text-yellow-700 dark:text-yellow-300 truncate font-mono relative z-10">
           Job: {data.config.job_id.substring(0, 8)}...
         </div>
       )}
@@ -277,27 +269,25 @@ const WaitVideoNode: React.FC<NodeProps & { executing?: boolean; completed?: boo
 
 // Node customizado: Save to Dataset
 const SaveToDatasetNode: React.FC<NodeProps & { executing?: boolean; completed?: boolean; failed?: boolean }> = ({ data, selected, executing, completed, failed }) => {
-  const borderClass = getBorderClass(executing || false, completed || false, failed || false, selected || false, 'border-teal-500', 'border-teal-200');
+  const borderClass = getBorderClass(
+    executing || false, completed || false, failed || false, selected || false,
+    'border-teal-500',
+    'border-teal-200 dark:border-teal-800'
+  );
   return (
-    <div className={`relative px-4 py-3 bg-teal-50 border-2 rounded-lg min-w-[200px] transition-all ${borderClass}`}>
+    <div className={`relative px-4 py-3 bg-teal-50 dark:bg-teal-950 border-2 rounded-lg min-w-[200px] transition-all ${borderClass}`}>
       <ExecutionIndicator executing={executing || false} />
       <Handle type="target" position={Position.Left} />
       <Handle type="source" position={Position.Right} />
       <div className="flex items-center gap-2 mb-2 relative z-10">
-        <Database className={`w-5 h-5 text-teal-600 ${executing ? 'animate-pulse' : ''}`} />
-        <div className="font-semibold text-teal-900">{data?.label || 'Save to Dataset'}</div>
-        {executing && (
-          <div className="ml-auto w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-        )}
-        {completed && (
-          <div className="ml-auto w-2 h-2 bg-green-600 rounded-full" />
-        )}
-        {failed && (
-          <div className="ml-auto w-2 h-2 bg-red-500 rounded-full" />
-        )}
+        <Database className={`w-5 h-5 text-teal-600 dark:text-teal-400 ${executing ? 'animate-pulse' : ''}`} />
+        <div className="font-semibold text-teal-900 dark:text-teal-100">{data?.label || 'Save to Dataset'}</div>
+        {executing && <div className="ml-auto w-2 h-2 bg-green-500 rounded-full animate-pulse" />}
+        {completed && <div className="ml-auto w-2 h-2 bg-green-600 rounded-full" />}
+        {failed && <div className="ml-auto w-2 h-2 bg-red-500 rounded-full" />}
       </div>
       {data?.config?.asset_id && (
-        <div className="text-xs text-teal-700 truncate font-mono relative z-10">
+        <div className="text-xs text-teal-700 dark:text-teal-300 truncate font-mono relative z-10">
           Asset: {data.config.asset_id.substring(0, 8)}...
         </div>
       )}
@@ -307,32 +297,30 @@ const SaveToDatasetNode: React.FC<NodeProps & { executing?: boolean; completed?:
 
 // Node customizado: Agent IA
 const AgentIANode: React.FC<NodeProps & { executing?: boolean; completed?: boolean; failed?: boolean }> = ({ data, selected, executing, completed, failed }) => {
-  const borderClass = getBorderClass(executing || false, completed || false, failed || false, selected || false, 'border-cyan-500', 'border-cyan-200');
+  const borderClass = getBorderClass(
+    executing || false, completed || false, failed || false, selected || false,
+    'border-cyan-500',
+    'border-cyan-200 dark:border-cyan-800'
+  );
   return (
-    <div className={`relative px-4 py-3 bg-cyan-50 border-2 rounded-lg min-w-[200px] transition-all ${borderClass}`}>
+    <div className={`relative px-4 py-3 bg-cyan-50 dark:bg-cyan-950 border-2 rounded-lg min-w-[200px] transition-all ${borderClass}`}>
       <ExecutionIndicator executing={executing || false} />
       <Handle type="target" position={Position.Left} />
       <Handle type="source" position={Position.Right} />
       <div className="flex items-center gap-2 mb-2 relative z-10">
-        <Bot className={`w-5 h-5 text-cyan-600 ${executing ? 'animate-pulse' : ''}`} />
-        <div className="font-semibold text-cyan-900">{data?.label || 'Agent IA'}</div>
-        {executing && (
-          <div className="ml-auto w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-        )}
-        {completed && (
-          <div className="ml-auto w-2 h-2 bg-green-600 rounded-full" />
-        )}
-        {failed && (
-          <div className="ml-auto w-2 h-2 bg-red-500 rounded-full" />
-        )}
+        <Bot className={`w-5 h-5 text-cyan-600 dark:text-cyan-400 ${executing ? 'animate-pulse' : ''}`} />
+        <div className="font-semibold text-cyan-900 dark:text-cyan-100">{data?.label || 'Agent IA'}</div>
+        {executing && <div className="ml-auto w-2 h-2 bg-green-500 rounded-full animate-pulse" />}
+        {completed && <div className="ml-auto w-2 h-2 bg-green-600 rounded-full" />}
+        {failed && <div className="ml-auto w-2 h-2 bg-red-500 rounded-full" />}
       </div>
       {data?.config?.system_prompt && (
-        <div className="text-xs text-cyan-700 truncate relative z-10">
+        <div className="text-xs text-cyan-700 dark:text-cyan-300 truncate relative z-10">
           {data.config.system_prompt.substring(0, 30)}...
         </div>
       )}
       {data?.config?.persona_tone && (
-        <div className="text-xs text-cyan-600 mt-1 relative z-10">
+        <div className="text-xs text-cyan-600 dark:text-cyan-400 mt-1 relative z-10">
           Tom: {data.config.persona_tone}
         </div>
       )}
@@ -386,10 +374,8 @@ export const FlowCanvasWithSelection: React.FC<FlowCanvasWithSelectionProps> = (
 
   // Sincroniza nodes externos com o estado interno quando há mudanças
   React.useEffect(() => {
-    // Compara IDs para detectar mudanças
     const currentIds = nodes.map(n => n.id).sort().join(',');
     const newIds = initialNodes.map(n => n.id).sort().join(',');
-    
     if (currentIds !== newIds) {
       setNodes(initialNodes);
     }
@@ -397,16 +383,13 @@ export const FlowCanvasWithSelection: React.FC<FlowCanvasWithSelectionProps> = (
 
   // Sincroniza edges externos com o estado interno quando há mudanças
   React.useEffect(() => {
-    // Compara IDs para detectar mudanças
     const currentIds = edges.map(e => e.id).sort().join(',');
     const newIds = initialEdges.map(e => e.id).sort().join(',');
-    
     if (currentIds !== newIds) {
       setEdges(initialEdges);
     }
   }, [initialEdges, setEdges]);
 
-  // Notifica mudanças externas
   React.useEffect(() => {
     if (onNodesChange) onNodesChange(nodes);
   }, [nodes, onNodesChange]);
@@ -434,24 +417,15 @@ export const FlowCanvasWithSelection: React.FC<FlowCanvasWithSelectionProps> = (
     }
   }, [nodes, edges, onSave]);
 
-  // Handler para quando um node é arrastado e solto no canvas (usando onPaneDrop do ReactFlow)
   const onPaneDrop = useCallback(
     (event: React.DragEvent) => {
       event.preventDefault();
-
       const nodeType = event.dataTransfer.getData('application/reactflow');
-      
-      if (!nodeType || !reactFlowInstance) {
-        return;
-      }
-
-      // Usa a posição do evento diretamente (já está no sistema de coordenadas do ReactFlow)
+      if (!nodeType || !reactFlowInstance) return;
       const position = reactFlowInstance.screenToFlowPosition({
         x: event.clientX,
         y: event.clientY,
       });
-
-      // Chama callback para adicionar o node
       if (onNodeAdd) {
         onNodeAdd(nodeType, position);
       }
@@ -465,8 +439,8 @@ export const FlowCanvasWithSelection: React.FC<FlowCanvasWithSelectionProps> = (
   }, []);
 
   return (
-    <div 
-      ref={reactFlowWrapper} 
+    <div
+      ref={reactFlowWrapper}
       style={{ width: '100%', height: '100%' }}
       onDrop={onPaneDrop}
       onDragOver={onDragOver}
@@ -502,4 +476,3 @@ export const FlowCanvasWithSelection: React.FC<FlowCanvasWithSelectionProps> = (
     </div>
   );
 };
-

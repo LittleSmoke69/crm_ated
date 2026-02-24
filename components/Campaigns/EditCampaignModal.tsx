@@ -230,39 +230,39 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+      <div className="bg-white dark:bg-[#2a2a2a] rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col border border-gray-200 dark:border-[#404040]">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+        <div className="px-6 py-4 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between">
           <div>
-            <h2 className="text-xl font-semibold text-gray-800">Editar Campanha</h2>
-            <p className="text-sm text-gray-500 mt-1">
+            <h2 className="text-xl font-semibold text-gray-800 dark:text-white">Editar Campanha</h2>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
               {campaign.group_subject || campaign.group_id}
             </p>
           </div>
           <button
             onClick={onClose}
-            className="p-2 hover:bg-gray-100 rounded-lg transition"
+            className="p-2 hover:bg-gray-100 dark:hover:bg-[#404040] rounded-lg transition"
           >
-            <X className="w-5 h-5 text-gray-500" />
+            <X className="w-5 h-5 text-gray-500 dark:text-gray-400" />
           </button>
         </div>
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           {/* Status da Campanha */}
-          <div className="border border-gray-200 rounded-lg p-4">
-            <h3 className="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2">
+          <div className="border border-gray-200 dark:border-[#404040] rounded-lg p-4">
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4 flex items-center gap-2">
               <AlertCircle className="w-4 h-4" />
               Status da Campanha
             </h3>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Status
               </label>
               <select
                 value={campaignStatus}
                 onChange={(e) => setCampaignStatus(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
               >
                 <option value="pending">Pendente</option>
                 <option value="running">Em Execução</option>
@@ -274,8 +274,8 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
           </div>
 
           {/* Estratégia de Delay */}
-          <div className="border border-gray-200 rounded-lg p-4">
-            <h3 className="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2">
+          <div className="border border-gray-200 dark:border-[#404040] rounded-lg p-4">
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4 flex items-center gap-2">
               <Clock className="w-4 h-4" />
               Estratégia de Delay (Atraso entre inclusões)
             </h3>
@@ -283,7 +283,7 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
             <div className="space-y-4">
               {/* Modo de Delay */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                   Modo de Delay
                 </label>
                 <div className="flex gap-4">
@@ -296,7 +296,7 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
                       onChange={(e) => setDelayMode(e.target.value as 'fixed')}
                       className="w-4 h-4 text-[#8CD955] border-gray-300 focus:ring-[#8CD955]"
                     />
-                    <span className="text-sm text-gray-700">Fixo</span>
+                    <span className="text-sm text-gray-700 dark:text-gray-300">Fixo</span>
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
@@ -307,7 +307,7 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
                       onChange={(e) => setDelayMode(e.target.value as 'random')}
                       className="w-4 h-4 text-[#8CD955] border-gray-300 focus:ring-[#8CD955]"
                     />
-                    <span className="text-sm text-gray-700">Aleatório</span>
+                    <span className="text-sm text-gray-700 dark:text-gray-300">Aleatório</span>
                   </label>
                 </div>
               </div>
@@ -316,7 +316,7 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
               {delayMode === 'fixed' && (
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                       Valor
                     </label>
                     <input
@@ -324,17 +324,17 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
                       value={delayValue}
                       onChange={(e) => setDelayValue(Number(e.target.value))}
                       min="0"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                       Unidade
                     </label>
                     <select
                       value={delayUnit}
                       onChange={(e) => setDelayUnit(e.target.value as 'seconds' | 'minutes')}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                     >
                       <option value="seconds">Segundos</option>
                       <option value="minutes">Minutos</option>
@@ -347,7 +347,7 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
               {delayMode === 'random' && (
                 <div className="grid grid-cols-3 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                       Mínimo (segundos)
                     </label>
                     <input
@@ -355,11 +355,11 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
                       value={randomMinSeconds}
                       onChange={(e) => setRandomMinSeconds(Number(e.target.value))}
                       min="0"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                       Máximo (segundos)
                     </label>
                     <input
@@ -367,11 +367,11 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
                       value={randomMaxSeconds}
                       onChange={(e) => setRandomMaxSeconds(Number(e.target.value))}
                       min="0"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                     />
                   </div>
                   <div className="flex items-end">
-                    <p className="text-xs text-gray-500">
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
                       Dica: 550s=9min10s e 950s=15min50s
                     </p>
                   </div>
@@ -381,8 +381,8 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
           </div>
 
           {/* Modo de Distribuição */}
-          <div className="border border-gray-200 rounded-lg p-4">
-            <h3 className="text-sm font-semibold text-gray-700 mb-4">
+          <div className="border border-gray-200 dark:border-[#404040] rounded-lg p-4">
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">
               Modo de Distribuição de Instâncias
             </h3>
             
@@ -396,7 +396,7 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
                   onChange={(e) => setDistributionMode(e.target.value as 'sequential')}
                   className="w-4 h-4 text-[#8CD955] border-gray-300 focus:ring-[#8CD955]"
                 />
-                <span className="text-sm text-gray-700">Sequencial</span>
+                <span className="text-sm text-gray-700 dark:text-gray-300">Sequencial</span>
               </label>
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
@@ -407,14 +407,14 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
                   onChange={(e) => setDistributionMode(e.target.value as 'random')}
                   className="w-4 h-4 text-[#8CD955] border-gray-300 focus:ring-[#8CD955]"
                 />
-                <span className="text-sm text-gray-700">Aleatório</span>
+                <span className="text-sm text-gray-700 dark:text-gray-300">Aleatório</span>
               </label>
             </div>
           </div>
 
           {/* Concorrência */}
-          <div className="border border-gray-200 rounded-lg p-4">
-            <h3 className="text-sm font-semibold text-gray-700 mb-4">
+          <div className="border border-gray-200 dark:border-[#404040] rounded-lg p-4">
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">
               Concorrência (Envios em Paralelo)
             </h3>
             
@@ -424,17 +424,17 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
               onChange={(e) => setConcurrency(Number(e.target.value))}
               min="1"
               max="10"
-              className="w-full max-w-xs px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+              className="w-full max-w-xs px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
             />
-            <p className="text-xs text-gray-500 mt-2">
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
               *Use com cautela para evitar rate-limit. Recomendado: 1-3
             </p>
           </div>
 
           {/* Instâncias */}
-          <div className="border border-gray-200 rounded-lg p-4">
+          <div className="border border-gray-200 dark:border-[#404040] rounded-lg p-4">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+              <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-2">
                 <RefreshCw className="w-4 h-4" />
                 Instâncias da Campanha
               </h3>
@@ -459,7 +459,7 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
 
             {/* Instâncias na campanha */}
             <div className="mb-4">
-              <p className="text-xs font-medium text-gray-700 mb-2">
+              <p className="text-xs font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Instâncias selecionadas ({selectedInstances.length})
               </p>
               {campaignInstances.length > 0 ? (
@@ -469,8 +469,8 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
                       key={name}
                       className={`px-3 py-2 rounded-md text-xs border-2 transition-all flex items-center gap-2 ${
                         isConnected
-                          ? 'bg-green-50 border-green-400 text-green-800'
-                          : 'bg-red-50 border-red-400 text-red-800'
+                          ? 'bg-green-50 dark:bg-[#8CD955]/20 border-green-400 dark:border-[#8CD955]/50 text-green-800 dark:text-[#8CD955]'
+                          : 'bg-red-50 dark:bg-red-900/30 border-red-400 dark:border-red-600/50 text-red-800 dark:text-red-300'
                       }`}
                     >
                       {isConnected ? (
@@ -480,18 +480,18 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
                       )}
                       <span className="font-semibold">{name}</span>
                       {hasProxy && (
-                        <span className="text-[10px] px-1.5 py-0.5 bg-blue-200 text-blue-800 rounded font-medium">
+                        <span className="text-[10px] px-1.5 py-0.5 bg-blue-200 dark:bg-blue-900/50 text-blue-800 dark:text-blue-300 rounded font-medium">
                           Proxy
                         </span>
                       )}
                       {!isConnected && (
-                        <span className="text-[10px] px-1.5 py-0.5 bg-red-200 text-red-900 rounded font-medium">
+                        <span className="text-[10px] px-1.5 py-0.5 bg-red-200 dark:bg-red-900/50 text-red-900 dark:text-red-300 rounded font-medium">
                           Desconectada
                         </span>
                       )}
                       <button
                         onClick={() => toggleInstance(name)}
-                        className="ml-1 p-0.5 hover:bg-red-200 rounded transition"
+                        className="ml-1 p-0.5 hover:bg-red-200 dark:hover:bg-red-900/50 rounded transition"
                         title="Remover"
                       >
                         <X className="w-3 h-3" />
@@ -500,32 +500,32 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
                   ))}
                 </div>
               ) : (
-                <p className="text-xs text-gray-400 italic">Nenhuma instância selecionada</p>
+                <p className="text-xs text-gray-400 dark:text-gray-500 italic">Nenhuma instância selecionada</p>
               )}
             </div>
 
             {/* Separador */}
-            <div className="border-t border-gray-300 my-4"></div>
+            <div className="border-t border-gray-300 dark:border-[#404040] my-4"></div>
 
             {/* Instâncias conectadas disponíveis */}
             <div className="mb-4">
-              <p className="text-xs font-semibold text-gray-700 mb-2">
+              <p className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">
                 Instâncias conectadas disponíveis ({availableConnected.length})
               </p>
               {availableConnected.length > 0 ? (
-                <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto p-2 bg-green-50 rounded border border-green-200">
+                <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto p-2 bg-green-50 dark:bg-[#8CD955]/10 rounded border border-green-200 dark:border-[#8CD955]/30">
                   {availableConnected.map((inst) => {
                     const hasProxy = !!inst.proxy_id || !!inst.proxy;
                     return (
                       <button
                         key={inst.instance_name}
                         onClick={() => toggleInstance(inst.instance_name)}
-                        className="px-3 py-1.5 rounded-md text-xs border-2 border-green-400 bg-white text-green-700 hover:bg-green-100 transition-all flex items-center gap-1.5"
+                        className="px-3 py-1.5 rounded-md text-xs border-2 border-green-400 dark:border-[#8CD955]/50 bg-white dark:bg-[#333] text-green-700 dark:text-[#8CD955] hover:bg-green-100 dark:hover:bg-[#8CD955]/20 transition-all flex items-center gap-1.5"
                       >
                         <CheckCircle2 className="w-3.5 h-3.5 text-green-600" />
                         <span className="font-medium">{inst.instance_name}</span>
                         {hasProxy && (
-                          <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">
+                          <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 rounded">
                             Proxy
                           </span>
                         )}
@@ -535,29 +535,29 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
                   })}
                 </div>
               ) : (
-                <p className="text-xs text-gray-500 italic">Todas as instâncias conectadas já estão na campanha</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 italic">Todas as instâncias conectadas já estão na campanha</p>
               )}
             </div>
 
             {/* Instâncias desconectadas disponíveis */}
             {availableDisconnected.length > 0 && (
               <div>
-                <p className="text-xs font-semibold text-gray-700 mb-2">
+                <p className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">
                   Instâncias desconectadas ({availableDisconnected.length})
                 </p>
-                <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto p-2 bg-gray-50 rounded border border-gray-300">
+                <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto p-2 bg-gray-50 dark:bg-[#333] rounded border border-gray-300 dark:border-[#404040]">
                   {availableDisconnected.map((inst) => {
                     const hasProxy = !!inst.proxy_id || !!inst.proxy;
                     return (
                       <button
                         key={inst.instance_name}
                         onClick={() => toggleInstance(inst.instance_name)}
-                        className="px-3 py-1.5 rounded-md text-xs border-2 border-gray-300 bg-white text-gray-600 hover:bg-gray-100 transition-all flex items-center gap-1.5"
+                        className="px-3 py-1.5 rounded-md text-xs border-2 border-gray-300 dark:border-[#555] bg-white dark:bg-[#404040] text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#505050] transition-all flex items-center gap-1.5"
                       >
-                        <XCircle className="w-3.5 h-3.5 text-gray-500" />
+                        <XCircle className="w-3.5 h-3.5 text-gray-500 dark:text-gray-400" />
                         <span className="font-medium">{inst.instance_name}</span>
                         {hasProxy && (
-                          <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">
+                          <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 rounded">
                             Proxy
                           </span>
                         )}
@@ -572,7 +572,7 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-between">
+        <div className="px-6 py-4 border-t border-gray-200 dark:border-[#404040] flex items-center justify-between">
           <div>
             {/* Botão de Pausar - só aparece se a campanha estiver em execução */}
             {(campaignStatus === 'running' || campaign?.status === 'running') && (
@@ -589,7 +589,7 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
           <div className="flex items-center gap-3">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition"
+              className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-white bg-gray-100 dark:bg-[#333] hover:bg-gray-200 dark:hover:bg-[#404040] rounded-lg transition"
             >
               Cancelar
             </button>

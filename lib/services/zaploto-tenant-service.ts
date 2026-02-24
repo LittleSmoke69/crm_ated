@@ -17,6 +17,7 @@ export interface ZaplotoTenant {
   app_title: string | null;
   support_email: string | null;
   is_active: boolean;
+  is_central?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -153,9 +154,11 @@ export async function getSidebarItemsForRole(
     }
   }
   for (const item of root) {
-    const subs = byParent.get(item.code);
-    if (subs?.length) {
-      item.submenu = subs.sort((a, b) => a.sort_order - b.sort_order);
+    const subs = (byParent.get(item.code) || [])
+      .filter((s: SidebarItem) => s.href) // exclui itens sem href (ex: list_cleaning_dedup, list_cleaning_whatsapp - permissões)
+      .sort((a: SidebarItem, b: SidebarItem) => a.sort_order - b.sort_order);
+    if (subs.length) {
+      item.submenu = subs;
     }
   }
 

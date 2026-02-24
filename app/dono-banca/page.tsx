@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import DonoBancaClient from './DonoBancaClient';
+import { getUserProfile } from '@/lib/middleware/permissions';
 
 export default async function DonoBancaPage() {
   const cookieStore = await cookies();
@@ -10,8 +11,18 @@ export default async function DonoBancaPage() {
     redirect('/login');
   }
 
-  // Dados carregados em segundo plano no client: dashboard aparece logo e a lista de gerentes/consultores carrega depois
-  return <DonoBancaClient initialData={null} userId={userId} />;
+  const profile = await getUserProfile(userId);
+  const userStatus = profile?.status ?? null;
+  const isAdminOrSuperAdmin = userStatus === 'super_admin' || userStatus === 'admin';
+
+  return (
+    <DonoBancaClient
+      initialData={null}
+      userId={userId}
+      userStatus={userStatus}
+      isAdminOrSuperAdmin={isAdminOrSuperAdmin}
+    />
+  );
 }
 
 

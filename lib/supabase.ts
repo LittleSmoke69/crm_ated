@@ -491,6 +491,246 @@ export interface Database {
           updated_at?: string;
         };
       };
+
+      academy_modules: {
+        Row: {
+          id: string;
+          title: string;
+          slug: string;
+          description: string | null;
+          order_index: number;
+          is_published: boolean;
+          thumbnail_url: string | null;
+          tags: string[] | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          title: string;
+          slug: string;
+          description?: string | null;
+          order_index?: number;
+          is_published?: boolean;
+          thumbnail_url?: string | null;
+          tags?: string[] | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          title?: string;
+          slug?: string;
+          description?: string | null;
+          order_index?: number;
+          is_published?: boolean;
+          thumbnail_url?: string | null;
+          tags?: string[] | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+      };
+
+      academy_lessons: {
+        Row: {
+          id: string;
+          module_id: string;
+          title: string;
+          slug: string;
+          description: string | null;
+          order_index: number;
+          is_published: boolean;
+          content_type: 'vturb' | 'iframe' | 'text';
+          estimated_minutes: number | null;
+          vturb_player_id: string | null;
+          vturb_project_id: string | null;
+          vturb_aspect_ratio: number | null;
+          vturb_use_sdk: boolean;
+          iframe_html: string | null;
+          cta_label: string | null;
+          cta_type: 'internal' | 'external' | null;
+          cta_url: string | null;
+          cta_target: '_self' | '_blank';
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          module_id: string;
+          title: string;
+          slug: string;
+          description?: string | null;
+          order_index?: number;
+          is_published?: boolean;
+          content_type: 'vturb' | 'iframe' | 'text';
+          estimated_minutes?: number | null;
+          vturb_player_id?: string | null;
+          vturb_project_id?: string | null;
+          vturb_aspect_ratio?: number | null;
+          vturb_use_sdk?: boolean;
+          iframe_html?: string | null;
+          cta_label?: string | null;
+          cta_type?: 'internal' | 'external' | null;
+          cta_url?: string | null;
+          cta_target?: '_self' | '_blank';
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          module_id?: string;
+          title?: string;
+          slug?: string;
+          description?: string | null;
+          order_index?: number;
+          is_published?: boolean;
+          content_type?: 'vturb' | 'iframe' | 'text';
+          estimated_minutes?: number | null;
+          vturb_player_id?: string | null;
+          vturb_project_id?: string | null;
+          vturb_aspect_ratio?: number | null;
+          vturb_use_sdk?: boolean;
+          iframe_html?: string | null;
+          cta_label?: string | null;
+          cta_type?: 'internal' | 'external' | null;
+          cta_url?: string | null;
+          cta_target?: '_self' | '_blank';
+          created_at?: string;
+          updated_at?: string;
+        };
+      };
+
+      academy_assets: {
+        Row: {
+          id: string;
+          type: 'image' | 'table' | 'pdf' | 'doc' | 'docx' | 'other';
+          title: string;
+          description: string | null;
+          file_path: string;
+          public_url: string | null;
+          category: string | null;
+          is_published: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          type: 'image' | 'table' | 'pdf' | 'doc' | 'docx' | 'other';
+          title: string;
+          description?: string | null;
+          file_path: string;
+          public_url?: string | null;
+          category?: string | null;
+          is_published?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          type?: 'image' | 'table' | 'pdf' | 'doc' | 'docx' | 'other';
+          title?: string;
+          description?: string | null;
+          file_path?: string;
+          public_url?: string | null;
+          category?: string | null;
+          is_published?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+      };
+
+      academy_lesson_attachments: {
+        Row: {
+          id: string;
+          lesson_id: string;
+          asset_id: string;
+          label: string | null;
+          order_index: number;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          lesson_id: string;
+          asset_id: string;
+          label?: string | null;
+          order_index?: number;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          lesson_id?: string;
+          asset_id?: string;
+          label?: string | null;
+          order_index?: number;
+          created_at?: string;
+          updated_at?: string;
+        };
+      };
+
+      academy_user_progress: {
+        Row: {
+          id: string;
+          user_id: string;
+          lesson_id: string;
+          status: 'not_started' | 'in_progress' | 'completed';
+          completed_at: string | null;
+          last_seen_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          lesson_id: string;
+          status?: 'not_started' | 'in_progress' | 'completed';
+          completed_at?: string | null;
+          last_seen_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          lesson_id?: string;
+          status?: 'not_started' | 'in_progress' | 'completed';
+          completed_at?: string | null;
+          last_seen_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+      };
+
+      academy_vturb_snapshots: {
+        Row: {
+          id: string;
+          lesson_id: string | null;
+          player_id: string;
+          date_start: string;
+          date_end: string;
+          payload: Record<string, unknown>;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          lesson_id?: string | null;
+          player_id: string;
+          date_start: string;
+          date_end: string;
+          payload: Record<string, unknown>;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          lesson_id?: string | null;
+          player_id?: string;
+          date_start?: string;
+          date_end?: string;
+          payload?: Record<string, unknown>;
+          created_at?: string;
+        };
+      };
     };
   };
 }

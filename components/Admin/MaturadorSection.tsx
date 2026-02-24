@@ -1520,7 +1520,7 @@ export default function MaturadorSection({ userId }: Props) {
                           <button
                             onClick={() => virginAction(vi.id, 'restart')}
                             disabled={virginActioning === vi.id}
-                            className="px-3 py-1.5 text-xs rounded bg-blue-100 hover:bg-blue-200 text-blue-800 disabled:opacity-50"
+                            className="px-3 py-1.5 text-xs rounded bg-[#8CD955]/20 hover:bg-[#8CD955]/30 text-[#6AB83D] dark:text-[#8CD955] disabled:opacity-50"
                           >
                             Reiniciar
                           </button>
@@ -1604,7 +1604,7 @@ export default function MaturadorSection({ userId }: Props) {
                   >
                     <div className="flex items-center gap-3">
                       <h4 className="font-medium text-gray-800">{plan.name}</h4>
-                      <span className="text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-700">
+                      <span className="text-xs px-2 py-0.5 rounded bg-[#8CD955]/20 text-[#8CD955] dark:text-[#8CD955]">
                         {plan.steps_json.length} steps
                       </span>
                     </div>
@@ -1616,7 +1616,7 @@ export default function MaturadorSection({ userId }: Props) {
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => openEditModal(plan)}
-                      className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                      className="p-2 text-gray-400 hover:text-[#8CD955] hover:bg-[#8CD955]/10 dark:hover:bg-[#8CD955]/10 rounded-lg transition-colors"
                       title="Editar"
                     >
                       <Edit className="w-4 h-4" />

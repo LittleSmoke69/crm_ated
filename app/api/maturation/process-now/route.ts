@@ -15,16 +15,19 @@ export async function POST(req: NextRequest) {
   try {
     await requireAuth(req);
 
-    console.log('[MATURATION] POST /api/maturation/process-now - Iniciando tick de processamento');
-    // Executa o processamento imediatamente (uma batelada de até CLAIM_LIMIT steps)
-    const result = await runMaturationTick(supabaseServiceRole);
-    console.log('[MATURATION] POST /api/maturation/process-now - Resultado:', result);
+    console.log('[MATURATION] POST /api/maturation/process-now - Disparando tick em segundo plano');
+    runMaturationTick(supabaseServiceRole)
+      .then((result) => {
+        console.log('[MATURATION] POST /api/maturation/process-now - Tick concluído:', result);
+      })
+      .catch((err) => {
+        console.error('[MATURATION] POST /api/maturation/process-now - Erro no tick:', err);
+      });
 
-    return NextResponse.json({
-      success: true,
-      processed: result.processed,
-      jobs: result.jobs || []
-    });
+    return NextResponse.json(
+      { success: true, processing: true, message: 'Processamento em andamento em segundo plano.' },
+      { status: 202 }
+    );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Erro ao processar';
     return NextResponse.json(

@@ -20,6 +20,7 @@ function normalizeEventType(t: string): string {
 
 /**
  * Carrega configs ativas com nomes das instâncias (master e watcher).
+ * Suporta owner_type banca (admin) e user (qualquer cargo).
  */
 async function loadActiveConfigs(): Promise<AntiSpamConfig[]> {
   const { data: configs, error } = await supabaseServiceRole
@@ -27,6 +28,8 @@ async function loadActiveConfigs(): Promise<AntiSpamConfig[]> {
     .select(`
       id,
       banca_id,
+      owner_type,
+      owner_id,
       is_enabled,
       master_instance_id,
       watcher_instance_id,
@@ -53,41 +56,72 @@ async function loadActiveConfigs(): Promise<AntiSpamConfig[]> {
 
   return configs.map((c: any) => ({
     ...c,
+    owner_type: c.owner_type || 'banca',
+    owner_id: c.owner_id || null,
+    banca_id: c.banca_id || null,
+    denuncia_group_jid: c.denuncia_group_jid || null,
     master_instance_name: nameById.get(c.master_instance_id),
     watcher_instance_name: c.watcher_instance_id ? nameById.get(c.watcher_instance_id) : null,
   }));
 }
 
 /**
- * Agrupa configs por banca_id e retorna mapa banca_id -> { instanceNames, configs }.
+ * Agrupa configs por unidade de processamento (banca_id ou owner_id).
+ * Retorna mapa unitKey -> { instanceNames, configs, bancaId?, userId? }.
  */
-function groupConfigsByBanca(configs: AntiSpamConfig[]): Map<string, { instanceNames: Set<string>; configs: AntiSpamConfig[] }> {
-  const byBanca = new Map<string, { instanceNames: Set<string>; configs: AntiSpamConfig[] }>();
+function groupConfigsByUnit(
+  configs: AntiSpamConfig[]
+): Map<string, { instanceNames: Set<string>; configs: AntiSpamConfig[]; bancaId: string | null; userId: string | null }> {
+  const byUnit = new Map<string, { instanceNames: Set<string>; configs: AntiSpamConfig[]; bancaId: string | null; userId: string | null }>();
   for (const c of configs) {
-    let entry = byBanca.get(c.banca_id);
+    const unitKey = c.owner_type === 'user' && c.owner_id
+      ? `user:${c.owner_id}`
+      : c.banca_id
+        ? `banca:${c.banca_id}`
+        : null;
+    if (!unitKey) continue;
+
+    let entry = byUnit.get(unitKey);
     if (!entry) {
-      entry = { instanceNames: new Set(), configs: [] };
-      byBanca.set(c.banca_id, entry);
+      entry = {
+        instanceNames: new Set(),
+        configs: [],
+        bancaId: c.banca_id || null,
+        userId: c.owner_type === 'user' ? c.owner_id : null,
+      };
+      byUnit.set(unitKey, entry);
     }
     entry.configs.push(c);
     if (c.master_instance_name) entry.instanceNames.add(c.master_instance_name);
     if (c.watcher_instance_name) entry.instanceNames.add(c.watcher_instance_name);
   }
-  return byBanca;
+  return byUnit;
 }
 
 /**
- * Obtém ou cria cursor para uma banca.
+ * Obtém cursor para uma unidade (banca ou user).
  */
-async function getCursor(bancaId: string): Promise<{ last_event_id: string | null; last_received_at: string | null }> {
-  const { data, error } = await supabaseServiceRole
-    .from('anti_spam_event_cursor')
-    .select('last_event_id, last_received_at')
-    .eq('banca_id', bancaId)
-    .single();
-
-  if (error || !data) return { last_event_id: null, last_received_at: null };
-  return { last_event_id: data.last_event_id, last_received_at: data.last_received_at };
+async function getCursor(
+  bancaId: string | null,
+  userId: string | null
+): Promise<{ last_event_id: string | null; last_received_at: string | null }> {
+  if (bancaId) {
+    const { data, error } = await supabaseServiceRole
+      .from('anti_spam_event_cursor')
+      .select('last_event_id, last_received_at')
+      .eq('banca_id', bancaId)
+      .single();
+    if (!error && data) return { last_event_id: data.last_event_id, last_received_at: data.last_received_at };
+  }
+  if (userId) {
+    const { data, error } = await supabaseServiceRole
+      .from('anti_spam_event_cursor')
+      .select('last_event_id, last_received_at')
+      .eq('user_id', userId)
+      .single();
+    if (!error && data) return { last_event_id: data.last_event_id, last_received_at: data.last_received_at };
+  }
+  return { last_event_id: null, last_received_at: null };
 }
 
 /**
@@ -133,17 +167,47 @@ async function fetchNextEvents(
 /**
  * Atualiza cursor após processar lote.
  */
-async function updateCursor(bancaId: string, lastEvent: { id: string; received_at: string }): Promise<void> {
-  const { error } = await supabaseServiceRole.from('anti_spam_event_cursor').upsert(
-    {
-      banca_id: bancaId,
-      last_event_id: lastEvent.id,
-      last_received_at: lastEvent.received_at,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: 'banca_id' }
-  );
-  if (error) console.error('[AntiSpam] Erro ao atualizar cursor:', error.message);
+async function updateCursor(
+  bancaId: string | null,
+  userId: string | null,
+  lastEvent: { id: string; received_at: string }
+): Promise<void> {
+  const payload = {
+    last_event_id: lastEvent.id,
+    last_received_at: lastEvent.received_at,
+    updated_at: new Date().toISOString(),
+  };
+  if (bancaId) {
+    const { data: existing } = await supabaseServiceRole
+      .from('anti_spam_event_cursor')
+      .select('id')
+      .eq('banca_id', bancaId)
+      .maybeSingle();
+    if (existing) {
+      await supabaseServiceRole.from('anti_spam_event_cursor').update(payload).eq('banca_id', bancaId);
+    } else {
+      await supabaseServiceRole.from('anti_spam_event_cursor').insert({
+        banca_id: bancaId,
+        user_id: null,
+        ...payload,
+      });
+    }
+  } else if (userId) {
+    const { data: existing } = await supabaseServiceRole
+      .from('anti_spam_event_cursor')
+      .select('id')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (existing) {
+      await supabaseServiceRole.from('anti_spam_event_cursor').update(payload).eq('user_id', userId);
+    } else {
+      await supabaseServiceRole.from('anti_spam_event_cursor').insert({
+        banca_id: null,
+        user_id: userId,
+        ...payload,
+      });
+    }
+  }
 }
 
 /**
@@ -176,7 +240,8 @@ async function actionAlreadyDone(
  */
 async function recordAction(
   configId: string,
-  bancaId: string,
+  bancaId: string | null,
+  userId: string | null,
   eventId: string,
   groupJid: string | null,
   phoneE164: string | null,
@@ -189,6 +254,7 @@ async function recordAction(
   await supabaseServiceRole.from('anti_spam_actions').insert({
     config_id: configId,
     banca_id: bancaId,
+    user_id: userId,
     event_id: eventId,
     group_jid: groupJid,
     phone_e164: phoneE164,
@@ -229,7 +295,8 @@ async function isInBlacklist(configId: string, phoneE164: string): Promise<boole
 async function handleParticipantAdd(
   event: WebhookEventRow,
   config: AntiSpamConfig,
-  bancaId: string,
+  bancaId: string | null,
+  userId: string | null,
   payload: any
 ): Promise<void> {
   const action = payload?.data?.action ?? payload?.action ?? '';
@@ -265,6 +332,7 @@ async function handleParticipantAdd(
     await recordAction(
       config.id,
       bancaId,
+      userId,
       event.id,
       groupJid,
       phoneE164,
@@ -282,9 +350,12 @@ async function handleParticipantAdd(
 async function handleDenunciaMessage(
   event: WebhookEventRow,
   config: AntiSpamConfig,
-  bancaId: string,
+  bancaId: string | null,
+  userId: string | null,
   payload: any
 ): Promise<void> {
+  if (!config.denuncia_group_jid) return;
+
   const text =
     payload?.data?.message?.conversation ??
     payload?.data?.message?.extendedTextMessage?.text ??
@@ -297,7 +368,7 @@ async function handleDenunciaMessage(
   if (phones.length === 0) return;
 
   const remoteJid = payload?.data?.key?.remoteJid ?? event.remote_jid ?? '';
-  if (!remoteJid || remoteJid !== config.denuncia_group_jid) return;
+  if (!remoteJid || remoteJid !== (config.denuncia_group_jid || '')) return;
 
   for (const phoneE164 of phones) {
     const already = await actionAlreadyDone(
@@ -310,6 +381,7 @@ async function handleDenunciaMessage(
     if (already) continue;
 
     const waJid = toWaJid(phoneE164);
+    const scope = config.owner_type === 'user' ? 'user' : 'global';
     const { error } = await supabaseServiceRole.from('anti_spam_blacklist').upsert(
       {
         config_id: config.id,
@@ -317,6 +389,7 @@ async function handleDenunciaMessage(
         wa_jid: waJid,
         reason: 'denuncia_grupo',
         status: 'active',
+        scope,
         last_seen_at: new Date().toISOString(),
       },
       { onConflict: 'config_id,phone_e164', ignoreDuplicates: false }
@@ -325,6 +398,7 @@ async function handleDenunciaMessage(
     await recordAction(
       config.id,
       bancaId,
+      userId,
       event.id,
       remoteJid,
       phoneE164,
@@ -341,7 +415,8 @@ async function handleDenunciaMessage(
 async function processEvent(
   event: WebhookEventRow,
   configs: AntiSpamConfig[],
-  bancaId: string,
+  bancaId: string | null,
+  userId: string | null,
   instanceNames: string[]
 ): Promise<void> {
   if (!event.instance_name || !instanceNames.includes(event.instance_name)) return;
@@ -353,47 +428,47 @@ async function processEvent(
   const eventTypeNorm = normalizeEventType(event.event_type);
 
   if (EVENT_TYPES_PARTICIPANTS.some((t) => normalizeEventType(t) === eventTypeNorm)) {
-    await handleParticipantAdd(event, config, bancaId, payload);
+    await handleParticipantAdd(event, config, bancaId, userId, payload);
     return;
   }
 
   if (EVENT_TYPES_MESSAGES.some((t) => normalizeEventType(t) === eventTypeNorm)) {
     const data = payload && typeof payload === 'object' && 'data' in payload ? (payload as { data?: { key?: { remoteJid?: string } } }).data : undefined;
     const remoteJid = data?.key?.remoteJid ?? event.remote_jid ?? '';
-    if (remoteJid === config.denuncia_group_jid) {
-      await handleDenunciaMessage(event, config, bancaId, payload);
+    if (config.denuncia_group_jid && remoteJid === config.denuncia_group_jid) {
+      await handleDenunciaMessage(event, config, bancaId, userId, payload);
     }
   }
 }
 
 /**
- * Um ciclo de processamento: carrega configs, para cada banca busca eventos, processa e atualiza cursor.
+ * Um ciclo de processamento: carrega configs, para cada unidade (banca/user) busca eventos, processa e atualiza cursor.
  * Exportado para uso em POST /api/admin/anti-spam/test-run.
  */
 export async function runCycle(): Promise<void> {
   const configs = await loadActiveConfigs();
   if (configs.length === 0) return;
 
-  const byBanca = groupConfigsByBanca(configs);
+  const byUnit = groupConfigsByUnit(configs);
 
-  for (const [bancaId, { instanceNames, configs: bancaConfigs }] of byBanca) {
+  for (const [_unitKey, { instanceNames, configs: unitConfigs, bancaId, userId }] of byUnit) {
     const names = Array.from(instanceNames);
     if (names.length === 0) continue;
 
-    const cursor = await getCursor(bancaId);
-    const events = await fetchNextEvents(bancaId, names, cursor);
+    const cursor = await getCursor(bancaId, userId);
+    const events = await fetchNextEvents(bancaId || userId || '', names, cursor);
     if (events.length === 0) continue;
 
     for (const event of events) {
       try {
-        await processEvent(event, bancaConfigs, bancaId, names);
+        await processEvent(event, unitConfigs, bancaId, userId, names);
       } catch (err: any) {
         console.error('[AntiSpam] Erro ao processar evento:', event.id, err?.message || err);
       }
     }
 
     const last = events[events.length - 1];
-    await updateCursor(bancaId, { id: last.id, received_at: last.received_at });
+    await updateCursor(bancaId, userId, { id: last.id, received_at: last.received_at });
   }
 }
 

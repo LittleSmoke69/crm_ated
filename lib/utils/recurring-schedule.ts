@@ -339,18 +339,16 @@ export function calculateNextRecurringRun(
     );
   }
 
-  // Próximo dia da semana (no timezone do usuário) — calendário explícito
+  // Próximo dia da semana (no timezone do usuário) — calendário explícito, sequencial
+  // Ex: disparou segunda dia 23 → próxima é terça dia 24 (se terça estiver marcada), não segunda da semana seguinte
   let daysToAdd: number;
   const nextDayInWeek = selectedDayNumbers.find((d) => d > current.dayOfWeek);
   if (nextDayInWeek !== undefined) {
+    // Há um dia marcado após hoje nesta semana → usa o próximo dia (ex: seg → ter = +1)
     daysToAdd = nextDayInWeek - current.dayOfWeek;
   } else {
+    // Não há mais dias marcados nesta semana → vai para o primeiro dia marcado na próxima semana
     daysToAdd = (7 - current.dayOfWeek + selectedDayNumbers[0]) % 7 || 7;
-  }
-
-  // Hoje selecionado e horário já passou (e não são todos os dias) → próxima ocorrência na semana que vem
-  if (isTodaySelected && hasTimePassedToday && !allDaysActive) {
-    daysToAdd = 7;
   }
 
   const nextDate = addCalendarDaysInTimezone(
@@ -448,18 +446,13 @@ function calculateNextFromCronExpr(
     );
   }
 
+  // Próximo dia sequencial (ex: seg → ter = +1, não +7)
   let daysToAdd: number;
   const nextDayInWeek = weekdayNumbers.find((d) => d > current.dayOfWeek);
   if (nextDayInWeek !== undefined) {
     daysToAdd = nextDayInWeek - current.dayOfWeek;
   } else {
     daysToAdd = (7 - current.dayOfWeek + weekdayNumbers[0]) % 7 || 7;
-  }
-
-  // Quando todos os dias da semana estão ativos (cron * ou 0-6), próxima execução = amanhã
-  if (isTodaySelected && hasTimePassedToday) {
-    const allDaysActive = weekdayNumbers.length === 7;
-    daysToAdd = allDaysActive ? 1 : 7;
   }
 
   const nextDate = addCalendarDaysInTimezone(

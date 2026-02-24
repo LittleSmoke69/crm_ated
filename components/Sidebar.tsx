@@ -33,6 +33,7 @@ import {
   ArrowLeftToLine,
   ExternalLink,
   ArrowRightLeft,
+  BookOpen,
 } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import Logo from '@/components/Logo';
@@ -74,6 +75,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
                           pathname === '/list-cleaning' ||
                           pathname === '/crm/transferido' ||
                           pathname?.startsWith('/admin/webhooks') ||
+                          pathname?.startsWith('/admin/whatsapp-official') ||
                           pathname?.startsWith('/admin/meta') ||
                           pathname?.startsWith('/admin/crm/lead-transfer') ||
                           pathname?.startsWith('/admin/hierarchy') ||
@@ -131,7 +133,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const iconMap: Record<string, any> = {
     LayoutDashboard, MessageSquare, Rocket, Users, Plus, Shield, Webhook, Workflow, Bot, Layout,
     Kanban, Activity, BarChart3, Briefcase, Settings, FlaskConical, User, ListOrdered, ClipboardList,
-    ArrowLeftToLine, ExternalLink, ArrowRightLeft,
+    ArrowLeftToLine, ExternalLink, ArrowRightLeft, BookOpen,
   };
 
   useEffect(() => {
@@ -223,6 +225,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
     icon: Webhook,
     submenu: [
       { href: '/admin/webhooks/evolution', icon: Webhook, label: 'Webhooks Evolution' },
+      { href: '/admin/whatsapp-official', icon: MessageSquare, label: 'WhatsApp Oficial' },
       { href: '/admin/webhooks/normalization-rules', icon: Settings, label: 'Regras de Normalização' },
       { href: '/admin/meta', icon: BarChart3, label: 'Meta Ads' },
     ],
@@ -262,12 +265,26 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const itemLimpezaLista: MenuItem = { href: '/list-cleaning', icon: ListOrdered, label: 'Limpeza de Lista' };
   const itemAuditoria: MenuItem = { href: '/admin/audit', icon: ClipboardList, label: 'Auditoria' };
   const itemAntiSpam: MenuItem = { href: '/admin/anti-spam', icon: Shield, label: 'Anti-Spam' };
+  const itemMeuAntiSpam: MenuItem = { href: '/anti-spam', icon: Shield, label: 'Meu Anti-Spam' };
   const itemGestaoBanca: MenuItem = { href: '/dono-banca', icon: BarChart3, label: 'Gestão de Banca' };
   const itemGestaoTrafego: MenuItem = { href: '/gestor-trafego', icon: BarChart3, label: 'Gestão de Tráfego' };
   const itemGestaoConsultores: MenuItem = { href: '/gerente', icon: Briefcase, label: 'Gestão de Consultores' };
   const itemMeuDesempenho: MenuItem = { href: '/consultor', icon: BarChart3, label: 'Meu Desempenho' };
   const itemMetaAds: MenuItem = { href: '/admin/meta', icon: BarChart3, label: 'Meta Ads' };
   const itemVslRedirect: MenuItem = { href: '/admin/vsl', icon: ExternalLink, label: 'VSL & Redirect' };
+  const itemAcademy: MenuItem = {
+    href: '/admin/academy',
+    icon: BookOpen,
+    label: 'Academy',
+    submenu: [
+      { href: '/admin/academy', icon: LayoutDashboard, label: 'Dashboard' },
+      { href: '/admin/academy/modulos', icon: Briefcase, label: 'Módulos' },
+      { href: '/admin/academy/aulas', icon: Activity, label: 'Aulas' },
+      { href: '/admin/academy/assets', icon: ListOrdered, label: 'Materiais' },
+      { href: '/admin/academy/analytics', icon: BarChart3, label: 'Analytics' },
+    ],
+  };
+  const itemAcademyPublic: MenuItem = { href: '/academy', icon: BookOpen, label: 'Academy' };
   const itemHierarquia: MenuItem = { href: '/admin/hierarchy', icon: BarChart3, label: 'Hierarquia' };
 
   // Define menus baseados no status do usuário (matriz de cargos)
@@ -296,18 +313,21 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemGestaoTrafego,
         itemVslRedirect,
         itemGestaoConsultores,
+        itemAcademy,
       ];
     }
 
-    // 🛠️ Admin - painel, CRM, campanhas, instâncias + Gestão de Tráfego + Meta Ads
+    // 🛠️ Admin - painel, CRM, campanhas, instâncias + Integrações (Webhooks, WhatsApp Oficial, Meta) + Gestão de Banca, etc.
     if (userStatus === 'admin') {
       return [
         itemDashboard,
         itemInstances,
         itemPainelAdmin,
         itemHierarquia,
+        itemWebhooks,
         itemMetaAds,
         itemVslRedirect,
+        itemAcademy,
         itemAgentesIAAdmin,
         itemCRM,
         itemCampanhas,
@@ -316,7 +336,10 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemLimpezaLista,
         itemAntiSpam,
         itemProfile,
+        itemGestaoBanca,
         itemGestaoTrafego,
+        itemGestaoConsultores,
+        itemMeuDesempenho,
       ];
     }
 
@@ -328,11 +351,13 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemInstances,
         itemMaturador,
         itemAgentesIA,
+        itemAcademyPublic,
         itemChatInterno,
         itemCRM,
         itemCampanhas,
         itemContatosAtivos,
         itemImportarContatos,
+        itemMeuAntiSpam,
         itemProfile,
       ];
     }
@@ -344,6 +369,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemInstances,
         itemMaturador,
         itemAgentesIA,
+        itemAcademyPublic,
         itemCRM,
         itemCampanhas,
         itemContatosAtivos,
@@ -354,7 +380,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
       ];
     }
 
-    // 💰 Dono de Banca - Gestão de Banca + operação (sem Flows, Webhooks, Auditoria, Anti-Spam, Chat, Gestão Consultores)
+    // 💰 Dono de Banca - Gestão de Banca + operação (sem Flows, Webhooks, Auditoria, Chat, Gestão Consultores)
     if (userStatus === 'dono_banca') {
       return [
         itemGestaoBanca,
@@ -362,10 +388,12 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemInstances,
         itemMaturador,
         itemAgentesIA,
+        itemAcademyPublic,
         itemCRM,
         itemCampanhas,
         itemContatosAtivos,
         itemImportarContatos,
+        itemMeuAntiSpam,
         itemProfile,
       ];
     }
@@ -379,31 +407,35 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemInstances,
         itemMaturador,
         itemAgentesIA,
+        itemAcademyPublic,
         itemCRM,
         itemCampanhas,
         itemContatosAtivos,
         itemImportarContatos,
+        itemMeuAntiSpam,
         itemProfile,
       ];
     }
 
-    // 📊 Gerente - Gestão de Consultores + operação (sem Maturador, Flows, Webhooks, Auditoria, Anti-Spam, Chat, Gestão Banca)
+    // 📊 Gerente - Gestão de Consultores + operação (sem Maturador, Flows, Webhooks, Auditoria, Chat, Gestão Banca)
     if (userStatus === 'gerente') {
       return [
         itemGestaoConsultores,
         itemDashboard,
         itemInstances,
         itemAgentesIA,
+        itemAcademyPublic,
         itemCRM,
         itemCampanhas,
         itemContatosAtivos,
         itemImportarContatos,
         itemLimpezaLista,
+        itemMeuAntiSpam,
         itemProfile,
       ];
     }
 
-    // 👨‍💼 Consultor - operacional (Meu Desempenho, Instâncias, CRM, Campanha > Grupos, Agentes IA, Meu Perfil)
+    // 👨‍💼 Consultor - operacional (Meu Desempenho, Instâncias, CRM, Campanha > Grupos, Agentes IA, Meu Anti-Spam, Meu Perfil)
     if (userStatus === 'consultor') {
       return [
         itemMeuDesempenho,
@@ -411,6 +443,8 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemCRM,
         itemCampanhaConsultor,
         itemAgentesIA,
+        itemAcademyPublic,
+        itemMeuAntiSpam,
         itemProfile,
       ];
     }
@@ -420,6 +454,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
       itemDashboard,
       itemInstances,
       itemMaturador,
+      itemAcademyPublic,
       itemProfile,
     ];
   };
@@ -466,7 +501,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
       {/* Overlay for mobile */}
       {isMobileOpen && (
         <div
-          className="lg:hidden fixed inset-0 bg-white/70 backdrop-blur-[1px] z-40"
+          className="lg:hidden fixed inset-0 bg-white/70 dark:bg-black/60 backdrop-blur-[1px] z-40"
           onClick={() => setIsMobileOpen(false)}
         />
       )}
@@ -474,7 +509,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
       {/* Sidebar */}
       <aside
         className={`
-          fixed left-0 top-0 h-full bg-gray-100 shadow-lg z-40
+          fixed left-0 top-0 h-full bg-gray-100 dark:bg-[#2a2a2a] shadow-lg z-40 border-r border-gray-200 dark:border-[#404040]
           transform transition-all duration-300 ease-in-out
           ${isMobileOpen ? 'translate-x-0' : '-translate-x-full'}
           lg:translate-x-0
@@ -485,7 +520,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         data-collapsed={isCollapsed}
       >
         {/* Logo e Botão de Toggle */}
-        <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+        <div className="p-4 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between">
           {(isMobileOpen || !isCollapsed) && (
             <Logo size="lg" />
           )}
@@ -493,7 +528,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
           {isMobileOpen && (
             <button
               onClick={() => setIsMobileOpen(false)}
-              className="lg:hidden flex items-center justify-center w-9 h-9 rounded-lg hover:bg-gray-100 transition text-gray-600"
+              className="lg:hidden flex items-center justify-center w-9 h-9 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] transition text-gray-600 dark:text-[#ccc]"
               aria-label="Fechar menu"
               type="button"
             >
@@ -507,7 +542,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
           )}
           <button
             onClick={() => setIsCollapsed(!isCollapsed)}
-            className="hidden lg:flex items-center justify-center w-8 h-8 rounded-lg hover:bg-gray-100 transition text-gray-600"
+            className="hidden lg:flex items-center justify-center w-8 h-8 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] transition text-gray-600 dark:text-[#ccc]"
             aria-label="Toggle sidebar"
           >
             {isCollapsed ? (
@@ -545,10 +580,10 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
                         ${
                           active && !isExpanded
                             ? 'text-white shadow-md'
-                            : 'text-gray-700 hover:bg-[#8CD95515] hover:text-[#8CD955]'
+                            : 'text-gray-700 dark:text-[#ccc] hover:bg-[#8CD955]/10 dark:hover:bg-[#8CD955]/10 hover:text-[#8CD955] dark:hover:text-[#8CD955]'
                         }
                       `}
-                      style={active && !isExpanded ? { backgroundColor: '#8CD955' } : {}}
+                      style={active && !isExpanded ? { backgroundColor: 'var(--zaploto-green)' } : {}}
                       title={isCollapsed && !isMobileOpen ? item.label : undefined}
                     >
                       <div className="flex items-center gap-3">
@@ -566,11 +601,12 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
                       <div className="mt-1 ml-4 pl-4 border-l-2 space-y-1" style={{ borderColor: '#8CD95540' }}>
                         {item.submenu?.map((sub) => {
                           const SubIcon = sub.icon;
-                          const subActive = isActive(sub.href);
+                          const subHref = sub.href ?? '/';
+                          const subActive = isActive(subHref);
                           return (
                             <Link
-                              key={sub.href}
-                              href={sub.href}
+                              key={subHref || sub.label}
+                              href={subHref}
                               onClick={() => {
                                 if (window.innerWidth < 1024) {
                                   setIsMobileOpen(false);
@@ -578,11 +614,11 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
                               }}
                               className={`
                                 flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-200
-                                ${subActive ? 'font-semibold' : 'text-gray-600 hover:bg-[#8CD95515] hover:text-[#8CD955]'}
+                                ${subActive ? 'font-semibold' : 'text-gray-600 dark:text-[#aaa] hover:bg-[#8CD955]/10 dark:hover:bg-[#8CD955]/10 hover:text-[#8CD955] dark:hover:text-[#8CD955]'}
                               `}
                               style={subActive ? { 
-                                color: '#8CD955', 
-                                backgroundColor: '#8CD95515' 
+                                color: 'var(--zaploto-green)', 
+                                backgroundColor: 'var(--zaploto-green-bg)' 
                               } : {}}
                             >
                               {SubIcon && <SubIcon className="w-4 h-4 flex-shrink-0" />}
@@ -626,11 +662,11 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
                     ${
                       active
                         ? 'text-white shadow-md'
-                        : 'text-gray-700 hover:bg-[#8CD95515] hover:text-[#8CD955]'
+                        : 'text-gray-700 dark:text-[#ccc] hover:bg-[#8CD955]/10 dark:hover:bg-[#8CD955]/10 hover:text-[#8CD955] dark:hover:text-[#8CD955]'
                     }
                     ${isLoadingDonoBanca ? 'opacity-75 cursor-wait' : ''}
                   `}
-                  style={active ? { backgroundColor: '#8CD955' } : {}}
+                  style={active ? { backgroundColor: 'var(--zaploto-green)' } : {}}
                   title={isMobileOpen ? undefined : isCollapsed ? item.label : undefined}
                 >
                   <Icon className="w-5 h-5 flex-shrink-0" />
@@ -644,7 +680,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
           
           {/* Voltar ao admin (quando está acessando conta de outro usuário) */}
           {isImpersonating && (
-            <div className="mt-auto pt-4 pb-2 border-t border-gray-200">
+            <div className="mt-auto pt-4 pb-2 border-t border-gray-200 dark:border-[#404040]">
               <button
                 onClick={() => {
                   setIsMobileOpen(false);
@@ -655,7 +691,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
                   ${isMobileOpen ? '' : isCollapsed ? 'justify-center' : ''}
                   text-white shadow-md
                 `}
-                style={{ backgroundColor: '#6366f1' }}
+                style={{ backgroundColor: '#8CD955' }}
                 title={isMobileOpen ? undefined : isCollapsed ? 'Voltar ao admin' : undefined}
               >
                 <ArrowLeftToLine className="w-5 h-5 flex-shrink-0" />
@@ -668,7 +704,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
           
           {/* Botão Sair no final da sidebar */}
           {shouldShowLogout && (
-            <div className="mt-auto pt-4 pb-2 border-t border-gray-200">
+            <div className="mt-auto pt-4 pb-2 border-t border-gray-200 dark:border-[#404040]">
               <button
                 onClick={() => {
                   setIsMobileOpen(false);

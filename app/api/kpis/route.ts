@@ -35,10 +35,11 @@ export async function GET(req: NextRequest) {
         .eq('user_id', userId)
         .eq('status', 'pending'),
       supabaseServiceRole
-        .from('whatsapp_instances')
+        .from('evolution_instances')
         .select('*', { count: 'exact', head: true })
         .eq('user_id', userId)
-        .eq('status', 'connected'),
+        .eq('status', 'ok')
+        .eq('is_active', true),
       supabaseServiceRole
         .from('searches')
         .select('*', { count: 'exact', head: true })

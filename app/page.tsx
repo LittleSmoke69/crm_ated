@@ -87,9 +87,9 @@ const Dashboard = () => {
 
   if (checking || userId === null || isCheckingStatus) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="bg-gray-100 rounded-xl shadow-lg p-6 border border-gray-200 text-center">
-          <p className="text-gray-700 font-medium">Preparando seu ambiente...</p>
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-[#1a1a1a]">
+        <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-lg p-6 border border-gray-200 dark:border-[#404040] text-center">
+          <p className="text-gray-700 dark:text-white font-medium">Preparando seu ambiente...</p>
         </div>
       </div>
     );
@@ -201,14 +201,14 @@ const Dashboard = () => {
         {/* Header */}
         <div className="flex items-center justify-between gap-4">
           <div className="flex-1">
-            <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 mb-2">Dashboard</h1>
-            <p className="text-sm sm:text-base text-gray-600">Visão geral do seu sistema</p>
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 dark:text-white mb-2">Dashboard</h1>
+            <p className="text-sm sm:text-base text-gray-600 dark:text-[#aaa]">Visão geral do seu sistema</p>
           </div>
           {/* Botão Toggle da Sidebar - Apenas no mobile, no topo direito */}
           <div className="lg:hidden flex-shrink-0">
             <button
               onClick={() => setIsMobileOpen(!isMobileOpen)}
-              className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-gray-100 transition text-gray-600 shadow-md bg-white"
+              className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] transition text-gray-600 dark:text-[#ccc] shadow-md bg-white dark:bg-[#2a2a2a]"
               aria-label="Toggle sidebar"
             >
               <Menu className="w-5 h-5" />
@@ -252,8 +252,8 @@ const Dashboard = () => {
         </div>
 
         {/* Campanhas Ativas */}
-        <div className="bg-gray-100 rounded-xl shadow-md p-6 border border-gray-200">
-          <h2 className="text-lg font-semibold text-gray-800 mb-4">Campanhas Ativas</h2>
+        <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-md p-6 border border-gray-200 dark:border-[#404040]">
+          <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">Campanhas Ativas</h2>
           {(() => {
             // Filtra apenas campanhas ativas (running, paused, pending)
             const activeCampaigns = campaigns.filter(
@@ -262,7 +262,7 @@ const Dashboard = () => {
             
             if (activeCampaigns.length === 0) {
               return (
-                <p className="text-sm text-gray-500 text-center py-4">Nenhuma campanha ativa no momento</p>
+                <p className="text-sm text-gray-500 dark:text-[#aaa] text-center py-4">Nenhuma campanha ativa no momento</p>
               );
             }
             
@@ -329,36 +329,36 @@ const Dashboard = () => {
         </div>
 
         {/* Quick Actions */}
-        <div className="bg-gray-100 rounded-xl shadow-md p-6 w-full border border-gray-200" data-tour-id="dashboard-acoes-rapidas">
-          <h2 className="text-lg font-semibold text-gray-800 mb-4">Ações Rápidas</h2>
+        <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-md p-6 w-full border border-gray-200 dark:border-[#404040]" data-tour-id="dashboard-acoes-rapidas">
+          <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">Ações Rápidas</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 w-full">
             <Link
               href="/instances"
-              className="p-4 border-2 border-gray-200 rounded-lg hover:border-[#8CD955] hover:bg-[#8CD95515] transition text-center"
+              className="p-4 border-2 border-gray-200 dark:border-[#404040] rounded-lg hover:border-[#8CD955] dark:hover:border-[#00ff00] hover:bg-[#8CD95515] dark:hover:bg-[#00ff0015] transition text-center"
             >
               <div className="text-2xl mb-2">📱</div>
-              <div className="font-medium text-gray-800">Gerenciar Instâncias</div>
+              <div className="font-medium text-gray-800 dark:text-white">Gerenciar Instâncias</div>
             </Link>
             <Link
               href="/add-to-group"
-              className="p-4 border-2 border-gray-200 rounded-lg hover:border-[#8CD955] hover:bg-[#8CD95515] transition text-center"
+              className="p-4 border-2 border-gray-200 dark:border-[#404040] rounded-lg hover:border-[#8CD955] dark:hover:border-[#00ff00] hover:bg-[#8CD95515] dark:hover:bg-[#00ff0015] transition text-center"
             >
               <div className="text-2xl mb-2">🚀</div>
-              <div className="font-medium text-gray-800">Adicionar ao Grupo</div>
+              <div className="font-medium text-gray-800 dark:text-white">Adicionar ao Grupo</div>
             </Link>
             <Link
               href="/contacts"
-              className="p-4 border-2 border-gray-200 rounded-lg hover:border-[#8CD955] hover:bg-[#8CD95515] transition text-center"
+              className="p-4 border-2 border-gray-200 dark:border-[#404040] rounded-lg hover:border-[#8CD955] dark:hover:border-[#00ff00] hover:bg-[#8CD95515] dark:hover:bg-[#00ff0015] transition text-center"
             >
               <div className="text-2xl mb-2">👥</div>
-              <div className="font-medium text-gray-800">Ver Contatos</div>
+              <div className="font-medium text-gray-800 dark:text-white">Ver Contatos</div>
             </Link>
             <Link
               href="/import-contacts"
-              className="p-4 border-2 border-gray-200 rounded-lg hover:border-[#8CD955] hover:bg-[#8CD95515] transition text-center"
+              className="p-4 border-2 border-gray-200 dark:border-[#404040] rounded-lg hover:border-[#8CD955] dark:hover:border-[#00ff00] hover:bg-[#8CD95515] dark:hover:bg-[#00ff0015] transition text-center"
             >
               <div className="text-2xl mb-2">➕</div>
-              <div className="font-medium text-gray-800">Importar Contatos</div>
+              <div className="font-medium text-gray-800 dark:text-white">Importar Contatos</div>
             </Link>
           </div>
         </div>

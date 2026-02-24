@@ -16,6 +16,42 @@ function normalizeBaseUrl(baseUrl: string): string {
   return normalized;
 }
 
+/** Tamanho máximo para vídeo PTV (20MB). A Evolution sendPtv usa stat() em path local; para URL precisamos enviar base64. */
+const PTV_FETCH_MAX_BYTES = 20 * 1024 * 1024;
+const PTV_FETCH_TIMEOUT_MS = 45000;
+
+/**
+ * Baixa o vídeo de uma URL e retorna em base64.
+ * A Evolution API sendPtv trata "video" como path local (stat()), então URLs falham com ENOENT.
+ * Enviar base64 evita isso.
+ */
+async function fetchVideoUrlAsBase64(videoUrl: string): Promise<string> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), PTV_FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(videoUrl, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    if (!res.ok) {
+      throw new Error(`Falha ao baixar vídeo: ${res.status} ${res.statusText}`);
+    }
+    const contentLength = res.headers.get('content-length');
+    if (contentLength) {
+      const len = parseInt(contentLength, 10);
+      if (!Number.isNaN(len) && len > PTV_FETCH_MAX_BYTES) {
+        throw new Error(`Vídeo PTV maior que ${PTV_FETCH_MAX_BYTES / 1024 / 1024}MB`);
+      }
+    }
+    const buf = await res.arrayBuffer();
+    if (buf.byteLength > PTV_FETCH_MAX_BYTES) {
+      throw new Error(`Vídeo PTV maior que ${PTV_FETCH_MAX_BYTES / 1024 / 1024}MB`);
+    }
+    const base64 = Buffer.from(buf).toString('base64');
+    return base64;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 
 /**
  * POST /api/crm/activations/send - Envia uma mensagem de ativação para vários grupos
@@ -129,6 +165,23 @@ export async function POST(req: NextRequest) {
     }
     console.log(`📌 [ACTIVATION] mention_all da mensagem: ${message.mention_all} → isMentionAll: ${isMentionAll} (todos os ${groupIds.length} grupos receberão a mesma opção)`);
 
+    // PTV com URL: Evolution sendPtv usa stat() no "video" (path local). URLs falham com ENOENT. Baixamos uma vez e enviamos base64.
+    let ptvVideoPayload: string | null = null;
+    if (message.message_type === 'ptv' && message.attachment_url) {
+      const v = String(message.attachment_url).trim();
+      if (v.startsWith('http://') || v.startsWith('https://')) {
+        try {
+          ptvVideoPayload = await fetchVideoUrlAsBase64(v);
+          console.log(`📹 [ACTIVATION] Vídeo PTV baixado e convertido para base64 (${Math.round((ptvVideoPayload?.length ?? 0) / 1024)}KB)`);
+        } catch (fetchErr: any) {
+          console.error('❌ [ACTIVATION] Erro ao baixar vídeo PTV para base64:', fetchErr?.message);
+          return errorResponse(`Não foi possível obter o vídeo PTV: ${fetchErr?.message || 'erro desconhecido'}`, 400);
+        }
+      } else {
+        ptvVideoPayload = v; // já é base64
+      }
+    }
+
     // 3. Envia para cada grupo em paralelo (todos com a mesma opção de menção)
     const sendPromises = groupIds.map(async (groupId: string) => {
       try {
@@ -145,25 +198,16 @@ export async function POST(req: NextRequest) {
           // Conteúdo da mensagem (sem @everyone obrigatório; mentionsEveryOne basta para menção)
           const messageContent = message.content ? String(message.content).trim() : '';
 
-          if (message.message_type === 'ptv' && message.attachment_url) {
-            // PTV: sendPtv da Evolution API usa stat() e não aceita URL remota nesta instância.
-            // Fallback: sendMedia aceita URL — vídeo enviado como mídia normal.
-            url = `${normalizedBaseUrl}/message/sendMedia/${instanceName}`;
+          if (message.message_type === 'ptv' && ptvVideoPayload) {
+            // PTV: envio REAL via sendPtv. Enviamos base64 (Evolution faz stat() em path local; URL dá ENOENT).
+            url = `${normalizedBaseUrl}/message/sendPtv/${instanceName}`;
             url = url.replace(/([^:]\/)\/+/g, '$1');
-            const videoUrl = String(message.attachment_url);
-            if (!videoUrl || !videoUrl.startsWith('http')) {
-              throw new Error('URL do vídeo PTV inválida ou não configurada');
-            }
+            const ptvDelay = typeof message.ptv_delay === 'number' && message.ptv_delay >= 0 ? message.ptv_delay : 1200;
             requestBody = {
               number: groupId,
-              mediatype: 'video',
-              mimetype: message.attachment_mime || 'video/mp4',
-              media: videoUrl,
-              fileName: 'video.mp4',
-              delay: 1200,
-              mentionsEveryOne: !!isMentionAll,
+              video: ptvVideoPayload,
+              delay: ptvDelay,
             };
-            if (messageContent) requestBody.caption = messageContent;
           } else if (message.message_type === 'audio' && message.attachment_url) {
             // Envio de áudio
             url = `${normalizedBaseUrl}/message/sendWhatsAppAudio/${instanceName}`;

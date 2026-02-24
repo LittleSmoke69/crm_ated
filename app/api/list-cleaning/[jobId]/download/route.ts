@@ -6,19 +6,20 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 const MAX_DOWNLOAD = 1000;
 
 /**
- * GET /api/list-cleaning/[jobId]/download?limit=500|1000
- * Retorna CSV com coluna phone (apenas validados - whatsapp_status = active).
+ * GET /api/list-cleaning/[jobId]/download?limit=500|1000&mode=validated|dedup
+ * - mode=validated (padrão): apenas whatsapp_status = active
+ * - mode=dedup: todos os únicos (is_duplicate=false), sem filtro whatsapp
  */
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ jobId: string }> }
 ) {
   try {
-    const { userId, profile } = await requireStatus(req, ['admin', 'dono_banca', 'gerente']);
+    const { userId, profile } = await requireStatus(req, ['super_admin', 'admin', 'dono_banca', 'gerente']);
     const { jobId } = await params;
     if (!jobId) return errorResponse('jobId obrigatório', 400);
 
-    const isAdmin = profile?.status === 'admin';
+    const isAdmin = profile?.status === 'admin' || profile?.status === 'super_admin';
     let query = supabaseServiceRole
       .from('list_cleaning_jobs')
       .select('id')
@@ -29,19 +30,25 @@ export async function GET(
       Math.max(1, Number(req.nextUrl.searchParams.get('limit')) || MAX_DOWNLOAD),
       MAX_DOWNLOAD
     );
+    const mode = req.nextUrl.searchParams.get('mode') || 'validated';
 
     const { data: job, error: jobError } = await query.single();
 
     if (jobError || !job) return errorResponse('Job não encontrado', 404);
 
-    const { data: items, error: itemsError } = await supabaseServiceRole
+    let itemsQuery = supabaseServiceRole
       .from('list_cleaning_items')
       .select('phone')
       .eq('job_id', jobId)
       .eq('is_duplicate', false)
-      .eq('whatsapp_status', 'active')
       .order('created_at', { ascending: true })
       .limit(limit);
+
+    if (mode === 'validated') {
+      itemsQuery = itemsQuery.eq('whatsapp_status', 'active');
+    }
+
+    const { data: items, error: itemsError } = await itemsQuery;
 
     if (itemsError) return errorResponse(itemsError.message);
     const phones = (items || []).map((r) => r.phone);
@@ -51,7 +58,7 @@ export async function GET(
       status: 200,
       headers: {
         'Content-Type': 'text/csv; charset=utf-8',
-        'Content-Disposition': `attachment; filename="lista-limpa-${jobId.slice(0, 8)}.csv"`,
+        'Content-Disposition': `attachment; filename="lista-${mode === 'dedup' ? 'dedup' : 'limpa'}-${jobId.slice(0, 8)}.csv"`,
       },
     });
   } catch (err: unknown) {

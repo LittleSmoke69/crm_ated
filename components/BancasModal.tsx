@@ -128,28 +128,28 @@ const BancasModal: React.FC<BancasModalProps> = ({
       className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
       style={{ pointerEvents: 'auto' }}
     >
-      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full max-h-[90vh] flex flex-col relative animate-in fade-in zoom-in duration-200">
+      <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-2xl max-w-md w-full max-h-[90vh] flex flex-col relative animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-[#404040]">
         {/* Header - mesmo padrão do TelefoneModal */}
         <div className="p-6 pb-0 flex-shrink-0">
           <div className="flex items-center gap-3 mb-2">
-            <div className="p-3 bg-[#8CD955] bg-opacity-10 rounded-xl">
-              <Building2 className="w-6 h-6 text-[#8CD955]" />
+            <div className="p-3 bg-[#8CD955] dark:bg-[#00ff00] bg-opacity-10 dark:bg-opacity-20 rounded-xl">
+              <Building2 className="w-6 h-6 text-[#8CD955] dark:text-[#00ff00]" />
             </div>
             <div>
-              <h2 className="text-xl font-bold text-gray-900">{title}</h2>
-              <p className="text-sm text-gray-500">Obrigatório para continuar no Zaploto</p>
+              <h2 className="text-xl font-bold text-gray-900 dark:text-white">{title}</h2>
+              <p className="text-sm text-gray-500 dark:text-[#aaa]">Obrigatório para continuar no Zaploto</p>
             </div>
           </div>
         </div>
 
         {/* Mensagem explicativa - estilo TelefoneModal */}
         <div className="px-6 py-4">
-          <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl">
+          <div className="p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl">
             <div className="flex items-start gap-3">
-              <AlertCircle className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
-              <div className="text-sm text-blue-800">
+              <AlertCircle className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+              <div className="text-sm text-blue-800 dark:text-blue-300">
                 <p className="font-semibold mb-1">Por que escolher minhas bancas?</p>
-                <p className="text-blue-700">
+                <p className="text-blue-700 dark:text-blue-300">
                   Selecione uma ou mais bancas em que você atua e defina a ordem de prioridade (a primeira da lista é a principal).
                 </p>
               </div>
@@ -160,46 +160,46 @@ const BancasModal: React.FC<BancasModalProps> = ({
         <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0">
           <div className="px-6 overflow-y-auto flex-1 space-y-4">
             {loadingBancas ? (
-              <p className="text-gray-500 text-sm">Carregando bancas...</p>
+              <p className="text-gray-500 dark:text-[#aaa] text-sm">Carregando bancas...</p>
             ) : bancas.length === 0 ? (
-              <p className="text-gray-500 text-sm">Nenhuma banca disponível no momento.</p>
+              <p className="text-gray-500 dark:text-[#aaa] text-sm">Nenhuma banca disponível no momento.</p>
             ) : (
               <>
                 <div className="mb-4">
                   <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-[#888] pointer-events-none" />
                     <input
                       type="search"
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
                       placeholder="Pesquisar banca por nome ou URL..."
-                      className="w-full pl-9 pr-4 py-2.5 border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] outline-none text-gray-900 placeholder:text-gray-500"
+                      className="w-full pl-9 pr-4 py-2.5 border border-gray-200 dark:border-[#555] rounded-xl bg-gray-50 dark:bg-[#333] focus:bg-white dark:focus:bg-[#3a3a3a] focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] outline-none text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-[#888]"
                       aria-label="Pesquisar banca"
                     />
                   </div>
                 </div>
                 <div>
-                  <p className="text-sm font-medium text-gray-700 mb-2">Bancas disponíveis</p>
+                  <p className="text-sm font-medium text-gray-700 dark:text-[#ccc] mb-2">Bancas disponíveis</p>
                   <ul className="space-y-2">
                     {filteredBancas.length === 0 ? (
-                      <p className="text-gray-500 text-sm py-3">
+                      <p className="text-gray-500 dark:text-[#aaa] text-sm py-3">
                         {searchTerm.trim() ? `Nenhuma banca encontrada para "${searchTerm.trim()}"` : 'Nenhuma banca disponível.'}
                       </p>
                     ) : (
                       filteredBancas.map((b) => (
                         <li key={b.id}>
-                          <label className="flex items-center gap-3 p-3 rounded-xl border border-gray-200 hover:bg-gray-50 cursor-pointer transition-colors">
+                          <label className="flex items-center gap-3 p-3 rounded-xl border border-gray-200 dark:border-[#404040] hover:bg-gray-50 dark:hover:bg-[#333] cursor-pointer transition-colors">
                             <input
                               type="checkbox"
                               checked={selectedSet.has(b.id)}
                               onChange={() => handleToggle(b.id)}
-                              className="w-5 h-5 rounded border-gray-300 text-[#8CD955] focus:ring-[#8CD955]"
+                              className="w-5 h-5 rounded border-gray-300 dark:border-[#555] text-[#8CD955] dark:text-[#00ff00] focus:ring-[#8CD955] dark:focus:ring-[#00ff00]"
                             />
-                            <span className="flex-1 font-medium text-gray-900">
+                            <span className="flex-1 font-medium text-gray-900 dark:text-white">
                               {b.name || b.url || b.id}
                             </span>
                             {selectedSet.has(b.id) && (
-                              <Check className="w-5 h-5 text-[#8CD955]" />
+                              <Check className="w-5 h-5 text-[#8CD955] dark:text-[#00ff00]" />
                             )}
                           </label>
                         </li>
@@ -210,7 +210,7 @@ const BancasModal: React.FC<BancasModalProps> = ({
 
                 {selectedOrder.length > 0 && (
                   <div>
-                    <p className="text-sm font-medium text-gray-700 mb-2">
+                    <p className="text-sm font-medium text-gray-700 dark:text-[#ccc] mb-2">
                       Suas bancas (ordem de prioridade)
                     </p>
                     <ul className="space-y-2">
@@ -220,12 +220,12 @@ const BancasModal: React.FC<BancasModalProps> = ({
                         return (
                           <li
                             key={id}
-                            className="flex items-center gap-2 p-3 rounded-xl border border-[#8CD955]/30 bg-[#8CD955]/5"
+                            className="flex items-center gap-2 p-3 rounded-xl border border-[#8CD955]/30 dark:border-[#00ff00]/30 bg-[#8CD955]/5 dark:bg-[#00ff00]/10"
                           >
-                            <span className="text-sm font-medium text-gray-500 w-6">
+                            <span className="text-sm font-medium text-gray-500 dark:text-[#aaa] w-6">
                               {index + 1}º
                             </span>
-                            <span className="flex-1 font-medium text-gray-900 truncate">
+                            <span className="flex-1 font-medium text-gray-900 dark:text-white truncate">
                               {name}
                             </span>
                             <div className="flex flex-col gap-0">
@@ -233,19 +233,19 @@ const BancasModal: React.FC<BancasModalProps> = ({
                                 type="button"
                                 onClick={() => moveUp(index)}
                                 disabled={index === 0}
-                                className="p-1 rounded hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                                className="p-1 rounded hover:bg-gray-200 dark:hover:bg-[#404040] disabled:opacity-40 disabled:cursor-not-allowed"
                                 aria-label="Subir"
                               >
-                                <ChevronUp className="w-4 h-4 text-gray-600" />
+                                <ChevronUp className="w-4 h-4 text-gray-600 dark:text-[#ccc]" />
                               </button>
                               <button
                                 type="button"
                                 onClick={() => moveDown(index)}
                                 disabled={index === selectedOrder.length - 1}
-                                className="p-1 rounded hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                                className="p-1 rounded hover:bg-gray-200 dark:hover:bg-[#404040] disabled:opacity-40 disabled:cursor-not-allowed"
                                 aria-label="Descer"
                               >
-                                <ChevronDown className="w-4 h-4 text-gray-600" />
+                                <ChevronDown className="w-4 h-4 text-gray-600 dark:text-[#ccc]" />
                               </button>
                             </div>
                           </li>
@@ -258,17 +258,17 @@ const BancasModal: React.FC<BancasModalProps> = ({
             )}
 
             {error && (
-              <div className="p-3 bg-red-50 border border-red-200 rounded-xl">
-                <p className="text-sm text-red-600">{error}</p>
+              <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl">
+                <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
               </div>
             )}
           </div>
 
-          <div className="p-6 pt-4 border-t border-gray-100 flex-shrink-0">
+          <div className="p-6 pt-4 border-t border-gray-100 dark:border-[#404040] flex-shrink-0">
             <button
               type="submit"
               disabled={loading || loadingBancas || bancas.length === 0 || selectedOrder.length === 0}
-              className="w-full px-4 py-3 bg-[#8CD955] hover:bg-[#7BC844] text-white rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full px-4 py-3 bg-[#8CD955] dark:bg-[#00ff00] hover:bg-[#7BC844] dark:hover:bg-[#00e600] text-white rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {loading ? 'Salvando...' : 'Continuar'}
             </button>

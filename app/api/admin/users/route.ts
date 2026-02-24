@@ -20,7 +20,7 @@ const DEFAULT_SETTINGS = {
 export async function GET(req: NextRequest) {
   try {
     const { profile } = await requireAdminOrSuporte(req);
-    const zaplotoId = getEffectiveZaplotoId(req, profile);
+    const zaplotoId = await getEffectiveZaplotoId(req, profile);
 
     const { data: users, error: usersError } = await supabaseServiceRole
       .from('profiles')

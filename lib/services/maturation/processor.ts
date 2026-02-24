@@ -58,7 +58,7 @@ async function sendText(params: {
   const { baseUrl, instanceName, apiKey, number, text } = params;
   const numberNorm = normalizeNumberForEvolution(number);
   const url = `${normalizeBaseUrl(baseUrl)}/message/sendText/${instanceName}`;
-  const body = { number: numberNorm, textContent: { text } };
+  const body = { number: numberNorm, text };
   console.log(`${LOG_PREFIX} [Evolution API] sendText - URL: ${url}`);
   console.log(`${LOG_PREFIX} [Evolution API] sendText - Body: number=${numberNorm}, text=${text?.substring(0, 50)}${text?.length > 50 ? '...' : ''}`);
   const startTime = Date.now();

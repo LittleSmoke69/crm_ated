@@ -181,8 +181,25 @@ async function getUserWithdrawals(bancaUrl: string, oddsUserId: number, apiKey: 
 export async function GET(req: NextRequest) {
   const startTime = Date.now();
   try {
-    const { userId, profile } = await requireStatus(req, ['gerente', 'gestor']);
+    const { userId, profile } = await requireStatus(req, ['gerente', 'gestor', 'super_admin', 'admin']);
     let effectiveUserId = userId;
+
+    const isAdminOrSuperAdmin = profile?.status === 'super_admin' || profile?.status === 'admin';
+
+    // super_admin/admin: gerente_id na query define o gerente cujo dashboard será exibido; banca_url recomendado
+    if (isAdminOrSuperAdmin) {
+      const gerenteIdParam = req.nextUrl.searchParams.get('gerente_id')?.trim();
+      if (gerenteIdParam) {
+        const { data: gerenteProfile } = await supabaseServiceRole
+          .from('profiles')
+          .select('id, status')
+          .eq('id', gerenteIdParam)
+          .single();
+        if (gerenteProfile?.status === 'gerente') {
+          effectiveUserId = gerenteIdParam;
+        }
+      }
+    }
 
     // Gestor: deve enviar X-Effective-Gerente-Id para ver o dashboard desse gerente (acesso ao CRM dos gerentes da banca)
     if (profile?.status === 'gestor') {

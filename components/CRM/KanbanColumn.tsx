@@ -190,10 +190,10 @@ const KanbanColumn: React.FC<KanbanColumnProps> = ({
     <div 
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => onDrop(e, id)}
-      className={`flex flex-col min-w-[340px] w-full max-w-[420px] h-full min-h-[500px] rounded-[32px] border-2 ${getBorderColor()} ${getBgColor()} overflow-hidden shadow-sm transition-all duration-300 hover:shadow-md`}
+      className={`flex flex-col min-w-[340px] w-full max-w-[420px] h-full min-h-[500px] rounded-[32px] border-2 ${getBorderColor()} dark:border-[#404040] ${getBgColor()} dark:bg-[#2a2a2a] overflow-hidden shadow-sm transition-all duration-300 hover:shadow-md`}
     >
       {/* Column Header */}
-      <div className="p-6 flex items-center justify-between bg-gray-100/60 backdrop-blur-md border-b border-black/5">
+      <div className="p-6 flex items-center justify-between bg-gray-100/60 dark:bg-[#333]/80 backdrop-blur-md border-b border-black/5 dark:border-[#404040]">
         <div className="flex items-center gap-3">
           <span 
             className={`px-4 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-widest ${getHeaderColor()} shadow-sm border border-black/5`}
@@ -201,7 +201,7 @@ const KanbanColumn: React.FC<KanbanColumnProps> = ({
           >
             {title}
           </span>
-          <span className="text-gray-600 text-[11px] font-black bg-white px-3 py-1.5 rounded-xl border border-gray-100 shadow-sm" title={totalLeads != null ? `${count} exibidos de ${totalLeads} no total` : undefined}>
+          <span className="text-gray-600 dark:text-gray-300 text-[11px] font-black bg-white dark:bg-[#404040] px-3 py-1.5 rounded-xl border border-gray-100 dark:border-[#555] shadow-sm" title={totalLeads != null ? `${count} exibidos de ${totalLeads} no total` : undefined}>
             {totalLeads != null ? `${count}/${totalLeads}` : count}
           </span>
         </div>
@@ -286,11 +286,11 @@ const KanbanColumn: React.FC<KanbanColumnProps> = ({
             </>
           )
         ) : (
-          <div className="h-40 flex flex-col items-center justify-center border-2 border-dashed border-gray-200 rounded-2xl m-2 bg-white/30">
+          <div className="h-40 flex flex-col items-center justify-center border-2 border-dashed border-gray-200 dark:border-[#404040] rounded-2xl m-2 bg-white/30 dark:bg-[#2a2a2a]/50">
             <div className="p-3 bg-gray-100 rounded-full mb-3">
               <Plus className="w-6 h-6 text-gray-300" />
             </div>
-            <p className="text-gray-400 text-sm font-bold">Nenhum lead</p>
+            <p className="text-gray-400 dark:text-gray-500 text-sm font-bold">Nenhum lead</p>
           </div>
         )}
         
@@ -323,10 +323,10 @@ const KanbanColumn: React.FC<KanbanColumnProps> = ({
       </div>
 
       {/* Footer / Add Lead Button */}
-      <div className="p-4 bg-gray-100/40 border-t border-black/5">
+      <div className="p-4 bg-gray-100/40 dark:bg-[#333]/50 border-t border-black/5 dark:border-[#404040]">
         <button 
           onClick={() => onAddLead?.(id)}
-          className="w-full py-3 flex items-center justify-center gap-2 text-sm font-black text-gray-500 hover:bg-white rounded-xl transition-all border border-dashed border-gray-300 hover:shadow-sm"
+          className="w-full py-3 flex items-center justify-center gap-2 text-sm font-black text-gray-500 dark:text-gray-400 hover:bg-white dark:hover:bg-[#404040] rounded-xl transition-all border border-dashed border-gray-300 dark:border-[#555] hover:shadow-sm"
           style={{ '--hover-color': '#8CD955', '--hover-border': '#8CD955' } as React.CSSProperties}
           onMouseEnter={(e) => {
             e.currentTarget.style.color = '#8CD955';

@@ -610,10 +610,10 @@ const TransferidoContent = () => {
 
   if (checking) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-200 text-center">
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-[#1a1a1a]">
+        <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-lg p-6 border border-gray-200 dark:border-[#404040] text-center">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955] mx-auto mb-4" />
-          <p className="text-gray-700 font-medium">Carregando...</p>
+          <p className="text-gray-700 dark:text-gray-200 font-medium">Carregando...</p>
         </div>
       </div>
     );
@@ -629,8 +629,8 @@ const TransferidoContent = () => {
                 <ArrowRightLeft className="w-5 h-5 md:w-6 md:h-6 text-[#8CD955]" />
               </div>
               <div>
-                <h1 className="text-xl md:text-2xl font-bold text-gray-800">Leads Transferidos</h1>
-                <p className="text-[11px] md:text-sm text-gray-500">CRM dos leads que foram transferidos para você</p>
+                <h1 className="text-xl md:text-2xl font-bold text-gray-800 dark:text-white">Leads Transferidos</h1>
+                <p className="text-[11px] md:text-sm text-gray-500 dark:text-gray-400">CRM dos leads que foram transferidos para você</p>
               </div>
             </div>
             <button
@@ -644,28 +644,28 @@ const TransferidoContent = () => {
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6 relative">
             {(loading || filterLoading) && (
-              <div className="absolute inset-0 bg-white/60 backdrop-blur-[2px] rounded-xl z-10 flex items-center justify-center">
+              <div className="absolute inset-0 bg-white/60 dark:bg-[#1a1a1a]/80 backdrop-blur-[2px] rounded-xl z-10 flex items-center justify-center">
                 <div className="flex items-center gap-2 text-[#8CD955]">
                   <RefreshCw className="w-4 h-4 animate-spin" />
                   <span className="text-xs font-semibold">Carregando...</span>
                 </div>
               </div>
             )}
-            <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Total Leads</p>
-              <p className="text-lg font-bold text-gray-800">{metrics?.total_leads ?? 0}</p>
+            <div className="bg-white dark:bg-[#2a2a2a] p-3 rounded-xl border border-gray-100 dark:border-[#404040] shadow-sm">
+              <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Total Leads</p>
+              <p className="text-lg font-bold text-gray-800 dark:text-white">{metrics?.total_leads ?? 0}</p>
             </div>
-            <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Total Depositado</p>
+            <div className="bg-white dark:bg-[#2a2a2a] p-3 rounded-xl border border-gray-100 dark:border-[#404040] shadow-sm">
+              <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Total Depositado</p>
               <p className="text-lg font-bold text-[#8CD955]">{formatCurrency(metrics?.total_deposited ?? 0)}</p>
             </div>
-            <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Clientes Ativos</p>
-              <p className="text-lg font-bold text-purple-600">{metrics?.active_leads ?? 0}</p>
+            <div className="bg-white dark:bg-[#2a2a2a] p-3 rounded-xl border border-gray-100 dark:border-[#404040] shadow-sm">
+              <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Clientes Ativos</p>
+              <p className="text-lg font-bold text-purple-600 dark:text-purple-400">{metrics?.active_leads ?? 0}</p>
             </div>
-            <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Conversão</p>
-              <p className="text-lg font-bold text-blue-600">{(metrics?.conversion_rate ?? 0).toFixed(1)}%</p>
+            <div className="bg-white dark:bg-[#2a2a2a] p-3 rounded-xl border border-gray-100 dark:border-[#404040] shadow-sm">
+              <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Conversão</p>
+              <p className="text-lg font-bold text-blue-600 dark:text-blue-400">{(metrics?.conversion_rate ?? 0).toFixed(1)}%</p>
             </div>
           </div>
 
@@ -676,11 +676,11 @@ const TransferidoContent = () => {
           )}
 
           {!loading && !filterLoading && !error && rawLeads.length === 0 && (
-            <div className="mb-4 p-4 bg-blue-50 border border-blue-100 text-blue-700 rounded-xl flex items-center gap-3 text-sm">
+            <div className="mb-4 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800/50 text-blue-700 dark:text-blue-200 rounded-xl flex items-center gap-3 text-sm">
               <AlertCircle className="w-5 h-5 flex-shrink-0" />
               <div>
                 <p className="font-semibold">Nenhum lead transferido</p>
-                <p className="text-xs text-blue-600 mt-1">Leads transferidos para você aparecerão aqui.</p>
+                <p className="text-xs text-blue-600 dark:text-blue-300 mt-1">Leads transferidos para você aparecerão aqui.</p>
               </div>
             </div>
           )}
@@ -691,13 +691,14 @@ const TransferidoContent = () => {
               onFilterChange={handleFilterChange}
               initialDateFilter={filters.date}
               onBancasLoaded={handleBancasLoaded}
+              targetUserId={targetUserId}
             />
           </div>
         </div>
 
         <div className="flex-1 overflow-x-auto overflow-y-auto pb-4 custom-scrollbar -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8 snap-x snap-mandatory relative min-h-[400px]">
           {(loading || filterLoading) && (
-            <div className="absolute inset-0 bg-white/50 backdrop-blur-[1px] rounded-xl z-20 flex items-center justify-center">
+            <div className="absolute inset-0 bg-white/50 dark:bg-[#1a1a1a]/80 backdrop-blur-[1px] rounded-xl z-20 flex items-center justify-center">
               <div className="flex flex-col items-center gap-2 text-[#8CD955]">
                 <RefreshCw className="w-5 h-5 animate-spin" />
                 <span className="text-xs font-semibold">Carregando leads...</span>
@@ -753,23 +754,23 @@ const TransferidoContent = () => {
 
       {showStatusModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowStatusModal(false)}>
-          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between rounded-t-2xl">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-gray-200 dark:border-[#404040]" onClick={(e) => e.stopPropagation()}>
+            <div className="sticky top-0 bg-white dark:bg-[#2a2a2a] border-b border-gray-200 dark:border-[#404040] px-6 py-4 flex items-center justify-between rounded-t-2xl">
               <div>
-                <h2 className="text-xl font-bold text-gray-800">Status de Temperatura dos Leads</h2>
-                <p className="text-sm text-gray-500">Entenda cada classificação de lead no sistema</p>
+                <h2 className="text-xl font-bold text-gray-800 dark:text-white">Status de Temperatura dos Leads</h2>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Entenda cada classificação de lead no sistema</p>
               </div>
-              <button onClick={() => setShowStatusModal(false)} className="p-2 hover:bg-gray-100 rounded-lg">
+              <button onClick={() => setShowStatusModal(false)} className="p-2 hover:bg-gray-100 dark:hover:bg-[#404040] rounded-lg">
                 <X className="w-5 h-5" />
               </button>
             </div>
             <div className="p-6">
-              <p className="text-gray-600">
+              <p className="text-gray-600 dark:text-gray-300">
                 Os leads são classificados por temperatura (frio, ativo, quente, esfriando) e por estágio no funil (novo, contactado, depósitos, ativo).
                 Use os filtros para segmentar sua base.
               </p>
             </div>
-            <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-6 py-4 rounded-b-2xl">
+            <div className="sticky bottom-0 bg-gray-50 dark:bg-[#333] border-t border-gray-200 dark:border-[#404040] px-6 py-4 rounded-b-2xl">
               <button onClick={() => setShowStatusModal(false)} className="w-full py-3 bg-[#8CD955] hover:bg-[#7BC84A] text-white font-bold rounded-xl">
                 Entendi
               </button>

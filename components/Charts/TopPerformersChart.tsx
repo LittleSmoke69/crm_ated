@@ -60,7 +60,7 @@ export default function TopPerformersChart({
 }: TopPerformersChartProps) {
   if (!data || !Array.isArray(data) || data.length === 0) {
     return (
-      <div className="flex items-center justify-center h-64 text-gray-500">
+      <div className="flex items-center justify-center h-64 text-gray-500 dark:text-gray-400">
         Nenhum dado disponível
       </div>
     );
@@ -68,12 +68,12 @@ export default function TopPerformersChart({
 
   return (
     <div className="w-full">
-      <h3 className="text-sm font-bold text-gray-600 mb-4">{title}</h3>
+      <h3 className="text-sm font-bold text-gray-600 dark:text-gray-400 mb-4">{title}</h3>
       <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2">
         {data.map((item, index) => (
           <div
             key={index}
-            className="bg-gradient-to-r from-gray-50 to-white border border-gray-200 rounded-lg p-3 hover:shadow-md hover:border-[#8CD955]/30 transition-all"
+            className="bg-gradient-to-r from-gray-50 to-white dark:from-[#2a2a2a] dark:to-[#1e1e1e] border border-gray-200 dark:border-[#404040] rounded-lg p-3 hover:shadow-md hover:border-[#8CD955]/30 transition-all"
           >
             <div className="flex items-center justify-between gap-4">
               <div className="flex-1 min-w-0">
@@ -81,7 +81,7 @@ export default function TopPerformersChart({
                   <div className="flex-shrink-0 w-7 h-7 rounded-full bg-[#8CD955] flex items-center justify-center shadow-sm">
                     <span className="text-xs font-bold text-white">{index + 1}</span>
                   </div>
-                  <p className="text-sm font-bold text-gray-800 truncate">{item.name}</p>
+                  <p className="text-sm font-bold text-gray-800 dark:text-gray-100 truncate">{item.name}</p>
                 </div>
                 <div className="flex items-center gap-1.5 mt-1.5 ml-9">
                   <Phone className="w-3.5 h-3.5 text-gray-400" />
@@ -90,7 +90,7 @@ export default function TopPerformersChart({
                       href={`https://wa.me/${normalizePhoneForTel(item.phone)}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-xs text-gray-600 hover:text-[#8CD955] font-medium transition-colors"
+                      className="text-xs text-gray-600 dark:text-gray-300 hover:text-[#8CD955] font-medium transition-colors"
                       title="Abrir conversa no WhatsApp"
                     >
                       {formatPhone(item.phone)}
@@ -101,7 +101,7 @@ export default function TopPerformersChart({
                 </div>
               </div>
               <div className="text-right flex-shrink-0">
-                <p className="text-xs text-gray-500 mb-0.5 font-medium">{valueLabel}</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mb-0.5 font-medium">{valueLabel}</p>
                 <p className="text-base font-bold text-[#8CD955]">
                   R$ {item.value.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </p>

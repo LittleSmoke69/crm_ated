@@ -79,6 +79,14 @@ export default function ConsultorPage() {
   const [showBancaFilter, setShowBancaFilter] = useState(false);
   const [bancaSearchTerm, setBancaSearchTerm] = useState('');
 
+  // Perfil e filtro de consultor para super_admin/admin (ver desempenho de outro consultor)
+  const [userStatus, setUserStatus] = useState<string | null>(null);
+  const [consultoresDaBanca, setConsultoresDaBanca] = useState<Array<{ id: string; email: string; full_name: string | null }>>([]);
+  const [consultoresLoading, setConsultoresLoading] = useState(false);
+  const [selectedConsultorId, setSelectedConsultorId] = useState<string>('');
+  const [showConsultorDesempenhoFilter, setShowConsultorDesempenhoFilter] = useState(false);
+  const [consultorDesempenhoSearchTerm, setConsultorDesempenhoSearchTerm] = useState('');
+
   // Filtro de data
   const [dateFilter, setDateFilter] = useState<'daily' | 'yesterday' | '7days' | '15days' | '30days' | 'custom' | 'all'>('daily');
   const [customStartDate, setCustomStartDate] = useState<string>('');
@@ -225,32 +233,58 @@ export default function ConsultorPage() {
     return { dateFrom, dateTo };
   };
 
+  const isAdminOrSuperAdmin = userStatus === 'super_admin' || userStatus === 'admin';
+
   useEffect(() => {
     if (!userId) return;
     loadBancas();
-    // Não carrega dados automaticamente - só quando filtro for aplicado
     setInitialLoading(false);
   }, [userId]);
 
   useEffect(() => {
+    if (!userId) return;
+    fetch('/api/user/profile', { headers: { 'X-User-Id': userId } })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.success && res.data?.status) setUserStatus(res.data.status);
+      })
+      .catch(() => {});
+  }, [userId]);
+
+  useEffect(() => {
+    if (!userId || !isAdminOrSuperAdmin || !selectedBanca) {
+      setConsultoresDaBanca([]);
+      setSelectedConsultorId('');
+      return;
+    }
+    setConsultoresLoading(true);
+    fetch(`/api/consultor/consultores-by-banca?banca_url=${encodeURIComponent(selectedBanca)}`, {
+      headers: { 'X-User-Id': userId }
+    })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.success && Array.isArray(res.data)) {
+          setConsultoresDaBanca(res.data);
+          if (res.data.length > 0 && !selectedConsultorId) setSelectedConsultorId(res.data[0].id);
+          else if (res.data.length === 0) setSelectedConsultorId('');
+        }
+      })
+      .finally(() => setConsultoresLoading(false));
+  }, [userId, isAdminOrSuperAdmin, selectedBanca]);
+
+  useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as HTMLElement;
-      if (!target.closest('.date-filter-container')) {
-        setShowDatePicker(false);
-      }
-      if (!target.closest('.banca-filter-container')) {
-        setShowBancaFilter(false);
-      }
-      if (!target.closest('.winners-date-filter-container')) {
-        setShowWinnersDatePicker(false);
-      }
+      if (!target.closest('.date-filter-container')) setShowDatePicker(false);
+      if (!target.closest('.banca-filter-container')) setShowBancaFilter(false);
+      if (!target.closest('.winners-date-filter-container')) setShowWinnersDatePicker(false);
+      if (!target.closest('.consultor-desempenho-filter-container')) { setShowConsultorDesempenhoFilter(false); setConsultorDesempenhoSearchTerm(''); }
     };
-    
-    if (showDatePicker || showBancaFilter || showWinnersDatePicker) {
+    if (showDatePicker || showBancaFilter || showWinnersDatePicker || showConsultorDesempenhoFilter) {
       document.addEventListener('mousedown', handleClickOutside);
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
-  }, [showDatePicker, showBancaFilter, showWinnersDatePicker]);
+  }, [showDatePicker, showBancaFilter, showWinnersDatePicker, showConsultorDesempenhoFilter]);
 
   const loadBancas = async () => {
     try {
@@ -287,9 +321,8 @@ export default function ConsultorPage() {
       if (dateFrom) params.append('date_from', dateFrom);
       if (dateTo) params.append('date_to', dateTo);
       if (selectedBanca) params.append('banca_url', selectedBanca);
-      if (params.toString()) {
-        url += `?${params.toString()}`;
-      }
+      if (isAdminOrSuperAdmin && selectedConsultorId) params.append('consultor_id', selectedConsultorId);
+      if (params.toString()) url += `?${params.toString()}`;
 
       const response = await fetch(url, {
         headers: {
@@ -344,18 +377,17 @@ export default function ConsultorPage() {
     }
   };
 
-  // Carrega dados quando filtros mudarem (mas só se banca estiver selecionada)
+  // Carrega dados quando filtros mudarem (banca, data, ou consultor para admin)
   useEffect(() => {
     if (!userId || initialLoading) return;
-    // Só carrega se houver banca selecionada
-    if (selectedBanca) {
-      loadDashboard();
-    } else {
-      // Limpa dados se não houver banca selecionada
+    if (!selectedBanca) {
       setData(null);
+      return;
     }
+    if (isAdminOrSuperAdmin && consultoresDaBanca.length > 0 && !selectedConsultorId) return;
+    loadDashboard();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dateFilter, appliedStartDate, appliedEndDate, selectedBanca]);
+  }, [dateFilter, appliedStartDate, appliedEndDate, selectedBanca, selectedConsultorId, isAdminOrSuperAdmin, consultoresDaBanca.length]);
 
   // Carrega lista de ganhadores quando banca ou período (last_winner_at) mudar
   useEffect(() => {
@@ -493,7 +525,7 @@ export default function ConsultorPage() {
 
   if (checking || initialLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-[#1a1a1a]">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
       </div>
     );
@@ -511,8 +543,8 @@ export default function ConsultorPage() {
               <LayoutDashboard className="w-6 h-6 text-[#8CD955]" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-gray-800">Meu Desempenho</h1>
-              <p className="text-sm text-gray-500">Acompanhe suas métricas e resultados pessoais</p>
+              <h1 className="text-2xl font-bold text-gray-800 dark:text-white">Meu Desempenho</h1>
+              <p className="text-sm text-gray-500 dark:text-gray-400">Acompanhe suas métricas e resultados pessoais</p>
             </div>
           </div>
 
@@ -521,7 +553,7 @@ export default function ConsultorPage() {
             <div className="relative banca-filter-container">
               <button
                 onClick={() => setShowBancaFilter(!showBancaFilter)}
-                className="flex items-center gap-2 bg-white border border-gray-200 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 hover:bg-gray-50 transition-all shadow-sm"
+                className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333] transition-all shadow-sm"
               >
                 <Filter className="w-4 h-4 text-[#8CD955]" />
                 <span className="truncate max-w-[150px]">
@@ -531,16 +563,16 @@ export default function ConsultorPage() {
               </button>
 
               {showBancaFilter && (
-                <div className="absolute right-0 mt-2 w-72 bg-white border border-gray-100 rounded-2xl shadow-xl z-50 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200">
-                  <div className="p-3 border-b border-gray-100">
+                <div className="absolute right-0 mt-2 w-72 bg-white dark:bg-[#2a2a2a] border border-gray-100 dark:border-[#404040] rounded-2xl shadow-xl z-50 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200">
+                  <div className="p-3 border-b border-gray-100 dark:border-[#404040]">
                     <div className="relative">
-                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500" />
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-gray-400" />
                       <input
                         type="text"
                         placeholder="Buscar banca..."
                         value={bancaSearchTerm}
                         onChange={(e) => setBancaSearchTerm(e.target.value)}
-                        className="w-full pl-9 pr-3 py-2 bg-gray-100 border border-gray-200 rounded-lg text-sm text-gray-900 font-bold focus:ring-2 focus:ring-[#8CD955]/30 placeholder:text-gray-500 outline-none"
+                        className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-900 dark:text-gray-100 font-bold focus:ring-2 focus:ring-[#8CD955]/30 placeholder:text-gray-500 dark:placeholder:text-gray-500 outline-none"
                       />
                     </div>
                   </div>
@@ -551,7 +583,7 @@ export default function ConsultorPage() {
                         setShowBancaFilter(false);
                       }}
                       className={`w-full text-left px-3 py-2.5 rounded-xl text-sm transition-all mb-1 ${
-                        !selectedBanca ? 'bg-[#8CD95510] text-[#8CD955] font-bold' : 'text-gray-600 hover:bg-gray-50'
+                        !selectedBanca ? 'bg-[#8CD95510] text-[#8CD955] font-bold' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
                       }`}
                     >
                       Todas as Bancas
@@ -566,7 +598,7 @@ export default function ConsultorPage() {
                             setShowBancaFilter(false);
                           }}
                           className={`w-full text-left px-3 py-2.5 rounded-xl text-sm transition-all mb-1 ${
-                            selectedBanca === banca.url ? 'bg-[#8CD95510] text-[#8CD955] font-bold' : 'text-gray-600 hover:bg-gray-50'
+                            selectedBanca === banca.url ? 'bg-[#8CD95510] text-[#8CD955] font-bold' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
                           }`}
                         >
                           <div className="font-bold">{banca.name}</div>
@@ -577,11 +609,70 @@ export default function ConsultorPage() {
               )}
             </div>
 
+            {/* Filtro de Consultor (super_admin/admin: ver desempenho de outro consultor) */}
+            {isAdminOrSuperAdmin && (
+              <div className="relative consultor-desempenho-filter-container">
+                <button
+                  onClick={() => {
+                    setShowConsultorDesempenhoFilter(!showConsultorDesempenhoFilter);
+                    setShowBancaFilter(false);
+                  }}
+                  disabled={consultoresLoading || consultoresDaBanca.length === 0}
+                  className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333] transition-all shadow-sm disabled:opacity-80"
+                >
+                  <Users className="w-4 h-4 text-[#8CD955]" />
+                  {consultoresLoading ? 'Carregando...' : (consultoresDaBanca.find((c) => c.id === selectedConsultorId)?.full_name || consultoresDaBanca.find((c) => c.id === selectedConsultorId)?.email || 'Consultor')}
+                  <ChevronDown className="w-4 h-4" />
+                </button>
+                {showConsultorDesempenhoFilter && (
+                  <div className="absolute right-0 mt-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-lg z-50 min-w-[240px] max-h-[360px] overflow-hidden flex flex-col">
+                    <div className="p-2 border-b border-gray-100 dark:border-[#404040]">
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500" />
+                        <input
+                          type="text"
+                          placeholder="Pesquisar consultor..."
+                          value={consultorDesempenhoSearchTerm}
+                          onChange={(e) => setConsultorDesempenhoSearchTerm(e.target.value)}
+                          className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955]/30 outline-none placeholder:text-gray-500 dark:placeholder:text-gray-500"
+                          autoFocus
+                        />
+                      </div>
+                    </div>
+                    <div className="overflow-y-auto max-h-[280px] p-2">
+                      {consultoresDaBanca
+                        .filter(c => (c.full_name || c.email || '').toLowerCase().includes(consultorDesempenhoSearchTerm.toLowerCase()))
+                        .map((c) => (
+                          <button
+                            key={c.id}
+                            onClick={() => {
+                              setSelectedConsultorId(c.id);
+                              setShowConsultorDesempenhoFilter(false);
+                              setConsultorDesempenhoSearchTerm('');
+                            }}
+                            className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                              selectedConsultorId === c.id ? 'bg-[#8CD95515] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
+                            }`}
+                          >
+                            {c.full_name || c.email}
+                          </button>
+                        ))}
+                      {consultoresDaBanca.filter(c => (c.full_name || c.email || '').toLowerCase().includes(consultorDesempenhoSearchTerm.toLowerCase())).length === 0 && (
+                        <div className="px-3 py-6 text-center text-sm text-gray-500 dark:text-gray-400">
+                          Nenhum consultor encontrado
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Filtro de Data */}
             <div className="relative date-filter-container">
               <button
                 onClick={() => setShowDatePicker(!showDatePicker)}
-                className="flex items-center gap-2 bg-white border border-gray-200 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 hover:bg-gray-50 transition-all shadow-sm"
+                className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333] transition-all shadow-sm"
               >
                 <Calendar className="w-4 h-4 text-[#8CD955]" />
                 {dateFilter === 'daily' && 'Diário'}
@@ -595,7 +686,7 @@ export default function ConsultorPage() {
               </button>
               
               {showDatePicker && (
-                <div className="absolute right-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-50 min-w-[200px]">
+                <div className="absolute right-0 mt-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-lg z-50 min-w-[200px]">
                   <div className="p-2">
                     {['daily', 'yesterday', '7days', '15days', '30days', 'custom', 'all'].map((filter) => (
                       <button
@@ -609,7 +700,7 @@ export default function ConsultorPage() {
                           }
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === filter ? 'bg-[#8CD95515] text-[#8CD955] font-medium' : 'text-gray-700 hover:bg-gray-50'
+                          dateFilter === filter ? 'bg-[#8CD95515] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
                         }`}
                       >
                         {filter === 'daily' && 'Diário'}
@@ -623,26 +714,26 @@ export default function ConsultorPage() {
                     ))}
                     
                     {dateFilter === 'custom' && (
-                      <div className="p-3 border-t border-gray-200 space-y-3 mt-2">
+                      <div className="p-3 border-t border-gray-200 dark:border-[#404040] space-y-3 mt-2">
                         <div>
-                          <label className="block text-xs font-medium text-gray-500 mb-1">Data Inicial</label>
+                          <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Data Inicial</label>
                           <input
                             type="date"
                             value={customStartDate}
                             onChange={(e) => setCustomStartDate(e.target.value)}
                             max={customEndDate || new Date().toISOString().split('T')[0]}
-                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                            className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] dark:bg-[#333] dark:text-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
                           />
                         </div>
                         <div>
-                          <label className="block text-xs font-medium text-gray-500 mb-1">Data Final</label>
+                          <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Data Final</label>
                           <input
                             type="date"
                             value={customEndDate}
                             onChange={(e) => setCustomEndDate(e.target.value)}
                             min={customStartDate}
                             max={new Date().toISOString().split('T')[0]}
-                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                            className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] dark:bg-[#333] dark:text-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
                           />
                         </div>
                         <button
@@ -678,7 +769,7 @@ export default function ConsultorPage() {
         {/* Resumo de Performance */}
         <div className="relative">
           {dataLoading && (
-            <div className="absolute inset-0 bg-white/80 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
+            <div className="absolute inset-0 bg-white/80 dark:bg-[#1a1a1a]/80 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
             </div>
           )}
@@ -780,19 +871,19 @@ export default function ConsultorPage() {
             
             if (!initialLoading && !dataLoading && !selectedBanca) {
               return (
-                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 text-center">
-                  <Filter className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                  <p className="text-gray-600 font-medium mb-2">Selecione uma banca para visualizar os dados</p>
-                  <p className="text-sm text-gray-500">Use o filtro acima para escolher uma banca e aplicar os filtros de período</p>
+                <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-sm border border-gray-100 dark:border-[#404040] p-8 text-center">
+                  <Filter className="w-12 h-12 text-gray-400 dark:text-gray-600 mx-auto mb-4" />
+                  <p className="text-gray-600 dark:text-gray-300 font-medium mb-2">Selecione uma banca para visualizar os dados</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Use o filtro acima para escolher uma banca e aplicar os filtros de período</p>
                 </div>
               );
             }
             
             if (!initialLoading && !dataLoading && selectedBanca) {
               return (
-                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 text-center">
-                  <AlertCircle className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                  <p className="text-gray-600 font-medium">Dados de performance não encontrados</p>
+                <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-sm border border-gray-100 dark:border-[#404040] p-8 text-center">
+                  <AlertCircle className="w-12 h-12 text-gray-400 dark:text-gray-600 mx-auto mb-4" />
+                  <p className="text-gray-600 dark:text-gray-300 font-medium">Dados de performance não encontrados</p>
                 </div>
               );
             }
@@ -804,7 +895,7 @@ export default function ConsultorPage() {
         {/* Gráficos */}
         <div className="relative">
           {dataLoading && (
-            <div className="absolute inset-0 bg-white/80 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
+            <div className="absolute inset-0 bg-white/80 dark:bg-[#1a1a1a]/80 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
             </div>
           )}
@@ -812,8 +903,8 @@ export default function ConsultorPage() {
           {(() => {
             if (chartData) {
               return (
-                <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-                  <h2 className="text-lg font-bold text-gray-800 mb-6 flex items-center gap-2">
+                <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-[#404040]">
+                  <h2 className="text-lg font-bold text-gray-800 dark:text-white mb-6 flex items-center gap-2">
                     <BarChart3 className="w-5 h-5 text-[#8CD955]" />
                     Análises e Gráficos
                   </h2>
@@ -822,7 +913,7 @@ export default function ConsultorPage() {
                     {/* Primeira linha: Top Ganhadores e Top Depositantes */}
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                       {chartData.top_ganhadores && chartData.top_ganhadores.length > 0 && (
-                        <div className="bg-gray-50/50 p-4 rounded-xl border border-gray-100">
+                        <div className="bg-gray-50/50 dark:bg-[#1e1e1e] p-4 rounded-xl border border-gray-100 dark:border-[#404040]">
                           <TopPerformersChart 
                             data={chartData.top_ganhadores}
                             title="Top Ganhadores"
@@ -833,7 +924,7 @@ export default function ConsultorPage() {
                       )}
 
                       {chartData.top_depositantes && chartData.top_depositantes.length > 0 && (
-                        <div className="bg-gray-50/50 p-4 rounded-xl border border-gray-100">
+                        <div className="bg-gray-50/50 dark:bg-[#1e1e1e] p-4 rounded-xl border border-gray-100 dark:border-[#404040]">
                           <TopPerformersChart 
                             data={chartData.top_depositantes}
                             title="Top Depositantes"
@@ -848,8 +939,8 @@ export default function ConsultorPage() {
                     <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-2 gap-6">
                       {/* Engajamento e Recorrência */}
                       {chartData.engagement_distribution && (
-                        <div className="bg-gray-50/50 p-4 rounded-xl border border-gray-100">
-                          <h3 className="text-sm font-bold text-gray-600 mb-4">Engajamento e Recorrência</h3>
+                        <div className="bg-gray-50/50 dark:bg-[#1e1e1e] p-4 rounded-xl border border-gray-100 dark:border-[#404040]">
+                          <h3 className="text-sm font-bold text-gray-600 dark:text-gray-400 mb-4">Engajamento e Recorrência</h3>
                           <div className="h-64">
                             <StatusDistributionChart 
                               data={chartData.engagement_distribution} 
@@ -861,8 +952,8 @@ export default function ConsultorPage() {
 
                       {/* Clientes Estrelas */}
                       {chartData.stars_distribution && (
-                        <div className="bg-gray-50/50 p-4 rounded-xl border border-gray-100">
-                          <h3 className="text-sm font-bold text-gray-600 mb-4">Clientes Estrelas</h3>
+                        <div className="bg-gray-50/50 dark:bg-[#1e1e1e] p-4 rounded-xl border border-gray-100 dark:border-[#404040]">
+                          <h3 className="text-sm font-bold text-gray-600 dark:text-gray-400 mb-4">Clientes Estrelas</h3>
                           <div className="h-64">
                             <StarsDistributionChart data={chartData.stars_distribution} />
                           </div>
@@ -871,8 +962,8 @@ export default function ConsultorPage() {
 
                       {/* Distribuição por Status */}
                       {chartData.status_distribution && (
-                        <div className="bg-gray-50/50 p-4 rounded-xl border border-gray-100">
-                          <h3 className="text-sm font-bold text-gray-600 mb-4">Distribuição por Status</h3>
+                        <div className="bg-gray-50/50 dark:bg-[#1e1e1e] p-4 rounded-xl border border-gray-100 dark:border-[#404040]">
+                          <h3 className="text-sm font-bold text-gray-600 dark:text-gray-400 mb-4">Distribuição por Status</h3>
                           <div className="h-64">
                             <StatusDistributionChart 
                               data={chartData.status_distribution} 
@@ -884,8 +975,8 @@ export default function ConsultorPage() {
 
                       {/* Atividade por Dia da Semana */}
                       {chartData.activity_by_weekday && (
-                        <div className="bg-gray-50/50 p-4 rounded-xl border border-gray-100">
-                          <h3 className="text-sm font-bold text-gray-600 mb-4">Atividade por Dia da Semana</h3>
+                        <div className="bg-gray-50/50 dark:bg-[#1e1e1e] p-4 rounded-xl border border-gray-100 dark:border-[#404040]">
+                          <h3 className="text-sm font-bold text-gray-600 dark:text-gray-400 mb-4">Atividade por Dia da Semana</h3>
                           <div className="h-64">
                             <ActivityByWeekdayChart data={chartData.activity_by_weekday} />
                           </div>
@@ -894,8 +985,8 @@ export default function ConsultorPage() {
 
                       {/* Funil de Conversão */}
                       {chartData.conversion_funnel && (
-                        <div className="bg-gray-50/50 p-4 rounded-xl border border-gray-100">
-                          <h3 className="text-sm font-bold text-gray-600 mb-4">Funil de Conversão</h3>
+                        <div className="bg-gray-50/50 dark:bg-[#1e1e1e] p-4 rounded-xl border border-gray-100 dark:border-[#404040]">
+                          <h3 className="text-sm font-bold text-gray-600 dark:text-gray-400 mb-4">Funil de Conversão</h3>
                           <div className="h-64">
                             <ConversionFunnelChart data={chartData.conversion_funnel} />
                           </div>
@@ -909,10 +1000,10 @@ export default function ConsultorPage() {
             
             if (!initialLoading && !dataLoading && !selectedBanca) {
               return (
-                <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-[#404040]">
                   <div className="text-center py-8">
-                    <Filter className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                    <p className="text-gray-600 font-medium">Selecione uma banca para visualizar os gráficos</p>
+                    <Filter className="w-12 h-12 text-gray-400 dark:text-gray-600 mx-auto mb-4" />
+                    <p className="text-gray-600 dark:text-gray-300 font-medium">Selecione uma banca para visualizar os gráficos</p>
                   </div>
                 </div>
               );
@@ -920,10 +1011,10 @@ export default function ConsultorPage() {
             
             if (!initialLoading && !dataLoading && selectedBanca) {
               return (
-                <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-[#404040]">
                   <div className="text-center py-8">
-                    <AlertCircle className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                    <p className="text-gray-600 font-medium">Dados não encontrados</p>
+                    <AlertCircle className="w-12 h-12 text-gray-400 dark:text-gray-600 mx-auto mb-4" />
+                    <p className="text-gray-600 dark:text-gray-300 font-medium">Dados não encontrados</p>
                   </div>
                 </div>
               );
@@ -934,9 +1025,9 @@ export default function ConsultorPage() {
         </div>
 
         {/* Lista de ganhadores: banca do topo + período ao lado (filtro por last_winner_at) */}
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+        <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-[#404040]">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-            <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+            <h2 className="text-lg font-bold text-gray-800 dark:text-white flex items-center gap-2">
               <Award className="w-5 h-5 text-[#8CD955]" />
               Lista de ganhadores
             </h2>
@@ -946,7 +1037,7 @@ export default function ConsultorPage() {
                   <button
                     type="button"
                     onClick={() => setShowWinnersDatePicker(!showWinnersDatePicker)}
-                    className="flex items-center gap-2 bg-gray-100 hover:bg-gray-200 border border-gray-200 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 transition-all"
+                    className="flex items-center gap-2 bg-gray-100 dark:bg-[#333] hover:bg-gray-200 dark:hover:bg-[#3a3a3a] border border-gray-200 dark:border-[#404040] px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 transition-all"
                   >
                     <Calendar className="w-4 h-4 text-[#8CD955]" />
                     {winnersPeriod === 'daily' && 'Diário'}
@@ -959,7 +1050,7 @@ export default function ConsultorPage() {
                     <ChevronDown className={`w-4 h-4 ${showWinnersDatePicker ? 'rotate-180' : ''}`} />
                   </button>
                   {showWinnersDatePicker && (
-                  <div className="absolute right-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-50 min-w-[200px]">
+                  <div className="absolute right-0 mt-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-lg z-50 min-w-[200px]">
                     <div className="p-2">
                       {(['daily', 'yesterday', '7days', '15days', '30days', 'custom', 'all'] as const).map((filter) => (
                         <button
@@ -974,7 +1065,7 @@ export default function ConsultorPage() {
                             }
                           }}
                           className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                            winnersPeriod === filter ? 'bg-[#8CD95515] text-[#8CD955] font-medium' : 'text-gray-700 hover:bg-gray-50'
+                            winnersPeriod === filter ? 'bg-[#8CD95515] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
                           }`}
                         >
                           {filter === 'daily' && 'Diário'}
@@ -987,26 +1078,26 @@ export default function ConsultorPage() {
                         </button>
                       ))}
                       {winnersPeriod === 'custom' && (
-                        <div className="p-3 border-t border-gray-200 space-y-3 mt-2">
+                        <div className="p-3 border-t border-gray-200 dark:border-[#404040] space-y-3 mt-2">
                           <div>
-                            <label className="block text-xs font-medium text-gray-500 mb-1">Data inicial</label>
+                            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Data inicial</label>
                             <input
                               type="date"
                               value={winnersCustomStart}
                               onChange={(e) => setWinnersCustomStart(e.target.value)}
                               max={winnersCustomEnd || new Date().toISOString().split('T')[0]}
-                              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                              className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] dark:bg-[#333] dark:text-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
                             />
                           </div>
                           <div>
-                            <label className="block text-xs font-medium text-gray-500 mb-1">Data final</label>
+                            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Data final</label>
                             <input
                               type="date"
                               value={winnersCustomEnd}
                               onChange={(e) => setWinnersCustomEnd(e.target.value)}
                               min={winnersCustomStart}
                               max={new Date().toISOString().split('T')[0]}
-                              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                              className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] dark:bg-[#333] dark:text-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
                             />
                           </div>
                           <button
@@ -1044,7 +1135,7 @@ export default function ConsultorPage() {
           </div>
 
           {!selectedBanca ? (
-            <div className="text-center py-8 text-gray-500 text-sm">
+            <div className="text-center py-8 text-gray-500 dark:text-gray-400 text-sm">
               Selecione uma banca no filtro acima para ver a lista de ganhadores.
             </div>
           ) : winnersLoading ? (
@@ -1054,7 +1145,7 @@ export default function ConsultorPage() {
           ) : winnersError ? (
             <div className="text-center py-8 text-amber-600 text-sm">{winnersError}</div>
           ) : winners.length === 0 ? (
-            <div className="text-center py-8 text-gray-500 text-sm">
+            <div className="text-center py-8 text-gray-500 dark:text-gray-400 text-sm">
               Nenhum ganhador no período selecionado (data de premiação / last_winner_at).
             </div>
           ) : (
@@ -1062,7 +1153,7 @@ export default function ConsultorPage() {
               {winners.map((w, index) => (
                 <div
                   key={String(w.id)}
-                  className="bg-gradient-to-r from-gray-50 to-white border border-gray-200 rounded-lg p-3 hover:shadow-md hover:border-[#8CD955]/30 transition-all"
+                  className="bg-gradient-to-r from-gray-50 to-white dark:from-[#2a2a2a] dark:to-[#1e1e1e] border border-gray-200 dark:border-[#404040] rounded-lg p-3 hover:shadow-md hover:border-[#8CD955]/30 transition-all"
                 >
                   <div className="flex items-center justify-between gap-4">
                     <div className="flex-1 min-w-0">
@@ -1070,7 +1161,7 @@ export default function ConsultorPage() {
                         <div className="flex-shrink-0 w-7 h-7 rounded-full bg-[#8CD955] flex items-center justify-center shadow-sm">
                           <span className="text-xs font-bold text-white">{index + 1}</span>
                         </div>
-                        <p className="text-sm font-bold text-gray-800 truncate">{w.name}</p>
+                        <p className="text-sm font-bold text-gray-800 dark:text-gray-100 truncate">{w.name}</p>
                       </div>
                       <div className="flex items-center gap-1.5 mt-1.5 ml-9">
                         <Phone className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
@@ -1079,7 +1170,7 @@ export default function ConsultorPage() {
                             href={`https://wa.me/${normalizePhoneForTel(w.phone)}`}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-xs text-gray-600 hover:text-[#8CD955] font-medium transition-colors"
+                            className="text-xs text-gray-600 dark:text-gray-300 hover:text-[#8CD955] font-medium transition-colors"
                             title="Abrir conversa no WhatsApp"
                           >
                             {formatWinnersPhone(w.phone)}
@@ -1091,14 +1182,14 @@ export default function ConsultorPage() {
                       {w.last_winner_at && (
                         <div className="flex items-center gap-1.5 mt-1 ml-9">
                           <Calendar className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-                          <span className="text-xs text-gray-500">
+                          <span className="text-xs text-gray-500 dark:text-gray-400">
                             Premiado em: {new Date(w.last_winner_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}
                           </span>
                         </div>
                       )}
                     </div>
                     <div className="text-right flex-shrink-0">
-                      <p className="text-xs text-gray-500 mb-0.5 font-medium">Total ganho</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-0.5 font-medium">Total ganho</p>
                       <p className="text-base font-bold text-[#8CD955]">
                         R$ {(w.last_winner_value ?? w.total_ganho ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </p>

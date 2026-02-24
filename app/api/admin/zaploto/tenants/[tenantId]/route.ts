@@ -68,3 +68,45 @@ export async function PUT(
     return errorResponse(message, 403);
   }
 }
+
+const CENTRAL_ZAPLOTO_ID = '00000000-0000-0000-0000-000000000001';
+
+/**
+ * DELETE /api/admin/zaploto/tenants/[tenantId] - Remove um tenant (white label).
+ * Não permite deletar o Zaploto Central.
+ */
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ tenantId: string }> }
+) {
+  try {
+    await requireSuperAdmin(req);
+    const { tenantId } = await params;
+
+    if (tenantId === CENTRAL_ZAPLOTO_ID) {
+      return errorResponse('Não é possível excluir o Zaploto Central.', 400);
+    }
+
+    const { data: tenant, error: fetchError } = await supabaseServiceRole
+      .from('zaploto_tenants')
+      .select('id, is_central')
+      .eq('id', tenantId)
+      .maybeSingle();
+
+    if (fetchError || !tenant) return errorResponse('Tenant não encontrado', 404);
+    if ((tenant as { is_central?: boolean }).is_central) {
+      return errorResponse('Não é possível excluir o Zaploto Central.', 400);
+    }
+
+    const { error: deleteError } = await supabaseServiceRole
+      .from('zaploto_tenants')
+      .delete()
+      .eq('id', tenantId);
+
+    if (deleteError) throw new Error(deleteError.message);
+    return successResponse({ deleted: true });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Erro ao excluir tenant';
+    return errorResponse(message, 403);
+  }
+}

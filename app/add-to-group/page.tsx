@@ -290,9 +290,9 @@ function AddToGroupPage() {
 
   if (checking || userId === null) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-200 text-center">
-          <p className="text-gray-700 font-medium">Carregando...</p>
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-[#1a1a1a]">
+        <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-lg p-6 border border-gray-200 dark:border-[#404040] text-center">
+          <p className="text-gray-700 dark:text-gray-200 font-medium">Carregando...</p>
         </div>
       </div>
     );
@@ -325,14 +325,14 @@ function AddToGroupPage() {
       <div className="space-y-6 w-full">
         <div className="flex items-center justify-between gap-4">
           <div className="flex-1">
-            <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 mb-2">Adição em Grupo</h1>
-            <p className="text-sm sm:text-base text-gray-600">Configure e inicie a adição de contatos aos grupos</p>
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 dark:text-white mb-2">Adição em Grupo</h1>
+            <p className="text-sm sm:text-base text-gray-600 dark:text-gray-400">Configure e inicie a adição de contatos aos grupos</p>
           </div>
           {/* Botão Toggle da Sidebar - Apenas no mobile, no topo direito */}
           <div className="lg:hidden flex-shrink-0">
             <button
               onClick={() => setIsMobileOpen(!isMobileOpen)}
-              className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-gray-100 transition text-gray-600 shadow-md bg-white"
+              className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-gray-100 dark:hover:bg-[#404040] transition text-gray-600 dark:text-gray-300 shadow-md bg-white dark:bg-[#2a2a2a]"
               aria-label="Toggle sidebar"
             >
               <Menu className="w-5 h-5" />
@@ -340,17 +340,17 @@ function AddToGroupPage() {
           </div>
         </div>
 
-        <div className="bg-gray-100 rounded-xl shadow-md p-6 space-y-6 border border-gray-200" data-tour-id="adicao-configuracao">
+        <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-md p-6 space-y-6 border border-gray-200 dark:border-[#404040]" data-tour-id="adicao-configuracao">
           {/* Instância base */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               Instância base:
             </label>
             <select
               value={selectedInstance}
               onChange={e => setSelectedInstance(e.target.value)}
               disabled={multiInstancesMode}
-              className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 text-gray-700"
+              className="w-full px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 text-gray-700 dark:text-white bg-white dark:bg-[#333]"
             >
               <option value="">Selecione uma Instância</option>
               {instances.map(inst => (
@@ -370,7 +370,7 @@ function AddToGroupPage() {
                 />
                 <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[#8CD955]/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#8CD955]"></div>
               </label>
-              <label htmlFor="multiInstances" className="text-sm font-medium text-gray-700 cursor-pointer">
+              <label htmlFor="multiInstances" className="text-sm font-medium text-gray-700 dark:text-gray-300 cursor-pointer">
                 Usar múltiplas instâncias em rodízio para adicionar ao grupo
               </label>
             </div>
@@ -388,8 +388,8 @@ function AddToGroupPage() {
                     key={inst.id || inst.instance_name}
                     onClick={() => toggleInstanceForAdd(inst.instance_name)}
                     className={`px-4 py-3 rounded-lg border-2 transition font-medium ${instancesForAdd.includes(inst.instance_name)
-                        ? 'border-[#8CD955] bg-[#8CD955]/25 text-[#1a4d0d] ring-2 ring-[#8CD955] ring-offset-2 shadow-sm'
-                        : 'border-gray-200 text-gray-600 hover:border-[#8CD955]/50 hover:bg-gray-50'
+                        ? 'border-[#8CD955] bg-[#8CD955]/25 dark:bg-[#8CD955]/20 text-[#1a4d0d] dark:text-[#8CD955] ring-2 ring-[#8CD955] ring-offset-2 shadow-sm'
+                        : 'border-gray-200 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:border-[#8CD955]/50 hover:bg-gray-50 dark:hover:bg-[#404040]'
                       }`}
                   >
                     {inst.instance_name}
@@ -397,11 +397,11 @@ function AddToGroupPage() {
                 ))}
               </div>
               <div className="mt-3">
-                <label className="block text-sm font-medium text-gray-700 mb-2">Modo de rodízio</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Modo de rodízio</label>
                 <select
                   value={distributionMode}
                   onChange={e => setDistributionMode(e.target.value as DistributionMode)}
-                  className="w-full px-4 py-2 border border-gray-200 rounded-lg text-gray-700"
+                  className="w-full px-4 py-2 border border-gray-200 dark:border-[#555] rounded-lg text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                 >
                   <option value="sequential">Sequencial</option>
                   <option value="random">Aleatório</option>
@@ -412,7 +412,7 @@ function AddToGroupPage() {
 
           {/* Grupo salvo no banco */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               Grupo salvo no banco:
             </label>
             <select
@@ -423,7 +423,7 @@ function AddToGroupPage() {
                 setSelectedGroupJid(e.target.value);
                 setSelectedGroupSubject(group?.group_subject || '');
               }}
-              className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 text-gray-700"
+              className="w-full px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 text-gray-700 dark:text-white bg-white dark:bg-[#333]"
             >
               <option value="">Selecione um Grupo</option>
               {dbGroups.map(group => (
@@ -443,7 +443,7 @@ function AddToGroupPage() {
                 />
                 <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[#8CD955]/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#8CD955]"></div>
               </label>
-              <label htmlFor="multiGroups" className="text-sm font-medium text-gray-700 cursor-pointer">
+              <label htmlFor="multiGroups" className="text-sm font-medium text-gray-700 dark:text-gray-300 cursor-pointer">
                 Adicionar mais de um grupo
               </label>
             </div>
@@ -451,8 +451,8 @@ function AddToGroupPage() {
 
 
           {multiGroupsMode && (
-            <div className="border border-blue-200 rounded-lg p-4 bg-blue-50/30" data-tour-id="adicao-multiplas-instancias">
-              <label className="block text-sm font-medium text-gray-700 mb-3">
+            <div className="border border-blue-200 dark:border-blue-800/50 rounded-lg p-4 bg-blue-50/30 dark:bg-blue-900/20" data-tour-id="adicao-multiplas-instancias">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
                 Selecionar Grupos:
               </label>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
@@ -461,8 +461,8 @@ function AddToGroupPage() {
                     key={inst.group_id || inst.group_subject}
                     onClick={() => toggleGroupForAdd({ jid: inst.group_id, subject: inst.group_subject })}
                     className={`px-4 py-3 rounded-lg border-2 transition font-medium ${groupsForAdd.some(g => g.jid === inst.group_id)
-                        ? 'border-[#8CD955] bg-[#8CD955]/25 text-[#1a4d0d] ring-2 ring-[#8CD955] ring-offset-2 shadow-sm'
-                        : 'border-gray-200 text-gray-600 hover:border-[#8CD955]/50 hover:bg-gray-50'
+                        ? 'border-[#8CD955] bg-[#8CD955]/25 dark:bg-[#8CD955]/20 text-[#1a4d0d] dark:text-[#8CD955] ring-2 ring-[#8CD955] ring-offset-2 shadow-sm'
+                        : 'border-gray-200 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:border-[#8CD955]/50 hover:bg-gray-50 dark:hover:bg-[#404040]'
                       }`}
                   >
                     {inst.group_subject}
@@ -470,11 +470,11 @@ function AddToGroupPage() {
                 ))}
               </div>
               <div className="mt-3">
-                <label className="block text-sm font-medium text-gray-700 mb-2">Modo de rodízio</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Modo de rodízio</label>
                 <select
                   value={distributionGpMode}
                   onChange={e => setDistributionGpMode(e.target.value as DistributionMode)}
-                  className="w-full px-4 py-2 border border-gray-200 rounded-lg text-gray-700"
+                  className="w-full px-4 py-2 border border-gray-200 dark:border-[#555] rounded-lg text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                 >
                   <option value="sequential">Sequencial</option>
                   <option value="random">Aleatório</option>
@@ -485,7 +485,7 @@ function AddToGroupPage() {
 
           {/* Seleção de Lista Personalizada */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               Lista de Contatos (Opcional)
             </label>
             <select
@@ -500,7 +500,7 @@ function AddToGroupPage() {
                   }
                 }
               }}
-              className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-gray-700"
+              className="w-full px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
             >
               <option value="">Todos os contatos disponíveis</option>
               {customLists.map(list => (
@@ -509,14 +509,14 @@ function AddToGroupPage() {
                 </option>
               ))}
             </select>
-            <p className="text-xs text-gray-500 mt-1">
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
               Selecione uma lista para adicionar apenas os contatos dela.
             </p>
           </div>
 
           {/* Quantidade de Leads */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               Quantidade de Leads
             </label>
             <input
@@ -525,13 +525,13 @@ function AddToGroupPage() {
               onChange={e => setAddLimit(Number(e.target.value))}
               placeholder="Digite uma Quantidade*"
               min="1"
-              className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-gray-700 placeholder:text-gray-400"
+              className="w-full px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-400 dark:placeholder-gray-500"
             />
           </div>
 
           {/* Atraso entre inclusões */}
           <div data-tour-id="adicao-tempo-random">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               Atraso entre inclusões
             </label>
             <div className="flex flex-col sm:flex-row gap-2">
@@ -542,13 +542,13 @@ function AddToGroupPage() {
                 placeholder="Digite uma Quantidade*"
                 min="0"
                 disabled={addRandom}
-                className="flex-1 min-w-0 px-4 py-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 disabled:opacity-50 text-gray-700 placeholder:text-gray-400"
+                className="flex-1 min-w-0 px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-400 dark:placeholder-gray-500"
               />
               <select
                 value={addDelayUnit}
                 onChange={e => setAddDelayUnit(e.target.value as DelayUnit)}
                 disabled={addRandom}
-                className="w-full sm:w-auto px-4 py-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 disabled:opacity-50 text-gray-700"
+                className="w-full sm:w-auto px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 text-gray-700 dark:text-white bg-white dark:bg-[#333]"
               >
                 <option value="seconds">Segundos</option>
                 <option value="minutes">Minutos</option>
@@ -565,7 +565,7 @@ function AddToGroupPage() {
                 />
                 <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[#8CD955]/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#8CD955]"></div>
               </label>
-              <label htmlFor="randomTime" className="text-sm font-medium text-gray-700 cursor-pointer">
+              <label htmlFor="randomTime" className="text-sm font-medium text-gray-700 dark:text-gray-300 cursor-pointer">
                 Random Time
               </label>
             </div>
@@ -575,22 +575,22 @@ function AddToGroupPage() {
                   type="number"
                   value={randomMinSeconds}
                   onChange={e => setRandomMinSeconds(Number(e.target.value))}
-                  className="w-24 px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-700"
+                  className="w-24 px-3 py-2 border border-gray-200 dark:border-[#555] rounded-lg text-sm text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                   min="0"
                 />
-                <span className="text-gray-600">a</span>
+                <span className="text-gray-600 dark:text-gray-400">a</span>
                 <input
                   type="number"
                   value={randomMaxSeconds}
                   onChange={e => setRandomMaxSeconds(Number(e.target.value))}
-                  className="w-24 px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-700"
+                  className="w-24 px-3 py-2 border border-gray-200 dark:border-[#555] rounded-lg text-sm text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                   min="0"
                 />
-                <span className="text-xs text-gray-500">segundos</span>
+                <span className="text-xs text-gray-500 dark:text-gray-400">segundos</span>
               </div>
             )}
             {addRandom && (
-              <p className="text-xs text-gray-500 mt-2">
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
                 Dica: 550s=9min10s e 950s=15min50s. Defina 0 para sem espera (não recomendado).
               </p>
             )}
@@ -609,7 +609,7 @@ function AddToGroupPage() {
             <button
               onClick={() => setAddPaused(!addPaused)}
               disabled={!addingToGroup}
-              className="w-full sm:w-auto px-6 py-3 border-2 border-[#8CD955] text-[#8CD955] rounded-lg font-medium hover:bg-[#8CD95515] transition disabled:opacity-50 flex items-center justify-center gap-2"
+              className="w-full sm:w-auto px-6 py-3 border-2 border-[#8CD955] text-[#8CD955] dark:text-[#8CD955] rounded-lg font-medium hover:bg-[#8CD955]/10 dark:hover:bg-[#8CD955]/20 transition disabled:opacity-50 flex items-center justify-center gap-2"
             >
               {addPaused ? (
                 <>
@@ -628,8 +628,8 @@ function AddToGroupPage() {
 
         {/* Tabela de Campanhas */}
         <div ref={activeCampaignsRef} data-tour-id="adicao-campanhas-ativas">
-          <div className="bg-gray-100 rounded-xl shadow-md p-6 border border-gray-200">
-            <h2 className="text-lg font-semibold text-gray-800 mb-4">Campanhas</h2>
+          <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-md p-6 border border-gray-200 dark:border-[#404040]">
+            <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">Campanhas</h2>
             <CampaignsTable
               campaigns={campaigns}
               instances={instances}

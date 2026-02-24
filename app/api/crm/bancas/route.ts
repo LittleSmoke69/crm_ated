@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
-import { getUserProfile, UserProfile } from '@/lib/middleware/permissions';
+import { getUserProfile, UserProfile, canAccessUser } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
@@ -322,14 +322,32 @@ export async function getBancasVisiveis(userId: string, profile: UserProfile | n
 /**
  * GET /api/crm/bancas - Lista bancas para filtro do CRM e modal "Bancas em que atuo" no perfil.
  * - Consultor/Gerente: chama API externa (get-indicateds-by-consultant) em cada banca; status 200 = passa no filtro, 404 = não tem conta na banca. Fallback: user_bancas ou todas.
- * - super_admin / admin: retorna todas as bancas de crm_bancas.
+ * - super_admin / admin: retorna todas as bancas de crm_bancas (ou, se targetUserId for informado, as bancas visíveis do usuário alvo).
+ * - Query opcional: targetUserId — quando o requester é super_admin/admin, retorna as bancas do usuário alvo (para CRM "visualizando como").
  */
 export async function GET(req: NextRequest) {
   try {
     const { userId } = await requireAuth(req);
-    const profile = await getUserProfile(userId);
+    const targetUserIdParam = req.nextUrl.searchParams.get('targetUserId')?.trim() || null;
 
-    const cacheKey = `bancas:${userId}:${profile?.status ?? ''}:${profile?.email ?? ''}`;
+    let effectiveUserId = userId;
+    let profile = await getUserProfile(userId);
+
+    if (targetUserIdParam && targetUserIdParam !== userId) {
+      const allowed = await canAccessUser(userId, targetUserIdParam);
+      if (!allowed) {
+        return errorResponse('Sem permissão para acessar as bancas deste usuário.', 403);
+      }
+      const targetProfile = await getUserProfile(targetUserIdParam);
+      if (!targetProfile) {
+        return errorResponse('Usuário alvo não encontrado.', 404);
+      }
+      effectiveUserId = targetUserIdParam;
+      profile = targetProfile;
+      console.log('[CRM Bancas] GET /api/crm/bancas | modo "visualizar como" | targetUserId:', targetUserIdParam);
+    }
+
+    const cacheKey = `bancas:${effectiveUserId}:${profile?.status ?? ''}:${profile?.email ?? ''}`;
     const cached = getCachedBancas(cacheKey);
     if (cached !== null) {
       console.log('[CRM Bancas] GET /api/crm/bancas solicitado | Cache HIT');
@@ -345,7 +363,7 @@ export async function GET(req: NextRequest) {
 
     let promise = bancasInFlight.get(cacheKey);
     if (!promise) {
-      promise = getBancasVisiveis(userId, profile).finally(() => {
+      promise = getBancasVisiveis(effectiveUserId, profile).finally(() => {
         bancasInFlight.delete(cacheKey);
       });
       bancasInFlight.set(cacheKey, promise);

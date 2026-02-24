@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Search, Check, Send, Loader2, Plus } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import { deduplicateGroupsById } from '@/lib/utils/group-utils';
 import SendMessageChoiceModal from './SendMessageChoiceModal';
 import ScheduleMessageModal from './ScheduleMessageModal';
 import { useToast } from '@/hooks/useToast';
@@ -41,28 +42,34 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
   
   const { toasts, showToast, removeToast } = useToast();
 
-  // Carrega grupos do banco de dados (whatsapp_groups)
-  const fetchDbGroups = async () => {
+  // Carrega grupos do banco (whatsapp_groups) filtrados pela instância selecionada
+  const fetchDbGroups = async (instanceName?: string | null) => {
+    const instance = instanceName ?? selectedInstance;
+    if (!instance?.trim()) {
+      setGroups([]);
+      return;
+    }
     setLoading(true);
     try {
       const { data, error } = await supabase
         .from('whatsapp_groups')
         .select('group_id, group_subject')
         .eq('user_id', userId)
+        .eq('instance_name', instance.trim())
         .order('group_subject', { ascending: true });
 
       if (error) throw error;
-      
-      const formattedGroups = (data || []).map(g => ({
-        id: g.group_id,
-        subject: g.group_subject
+
+      const withGroupId = (data || []).map((g: { group_id: string; group_subject: string | null }) => ({
+        group_id: g.group_id,
+        subject: g.group_subject,
       }));
-      // Deduplica por id para evitar bugs de seleção (mesmo grupo listado 2x)
-      const byId = new Map<string, Group>();
-      formattedGroups.forEach(g => { if (!byId.has(g.id)) byId.set(g.id, g); });
-      setGroups(Array.from(byId.values()).sort((a, b) => a.subject.localeCompare(b.subject)));
+      const deduped = deduplicateGroupsById(withGroupId);
+      const formattedGroups: Group[] = deduped.map((d) => ({ id: d.group_id, subject: d.subject || '' }));
+      setGroups(formattedGroups.sort((a, b) => (a.subject || '').localeCompare(b.subject || '')));
     } catch (error) {
       console.error('Erro ao buscar grupos do banco:', error);
+      setGroups([]);
     } finally {
       setLoading(false);
     }
@@ -185,28 +192,36 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
         });
         const data = await response.json();
         if (data.success) {
-          // Filtra apenas instâncias mestres conectadas para ativações
-          const masterConnected = data.data.filter((i: any) => 
+          const masterConnected = data.data.filter((i: any) =>
             i.status === 'connected' && i.is_master === true
           );
           setInstances(masterConnected);
-          if (masterConnected.length > 0) {
-            setSelectedInstance(masterConnected[0].instance_name);
-          }
+          setSelectedInstance(masterConnected.length > 0 ? masterConnected[0].instance_name : '');
+        } else {
+          setInstances([]);
+          setSelectedInstance('');
+          setGroups([]);
         }
       } catch (error) {
         console.error('Erro ao buscar instâncias:', error);
+        setGroups([]);
       }
-
-      // 2. Busca grupos do banco
-      fetchDbGroups();
     };
 
-    // Carrega quando o modal está aberto e não está mostrando os modais de escolha/agendamento
     if (isOpen && userId && !showChoiceModal && !showScheduleModal) {
       init();
     }
   }, [isOpen, userId, showChoiceModal, showScheduleModal]);
+
+  // Carrega grupos da instância selecionada ao abrir o modal ou ao trocar a instância no dropdown
+  useEffect(() => {
+    if (!isOpen || !userId || showChoiceModal || showScheduleModal) return;
+    if (selectedInstance) {
+      fetchDbGroups(selectedInstance);
+    } else {
+      setGroups([]);
+    }
+  }, [isOpen, userId, selectedInstance, showChoiceModal, showScheduleModal]);
 
   const filteredGroups = groups.filter(g => 
     g.subject.toLowerCase().includes(searchQuery.toLowerCase())
@@ -346,8 +361,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
         }}
         onSendNow={() => {
           setShowChoiceModal(false);
-          // Continua com o fluxo normal de envio (o modal principal já está aberto)
-          // Carrega dados se ainda não foram carregados
+          // Continua com o fluxo normal de envio; o useEffect (selectedInstance) carrega grupos ao ter instância
           if (instances.length === 0) {
             fetch('/api/instances', {
               headers: { 'X-User-Id': userId },
@@ -355,8 +369,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
               .then(res => res.json())
               .then(data => {
                 if (data.success) {
-                  // Filtra apenas instâncias mestres conectadas para ativações
-                  const masterConnected = data.data.filter((i: any) => 
+                  const masterConnected = data.data.filter((i: any) =>
                     i.status === 'connected' && i.is_master === true
                   );
                   setInstances(masterConnected);
@@ -366,7 +379,6 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
                 }
               })
               .catch(err => console.error('Erro ao buscar instâncias:', err));
-            fetchDbGroups();
           }
         }}
         onSchedule={() => {
@@ -400,29 +412,29 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
     <>
       <ToastContainer toasts={toasts} onClose={removeToast} />
       <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-3 sm:p-4 overflow-y-auto">
-        <div className="bg-gray-100 border border-gray-200 rounded-2xl w-full max-w-md sm:max-w-lg shadow-2xl flex flex-col min-h-0 max-h-[calc(100vh-2rem)] my-auto overflow-y-auto overflow-x-hidden">
+        <div className="bg-gray-100 dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-2xl w-full max-w-md sm:max-w-lg shadow-2xl flex flex-col min-h-0 max-h-[calc(100vh-2rem)] my-auto overflow-y-auto overflow-x-hidden">
         {/* Header */}
-        <div className="p-4 border-b border-gray-200 flex items-center justify-between flex-shrink-0">
+        <div className="p-4 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between flex-shrink-0">
           <div className="flex-1 pr-2">
-            <h2 className="text-gray-800 font-bold text-lg">Escolha os grupos nos quais deseja enviar a mensagem selecionada agora</h2>
+            <h2 className="text-gray-800 dark:text-white font-bold text-lg">Escolha os grupos nos quais deseja enviar a mensagem selecionada agora</h2>
           </div>
           <button 
             onClick={onClose}
-            className="p-2 hover:bg-gray-200 rounded-full text-gray-600 transition-colors flex-shrink-0"
+            className="p-2 hover:bg-gray-200 dark:hover:bg-[#404040] rounded-full text-gray-600 dark:text-gray-400 transition-colors flex-shrink-0"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Instância Select */}
-        <div className="p-4 border-b border-gray-200 flex-shrink-0">
-          <label className="text-gray-700 text-xs font-semibold mb-2 block uppercase tracking-wider">
+        <div className="p-4 border-b border-gray-200 dark:border-[#404040] flex-shrink-0">
+          <label className="text-gray-700 dark:text-gray-300 text-xs font-semibold mb-2 block uppercase tracking-wider">
             Instância *
           </label>
           <select
             value={selectedInstance}
             onChange={(e) => setSelectedInstance(e.target.value)}
-            className="w-full bg-white border border-gray-300 rounded-xl px-4 py-2.5 text-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+            className="w-full bg-white dark:bg-[#333] border border-gray-300 dark:border-[#555] rounded-xl px-4 py-2.5 text-gray-800 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
           >
             {instances.length === 0 ? (
               <option value="">Nenhuma instância conectada</option>
@@ -437,9 +449,9 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
         </div>
 
         {/* Filtros e Seleção */}
-        <div className="p-4 space-y-4 flex-shrink-0 border-b border-gray-200">
+        <div className="p-4 space-y-4 flex-shrink-0 border-b border-gray-200 dark:border-[#404040]">
           <div className="flex items-center justify-between text-sm">
-            <span className="text-gray-700 font-medium">Grupos disponíveis *</span>
+            <span className="text-gray-700 dark:text-gray-300 font-medium">Grupos disponíveis *</span>
             <button 
               onClick={fetchEvolutionGroups}
               disabled={fetchingAll || !selectedInstance}
@@ -461,7 +473,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
               placeholder="Pesquisar grupos..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-gray-100 border border-gray-200 rounded-xl pl-10 pr-4 py-2.5 text-gray-900 text-sm focus:outline-none focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] placeholder:text-gray-500"
+              className="w-full bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-xl pl-10 pr-4 py-2.5 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] placeholder:text-gray-500 dark:placeholder:text-gray-400"
             />
           </div>
 
@@ -474,11 +486,11 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
               <div className={`w-5 h-5 rounded border flex items-center justify-center transition-all flex-shrink-0 ${
                 allFilteredSelected
                   ? 'bg-[#8CD955] border-[#8CD955] shadow-[0_0_10px_rgba(140,217,85,0.3)]' 
-                  : 'bg-white border-gray-300 group-hover:border-[#8CD955]'
+                  : 'bg-white dark:bg-[#333] border-gray-300 dark:border-[#555] group-hover:border-[#8CD955]'
               }`}>
                 {allFilteredSelected && <Check className="w-3.5 h-3.5 text-white stroke-[3]" />}
               </div>
-              <span className="text-sm text-gray-700 font-medium">Selecione todos os grupos</span>
+              <span className="text-sm text-gray-700 dark:text-gray-300 font-medium">Selecione todos os grupos</span>
             </button>
             <span className="text-[#8CD955] font-bold text-sm">Total: {filteredGroupIds.length}</span>
           </div>
@@ -489,7 +501,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
           {loading ? (
             <div className="flex flex-col items-center justify-center min-h-[200px] py-12 gap-3">
               <Loader2 className="w-8 h-8 text-[#8CD955] animate-spin" />
-              <span className="text-gray-500 text-sm inline-flex items-center">
+              <span className="text-gray-500 dark:text-gray-400 text-sm inline-flex items-center">
                 Isso pode demorar um pouco
                 <span className="inline-flex ml-1 gap-0">
                   <span className="wave-dot-1">.</span>
@@ -500,7 +512,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
             </div>
           ) : filteredGroups.length === 0 ? (
             <div className="flex flex-col items-center justify-center min-h-[200px] py-12 text-center">
-              <span className="text-gray-500 text-sm">Nenhum grupo encontrado</span>
+              <span className="text-gray-500 dark:text-gray-400 text-sm">Nenhum grupo encontrado</span>
             </div>
           ) : (
             <div className="space-y-1.5 pb-1">
@@ -510,17 +522,17 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
                   type="button"
                   onClick={() => toggleGroup(group.id)}
                   className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all group text-left ${
-                    selectedGroups.has(group.id) ? 'bg-[#8CD955]/10 border border-[#8CD955]/40' : 'hover:bg-[#8CD955]/5 border border-transparent hover:border-[#8CD955]/20'
+                    selectedGroups.has(group.id) ? 'bg-[#8CD955]/10 dark:bg-[#8CD955]/20 border border-[#8CD955]/40 dark:border-[#8CD955]/50' : 'hover:bg-[#8CD955]/5 dark:hover:bg-[#8CD955]/10 border border-transparent hover:border-[#8CD955]/20 dark:hover:border-[#8CD955]/30'
                   }`}
                 >
                   <div className={`w-5 h-5 rounded border flex items-center justify-center transition-all flex-shrink-0 mt-0.5 ${
                     selectedGroups.has(group.id) 
                       ? 'bg-[#8CD955] border-[#8CD955] shadow-[0_0_10px_rgba(140,217,85,0.3)]' 
-                      : 'bg-white border-gray-300 group-hover:border-[#8CD955]'
+                      : 'bg-white dark:bg-[#333] border-gray-300 dark:border-[#555] group-hover:border-[#8CD955]'
                   }`}>
                     {selectedGroups.has(group.id) && <Check className="w-3.5 h-3.5 text-white stroke-[3]" />}
                   </div>
-                  <span className={`text-sm font-medium text-left break-words line-clamp-2 ${selectedGroups.has(group.id) ? 'text-[#6AB83D]' : 'text-gray-700 group-hover:text-[#8CD955]'}`} title={group.subject}>
+                  <span className={`text-sm font-medium text-left break-words line-clamp-2 ${selectedGroups.has(group.id) ? 'text-[#6AB83D]' : 'text-gray-700 dark:text-gray-300 group-hover:text-[#8CD955]'}`} title={group.subject}>
                     {group.subject}
                   </span>
                 </button>
@@ -530,10 +542,10 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
         </div>
 
         {/* Footer Actions - sempre visível */}
-        <div className="p-4 border-t border-gray-200 bg-white flex gap-3 flex-shrink-0">
+        <div className="p-4 border-t border-gray-200 dark:border-[#404040] bg-white dark:bg-[#333] flex gap-3 flex-shrink-0">
           <button
             onClick={onClose}
-            className="flex-1 px-4 py-3 bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold rounded-xl transition-all"
+            className="flex-1 px-4 py-3 bg-gray-200 dark:bg-[#404040] hover:bg-gray-300 dark:hover:bg-[#505050] text-gray-800 dark:text-white font-bold rounded-xl transition-all"
           >
             Cancelar
           </button>

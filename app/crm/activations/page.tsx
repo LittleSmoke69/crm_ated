@@ -1128,20 +1128,20 @@ const ActivationsPage = () => {
             <Activity className="w-6 h-6 text-[#8CD955]" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">Mensagem</h1>
-            <p className="text-gray-600">Gerencie suas mensagens personalizadas</p>
+            <h1 className="text-2xl font-bold text-gray-800 dark:text-white">Mensagem</h1>
+            <p className="text-gray-600 dark:text-gray-400">Gerencie suas mensagens personalizadas</p>
           </div>
         </div>
 
         {/* Tabs */}
-        <div className="bg-white rounded-xl shadow-md border border-gray-200 overflow-hidden">
-          <div className="flex border-b border-gray-200">
+        <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-md border border-gray-200 dark:border-[#404040] overflow-hidden">
+          <div className="flex border-b border-gray-200 dark:border-[#404040]">
             <button
               onClick={() => setActiveTab('messages')}
               className={`flex-1 px-6 py-4 font-medium transition-colors ${
                 activeTab === 'messages'
-                  ? 'text-[#8CD955] border-b-2 border-[#8CD955] bg-[#8CD955]/5'
-                  : 'text-gray-600 hover:text-gray-800 hover:bg-gray-50'
+                  ? 'text-[#8CD955] border-b-2 border-[#8CD955] bg-[#8CD955]/5 dark:bg-[#8CD955]/10'
+                  : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-[#333]'
               }`}
             >
               Mensagens
@@ -1150,8 +1150,8 @@ const ActivationsPage = () => {
               onClick={() => setActiveTab('schedules')}
               className={`flex-1 px-6 py-4 font-medium transition-colors ${
                 activeTab === 'schedules'
-                  ? 'text-[#8CD955] border-b-2 border-[#8CD955] bg-[#8CD955]/5'
-                  : 'text-gray-600 hover:text-gray-800 hover:bg-gray-50'
+                  ? 'text-[#8CD955] border-b-2 border-[#8CD955] bg-[#8CD955]/5 dark:bg-[#8CD955]/10'
+                  : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-[#333]'
               }`}
             >
               Agendamento
@@ -1163,7 +1163,7 @@ const ActivationsPage = () => {
         {activeTab === 'messages' && (
           <>
             {/* Barra de ações e pesquisa */}
-            <div className="bg-gray-100 rounded-xl shadow-md p-4 border border-gray-200">
+            <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-md p-4 border border-gray-200 dark:border-[#404040]">
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
             {/* Selecionar todos e pesquisa */}
             <div className="flex items-center gap-4 flex-1 w-full md:w-auto">
@@ -1174,7 +1174,7 @@ const ActivationsPage = () => {
                   onChange={handleSelectAll}
                   className="w-5 h-5 text-[#8CD955] rounded focus:ring-[#8CD955]"
                 />
-                <span className="text-sm text-gray-700 font-medium">Selecionar todos</span>
+                <span className="text-sm text-gray-700 dark:text-gray-300 font-medium">Selecionar todos</span>
               </label>
 
               <div className="relative flex-1 md:flex-initial md:w-80">
@@ -1184,14 +1184,14 @@ const ActivationsPage = () => {
                   placeholder="Pesquisar mensagens..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 bg-gray-100 border border-gray-200 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-gray-900 placeholder:text-gray-500"
+                  className="w-full pl-10 pr-4 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400"
                 />
               </div>
             </div>
 
             {/* Contador e botão nova mensagem */}
             <div className="flex items-center gap-4">
-              <span className="text-sm text-gray-600 font-medium">
+              <span className="text-sm text-gray-600 dark:text-gray-400 font-medium">
                 {filteredMessages.length} mensagem{filteredMessages.length !== 1 ? 's' : ''}
               </span>
               <button
@@ -1222,22 +1222,22 @@ const ActivationsPage = () => {
         </div>
 
         {/* Lista de mensagens */}
-        <div className="bg-gray-100 rounded-xl shadow-md border border-gray-200 overflow-hidden">
+        <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-md border border-gray-200 dark:border-[#404040] overflow-hidden">
           {loading ? (
             <div className="p-12 text-center">
               <div className="inline-block w-8 h-8 border-4 border-[#8CD955] border-t-transparent rounded-full animate-spin"></div>
-              <p className="mt-4 text-gray-600">Carregando mensagens...</p>
+              <p className="mt-4 text-gray-600 dark:text-gray-400">Carregando mensagens...</p>
             </div>
           ) : filteredMessages.length === 0 ? (
             <div className="p-12 text-center">
-              <p className="text-gray-500">Nenhuma mensagem encontrada</p>
+              <p className="text-gray-500 dark:text-gray-400">Nenhuma mensagem encontrada</p>
             </div>
           ) : (
             <div className="divide-y divide-gray-100">
               {filteredMessages.map((message) => (
                 <div
                   key={message.id}
-                  className="p-4 bg-white hover:bg-[#8CD95515] transition-colors relative group border-b border-gray-200 last:border-b-0"
+                  className="p-4 bg-white dark:bg-[#333] hover:bg-[#8CD95515] dark:hover:bg-[#8CD955]/10 transition-colors relative group border-b border-gray-200 dark:border-[#404040] last:border-b-0"
                 >
                   <div className="flex items-start gap-4">
                     {/* Checkbox */}
@@ -1264,19 +1264,19 @@ const ActivationsPage = () => {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start justify-between gap-4 mb-2">
                         <div className="flex-1 min-w-0">
-                          <h3 className="font-semibold text-gray-800 mb-1">{message.title}</h3>
-                          <div className="flex items-center gap-4 text-sm text-gray-600 flex-wrap">
+                          <h3 className="font-semibold text-gray-800 dark:text-white mb-1">{message.title}</h3>
+                          <div className="flex items-center gap-4 text-sm text-gray-600 dark:text-gray-400 flex-wrap">
                             <span className="flex items-center gap-1">
                               <span className="font-medium">Criação:</span>
                               {formatDate(message.created_at)}
                             </span>
                             {message.category && (
-                              <span className="px-2 py-1 bg-[#8CD95515] text-[#6AB83D] rounded text-xs font-medium">
+                              <span className="px-2 py-1 bg-[#8CD95515] dark:bg-[#8CD955]/20 text-[#6AB83D] dark:text-[#8CD955] rounded text-xs font-medium">
                                 {message.category}
                               </span>
                             )}
                             {isAdmin && message.profiles && (
-                              <span className="text-gray-500">
+                              <span className="text-gray-500 dark:text-gray-400">
                                 Por: {message.profiles.full_name || message.profiles.email}
                               </span>
                             )}
@@ -1287,9 +1287,9 @@ const ActivationsPage = () => {
                         <div className="relative flex-shrink-0">
                           <button
                             onClick={() => setOpenMenuId(openMenuId === message.id ? null : message.id)}
-                            className="p-2 hover:bg-gray-200 rounded-lg transition-colors"
+                            className="p-2 hover:bg-gray-200 dark:hover:bg-[#404040] rounded-lg transition-colors"
                           >
-                            <MoreVertical className="w-5 h-5 text-gray-600" />
+                            <MoreVertical className="w-5 h-5 text-gray-600 dark:text-gray-400" />
                           </button>
 
                           {openMenuId === message.id && (
@@ -1298,7 +1298,7 @@ const ActivationsPage = () => {
                                 className="fixed inset-0 z-10"
                                 onClick={() => setOpenMenuId(null)}
                               />
-                              <div className="absolute right-0 top-full mt-2 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20 min-w-[150px]">
+                              <div className="absolute right-0 top-full mt-2 bg-white dark:bg-[#2a2a2a] rounded-lg shadow-lg border border-gray-200 dark:border-[#404040] py-1 z-20 min-w-[150px]">
                                 <button
                                   onClick={() => {
                                     setMessageToSend(message);
@@ -1312,14 +1312,14 @@ const ActivationsPage = () => {
                                 </button>
                                 <button
                                   onClick={() => handleOpenEdit(message)}
-                                  className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                                  className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333] flex items-center gap-2"
                                 >
                                   <Edit2 className="w-4 h-4" />
                                   Editar
                                 </button>
                                 <button
                                   onClick={() => handleDeleteMessage(message.id)}
-                                  className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+                                  className="w-full px-4 py-2 text-left text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 flex items-center gap-2"
                                 >
                                   <Trash2 className="w-4 h-4" />
                                   Deletar
@@ -1333,14 +1333,14 @@ const ActivationsPage = () => {
                       {/* Preview */}
                       {message.preview && (
                         <div className="mt-2">
-                          <span className="text-xs font-medium text-gray-500">Preview:</span>
-                          <p className="text-sm text-gray-700 mt-1">{message.preview}</p>
+                          <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Preview:</span>
+                          <p className="text-sm text-gray-700 dark:text-gray-300 mt-1">{message.preview}</p>
                         </div>
                       )}
 
                       {/* Anexo */}
                       {message.has_attachment && (
-                        <div className="mt-2 flex items-center gap-1 text-gray-500">
+                        <div className="mt-2 flex items-center gap-1 text-gray-500 dark:text-gray-400">
                           <Paperclip className="w-4 h-4" />
                           <span className="text-xs">Anexo</span>
                         </div>
@@ -1356,10 +1356,10 @@ const ActivationsPage = () => {
         {/* Modal de criar/editar mensagem */}
         {showCreateModal && (
           <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4 overflow-y-auto">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-7xl my-8">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-2xl w-full max-w-7xl my-8 border border-gray-200 dark:border-[#404040]">
               {/* Header */}
-              <div className="flex justify-between items-center p-6 border-b border-gray-200">
-                <h2 className="text-xl font-bold text-gray-800">
+              <div className="flex justify-between items-center p-6 border-b border-gray-200 dark:border-[#404040]">
+                <h2 className="text-xl font-bold text-gray-800 dark:text-white">
                   {editingMessage ? 'Editar mensagem' : 'Nova mensagem'}
                 </h2>
                 <button
@@ -1380,7 +1380,7 @@ const ActivationsPage = () => {
                     });
                     handleRemoveFile();
                   }}
-                  className="text-gray-400 hover:text-gray-600"
+                  className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-white"
                 >
                   <X className="w-6 h-6" />
                 </button>
@@ -1388,21 +1388,21 @@ const ActivationsPage = () => {
 
               <div className="flex flex-col lg:flex-row h-[calc(100vh-200px)] max-h-[800px]">
                 {/* Coluna Esquerda - Formulário */}
-                <div className="flex-1 p-6 overflow-y-auto border-r border-gray-200">
+                <div className="flex-1 p-6 overflow-y-auto border-r border-gray-200 dark:border-[#404040]">
                   {/* 1. Informações gerais */}
                   <div className="mb-6">
-                    <h3 className="text-lg font-semibold text-gray-800 mb-4">1. Informações gerais</h3>
+                    <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">1. Informações gerais</h3>
                     <div className="space-y-4">
                       {/* Título */}
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                           Título da mensagem: <span className="text-red-500">*</span>
                         </label>
                         <input
                           type="text"
                           value={formData.title}
                           onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700"
+                          className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-400 dark:placeholder:text-gray-500"
                           placeholder="Ex: asas"
                           required
                         />
@@ -1411,7 +1411,7 @@ const ActivationsPage = () => {
                       {/* Mensagem */}
                       <div>
                         <div className="flex items-center gap-2 mb-2">
-                          <label className="text-sm font-medium text-gray-700">
+                          <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
                             Mensagem:{' '}
                             {!(formData.message_type === 'audio' || formData.message_type === 'ptv' || formData.message_type === 'video') && (
                               <span className="text-red-500">*</span>
@@ -1422,7 +1422,7 @@ const ActivationsPage = () => {
                         <textarea
                           value={formData.content}
                           onChange={(e) => setFormData({ ...formData, content: e.target.value })}
-                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-gray-700 min-h-[150px] resize-y"
+                          className="w-full px-4 py-3 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-gray-700 dark:text-white bg-white dark:bg-[#333] min-h-[150px] resize-y placeholder:text-gray-400 dark:placeholder:text-gray-500"
                           placeholder={
                             formData.message_type === 'ptv' || formData.message_type === 'video'
                               ? 'Legenda opcional (deixe em branco para enviar só o vídeo)'
@@ -1434,7 +1434,7 @@ const ActivationsPage = () => {
 
                       {/* Mencionar todos */}
                       <div className="flex items-center justify-between">
-                        <label className="text-sm font-medium text-gray-700 cursor-pointer">
+                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300 cursor-pointer">
                           Mencionar todos os usuários do grupo
                         </label>
                         <label className="relative inline-flex items-center cursor-pointer">
@@ -1452,18 +1452,18 @@ const ActivationsPage = () => {
 
                   {/* 2. Configurações */}
                   <div>
-                    <h3 className="text-lg font-semibold text-gray-800 mb-4">2. Configurações</h3>
+                    <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">2. Configurações</h3>
                     
                     <div className="space-y-4">
                       {/* Tipo de mensagem */}
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                           Selecione o tipo de mensagem que deseja enviar:
                         </label>
                         <select
                           value={formData.message_type}
                           onChange={(e) => setFormData({ ...formData, message_type: e.target.value })}
-                          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700"
+                          className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                         >
                           <option value="text_only">Somente textos e/ou anexos</option>
                           <option value="text_with_attachment">Texto com anexo</option>
@@ -1504,9 +1504,9 @@ const ActivationsPage = () => {
 
                       {/* Info box para áudio */}
                       {formData.message_type === 'audio' && (
-                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-start gap-3">
-                          <Info className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
-                          <p className="text-sm text-blue-800">
+                        <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4 flex items-start gap-3">
+                          <Info className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+                          <p className="text-sm text-blue-800 dark:text-blue-300">
                             Se desejar enviar um áudio como se fosse gravado, você precisa baixar o áudio original em formato .ogg do WhatsApp e anexá-lo abaixo
                           </p>
                         </div>
@@ -1515,20 +1515,20 @@ const ActivationsPage = () => {
                       {/* Upload de arquivo */}
                       {(formData.message_type === 'text_with_attachment' || formData.message_type === 'video' || formData.message_type === 'ptv' || formData.message_type === 'audio') && (
                         <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                             {formData.message_type === 'audio' ? 'Áudio' : formData.message_type === 'ptv' ? 'Vídeo (PTV)' : formData.message_type === 'video' ? 'Vídeo' : 'Anexo'}
                           </label>
                           
                           {!attachmentFile && !mediaPreviewUrl ? (
                             <div
                               onClick={() => fileInputRef.current?.click()}
-                              className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-[#8CD955] hover:bg-[#8CD95515] transition-colors"
+                              className="border-2 border-dashed border-gray-300 dark:border-[#555] rounded-lg p-8 text-center cursor-pointer hover:border-[#8CD955] hover:bg-[#8CD95515] dark:hover:bg-[#8CD955]/10 transition-colors"
                             >
                               <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
-                              <p className="text-sm text-gray-600 mb-1">
+                              <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">
                                 Arraste o arquivo ou clique aqui
                               </p>
-                              <p className="text-xs text-gray-500">
+                              <p className="text-xs text-gray-500 dark:text-gray-500">
                                 {formData.message_type === 'audio' 
                                   ? 'Formatos: MP3, WAV, OGG' 
                                   : formData.message_type === 'video' || formData.message_type === 'ptv'
@@ -1539,11 +1539,11 @@ const ActivationsPage = () => {
                           ) : (
                             <div className="space-y-3">
                               {/* Preview da mídia */}
-                              <div className="border border-gray-200 rounded-lg p-4 bg-gray-50">
+                              <div className="border border-gray-200 dark:border-[#404040] rounded-lg p-4 bg-gray-50 dark:bg-[#333]">
                                 {mediaType === 'image' && mediaPreviewUrl && (
                                   <div className="space-y-2">
                                     <div className="flex items-center justify-between">
-                                      <span className="text-sm font-medium text-gray-700">Imagem</span>
+                                      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Imagem</span>
                                       <button
                                         onClick={handleRemoveFile}
                                         className="text-red-600 hover:text-red-700 text-sm"
@@ -1576,7 +1576,7 @@ const ActivationsPage = () => {
                                 {mediaType === 'video' && mediaPreviewUrl && (
                                   <div className="space-y-2">
                                     <div className="flex items-center justify-between">
-                                      <span className="text-sm font-medium text-gray-700">Vídeo</span>
+                                      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Vídeo</span>
                                       <button
                                         onClick={handleRemoveFile}
                                         className="text-red-600 hover:text-red-700 text-sm"
@@ -1608,7 +1608,7 @@ const ActivationsPage = () => {
                                 {mediaType === 'audio' && mediaPreviewUrl && (
                                   <div className="space-y-3">
                                     <div className="flex items-center justify-between">
-                                      <span className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                                      <span className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-2">
                                         <Music className="w-4 h-4" />
                                         Áudio
                                       </span>
@@ -1620,7 +1620,7 @@ const ActivationsPage = () => {
                                         Remover
                                       </button>
                                     </div>
-                                    <div className="bg-white rounded-lg p-4 border border-gray-200">
+                                    <div className="bg-white dark:bg-[#333] rounded-lg p-4 border border-gray-200 dark:border-[#404040]">
                                       <audio 
                                         src={mediaPreviewUrl} 
                                         controls 
@@ -1653,7 +1653,7 @@ const ActivationsPage = () => {
                               
                               <button
                                 onClick={() => fileInputRef.current?.click()}
-                                className="w-full px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                                className="w-full px-4 py-2 text-sm text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-[#555] rounded-lg hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors"
                               >
                                 Trocar arquivo
                               </button>
@@ -1680,12 +1680,12 @@ const ActivationsPage = () => {
                 </div>
 
                 {/* Coluna Direita - Preview do Celular */}
-                <div className="lg:w-96 p-6 bg-gray-50 overflow-y-auto">
+                <div className="lg:w-96 p-6 bg-gray-50 dark:bg-[#333] overflow-y-auto">
                   <div className="w-full max-w-[280px] mx-auto">
-                    <h3 className="text-sm font-semibold text-gray-700 mb-4">3. Preview:</h3>
+                    <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">3. Preview:</h3>
                     {/* Mockup do celular */}
                     <div className="bg-gray-900 rounded-[2.5rem] p-2 shadow-2xl">
-                      <div className="bg-white rounded-[2rem] overflow-hidden">
+                      <div className="bg-white dark:bg-[#2a2a2a] rounded-[2rem] overflow-hidden">
                         {/* Status bar */}
                         <div className="bg-gray-900 text-white text-xs px-4 py-1 flex justify-between items-center">
                           <span>18:39</span>
@@ -1717,8 +1717,8 @@ const ActivationsPage = () => {
                         </div>
 
                         {/* Área de mensagens */}
-                        <div className="bg-gray-100 h-[400px] p-4 overflow-y-auto">
-                          <div className="text-center text-xs text-gray-500 mb-4">HOJE</div>
+                        <div className="bg-gray-100 dark:bg-[#333] h-[400px] p-4 overflow-y-auto">
+                          <div className="text-center text-xs text-gray-500 dark:text-gray-400 mb-4">HOJE</div>
                           
                           {/* Mensagem */}
                           <div className="flex justify-end mb-2">
@@ -1787,12 +1787,12 @@ const ActivationsPage = () => {
                         </div>
 
                         {/* Input bar */}
-                        <div className="bg-white border-t border-gray-200 px-3 py-2 flex items-center gap-2">
+                        <div className="bg-white dark:bg-[#2a2a2a] border-t border-gray-200 dark:border-[#404040] px-3 py-2 flex items-center gap-2">
                           <Smile className="w-5 h-5 text-gray-400 cursor-pointer" />
                           <input
                             type="text"
                             placeholder="Mensagem"
-                            className="flex-1 text-sm py-2 px-3 bg-gray-100 rounded-full focus:outline-none"
+                            className="flex-1 text-sm py-2 px-3 bg-gray-100 dark:bg-[#333] text-gray-900 dark:text-white rounded-full focus:outline-none placeholder:text-gray-400 dark:placeholder:text-gray-500"
                             disabled
                           />
                           <Paperclip className="w-5 h-5 text-gray-400 cursor-pointer" />
@@ -1808,15 +1808,15 @@ const ActivationsPage = () => {
               </div>
 
               {/* Footer com botões */}
-              <div className="flex flex-col gap-3 p-6 border-t border-gray-200">
+              <div className="flex flex-col gap-3 p-6 border-t border-gray-200 dark:border-[#404040]">
                 {/* Barra de progresso de upload */}
                 {isUploading && (
                   <div className="space-y-2">
                     <div className="flex items-center justify-between text-sm">
-                      <span className="text-gray-600 font-medium">{uploadStatus || 'Enviando...'}</span>
-                      <span className="text-gray-500">{uploadProgress}%</span>
+                      <span className="text-gray-600 dark:text-gray-400 font-medium">{uploadStatus || 'Enviando...'}</span>
+                      <span className="text-gray-500 dark:text-gray-400">{uploadProgress}%</span>
                     </div>
-                    <div className="w-full bg-gray-200 rounded-full h-2">
+                    <div className="w-full bg-gray-200 dark:bg-[#404040] rounded-full h-2">
                       <div
                         className="bg-[#8CD955] h-2 rounded-full transition-all duration-300"
                         style={{ width: `${uploadProgress}%` }}
@@ -1846,7 +1846,7 @@ const ActivationsPage = () => {
                       handleRemoveFile();
                     }}
                     disabled={isUploading}
-                    className="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="px-6 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-white bg-white dark:bg-[#333] hover:bg-gray-50 dark:hover:bg-[#404040] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Cancelar
                   </button>
@@ -1894,7 +1894,7 @@ const ActivationsPage = () => {
         {activeTab === 'schedules' && (
           <div className="space-y-4">
             {/* Barra de pesquisa e filtros */}
-            <div className="bg-white rounded-xl shadow-md border border-gray-200 p-4">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-md border border-gray-200 dark:border-[#404040] p-4">
               <div className="flex flex-wrap items-center gap-3">
                 <div className="relative flex-1 min-w-[200px]">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
@@ -1903,29 +1903,29 @@ const ActivationsPage = () => {
                     placeholder="Buscar por título"
                     value={scheduleSearchTitle}
                     onChange={(e) => setScheduleSearchTitle(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 bg-gray-100 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-900 placeholder:text-gray-500 text-sm"
+                    className="w-full pl-10 pr-4 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400 text-sm"
                   />
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-sm text-gray-600 whitespace-nowrap">Criação:</span>
+                  <span className="text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">Criação:</span>
                   <input
                     type="date"
                     value={scheduleFilterCreatedFrom}
                     onChange={(e) => setScheduleFilterCreatedFrom(e.target.value)}
-                    className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8CD955] text-gray-700 text-sm"
+                    className="px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333] text-sm"
                   />
-                  <span className="text-gray-400">até</span>
+                  <span className="text-gray-400 dark:text-gray-500">até</span>
                   <input
                     type="date"
                     value={scheduleFilterCreatedTo}
                     onChange={(e) => setScheduleFilterCreatedTo(e.target.value)}
-                    className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8CD955] text-gray-700 text-sm"
+                    className="px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333] text-sm"
                   />
                 </div>
                 <select
                   value={scheduleFilterStatus}
                   onChange={(e) => setScheduleFilterStatus(e.target.value as 'all' | 'sent' | 'failed')}
-                  className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8CD955] text-gray-700 text-sm"
+                  className="px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333] text-sm"
                 >
                   <option value="all">Todos os status</option>
                   <option value="sent">Executado</option>
@@ -1934,7 +1934,7 @@ const ActivationsPage = () => {
                 <select
                   value={scheduleFilterType}
                   onChange={(e) => setScheduleFilterType(e.target.value as 'all' | 'one_time' | 'recurring')}
-                  className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8CD955] text-gray-700 text-sm"
+                  className="px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333] text-sm"
                 >
                   <option value="all">Todos os tipos</option>
                   <option value="one_time">Pontual</option>
@@ -1945,7 +1945,7 @@ const ActivationsPage = () => {
                     type="button"
                     onClick={handleRecalculateRecurring}
                     disabled={recalculatingRecurring}
-                    className="px-3 py-2 rounded-lg bg-amber-100 text-amber-800 border border-amber-300 text-sm font-medium hover:bg-amber-200 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
+                    className="px-3 py-2 rounded-lg bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700 text-sm font-medium hover:bg-amber-200 dark:hover:bg-amber-900/60 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
                     title="Recalcula a data/hora da próxima execução de todos os agendamentos recorrentes (corrige dados antigos)"
                   >
                     {recalculatingRecurring ? (
@@ -1962,14 +1962,14 @@ const ActivationsPage = () => {
             </div>
 
             {loadingSchedules ? (
-              <div className="bg-gray-100 rounded-xl shadow-md border border-gray-200 p-12 text-center">
+              <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-md border border-gray-200 dark:border-[#404040] p-12 text-center">
                 <div className="inline-block w-8 h-8 border-4 border-[#8CD955] border-t-transparent rounded-full animate-spin"></div>
-                <p className="mt-4 text-gray-600">Carregando agendamentos...</p>
+                <p className="mt-4 text-gray-600 dark:text-gray-400">Carregando agendamentos...</p>
               </div>
             ) : filteredSchedules.length === 0 ? (
-              <div className="bg-gray-100 rounded-xl shadow-md border border-gray-200 p-12 text-center">
-                <Calendar className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                <p className="text-gray-500">
+              <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-md border border-gray-200 dark:border-[#404040] p-12 text-center">
+                <Calendar className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
+                <p className="text-gray-500 dark:text-gray-400">
                   {schedules.length === 0
                     ? 'Nenhum agendamento encontrado'
                     : 'Nenhum agendamento corresponde aos filtros'}
@@ -1992,18 +1992,18 @@ const ActivationsPage = () => {
                   return (
                     <div
                       key={key}
-                      className="bg-white rounded-xl shadow-md border border-gray-200 p-4 sm:p-6 hover:shadow-lg transition-shadow min-w-0 flex flex-col"
+                      className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-md border border-gray-200 dark:border-[#404040] p-4 sm:p-6 hover:shadow-lg transition-shadow min-w-0 flex flex-col"
                     >
                       {/* Header do Card */}
                       <div className="flex flex-wrap items-start justify-between gap-2 mb-3 sm:mb-4">
                         <div className="flex flex-wrap items-center gap-2">
                           {isRecurring ? (
-                            <span className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-xs font-medium flex items-center gap-1 shrink-0">
+                            <span className="px-3 py-1 bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 rounded-full text-xs font-medium flex items-center gap-1 shrink-0">
                               <Clock className="w-3 h-3" />
                               Recorrente
                             </span>
                           ) : (
-                            <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-medium flex items-center gap-1 shrink-0">
+                            <span className="px-3 py-1 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-full text-xs font-medium flex items-center gap-1 shrink-0">
                               <Calendar className="w-3 h-3" />
                               Pontual
                             </span>
@@ -2040,15 +2040,15 @@ const ActivationsPage = () => {
 
                       {/* Título */}
                       <div className="mb-3 sm:mb-4 min-w-0">
-                        <p className="text-xs font-semibold text-gray-500 uppercase mb-1">TÍTULO</p>
-                        <p className="text-gray-800 font-medium break-words">{message?.title || 'Sem título'}</p>
+                        <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">TÍTULO</p>
+                        <p className="text-gray-800 dark:text-white font-medium break-words">{message?.title || 'Sem título'}</p>
                       </div>
 
                       {/* Data de criação do disparo */}
                       {(() => {
                         const createdAt = groupSchedules.map((s: { created_at?: string }) => s.created_at).filter(Boolean).sort()[0];
                         return createdAt ? (
-                          <div className="mb-3 sm:mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-gray-600 min-w-0">
+                          <div className="mb-3 sm:mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-gray-600 dark:text-gray-400 min-w-0">
                             <Calendar className="w-4 h-4 shrink-0" />
                             <span className="font-medium shrink-0">CRIADO EM:</span>
                             <span className="break-words">{formatDateTime(createdAt)}</span>
@@ -2058,15 +2058,15 @@ const ActivationsPage = () => {
 
                       {/* Grupos deste disparo */}
                       <div className="mb-3 sm:mb-4 min-w-0">
-                        <p className="text-xs font-semibold text-gray-500 uppercase mb-1">GRUPOS ({groupSchedules.length})</p>
+                        <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">GRUPOS ({groupSchedules.length})</p>
                         <div className="flex flex-wrap gap-1">
                           {groupNames.slice(0, 5).map((name, i) => (
-                            <span key={i} className="px-2 py-0.5 bg-gray-100 text-gray-700 rounded text-xs">
+                            <span key={i} className="px-2 py-0.5 bg-gray-100 dark:bg-[#404040] text-gray-700 dark:text-gray-300 rounded text-xs">
                               {name}
                             </span>
                           ))}
                           {groupNames.length > 5 && (
-                            <span className="px-2 py-0.5 bg-gray-200 text-gray-600 rounded text-xs">
+                            <span className="px-2 py-0.5 bg-gray-200 dark:bg-[#505050] text-gray-600 dark:text-gray-400 rounded text-xs">
                               +{groupNames.length - 5}
                             </span>
                           )}
@@ -2077,15 +2077,15 @@ const ActivationsPage = () => {
                       <div className="mb-3 sm:mb-4 space-y-2 min-w-0">
                         {isRecurring ? (
                           <>
-                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-gray-600">
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-gray-600 dark:text-gray-400">
                               <Calendar className="w-4 h-4 shrink-0" />
                               <span className="font-medium shrink-0">PRÓXIMA EXECUÇÃO:</span>
                               <span className="break-words">{schedule.next_run_utc ? formatDateTime(schedule.next_run_utc) : 'Não agendado'}</span>
                             </div>
                             {schedule.recurring_days && schedule.recurring_days.length > 0 && schedule.recurring_time && (
-                              <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 mt-2 min-w-0">
-                                <p className="text-xs font-semibold text-orange-800 mb-1">AGENDAMENTO RECORRENTE</p>
-                                <p className="text-xs text-orange-700 break-words">
+                              <div className="bg-orange-50 dark:bg-orange-900/30 border border-orange-200 dark:border-orange-800 rounded-lg p-3 mt-2 min-w-0">
+                                <p className="text-xs font-semibold text-orange-800 dark:text-orange-300 mb-1">AGENDAMENTO RECORRENTE</p>
+                                <p className="text-xs text-orange-700 dark:text-orange-400 break-words">
                                   {schedule.recurring_days.map((day: string) => {
                                     const dayMap: Record<string, string> = {
                                       monday: 'Seg',
@@ -2103,7 +2103,7 @@ const ActivationsPage = () => {
                             )}
                           </>
                         ) : (
-                          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-gray-600">
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-gray-600 dark:text-gray-400">
                             <Calendar className="w-4 h-4 shrink-0" />
                             <span className="font-medium shrink-0">DATA PROGRAMADA:</span>
                             <span className="break-words">{schedule.scheduled_at_utc ? formatDateTime(schedule.scheduled_at_utc) : 'Não agendado'}</span>
@@ -2133,14 +2133,14 @@ const ActivationsPage = () => {
                         )}
                         <button
                           onClick={() => handleViewDetails({ schedules: groupSchedules })}
-                          className="w-full sm:flex-1 min-w-0 px-3 py-2 sm:px-4 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg font-medium transition-colors flex items-center justify-center gap-2 text-sm"
+                          className="w-full sm:flex-1 min-w-0 px-3 py-2 sm:px-4 bg-gray-200 dark:bg-[#404040] hover:bg-gray-300 dark:hover:bg-[#505050] text-gray-700 dark:text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2 text-sm"
                         >
                           <Eye className="w-4 h-4 shrink-0" />
                           Ver detalhes
                         </button>
                         <button
                           onClick={() => handleDeleteScheduleGroup(scheduleIds)}
-                          className="w-full sm:flex-1 min-w-0 px-3 py-2 sm:px-4 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg font-medium transition-colors flex items-center justify-center gap-2 text-sm"
+                          className="w-full sm:flex-1 min-w-0 px-3 py-2 sm:px-4 bg-gray-200 dark:bg-[#404040] hover:bg-gray-300 dark:hover:bg-[#505050] text-gray-700 dark:text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2 text-sm"
                         >
                           <Trash className="w-4 h-4 shrink-0" />
                           Excluir

@@ -274,13 +274,13 @@ const EditCampaignsPage = () => {
         {/* Header */}
         <div className="flex items-center justify-between gap-4">
           <div className="flex-1">
-            <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 mb-2">Editar Campanhas</h1>
-            <p className="text-sm sm:text-base text-gray-600">Visualize informações, pause, verifique e gerencie instâncias das campanhas</p>
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 dark:text-white mb-2">Editar Campanhas</h1>
+            <p className="text-sm sm:text-base text-gray-600 dark:text-gray-400">Visualize informações, pause, verifique e gerencie instâncias das campanhas</p>
           </div>
           <div className="lg:hidden flex-shrink-0">
             <button
               onClick={() => setIsMobileOpen(!isMobileOpen)}
-              className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-gray-100 transition text-gray-600 shadow-md bg-white"
+              className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-gray-100 dark:hover:bg-[#404040] transition text-gray-600 dark:text-gray-400 shadow-md bg-white dark:bg-[#2a2a2a]"
               aria-label="Toggle sidebar"
             >
               <Menu className="w-5 h-5" />
@@ -289,11 +289,11 @@ const EditCampaignsPage = () => {
         </div>
 
         {/* Aviso sobre permissões */}
-        <div className="bg-blue-50 border border-blue-200 text-blue-800 p-4 rounded-xl flex items-start gap-3">
+        <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-300 p-4 rounded-xl flex items-start gap-3">
           <Info className="w-5 h-5 flex-shrink-0 mt-0.5" />
           <div>
             <h3 className="font-semibold text-lg mb-1">Permissões de Suporte</h3>
-            <p className="text-sm">
+            <p className="text-sm dark:text-blue-200/90">
               Como usuário de suporte, você pode visualizar informações das campanhas, pausar/retomar campanhas, 
               verificar instâncias e editar configurações das campanhas.
             </p>
@@ -301,9 +301,9 @@ const EditCampaignsPage = () => {
         </div>
 
         {/* Lista de Campanhas */}
-        <div className="bg-gray-100 rounded-xl shadow-md p-6 border border-gray-200">
+        <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-md p-6 border border-gray-200 dark:border-[#404040]">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-gray-800">Todas as Campanhas</h2>
+            <h2 className="text-lg font-semibold text-gray-800 dark:text-white">Todas as Campanhas</h2>
             <button
               onClick={() => loadInitialData()}
               disabled={loading}
@@ -316,9 +316,9 @@ const EditCampaignsPage = () => {
 
           {campaigns.length === 0 ? (
             <div className="text-center py-12">
-              <Rocket className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-              <p className="text-gray-500 text-lg font-medium mb-2">Nenhuma campanha encontrada</p>
-              <p className="text-gray-400 text-sm">As campanhas aparecerão aqui quando forem criadas</p>
+              <Rocket className="w-16 h-16 text-gray-300 dark:text-gray-500 mx-auto mb-4" />
+              <p className="text-gray-500 dark:text-gray-400 text-lg font-medium mb-2">Nenhuma campanha encontrada</p>
+              <p className="text-gray-400 dark:text-gray-500 text-sm">As campanhas aparecerão aqui quando forem criadas</p>
             </div>
           ) : (
             <CampaignsTable

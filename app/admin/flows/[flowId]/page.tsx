@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { Suspense, useState, useEffect, useCallback, useRef } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import Layout from '@/components/Layout';
@@ -172,7 +172,7 @@ const NODE_TEMPLATES = {
   },
 };
 
-export default function FlowEditorPage() {
+function FlowEditorPageContent() {
   const { checking, userId } = useRequireAuth();
   const router = useRouter();
   const params = useParams();
@@ -396,7 +396,7 @@ export default function FlowEditorPage() {
       
       <div className="h-screen flex flex-col">
         {/* Header - Compacto */}
-        <div className="px-6 py-4 border-b border-gray-200 bg-white">
+        <div className="px-6 py-4 border-b border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a]">
           <div className="flex items-start justify-between gap-4">
             <div className="flex-1 min-w-0">
               <input
@@ -404,21 +404,21 @@ export default function FlowEditorPage() {
                 value={flow?.name || ''}
                 onChange={(e) => setFlow({ ...flow!, name: e.target.value })}
                 placeholder="Nome do Flow"
-                className="text-xl font-bold text-gray-900 bg-transparent border-none outline-none w-full"
+                className="text-xl font-bold text-gray-900 dark:text-gray-100 bg-transparent border-none outline-none w-full"
               />
               <input
                 type="text"
                 value={flow?.description || ''}
                 onChange={(e) => setFlow({ ...flow!, description: e.target.value })}
                 placeholder="Descrição (opcional)"
-                className="text-sm text-gray-600 bg-transparent border-none outline-none w-full mt-0.5"
+                className="text-sm text-gray-600 dark:text-gray-400 bg-transparent border-none outline-none w-full mt-0.5"
               />
             </div>
             <div className="flex items-center gap-3 flex-shrink-0">
               <select
                 value={flow?.status || 'draft'}
                 onChange={(e) => setFlow({ ...flow!, status: e.target.value as any })}
-                className="px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
+                className="px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
               >
                 <option value="draft">Rascunho</option>
                 <option value="inactive">Inativo</option>
@@ -443,20 +443,20 @@ export default function FlowEditorPage() {
               </button>
               <button
                 onClick={() => setShowTestPanel(!showTestPanel)}
-                className="px-4 py-2 bg-purple-100 hover:bg-purple-200 text-purple-700 rounded-lg text-sm font-medium transition flex items-center gap-2"
+                className="px-4 py-2 bg-purple-100 dark:bg-purple-900/40 hover:bg-purple-200 dark:hover:bg-purple-900/60 text-purple-700 dark:text-purple-300 rounded-lg text-sm font-medium transition flex items-center gap-2"
               >
                 <Play className="w-4 h-4" />
                 Testar Flow
               </button>
               <button
                 onClick={() => router.push(`/admin/flows/${flowId}/executions`)}
-                className="px-4 py-2 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg text-sm font-medium transition"
+                className="px-4 py-2 bg-blue-100 dark:bg-blue-900/40 hover:bg-blue-200 dark:hover:bg-blue-900/60 text-blue-700 dark:text-blue-300 rounded-lg text-sm font-medium transition"
               >
                 Ver Execuções
               </button>
               <button
                 onClick={() => router.push('/admin/flows')}
-                className="p-2 text-gray-400 hover:text-gray-600"
+                className="p-2 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -467,8 +467,8 @@ export default function FlowEditorPage() {
         {/* Canvas e Sidebar */}
         <div className="flex-1 flex overflow-hidden">
           {/* Sidebar de Nodes */}
-          <div className="w-64 bg-gray-50 border-r border-gray-200 p-5 overflow-y-auto flex-shrink-0">
-            <h3 className="font-semibold text-gray-900 mb-5 text-sm uppercase tracking-wide">Adicionar Node</h3>
+          <div className="w-64 bg-gray-50 dark:bg-[#1f1f1f] border-r border-gray-200 dark:border-[#404040] p-5 overflow-y-auto flex-shrink-0">
+            <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-5 text-sm uppercase tracking-wide">Adicionar Node</h3>
             <div className="space-y-2.5">
               <div
                 draggable
@@ -477,12 +477,12 @@ export default function FlowEditorPage() {
                   e.dataTransfer.effectAllowed = 'move';
                 }}
                 onClick={() => handleAddNode('webhookTrigger')}
-                className="w-full flex items-center gap-3 p-3.5 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 hover:border-gray-300 transition text-left cursor-grab active:cursor-grabbing"
+                className="w-full flex items-center gap-3 p-3.5 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-lg hover:bg-gray-50 dark:hover:bg-[#333] hover:border-gray-300 dark:hover:border-[#555] transition text-left cursor-grab active:cursor-grabbing"
               >
                 <Workflow className="w-5 h-5 text-blue-600" />
                 <div>
-                  <div className="font-medium text-sm text-gray-900">Webhook Trigger</div>
-                  <div className="text-xs text-gray-500">Gatilho de evento</div>
+                  <div className="font-medium text-sm text-gray-900 dark:text-gray-100">Webhook Trigger</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">Gatilho de evento</div>
                 </div>
               </div>
 
@@ -493,12 +493,12 @@ export default function FlowEditorPage() {
                   e.dataTransfer.effectAllowed = 'move';
                 }}
                 onClick={() => handleAddNode('switch')}
-                className="w-full flex items-center gap-3 p-3.5 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 hover:border-gray-300 transition text-left cursor-grab active:cursor-grabbing"
+                className="w-full flex items-center gap-3 p-3.5 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-lg hover:bg-gray-50 dark:hover:bg-[#333] hover:border-gray-300 dark:hover:border-[#555] transition text-left cursor-grab active:cursor-grabbing"
               >
                 <GitBranch className="w-5 h-5 text-purple-600" />
                 <div>
-                  <div className="font-medium text-sm text-gray-900">Switch</div>
-                  <div className="text-xs text-gray-500">Condição/Ramificação</div>
+                  <div className="font-medium text-sm text-gray-900 dark:text-gray-100">Switch</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">Condição/Ramificação</div>
                 </div>
               </div>
 
@@ -509,12 +509,12 @@ export default function FlowEditorPage() {
                   e.dataTransfer.effectAllowed = 'move';
                 }}
                 onClick={() => handleAddNode('randomPicker')}
-                className="w-full flex items-center gap-3 p-3.5 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 hover:border-gray-300 transition text-left cursor-grab active:cursor-grabbing"
+                className="w-full flex items-center gap-3 p-3.5 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-lg hover:bg-gray-50 dark:hover:bg-[#333] hover:border-gray-300 dark:hover:border-[#555] transition text-left cursor-grab active:cursor-grabbing"
               >
                 <Shuffle className="w-5 h-5 text-orange-600" />
                 <div>
-                  <div className="font-medium text-sm text-gray-900">Random Picker</div>
-                  <div className="text-xs text-gray-500">Escolhe mensagem aleatória</div>
+                  <div className="font-medium text-sm text-gray-900 dark:text-gray-100">Random Picker</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">Escolhe mensagem aleatória</div>
                 </div>
               </div>
 
@@ -525,19 +525,19 @@ export default function FlowEditorPage() {
                   e.dataTransfer.effectAllowed = 'move';
                 }}
                 onClick={() => handleAddNode('sendMessage')}
-                className="w-full flex items-center gap-3 p-3.5 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 hover:border-gray-300 transition text-left cursor-grab active:cursor-grabbing"
+                className="w-full flex items-center gap-3 p-3.5 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-lg hover:bg-gray-50 dark:hover:bg-[#333] hover:border-gray-300 dark:hover:border-[#555] transition text-left cursor-grab active:cursor-grabbing"
               >
                 <Send className="w-5 h-5 text-green-600" />
                 <div>
-                  <div className="font-medium text-sm text-gray-900">Send Message</div>
-                  <div className="text-xs text-gray-500">Envia mensagem</div>
+                  <div className="font-medium text-sm text-gray-900 dark:text-gray-100">Send Message</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">Envia mensagem</div>
                 </div>
               </div>
             </div>
 
             {/* Seção: Integração IA */}
-            <div className="mt-8 pt-6 border-t border-gray-300">
-              <h3 className="font-semibold text-gray-900 mb-5 text-sm uppercase tracking-wide">Integração IA</h3>
+            <div className="mt-8 pt-6 border-t border-gray-300 dark:border-[#404040]">
+              <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-5 text-sm uppercase tracking-wide">Integração IA</h3>
               <div className="space-y-2.5">
                 <div
                   draggable
@@ -546,12 +546,12 @@ export default function FlowEditorPage() {
                     e.dataTransfer.effectAllowed = 'move';
                   }}
                   onClick={() => handleAddNode('generateImage')}
-                  className="w-full flex items-center gap-3 p-3.5 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 hover:border-gray-300 transition text-left cursor-grab active:cursor-grabbing"
+                  className="w-full flex items-center gap-3 p-3.5 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-lg hover:bg-gray-50 dark:hover:bg-[#333] hover:border-gray-300 dark:hover:border-[#555] transition text-left cursor-grab active:cursor-grabbing"
                 >
                   <Image className="w-5 h-5 text-pink-600" />
                   <div>
-                    <div className="font-medium text-sm text-gray-900">Generate Image</div>
-                    <div className="text-xs text-gray-500">Gera imagem (Imagen)</div>
+                  <div className="font-medium text-sm text-gray-900 dark:text-gray-100">Generate Image</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">Gera imagem (Imagen)</div>
                   </div>
                 </div>
 
@@ -562,12 +562,12 @@ export default function FlowEditorPage() {
                     e.dataTransfer.effectAllowed = 'move';
                   }}
                   onClick={() => handleAddNode('generateVideo')}
-                  className="w-full flex items-center gap-3 p-3.5 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 hover:border-gray-300 transition text-left cursor-grab active:cursor-grabbing"
+                  className="w-full flex items-center gap-3 p-3.5 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-lg hover:bg-gray-50 dark:hover:bg-[#333] hover:border-gray-300 dark:hover:border-[#555] transition text-left cursor-grab active:cursor-grabbing"
                 >
                   <Video className="w-5 h-5 text-indigo-600" />
                   <div>
-                    <div className="font-medium text-sm text-gray-900">Generate Video</div>
-                    <div className="text-xs text-gray-500">Gera vídeo (Veo)</div>
+                  <div className="font-medium text-sm text-gray-900 dark:text-gray-100">Generate Video</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">Gera vídeo (Veo)</div>
                   </div>
                 </div>
 
@@ -578,12 +578,12 @@ export default function FlowEditorPage() {
                     e.dataTransfer.effectAllowed = 'move';
                   }}
                   onClick={() => handleAddNode('waitVideo')}
-                  className="w-full flex items-center gap-3 p-3.5 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 hover:border-gray-300 transition text-left cursor-grab active:cursor-grabbing"
+                  className="w-full flex items-center gap-3 p-3.5 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-lg hover:bg-gray-50 dark:hover:bg-[#333] hover:border-gray-300 dark:hover:border-[#555] transition text-left cursor-grab active:cursor-grabbing"
                 >
                   <Clock className="w-5 h-5 text-yellow-600" />
                   <div>
-                    <div className="font-medium text-sm text-gray-900">Wait Video</div>
-                    <div className="text-xs text-gray-500">Aguarda conclusão do vídeo</div>
+                  <div className="font-medium text-sm text-gray-900 dark:text-gray-100">Wait Video</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">Aguarda conclusão do vídeo</div>
                   </div>
                 </div>
 
@@ -594,12 +594,12 @@ export default function FlowEditorPage() {
                     e.dataTransfer.effectAllowed = 'move';
                   }}
                   onClick={() => handleAddNode('saveToDataset')}
-                  className="w-full flex items-center gap-3 p-3.5 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 hover:border-gray-300 transition text-left cursor-grab active:cursor-grabbing"
+                  className="w-full flex items-center gap-3 p-3.5 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-lg hover:bg-gray-50 dark:hover:bg-[#333] hover:border-gray-300 dark:hover:border-[#555] transition text-left cursor-grab active:cursor-grabbing"
                 >
                   <Database className="w-5 h-5 text-teal-600" />
                   <div>
-                    <div className="font-medium text-sm text-gray-900">Save to Dataset</div>
-                    <div className="text-xs text-gray-500">Salva no dataset</div>
+                  <div className="font-medium text-sm text-gray-900 dark:text-gray-100">Save to Dataset</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">Salva no dataset</div>
                   </div>
                 </div>
 
@@ -610,12 +610,12 @@ export default function FlowEditorPage() {
                     e.dataTransfer.effectAllowed = 'move';
                   }}
                   onClick={() => handleAddNode('agentIA')}
-                  className="w-full flex items-center gap-3 p-3.5 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 hover:border-gray-300 transition text-left cursor-grab active:cursor-grabbing"
+                  className="w-full flex items-center gap-3 p-3.5 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-lg hover:bg-gray-50 dark:hover:bg-[#333] hover:border-gray-300 dark:hover:border-[#555] transition text-left cursor-grab active:cursor-grabbing"
                 >
                   <Bot className="w-5 h-5 text-cyan-600" />
                   <div>
-                    <div className="font-medium text-sm text-gray-900">Agent IA</div>
-                    <div className="text-xs text-gray-500">Agente IA com anti-spam</div>
+                  <div className="font-medium text-sm text-gray-900 dark:text-gray-100">Agent IA</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">Agente IA com anti-spam</div>
                   </div>
                 </div>
               </div>
@@ -623,7 +623,7 @@ export default function FlowEditorPage() {
           </div>
 
           {/* Canvas */}
-          <div className="flex-1 bg-gray-100 relative">
+          <div className="flex-1 bg-gray-100 dark:bg-[#1a1a1a] relative">
             {testing && (
               <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 animate-pulse">
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -649,9 +649,9 @@ export default function FlowEditorPage() {
             const selectedNode = nodes.find(n => n.id === selectedNodeId);
             if (!selectedNode) return null;
             return (
-              <div className="w-80 bg-white border-l border-gray-200 p-5 overflow-y-auto flex-shrink-0">
+              <div className="w-80 bg-white dark:bg-[#2a2a2a] border-l border-gray-200 dark:border-[#404040] p-5 overflow-y-auto flex-shrink-0">
                 <div className="flex items-center justify-between mb-5">
-                  <h3 className="font-semibold text-gray-900">Configurar Node</h3>
+                  <h3 className="font-semibold text-gray-900 dark:text-gray-100">Configurar Node</h3>
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => handleDeleteNode(selectedNode.id)}
@@ -662,7 +662,7 @@ export default function FlowEditorPage() {
                     </button>
                     <button
                       onClick={() => setSelectedNodeId(null)}
-                      className="text-gray-400 hover:text-gray-600"
+                      className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
                       title="Fechar"
                     >
                       <X className="w-4 h-4" />
@@ -705,6 +705,20 @@ export default function FlowEditorPage() {
         </div>
       </div>
     </Layout>
+  );
+}
+
+export default function FlowEditorPage() {
+  return (
+    <Suspense fallback={
+      <Layout>
+        <div className="flex items-center justify-center p-12">
+          <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+        </div>
+      </Layout>
+    }>
+      <FlowEditorPageContent />
+    </Suspense>
   );
 }
 
@@ -1135,13 +1149,13 @@ const TestPanel: React.FC<{
 
   return (
     <div 
-      className="bg-white border-l border-gray-200 flex flex-col h-full relative"
+      className="bg-white dark:bg-[#2a2a2a] border-l border-gray-200 dark:border-[#404040] flex flex-col h-full relative"
       style={{ width: `${testPanelWidth}px` }}
     >
       {/* Handle de redimensionamento */}
       <div
         onMouseDown={handleMouseDown}
-        className="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-blue-400 bg-gray-300 transition-colors z-10 group"
+        className="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-blue-400 bg-gray-300 dark:bg-[#444] transition-colors z-10 group"
         style={{ marginLeft: '-3px' }}
       >
         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -1149,15 +1163,15 @@ const TestPanel: React.FC<{
         </div>
       </div>
 
-      <div className="p-5 border-b border-gray-200 bg-gray-50 flex-shrink-0">
+      <div className="p-5 border-b border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#1f1f1f] flex-shrink-0">
         <div className="flex items-start justify-between mb-4">
           <div className="flex-1 min-w-0">
-            <h3 className="font-semibold text-gray-900 text-base">Testar Flow</h3>
-            <p className="text-xs text-gray-600 mt-1">Selecione um evento ou edite o payload</p>
+            <h3 className="font-semibold text-gray-900 dark:text-gray-100 text-base">Testar Flow</h3>
+            <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">Selecione um evento ou edite o payload</p>
           </div>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 flex-shrink-0 ml-2"
+            className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 flex-shrink-0 ml-2"
             title="Fechar"
           >
             <X className="w-5 h-5" />
@@ -1168,7 +1182,7 @@ const TestPanel: React.FC<{
           <select
             value={eventEnv}
             onChange={(e) => setEventEnv(e.target.value)}
-            className="flex-1 px-3 py-2 bg-white border border-gray-300 text-gray-900 rounded-lg text-sm"
+            className="flex-1 px-3 py-2 bg-white dark:bg-[#333] border border-gray-300 dark:border-[#555] text-gray-900 dark:text-gray-100 rounded-lg text-sm"
           >
             <option value="prod">PROD</option>
             <option value="test">TEST</option>
@@ -1177,7 +1191,7 @@ const TestPanel: React.FC<{
           <button
             onClick={loadEvents}
             disabled={loadingEvents}
-            className="flex items-center justify-center gap-2 px-3 py-2 bg-white hover:bg-gray-100 border border-gray-300 text-gray-900 rounded-lg text-sm transition disabled:opacity-50 flex-shrink-0"
+            className="flex items-center justify-center gap-2 px-3 py-2 bg-white dark:bg-[#333] hover:bg-gray-100 dark:hover:bg-[#3a3a3a] border border-gray-300 dark:border-[#555] text-gray-900 dark:text-gray-100 rounded-lg text-sm transition disabled:opacity-50 flex-shrink-0"
           >
             <RefreshCw className={`w-4 h-4 ${loadingEvents ? 'animate-spin' : ''}`} />
             {loadingEvents ? '...' : 'Atualizar'}
@@ -1188,17 +1202,17 @@ const TestPanel: React.FC<{
       <div className="flex-1 overflow-y-auto p-5 space-y-5">
         {/* Lista de Eventos */}
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-3">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-3">
             Eventos Recebidos via Webhook ({webhookEvents.length})
           </label>
-          <div className="border border-gray-200 rounded-lg max-h-72 overflow-y-auto bg-gray-50 shadow-sm">
+          <div className="border border-gray-200 dark:border-[#404040] rounded-lg max-h-72 overflow-y-auto bg-gray-50 dark:bg-[#1f1f1f] shadow-sm">
             {loadingEvents ? (
-              <div className="p-4 text-center text-gray-500">
+              <div className="p-4 text-center text-gray-500 dark:text-gray-400">
                 <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" />
                 Carregando eventos...
               </div>
             ) : webhookEvents.length === 0 ? (
-              <div className="p-4 text-center text-gray-500 text-sm">
+              <div className="p-4 text-center text-gray-500 dark:text-gray-400 text-sm">
                 Nenhum evento encontrado
               </div>
             ) : (
@@ -1216,19 +1230,21 @@ const TestPanel: React.FC<{
                       }
                     }}
                     onClick={() => handleSelectEvent(event)}
-                    className={`w-full text-left p-3.5 border-b border-gray-200 hover:bg-white transition ${
-                      isSelected ? 'bg-blue-50 border-l-4 border-l-blue-500' : 'bg-white'
+                    className={`w-full text-left p-3.5 border-b border-gray-200 dark:border-[#404040] transition ${
+                      isSelected
+                        ? 'bg-blue-50 dark:bg-blue-900/30 border-l-4 border-l-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/30'
+                        : 'bg-white dark:bg-[#2a2a2a] hover:bg-gray-50 dark:hover:bg-[#333]'
                     }`}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium text-gray-900 truncate">
+                        <div className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
                           {event.event_type || 'Sem tipo'}
                         </div>
-                        <div className="text-xs text-gray-600 mt-1.5">
+                        <div className="text-xs text-gray-600 dark:text-gray-400 mt-1.5">
                           {event.instance_name || 'Sem instância'}
                         </div>
-                        <div className="text-xs text-gray-500 mt-1">
+                        <div className="text-xs text-gray-500 dark:text-gray-500 mt-1">
                           {new Date(event.received_at).toLocaleString('pt-BR')}
                         </div>
                       </div>
@@ -1245,54 +1261,54 @@ const TestPanel: React.FC<{
 
         {/* Informações do Evento Selecionado */}
         {selectedEvent && (
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 shadow-sm">
-            <h4 className="text-sm font-semibold text-blue-900 mb-3">Evento Selecionado</h4>
+          <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 shadow-sm">
+            <h4 className="text-sm font-semibold text-blue-900 dark:text-blue-300 mb-3">Evento Selecionado</h4>
             <div className="space-y-2 text-xs">
-              <div className="text-gray-900"><strong className="text-gray-800 font-medium">Tipo:</strong> <span className="text-gray-900 ml-1">{selectedEvent.event_type}</span></div>
-              <div className="text-gray-900"><strong className="text-gray-800 font-medium">Instância:</strong> <span className="text-gray-900 ml-1">{selectedEvent.instance_name || 'N/A'}</span></div>
-              <div className="text-gray-900"><strong className="text-gray-800 font-medium">Remote JID:</strong> <span className="text-gray-900 ml-1 break-all">{selectedEvent.remote_jid || 'N/A'}</span></div>
-              <div className="text-gray-900"><strong className="text-gray-800 font-medium">Message ID:</strong> <span className="text-gray-900 ml-1 break-all">{selectedEvent.message_id || 'N/A'}</span></div>
-              <div className="text-gray-900"><strong className="text-gray-800 font-medium">Recebido em:</strong> <span className="text-gray-900 ml-1">{new Date(selectedEvent.received_at).toLocaleString('pt-BR')}</span></div>
+              <div className="text-gray-900 dark:text-gray-200"><strong className="text-gray-800 dark:text-gray-300 font-medium">Tipo:</strong> <span className="ml-1">{selectedEvent.event_type}</span></div>
+              <div className="text-gray-900 dark:text-gray-200"><strong className="text-gray-800 dark:text-gray-300 font-medium">Instância:</strong> <span className="ml-1">{selectedEvent.instance_name || 'N/A'}</span></div>
+              <div className="text-gray-900 dark:text-gray-200"><strong className="text-gray-800 dark:text-gray-300 font-medium">Remote JID:</strong> <span className="ml-1 break-all">{selectedEvent.remote_jid || 'N/A'}</span></div>
+              <div className="text-gray-900 dark:text-gray-200"><strong className="text-gray-800 dark:text-gray-300 font-medium">Message ID:</strong> <span className="ml-1 break-all">{selectedEvent.message_id || 'N/A'}</span></div>
+              <div className="text-gray-900 dark:text-gray-200"><strong className="text-gray-800 dark:text-gray-300 font-medium">Recebido em:</strong> <span className="ml-1">{new Date(selectedEvent.received_at).toLocaleString('pt-BR')}</span></div>
             </div>
           </div>
         )}
 
         {/* Configurações do Teste */}
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2.5">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2.5">
             Tipo de Evento
           </label>
           <input
             type="text"
             value={eventType}
             onChange={(e) => setEventType(e.target.value)}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             placeholder="MESSAGES_UPSERT"
           />
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2.5">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2.5">
             Instância (opcional)
           </label>
           <input
             type="text"
             value={instanceName}
             onChange={(e) => setInstanceName(e.target.value)}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             placeholder="Nome da instância"
           />
         </div>
 
         {/* Editor de Payload */}
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2.5">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2.5">
             Payload JSON (editável)
           </label>
           <textarea
             value={testPayload}
             onChange={(e) => setTestPayload(e.target.value)}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm font-mono text-xs text-gray-900 bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm font-mono text-xs text-gray-900 dark:text-gray-100 bg-white dark:bg-[#1e1e1e] focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
             rows={14}
             placeholder='{"key": {"remoteJid": "...", "id": "..."}, ...}'
           />
@@ -1319,29 +1335,29 @@ const TestPanel: React.FC<{
 
         {/* Resultado do Teste */}
         {testResult && (
-          <div className="mt-5 p-4 bg-gray-50 rounded-lg border border-gray-200 shadow-sm">
-            <h4 className="text-sm font-semibold text-gray-900 mb-3">Resultado:</h4>
+          <div className="mt-5 p-4 bg-gray-50 dark:bg-[#1f1f1f] rounded-lg border border-gray-200 dark:border-[#404040] shadow-sm">
+            <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">Resultado:</h4>
             {testResult.error ? (
               <div className="text-sm text-red-700">
                 <strong className="text-red-900">Erro:</strong> <span className="text-red-800">{testResult.error}</span>
               </div>
             ) : (
-              <div className="text-sm text-gray-900 space-y-2">
+                <div className="text-sm text-gray-900 dark:text-gray-200 space-y-2">
                 <div>
-                  <strong className="text-gray-800">Execução ID:</strong> <span className="text-gray-900 font-mono text-xs ml-1">{testResult.execution_id}</span>
+                  <strong className="text-gray-800 dark:text-gray-300">Execução ID:</strong> <span className="font-mono text-xs ml-1">{testResult.execution_id}</span>
                 </div>
                 {testResult.execution && (
                   <div>
-                    <strong className="text-gray-800">Status:</strong> <span className={`ml-1 px-2 py-0.5 rounded text-xs font-medium ${
-                      testResult.execution.status === 'success' ? 'bg-green-100 text-green-800' :
-                      testResult.execution.status === 'failed' ? 'bg-red-100 text-red-800' :
-                      'bg-gray-100 text-gray-800'
+                    <strong className="text-gray-800 dark:text-gray-300">Status:</strong> <span className={`ml-1 px-2 py-0.5 rounded text-xs font-medium ${
+                      testResult.execution.status === 'success' ? 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-300' :
+                      testResult.execution.status === 'failed' ? 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-300' :
+                      'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-300'
                     }`}>{testResult.execution.status}</span>
                   </div>
                 )}
                 {testResult.test_event_id && (
                   <div>
-                    <strong className="text-gray-800">Evento de Teste ID:</strong> <span className="text-gray-900 font-mono text-xs ml-1">{testResult.test_event_id}</span>
+                    <strong className="text-gray-800 dark:text-gray-300">Evento de Teste ID:</strong> <span className="font-mono text-xs ml-1">{testResult.test_event_id}</span>
                   </div>
                 )}
               </div>
@@ -1482,7 +1498,7 @@ const TextWithVariables: React.FC<{
                   onDeleteVariable(part.start!, part.end!);
                 }
               }}
-              className="text-blue-600 font-mono font-semibold bg-blue-50 px-1 py-0.5 rounded cursor-pointer hover:bg-blue-100 active:bg-blue-200 transition-colors select-none"
+              className="text-blue-600 dark:text-blue-400 font-mono font-semibold bg-blue-50 dark:bg-blue-900/30 px-1 py-0.5 rounded cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900/50 active:bg-blue-200 dark:active:bg-blue-900/70 transition-colors select-none"
               title="Duplo clique para deletar | Arraste para mover"
             >
               {part.text}
@@ -1624,9 +1640,9 @@ const VariableTextEditor: React.FC<{
         placeholder={placeholder}
       />
       {showPreview && value && (
-        <div className="mt-2 px-3.5 py-2.5 border border-gray-200 rounded-lg text-sm bg-gray-50 min-h-[60px]">
-          <p className="text-xs text-gray-500 mb-1">Prévia (duplo clique na variável para deletar | arraste para mover):</p>
-          <div className="text-gray-900 whitespace-pre-wrap">
+        <div className="mt-2 px-3.5 py-2.5 border border-gray-200 dark:border-[#404040] rounded-lg text-sm bg-gray-50 dark:bg-[#1f1f1f] min-h-[60px]">
+          <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Prévia (duplo clique na variável para deletar | arraste para mover):</p>
+          <div className="text-gray-900 dark:text-gray-200 whitespace-pre-wrap">
             <TextWithVariables 
               text={value} 
               onDeleteVariable={handleDeleteVariable}
@@ -1651,7 +1667,7 @@ const VariableChip: React.FC<{
       e.dataTransfer.setData('text/plain', value);
       e.dataTransfer.effectAllowed = 'copy';
     }}
-    className="inline-flex items-center gap-1 bg-blue-100 hover:bg-blue-200 px-1.5 py-0.5 rounded cursor-grab active:cursor-grabbing text-blue-900 font-mono text-xs transition-colors select-none"
+    className="inline-flex items-center gap-1 bg-blue-100 dark:bg-blue-900/40 hover:bg-blue-200 dark:hover:bg-blue-900/60 px-1.5 py-0.5 rounded cursor-grab active:cursor-grabbing text-blue-900 dark:text-blue-300 font-mono text-xs transition-colors select-none"
     title={`Arraste para o texto: ${label}`}
   >
     {value}
@@ -1669,7 +1685,7 @@ const NodeConfigPanel: React.FC<{
     return (
       <div className="space-y-5">
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Tipo de Evento
           </label>
           <input
@@ -1681,12 +1697,12 @@ const NodeConfigPanel: React.FC<{
                 event_type: e.target.value,
               },
             })}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
             placeholder="Ex: group-participants.update"
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Instância (opcional)
           </label>
           <input
@@ -1698,12 +1714,12 @@ const NodeConfigPanel: React.FC<{
                 instance: e.target.value || null,
               },
             })}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
             placeholder="Nome da instância"
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Action (opcional)
           </label>
           <select
@@ -1714,7 +1730,7 @@ const NodeConfigPanel: React.FC<{
                 action: e.target.value || null,
               },
             })}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
           >
             <option value="">Todos</option>
             <option value="add">Add</option>
@@ -1729,13 +1745,13 @@ const NodeConfigPanel: React.FC<{
     return (
       <div className="space-y-5">
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Regras
           </label>
           {(config.rules || []).map((rule: any, idx: number) => (
-            <div key={idx} className="mb-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+            <div key={idx} className="mb-3 p-3 bg-gray-50 dark:bg-[#1f1f1f] rounded-lg border border-gray-200 dark:border-[#404040]">
               <div className="mb-2">
-                <label className="block text-xs font-medium text-gray-900 mb-1.5">
+                <label className="block text-xs font-medium text-gray-900 dark:text-gray-100 mb-1.5">
                   Condição
                 </label>
                 <input
@@ -1746,20 +1762,20 @@ const NodeConfigPanel: React.FC<{
                     newRules[idx] = { ...rule, condition: e.target.value };
                     onUpdate({ rules: newRules });
                   }}
-                  className="w-full px-2.5 py-1.5 border border-gray-300 rounded text-xs font-mono text-gray-900 bg-white"
+                  className="w-full px-2.5 py-1.5 border border-gray-300 dark:border-[#555] rounded text-xs font-mono text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
                   placeholder="{{$json.normalized.action}} equals 'add'"
                 />
                 {rule.condition && (
-                  <div className="mt-1.5 px-2.5 py-1.5 border border-gray-200 rounded text-xs bg-gray-50">
-                    <p className="text-xs text-gray-500 mb-0.5">Prévia:</p>
-                    <div className="text-gray-900">
+                  <div className="mt-1.5 px-2.5 py-1.5 border border-gray-200 dark:border-[#404040] rounded text-xs bg-gray-50 dark:bg-[#1f1f1f]">
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-0.5">Prévia:</p>
+                    <div className="text-gray-900 dark:text-gray-200">
                       <TextWithVariables text={rule.condition} />
                     </div>
                   </div>
                 )}
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-900 mb-1.5">
+                <label className="block text-xs font-medium text-gray-900 dark:text-gray-100 mb-1.5">
                   Output
                 </label>
                 <input
@@ -1770,7 +1786,7 @@ const NodeConfigPanel: React.FC<{
                     newRules[idx] = { ...rule, output: e.target.value };
                     onUpdate({ rules: newRules });
                   }}
-                  className="w-full px-2.5 py-1.5 border border-gray-300 rounded text-xs text-gray-900 bg-white"
+                  className="w-full px-2.5 py-1.5 border border-gray-300 dark:border-[#555] rounded text-xs text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
                   placeholder="add"
                 />
               </div>
@@ -1780,7 +1796,7 @@ const NodeConfigPanel: React.FC<{
             onClick={() => onUpdate({
               rules: [...(config.rules || []), { condition: '', output: '' }],
             })}
-            className="w-full px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded-lg transition"
+            className="w-full px-3 py-2 text-sm bg-gray-100 dark:bg-[#333] hover:bg-gray-200 dark:hover:bg-[#404040] text-gray-700 dark:text-gray-300 rounded-lg transition"
           >
             Adicionar Regra
           </button>
@@ -1793,8 +1809,8 @@ const NodeConfigPanel: React.FC<{
     return (
       <div className="space-y-5">
         {/* Variáveis arrastáveis */}
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-          <h4 className="text-sm font-semibold text-blue-900 mb-2">Variáveis — arraste para o texto</h4>
+        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+          <h4 className="text-sm font-semibold text-blue-900 dark:text-blue-300 mb-2">Variáveis — arraste para o texto</h4>
           <div className="flex flex-wrap gap-2 text-xs">
             {VARIABLES_RANDOMPICKER.map((v) => (
               <VariableChip key={v.value} value={v.value} label={v.label} />
@@ -1804,7 +1820,7 @@ const NodeConfigPanel: React.FC<{
 
         <div>
           <div className="flex items-center justify-between mb-2">
-            <label className="block text-sm font-medium text-gray-900">
+            <label className="block text-sm font-medium text-gray-900 dark:text-gray-100">
               Mensagens ({config.messages?.length || 0})
             </label>
             <div className="flex gap-2">
@@ -1817,8 +1833,8 @@ const NodeConfigPanel: React.FC<{
                   }
                 }}
                 disabled={(config.messages?.length || 0) <= 1}
-                className="px-2 py-1 text-sm text-gray-600 hover:bg-gray-100 rounded disabled:opacity-50 disabled:cursor-not-allowed"
-                title="Remover última mensagem"
+                  className="px-2 py-1 text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#333] rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Remover última mensagem"
               >
                 <Minus className="w-4 h-4" />
               </button>
@@ -1826,8 +1842,8 @@ const NodeConfigPanel: React.FC<{
                 onClick={() => onUpdate({
                   messages: [...(config.messages || []), ''],
                 })}
-                className="px-2 py-1 text-sm text-gray-600 hover:bg-gray-100 rounded"
-                title="Adicionar mensagem"
+                  className="px-2 py-1 text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#333] rounded"
+                  title="Adicionar mensagem"
               >
                 <Plus className="w-4 h-4" />
               </button>
@@ -1844,7 +1860,7 @@ const NodeConfigPanel: React.FC<{
                       newMessages[idx] = newValue;
                       onUpdate({ messages: newMessages });
                     }}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white resize-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400"
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] resize-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400"
                     rows={3}
                     placeholder={`Mensagem ${idx + 1}... (solte variáveis aqui)`}
                     showPreview={true}
@@ -1868,7 +1884,7 @@ const NodeConfigPanel: React.FC<{
               onClick={() => onUpdate({
                 messages: [''],
               })}
-              className="w-full px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded-lg transition flex items-center justify-center gap-2"
+              className="w-full px-3 py-2 text-sm bg-gray-100 dark:bg-[#333] hover:bg-gray-200 dark:hover:bg-[#404040] text-gray-700 dark:text-gray-300 rounded-lg transition flex items-center justify-center gap-2"
             >
               <Plus className="w-4 h-4" />
               Adicionar Primeira Mensagem
@@ -1902,8 +1918,8 @@ const NodeConfigPanel: React.FC<{
     return (
       <div className="space-y-5">
         {/* Variáveis arrastáveis */}
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-          <h4 className="text-sm font-semibold text-blue-900 mb-2 flex items-center gap-2">
+        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+          <h4 className="text-sm font-semibold text-blue-900 dark:text-blue-300 mb-2 flex items-center gap-2">
             <Info className="w-4 h-4" />
             Variáveis — arraste para o texto
           </h4>
@@ -1912,13 +1928,13 @@ const NodeConfigPanel: React.FC<{
               <VariableChip key={v.value} value={v.value} label={v.label} />
             ))}
           </div>
-          <p className="mt-2 text-xs text-blue-700">
+          <p className="mt-2 text-xs text-blue-700 dark:text-blue-400">
             💡 Use @ antes de numero na mensagem para mencionar o lead.
           </p>
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Instância *
           </label>
           <input
@@ -1927,20 +1943,20 @@ const NodeConfigPanel: React.FC<{
             onChange={(e) => onUpdate({ instance_name: e.target.value })}
             onDragOver={handleDragOver}
             onDrop={(e) => handleDrop(e, 'instance_name')}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white focus:ring-2 focus:ring-blue-400 focus:border-blue-400"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] focus:ring-2 focus:ring-blue-400 focus:border-blue-400"
             placeholder="{{$json.normalized.instanceName}}"
           />
           {config.instance_name && (
-            <div className="mt-2 px-3.5 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50">
-              <p className="text-xs text-gray-500 mb-1">Prévia:</p>
-              <div className="text-gray-900">
+            <div className="mt-2 px-3.5 py-2 border border-gray-200 dark:border-[#404040] rounded-lg text-sm bg-gray-50 dark:bg-[#1f1f1f]">
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Prévia:</p>
+              <div className="text-gray-900 dark:text-gray-200">
                 <TextWithVariables text={config.instance_name} />
               </div>
             </div>
           )}
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Grupo JID (ou número) *
           </label>
           <input
@@ -1949,36 +1965,36 @@ const NodeConfigPanel: React.FC<{
             onChange={(e) => onUpdate({ group_jid: e.target.value })}
             onDragOver={handleDragOver}
             onDrop={(e) => handleDrop(e, 'group_jid')}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm font-mono text-xs text-gray-900 bg-white focus:ring-2 focus:ring-blue-400 focus:border-blue-400"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm font-mono text-xs text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] focus:ring-2 focus:ring-blue-400 focus:border-blue-400"
             placeholder="{{$json.normalized.groupId}}"
           />
           {config.group_jid && (
-            <div className="mt-2 px-3.5 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50">
-              <p className="text-xs text-gray-500 mb-1">Prévia:</p>
-              <div className="text-gray-900">
+            <div className="mt-2 px-3.5 py-2 border border-gray-200 dark:border-[#404040] rounded-lg text-sm bg-gray-50 dark:bg-[#1f1f1f]">
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Prévia:</p>
+              <div className="text-gray-900 dark:text-gray-200">
                 <TextWithVariables text={config.group_jid} />
               </div>
             </div>
           )}
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Mensagem *
           </label>
           <VariableTextEditor
             value={config.message || ''}
             onChange={(newValue) => onUpdate({ message: newValue })}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white focus:ring-2 focus:ring-blue-400 focus:border-blue-400"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] focus:ring-2 focus:ring-blue-400 focus:border-blue-400"
             rows={6}
             placeholder="Solte variáveis aqui. Ex: Tudo bom? {{numero}}, seja bem-vindo ao {{banca}}! Sou o {{nome}}."
             showPreview={true}
           />
-          <p className="mt-1 text-xs text-gray-500">
+          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
             Arraste as variáveis para inserir no ponto exato da mensagem. Duplo clique na variável na prévia para deletar ou arraste para mover.
           </p>
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Mencionados (mentioned)
           </label>
           <textarea
@@ -1986,17 +2002,17 @@ const NodeConfigPanel: React.FC<{
             onChange={(e) => onUpdate({ mentioned: e.target.value })}
             onDragOver={handleDragOver}
             onDrop={(e) => handleDrop(e, 'mentioned')}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm font-mono text-xs text-gray-900 bg-white focus:ring-2 focus:ring-blue-400 focus:border-blue-400"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm font-mono text-xs text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] focus:ring-2 focus:ring-blue-400 focus:border-blue-400"
             rows={3}
             placeholder="Um JID por linha. Ex: 62851243461918@s.whatsapp.net&#10;Ou use variável: {{$json.normalized.phoneNumber}}"
           />
-          <p className="mt-1 text-xs text-gray-500">
+          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
             {'JIDs para marcar no WhatsApp (um por linha). Enviado no request como "mentioned". Ex: 62851243461918@s.whatsapp.net ou variável como {{$json.normalized.phoneNumber}}.'}
           </p>
           {config.mentioned && (
-            <div className="mt-2 px-3.5 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50">
-              <p className="text-xs text-gray-500 mb-1">Prévia:</p>
-              <div className="text-gray-900 font-mono text-xs whitespace-pre-wrap">
+            <div className="mt-2 px-3.5 py-2 border border-gray-200 dark:border-[#404040] rounded-lg text-sm bg-gray-50 dark:bg-[#1f1f1f]">
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Prévia:</p>
+              <div className="text-gray-900 dark:text-gray-200 font-mono text-xs whitespace-pre-wrap">
                 <TextWithVariables text={config.mentioned} />
               </div>
             </div>
@@ -2010,25 +2026,25 @@ const NodeConfigPanel: React.FC<{
     return (
       <div className="space-y-5">
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Prompt *
           </label>
           <textarea
             value={config.prompt || ''}
             onChange={(e) => onUpdate({ prompt: e.target.value })}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
             rows={3}
             placeholder="Descreva a imagem que deseja gerar"
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Aspect Ratio
           </label>
           <select
             value={config.aspectRatio || '1:1'}
             onChange={(e) => onUpdate({ aspectRatio: e.target.value })}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
           >
             <option value="1:1">1:1 (Quadrado)</option>
             <option value="16:9">16:9 (Widescreen)</option>
@@ -2045,7 +2061,7 @@ const NodeConfigPanel: React.FC<{
             onChange={(e) => onUpdate({ saveToDataset: e.target.checked })}
             className="w-4 h-4"
           />
-          <label htmlFor="saveToDataset" className="text-sm text-gray-700">
+          <label htmlFor="saveToDataset" className="text-sm text-gray-700 dark:text-gray-300">
             Salvar no dataset (pending approval)
           </label>
         </div>
@@ -2057,25 +2073,25 @@ const NodeConfigPanel: React.FC<{
     return (
       <div className="space-y-5">
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Prompt *
           </label>
           <textarea
             value={config.prompt || ''}
             onChange={(e) => onUpdate({ prompt: e.target.value })}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
             rows={3}
             placeholder="Descreva o vídeo que deseja gerar"
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Aspect Ratio
           </label>
           <select
             value={config.aspectRatio || '16:9'}
             onChange={(e) => onUpdate({ aspectRatio: e.target.value })}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
           >
             <option value="16:9">16:9 (Widescreen)</option>
             <option value="9:16">9:16 (Vertical)</option>
@@ -2083,19 +2099,19 @@ const NodeConfigPanel: React.FC<{
           </select>
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Resolução
           </label>
           <select
             value={config.resolution || '720p'}
             onChange={(e) => onUpdate({ resolution: e.target.value })}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
           >
             <option value="720p">720p</option>
             <option value="1080p">1080p</option>
           </select>
         </div>
-        <div className="text-xs text-gray-500 bg-blue-50 p-2 rounded">
+        <div className="text-xs text-gray-500 dark:text-gray-400 bg-blue-50 dark:bg-blue-900/20 p-2 rounded">
           💡 O vídeo será gerado de forma assíncrona. Use o node "Wait Video" para aguardar a conclusão.
         </div>
       </div>
@@ -2106,42 +2122,42 @@ const NodeConfigPanel: React.FC<{
     return (
       <div className="space-y-5">
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Job ID *
           </label>
           <input
             type="text"
             value={config.job_id || ''}
             onChange={(e) => onUpdate({ job_id: e.target.value })}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm font-mono text-xs text-gray-900 bg-white"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm font-mono text-xs text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
             placeholder="{{$json.generateVideo.job_id}}"
           />
-          <p className="text-xs text-gray-500 mt-1">
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
             Use a variável do node Generate Video anterior
           </p>
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Tempo Máximo de Espera (segundos)
           </label>
           <input
             type="number"
             value={config.maxWaitSeconds || 300}
             onChange={(e) => onUpdate({ maxWaitSeconds: parseInt(e.target.value) || 300 })}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
             min={60}
             max={3600}
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Intervalo de Polling (segundos)
           </label>
           <input
             type="number"
             value={config.pollIntervalSeconds || 5}
             onChange={(e) => onUpdate({ pollIntervalSeconds: parseInt(e.target.value) || 5 })}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
             min={2}
             max={60}
           />
@@ -2154,46 +2170,46 @@ const NodeConfigPanel: React.FC<{
     return (
       <div className="space-y-5">
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Asset ID *
           </label>
           <input
             type="text"
             value={config.asset_id || ''}
             onChange={(e) => onUpdate({ asset_id: e.target.value })}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm font-mono text-xs text-gray-900 bg-white"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm font-mono text-xs text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
             placeholder="{{$json.generateImage.asset_id}}"
           />
-          <p className="text-xs text-gray-500 mt-1">
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
             Use a variável do node Generate Image/Video anterior
           </p>
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Título
           </label>
           <input
             type="text"
             value={config.title || ''}
             onChange={(e) => onUpdate({ title: e.target.value })}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
             placeholder="Título do item"
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Descrição
           </label>
           <textarea
             value={config.description || ''}
             onChange={(e) => onUpdate({ description: e.target.value })}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
             rows={3}
             placeholder="Descrição do item"
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Tags (separadas por vírgula)
           </label>
           <input
@@ -2203,18 +2219,18 @@ const NodeConfigPanel: React.FC<{
               const tags = e.target.value.split(',').map(t => t.trim()).filter(t => t);
               onUpdate({ tags });
             }}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
             placeholder="generated, imagen, tabela"
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Intent
           </label>
           <select
             value={config.intent || ''}
             onChange={(e) => onUpdate({ intent: e.target.value || null })}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
           >
             <option value="">Nenhum</option>
             <option value="faq_regras_lotinha">FAQ - Regras Lotinha</option>
@@ -2224,7 +2240,7 @@ const NodeConfigPanel: React.FC<{
             <option value="aposta">Aposta</option>
           </select>
         </div>
-        <div className="text-xs text-gray-500 bg-yellow-50 p-2 rounded">
+        <div className="text-xs text-gray-500 dark:text-gray-400 bg-yellow-50 dark:bg-yellow-900/20 p-2 rounded">
           ⚠️ O item será criado com approved=false. Um admin precisa aprovar para uso.
         </div>
       </div>
@@ -2235,25 +2251,25 @@ const NodeConfigPanel: React.FC<{
     return (
       <div className="space-y-5">
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Prompt do Sistema *
           </label>
           <textarea
             value={config.system_prompt || ''}
             onChange={(e) => onUpdate({ system_prompt: e.target.value })}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
             rows={4}
             placeholder="Você é um Agente IA de FAQ e Upsell dentro de um grupo de WhatsApp..."
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Tom da Persona
           </label>
           <select
             value={config.persona_tone || 'gentil'}
             onChange={(e) => onUpdate({ persona_tone: e.target.value })}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
           >
             <option value="neutro">Neutro</option>
             <option value="gentil">Gentil</option>
@@ -2261,70 +2277,70 @@ const NodeConfigPanel: React.FC<{
           </select>
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Papel da Persona
           </label>
           <select
             value={config.persona_role || 'consultor'}
             onChange={(e) => onUpdate({ persona_role: e.target.value })}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
           >
             <option value="consultor">Consultor</option>
             <option value="gerente">Gerente</option>
           </select>
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-900 mb-2">
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Objetivo
           </label>
           <input
             type="text"
             value={config.objective || ''}
             onChange={(e) => onUpdate({ objective: e.target.value })}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
             placeholder="levar para deposito"
           />
         </div>
 
-        <div className="pt-4 border-t border-gray-200">
-          <h4 className="text-sm font-semibold text-gray-700 mb-3">Anti-Spam</h4>
+        <div className="pt-4 border-t border-gray-200 dark:border-[#404040]">
+          <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Anti-Spam</h4>
           
           <div className="space-y-3">
             <div>
-              <label className="block text-sm font-medium text-gray-900 mb-2">
+              <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
                 Máx. Respostas por Janela
               </label>
               <input
                 type="number"
                 value={config.max_replies_per_window || 2}
                 onChange={(e) => onUpdate({ max_replies_per_window: parseInt(e.target.value) || 2 })}
-                className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
+                className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
                 min={1}
                 max={10}
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-900 mb-2">
+              <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
                 Duração da Janela (segundos)
               </label>
               <input
                 type="number"
                 value={config.window_seconds || 300}
                 onChange={(e) => onUpdate({ window_seconds: parseInt(e.target.value) || 300 })}
-                className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
+                className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
                 min={60}
                 max={3600}
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-900 mb-2">
+              <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
                 Cooldown por Usuário (segundos)
               </label>
               <input
                 type="number"
                 value={config.user_cooldown_seconds || 600}
                 onChange={(e) => onUpdate({ user_cooldown_seconds: parseInt(e.target.value) || 600 })}
-                className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
+                className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
                 min={60}
                 max={3600}
               />
@@ -2337,7 +2353,7 @@ const NodeConfigPanel: React.FC<{
                 onChange={(e) => onUpdate({ only_reply_if_question: e.target.checked })}
                 className="w-4 h-4"
               />
-              <label htmlFor="only_reply_if_question" className="text-sm text-gray-700">
+              <label htmlFor="only_reply_if_question" className="text-sm text-gray-700 dark:text-gray-300">
                 Só responde se for pergunta
               </label>
             </div>
@@ -2349,12 +2365,12 @@ const NodeConfigPanel: React.FC<{
                 onChange={(e) => onUpdate({ only_reply_if_mentioned: e.target.checked })}
                 className="w-4 h-4"
               />
-              <label htmlFor="only_reply_if_mentioned" className="text-sm text-gray-700">
+              <label htmlFor="only_reply_if_mentioned" className="text-sm text-gray-700 dark:text-gray-300">
                 Só responde se mencionado
               </label>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-900 mb-2">
+              <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
                 Palavras-chave (separadas por vírgula)
               </label>
               <input
@@ -2364,50 +2380,50 @@ const NodeConfigPanel: React.FC<{
                   const keywords = e.target.value.split(',').map(k => k.trim()).filter(k => k);
                   onUpdate({ keywords });
                 }}
-                className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
+                className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
                 placeholder="lotinha, lotofacil, tabela, valor, pix, deposito..."
               />
             </div>
           </div>
         </div>
 
-        <div className="pt-4 border-t border-gray-200">
-          <h4 className="text-sm font-semibold text-gray-700 mb-3">Configuração de Envio</h4>
+        <div className="pt-4 border-t border-gray-200 dark:border-[#404040]">
+          <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Configuração de Envio</h4>
           
           <div className="space-y-3">
             <div>
-              <label className="block text-sm font-medium text-gray-900 mb-2">
+              <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
                 Instância *
               </label>
               <input
                 type="text"
                 value={config.instance_name || ''}
                 onChange={(e) => onUpdate({ instance_name: e.target.value })}
-                className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
+                className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
                 placeholder="Nome da instância"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-900 mb-2">
+              <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
                 Grupo JID
               </label>
               <input
                 type="text"
                 value={config.group_jid || ''}
                 onChange={(e) => onUpdate({ group_jid: e.target.value })}
-                className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm font-mono text-xs text-gray-900 bg-white"
+                className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm font-mono text-xs text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
                 placeholder="{{$json.normalized.groupId}}"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-900 mb-2">
+              <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
                 Mensagem do Usuário
               </label>
               <input
                 type="text"
                 value={config.user_message || ''}
                 onChange={(e) => onUpdate({ user_message: e.target.value })}
-                className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm font-mono text-xs text-gray-900 bg-white"
+                className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm font-mono text-xs text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
                 placeholder="{{$json.normalized.message}}"
               />
             </div>
@@ -2417,6 +2433,6 @@ const NodeConfigPanel: React.FC<{
     );
   }
 
-  return <div className="text-sm text-gray-500">Sem configurações disponíveis</div>;
+  return <div className="text-sm text-gray-500 dark:text-gray-400">Sem configurações disponíveis</div>;
 };
 

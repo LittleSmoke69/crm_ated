@@ -137,9 +137,9 @@ export async function POST(req: NextRequest) {
             String(groupJid),
             np
           );
-          for (const { flow_id, user_id } of matching) {
+          for (const { flow_id, user_id, settings_json } of matching) {
             try {
-              await flowExecutorService.executeFlow(flow_id, event.id, user_id);
+              await flowExecutorService.executeFlow(flow_id, event.id, user_id, settings_json);
             } catch (flowErr: any) {
               console.error(`❌ [WEBHOOK TEST] Erro ao executar flow ${flow_id}:`, flowErr);
             }

@@ -94,7 +94,7 @@ export default function StatusDistributionChart({ data, colors = DEFAULT_COLORS 
 
   if (chartData.length === 0) {
     return (
-      <div className="flex items-center justify-center h-64 text-gray-500">
+      <div className="flex items-center justify-center h-64 text-gray-500 dark:text-gray-400">
         Nenhum dado disponível
       </div>
     );
@@ -117,7 +117,15 @@ export default function StatusDistributionChart({ data, colors = DEFAULT_COLORS 
             <Cell key={`cell-${index}`} fill={colors[index % colors.length]} />
           ))}
         </Pie>
-        <Tooltip />
+        <Tooltip
+          contentStyle={{
+            backgroundColor: '#2a2a2a',
+            border: '1px solid #404040',
+            borderRadius: '8px',
+            padding: '8px',
+            color: '#e5e7eb',
+          }}
+        />
         <Legend />
       </PieChart>
     </ResponsiveContainer>

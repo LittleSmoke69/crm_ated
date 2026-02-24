@@ -213,15 +213,15 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col lg:flex-row">
+    <div className="min-h-screen bg-gray-50 dark:bg-[#1a1a1a] flex flex-col lg:flex-row">
       {/* Header Mobile */}
-      <header className="lg:hidden h-16 bg-white border-b border-gray-200 flex items-center justify-between px-4 sticky top-0 z-30 shadow-sm">
+      <header className="lg:hidden h-16 bg-white dark:bg-[#2a2a2a] border-b border-gray-200 dark:border-[#404040] flex items-center justify-between px-4 sticky top-0 z-30 shadow-sm">
         <div className="flex items-center gap-2">
           <Logo size="md" />
         </div>
         <button
           onClick={() => setIsMobileOpen(!isMobileOpen)}
-          className="p-2 rounded-xl bg-gray-50 text-gray-600 hover:bg-gray-100 transition-colors"
+          className="p-2 rounded-xl bg-gray-50 dark:bg-[#333] text-gray-600 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#404040] transition-colors"
           aria-label="Abrir menu"
         >
           {isMobileOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}

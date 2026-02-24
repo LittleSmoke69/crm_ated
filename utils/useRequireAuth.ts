@@ -10,22 +10,28 @@ export function useRequireAuth() {
   const [userId, setUserId] = useState<string | null>(null);
 
   useEffect(() => {
-    // Rotas públicas que não devem redirecionar
-    const publicPaths = ['/login', '/register', '/admin/login'];
+    // Rotas públicas que não devem redirecionar (vitrine da Academy é pública)
+    const publicPaths = ['/login', '/register', '/admin/login', '/academy', '/academy/trilhas'];
+    const publicPrefixes = ['/academy/modulos/', '/academy/aula/'];
+    const isAcademyPublic = pathname.startsWith('/academy') && (
+      publicPaths.includes(pathname) ||
+      publicPrefixes.some((p) => pathname.startsWith(p))
+    );
 
     // Garante que só roda no cliente
     if (typeof window === 'undefined') return;
 
-    // Se estiver numa rota pública, não precisa checar sessão
-    if (publicPaths.includes(pathname)) {
+    // Sessão (para Academy também queremos userId se logado)
+    const id = sessionStorage.getItem('user_id')
+      || sessionStorage.getItem('profile_id')
+      || localStorage.getItem('profile_id');
+
+    // Se estiver numa rota pública (incluindo vitrine da Academy), não redireciona para login
+    if (publicPaths.includes(pathname) || isAcademyPublic) {
+      if (id) setUserId(id);
       setChecking(false);
       return;
     }
-
-    // Sessão curta (some ao fechar o navegador)
-    const id = sessionStorage.getItem('user_id')
-      || sessionStorage.getItem('profile_id')
-      || localStorage.getItem('profile_id'); // Fallback para localStorage se existir
 
     if (!id) {
       router.replace('/login');

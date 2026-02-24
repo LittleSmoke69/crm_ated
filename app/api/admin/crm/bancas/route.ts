@@ -15,7 +15,7 @@ const LOG_PREFIX = '[admin][crm][bancas]';
 export async function GET(req: NextRequest) {
   try {
     const { userId, profile } = await requireAdminOrSuporte(req);
-    const zaplotoId = getEffectiveZaplotoId(req, profile);
+    const zaplotoId = await getEffectiveZaplotoId(req, profile);
 
     const { searchParams } = new URL(req.url);
     const withUsers = searchParams.get('with_users') === '1';

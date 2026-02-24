@@ -76,6 +76,8 @@ export interface Lead {
   original_consultant_id?: number | null;
   original_consultant_name?: string | null;
   original_consultant_email?: string | null;
+  /** Lead resolvido como “vinculado” após prazo (consultor converteu); exibir “Lead na carteira” no card */
+  vinculado?: boolean;
 }
 
 export interface Column {

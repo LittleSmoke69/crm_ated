@@ -15,6 +15,7 @@ export interface UserProfile {
   banca_name?: string | null;
   telefone?: string | null;
   zaploto_id?: string | null;
+  theme_preference?: 'light' | 'dark' | null;
 }
 
 const GET_PROFILE_MAX_RETRIES = 3;
@@ -43,7 +44,7 @@ export async function getUserProfile(userId: string): Promise<UserProfile | null
     try {
       const { data, error } = await supabaseServiceRole
         .from('profiles')
-        .select('id, email, full_name, status, enroller, created_at, banca_url, banca_name, telefone, zaploto_id')
+        .select('id, email, full_name, status, enroller, created_at, banca_url, banca_name, telefone, zaploto_id, theme_preference')
         .eq('id', userId)
         .single();
 
@@ -237,8 +238,8 @@ export async function canAccessUser(
     return false;
   }
 
-  // Admin pode acessar tudo
-  if (requesterProfile.status === 'admin') {
+  // Super_admin e admin podem acessar todos os dados (incluindo CRM de qualquer pessoa)
+  if (requesterProfile.status === 'super_admin' || requesterProfile.status === 'admin') {
     return true;
   }
 
@@ -266,8 +267,8 @@ export async function getSubordinateIds(userId: string): Promise<string[]> {
     return [];
   }
 
-  // Admin retorna todos os usuários (exceto outros admins)
-  if (profile.status === 'admin') {
+  // Super_admin e admin retornam todos os usuários (exceto outros admins)
+  if (profile.status === 'super_admin' || profile.status === 'admin') {
     const { data } = await supabaseServiceRole
       .from('profiles')
       .select('id')
@@ -295,8 +296,8 @@ export async function getSubordinates(userId: string): Promise<UserProfile[]> {
     return [];
   }
 
-  // Admin retorna todos os usuários (exceto outros admins)
-  if (profile.status === 'admin') {
+  // Super_admin e admin retornam todos os usuários (exceto outros admins)
+  if (profile.status === 'super_admin' || profile.status === 'admin') {
     const { data } = await supabaseServiceRole
       .from('profiles')
       .select('id, email, full_name, status, enroller, created_at')

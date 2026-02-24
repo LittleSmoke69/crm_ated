@@ -42,8 +42,9 @@ export interface Flow {
 export class FlowExecutorService {
   /**
    * Executa um flow dado um evento webhook
+   * @param instanceSettings - Configurações personalizadas da flow_instance (mensagens customizadas, banca selecionada)
    */
-  async executeFlow(flowId: string, eventId: string, userId: string): Promise<string | null> {
+  async executeFlow(flowId: string, eventId: string, userId: string, instanceSettings?: any): Promise<string | null> {
     try {
       // Busca o flow
       const { data: flow, error: flowError } = await supabaseServiceRole
@@ -162,6 +163,9 @@ export class FlowExecutorService {
         
         // Busca informações do usuário para variáveis globais
         const userInfo = await this.getUserInfoForVariables(userId);
+
+        // Se a flow_instance tem uma banca específica selecionada, usa ela; senão usa a padrão
+        const bancaName = instanceSettings?.selectedBanca || userInfo.banca || '';
         
         // Executa o flow percorrendo os nodes
         const executionContext: Record<string, any> = {
@@ -173,14 +177,17 @@ export class FlowExecutorService {
           // Variáveis globais
           $global: {
             numero: userInfo.numero || '',
-            banca: userInfo.banca || '',
+            banca: bancaName,
             nome: userInfo.nome || '',
           },
           global: {
             numero: userInfo.numero || '',
-            banca: userInfo.banca || '',
+            banca: bancaName,
             nome: userInfo.nome || '',
           },
+          // Configurações da flow_instance para personalização de nós
+          $instanceSettings: instanceSettings || {},
+          instanceSettings: instanceSettings || {},
         };
 
         const outputData = await this.executeNodes(
@@ -465,6 +472,7 @@ export class FlowExecutorService {
 
   /**
    * Executa node Random Picker
+   * Suporta mensagens customizadas por slot e numberOfVariants (3 a 10) via instanceSettings
    */
   private async executeRandomPickerNode(
     node: FlowNode,
@@ -472,25 +480,44 @@ export class FlowExecutorService {
     context: Record<string, any>
   ): Promise<any> {
     const config = node.data.config || {};
-    const messages = config.messages || [];
+    const allSystemMessages: string[] = config.messages || [];
 
-    if (messages.length === 0) {
+    if (allSystemMessages.length === 0) {
       return { selected: null, error: 'Nenhuma mensagem configurada' };
     }
 
-    // Escolhe mensagem aleatória
-    const randomIndex = Math.floor(Math.random() * messages.length);
-    const selected = messages[randomIndex];
+    const instanceSettings = context.$instanceSettings || context.instanceSettings || {};
+    const customMessagesForNode: (string | null)[] | undefined = instanceSettings.customMessages?.[node.id];
+    // Número de variações escolhido pelo usuário (3 a 10); usa no máximo o que o nó tem
+    const nVariants = Math.min(
+      10,
+      Math.max(3, Number(instanceSettings.numberOfVariants) || 10),
+      allSystemMessages.length
+    );
+    const systemMessages = allSystemMessages.slice(0, nVariants);
+
+    // Mescla: slot customizado substitui sistema; null/vazio = usa sistema (apenas nos primeiros nVariants)
+    const effectiveMessages = systemMessages.map((sysMsg: string, idx: number) => {
+      const custom = customMessagesForNode?.[idx];
+      return (custom !== null && custom !== undefined && custom.trim() !== '') ? custom : sysMsg;
+    }).filter((m: string) => m && m.trim() !== '');
+
+    if (effectiveMessages.length === 0) {
+      return { selected: null, error: 'Nenhuma mensagem configurada' };
+    }
+
+    // Escolhe mensagem aleatória entre as mensagens efetivas
+    const randomIndex = Math.floor(Math.random() * effectiveMessages.length);
+    const selected = effectiveMessages[randomIndex];
 
     // Resolve variáveis na mensagem (ex: {{$json.normalized.phoneNumber}})
     const resolvedMessage = this.resolveVariables(selected, context);
 
-    // Retorna tanto a mensagem resolvida quanto o objeto completo para acesso via {{$json.randomPicker.selected}}
     return { 
       selected: resolvedMessage, 
       index: randomIndex,
-      message: resolvedMessage, // Alias para compatibilidade
-      original: selected // Mensagem original antes da resolução
+      message: resolvedMessage,
+      original: selected
     };
   }
 
@@ -1855,14 +1882,14 @@ REGRAS ANTI-SPAM (OBRIGATÓRIO):
   /**
    * Busca flow_instances (ativações por usuário) que correspondem a um evento
    * com instance + group. Usado para group-participants.update (ex.: boas-vindas).
-   * Retorna { flow_id, user_id } para executar o flow no contexto de quem ativou.
+   * Retorna { flow_id, user_id, settings_json } para executar o flow no contexto de quem ativou.
    */
   async findMatchingFlowInstances(
     eventType: string,
     instanceName: string | null,
     groupJid: string | null,
     normalizedPayload: any
-  ): Promise<Array<{ flow_id: string; user_id: string }>> {
+  ): Promise<Array<{ flow_id: string; user_id: string; settings_json?: any }>> {
     console.log('🔍 [FLOW EXECUTOR] findMatchingFlowInstances chamado:', {
       eventType,
       instanceName,
@@ -1891,6 +1918,7 @@ REGRAS ANTI-SPAM (OBRIGATÓRIO):
           instance_name,
           group_jid,
           is_active,
+          settings_json,
           flows:flow_id (
             id,
             status,
@@ -1918,6 +1946,7 @@ REGRAS ANTI-SPAM (OBRIGATÓRIO):
             instance_name,
             group_jid,
             is_active,
+            settings_json,
             flows:flow_id (
               id,
               status,
@@ -1965,7 +1994,7 @@ REGRAS ANTI-SPAM (OBRIGATÓRIO):
       }
 
       const action = normalizedPayload?.action ?? normalizedPayload?.normalized?.action ?? normalizedPayload?.data?.action;
-      const result: Array<{ flow_id: string; user_id: string }> = [];
+      const result: Array<{ flow_id: string; user_id: string; settings_json?: any }> = [];
 
       for (const fi of instances) {
         const raw = (fi as any).flows;
@@ -2004,7 +2033,11 @@ REGRAS ANTI-SPAM (OBRIGATÓRIO):
           }
         }
 
-        result.push({ flow_id: fi.flow_id, user_id: fi.user_id });
+        result.push({ 
+          flow_id: fi.flow_id, 
+          user_id: fi.user_id,
+          settings_json: (fi as any).settings_json || {},
+        });
       }
 
       return result;

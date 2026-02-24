@@ -696,13 +696,13 @@ export default function GestorTrafegoClient({
   if (isAuthorized === false) {
     return (
       <Layout onSignOut={handleSignOut}>
-        <div className="min-h-screen flex items-center justify-center bg-gray-50 p-6">
-          <div className="bg-white rounded-2xl shadow-lg border border-red-200 p-8 max-w-md w-full text-center">
-            <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Shield className="w-8 h-8 text-red-600" />
+        <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-[#1a1a1a] p-6">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-lg border border-red-200 dark:border-red-900/50 p-8 max-w-md w-full text-center">
+            <div className="w-16 h-16 bg-red-100 dark:bg-red-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Shield className="w-8 h-8 text-red-600 dark:text-red-400" />
             </div>
-            <h2 className="text-2xl font-bold text-gray-800 mb-2">Acesso Negado</h2>
-            <p className="text-gray-600 mb-6">
+            <h2 className="text-2xl font-bold text-gray-800 dark:text-gray-100 mb-2">Acesso Negado</h2>
+            <p className="text-gray-600 dark:text-gray-300 mb-6">
               {authError || serverError || 'Esta página é exclusiva para Gestores de Tráfego. Você não tem permissão para acessar este conteúdo.'}
             </p>
             <button
@@ -719,15 +719,15 @@ export default function GestorTrafegoClient({
 
   return (
     <Layout onSignOut={handleSignOut}>
-      <div className="p-6 space-y-6 max-w-7xl mx-auto">
+      <div className="p-6 space-y-6 max-w-7xl mx-auto bg-gray-50 dark:bg-[#1a1a1a] min-h-screen">
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
-              <Shield className="w-6 h-6 text-emerald-600" />
+            <h1 className="text-2xl font-bold text-gray-800 dark:text-gray-100 flex items-center gap-2">
+              <Shield className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />
               Gestão de Tráfego
             </h1>
-            <p className="text-gray-500">Painel do Gestor de Tráfego — mesma hierarquia e métricas da banca</p>
+            <p className="text-gray-500 dark:text-gray-400">Painel do Gestor de Tráfego — mesma hierarquia e métricas da banca</p>
           </div>
           
           <button 
@@ -742,8 +742,8 @@ export default function GestorTrafegoClient({
         {/* KPIs da API Externa */}
         <div className="mb-6">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
-            <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-              <BarChart3 className="w-6 h-6 text-emerald-600" />
+            <h2 className="text-xl font-bold text-gray-800 dark:text-gray-100 flex items-center gap-2">
+              <BarChart3 className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />
               Métricas da Banca {bancaName ? `- ${bancaName}` : showDonoSelector && !selectedDonoId ? (serverUserStatus === 'gestor' ? '(selecione uma banca)' : '(selecione uma banca)') : ''}
             </h2>
             
@@ -751,11 +751,11 @@ export default function GestorTrafegoClient({
             <div className="flex flex-wrap items-center gap-2 date-filter-container">
               {showDonoSelector && (
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-gray-600 hidden sm:inline">
+                  <span className="text-sm font-medium text-gray-600 dark:text-gray-400 hidden sm:inline">
                     {serverUserStatus === 'gestor' ? 'Banca' : 'Dono da Banca'}
                   </span>
                   {loadingDonos ? (
-                    <div className="flex items-center gap-2 bg-white border border-gray-200 px-4 py-2 rounded-xl text-sm text-gray-500">
+                    <div className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2 rounded-xl text-sm text-gray-500 dark:text-gray-400">
                       <div className="animate-spin rounded-full h-4 w-4 border-2 border-[#8CD955] border-t-transparent" />
                       Carregando...
                     </div>
@@ -781,7 +781,7 @@ export default function GestorTrafegoClient({
                           setBancaName(null);
                         }
                       }}
-                      className="bg-white border border-gray-200 px-4 py-2 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors shadow-sm min-w-[180px]"
+                      className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2 rounded-xl text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm min-w-[180px]"
                     >
                       <option value="">
                         {serverUserStatus === 'gestor'
@@ -812,7 +812,7 @@ export default function GestorTrafegoClient({
               <div className="relative">
                 <button
                   onClick={() => setShowDatePicker(!showDatePicker)}
-                  className="flex items-center gap-2 bg-white border border-gray-200 px-4 py-2 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors shadow-sm"
+                  className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2 rounded-xl text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm"
                 >
                   <Calendar className="w-4 h-4 text-[#8CD955]" />
                   <span>
@@ -828,7 +828,7 @@ export default function GestorTrafegoClient({
                 </button>
                 
                 {showDatePicker && (
-                  <div className="absolute right-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-50 min-w-[200px]">
+                  <div className="absolute right-0 mt-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 rounded-xl shadow-lg z-50 min-w-[200px]">
                     <div className="p-2">
                       <button
                         onClick={() => {
@@ -838,7 +838,7 @@ export default function GestorTrafegoClient({
                           setShowDatePicker(false);
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === 'daily' ? 'bg-[#8CD95515] text-[#8CD955] font-medium' : 'text-gray-700 hover:bg-gray-50'
+                          dateFilter === 'daily' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
                         }`}
                       >
                         Hoje
@@ -851,7 +851,7 @@ export default function GestorTrafegoClient({
                           setShowDatePicker(false);
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === 'yesterday' ? 'bg-[#8CD95515] text-[#8CD955] font-medium' : 'text-gray-700 hover:bg-gray-50'
+                          dateFilter === 'yesterday' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
                         }`}
                       >
                         Ontem
@@ -864,7 +864,7 @@ export default function GestorTrafegoClient({
                           setShowDatePicker(false);
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === '7days' ? 'bg-[#8CD95515] text-[#8CD955] font-medium' : 'text-gray-700 hover:bg-gray-50'
+                          dateFilter === '7days' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
                         }`}
                       >
                         Últimos 7 dias
@@ -877,7 +877,7 @@ export default function GestorTrafegoClient({
                           setShowDatePicker(false);
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === '15days' ? 'bg-[#8CD95515] text-[#8CD955] font-medium' : 'text-gray-700 hover:bg-gray-50'
+                          dateFilter === '15days' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
                         }`}
                       >
                         Últimos 15 dias
@@ -890,7 +890,7 @@ export default function GestorTrafegoClient({
                           setShowDatePicker(false);
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === '30days' ? 'bg-[#8CD95515] text-[#8CD955] font-medium' : 'text-gray-700 hover:bg-gray-50'
+                          dateFilter === '30days' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
                         }`}
                       >
                         Últimos 30 dias
@@ -903,7 +903,7 @@ export default function GestorTrafegoClient({
                           if (appliedEndDate) setCustomEndDate(appliedEndDate);
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === 'custom' ? 'bg-[#8CD95515] text-[#8CD955] font-medium' : 'text-gray-700 hover:bg-gray-50'
+                          dateFilter === 'custom' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
                         }`}
                       >
                         Personalizado
@@ -916,7 +916,7 @@ export default function GestorTrafegoClient({
                           setShowDatePicker(false);
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === 'all' ? 'bg-[#8CD95515] text-[#8CD955] font-medium' : 'text-gray-700 hover:bg-gray-50'
+                          dateFilter === 'all' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
                         }`}
                       >
                         Todo o Período
@@ -924,7 +924,7 @@ export default function GestorTrafegoClient({
                     </div>
                     
                     {dateFilter === 'custom' && (
-                      <div className="p-3 border-t border-gray-200 space-y-3">
+                      <div className="p-3 border-t border-gray-200 dark:border-gray-600 space-y-3">
                         <div>
                           <label className="block text-xs font-medium text-gray-500 mb-1">Data Inicial</label>
                           <input
@@ -932,7 +932,7 @@ export default function GestorTrafegoClient({
                             value={customStartDate}
                             onChange={(e) => setCustomStartDate(e.target.value)}
                             max={customEndDate || new Date().toISOString().split('T')[0]}
-                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                            className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
                           />
                         </div>
                         <div>
@@ -943,7 +943,7 @@ export default function GestorTrafegoClient({
                             onChange={(e) => setCustomEndDate(e.target.value)}
                             min={customStartDate}
                             max={new Date().toISOString().split('T')[0]}
-                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                            className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
                           />
                         </div>
                         <button
@@ -968,7 +968,7 @@ export default function GestorTrafegoClient({
           </div>
           
           {externalMetricsError && (
-            <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl mb-4">
+            <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 p-4 rounded-xl mb-4">
               <p className="font-medium">{externalMetricsError}</p>
             </div>
           )}
@@ -976,26 +976,26 @@ export default function GestorTrafegoClient({
           {/* Card Métricas Meta Ads (Campanhas) - acima do Resumo Geral */}
           <div className="relative mb-6">
             {loadingMetrics && (
-              <div className="absolute inset-0 bg-white/80 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
+              <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
               </div>
             )}
-            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+            <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
                 <div className="flex items-center gap-2">
-                  <div className="p-2 bg-blue-50 rounded-xl">
-                    <Megaphone className="w-5 h-5 text-blue-600" />
+                  <div className="p-2 bg-blue-50 dark:bg-blue-900/30 rounded-xl">
+                    <Megaphone className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                   </div>
                   <div>
-                    <h2 className="text-lg font-bold text-gray-800">Métricas Meta Ads (Campanhas)</h2>
-                    <p className="text-sm text-gray-500">Dados diários da Meta (meta_insights_daily) — Período: <span className="font-medium text-gray-700">{getPeriodLabel()}</span></p>
+                    <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100">Métricas Meta Ads (Campanhas)</h2>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">Dados diários da Meta (meta_insights_daily) — Período: <span className="font-medium text-gray-700 dark:text-gray-300">{getPeriodLabel()}</span></p>
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
                   <select
                     value={metaActiveOnly ? 'active' : 'all'}
                     onChange={(e) => setMetaActiveOnly(e.target.value === 'active')}
-                    className="px-4 py-2 border border-gray-200 rounded-xl text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors"
+                    className="px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                   >
                     <option value="active">Apenas ativas</option>
                     <option value="all">Todas</option>
@@ -1003,7 +1003,7 @@ export default function GestorTrafegoClient({
                   <button
                     onClick={handleSyncMetaAds}
                     disabled={syncingMeta || !effectiveBancaId}
-                    className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl font-medium text-sm transition-colors"
+                    className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 dark:disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-xl font-medium text-sm transition-colors"
                   >
                     <RefreshCw className={`w-4 h-4 ${syncingMeta ? 'animate-spin' : ''}`} />
                     {syncingMeta ? 'Sincronizando...' : 'Atualizar campanhas'}
@@ -1011,46 +1011,46 @@ export default function GestorTrafegoClient({
                 </div>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4">
-                <div className="bg-gray-50/80 p-4 rounded-xl border border-gray-100">
+                <div className="bg-gray-50/80 dark:bg-gray-800/60 p-4 rounded-xl border border-gray-100 dark:border-gray-600">
                   <div className="flex items-center gap-2 mb-2">
-                    <Eye className="w-4 h-4 text-blue-600" />
-                    <p className="text-xs font-bold text-gray-600 uppercase">Impressões</p>
+                    <Eye className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                    <p className="text-xs font-bold text-gray-600 dark:text-gray-400 uppercase">Impressões</p>
                   </div>
-                  <p className="text-xl font-bold text-gray-800">{(metaFunnel?.impressions ?? 0).toLocaleString('pt-BR')}</p>
+                  <p className="text-xl font-bold text-gray-800 dark:text-gray-100">{(metaFunnel?.impressions ?? 0).toLocaleString('pt-BR')}</p>
                 </div>
-                <div className="bg-gray-50/80 p-4 rounded-xl border border-gray-100">
+                <div className="bg-gray-50/80 dark:bg-gray-800/60 p-4 rounded-xl border border-gray-100 dark:border-gray-600">
                   <div className="flex items-center gap-2 mb-2">
-                    <Users className="w-4 h-4 text-blue-600" />
-                    <p className="text-xs font-bold text-gray-600 uppercase">Alcance</p>
+                    <Users className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                    <p className="text-xs font-bold text-gray-600 dark:text-gray-400 uppercase">Alcance</p>
                   </div>
-                  <p className="text-xl font-bold text-gray-800">{(metaFunnel?.reach ?? 0).toLocaleString('pt-BR')}</p>
+                  <p className="text-xl font-bold text-gray-800 dark:text-gray-100">{(metaFunnel?.reach ?? 0).toLocaleString('pt-BR')}</p>
                 </div>
-                <div className="bg-gray-50/80 p-4 rounded-xl border border-gray-100">
+                <div className="bg-gray-50/80 dark:bg-gray-800/60 p-4 rounded-xl border border-gray-100 dark:border-gray-600">
                   <div className="flex items-center gap-2 mb-2">
-                    <MousePointer className="w-4 h-4 text-blue-600" />
-                    <p className="text-xs font-bold text-gray-600 uppercase">Cliques</p>
+                    <MousePointer className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                    <p className="text-xs font-bold text-gray-600 dark:text-gray-400 uppercase">Cliques</p>
                   </div>
-                  <p className="text-xl font-bold text-gray-800">{(metaFunnel?.clicks ?? 0).toLocaleString('pt-BR')}</p>
+                  <p className="text-xl font-bold text-gray-800 dark:text-gray-100">{(metaFunnel?.clicks ?? 0).toLocaleString('pt-BR')}</p>
                 </div>
-                <div className="bg-gray-50/80 p-4 rounded-xl border border-gray-100">
+                <div className="bg-gray-50/80 dark:bg-gray-800/60 p-4 rounded-xl border border-gray-100 dark:border-gray-600">
                   <div className="flex items-center gap-2 mb-2">
-                    <DollarSign className="w-4 h-4 text-blue-600" />
-                    <p className="text-xs font-bold text-gray-600 uppercase">Gasto</p>
+                    <DollarSign className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                    <p className="text-xs font-bold text-gray-600 dark:text-gray-400 uppercase">Gasto</p>
                   </div>
-                  <p className="text-xl font-bold text-gray-800">
+                  <p className="text-xl font-bold text-gray-800 dark:text-gray-100">
                     R$ {(metaFunnel?.spend ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </p>
                 </div>
-                <div className="bg-gray-50/80 p-4 rounded-xl border border-gray-100">
+                <div className="bg-gray-50/80 dark:bg-gray-800/60 p-4 rounded-xl border border-gray-100 dark:border-gray-600">
                   <div className="flex items-center gap-2 mb-2">
-                    <UserPlus className="w-4 h-4 text-blue-600" />
-                    <p className="text-xs font-bold text-gray-600 uppercase">Leads (Meta)</p>
+                    <UserPlus className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                    <p className="text-xs font-bold text-gray-600 dark:text-gray-400 uppercase">Leads (Meta)</p>
                   </div>
-                  <p className="text-xl font-bold text-gray-800">{(metaFunnel?.leads ?? 0).toLocaleString('pt-BR')}</p>
+                  <p className="text-xl font-bold text-gray-800 dark:text-gray-100">{(metaFunnel?.leads ?? 0).toLocaleString('pt-BR')}</p>
                 </div>
               </div>
               {!metaFunnel && (
-                <p className="text-xs text-amber-600 mt-3">
+                <p className="text-xs text-amber-600 dark:text-amber-400 mt-3">
                   Configure a integração Meta na seção &quot;Configurar integração Meta&quot; abaixo ou em Admin → Meta Ads. Depois sincronize para ver as métricas.
                 </p>
               )}
@@ -1059,26 +1059,26 @@ export default function GestorTrafegoClient({
                 <div className="mt-6 overflow-x-auto">
                   <table className="w-full text-left border-collapse text-sm">
                     <thead>
-                      <tr className="border-b border-gray-200 bg-gray-50/80">
-                        <th className="px-4 py-3 font-bold text-gray-600 uppercase">Campanha</th>
-                        <th className="px-4 py-3 font-bold text-gray-600 uppercase">AdSets</th>
-                        <th className="px-4 py-3 font-bold text-gray-600 uppercase text-right">Impressões</th>
-                        <th className="px-4 py-3 font-bold text-gray-600 uppercase text-right">Alcance</th>
-                        <th className="px-4 py-3 font-bold text-gray-600 uppercase text-right">Cliques</th>
-                        <th className="px-4 py-3 font-bold text-gray-600 uppercase text-right">Gasto</th>
-                        <th className="px-4 py-3 font-bold text-gray-600 uppercase text-right">Leads</th>
+                      <tr className="border-b border-gray-200 dark:border-gray-600 bg-gray-50/80 dark:bg-gray-800/60">
+                        <th className="px-4 py-3 font-bold text-gray-600 dark:text-gray-400 uppercase">Campanha</th>
+                        <th className="px-4 py-3 font-bold text-gray-600 dark:text-gray-400 uppercase">AdSets</th>
+                        <th className="px-4 py-3 font-bold text-gray-600 dark:text-gray-400 uppercase text-right">Impressões</th>
+                        <th className="px-4 py-3 font-bold text-gray-600 dark:text-gray-400 uppercase text-right">Alcance</th>
+                        <th className="px-4 py-3 font-bold text-gray-600 dark:text-gray-400 uppercase text-right">Cliques</th>
+                        <th className="px-4 py-3 font-bold text-gray-600 dark:text-gray-400 uppercase text-right">Gasto</th>
+                        <th className="px-4 py-3 font-bold text-gray-600 dark:text-gray-400 uppercase text-right">Leads</th>
                       </tr>
                     </thead>
                     <tbody>
                       {metaCampaignsData.map((row, idx) => (
-                        <tr key={row.campaign_id || idx} className="border-b border-gray-100 hover:bg-gray-50/50 text-gray-800">
-                          <td className="px-4 py-3 font-medium text-gray-900">{row.campaign_name || row.campaign_id}</td>
-                          <td className="px-4 py-3 text-gray-800">{row.adsets?.join(', ') || '-'}</td>
-                          <td className="px-4 py-3 text-right text-gray-800">{row.impressions.toLocaleString('pt-BR')}</td>
-                          <td className="px-4 py-3 text-right text-gray-800">{row.reach.toLocaleString('pt-BR')}</td>
-                          <td className="px-4 py-3 text-right text-gray-800">{row.clicks.toLocaleString('pt-BR')}</td>
-                          <td className="px-4 py-3 text-right text-gray-800">R$ {row.spend.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                          <td className="px-4 py-3 text-right text-gray-800">{row.leads.toLocaleString('pt-BR')}</td>
+                        <tr key={row.campaign_id || idx} className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50/50 dark:hover:bg-gray-700/50 text-gray-800 dark:text-gray-200">
+                          <td className="px-4 py-3 font-medium text-gray-900 dark:text-gray-100">{row.campaign_name || row.campaign_id}</td>
+                          <td className="px-4 py-3 text-gray-800 dark:text-gray-200">{row.adsets?.join(', ') || '-'}</td>
+                          <td className="px-4 py-3 text-right text-gray-800 dark:text-gray-200">{row.impressions.toLocaleString('pt-BR')}</td>
+                          <td className="px-4 py-3 text-right text-gray-800 dark:text-gray-200">{row.reach.toLocaleString('pt-BR')}</td>
+                          <td className="px-4 py-3 text-right text-gray-800 dark:text-gray-200">{row.clicks.toLocaleString('pt-BR')}</td>
+                          <td className="px-4 py-3 text-right text-gray-800 dark:text-gray-200">R$ {row.spend.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                          <td className="px-4 py-3 text-right text-gray-800 dark:text-gray-200">{row.leads.toLocaleString('pt-BR')}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1090,7 +1090,7 @@ export default function GestorTrafegoClient({
           
           <div className="relative">
             {loadingMetrics && (
-              <div className="absolute inset-0 bg-white/80 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
+              <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
               </div>
             )}
@@ -1183,38 +1183,38 @@ export default function GestorTrafegoClient({
 
         {/* Configurar integração Meta (vinculada à banca) - gestor pode adicionar aqui; admin vê em Admin → Meta */}
         {effectiveBancaId && (
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
             <button
               type="button"
               onClick={() => setShowMetaConfig(!showMetaConfig)}
               className="w-full flex items-center justify-between gap-2 text-left"
             >
               <div className="flex items-center gap-2">
-                <div className="p-2 bg-indigo-50 rounded-xl">
-                  <Key className="w-5 h-5 text-indigo-600" />
+                <div className="p-2 bg-indigo-50 dark:bg-indigo-900/40 rounded-xl">
+                  <Key className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
                 </div>
                 <div>
-                  <h2 className="text-lg font-bold text-gray-900">
+                  <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100">
                     Configurar integração Meta — {bancaName || (bancasGestor.find((b) => b.banca_id === effectiveBancaId)?.banca_name) || 'Banca selecionada'}
                   </h2>
-                  <p className="text-sm text-gray-700">
+                  <p className="text-sm text-gray-700 dark:text-gray-300">
                     Vinculado à banca escolhida no filtro acima. Use o seletor &quot;Banca&quot; no topo da página para trocar de banca e configurar outra. As informações aparecem na tela Admin → Meta Ads.
                   </p>
                 </div>
               </div>
-              {showMetaConfig ? <ChevronUp className="w-5 h-5 text-gray-600" /> : <ChevronDown className="w-5 h-5 text-gray-600" />}
+              {showMetaConfig ? <ChevronUp className="w-5 h-5 text-gray-600 dark:text-gray-400" /> : <ChevronDown className="w-5 h-5 text-gray-600 dark:text-gray-400" />}
             </button>
             {showMetaConfig && (
-              <div className="mt-6 pt-6 border-t border-gray-100 space-y-4">
-                <div className="flex items-center gap-2 px-3 py-2 bg-indigo-50 rounded-xl border border-indigo-100">
-                  <Building2 className="w-4 h-4 text-indigo-600" />
-                  <span className="text-sm font-medium text-gray-800">
+              <div className="mt-6 pt-6 border-t border-gray-100 dark:border-gray-700 space-y-4">
+                <div className="flex items-center gap-2 px-3 py-2 bg-indigo-50 dark:bg-indigo-900/30 rounded-xl border border-indigo-100 dark:border-indigo-800">
+                  <Building2 className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                  <span className="text-sm font-medium text-gray-800 dark:text-gray-200">
                     Banca atual: <strong>{bancaName || (bancasGestor.find((b) => b.banca_id === effectiveBancaId)?.banca_name) || 'Selecionada no filtro'}</strong>
                   </span>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-800 mb-1">Base URL Meta</label>
+                    <label className="block text-sm font-medium text-gray-800 dark:text-gray-200 mb-1">Base URL Meta</label>
                     <input
                       type="text"
                       value={metaConfigForm.base_url}
@@ -1222,14 +1222,14 @@ export default function GestorTrafegoClient({
                       placeholder="https://graph.facebook.com/v23.0"
                       disabled={!isAdminOrSuperAdmin}
                       readOnly={!isAdminOrSuperAdmin}
-                      className={`w-full px-3 py-2 border border-gray-200 rounded-xl text-sm text-gray-800 placeholder:text-gray-500 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] ${!isAdminOrSuperAdmin ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                      className={`w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] ${!isAdminOrSuperAdmin ? 'bg-gray-100 dark:bg-gray-700 cursor-not-allowed' : 'bg-white dark:bg-gray-800'}`}
                     />
                     {!isAdminOrSuperAdmin && (
-                      <p className="text-xs text-gray-500 mt-1">Somente administrador pode alterar URL e token.</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Somente administrador pode alterar URL e token.</p>
                     )}
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-800 mb-1">Access Token {isAdminOrSuperAdmin ? '(deixe em branco para manter)' : ''}</label>
+                    <label className="block text-sm font-medium text-gray-800 dark:text-gray-200 mb-1">Access Token {isAdminOrSuperAdmin ? '(deixe em branco para manter)' : ''}</label>
                     <input
                       type="password"
                       value={isAdminOrSuperAdmin ? metaConfigForm.access_token : ''}
@@ -1237,38 +1237,38 @@ export default function GestorTrafegoClient({
                       placeholder={isAdminOrSuperAdmin ? '••••••••' : 'Somente administrador pode alterar'}
                       disabled={!isAdminOrSuperAdmin}
                       readOnly={!isAdminOrSuperAdmin}
-                      className={`w-full px-3 py-2 border border-gray-200 rounded-xl text-sm text-gray-800 placeholder:text-gray-500 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] ${!isAdminOrSuperAdmin ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                      className={`w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] ${!isAdminOrSuperAdmin ? 'bg-gray-100 dark:bg-gray-700 cursor-not-allowed' : 'bg-white dark:bg-gray-800'}`}
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-800 mb-1">Ad Account ID (act_xxx)</label>
+                    <label className="block text-sm font-medium text-gray-800 dark:text-gray-200 mb-1">Ad Account ID (act_xxx)</label>
                     <input
                       type="text"
                       value={metaConfigForm.ad_account_id}
                       onChange={(e) => setMetaConfigForm((f) => ({ ...f, ad_account_id: e.target.value }))}
                       placeholder="300392276267865"
-                      className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm text-gray-800 placeholder:text-gray-500 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                      className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white dark:bg-gray-800"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-800 mb-1">Pixel ID</label>
+                    <label className="block text-sm font-medium text-gray-800 dark:text-gray-200 mb-1">Pixel ID</label>
                     <input
                       type="text"
                       value={metaConfigForm.pixel_id}
                       onChange={(e) => setMetaConfigForm((f) => ({ ...f, pixel_id: e.target.value }))}
                       placeholder="767101702304319"
-                      className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm text-gray-800 placeholder:text-gray-500 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                      className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white dark:bg-gray-800"
                     />
                   </div>
                 </div>
                 <div className="flex flex-wrap items-end gap-2">
                   <div className="min-w-[200px] flex-1">
-                    <label className="block text-sm font-medium text-gray-800 mb-1">Campanha padrão (opcional)</label>
+                    <label className="block text-sm font-medium text-gray-800 dark:text-gray-200 mb-1">Campanha padrão (opcional)</label>
                     <div className="flex gap-2">
                       <select
                         value={metaConfigForm.default_campaign_id}
                         onChange={(e) => setMetaConfigForm((f) => ({ ...f, default_campaign_id: e.target.value }))}
-                        className="flex-1 px-3 py-2 border border-gray-200 rounded-xl text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white"
+                        className="flex-1 px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm text-gray-800 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white dark:bg-gray-800"
                       >
                         <option value="">Nenhuma</option>
                         {metaCampaignsList.map((c) => (
@@ -1279,7 +1279,7 @@ export default function GestorTrafegoClient({
                         type="button"
                         onClick={handleLoadMetaCampaigns}
                         disabled={metaCampaignsLoading}
-                        className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-xl text-sm font-medium disabled:opacity-50 flex items-center gap-1"
+                        className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded-xl text-sm font-medium disabled:opacity-50 flex items-center gap-1"
                       >
                         {metaCampaignsLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                         Carregar campanhas
@@ -1288,7 +1288,7 @@ export default function GestorTrafegoClient({
                   </div>
                 </div>
                 {metaTestResult && (
-                  <div className={`p-3 rounded-xl text-sm ${metaTestResult.success ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
+                  <div className={`p-3 rounded-xl text-sm ${metaTestResult.success ? 'bg-green-50 dark:bg-green-900/30 text-green-800 dark:text-green-200 border border-green-200 dark:border-green-800' : 'bg-red-50 dark:bg-red-900/30 text-red-800 dark:text-red-200 border border-red-200 dark:border-red-800'}`}>
                     {metaTestResult.success ? (
                       <>Conexão OK. {metaTestResult.me?.name && `Logado como ${metaTestResult.me.name}.`} {metaTestResult.adAccounts?.length ? `Contas: ${metaTestResult.adAccounts.map((a: any) => a.name || a.id).join(', ')}` : ''}</>
                     ) : (
@@ -1329,7 +1329,7 @@ export default function GestorTrafegoClient({
                       href="/admin/meta"
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="flex items-center gap-2 px-4 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-medium text-sm"
+                      className="flex items-center gap-2 px-4 py-2.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-xl font-medium text-sm"
                     >
                       <ExternalLink className="w-4 h-4" />
                       Ver na tela Admin Meta
@@ -1337,7 +1337,7 @@ export default function GestorTrafegoClient({
                   )}
                   <a
                     href="/admin/vsl"
-                    className="flex items-center gap-2 px-4 py-2.5 bg-teal-100 hover:bg-teal-200 text-teal-800 rounded-xl font-medium text-sm"
+                    className="flex items-center gap-2 px-4 py-2.5 bg-teal-100 dark:bg-teal-900/40 hover:bg-teal-200 dark:hover:bg-teal-800/60 text-teal-800 dark:text-teal-200 rounded-xl font-medium text-sm"
                   >
                     <ExternalLink className="w-4 h-4" />
                     VSL &amp; Redirect
@@ -1351,18 +1351,18 @@ export default function GestorTrafegoClient({
         {/* Gráficos Detalhados do Resumo Geral - sempre visível */}
         <div className="relative">
           {loadingMetrics && (
-            <div className="absolute inset-0 bg-white/80 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
+            <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
             </div>
           )}
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-            <h2 className="text-lg font-bold text-gray-800 mb-6 flex items-center gap-2">
+          <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
+            <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-6 flex items-center gap-2">
               <BarChart3 className="w-5 h-5 text-[#8CD955]" />
               Análise Detalhada do Resumo Geral
             </h2>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="bg-gray-50/50 p-4 rounded-xl border border-gray-100">
-                <h3 className="text-sm font-bold text-gray-600 mb-4">Métricas Financeiras</h3>
+              <div className="bg-gray-50/50 dark:bg-gray-800/50 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
+                <h3 className="text-sm font-bold text-gray-600 dark:text-gray-400 mb-4">Métricas Financeiras</h3>
                 <div className="h-64">
                   <FinancialMetricsBarChart 
                     data={{
@@ -1374,8 +1374,8 @@ export default function GestorTrafegoClient({
                   />
                 </div>
               </div>
-              <div className="bg-gray-50/50 p-4 rounded-xl border border-gray-100">
-                <h3 className="text-sm font-bold text-gray-600 mb-4">Distribuição de Leads</h3>
+              <div className="bg-gray-50/50 dark:bg-gray-800/50 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
+                <h3 className="text-sm font-bold text-gray-600 dark:text-gray-400 mb-4">Distribuição de Leads</h3>
                 <div className="h-64">
                   <LeadsDistributionChart 
                     totalLeads={externalMetrics?.total_leads ?? 0}
@@ -1388,21 +1388,21 @@ export default function GestorTrafegoClient({
         </div>
 
         {/* Funil Facebook (Meta) + Loteria - unificado */}
-        <div className="relative bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+        <div className="relative bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
           {loadingMetrics && (
-            <div className="absolute inset-0 bg-white/80 backdrop-blur-sm rounded-2xl z-10 flex flex-col items-center justify-center gap-3">
+            <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex flex-col items-center justify-center gap-3">
               <div className="animate-spin rounded-full h-10 w-10 border-2 border-[#8CD955] border-t-transparent" />
-              <p className="text-sm font-medium text-gray-600">Carregando dados do funil...</p>
+              <p className="text-sm font-medium text-gray-600 dark:text-gray-300">Carregando dados do funil...</p>
             </div>
           )}
-          <h2 className="text-lg font-bold text-gray-800 mb-2 flex items-center gap-2">
+          <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-2 flex items-center gap-2">
             <BarChart3 className="w-5 h-5 text-[#8CD955]" />
             Funil Facebook (Meta) + Loteria
           </h2>
-          <p className="text-sm text-gray-500 mb-6">
-            Dados diários da Meta (alcance, impressões, cliques, leads) e da Loteria (cadastros, depósitos, ativos) para o período: <span className="font-medium text-gray-700">{getPeriodLabel()}</span>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
+            Dados diários da Meta (alcance, impressões, cliques, leads) e da Loteria (cadastros, depósitos, ativos) para o período: <span className="font-medium text-gray-700 dark:text-gray-300">{getPeriodLabel()}</span>
           </p>
-          <div className="bg-gray-50/50 p-4 rounded-xl border border-gray-100 min-h-[340px]">
+          <div className="bg-gray-50/50 dark:bg-gray-800/50 p-4 rounded-xl border border-gray-100 dark:border-gray-700 min-h-[340px]">
             <Funnel3DChart
               data={{
                 stages: ['Impressões', 'Alcance', 'Cliques', 'Leads', 'Cadastros', 'Depósitos', 'Ativos'],
@@ -1425,7 +1425,7 @@ export default function GestorTrafegoClient({
             </p>
           )}
           {!metaFunnel && !externalMetricsError && (
-            <p className="text-xs text-amber-600 mt-2">
+            <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">
               Configure a integração Meta na seção &quot;Configurar integração Meta (esta banca)&quot; ou em Admin → Meta Ads.
             </p>
           )}
@@ -1434,13 +1434,13 @@ export default function GestorTrafegoClient({
         {/* Top 5 Consultores por Vendas - Design Visual */}
         <div className="relative">
           {loadingMetrics && (
-            <div className="absolute inset-0 bg-white/80 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
+            <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
             </div>
           )}
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-            <h2 className="text-lg font-bold text-gray-800 mb-6 flex items-center gap-2">
-              <Trophy className="w-5 h-5 text-amber-500" />
+          <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
+            <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-6 flex items-center gap-2">
+              <Trophy className="w-5 h-5 text-amber-500 dark:text-amber-400" />
               Top 5 Consultores por Vendas
             </h2>
             
@@ -1524,7 +1524,7 @@ export default function GestorTrafegoClient({
 
                         {/* Nome e Valor */}
                         <div className="flex-1 min-w-0">
-                          <h3 className="font-bold text-gray-800 text-base truncate">
+                          <h3 className="font-bold text-gray-800 dark:text-gray-100 text-base truncate">
                             {consultant.name}
                           </h3>
                           <div className="mt-1">
@@ -1541,13 +1541,13 @@ export default function GestorTrafegoClient({
 
                         {/* Badge de Destaque para Top 3 */}
                         {position <= 3 && (
-                          <div className="flex items-center gap-1 px-3 py-1 rounded-full bg-white/80 backdrop-blur-sm border border-white/50">
+                          <div className="flex items-center gap-1 px-3 py-1 rounded-full bg-white/80 dark:bg-gray-700/80 backdrop-blur-sm border border-white/50 dark:border-gray-600">
                             <Trophy className={`w-4 h-4 ${
                               position === 1 ? 'text-amber-500' :
-                              position === 2 ? 'text-gray-500' :
+                              position === 2 ? 'text-gray-500 dark:text-gray-400' :
                               'text-orange-500'
                             }`} />
-                            <span className="text-xs font-bold text-gray-700">
+                            <span className="text-xs font-bold text-gray-700 dark:text-gray-200">
                               {position === 1 ? 'Campeão' : position === 2 ? 'Vice' : '3º Lugar'}
                             </span>
                           </div>
@@ -1556,8 +1556,8 @@ export default function GestorTrafegoClient({
 
                       {/* Barra de Progresso Visual (comparado com o 1º lugar) */}
                       {position > 1 && top5Consultants[0] && (
-                        <div className="mt-3 pt-3 border-t border-white/50">
-                          <div className="flex items-center justify-between text-xs text-gray-600 mb-1">
+                        <div className="mt-3 pt-3 border-t border-white/50 dark:border-gray-600">
+                          <div className="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400 mb-1">
                             <span>Progresso em relação ao 1º lugar</span>
                             <span className="font-bold">
                               {((consultant.value / top5Consultants[0].value) * 100).toFixed(0)}%
@@ -1580,10 +1580,10 @@ export default function GestorTrafegoClient({
                 })}
               </div>
             ) : (
-              <div className="flex flex-col items-center justify-center py-12 text-gray-500">
-                <Trophy className="w-16 h-16 text-gray-300 mb-4" />
+              <div className="flex flex-col items-center justify-center py-12 text-gray-500 dark:text-gray-400">
+                <Trophy className="w-16 h-16 text-gray-300 dark:text-gray-600 mb-4" />
                 <p className="text-base font-medium">Nenhum consultor com vendas no período selecionado</p>
-                <p className="text-sm text-gray-400 mt-2">Altere o filtro de data para ver os resultados</p>
+                <p className="text-sm text-gray-400 dark:text-gray-500 mt-2">Altere o filtro de data para ver os resultados</p>
               </div>
             )}
           </div>
@@ -1591,49 +1591,49 @@ export default function GestorTrafegoClient({
 
         {/* Stats Summary Internos */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
             <div className="flex items-center gap-3 mb-2">
-              <div className="p-2 bg-blue-50 rounded-lg">
-                <Briefcase className="w-5 h-5 text-blue-600" />
+              <div className="p-2 bg-blue-50 dark:bg-blue-900/40 rounded-lg">
+                <Briefcase className="w-5 h-5 text-blue-600 dark:text-blue-400" />
               </div>
-              <span className="text-sm font-medium text-gray-500">Total de Gerentes</span>
+              <span className="text-sm font-medium text-gray-500 dark:text-gray-400">Total de Gerentes</span>
             </div>
-            <p className="text-2xl font-bold text-gray-800">{gerentes.length}</p>
+            <p className="text-2xl font-bold text-gray-800 dark:text-gray-100">{gerentes.length}</p>
           </div>
           
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
             <div className="flex items-center gap-3 mb-2">
-              <div className="p-2 bg-emerald-50 rounded-lg">
-                <TrendingUp className="w-5 h-5 text-emerald-600" />
+              <div className="p-2 bg-emerald-50 dark:bg-emerald-900/40 rounded-lg">
+                <TrendingUp className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
               </div>
-              <span className="text-sm font-medium text-gray-500">Taxa Conversão Média</span>
+              <span className="text-sm font-medium text-gray-500 dark:text-gray-400">Taxa Conversão Média</span>
             </div>
-            <p className="text-2xl font-bold text-gray-800">
+            <p className="text-2xl font-bold text-gray-800 dark:text-gray-100">
               {(gerentes.reduce((acc, g) => acc + (g.metrics.externalKpis?.conversion_rate || parseFloat(g.metrics.successRate) || 0), 0) / (gerentes.length || 1)).toFixed(1)}%
             </p>
           </div>
 
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
             <div className="flex items-center gap-3 mb-2">
-              <div className="p-2 bg-purple-50 rounded-lg">
-                <Users className="w-5 h-5 text-purple-600" />
+              <div className="p-2 bg-purple-50 dark:bg-purple-900/40 rounded-lg">
+                <Users className="w-5 h-5 text-purple-600 dark:text-purple-400" />
               </div>
-              <span className="text-sm font-medium text-gray-500">Total de Leads</span>
+              <span className="text-sm font-medium text-gray-500 dark:text-gray-400">Total de Leads</span>
             </div>
-            <p className="text-2xl font-bold text-gray-800">
+            <p className="text-2xl font-bold text-gray-800 dark:text-gray-100">
               {gerentes.reduce((acc, g) => acc + (g.metrics.externalKpis?.total_leads || g.metrics.contacts || 0), 0)}
             </p>
           </div>
         </div>
 
         {/* Search & List */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-          <div className="p-4 border-b border-gray-200 bg-gray-100 flex items-center gap-3">
-            <Search className="w-5 h-5 text-gray-500" />
+        <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
+          <div className="p-4 border-b border-gray-200 dark:border-gray-600 bg-gray-100 dark:bg-gray-800 flex items-center gap-3">
+            <Search className="w-5 h-5 text-gray-500 dark:text-gray-400" />
             <input 
               type="text" 
               placeholder="Buscar por nome ou email..."
-              className="bg-transparent border-none focus:ring-0 text-sm w-full text-gray-900 placeholder:text-gray-500"
+              className="bg-transparent border-none focus:ring-0 text-sm w-full text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
@@ -1643,49 +1643,49 @@ export default function GestorTrafegoClient({
           <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="bg-gray-50/50">
-                  <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Gerente</th>
-                  <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider text-center">Consultores</th>
-                  <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider text-center">Leads</th>
-                  <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider text-center">Depositado</th>
-                  <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider text-center">Lucro</th>
-                  <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider text-center">Conversão</th>
-                  <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider text-right">Ações</th>
+                <tr className="bg-gray-50/50 dark:bg-gray-800/60">
+                  <th className="px-6 py-4 text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Gerente</th>
+                  <th className="px-6 py-4 text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider text-center">Consultores</th>
+                  <th className="px-6 py-4 text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider text-center">Leads</th>
+                  <th className="px-6 py-4 text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider text-center">Depositado</th>
+                  <th className="px-6 py-4 text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider text-center">Lucro</th>
+                  <th className="px-6 py-4 text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider text-center">Conversão</th>
+                  <th className="px-6 py-4 text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider text-right">Ações</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                 {filteredGerentes.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-6 py-10 text-center text-gray-500 text-sm">
+                    <td colSpan={7} className="px-6 py-10 text-center text-gray-500 dark:text-gray-400 text-sm">
                       Nenhum gerente encontrado
                     </td>
                   </tr>
                 ) : (
                   filteredGerentes.map((gerente) => (
                     <React.Fragment key={gerente.id}>
-                    <tr className="hover:bg-gray-50 transition-colors group">
+                    <tr className="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors group">
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700 font-bold">
+                          <div className="w-10 h-10 rounded-full bg-emerald-100 dark:bg-emerald-900/50 flex items-center justify-center text-emerald-700 dark:text-emerald-300 font-bold">
                             {(gerente.full_name || gerente.email)[0].toUpperCase()}
                           </div>
                           <div>
-                            <p className="font-bold text-gray-800">{gerente.full_name || 'Sem nome'}</p>
-                            <p className="text-xs text-gray-500">{gerente.email}</p>
+                            <p className="font-bold text-gray-800 dark:text-gray-100">{gerente.full_name || 'Sem nome'}</p>
+                            <p className="text-xs text-gray-500 dark:text-gray-400">{gerente.email}</p>
                           </div>
                         </div>
                       </td>
                       <td className="px-6 py-4 text-center">
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-purple-100 text-purple-800">
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-purple-100 dark:bg-purple-900/50 text-purple-800 dark:text-purple-200">
                           {gerente.metrics.consultorsCount}
                         </span>
                       </td>
                       <td className="px-6 py-4 text-center">
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 dark:bg-blue-900/50 text-blue-800 dark:text-blue-200">
                           {gerente.metrics.externalKpis?.total_leads || gerente.metrics.contacts || 0}
                         </span>
                       </td>
-                      <td className="px-6 py-4 text-center text-gray-600 font-medium">
+                      <td className="px-6 py-4 text-center text-gray-600 dark:text-gray-300 font-medium">
                         R$ {((gerente.metrics.externalKpis?.total_deposited || 0) / 1000).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}k
                       </td>
                       <td className="px-6 py-4 text-center">
@@ -1694,14 +1694,14 @@ export default function GestorTrafegoClient({
                         </span>
                       </td>
                       <td className="px-6 py-4 text-center">
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800">
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 dark:bg-emerald-900/50 text-emerald-800 dark:text-emerald-200">
                           {(gerente.metrics.externalKpis?.conversion_rate || parseFloat(gerente.metrics.successRate) || 0).toFixed(1)}%
                         </span>
                       </td>
                       <td className="px-6 py-4 text-right">
                         <a 
                           href={`/gestor-trafego/gerentes/${gerente.id}`}
-                          className="inline-flex items-center gap-1.5 text-emerald-600 hover:text-emerald-700 font-bold text-sm transition-colors"
+                          className="inline-flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 font-bold text-sm transition-colors"
                         >
                           <Eye className="w-4 h-4" />
                           Visualizar
@@ -1709,17 +1709,17 @@ export default function GestorTrafegoClient({
                       </td>
                     </tr>
                     {gerente.consultoresEmOutrasBancas && gerente.consultoresEmOutrasBancas.length > 0 && (
-                      <tr className="bg-amber-50/60 border-l-4 border-amber-300">
+                      <tr className="bg-amber-50/60 dark:bg-amber-900/20 border-l-4 border-amber-300 dark:border-amber-600">
                         <td colSpan={7} className="px-6 py-3 text-sm">
-                          <p className="font-semibold text-amber-800 mb-2 flex items-center gap-1.5">
+                          <p className="font-semibold text-amber-800 dark:text-amber-200 mb-2 flex items-center gap-1.5">
                             <Users className="w-4 h-4" />
                             Consultores deste gerente em outras bancas (ainda não atribuídos a {bancaName || 'esta banca'})
                           </p>
                           <ul className="space-y-1.5">
                             {gerente.consultoresEmOutrasBancas.map((c) => (
-                              <li key={c.id} className="flex items-center justify-between gap-3 flex-wrap bg-white/80 rounded-lg px-3 py-2 border border-amber-100">
-                                <span className="text-gray-700">{c.full_name || c.email}</span>
-                                <span className="text-gray-500 text-xs">{c.email}</span>
+                              <li key={c.id} className="flex items-center justify-between gap-3 flex-wrap bg-white/80 dark:bg-gray-700/80 rounded-lg px-3 py-2 border border-amber-100 dark:border-amber-800">
+                                <span className="text-gray-700 dark:text-gray-200">{c.full_name || c.email}</span>
+                                <span className="text-gray-500 dark:text-gray-400 text-xs">{c.email}</span>
                                 <button
                                   type="button"
                                   onClick={() => handleAddConsultantToBanca(c.id)}
@@ -1807,8 +1807,8 @@ export default function GestorTrafegoClient({
                       </p>
                       <ul className="space-y-2">
                         {gerente.consultoresEmOutrasBancas.map((c) => (
-                          <li key={c.id} className="flex items-center justify-between gap-2 flex-wrap bg-white/90 rounded-lg px-2.5 py-2 border border-amber-100">
-                            <span className="text-gray-700 text-sm truncate">{c.full_name || c.email}</span>
+                          <li key={c.id} className="flex items-center justify-between gap-2 flex-wrap bg-white/90 dark:bg-gray-700/90 rounded-lg px-2.5 py-2 border border-amber-100 dark:border-amber-800">
+                            <span className="text-gray-700 dark:text-gray-200 text-sm truncate">{c.full_name || c.email}</span>
                             <button
                               type="button"
                               onClick={() => handleAddConsultantToBanca(c.id)}
@@ -1833,8 +1833,8 @@ export default function GestorTrafegoClient({
         {/* Modal de Cadastro */}
         {isModalOpen && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in duration-200">
-              <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-emerald-600 text-white">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-gray-700">
+              <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-emerald-600 text-white">
                 <h2 className="text-xl font-bold flex items-center gap-2">
                   <UserPlus className="w-6 h-6" />
                   Cadastrar Novo Usuário
@@ -1846,63 +1846,63 @@ export default function GestorTrafegoClient({
               
               <form onSubmit={handleCreateUser} className="p-6 space-y-4">
                 {formError && (
-                  <div className="bg-red-50 text-red-600 p-3 rounded-xl text-sm font-medium border border-red-100 flex items-center gap-2">
+                  <div className="bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-300 p-3 rounded-xl text-sm font-medium border border-red-100 dark:border-red-800 flex items-center gap-2">
                     <X className="w-4 h-4" /> {formError}
                   </div>
                 )}
                 {formSuccess && (
-                  <div className="bg-emerald-50 text-emerald-600 p-3 rounded-xl text-sm font-medium border border-emerald-100 flex items-center gap-2">
+                  <div className="bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-300 p-3 rounded-xl text-sm font-medium border border-emerald-100 dark:border-emerald-800 flex items-center gap-2">
                     <TrendingUp className="w-4 h-4" /> {formSuccess}
                   </div>
                 )}
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="col-span-2">
-                    <label className="block text-xs font-bold text-gray-700 uppercase mb-1.5 ml-1">Nome Completo</label>
+                    <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-1.5 ml-1">Nome Completo</label>
                     <input 
                       type="text" 
                       required
                       placeholder="Ex: João Silva"
-                      className="w-full bg-white border border-gray-300 rounded-xl focus:ring-emerald-500 focus:border-emerald-500 transition-all p-3 text-sm text-gray-900 placeholder:text-gray-400 font-medium"
+                      className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-emerald-500 focus:border-emerald-500 transition-all p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium"
                       value={formData.fullName}
                       onChange={e => setFormData({...formData, fullName: e.target.value})}
                     />
                   </div>
                   
                   <div className="col-span-2 md:col-span-1">
-                    <label className="block text-xs font-bold text-gray-700 uppercase mb-1.5 ml-1">E-mail</label>
+                    <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-1.5 ml-1">E-mail</label>
                     <input 
                       type="email" 
                       required
                       placeholder="exemplo@email.com"
-                      className="w-full bg-white border border-gray-300 rounded-xl focus:ring-emerald-500 focus:border-emerald-500 transition-all p-3 text-sm text-gray-900 placeholder:text-gray-400 font-medium"
+                      className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-emerald-500 focus:border-emerald-500 transition-all p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium"
                       value={formData.email}
                       onChange={e => setFormData({...formData, email: e.target.value})}
                     />
                   </div>
 
                   <div className="col-span-2 md:col-span-1">
-                    <label className="block text-xs font-bold text-gray-700 uppercase mb-1.5 ml-1">Senha Inicial</label>
+                    <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-1.5 ml-1">Senha Inicial</label>
                     <input 
                       type="password" 
                       required
                       placeholder="••••••••"
-                      className="w-full bg-white border border-gray-300 rounded-xl focus:ring-emerald-500 focus:border-emerald-500 transition-all p-3 text-sm text-gray-900 placeholder:text-gray-400 font-medium"
+                      className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-emerald-500 focus:border-emerald-500 transition-all p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium"
                       value={formData.password}
                       onChange={e => setFormData({...formData, password: e.target.value})}
                     />
                   </div>
 
                   <div className="col-span-2">
-                    <label className="block text-xs font-bold text-gray-700 uppercase mb-1.5 ml-1">Tipo de Usuário</label>
+                    <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-1.5 ml-1">Tipo de Usuário</label>
                     <div className="grid grid-cols-2 gap-2">
                       <button
                         type="button"
                         onClick={() => setFormData({...formData, status: 'gerente'})}
                         className={`p-3 rounded-xl border-2 text-sm font-bold transition-all ${
                           formData.status === 'gerente' 
-                          ? 'border-emerald-500 bg-emerald-50 text-emerald-700' 
-                          : 'border-gray-100 bg-white text-gray-400 hover:border-gray-200'
+                          ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300' 
+                          : 'border-gray-100 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-400 dark:text-gray-500 hover:border-gray-200 dark:hover:border-gray-500'
                         }`}
                       >
                         Gerente
@@ -1912,8 +1912,8 @@ export default function GestorTrafegoClient({
                         onClick={() => setFormData({...formData, status: 'consultor'})}
                         className={`p-3 rounded-xl border-2 text-sm font-bold transition-all ${
                           formData.status === 'consultor' 
-                          ? 'border-emerald-500 bg-emerald-50 text-emerald-700' 
-                          : 'border-gray-100 bg-white text-gray-400 hover:border-gray-200'
+                          ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300' 
+                          : 'border-gray-100 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-400 dark:text-gray-500 hover:border-gray-200 dark:hover:border-gray-500'
                         }`}
                       >
                         Consultor
@@ -1923,16 +1923,16 @@ export default function GestorTrafegoClient({
 
                   {formData.status === 'consultor' && (
                     <div className="col-span-2 animate-in slide-in-from-top-2 duration-200">
-                      <label className="block text-xs font-bold text-gray-700 uppercase mb-1.5 ml-1">Selecionar Gerente</label>
+                      <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-1.5 ml-1">Selecionar Gerente</label>
                       <select 
                         required
-                        className="w-full bg-white border border-gray-300 rounded-xl focus:ring-emerald-500 focus:border-emerald-500 transition-all p-3 text-sm text-gray-900 font-medium"
+                        className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-emerald-500 focus:border-emerald-500 transition-all p-3 text-sm text-gray-900 dark:text-gray-100 font-medium"
                         value={formData.enroller}
                         onChange={e => setFormData({...formData, enroller: e.target.value})}
                       >
-                        <option value="" className="text-gray-500">Selecione o gerente responsável</option>
+                        <option value="" className="text-gray-500 dark:text-gray-400">Selecione o gerente responsável</option>
                         {gerentes.map(g => (
-                          <option key={g.id} value={g.id} className="text-gray-900">{g.full_name || g.email}</option>
+                          <option key={g.id} value={g.id} className="text-gray-900 dark:text-gray-100">{g.full_name || g.email}</option>
                         ))}
                       </select>
                     </div>
@@ -1943,7 +1943,7 @@ export default function GestorTrafegoClient({
                   <button 
                     type="button"
                     onClick={() => setIsModalOpen(false)}
-                    className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold py-3 rounded-xl transition-all"
+                    className="flex-1 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-300 font-bold py-3 rounded-xl transition-all"
                   >
                     Cancelar
                   </button>

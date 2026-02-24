@@ -8,7 +8,8 @@ export interface ChatMessage {
   id?: string;
   workspace_id?: string;
   user_id?: string;
-  instance_id: string;
+  instance_id?: string | null;
+  whatsapp_config_id?: string | null;
   conversation_id?: string;
   message_id: string;
   direction: 'in' | 'out';
@@ -21,13 +22,15 @@ export interface ChatMessage {
   status?: string;
   timestamp: number;
   created_at?: string;
+  provider?: 'evolution' | 'whatsapp_official';
 }
 
 export interface ChatConversation {
   id?: string;
   workspace_id?: string;
   user_id?: string;
-  instance_id: string;
+  instance_id?: string | null;
+  whatsapp_config_id?: string | null;
   remote_jid: string;
   title?: string;
   is_group: boolean;
@@ -116,11 +119,12 @@ export class ChatService {
   }
 
   async upsertConversation(conversation: ChatConversation) {
+    const conflict = conversation.whatsapp_config_id
+      ? 'whatsapp_config_id,remote_jid'
+      : 'instance_id,remote_jid';
     const { data, error } = await supabaseServiceRole
       .from('chat_conversations')
-      .upsert(conversation, {
-        onConflict: 'instance_id,remote_jid',
-      })
+      .upsert(conversation, { onConflict: conflict })
       .select()
       .single();
 
@@ -132,7 +136,7 @@ export class ChatService {
     const { data, error } = await supabaseServiceRole
       .from('chat_messages')
       .upsert(message, {
-        onConflict: 'instance_id,message_id',
+        onConflict: 'conversation_id,message_id',
       })
       .select()
       .single();

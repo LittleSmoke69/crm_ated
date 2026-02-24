@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
   try {
     await requireAuth(req);
     const body = await req.json();
-    const { instance: instanceName, to, video, caption, mentionsEveryOne, delay } = body;
+    const { instance: instanceName, to, video, delay } = body;
 
     if (!instanceName || !to || !video) {
       return errorResponse('instance, to e video são obrigatórios', 400);
@@ -58,7 +58,6 @@ export async function POST(req: NextRequest) {
       return errorResponse('Destino (to) inválido', 400);
     }
 
-    const isGroup = remoteJid.endsWith('@g.us');
     const delayMs = typeof delay === 'number' && delay >= 0 ? delay : 1200;
 
     const { data: instance, error: instanceError } = await supabaseServiceRole
@@ -85,15 +84,12 @@ export async function POST(req: NextRequest) {
       return errorResponse('Instância sem base_url ou apikey configurada', 400);
     }
 
-    const payload: Record<string, unknown> = {
+    // Body EXCLUSIVO para sendPtv: apenas number, video, delay (não enviar mediatype, mimetype, fileName, caption, etc.)
+    const payload = {
       number: remoteJid,
       video: video.trim(),
       delay: delayMs,
-      mentionsEveryOne: mentionsEveryOne === true && isGroup,
     };
-    if (caption && String(caption).trim()) {
-      payload.caption = String(caption).trim();
-    }
 
     const url = `${baseUrl.replace(/([^:]\/)\/+/g, '$1')}/message/sendPtv/${instanceName}`;
     const response = await fetch(url, {

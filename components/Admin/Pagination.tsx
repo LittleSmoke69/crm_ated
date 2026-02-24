@@ -57,7 +57,7 @@ const Pagination: React.FC<PaginationProps> = ({
   };
 
   return (
-    <div className="flex items-center justify-between border-t border-gray-200 bg-white px-4 py-3 sm:px-6">
+    <div className="flex items-center justify-between border-t border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] px-4 py-3 sm:px-6">
       <div className="flex flex-1 justify-between sm:hidden">
         <button
           onClick={() => onPageChange(currentPage - 1)}
@@ -76,7 +76,7 @@ const Pagination: React.FC<PaginationProps> = ({
       </div>
       <div className="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
         <div>
-          <p className="text-sm text-gray-700">
+          <p className="text-sm text-gray-700 dark:text-gray-300">
             Mostrando <span className="font-medium">{startItem}</span> até{' '}
             <span className="font-medium">{endItem}</span> de{' '}
             <span className="font-medium">{totalItems}</span> resultados
@@ -103,7 +103,7 @@ const Pagination: React.FC<PaginationProps> = ({
                     className={`relative inline-flex items-center px-4 py-2 text-sm font-semibold ${
                       currentPage === page
                         ? 'z-10 bg-[#8CD955] text-white focus:z-20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#8CD955]'
-                        : 'text-gray-900 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 focus:z-20 focus:outline-offset-0'
+                        : 'text-gray-900 dark:text-gray-200 ring-1 ring-inset ring-gray-300 dark:ring-[#555] hover:bg-gray-50 dark:hover:bg-[#404040] focus:z-20 focus:outline-offset-0'
                     }`}
                   >
                     {page}

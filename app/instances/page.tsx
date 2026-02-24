@@ -25,6 +25,7 @@ import {
   MessageSquare,
   Zap,
   Phone,
+  Loader2,
 } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import { supabase } from '@/lib/supabase';
@@ -82,6 +83,14 @@ const InstancesPage = () => {
   const [checkingInstance, setCheckingInstance] = useState<string | null>(null); // Instância sendo verificada
   const [showExtractGroupsPrompt, setShowExtractGroupsPrompt] = useState(false);
   const [newlyConnectedInstance, setNewlyConnectedInstance] = useState<string | null>(null);
+  /** Instância cujo extração de grupos está rodando em segundo plano (null = nenhuma). */
+  const [groupsProcessingForInstance, setGroupsProcessingForInstance] = useState<string | null>(null);
+  /** Verificação de todas as instâncias em andamento. */
+  const [verifyingAll, setVerifyingAll] = useState(false);
+  /** Modal de resumo (nome, telefone, status, grupos) aberto. */
+  const [showSummaryModal, setShowSummaryModal] = useState(false);
+  const [summaryData, setSummaryData] = useState<Array<{ instance_name: string; phone: string | null; status: string; groups_count: number }>>([]);
+  const [summaryLoading, setSummaryLoading] = useState(false);
 
   // Estados para modal de telefone
   const [isPhoneModalOpen, setIsPhoneModalOpen] = useState(false);
@@ -314,12 +323,11 @@ const InstancesPage = () => {
 
   const handleExtractAllGroups = async (instanceName: string) => {
     if (!userId) return;
-    
+
     try {
       showToast('Extraindo grupos...', 'info');
       addLog(`Extraindo todos os grupos da instância ${instanceName}...`, 'info');
 
-      // Primeiro, busca os grupos da API
       const fetchResponse = await fetch('/api/groups/fetch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
@@ -333,38 +341,73 @@ const InstancesPage = () => {
       }
 
       const groups = fetchData.data;
-      let savedCount = 0;
 
-      // Salva cada grupo no banco
-      for (const group of groups) {
-        try {
-          const saveResponse = await fetch('/api/groups', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-            body: JSON.stringify({
-              instanceName,
-              groupId: group.id,
-              groupSubject: group.subject,
-              pictureUrl: group.pictureUrl,
-              size: group.size,
-            }),
-          });
+      const syncResponse = await fetch('/api/groups/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({ instanceName, groups }),
+      });
 
-          if (saveResponse.ok) {
-            savedCount++;
-          }
-        } catch (error) {
-          console.error(`Erro ao salvar grupo ${group.id}:`, error);
-        }
+      const syncData = await syncResponse.json();
+      if (syncResponse.ok && syncData.success) {
+        const { inserted = 0, updated = 0 } = syncData.data || {};
+        showToast(`${inserted + updated} grupo(s) sincronizado(s) com sucesso!`, 'success');
+        addLog(`${inserted + updated} grupos sincronizados da instância ${instanceName} (sem duplicatas)`, 'success');
+      } else {
+        showToast(syncData.error || 'Erro ao sincronizar grupos', 'error');
       }
-
-      showToast(`${savedCount} grupo(s) extraído(s) e salvo(s) com sucesso!`, 'success');
-      addLog(`${savedCount} grupos extraídos e salvos da instância ${instanceName}`, 'success');
     } catch (error) {
       showToast('Erro ao extrair grupos', 'error');
       addLog(`Erro ao extrair grupos: ${String(error)}`, 'error');
     }
   };
+
+  /** Roda extração de grupos em segundo plano: mostra banner na tela e avisa quando terminar. */
+  const runExtractGroupsInBackground = useCallback(
+    (instanceName: string) => {
+      if (!userId) return;
+      setGroupsProcessingForInstance(instanceName);
+      addLog(`Grupos da instância ${instanceName} sendo processados em segundo plano...`, 'info');
+
+      (async () => {
+        try {
+          const fetchResponse = await fetch('/api/groups/fetch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+            body: JSON.stringify({ instanceName }),
+          });
+          const fetchData = await fetchResponse.json();
+          if (!fetchResponse.ok || !fetchData.data) {
+            setGroupsProcessingForInstance(null);
+            showToast('Erro ao buscar grupos da API', 'error');
+            addLog(`Erro ao buscar grupos da instância ${instanceName}`, 'error');
+            return;
+          }
+          const groups = fetchData.data;
+
+          const syncResponse = await fetch('/api/groups/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+            body: JSON.stringify({ instanceName, groups }),
+          });
+          const syncData = await syncResponse.json();
+          setGroupsProcessingForInstance(null);
+          if (syncResponse.ok && syncData.success) {
+            const { inserted = 0, updated = 0 } = syncData.data || {};
+            showToast(`${inserted + updated} grupo(s) sincronizado(s)! Processamento em segundo plano concluído.`, 'success');
+            addLog(`${inserted + updated} grupos sincronizados da instância ${instanceName} (em segundo plano)`, 'success');
+          } else {
+            showToast(syncData.error || 'Erro ao sincronizar grupos', 'error');
+          }
+        } catch (error) {
+          setGroupsProcessingForInstance(null);
+          showToast('Erro ao extrair grupos em segundo plano', 'error');
+          addLog(`Erro ao extrair grupos (${instanceName}): ${String(error)}`, 'error');
+        }
+      })();
+    },
+    [userId, showToast, addLog]
+  );
 
   const handleCheckStatus = async (inst: WhatsAppInstance) => {
     if (!userId || !inst.instance_name) return;
@@ -526,6 +569,51 @@ const InstancesPage = () => {
       showToast('Erro ao salvar telefone', 'error');
     } finally {
       setIsSavingPhone(false);
+    }
+  };
+
+  const handleVerifyAllInstances = async () => {
+    if (!userId) return;
+    setVerifyingAll(true);
+    try {
+      const response = await fetch('/api/instances/verify-all', {
+        method: 'POST',
+        headers: { 'X-User-Id': userId },
+      });
+      const data = await response.json();
+      if (response.ok && data.success !== false) {
+        const msg = data.data?.message || 'Verificação concluída.';
+        showToast(msg, data.data?.processing ? 'info' : 'success');
+        if (data.data?.reportSent) {
+          addLog('Relatório de instâncias enviado ao seu WhatsApp (Loto Assistente).', 'success');
+        }
+        await loadInitialData();
+      } else {
+        showToast(data.error || 'Erro ao verificar instâncias', 'error');
+      }
+    } catch (error) {
+      showToast('Erro ao verificar instâncias', 'error');
+      addLog(`Erro: ${String(error)}`, 'error');
+    } finally {
+      setVerifyingAll(false);
+    }
+  };
+
+  const handleOpenSummaryModal = async () => {
+    setShowSummaryModal(true);
+    setSummaryLoading(true);
+    try {
+      const response = await fetch('/api/instances/summary', { headers: { 'X-User-Id': userId! } });
+      const data = await response.json();
+      if (response.ok && data.success && Array.isArray(data.data)) {
+        setSummaryData(data.data);
+      } else {
+        setSummaryData([]);
+      }
+    } catch {
+      setSummaryData([]);
+    } finally {
+      setSummaryLoading(false);
     }
   };
 
@@ -938,7 +1026,7 @@ const InstancesPage = () => {
 
         <div className="flex items-center justify-between gap-4">
           <div className="flex-1">
-            <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 mb-2">Instâncias WhatsApp</h1>
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 dark:text-white mb-2">Instâncias WhatsApp</h1>
             <p className="text-sm sm:text-base text-gray-600">Gerencie suas instâncias e grupos</p>
           </div>
           {/* Botão Toggle da Sidebar - Apenas no mobile, no topo direito */}
@@ -954,19 +1042,51 @@ const InstancesPage = () => {
         </div>
 
         <div className="space-y-6">
+          {/* Banner: grupos sendo processados em segundo plano */}
+          {groupsProcessingForInstance && (
+            <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-[#8CD955]/15 dark:bg-[#8CD955]/20 border border-[#8CD955]/40 dark:border-[#8CD955]/30 text-gray-800 dark:text-gray-100">
+              <Loader2 className="w-5 h-5 flex-shrink-0 animate-spin text-[#8CD955]" />
+              <div className="flex-1 min-w-0">
+                <p className="font-medium text-sm sm:text-base">
+                  Grupos da instância <span className="font-semibold text-[#5a8a2a] dark:text-[#8CD955]">{groupsProcessingForInstance}</span> estão sendo processados em segundo plano.
+                </p>
+                <p className="text-xs sm:text-sm text-gray-600 dark:text-gray-400 mt-0.5">
+                  Você será avisado quando a extração e sincronização terminarem. Pode continuar usando a página.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Lista de Instâncias */}
-          <div className="bg-gray-100 rounded-xl shadow-md p-6 border border-gray-200" data-tour-id="instancias-conectadas">
+          <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-md p-6 border border-gray-200 dark:border-[#404040]" data-tour-id="instancias-conectadas">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
-              <h2 className="text-lg font-semibold text-gray-800">Lista de Instâncias</h2>
+              <h2 className="text-lg font-semibold text-gray-800 dark:text-white">Lista de Instâncias</h2>
               
-              {/* Botão Criar Instância */}
-              <button
-                onClick={() => setIsCreateModalOpen(true)}
-                className="flex items-center gap-2 px-4 py-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition shadow-md"
-              >
-                <Plus className="w-5 h-5" />
-                Criar Instância
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={handleOpenSummaryModal}
+                  disabled={instances.length === 0}
+                  className="flex items-center gap-2 px-3 py-2 bg-gray-100 dark:bg-[#333] hover:bg-gray-200 dark:hover:bg-[#404040] text-gray-700 dark:text-gray-200 rounded-lg font-medium transition shadow-sm disabled:opacity-50"
+                >
+                  <Info className="w-4 h-4" />
+                  Ver resumo
+                </button>
+                <button
+                  onClick={handleVerifyAllInstances}
+                  disabled={verifyingAll || instances.length === 0}
+                  className="flex items-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition shadow-sm disabled:opacity-50"
+                >
+                  {verifyingAll ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                  Verificar todas
+                </button>
+                <button
+                  onClick={() => setIsCreateModalOpen(true)}
+                  className="flex items-center gap-2 px-4 py-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition shadow-md"
+                >
+                  <Plus className="w-5 h-5" />
+                  Criar Instância
+                </button>
+              </div>
             </div>
             
             {isLoadingInstances ? (
@@ -975,7 +1095,7 @@ const InstancesPage = () => {
                 <div className="flex items-center justify-center py-12">
                   <div className="text-center">
                     <RefreshCw className="w-8 h-8 text-[#8CD955] animate-spin mx-auto mb-4" />
-                    <p className="text-gray-600 font-medium">Carregando instâncias...</p>
+                    <p className="text-gray-600 dark:text-[#aaa] font-medium">Carregando instâncias...</p>
                   </div>
                 </div>
               </>
@@ -987,8 +1107,8 @@ const InstancesPage = () => {
                     onClick={() => setInstanceFilter('todas')}
                     className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all ${
                       instanceFilter === 'todas'
-                        ? 'bg-[#8CD955] text-white'
-                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                        ? 'bg-[#8CD955] dark:bg-[#00ff00] text-white'
+                        : 'bg-gray-100 dark:bg-[#333] text-gray-600 dark:text-[#ccc] hover:bg-gray-200 dark:hover:bg-[#404040]'
                     }`}
                   >
                     Todas ({instances.length})
@@ -997,8 +1117,8 @@ const InstancesPage = () => {
                     onClick={() => setInstanceFilter('connected')}
                     className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all ${
                       instanceFilter === 'connected'
-                        ? 'bg-[#8CD955] text-white'
-                        : 'bg-[#8CD95515] text-[#6AB83D] hover:bg-[#8CD95525]'
+                        ? 'bg-[#8CD955] dark:bg-[#00ff00] text-white'
+                        : 'bg-[#8CD95515] dark:bg-[#00ff0015] text-[#6AB83D] dark:text-[#00ff00] hover:bg-[#8CD95525] dark:hover:bg-[#00ff0025]'
                     }`}
                   >
                     Conectadas ({instances.filter(i => i.status === 'connected' || i.status === 'ok').length})
@@ -1008,7 +1128,7 @@ const InstancesPage = () => {
                     className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all ${
                       instanceFilter === 'disconnected'
                         ? 'bg-red-600 text-white'
-                        : 'bg-red-50 text-red-600 hover:bg-red-100'
+                        : 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/30'
                     }`}
                   >
                     Desconectadas ({instances.filter(i => {
@@ -1021,7 +1141,7 @@ const InstancesPage = () => {
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {filteredInstances.length === 0 ? (
                     <div className="col-span-full">
-                      <p className="text-sm text-gray-500 text-center py-4">Nenhuma instância encontrada com o filtro selecionado</p>
+                      <p className="text-sm text-gray-500 dark:text-[#888] text-center py-4">Nenhuma instância encontrada com o filtro selecionado</p>
                     </div>
                   ) : (
                     <>
@@ -1042,15 +1162,15 @@ const InstancesPage = () => {
                         }
                         
                         return (
-                          <div key={inst.id || inst.instance_name} className="p-5 border-2 border-gray-200 rounded-lg hover:border-[#8CD95540] hover:bg-[#8CD95515] transition-all duration-200 bg-white flex flex-col h-full shadow-sm">
+                          <div key={inst.id || inst.instance_name} className="p-5 border-2 border-gray-200 dark:border-[#404040] rounded-lg hover:border-[#8CD95540] dark:hover:border-[#00ff0040] hover:bg-[#8CD95515] dark:hover:bg-[#00ff0015] transition-all duration-200 bg-white dark:bg-[#333] flex flex-col h-full shadow-sm">
                             <div className="flex justify-between items-start mb-3">
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2 mb-2 flex-wrap">
-                                  <span className="font-semibold text-gray-800 truncate">{inst.instance_name}</span>
+                                  <span className="font-semibold text-gray-800 dark:text-white truncate">{inst.instance_name}</span>
                                   {/* Selo Em Maturação (virgem, bloqueada) */}
                                   {(inst as any).is_locked === true && (inst as any).maturation_type === 'virgem' && (
                                     <span
-                                      className="px-2 py-1 rounded text-xs font-bold bg-amber-100 text-amber-800 flex items-center gap-1 flex-shrink-0"
+                                      className="px-2 py-1 rounded text-xs font-bold bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 flex items-center gap-1 flex-shrink-0"
                                       title="Instância em auto maturação por 5 dias - bloqueada para campanhas e fluxos"
                                     >
                                       <Lock className="w-3 h-3" />
@@ -1081,17 +1201,17 @@ const InstancesPage = () => {
                                   <span
                                     className={`px-2 py-1 rounded text-xs font-medium flex-shrink-0 ${
                                       connected
-                                        ? 'bg-[#8CD95515] text-[#6AB83D]'
+                                        ? 'bg-[#8CD95515] dark:bg-[#00ff0015] text-[#6AB83D] dark:text-[#00ff00]'
                                         : connecting
-                                        ? 'bg-yellow-100 text-yellow-700'
-                                        : 'bg-gray-100 text-gray-600'
+                                        ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400'
+                                        : 'bg-gray-100 dark:bg-[#404040] text-gray-600 dark:text-[#aaa]'
                                     }`}
                                   >
                                     {connected ? 'Conectado' : connecting ? 'Conectando' : inst.status === 'disconnected' ? 'Desconectado' : inst.status}
                                   </span>
                                 </div>
                                 {inst.number && (
-                                  <p className="text-sm text-gray-600 mb-2 flex items-center gap-1">
+                                  <p className="text-sm text-gray-600 dark:text-[#aaa] mb-2 flex items-center gap-1">
                                     <Phone className="w-3 h-3 text-indigo-500" />
                                     {inst.number}
                                   </p>
@@ -1100,7 +1220,7 @@ const InstancesPage = () => {
                                   {/* Indicador de Proxy */}
                                   {inst.proxy && (
                                     <span
-                                      className="px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-700 flex items-center gap-1 flex-shrink-0"
+                                      className="px-2 py-1 rounded text-xs font-medium bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 flex items-center gap-1 flex-shrink-0"
                                       title={`Proxy: ${inst.proxy.name} (${inst.proxy.host})`}
                                     >
                                       <LinkIcon className="w-3 h-3" />
@@ -1110,7 +1230,7 @@ const InstancesPage = () => {
                                   {/* Badge de API Bloqueada - Mostra quando a API Evolution está bloqueada para criação de instâncias */}
                                   {isBlocked && (
                                     <span
-                                      className="px-2 py-1 rounded text-xs font-medium bg-orange-100 text-orange-800 flex items-center gap-1 flex-shrink-0"
+                                      className="px-2 py-1 rounded text-xs font-medium bg-orange-100 dark:bg-orange-900/40 text-orange-800 dark:text-orange-300 flex items-center gap-1 flex-shrink-0"
                                       title="API Evolution bloqueada para criação de novas instâncias. Esta instância ainda pode ser usada para adicionar pessoas em grupos e enviar mensagens."
                                     >
                                       <Lock className="w-3 h-3" />
@@ -1123,7 +1243,7 @@ const InstancesPage = () => {
                                 {inst.hash && (
                                   <button
                                     onClick={() => copyApiKey(inst.hash!)}
-                                    className="p-2 hover:bg-gray-100 rounded-lg transition text-gray-400 hover:text-gray-600"
+                                    className="p-2 hover:bg-gray-100 dark:hover:bg-[#404040] rounded-lg transition text-gray-400 dark:text-[#888] hover:text-gray-600 dark:hover:text-white"
                                     title="Copiar API Key"
                                   >
                                     <Copy className="w-4 h-4" />
@@ -1131,15 +1251,15 @@ const InstancesPage = () => {
                                 )}
                                 <button
                                   onClick={() => handleDeleteInstance(inst)}
-                                  className="p-2 hover:bg-red-50 rounded-lg transition text-gray-400 hover:text-red-600"
-                                  title="Deletar instância"
+                                  className="p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition text-gray-400 dark:text-[#888] hover:text-red-600 dark:hover:text-red-400"
+                                    title="Deletar instância"
                                 >
                                   <Trash2 className="w-4 h-4" />
                                 </button>
                               </div>
                             </div>
                             {inst.hash && (
-                              <div className="mb-4 p-2 bg-gray-50 border border-gray-100 rounded-lg text-[10px] font-mono break-all text-gray-400 flex items-center justify-center">
+                              <div className="mb-4 p-2 bg-gray-50 dark:bg-[#404040] border border-gray-100 dark:border-[#555] rounded-lg text-[10px] font-mono break-all text-gray-400 dark:text-[#aaa] flex items-center justify-center">
                                 {inst.hash}
                               </div>
                             )}
@@ -1156,7 +1276,7 @@ const InstancesPage = () => {
                               )}
                               <button
                                 onClick={() => handleOpenPhoneModal(inst)}
-                                className="flex-1 h-10 px-3 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 rounded-xl text-xs sm:text-sm font-semibold transition-all active:scale-95 flex items-center justify-center gap-1.5"
+                                className="flex-1 h-10 px-3 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 border border-indigo-200 dark:border-indigo-700 rounded-xl text-xs sm:text-sm font-semibold transition-all active:scale-95 flex items-center justify-center gap-1.5"
                                 title="Configurar Telefone"
                               >
                                 <Phone className="w-4 h-4" />
@@ -1225,15 +1345,15 @@ const InstancesPage = () => {
           <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
           
           {/* Modal - largo para melhor visualização */}
-          <div className="relative bg-white rounded-xl shadow-2xl max-w-4xl w-full z-10 animate-in fade-in zoom-in duration-200 overflow-hidden">
+          <div className="relative bg-white dark:bg-[#2a2a2a] rounded-xl shadow-2xl max-w-4xl w-full z-10 animate-in fade-in zoom-in duration-200 overflow-hidden border border-gray-200 dark:border-[#404040]">
             <div className="p-6">
             {/* Header */}
             <div className="flex justify-between items-center mb-5">
-              <h2 className="text-xl font-semibold text-gray-800">Criar Nova Instância</h2>
+              <h2 className="text-xl font-semibold text-gray-800 dark:text-white">Criar Nova Instância</h2>
               <button
                 onClick={() => !loading && setIsCreateModalOpen(false)}
                 disabled={loading}
-                className="p-2 hover:bg-gray-100 rounded-lg transition text-gray-500 hover:text-gray-700 disabled:opacity-50"
+                className="p-2 hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg transition text-gray-500 dark:text-[#aaa] hover:text-gray-700 dark:hover:text-white disabled:opacity-50"
                 aria-label="Fechar"
               >
                 <X className="w-5 h-5" />
@@ -1246,22 +1366,22 @@ const InstancesPage = () => {
               <div className="grid grid-cols-1 md:grid-cols-[auto_1fr] gap-5 items-start">
                 {/* Tipo de API (compacto) */}
                 <div className="min-w-0">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Tipo de API*</label>
-                  <div className="border-2 border-gray-200 rounded-lg p-3 bg-[#8CD95515] cursor-pointer hover:border-[#8CD955] transition">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-2">Tipo de API*</label>
+                  <div className="border-2 border-gray-200 dark:border-[#555] rounded-lg p-3 bg-[#8CD95515] dark:bg-[#00ff0015] cursor-pointer hover:border-[#8CD955] dark:hover:border-[#00ff00] transition">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 shrink-0 bg-[#8CD955] rounded-lg flex items-center justify-center">
+                      <div className="w-10 h-10 shrink-0 bg-[#8CD955] dark:bg-[#00ff00] rounded-lg flex items-center justify-center">
                         <MessageSquare className="w-5 h-5 text-white" />
                       </div>
                       <div className="min-w-0">
-                        <p className="font-semibold text-gray-800 text-sm">API WhatsApp (Não Oficial)</p>
-                        <p className="text-xs text-gray-500">Evolution API - Baileys</p>
+                        <p className="font-semibold text-gray-800 dark:text-white text-sm">API WhatsApp (Não Oficial)</p>
+                        <p className="text-xs text-gray-500 dark:text-[#aaa]">Evolution API - Baileys</p>
                       </div>
                     </div>
                   </div>
                 </div>
                 {/* Nome da Instância */}
                 <div className="min-w-0">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Nome da Instância*</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-2">Nome da Instância*</label>
                   <input
                     type="text"
                     value={instanceName}
@@ -1271,9 +1391,9 @@ const InstancesPage = () => {
                     }}
                     placeholder="Ex: teste1, adicione1, consultorjão, teste_teste"
                     disabled={loading}
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 placeholder:text-gray-400 disabled:opacity-50"
+                    className="w-full px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-gray-700 dark:text-white dark:bg-[#333] placeholder:text-gray-400 dark:placeholder:text-[#888] disabled:opacity-50"
                   />
-                  <p className="text-xs text-gray-500 mt-1">Apenas letras, números e underscore (_)</p>
+                  <p className="text-xs text-gray-500 dark:text-[#888] mt-1">Apenas letras, números e underscore (_)</p>
                 </div>
               </div>
 
@@ -1281,25 +1401,25 @@ const InstancesPage = () => {
               <div className={`grid grid-cols-1 ${!isConsultor ? 'lg:grid-cols-2' : ''} gap-5 items-stretch`}>
                 {/* Tipo de Instância */}
                 <div className="flex flex-col">
-                  <label className="block text-sm font-medium text-gray-700 mb-2 h-5 flex items-center">Tipo de Instância*</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-2 h-5 flex items-center">Tipo de Instância*</label>
                   <div className="grid grid-rows-2 gap-2 flex-1 min-h-[140px]">
                     <div
                       onClick={() => !loading && setIsMaster(true)}
                       className={`border-2 rounded-lg p-3 transition flex items-center gap-3 min-h-[64px] ${
-                        isMaster ? 'border-[#8CD955] bg-[#8CD95515] cursor-pointer' : 'border-gray-200 hover:border-[#8CD95540] hover:bg-gray-50 cursor-pointer'
+                        isMaster ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD95515] dark:bg-[#00ff0015] cursor-pointer' : 'border-gray-200 dark:border-[#555] hover:border-[#8CD95540] dark:hover:border-[#00ff0040] hover:bg-gray-50 dark:hover:bg-[#333] cursor-pointer'
                       } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
                       <div className={`w-5 h-5 shrink-0 rounded-full border-2 flex items-center justify-center ${
-                        isMaster ? 'border-[#8CD955] bg-[#8CD955]' : 'border-gray-300'
+                        isMaster ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD955] dark:bg-[#00ff00]' : 'border-gray-300 dark:border-[#555]'
                       }`}>
                         {isMaster && <div className="w-3 h-3 rounded-full bg-white" />}
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2 mb-0.5">
                           <Star className="w-4 h-4 text-yellow-500 fill-yellow-500 shrink-0" />
-                          <span className="font-semibold text-gray-800 text-sm">Instância Mestre</span>
+                          <span className="font-semibold text-gray-800 dark:text-white text-sm">Instância Mestre</span>
                         </div>
-                        <p className="text-xs text-gray-600 leading-snug">
+                        <p className="text-xs text-gray-600 dark:text-[#aaa] leading-snug">
                           Mensagens, Agentes IA, Anti-Spam e Boas-Vindas. Sem proxy automático. Instâncias mestres ilimitadas.
                         </p>
                       </div>
@@ -1307,20 +1427,20 @@ const InstancesPage = () => {
                     <div
                       onClick={() => !loading && setIsMaster(false)}
                       className={`border-2 rounded-lg p-3 cursor-pointer transition flex items-center gap-3 min-h-[64px] ${
-                        !isMaster ? 'border-[#8CD955] bg-[#8CD95515]' : 'border-gray-200 hover:border-[#8CD95540] hover:bg-gray-50'
+                        !isMaster ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD95515] dark:bg-[#00ff0015]' : 'border-gray-200 dark:border-[#555] hover:border-[#8CD95540] dark:hover:border-[#00ff0040] hover:bg-gray-50 dark:hover:bg-[#333]'
                       } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
                       <div className={`w-5 h-5 shrink-0 rounded-full border-2 flex items-center justify-center ${
-                        !isMaster ? 'border-[#8CD955] bg-[#8CD955]' : 'border-gray-300'
+                        !isMaster ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD955] dark:bg-[#00ff00]' : 'border-gray-300 dark:border-[#555]'
                       }`}>
                         {!isMaster && <div className="w-3 h-3 rounded-full bg-white" />}
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2 mb-0.5">
                           <Zap className="w-4 h-4 text-blue-500 shrink-0" />
-                          <span className="font-semibold text-gray-800 text-sm">Instância Normal</span>
+                          <span className="font-semibold text-gray-800 dark:text-white text-sm">Instância Normal</span>
                         </div>
-                        <p className="text-xs text-gray-600 leading-snug">
+                        <p className="text-xs text-gray-600 dark:text-[#aaa] leading-snug">
                           Campanhas em massa e criar grupos via API. Proxy vinculado automaticamente.
                         </p>
                       </div>
@@ -1331,22 +1451,22 @@ const InstancesPage = () => {
                 {/* Tipo de Maturação */}
                 {!isConsultor && (
                   <div className="flex flex-col">
-                    <label className="block text-sm font-medium text-gray-700 mb-2 h-5 flex items-center">Tipo de Maturação*</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-2 h-5 flex items-center">Tipo de Maturação*</label>
                     <div className="grid grid-rows-2 gap-2 flex-1 min-h-[140px]">
                       <div
                         onClick={() => !loading && setMaturationType('maturado')}
                         className={`border-2 rounded-lg p-3 cursor-pointer transition flex items-center gap-3 min-h-[64px] ${
-                          maturationType === 'maturado' ? 'border-[#8CD955] bg-[#8CD95515]' : 'border-gray-200 hover:border-[#8CD95540] hover:bg-gray-50'
+                          maturationType === 'maturado' ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD95515] dark:bg-[#00ff0015]' : 'border-gray-200 dark:border-[#555] hover:border-[#8CD95540] dark:hover:border-[#00ff0040] hover:bg-gray-50 dark:hover:bg-[#333]'
                         } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
                       >
                         <div className={`w-5 h-5 shrink-0 rounded-full border-2 flex items-center justify-center ${
-                          maturationType === 'maturado' ? 'border-[#8CD955] bg-[#8CD955]' : 'border-gray-300'
+                          maturationType === 'maturado' ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD955] dark:bg-[#00ff00]' : 'border-gray-300 dark:border-[#555]'
                         }`}>
                           {maturationType === 'maturado' && <div className="w-3 h-3 rounded-full bg-white" />}
                         </div>
                         <div className="min-w-0 flex-1">
-                          <span className="font-semibold text-gray-800 text-sm block mb-0.5">Maturado</span>
-                          <p className="text-xs text-gray-600 leading-snug">
+                          <span className="font-semibold text-gray-800 dark:text-white text-sm block mb-0.5">Maturado</span>
+                          <p className="text-xs text-gray-600 dark:text-[#aaa] leading-snug">
                             Número já maturado. Pode operar normalmente após conectar.
                           </p>
                         </div>
@@ -1354,17 +1474,17 @@ const InstancesPage = () => {
                       <div
                         onClick={() => !loading && setMaturationType('virgem')}
                         className={`border-2 rounded-lg p-3 cursor-pointer transition flex items-center gap-3 min-h-[64px] ${
-                          maturationType === 'virgem' ? 'border-[#8CD955] bg-[#8CD95515]' : 'border-gray-200 hover:border-[#8CD95540] hover:bg-gray-50'
+                          maturationType === 'virgem' ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD95515] dark:bg-[#00ff0015]' : 'border-gray-200 dark:border-[#555] hover:border-[#8CD95540] dark:hover:border-[#00ff0040] hover:bg-gray-50 dark:hover:bg-[#333]'
                         } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
                       >
                         <div className={`w-5 h-5 shrink-0 rounded-full border-2 flex items-center justify-center ${
-                          maturationType === 'virgem' ? 'border-[#8CD955] bg-[#8CD955]' : 'border-gray-300'
+                          maturationType === 'virgem' ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD955] dark:bg-[#00ff00]' : 'border-gray-300 dark:border-[#555]'
                         }`}>
                           {maturationType === 'virgem' && <div className="w-3 h-3 rounded-full bg-white" />}
                         </div>
                         <div className="min-w-0 flex-1">
-                          <span className="font-semibold text-gray-800 text-sm block mb-0.5">Virgem</span>
-                          <p className="text-xs text-gray-600 leading-snug">
+                          <span className="font-semibold text-gray-800 dark:text-white text-sm block mb-0.5">Virgem</span>
+                          <p className="text-xs text-gray-600 dark:text-[#aaa] leading-snug">
                             Número novo. Após QR Code, auto maturação por 5 dias (bloqueada para campanhas/fluxos).
                           </p>
                         </div>
@@ -1378,7 +1498,7 @@ const InstancesPage = () => {
               <button
                 onClick={handleCreateInstance}
                 disabled={loading || !instanceName}
-                className="w-full py-3 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                className="w-full py-3 bg-[#8CD955] dark:bg-[#00ff00] hover:bg-[#7BC84A] dark:hover:bg-[#00e600] text-white rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 {loading ? (
                   <>
@@ -1413,11 +1533,11 @@ const InstancesPage = () => {
           <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
           
           {/* Modal */}
-          <div className="relative bg-white rounded-xl shadow-2xl p-6 max-w-md w-full z-10 animate-in fade-in zoom-in duration-200">
+          <div className="relative bg-white dark:bg-[#2a2a2a] rounded-xl shadow-2xl p-6 max-w-md w-full z-10 animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-[#404040]">
             <div className="text-center mb-6">
-              <CheckCircle2 className="w-16 h-16 text-[#8CD955] mx-auto mb-4" />
-              <h2 className="text-xl font-semibold text-gray-800 mb-2">Instância Conectada!</h2>
-              <p className="text-gray-600">Deseja extrair e salvar todos os grupos desta instância?</p>
+              <CheckCircle2 className="w-16 h-16 text-[#8CD955] dark:text-[#00ff00] mx-auto mb-4" />
+              <h2 className="text-xl font-semibold text-gray-800 dark:text-white mb-2">Instância Conectada!</h2>
+              <p className="text-gray-600 dark:text-[#ccc]">Deseja extrair e salvar todos os grupos desta instância?</p>
             </div>
 
             <div className="flex gap-3">
@@ -1432,12 +1552,12 @@ const InstancesPage = () => {
                 Fechar
               </button>
               <button
-                onClick={async () => {
-                  setShowExtractGroupsPrompt(false);
+                onClick={() => {
                   const instanceName = newlyConnectedInstance;
+                  setShowExtractGroupsPrompt(false);
                   setNewlyConnectedInstance(null);
-                  await handleExtractAllGroups(instanceName!);
                   showToast('Instância conectada com sucesso!', 'success');
+                  if (instanceName) runExtractGroupsInBackground(instanceName);
                 }}
                 className="flex-1 py-3 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition"
               >
@@ -1524,6 +1644,72 @@ const InstancesPage = () => {
                   )}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Resumo (tabela: nome, telefone, status, grupos) */}
+      {showSummaryModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          onClick={(e) => e.target === e.currentTarget && setShowSummaryModal(false)}
+        >
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
+          <div className="relative bg-white dark:bg-[#2a2a2a] rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col z-10 border border-gray-200 dark:border-[#404040]">
+            <div className="flex justify-between items-center p-4 border-b border-gray-200 dark:border-[#404040]">
+              <h2 className="text-xl font-semibold text-gray-800 dark:text-white flex items-center gap-2">
+                <Info className="w-5 h-5 text-[#8CD955]" />
+                Resumo das instâncias
+              </h2>
+              <button
+                onClick={() => setShowSummaryModal(false)}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg transition text-gray-500 dark:text-[#aaa]"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto p-4">
+              {summaryLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+                </div>
+              ) : summaryData.length === 0 ? (
+                <p className="text-gray-500 dark:text-[#aaa] text-center py-8">Nenhuma instância ou dados não disponíveis.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm border-collapse">
+                    <thead>
+                      <tr className="border-b border-gray-200 dark:border-[#404040]">
+                        <th className="text-left py-3 px-2 font-semibold text-gray-700 dark:text-gray-300">Instância</th>
+                        <th className="text-left py-3 px-2 font-semibold text-gray-700 dark:text-gray-300">Telefone</th>
+                        <th className="text-left py-3 px-2 font-semibold text-gray-700 dark:text-gray-300">Status</th>
+                        <th className="text-left py-3 px-2 font-semibold text-gray-700 dark:text-gray-300">Nº de grupos</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {summaryData.map((row, idx) => (
+                        <tr key={idx} className="border-b border-gray-100 dark:border-[#333] hover:bg-gray-50 dark:hover:bg-[#333]/50">
+                          <td className="py-2 px-2 text-gray-800 dark:text-white font-medium">{row.instance_name}</td>
+                          <td className="py-2 px-2 text-gray-600 dark:text-[#aaa]">{row.phone || '-'}</td>
+                          <td className="py-2 px-2">
+                            <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                              row.status === 'Conectada' ? 'bg-[#8CD955]/20 text-[#6AB83D] dark:text-[#00ff00]' :
+                              row.status === 'Conectando' ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400' :
+                              'bg-gray-100 dark:bg-[#404040] text-gray-600 dark:text-[#aaa]'
+                            }`}>
+                              {row.status}
+                            </span>
+                          </td>
+                          <td className="py-2 px-2 text-gray-600 dark:text-[#aaa]">
+                            {row.groups_count ?? 0}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         </div>

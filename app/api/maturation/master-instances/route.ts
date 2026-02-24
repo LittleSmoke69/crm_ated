@@ -32,7 +32,15 @@ export async function GET(req: NextRequest) {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       const result = await supabaseServiceRole
         .from('evolution_instances')
-        .select('id, instance_name, status, is_master, is_active, phone_number')
+        .select(`
+          id,
+          instance_name,
+          status,
+          is_master,
+          is_active,
+          phone_number,
+          evolution_apis ( is_blocked_for_instances )
+        `)
         .eq('is_active', true)
         .in('status', ['ok', 'open', 'connected'])
         .order('is_master', { ascending: false })
@@ -40,7 +48,14 @@ export async function GET(req: NextRequest) {
 
       connError = result.error;
       if (!connError) {
-        allConnected = result.data;
+        const raw = result.data || [];
+        const apisBlocked = (row: any) => {
+          const apis = row.evolution_apis;
+          if (!apis) return false;
+          const api = Array.isArray(apis) ? apis[0] : apis;
+          return api?.is_blocked_for_instances === true || api?.is_blocked_for_instances === 'true';
+        };
+        allConnected = raw.filter((row: any) => !apisBlocked(row));
         break;
       }
       if (isNetworkError(connError) && attempt < maxRetries) {

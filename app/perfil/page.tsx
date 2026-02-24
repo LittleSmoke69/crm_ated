@@ -3,7 +3,8 @@
 import React, { useEffect, useState } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import Layout from '@/components/Layout';
-import { User, Mail, Phone, Building2, Shield, Loader2, Edit2, Save, X, Search, UserCircle } from 'lucide-react';
+import { useTheme } from '@/contexts/ThemeContext';
+import { User, Mail, Phone, Building2, Shield, Loader2, Edit2, Save, X, Search, UserCircle, Sun, Moon } from 'lucide-react';
 
 interface BancaItem {
   id?: string;
@@ -27,12 +28,14 @@ interface UserProfile {
   bancas: BancaItem[];
   gerente?: GerenteInfo | null;
   needs_bancas_choice?: boolean;
+  theme_preference?: 'light' | 'dark';
 }
 
 const ROLES_COM_BANCAS = ['consultor', 'gerente', 'gestor', 'super_admin'] as const;
 
 const PerfilPage = () => {
   const { checking, userId } = useRequireAuth();
+  const { theme, setTheme } = useTheme();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -190,16 +193,16 @@ const PerfilPage = () => {
 
   const getStatusColor = (status: string | null): string => {
     const colors: Record<string, string> = {
-      super_admin: 'bg-indigo-100 text-indigo-700',
-      admin: 'bg-purple-100 text-purple-700',
-      dono_banca: 'bg-blue-100 text-blue-700',
-      gerente: 'bg-green-100 text-green-700',
-      gestor: 'bg-teal-100 text-teal-700',
-      consultor: 'bg-yellow-100 text-yellow-700',
-      auditoria: 'bg-orange-100 text-orange-700',
-      suporte: 'bg-gray-100 text-gray-700',
+      super_admin: 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300',
+      admin: 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300',
+      dono_banca: 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300',
+      gerente: 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300',
+      gestor: 'bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300',
+      consultor: 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-300',
+      auditoria: 'bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300',
+      suporte: 'bg-gray-100 dark:bg-gray-700/40 text-gray-700 dark:text-gray-300',
     };
-    return colors[status || ''] || 'bg-gray-100 text-gray-700';
+    return colors[status || ''] || 'bg-gray-100 dark:bg-gray-700/40 text-gray-700 dark:text-gray-300';
   };
 
   const canEditBancas = profile ? ROLES_COM_BANCAS.includes(profile.status as any) : false;
@@ -306,12 +309,12 @@ const PerfilPage = () => {
       <div className="max-w-4xl mx-auto">
         {/* Header */}
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Meu Perfil</h1>
-          <p className="text-gray-600">Visualize e gerencie suas informações pessoais</p>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">Meu Perfil</h1>
+          <p className="text-gray-600 dark:text-[#aaa]">Visualize e gerencie suas informações pessoais</p>
         </div>
 
         {/* Card Principal */}
-        <div className="bg-white rounded-2xl shadow-lg border border-gray-200 overflow-hidden">
+        <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-lg border border-gray-200 dark:border-[#404040] overflow-hidden">
           {/* Header do Card */}
           <div className="bg-gradient-to-r from-[#8CD955] to-[#7BC844] p-6">
             <div className="flex items-center gap-4">
@@ -332,23 +335,23 @@ const PerfilPage = () => {
           {/* Conteúdo do Card */}
           <div className="p-6 space-y-6">
             {/* Email */}
-            <div className="flex items-start gap-4 p-4 bg-gray-50 rounded-xl">
-              <div className="p-2 bg-blue-100 rounded-lg">
-                <Mail className="w-5 h-5 text-blue-600" />
+            <div className="flex items-start gap-4 p-4 bg-gray-50 dark:bg-[#333] rounded-xl">
+              <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
+                <Mail className="w-5 h-5 text-blue-600 dark:text-blue-400" />
               </div>
               <div className="flex-1">
-                <label className="block text-sm font-medium text-gray-500 mb-1">Email</label>
-                <p className="text-gray-900 font-medium">{profile.email}</p>
+                <label className="block text-sm font-medium text-gray-500 dark:text-[#aaa] mb-1">Email</label>
+                <p className="text-gray-900 dark:text-white font-medium">{profile.email}</p>
               </div>
             </div>
 
             {/* Telefone */}
-            <div className="flex items-start gap-4 p-4 bg-gray-50 rounded-xl">
-              <div className="p-2 bg-green-100 rounded-lg">
-                <Phone className="w-5 h-5 text-green-600" />
+            <div className="flex items-start gap-4 p-4 bg-gray-50 dark:bg-[#333] rounded-xl">
+              <div className="p-2 bg-green-100 dark:bg-green-900/30 rounded-lg">
+                <Phone className="w-5 h-5 text-green-600 dark:text-[#00ff00]" />
               </div>
               <div className="flex-1">
-                <label className="block text-sm font-medium text-gray-500 mb-1">Telefone</label>
+                <label className="block text-sm font-medium text-gray-500 dark:text-[#aaa] mb-1">Telefone</label>
                 {editingTelefone ? (
                   <div className="flex items-center gap-2">
                     <input
@@ -359,7 +362,7 @@ const PerfilPage = () => {
                         setTelefoneValue(digits);
                       }}
                       placeholder="8195124779"
-                      className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-transparent outline-none placeholder:text-gray-400"
+                      className="flex-1 px-3 py-2 border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] text-gray-900 dark:text-white rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-transparent outline-none placeholder:text-gray-400 dark:placeholder:text-[#888]"
                       autoFocus
                       inputMode="numeric"
                       pattern="[0-9]*"
@@ -390,12 +393,12 @@ const PerfilPage = () => {
                   </div>
                 ) : (
                   <div className="flex items-center justify-between">
-                    <p className="text-gray-900 font-medium">
+                    <p className="text-gray-900 dark:text-white font-medium">
                       {profile.telefone ? formatPhone(profile.telefone) : 'Não cadastrado'}
                     </p>
                     <button
                       onClick={() => setEditingTelefone(true)}
-                      className="p-2 text-[#8CD955] hover:bg-green-50 rounded-lg transition-colors"
+                      className="p-2 text-[#8CD955] dark:text-[#00ff00] hover:bg-green-50 dark:hover:bg-[#00ff0015] rounded-lg transition-colors"
                       title="Editar telefone"
                     >
                       <Edit2 className="w-4 h-4" />
@@ -410,15 +413,15 @@ const PerfilPage = () => {
 
             {/* Meu gerente (consultor) */}
             {profile.status === 'consultor' && profile.gerente && (
-              <div className="flex items-start gap-4 p-4 bg-gray-50 rounded-xl">
-                <div className="p-2 bg-emerald-100 rounded-lg">
-                  <UserCircle className="w-5 h-5 text-emerald-600" />
+              <div className="flex items-start gap-4 p-4 bg-gray-50 dark:bg-[#333] rounded-xl">
+                <div className="p-2 bg-emerald-100 dark:bg-emerald-900/30 rounded-lg">
+                  <UserCircle className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <label className="block text-sm font-medium text-gray-500 mb-1">Meu gerente</label>
-                  <p className="text-gray-900 font-medium">{profile.gerente.full_name || profile.gerente.email}</p>
+                  <label className="block text-sm font-medium text-gray-500 dark:text-[#aaa] mb-1">Meu gerente</label>
+                  <p className="text-gray-900 dark:text-white font-medium">{profile.gerente.full_name || profile.gerente.email}</p>
                   {profile.gerente.email && (
-                    <p className="text-sm text-gray-500">{profile.gerente.email}</p>
+                    <p className="text-sm text-gray-500 dark:text-[#888]">{profile.gerente.email}</p>
                   )}
                 </div>
               </div>
@@ -426,29 +429,29 @@ const PerfilPage = () => {
 
             {/* Bancas (consultor, gerente, gestor, super_admin ou quando precisa escolher) */}
             {showBancasSection && (
-            <div className="flex items-start gap-4 p-4 bg-gray-50 rounded-xl">
-              <div className="p-2 bg-purple-100 rounded-lg">
-                <Building2 className="w-5 h-5 text-purple-600" />
+            <div className="flex items-start gap-4 p-4 bg-gray-50 dark:bg-[#333] rounded-xl">
+              <div className="p-2 bg-purple-100 dark:bg-purple-900/30 rounded-lg">
+                <Building2 className="w-5 h-5 text-purple-600 dark:text-purple-400" />
               </div>
               <div className="flex-1 min-w-0">
-                <label className="block text-sm font-medium text-gray-500 mb-2">
+                <label className="block text-sm font-medium text-gray-500 dark:text-[#aaa] mb-2">
                   {canEditBancas || profile.needs_bancas_choice ? 'Bancas em que atuo' : profile.bancas.length === 1 ? 'Banca' : 'Bancas'}
                 </label>
                 {(canEditBancas || profile.needs_bancas_choice) ? (
                   <div className="flex items-center justify-between gap-3 flex-wrap">
                     <div className="flex-1 min-w-0">
                       {profile.bancas.length > 0 ? (
-                        <p className="text-gray-900 font-medium">
+                        <p className="text-gray-900 dark:text-white font-medium">
                           {profile.bancas.map((b) => b.name).join(', ')}
                         </p>
                       ) : (
-                        <p className="text-gray-500">Nenhuma banca associada</p>
+                        <p className="text-gray-500 dark:text-[#888]">Nenhuma banca associada</p>
                       )}
                     </div>
                     <button
                       type="button"
                       onClick={openModalBancas}
-                      className="flex items-center gap-2 px-3 py-2 text-[#8CD955] hover:bg-green-50 rounded-lg transition-colors font-medium shrink-0"
+                      className="flex items-center gap-2 px-3 py-2 text-[#8CD955] dark:text-[#00ff00] hover:bg-green-50 dark:hover:bg-[#00ff0015] rounded-lg transition-colors font-medium shrink-0"
                       title="Escolher bancas"
                     >
                       <Edit2 className="w-4 h-4" />
@@ -461,13 +464,13 @@ const PerfilPage = () => {
                       <div className="space-y-2">
                         {profile.bancas.map((banca, index) => (
                           <div key={banca.id || index} className="flex items-center gap-2">
-                            <span className="text-gray-900 font-medium">{banca.name}</span>
+                            <span className="text-gray-900 dark:text-white font-medium">{banca.name}</span>
                             {banca.url && (
                               <a
                                 href={banca.url}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="text-[#8CD955] hover:underline text-sm"
+                                className="text-[#8CD955] dark:text-[#00ff00] hover:underline text-sm"
                               >
                                 ({banca.url})
                               </a>
@@ -488,15 +491,15 @@ const PerfilPage = () => {
             {modalBancasOpen && (
               <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={closeModalBancas}>
                 <div
-                  className="bg-white rounded-2xl shadow-xl max-w-lg w-full max-h-[85vh] flex flex-col overflow-hidden"
+                  className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-xl max-w-lg w-full max-h-[85vh] flex flex-col overflow-hidden border border-gray-200 dark:border-[#404040]"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <div className="p-4 border-b border-gray-200 flex items-center justify-between shrink-0">
-                    <h3 className="text-lg font-bold text-gray-900">Bancas em que atuo</h3>
+                  <div className="p-4 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between shrink-0">
+                    <h3 className="text-lg font-bold text-gray-900 dark:text-white">Bancas em que atuo</h3>
                     <button
                       type="button"
                       onClick={closeModalBancas}
-                      className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors"
+                      className="p-2 text-gray-500 dark:text-[#aaa] hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg transition-colors"
                       aria-label="Fechar"
                     >
                       <X className="w-5 h-5" />
@@ -512,7 +515,7 @@ const PerfilPage = () => {
                             value={bancaSearchTerm}
                             onChange={(e) => setBancaSearchTerm(e.target.value)}
                             placeholder="Pesquisar banca por nome ou URL..."
-                            className="w-full pl-9 pr-4 py-2.5 border border-gray-200 rounded-xl bg-gray-100 focus:bg-gray-50 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] outline-none text-gray-900 placeholder:text-gray-600"
+                            className="w-full pl-9 pr-4 py-2.5 border border-gray-200 dark:border-[#555] rounded-xl bg-gray-100 dark:bg-[#333] focus:bg-gray-50 dark:focus:bg-[#3a3a3a] focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] outline-none text-gray-900 dark:text-white placeholder:text-gray-600 dark:placeholder:text-[#888]"
                           />
                         </div>
                       </div>
@@ -533,17 +536,17 @@ const PerfilPage = () => {
                             filteredBancasModal.map((banca) => (
                               <label
                                 key={banca.id ?? ''}
-                                className="flex items-center gap-3 cursor-pointer hover:bg-gray-50 rounded-lg p-3 border border-gray-100"
+                                className="flex items-center gap-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-[#333] rounded-lg p-3 border border-gray-100 dark:border-[#404040]"
                               >
                                 <input
                                   type="checkbox"
                                   checked={selectedBancaIds.has(banca.id ?? '')}
                                   onChange={() => toggleBanca(banca.id ?? '')}
-                                  className="w-4 h-4 rounded border-gray-300 text-[#8CD955] focus:ring-[#8CD955]"
+                                  className="w-4 h-4 rounded border-gray-300 dark:border-[#555] text-[#8CD955] dark:text-[#00ff00] focus:ring-[#8CD955] dark:focus:ring-[#00ff00]"
                                 />
-                                <span className="text-gray-900 font-medium">{banca.name}</span>
+                                <span className="text-gray-900 dark:text-white font-medium">{banca.name}</span>
                                 {banca.url && (
-                                  <span className="text-gray-400 text-sm truncate max-w-[180px]" title={banca.url}>
+                                  <span className="text-gray-400 dark:text-[#888] text-sm truncate max-w-[180px]" title={banca.url}>
                                     {banca.url}
                                   </span>
                                 )}
@@ -557,11 +560,11 @@ const PerfilPage = () => {
                       )}
                     </div>
                   </div>
-                  <div className="p-4 border-t border-gray-200 flex justify-end gap-2 shrink-0 bg-white">
+                  <div className="p-4 border-t border-gray-200 dark:border-[#404040] flex justify-end gap-2 shrink-0 bg-white dark:bg-[#2a2a2a]">
                     <button
                       type="button"
                       onClick={closeModalBancas}
-                      className="px-4 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-xl font-medium transition-colors"
+                      className="px-4 py-2 text-gray-700 dark:text-[#ccc] bg-gray-100 dark:bg-[#404040] hover:bg-gray-200 dark:hover:bg-[#4a4a4a] rounded-xl font-medium transition-colors"
                     >
                       Cancelar
                     </button>
@@ -569,7 +572,7 @@ const PerfilPage = () => {
                       type="button"
                       onClick={handleSaveBancas}
                       disabled={savingBancas || !bancasLoaded || allBancas.length === 0}
-                      className="flex items-center gap-2 px-4 py-2 bg-[#8CD955] text-white rounded-xl hover:bg-[#7BC844] transition-colors disabled:opacity-50 font-medium"
+                      className="flex items-center gap-2 px-4 py-2 bg-[#8CD955] dark:bg-[#00ff00] text-white rounded-xl hover:bg-[#7BC844] dark:hover:bg-[#00e600] transition-colors disabled:opacity-50 font-medium"
                     >
                       {savingBancas ? (
                         <>
@@ -588,14 +591,50 @@ const PerfilPage = () => {
               </div>
             )}
 
-            {/* Data de criação */}
-            <div className="flex items-start gap-4 p-4 bg-gray-50 rounded-xl">
-              <div className="p-2 bg-gray-100 rounded-lg">
-                <Shield className="w-5 h-5 text-gray-600" />
+            {/* Tema (Light / Dark) */}
+            <div className="flex items-start gap-4 p-4 bg-gray-50 dark:bg-[#333] rounded-xl">
+              <div className="p-2 bg-gray-100 dark:bg-[#404040] rounded-lg">
+                <Sun className="w-5 h-5 text-gray-600 dark:text-[#00ff00]" />
               </div>
               <div className="flex-1">
-                <label className="block text-sm font-medium text-gray-500 mb-1">Membro desde</label>
-                <p className="text-gray-900 font-medium">
+                <label className="block text-sm font-medium text-gray-500 dark:text-[#aaa] mb-2">Aparência</label>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setTheme('light')}
+                    className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium transition-all ${
+                      theme === 'light'
+                        ? 'bg-[#8CD955] dark:bg-[#00ff00] text-white shadow-md'
+                        : 'bg-gray-200 dark:bg-[#404040] text-gray-700 dark:text-[#ccc] hover:bg-gray-300 dark:hover:bg-[#4a4a4a]'
+                    }`}
+                  >
+                    <Sun className="w-4 h-4" />
+                    Modo claro (White)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTheme('dark')}
+                    className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium transition-all ${
+                      theme === 'dark'
+                        ? 'bg-[#8CD955] dark:bg-[#00ff00] text-white shadow-md'
+                        : 'bg-gray-200 dark:bg-[#404040] text-gray-700 dark:text-[#ccc] hover:bg-gray-300 dark:hover:bg-[#4a4a4a]'
+                    }`}
+                  >
+                    <Moon className="w-4 h-4" />
+                    Modo escuro (Dark)
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Data de criação */}
+            <div className="flex items-start gap-4 p-4 bg-gray-50 dark:bg-[#333] rounded-xl">
+              <div className="p-2 bg-gray-100 dark:bg-[#404040] rounded-lg">
+                <Shield className="w-5 h-5 text-gray-600 dark:text-[#aaa]" />
+              </div>
+              <div className="flex-1">
+                <label className="block text-sm font-medium text-gray-500 dark:text-[#aaa] mb-1">Membro desde</label>
+                <p className="text-gray-900 dark:text-white font-medium">
                   {new Date(profile.created_at).toLocaleDateString('pt-BR', {
                     day: '2-digit',
                     month: 'long',

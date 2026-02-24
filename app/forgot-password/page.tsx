@@ -78,7 +78,7 @@ export default function ForgotPasswordPage() {
     setErrorMsg(null);
     const raw = normalizePhoneInput(phone);
     if (raw.length < 10) {
-      setErrorMsg('Informe o DDD e o número (ex: 819512449).');
+      setErrorMsg('Informe o DDD e o número com 9 (ex: 81999999999 ou 7999999999).');
       return;
     }
     setLoading(true);
@@ -250,7 +250,7 @@ export default function ForgotPasswordPage() {
                       inputMode="numeric"
                       value={phone}
                       onChange={e => setPhone(normalizePhoneInput(e.target.value))}
-                      placeholder="819999999"
+                      placeholder="81999999999 ou 7999999999"
                       className="w-full pl-10 pr-4 py-3 border-0 focus:ring-0 text-gray-700 placeholder:text-gray-400"
                       disabled={loading}
                       maxLength={11}
@@ -258,7 +258,7 @@ export default function ForgotPasswordPage() {
                     />
                   </div>
                 </div>
-                <p className="text-xs text-gray-500 mt-1">Só DDD e número, sem o 55</p>
+                <p className="text-xs text-gray-500 mt-1">DDD + número (com 9 após o DDD: 81 9…, 79 9…). Sem o 55.</p>
               </div>
               <button
                 type="submit"

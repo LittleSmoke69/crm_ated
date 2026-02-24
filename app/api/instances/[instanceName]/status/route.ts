@@ -5,6 +5,7 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { evolutionService } from '@/lib/services/evolution-service';
 import { getUserEvolutionApi } from '@/lib/services/evolution-api-helper';
 import { proxyAutoAssign } from '@/lib/services/proxy-auto-assign';
+import { notifyInstanceDisconnected } from '@/lib/services/loto-notify-service';
 
 /**
  * GET /api/instances/[instanceName]/status - Verifica status de conexão
@@ -150,6 +151,17 @@ export async function GET(
       });
     } else if (isMaster && isNowConnected && !wasConnected) {
       console.log(`👑 [STATUS] Instância mestre ${instanceName} conectada - proxy não será atribuído automaticamente`);
+    }
+
+    // Quando passa de conectada para desconectada: avisa o dono via Loto Assistente (não bloqueia)
+    if (newStatus === 'disconnected' && wasConnected && instance.user_id) {
+      notifyInstanceDisconnected({
+        instanceName,
+        instanceId: instance.id,
+        userId: instance.user_id,
+        previousStatus: instance.status,
+        newStatus: 'disconnected',
+      }).catch((err) => console.error('[STATUS] Aviso Loto desconexão:', err));
     }
 
     const responseData = {

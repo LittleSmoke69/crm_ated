@@ -1,8 +1,44 @@
 @import "tailwindcss";
 
+/* Dark mode via class (data-theme ou .dark no html) */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --background: #f9fafb;
   --foreground: #171717;
+  --card-bg: #ffffff;
+  --card-border: #e5e7eb;
+  --input-bg: #ffffff;
+  --input-border: #d1d5db;
+  --muted: #6b7280;
+  --muted-foreground: #9ca3af;
+  --zaploto-green: #8CD955;
+  --zaploto-green-hover: #7BC84A;
+  --zaploto-green-light: #A8E677;
+  --zaploto-green-dark: #6AB83D;
+  --zaploto-green-bg: #8CD95515;
+  --zaploto-green-bg-hover: #8CD95525;
+  --zaploto-green-border: #8CD95540;
+  --zaploto-green-border-hover: #8CD95560;
+}
+
+/* Dark mode: paleta ZAP AFILIADOS */
+/* Native selects/inputs use dark scheme in dark mode */
+.dark select,
+[data-theme="dark"] select {
+  color-scheme: dark;
+}
+
+.dark,
+[data-theme="dark"] {
+  --background: #1a1a1a;
+  --foreground: #e0e0e0;
+  --card-bg: #2a2a2a;
+  --card-border: #404040;
+  --input-bg: #333333;
+  --input-border: #555555;
+  --muted: #888888;
+  --muted-foreground: #aaaaaa;
   --zaploto-green: #8CD955;
   --zaploto-green-hover: #7BC84A;
   --zaploto-green-light: #A8E677;
@@ -19,13 +55,6 @@
   --color-zaploto-green: var(--zaploto-green);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
 }
 
 html {
@@ -46,16 +75,26 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: #f1f1f1;
+  background: var(--card-bg, #f1f1f1);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #888;
+  background: var(--muted, #888);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
+  background: var(--muted-foreground, #555);
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb,
+[data-theme="dark"] .custom-scrollbar::-webkit-scrollbar-thumb {
   background: #555;
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover,
+[data-theme="dark"] .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #666;
 }
 
 @keyframes wave {
@@ -179,4 +218,93 @@ body {
 
 .vsl-cta-pulse {
   animation: vslCtaPulse 1.5s ease-in-out infinite;
+}
+
+/* ===== ReactFlow Dark Mode Overrides ===== */
+.dark .react-flow__renderer,
+[data-theme="dark"] .react-flow__renderer {
+  background-color: #1a1a1a;
+}
+
+.dark .react-flow__background,
+[data-theme="dark"] .react-flow__background {
+  background-color: #1a1a1a;
+}
+
+.dark .react-flow__node,
+[data-theme="dark"] .react-flow__node {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6) !important;
+}
+
+.dark .react-flow__controls,
+[data-theme="dark"] .react-flow__controls {
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
+}
+
+.dark .react-flow__controls-button,
+[data-theme="dark"] .react-flow__controls-button {
+  background-color: #2a2a2a;
+  border-bottom-color: #404040;
+  fill: #e0e0e0;
+  color: #e0e0e0;
+}
+
+.dark .react-flow__controls-button:hover,
+[data-theme="dark"] .react-flow__controls-button:hover {
+  background-color: #383838;
+}
+
+.dark .react-flow__minimap,
+[data-theme="dark"] .react-flow__minimap {
+  background-color: #2a2a2a;
+  border: 1px solid #404040;
+}
+
+.dark .react-flow__minimap-mask,
+[data-theme="dark"] .react-flow__minimap-mask {
+  fill: rgba(0, 0, 0, 0.3);
+}
+
+.dark .react-flow__edge path,
+[data-theme="dark"] .react-flow__edge path {
+  stroke: #666;
+}
+
+.dark .react-flow__edge.selected path,
+[data-theme="dark"] .react-flow__edge.selected path {
+  stroke: #8CD955;
+}
+
+.dark .react-flow__edge-text,
+[data-theme="dark"] .react-flow__edge-text {
+  fill: #e0e0e0;
+}
+
+.dark .react-flow__attribution,
+[data-theme="dark"] .react-flow__attribution {
+  background-color: rgba(26, 26, 26, 0.7);
+  color: #666;
+}
+
+.dark .react-flow__attribution a,
+[data-theme="dark"] .react-flow__attribution a {
+  color: #888;
+}
+
+.dark .react-flow__handle,
+[data-theme="dark"] .react-flow__handle {
+  background-color: #555;
+  border-color: #888;
+}
+
+.dark .react-flow__nodesselection-rect,
+[data-theme="dark"] .react-flow__nodesselection-rect {
+  border-color: #8CD955;
+  background-color: rgba(140, 217, 85, 0.05);
+}
+
+.dark .react-flow__selection,
+[data-theme="dark"] .react-flow__selection {
+  border-color: #8CD955;
+  background-color: rgba(140, 217, 85, 0.05);
 }

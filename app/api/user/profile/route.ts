@@ -52,6 +52,7 @@ export async function GET(req: NextRequest) {
       bancas,
       gerente,
       needs_bancas_choice,
+      theme_preference: profile.theme_preference || 'light',
     });
   } catch (err: any) {
     return errorResponse(err.message || 'Erro ao buscar perfil', 401);

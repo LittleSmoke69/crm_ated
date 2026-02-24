@@ -47,7 +47,7 @@ export async function GET(req: NextRequest) {
 
     const { data: entries, error } = await supabaseServiceRole
       .from('admin_lead_transfer_entries')
-      .select('lead_id, had_balance, saldo_snapshot, target_consultant_email, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot')
+      .select('lead_id, had_balance, saldo_snapshot, target_consultant_email, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, resolution_status, resolved_at, current_total_depositado_at_resolution, current_total_apostado_at_resolution')
       .eq('banca_id', resolved.bancaId)
       .eq('transfer_log_id', logId)
       .order('lead_id', { ascending: true });
@@ -96,6 +96,10 @@ export async function GET(req: NextRequest) {
       total_apostado_snapshot?: number | null;
       total_ganho_snapshot?: number | null;
       available_withdraw_snapshot?: number | null;
+      resolution_status?: string | null;
+      resolved_at?: string | null;
+      current_total_depositado_at_resolution?: number | null;
+      current_total_apostado_at_resolution?: number | null;
     };
     const list = rawList.map((e: EntryRow) => {
       const leadId = String(e.lead_id ?? '');
@@ -108,6 +112,10 @@ export async function GET(req: NextRequest) {
         total_apostado_snapshot: e.total_apostado_snapshot != null ? Number(e.total_apostado_snapshot) : null,
         total_ganho_snapshot: e.total_ganho_snapshot != null ? Number(e.total_ganho_snapshot) : null,
         available_withdraw_snapshot: e.available_withdraw_snapshot != null ? Number(e.available_withdraw_snapshot) : null,
+        resolution_status: e.resolution_status ?? 'pending',
+        resolved_at: e.resolved_at ?? null,
+        current_total_depositado_at_resolution: e.current_total_depositado_at_resolution != null ? Number(e.current_total_depositado_at_resolution) : null,
+        current_total_apostado_at_resolution: e.current_total_apostado_at_resolution != null ? Number(e.current_total_apostado_at_resolution) : null,
         name: detail.name ?? null,
         last_name: detail.last_name ?? null,
         email: detail.email ?? null,

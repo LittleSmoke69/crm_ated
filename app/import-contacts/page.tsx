@@ -188,9 +188,9 @@ const ImportContactsPage = () => {
 
   if (checking || userId === null) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-200 text-center">
-          <p className="text-gray-700 font-medium">Carregando...</p>
+      <div className="min-h-screen flex items-center justify-center bg-gray-900 dark:bg-[#1a1a1a]">
+        <div className="bg-[#2a2a2a] rounded-xl shadow-lg p-6 border border-[#404040] text-center">
+          <p className="text-gray-300 font-medium">Carregando...</p>
         </div>
       </div>
     );
@@ -198,6 +198,7 @@ const ImportContactsPage = () => {
 
   return (
     <Layout onSignOut={handleSignOut}>
+      <div className="-m-4 sm:-m-6 lg:-m-8 p-4 sm:p-6 lg:p-8 min-h-screen bg-[#1a1a1a]">
       {/* Toasts */}
       <div className="fixed top-4 right-4 z-50 space-y-2">
         {toasts.map(toast => (
@@ -224,14 +225,14 @@ const ImportContactsPage = () => {
       <div className="space-y-6 w-full">
         <div className="flex items-center justify-between gap-4">
           <div className="flex-1">
-            <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 mb-2">Importar Contatos</h1>
-            <p className="text-sm sm:text-base text-gray-600">Importe contatos via arquivo CSV</p>
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-100 mb-2">Importar Contatos</h1>
+            <p className="text-sm sm:text-base text-gray-400">Importe contatos via arquivo CSV</p>
           </div>
           {/* Botão Toggle da Sidebar - Apenas no mobile, no topo direito */}
           <div className="lg:hidden flex-shrink-0">
             <button
               onClick={() => setIsMobileOpen(!isMobileOpen)}
-              className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-gray-100 transition text-gray-600 shadow-md bg-white"
+              className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-[#404040] transition text-gray-400 shadow-md bg-[#2a2a2a] border border-[#404040]"
               aria-label="Toggle sidebar"
             >
               <Menu className="w-5 h-5" />
@@ -239,16 +240,16 @@ const ImportContactsPage = () => {
           </div>
         </div>
 
-        <div className="bg-gray-100 rounded-xl shadow-md p-6 border border-gray-200">
-          <h2 className="text-lg font-semibold text-gray-800 mb-4">Importar Contatos via CSV</h2>
+        <div className="bg-[#2a2a2a] rounded-xl shadow-md p-6 border border-[#404040]">
+          <h2 className="text-lg font-semibold text-gray-100 mb-4">Importar Contatos via CSV</h2>
 
           {/* Regras do arquivo */}
-          <div className="mb-6 p-4 bg-[#8CD95515] border-2 border-[#8CD95540] rounded-lg" data-tour-id="importar-regras">
-            <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+          <div className="mb-6 p-4 bg-[#8CD95515] dark:bg-[#8CD95510] border-2 border-[#8CD95540] rounded-lg" data-tour-id="importar-regras">
+            <h3 className="font-semibold text-gray-200 mb-3 flex items-center gap-2">
               <FileText className="w-5 h-5 text-[#8CD955]" />
               Regras do arquivo:
             </h3>
-            <ul className="space-y-2 text-sm text-gray-700">
+            <ul className="space-y-2 text-sm text-gray-300">
               <li className="flex items-start gap-2">
                 <span className="text-[#8CD955] mt-1">•</span>
                 <span><strong>Formato:</strong> .csv (sem limite de linhas)</span>
@@ -274,15 +275,15 @@ const ImportContactsPage = () => {
           <div className="space-y-4">
             <div data-tour-id="importar-upload">
               <label className="block w-full">
-                <div className="cursor-pointer flex flex-col items-center justify-center gap-3 px-6 py-8 bg-white border-2 border-dashed border-[#8CD95560] rounded-lg hover:bg-[#8CD95515] transition text-center">
+                <div className="cursor-pointer flex flex-col items-center justify-center gap-3 px-6 py-8 bg-[#333] border-2 border-dashed border-[#8CD95560] rounded-lg hover:bg-[#404040] hover:border-[#8CD95580] transition text-center">
                   <Upload className="w-8 h-8 text-[#8CD955]" />
                   <div>
                     <span className="text-[#8CD955] font-medium">Clique para escolher arquivo</span>
-                    <span className="text-gray-600"> ou arraste e solte</span>
+                    <span className="text-gray-400"> ou arraste e solte</span>
                   </div>
                   {csvFileName && (
-                    <p className="text-sm text-gray-600 mt-2">
-                      Arquivo selecionado: <strong>{csvFileName}</strong>
+                    <p className="text-sm text-gray-400 mt-2">
+                      Arquivo selecionado: <strong className="text-gray-300">{csvFileName}</strong>
                     </p>
                   )}
                   <p className="text-xs text-gray-500" data-tour-id="importar-exemplo">CSV sem limite de linhas</p>
@@ -297,8 +298,8 @@ const ImportContactsPage = () => {
             </div>
 
             {csvContacts.length > 0 && (
-              <div className="p-4 bg-gray-50 rounded-lg">
-                <p className="text-sm text-gray-700">
+              <div className="p-4 bg-[#333] rounded-lg border border-[#404040]">
+                <p className="text-sm text-gray-300">
                   <strong>{csvContacts.length}</strong> contato(s) carregado(s) e pronto(s) para importar
                 </p>
               </div>
@@ -327,7 +328,7 @@ const ImportContactsPage = () => {
             </button>
             
             {csvImporting && importProgress && importProgress.total > 1000 && (
-              <div className="w-full bg-gray-200 rounded-full h-2.5">
+              <div className="w-full bg-[#404040] rounded-full h-2.5">
                 <div
                   className="bg-[#8CD955] h-2.5 rounded-full transition-all duration-300"
                   style={{
@@ -338,6 +339,7 @@ const ImportContactsPage = () => {
             )}
           </div>
         </div>
+      </div>
       </div>
     </Layout>
   );

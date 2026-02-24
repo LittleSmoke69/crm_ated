@@ -12,7 +12,7 @@ import { getEffectiveZaplotoId } from '@/lib/tenant-context';
 export async function GET(req: NextRequest) {
   try {
     const { profile } = await requireAdmin(req);
-    const zaplotoId = getEffectiveZaplotoId(req, profile);
+    const zaplotoId = await getEffectiveZaplotoId(req, profile);
 
     const now = new Date();
     const startOfTodayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));

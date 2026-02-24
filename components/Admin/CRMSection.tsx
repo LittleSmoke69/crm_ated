@@ -145,24 +145,24 @@ export function DateInputDDMMYYYY({ value, onChange, className = '', maxDate }: 
         tabIndex={0}
         onClick={() => setOpen((o) => !o)}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen((o) => !o); } }}
-        className={`flex items-center bg-transparent text-sm font-semibold text-gray-700 cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 rounded ${className}`}
+        className={`flex items-center bg-transparent text-sm font-semibold text-gray-700 dark:text-gray-200 cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 rounded ${className}`}
       >
         <span className={displayValue ? '' : 'text-gray-400'}>{displayValue || 'dd/mm/aaaa'}</span>
       </div>
       {open && (
-        <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-50 p-3 min-w-[260px]">
+        <div className="absolute top-full left-0 mt-1 bg-white dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-xl shadow-lg z-50 p-3 min-w-[260px]">
           <div className="flex items-center justify-between mb-3">
-            <button type="button" onClick={prevMonth} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-600">
+            <button type="button" onClick={prevMonth} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-[#404040] text-gray-600 dark:text-gray-400">
               <ChevronLeft className="w-5 h-5" />
             </button>
-            <span className="text-sm font-bold text-gray-800">{MESES[view.month]} {view.year}</span>
-            <button type="button" onClick={nextMonth} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-600">
+            <span className="text-sm font-bold text-gray-800 dark:text-white">{MESES[view.month]} {view.year}</span>
+            <button type="button" onClick={nextMonth} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-[#404040] text-gray-600 dark:text-gray-400">
               <ChevronRight className="w-5 h-5" />
             </button>
           </div>
           <div className="grid grid-cols-7 gap-0.5 text-center">
             {DIAS_SEMANA.map((d) => (
-              <div key={d} className="text-[10px] font-semibold text-gray-500 py-1">{d}</div>
+              <div key={d} className="text-[10px] font-semibold text-gray-500 dark:text-gray-400 py-1">{d}</div>
             ))}
             {days.map((day, i) => {
               if (day === null) return <div key={`e-${i}`} />;
@@ -177,7 +177,7 @@ export function DateInputDDMMYYYY({ value, onChange, className = '', maxDate }: 
                   onClick={() => !isAfterMax && selectDay(day)}
                   disabled={isAfterMax}
                   className={`w-8 h-8 rounded-lg text-sm font-medium transition-colors ${
-                    isAfterMax ? 'text-gray-300 cursor-not-allowed' : isSelected ? 'bg-[#8CD955] text-white' : isToday ? 'bg-gray-200 text-gray-800' : 'hover:bg-gray-100 text-gray-700'
+                    isAfterMax ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed' : isSelected ? 'bg-[#8CD955] text-white' : isToday ? 'bg-gray-200 dark:bg-[#404040] text-gray-800 dark:text-white' : 'hover:bg-gray-100 dark:hover:bg-[#404040] text-gray-700 dark:text-gray-300'
                   }`}
                 >
                   {day}
@@ -220,13 +220,13 @@ function BancaSelectWithSearch({ bancas, value, onChange }: { bancas: Banca[]; v
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="pl-9 pr-8 py-2 w-full min-w-[200px] bg-gray-50 border border-gray-100 rounded-lg text-sm font-semibold text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 flex items-center justify-between gap-2"
+        className="pl-9 pr-8 py-2 w-full min-w-[200px] bg-gray-50 dark:bg-[#333] border border-gray-100 dark:border-[#555] rounded-lg text-sm font-semibold text-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 flex items-center justify-between gap-2"
       >
         <span className="truncate">{label}</span>
         <ChevronDown className={`w-4 h-4 shrink-0 text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && (
-        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 overflow-hidden">
+        <div className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg shadow-lg z-50 overflow-hidden">
           <div className="p-2 border-b border-gray-100">
             <div className="relative">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -236,7 +236,7 @@ function BancaSelectWithSearch({ bancas, value, onChange }: { bancas: Banca[]; v
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Pesquisar banca..."
-                className="w-full pl-8 pr-3 py-2 bg-gray-50 border border-gray-100 rounded-lg text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30"
+                className="w-full pl-8 pr-3 py-2 bg-gray-50 dark:bg-[#404040] border border-gray-100 dark:border-[#555] rounded-lg text-sm text-gray-800 dark:text-white placeholder:text-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30"
               />
             </div>
           </div>
@@ -244,7 +244,7 @@ function BancaSelectWithSearch({ bancas, value, onChange }: { bancas: Banca[]; v
             <button
               type="button"
               onClick={() => { onChange('all'); setOpen(false); }}
-              className={`w-full px-4 py-2.5 text-left text-sm font-medium hover:bg-gray-50 ${value === 'all' ? 'bg-emerald-50 text-[#6AB83D]' : 'text-gray-700'}`}
+              className={`w-full px-4 py-2.5 text-left text-sm font-medium hover:bg-gray-50 dark:hover:bg-[#404040] ${value === 'all' ? 'bg-emerald-50 dark:bg-[#8CD955]/20 text-[#6AB83D] dark:text-[#8CD955]' : 'text-gray-700 dark:text-gray-300'}`}
             >
               Todas as bancas
             </button>
@@ -253,7 +253,7 @@ function BancaSelectWithSearch({ bancas, value, onChange }: { bancas: Banca[]; v
                 key={b.id}
                 type="button"
                 onClick={() => { onChange(b.url); setOpen(false); }}
-                className={`w-full px-4 py-2.5 text-left text-sm font-medium hover:bg-gray-50 truncate ${value === b.url ? 'bg-emerald-50 text-[#6AB83D]' : 'text-gray-700'}`}
+                className={`w-full px-4 py-2.5 text-left text-sm font-medium hover:bg-gray-50 dark:hover:bg-[#404040] truncate ${value === b.url ? 'bg-emerald-50 dark:bg-[#8CD955]/20 text-[#6AB83D] dark:text-[#8CD955]' : 'text-gray-700 dark:text-gray-300'}`}
               >
                 {b.name}
               </button>
@@ -345,9 +345,9 @@ function MetricCard({ title, value, icon, bgColor }: any) {
   }
 
   return (
-    <div className={`bg-gradient-to-br ${gradientClass} rounded-xl shadow-lg border p-4 sm:p-6 relative overflow-hidden h-full`}>
-      <div className={`absolute top-0 right-0 w-32 h-32 ${bgElementsClass} rounded-full -mr-16 -mt-16`}></div>
-      <div className={`absolute bottom-0 left-0 w-24 h-24 ${bgElementsBottomClass} rounded-full -ml-12 -mb-12`}></div>
+    <div className={`bg-gradient-to-br ${gradientClass} dark:from-[#2a2a2a] dark:to-[#333] dark:border-[#404040] rounded-xl shadow-lg border p-4 sm:p-6 relative overflow-hidden h-full`}>
+      <div className={`absolute top-0 right-0 w-32 h-32 ${bgElementsClass} dark:opacity-30 rounded-full -mr-16 -mt-16`}></div>
+      <div className={`absolute bottom-0 left-0 w-24 h-24 ${bgElementsBottomClass} dark:opacity-20 rounded-full -ml-12 -mb-12`}></div>
       
       <div className="relative z-10">
         <div className="flex items-center justify-between mb-3 sm:mb-4">
@@ -356,7 +356,7 @@ function MetricCard({ title, value, icon, bgColor }: any) {
         <div className={`text-xl sm:text-2xl font-extrabold mb-1 bg-gradient-to-r ${dotGradientClass} bg-clip-text text-transparent`}>
           {value}
         </div>
-        <div className="text-[10px] sm:text-xs text-gray-500 font-bold uppercase tracking-wider">{title}</div>
+        <div className="text-[10px] sm:text-xs text-gray-500 dark:text-[#aaa] font-bold uppercase tracking-wider">{title}</div>
       </div>
     </div>
   );
@@ -668,27 +668,27 @@ export default function CRMSection({ userId }: CRMSectionProps) {
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
       {/* Filters Header */}
-      <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-wrap items-center justify-between gap-4">
+      <div className="bg-white dark:bg-[#2a2a2a] p-4 rounded-xl shadow-sm border border-gray-100 dark:border-[#404040] flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative">
             <Globe className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none z-10" />
             <BancaSelectWithSearch bancas={bancas} value={selectedBanca} onChange={setSelectedBanca} />
           </div>
 
-          <div className="flex items-center gap-2 bg-gray-50 border border-gray-100 px-3 py-2 rounded-lg">
+          <div className="flex items-center gap-2 bg-gray-50 dark:bg-[#333] border border-gray-100 dark:border-[#555] px-3 py-2 rounded-lg">
             <Calendar className="w-4 h-4 text-gray-400 shrink-0" />
             <DateInputDDMMYYYY
               value={dateFrom}
               onChange={setDateFrom}
               maxDate={getTodaySãoPaulo()}
-              className="w-28 bg-transparent text-sm font-semibold text-gray-700 focus:outline-none"
+              className="w-28 bg-transparent text-sm font-semibold text-gray-700 dark:text-gray-200 focus:outline-none"
             />
             <span className="text-gray-300">—</span>
             <DateInputDDMMYYYY
               value={dateTo}
               onChange={setDateTo}
               maxDate={getTodaySãoPaulo()}
-              className="w-28 bg-transparent text-sm font-semibold text-gray-700 focus:outline-none"
+              className="w-28 bg-transparent text-sm font-semibold text-gray-700 dark:text-gray-200 focus:outline-none"
             />
             <button
               type="button"
@@ -712,8 +712,8 @@ export default function CRMSection({ userId }: CRMSectionProps) {
             onClick={() => setShowManagement(!showManagement)}
             className={`px-4 py-2 rounded-lg font-bold text-sm transition-all flex items-center gap-2 ${
               showManagement 
-                ? 'bg-gray-100 text-gray-700' 
-                : 'bg-[#8CD955] text-white shadow-md shadow-gray-100 hover:bg-[#7BC84A]'
+                ? 'bg-gray-100 dark:bg-[#404040] text-gray-700 dark:text-gray-300' 
+                : 'bg-[#8CD955] text-white shadow-md shadow-gray-100 dark:shadow-none hover:bg-[#7BC84A]'
             }`}
           >
             <Settings className="w-4 h-4" />
@@ -722,7 +722,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
           <button 
             onClick={loadDashboard}
             disabled={metricsLoading}
-            className="p-2 bg-white border border-gray-100 rounded-lg text-gray-400 hover:text-[#8CD955] transition-colors"
+            className="p-2 bg-white dark:bg-[#333] border border-gray-100 dark:border-[#555] rounded-lg text-gray-400 dark:text-gray-500 hover:text-[#8CD955] transition-colors"
           >
             <RefreshCw className={`w-5 h-5 ${metricsLoading ? 'animate-spin' : ''}`} />
           </button>
@@ -737,7 +737,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
       )}
 
       {success && (
-        <div className="p-4 bg-gray-50 border border-gray-200 text-[#6AB83D] rounded-xl flex items-center gap-3">
+        <div className="p-4 bg-gray-50 dark:bg-[#8CD955]/10 border border-gray-200 dark:border-[#8CD955]/30 text-[#6AB83D] dark:text-[#8CD955] rounded-xl flex items-center gap-3">
           <CheckCircle2 className="w-5 h-5" />
           <span className="font-medium text-sm">{success}</span>
         </div>
@@ -747,13 +747,13 @@ export default function CRMSection({ userId }: CRMSectionProps) {
         /* Management View */
         <div className="space-y-6">
           {/* Tabs */}
-          <div className="bg-white rounded-xl p-2 border border-gray-100 shadow-sm flex gap-2">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-xl p-2 border border-gray-100 dark:border-[#404040] shadow-sm flex gap-2">
             <button
               onClick={() => setActiveTab('bancas')}
               className={`flex-1 py-2.5 px-4 rounded-lg font-bold text-sm transition-all ${
                 activeTab === 'bancas'
                   ? 'bg-[#8CD955] text-white shadow-md'
-                  : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
+                  : 'bg-gray-50 dark:bg-[#333] text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#404040]'
               }`}
             >
               Bancas
@@ -763,7 +763,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
               className={`flex-1 py-2.5 px-4 rounded-lg font-bold text-sm transition-all ${
                 activeTab === 'tags'
                   ? 'bg-[#8CD955] text-white shadow-md'
-                  : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
+                  : 'bg-gray-50 dark:bg-[#333] text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#404040]'
               }`}
             >
               Etiquetas
@@ -773,7 +773,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
           {activeTab === 'bancas' ? (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <div className="lg:col-span-1">
-                <div className="bg-white rounded-xl p-6 border border-gray-100 shadow-sm">
+                <div className="bg-white dark:bg-[#2a2a2a] rounded-xl p-6 border border-gray-100 dark:border-[#404040] shadow-sm">
                   <h2 className="text-lg font-bold mb-6 flex items-center gap-2 text-gray-800">
                     {editingBanca ? <Edit2 className="w-5 h-5 text-[#8CD955]" /> : <Plus className="w-5 h-5 text-[#8CD955]" />}
                     {editingBanca ? 'Editar Banca' : 'Nova Banca'}
@@ -786,7 +786,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
                     value={newName}
                     onChange={(e) => setNewName(e.target.value)}
                     placeholder="Ex: Arena VIP"
-                    className="w-full bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:bg-white transition-all"
+                    className="w-full bg-gray-50 dark:bg-[#333] border border-gray-100 dark:border-[#555] rounded-xl px-4 py-3 text-sm text-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 focus:bg-white dark:focus:bg-[#333] transition-all"
                   />
                 </div>
                 <div>
@@ -796,7 +796,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
                     value={newUrl}
                     onChange={(e) => setNewUrl(e.target.value)}
                     placeholder="Ex: web.girodasorte.digital ou https://..."
-                    className="w-full bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:bg-white transition-all"
+                    className="w-full bg-gray-50 dark:bg-[#333] border border-gray-100 dark:border-[#555] rounded-xl px-4 py-3 text-sm text-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 focus:bg-white dark:focus:bg-[#333] transition-all"
                   />
                   <p className="mt-1.5 text-[10px] text-gray-400 font-medium ml-1">
                     * Será salva exatamente como digitada (Nova Banca e Editar Banca)
@@ -815,7 +815,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
                     <button 
                       type="button"
                       onClick={handleCancelEditBanca}
-                      className="px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 py-3.5 rounded-xl font-bold text-sm transition-all"
+                      className="px-4 bg-gray-100 dark:bg-[#404040] hover:bg-gray-200 dark:hover:bg-[#555] text-gray-700 dark:text-gray-200 py-3.5 rounded-xl font-bold text-sm transition-all"
                     >
                       Cancelar
                     </button>
@@ -826,18 +826,18 @@ export default function CRMSection({ userId }: CRMSectionProps) {
           </div>
 
           <div className="lg:col-span-2">
-            <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-              <div className="p-6 border-b border-gray-50 bg-gray-50/30 flex items-center justify-between">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-100 dark:border-[#404040] shadow-sm overflow-hidden">
+              <div className="p-6 border-b border-gray-50 dark:border-[#404040] bg-gray-50/30 dark:bg-[#333]/50 flex items-center justify-between">
                 <h2 className="text-lg font-bold text-gray-800">Bancas Cadastradas</h2>
                 <span className="bg-emerald-100 text-[#6AB83D] px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider">
                   {bancas.length} Total
                 </span>
               </div>
-              <div className="divide-y divide-gray-50 max-h-[400px] overflow-y-auto">
+              <div className="divide-y divide-gray-50 dark:divide-[#404040] max-h-[400px] overflow-y-auto">
                 {bancas.map(b => (
-                  <div key={b.id} className="p-4 flex items-center justify-between hover:bg-gray-50 transition-all">
+                      <div key={b.id} className="p-4 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-[#333] transition-all">
                     <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 bg-gray-50 border border-gray-200 rounded-xl flex items-center justify-center font-black text-[#8CD955]">
+                      <div className="w-10 h-10 bg-gray-50 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-xl flex items-center justify-center font-black text-[#8CD955]">
                         {b.name.charAt(0).toUpperCase()}
                       </div>
                       <div>
@@ -877,7 +877,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
             /* Tags View */
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <div className="lg:col-span-1">
-                <div className="bg-white rounded-xl p-6 border border-gray-100 shadow-sm">
+                <div className="bg-white dark:bg-[#2a2a2a] rounded-xl p-6 border border-gray-100 dark:border-[#404040] shadow-sm">
                   <h2 className="text-lg font-bold mb-6 flex items-center gap-2 text-gray-800">
                     <TagIcon className="w-5 h-5 text-[#8CD955]" />
                     {editingTag ? 'Editar Etiqueta' : 'Nova Etiqueta'}
@@ -890,7 +890,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
                         value={newTagLabel}
                         onChange={(e) => setNewTagLabel(e.target.value)}
                         placeholder="Ex: VIP"
-                        className="w-full bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:bg-white transition-all"
+                        className="w-full bg-gray-50 dark:bg-[#333] border border-gray-100 dark:border-[#555] rounded-xl px-4 py-3 text-sm text-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 focus:bg-white dark:focus:bg-[#333] transition-all"
                       />
                     </div>
                     <div>
@@ -907,7 +907,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
                           value={newTagColor}
                           onChange={(e) => setNewTagColor(e.target.value)}
                           placeholder="#8CD955"
-                          className="flex-1 bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:bg-white transition-all"
+                          className="flex-1 bg-gray-50 dark:bg-[#333] border border-gray-100 dark:border-[#555] rounded-xl px-4 py-3 text-sm text-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 focus:bg-white dark:focus:bg-[#333] transition-all"
                         />
                       </div>
                     </div>
@@ -924,7 +924,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
                         <button 
                           type="button"
                           onClick={handleCancelEditTag}
-                          className="px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 py-3.5 rounded-xl font-bold text-sm transition-all"
+                          className="px-4 bg-gray-100 dark:bg-[#404040] hover:bg-gray-200 dark:hover:bg-[#555] text-gray-700 dark:text-gray-200 py-3.5 rounded-xl font-bold text-sm transition-all"
                         >
                           Cancelar
                         </button>
@@ -935,16 +935,16 @@ export default function CRMSection({ userId }: CRMSectionProps) {
               </div>
 
               <div className="lg:col-span-2">
-                <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-                  <div className="p-6 border-b border-gray-50 bg-gray-50/30 flex items-center justify-between">
+                <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-100 dark:border-[#404040] shadow-sm overflow-hidden">
+                  <div className="p-6 border-b border-gray-50 dark:border-[#404040] bg-gray-50/30 dark:bg-[#333]/50 flex items-center justify-between">
                     <h2 className="text-lg font-bold text-gray-800">Etiquetas Cadastradas</h2>
                     <span className="bg-emerald-100 text-[#6AB83D] px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider">
                       {tags.length} Total
                     </span>
                   </div>
-                  <div className="divide-y divide-gray-50 max-h-[400px] overflow-y-auto">
+                  <div className="divide-y divide-gray-50 dark:divide-[#404040] max-h-[400px] overflow-y-auto">
                     {tags.map(tag => (
-                      <div key={tag.id} className="p-4 flex items-center justify-between hover:bg-gray-50 transition-all">
+                      <div key={tag.id} className="p-4 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-[#333] transition-all">
                         <div className="flex items-center gap-4">
                           <div 
                             className="w-10 h-10 rounded-xl border-2 border-gray-200 flex items-center justify-center"
@@ -992,10 +992,10 @@ export default function CRMSection({ userId }: CRMSectionProps) {
         /* Dashboard View */
         <div className="relative">
           {metricsLoading && (
-            <div className="absolute inset-0 z-20 flex items-center justify-center rounded-xl bg-white/90 backdrop-blur-sm">
+            <div className="absolute inset-0 z-20 flex items-center justify-center rounded-xl bg-white/90 dark:bg-[#1a1a1a]/95 backdrop-blur-sm">
               <div className="flex flex-col items-center gap-3">
                 <Loader2 className="w-10 h-10 text-[#8CD955] animate-spin" />
-                <span className="text-sm font-medium text-gray-600">Carregando dados...</span>
+                <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Carregando dados...</span>
               </div>
             </div>
           )}
@@ -1056,19 +1056,19 @@ export default function CRMSection({ userId }: CRMSectionProps) {
           </div>
 
           {/* Top 5 Consultores - linha inteira com filtro por métrica */}
-          <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm">
+          <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-xl border border-gray-100 dark:border-[#404040] shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
-              <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2">
+              <h3 className="text-sm font-bold text-gray-800 dark:text-white flex items-center gap-2">
                 <Trophy className="w-4 h-4 text-amber-500" />
                 Top 5 Consultores
               </h3>
               <div className="flex items-center gap-2">
-                <label htmlFor="top5-sort" className="text-xs font-semibold text-gray-500 whitespace-nowrap">Filtrar por:</label>
+                <label htmlFor="top5-sort" className="text-xs font-semibold text-gray-500 dark:text-gray-400 whitespace-nowrap">Filtrar por:</label>
                 <select
                   id="top5-sort"
                   value={top5Sort}
                   onChange={(e) => setTop5Sort(e.target.value)}
-                  className="px-3 py-2 bg-gray-50 border border-gray-100 rounded-lg text-sm font-medium text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30"
+                  className="px-3 py-2 bg-gray-50 dark:bg-[#333] border border-gray-100 dark:border-[#555] rounded-lg text-sm font-medium text-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30"
                 >
                   <option value="vendas">Por total depositado</option>
                   <option value="cadastro">Por cadastro</option>
@@ -1081,12 +1081,12 @@ export default function CRMSection({ userId }: CRMSectionProps) {
               </div>
             </div>
             {!chartData ? (
-              <div className="flex items-center justify-center py-16 text-gray-300">
+              <div className="flex items-center justify-center py-16 text-gray-300 dark:text-gray-500">
                 <RefreshCw className="w-8 h-8 animate-spin mr-2" />
                 Carregando...
               </div>
             ) : top5List.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 text-gray-500">
+              <div className="flex flex-col items-center justify-center py-12 text-gray-500 dark:text-gray-400">
                 <Trophy className="w-12 h-12 text-gray-300 mb-2" />
                 <p className="text-sm font-medium">Nenhum consultor no período</p>
               </div>
@@ -1126,8 +1126,8 @@ export default function CRMSection({ userId }: CRMSectionProps) {
 
 function ChartBox({ title, icon: Icon, iconColor, children }: { title: string, icon: any, iconColor: string, children: React.ReactNode }) {
   return (
-    <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm flex flex-col h-[400px]">
-      <h3 className="text-sm font-bold text-gray-800 mb-6 flex items-center gap-2">
+    <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-xl border border-gray-100 dark:border-[#404040] shadow-sm flex flex-col h-[400px]">
+      <h3 className="text-sm font-bold text-gray-800 dark:text-white mb-6 flex items-center gap-2">
         <Icon className={`w-4 h-4 ${iconColor}`} />
         {title}
       </h3>
@@ -1181,8 +1181,8 @@ function Top5ConsultoresCards({ list, showBancas = true, sortKey = 'vendas' }: {
               return {
                 rankBg: 'bg-gradient-to-br from-amber-400 to-amber-600',
                 rankText: 'text-white',
-                cardBg: 'bg-gradient-to-br from-amber-50 to-amber-100/50',
-                cardBorder: 'border-amber-200',
+                cardBg: 'bg-gradient-to-br from-amber-50 to-amber-100/50 dark:from-amber-900/30 dark:to-amber-800/20',
+                cardBorder: 'border-amber-200 dark:border-amber-700',
                 medal: '🥇',
                 shadow: 'shadow-lg shadow-amber-200/50',
               };
@@ -1190,8 +1190,8 @@ function Top5ConsultoresCards({ list, showBancas = true, sortKey = 'vendas' }: {
               return {
                 rankBg: 'bg-gradient-to-br from-gray-300 to-gray-500',
                 rankText: 'text-white',
-                cardBg: 'bg-gradient-to-br from-gray-50 to-gray-100/50',
-                cardBorder: 'border-gray-200',
+                cardBg: 'bg-gradient-to-br from-gray-50 to-gray-100/50 dark:from-[#333] dark:to-[#2a2a2a]',
+                cardBorder: 'border-gray-200 dark:border-[#404040]',
                 medal: '🥈',
                 shadow: 'shadow-md shadow-gray-200/50',
               };
@@ -1199,8 +1199,8 @@ function Top5ConsultoresCards({ list, showBancas = true, sortKey = 'vendas' }: {
               return {
                 rankBg: 'bg-gradient-to-br from-orange-300 to-orange-500',
                 rankText: 'text-white',
-                cardBg: 'bg-gradient-to-br from-orange-50 to-orange-100/50',
-                cardBorder: 'border-orange-200',
+                cardBg: 'bg-gradient-to-br from-orange-50 to-orange-100/50 dark:from-orange-900/30 dark:to-orange-800/20',
+                cardBorder: 'border-orange-200 dark:border-orange-700',
                 medal: '🥉',
                 shadow: 'shadow-md shadow-orange-200/50',
               };
@@ -1208,8 +1208,8 @@ function Top5ConsultoresCards({ list, showBancas = true, sortKey = 'vendas' }: {
               return {
                 rankBg: 'bg-gradient-to-br from-blue-400 to-blue-600',
                 rankText: 'text-white',
-                cardBg: 'bg-gradient-to-br from-blue-50 to-blue-100/50',
-                cardBorder: 'border-blue-200',
+                cardBg: 'bg-gradient-to-br from-blue-50 to-blue-100/50 dark:from-[#333] dark:to-[#2a2a2a]',
+                cardBorder: 'border-blue-200 dark:border-blue-800',
                 medal: null,
                 shadow: 'shadow-sm',
               };
@@ -1255,7 +1255,7 @@ function Top5ConsultoresCards({ list, showBancas = true, sortKey = 'vendas' }: {
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex flex-wrap items-baseline gap-1.5">
-                  <h3 className="font-bold text-gray-800 text-sm truncate">
+                  <h3 className="font-bold text-gray-800 dark:text-white text-sm truncate">
                     {consultant.name}
                   </h3>
                   {consultant.email && (
@@ -1274,7 +1274,7 @@ function Top5ConsultoresCards({ list, showBancas = true, sortKey = 'vendas' }: {
                 )}
               </div>
               {position <= 3 && (
-                <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/80 backdrop-blur-sm border border-white/50 shrink-0">
+                <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/80 dark:bg-[#333]/80 backdrop-blur-sm border border-white/50 dark:border-[#555] shrink-0">
                   <Trophy
                     className={`w-3 h-3 ${
                       position === 1
@@ -1284,21 +1284,21 @@ function Top5ConsultoresCards({ list, showBancas = true, sortKey = 'vendas' }: {
                           : 'text-orange-500'
                     }`}
                   />
-                  <span className="text-[10px] font-bold text-gray-700">
+                  <span className="text-[10px] font-bold text-gray-700 dark:text-gray-300">
                     {position === 1 ? 'Campeão' : position === 2 ? 'Vice' : '3º Lugar'}
                   </span>
                 </div>
               )}
             </div>
-            {position > 1 && firstValue > 0 && (
-              <div className="mt-2 pt-2 border-t border-white/50">
-                <div className="flex items-center justify-between text-[10px] text-gray-600 mb-0.5">
+              {position > 1 && firstValue > 0 && (
+              <div className="mt-2 pt-2 border-t border-white/50 dark:border-[#404040]">
+                <div className="flex items-center justify-between text-[10px] text-gray-600 dark:text-gray-400 mb-0.5">
                   <span>Progresso em relação ao 1º lugar</span>
                   <span className="font-bold">
                     {((consultant.value / firstValue) * 100).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 1 })}%
                   </span>
                 </div>
-                <div className="w-full bg-white/60 rounded-full h-1.5 overflow-hidden">
+                <div className="w-full bg-white/60 dark:bg-[#404040] rounded-full h-1.5 overflow-hidden">
                   <div
                     className={`h-full rounded-full transition-all ${
                       position === 2

@@ -34,6 +34,7 @@ export async function POST(req: NextRequest) {
           wa_jid: waJid,
           reason: reason === 'denuncia_grupo' || reason === 'scan' ? reason : 'manual',
           status: 'active',
+          scope: 'global',
           last_seen_at: new Date().toISOString(),
           expires_at: expires_at || null,
         },

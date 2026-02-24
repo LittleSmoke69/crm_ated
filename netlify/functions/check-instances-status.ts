@@ -117,6 +117,50 @@ function extractState(data: any): 'connected' | 'connecting' | 'disconnected' | 
   return 'unknown';
 }
 
+// Notifica dono da instância via Loto Assistente quando desconecta (não bloqueia; falhas só são logadas)
+async function notifyDisconnectViaLoto(instance: { instance_name: string; user_id?: string }, workerId: string) {
+  if (!instance.user_id) return;
+  try {
+    const { data: instanceRow } = await supabaseServiceRole.from('system_settings').select('value').eq('key', 'loto_assistencia_instance_id').maybeSingle();
+    const lotoInstanceId = instanceRow?.value;
+    if (!lotoInstanceId) return;
+
+    const { data: lotoInst, error: lotoErr } = await supabaseServiceRole
+      .from('evolution_instances')
+      .select('instance_name, apikey, evolution_apis ( base_url, api_key_global )')
+      .eq('id', lotoInstanceId)
+      .single();
+    if (lotoErr || !lotoInst) return;
+    const apis = (lotoInst as any).evolution_apis;
+    const baseUrl = Array.isArray(apis) ? apis[0]?.base_url : apis?.base_url;
+    const apikey = (lotoInst as any).apikey || (Array.isArray(apis) ? apis[0]?.api_key_global : apis?.api_key_global);
+    if (!baseUrl || !apikey) return;
+
+    const { data: profile } = await supabaseServiceRole.from('profiles').select('telefone').eq('id', instance.user_id).single();
+    const phone = profile?.telefone?.trim();
+    if (!phone || phone.length < 10) return;
+
+    let template = '⚠️ *Zaploto*: A instância *{{NomeInstancia}}* foi desconectada. Status: {{Status}}. Acesse o painel para reconectar.';
+    const { data: msgRow } = await supabaseServiceRole.from('system_settings').select('value').eq('key', 'loto_assistencia_message_instance_disconnected').maybeSingle();
+    if (msgRow?.value && typeof msgRow.value === 'string') template = msgRow.value;
+    const text = template.replace(/\{\{NomeInstancia\}\}/g, instance.instance_name).replace(/\{\{Status\}\}/g, 'desconectada');
+
+    let num = phone.replace(/\D/g, '');
+    if (num.length >= 10 && num.length <= 11 && !num.startsWith('55')) num = '55' + num;
+    const remoteJid = num.includes('@') ? num : `${num}@s.whatsapp.net`;
+    const url = `${baseUrl.replace(/\/+$/, '')}/message/sendText/${(lotoInst as any).instance_name}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey },
+      body: JSON.stringify({ number: remoteJid, text }),
+    });
+    if (!res.ok) throw new Error(`${res.status}`);
+    console.log(`[WORKER ${workerId}] 📲 Aviso de desconexão (Loto) enviado para usuário da instância ${instance.instance_name}`);
+  } catch (e: any) {
+    console.warn(`[WORKER ${workerId}] ⚠️ Falha ao enviar aviso Loto (${instance.instance_name}):`, e?.message || e);
+  }
+}
+
 // Verifica status de uma instância usando a mesma lógica do endpoint /api/instances/[instanceName]/status
 async function checkInstanceStatus(instance: any, workerId: string): Promise<{ success: boolean; newStatus: string; state?: string; error?: string }> {
   try {
@@ -262,6 +306,7 @@ export const handler: Handler = async (event, context) => {
         id,
         instance_name,
         status,
+        user_id,
         is_active,
         maturation_type,
         maturation_status,
@@ -353,6 +398,9 @@ export const handler: Handler = async (event, context) => {
             }
 
             console.log(`[WORKER ${WORKER_ID}] ✅ Instância ${instance.instance_name}: ${instance.status} → ${result.newStatus} (${result.state})`);
+            if (result.newStatus === 'disconnected' && instance.status === 'ok' && instance.user_id) {
+              notifyDisconnectViaLoto({ instance_name: instance.instance_name, user_id: instance.user_id }, WORKER_ID).catch(() => {});
+            }
             return {
               instanceName: instance.instance_name,
               oldStatus: instance.status,

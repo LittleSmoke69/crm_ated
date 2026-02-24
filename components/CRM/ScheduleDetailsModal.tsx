@@ -217,25 +217,25 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
-      <div className="bg-gray-100 border border-gray-200 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+      <div className="bg-gray-100 dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
         {/* Header */}
-        <div className="p-6 border-b border-gray-200 flex items-center justify-between bg-white">
+        <div className="p-6 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between bg-white dark:bg-[#333]">
           <div>
-            <h2 className="text-gray-800 font-bold text-xl">Detalhes do Agendamento</h2>
-            <p className="text-sm text-gray-600 mt-1">ID: {schedule.id.slice(0, 8)}...</p>
+            <h2 className="text-gray-800 dark:text-white font-bold text-xl">Detalhes do Agendamento</h2>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">ID: {schedule.id.slice(0, 8)}...</p>
           </div>
           <div className="flex items-center gap-2">
             {isEditing && (
               <button
                 onClick={() => setIsEditing(false)}
-                className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 font-medium rounded-lg transition-colors"
+                className="px-4 py-2 bg-gray-200 dark:bg-[#404040] hover:bg-gray-300 dark:hover:bg-[#505050] text-gray-800 dark:text-white font-medium rounded-lg transition-colors"
               >
                 Cancelar
               </button>
             )}
             <button
               onClick={onClose}
-              className="p-2 hover:bg-gray-200 rounded-full text-gray-600 transition-colors"
+              className="p-2 hover:bg-gray-200 dark:hover:bg-[#404040] rounded-full text-gray-600 dark:text-gray-400 transition-colors"
             >
               <X className="w-5 h-5" />
             </button>
@@ -243,10 +243,10 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-white dark:bg-[#2a2a2a]">
           {/* Status Badge */}
           <div className="flex items-center gap-3 flex-wrap">
-            <span className="text-sm font-semibold text-gray-700 uppercase tracking-wider">Status:</span>
+            <span className="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Status:</span>
             <span className={`px-3 py-1 rounded-full text-white text-sm font-medium ${statusColors[schedule.status] || 'bg-gray-500'}`}>
               {schedule.status === 'scheduled' ? 'Agendado' :
                schedule.status === 'processing' ? 'Processando' :
@@ -257,7 +257,7 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
                schedule.status === 'canceled' ? 'Cancelado' : schedule.status}
             </span>
             {(schedule.status === 'failed' || schedule.status === 'paused') && (
-              <p className="text-xs text-amber-700 bg-amber-50 px-2 py-1 rounded w-full mt-1">
+              <p className="text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/30 px-2 py-1 rounded w-full mt-1">
                 Troque a instância e salve para reativar o disparo.
               </p>
             )}
@@ -265,9 +265,9 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
 
           {/* Tipo de Agendamento */}
           <div className="flex items-center gap-3">
-            <Calendar className="w-5 h-5 text-gray-600" />
+            <Calendar className="w-5 h-5 text-gray-600 dark:text-gray-400" />
             <div>
-              <span className="text-sm font-semibold text-gray-700 uppercase tracking-wider">Tipo:</span>
+              <span className="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Tipo:</span>
               <span className="ml-2 px-2 py-1 bg-blue-500 text-white rounded-full text-xs font-medium">
                 {isRecurring ? 'Recorrente' : 'Pontual'}
               </span>
@@ -277,16 +277,16 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
           {/* Título da Mensagem */}
           <div>
             <div className="flex items-center gap-2 mb-2">
-              <MessageSquare className="w-5 h-5 text-gray-600" />
-              <span className="text-sm font-semibold text-gray-700 uppercase tracking-wider">Mensagem:</span>
+              <MessageSquare className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+              <span className="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Mensagem:</span>
             </div>
-            <div className="bg-white rounded-xl p-4 border border-gray-200">
+            <div className="bg-white dark:bg-[#333] rounded-xl p-4 border border-gray-200 dark:border-[#404040]">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="font-bold text-gray-800">
+                  <p className="font-bold text-gray-800 dark:text-white">
                     {schedule.messages?.title || schedule.message_title || 'N/A'}
                   </p>
-                  <p className="text-xs text-gray-500 mt-1">ID: {schedule.message_id?.slice(0, 8)}...</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">ID: {schedule.message_id?.slice(0, 8)}...</p>
                 </div>
                 <button
                   onClick={() => {
@@ -306,28 +306,28 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
           {!isEditing ? (
             <div>
               <div className="flex items-center gap-2 mb-2">
-                <Clock className="w-5 h-5 text-gray-600" />
-                <span className="text-sm font-semibold text-gray-700 uppercase tracking-wider">
+                <Clock className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                <span className="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
                   {isRecurring ? 'Horário Recorrente:' : 'Data Programada:'}
                 </span>
               </div>
-              <div className="bg-white rounded-xl p-4 border border-gray-200">
+              <div className="bg-white dark:bg-[#333] rounded-xl p-4 border border-gray-200 dark:border-[#404040]">
                 {isRecurring ? (
                   <div className="space-y-2">
-                    <p className="text-gray-800 font-medium">
+                    <p className="text-gray-800 dark:text-white font-medium">
                       {schedule.recurring_days && Array.isArray(schedule.recurring_days) 
                         ? schedule.recurring_days.join(', ')
                         : schedule.recurring_days || 'N/A'}
                     </p>
-                    <p className="text-gray-600 text-sm">{schedule.recurring_time || 'N/A'}</p>
+                    <p className="text-gray-600 dark:text-gray-400 text-sm">{schedule.recurring_time || 'N/A'}</p>
                     {schedule.next_run_utc && (
-                      <p className="text-gray-500 text-xs mt-2">
+                      <p className="text-gray-500 dark:text-gray-400 text-xs mt-2">
                         Próxima execução: {formatDate(schedule.next_run_utc)}
                       </p>
                     )}
                   </div>
                 ) : (
-                  <p className="text-gray-800 font-medium">
+                  <p className="text-gray-800 dark:text-white font-medium">
                     {schedule.scheduled_at_utc ? formatDate(schedule.scheduled_at_utc) : 'N/A'}
                   </p>
                 )}
@@ -336,16 +336,16 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
           ) : (
             <div>
               <div className="flex items-center gap-2 mb-2">
-                <Clock className="w-5 h-5 text-gray-600" />
-                <span className="text-sm font-semibold text-gray-700 uppercase tracking-wider">
+                <Clock className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                <span className="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
                   {isRecurring ? 'Horário Recorrente:' : 'Data Programada:'}
                 </span>
               </div>
-              <div className="bg-white rounded-xl p-4 border border-gray-200 space-y-4">
+              <div className="bg-white dark:bg-[#333] rounded-xl p-4 border border-gray-200 dark:border-[#404040] space-y-4">
                 {!isRecurring && (
                   <>
                     <div>
-                      <label className="text-xs text-gray-600 font-semibold uppercase tracking-wider mb-1 block">
+                      <label className="text-xs text-gray-600 dark:text-gray-400 font-semibold uppercase tracking-wider mb-1 block">
                         Data
                       </label>
                       <input
@@ -353,32 +353,32 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
                         value={formData.selectedDate}
                         onChange={(e) => setFormData({ ...formData, selectedDate: e.target.value })}
                         min={new Date().toISOString().split('T')[0]}
-                        className="w-full px-4 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-800"
+                        className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-800 dark:text-white bg-white dark:bg-[#333]"
                       />
                     </div>
                     <div>
-                      <label className="text-xs text-gray-600 font-semibold uppercase tracking-wider mb-1 block">
+                      <label className="text-xs text-gray-600 dark:text-gray-400 font-semibold uppercase tracking-wider mb-1 block">
                         Hora
                       </label>
                       <input
                         type="time"
                         value={formData.selectedTime}
                         onChange={(e) => setFormData({ ...formData, selectedTime: e.target.value })}
-                        className="w-full px-4 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-800"
+                        className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-800 dark:text-white bg-white dark:bg-[#333]"
                       />
                     </div>
                   </>
                 )}
                 {isRecurring && (
                   <div>
-                    <label className="text-xs text-gray-600 font-semibold uppercase tracking-wider mb-1 block">
+                    <label className="text-xs text-gray-600 dark:text-gray-400 font-semibold uppercase tracking-wider mb-1 block">
                       Horário
                     </label>
                     <input
                       type="time"
                       value={formData.selectedTime}
                       onChange={(e) => setFormData({ ...formData, selectedTime: e.target.value })}
-                      className="w-full px-4 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-800"
+                      className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-800 dark:text-white bg-white dark:bg-[#333]"
                     />
                   </div>
                 )}
@@ -390,22 +390,22 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
           {!isEditing ? (
             <div>
               <div className="flex items-center gap-2 mb-2">
-                <Users className="w-5 h-5 text-gray-600" />
-                <span className="text-sm font-semibold text-gray-700 uppercase tracking-wider">Instância:</span>
+                <Users className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                <span className="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Instância:</span>
               </div>
-              <div className="bg-white rounded-xl p-4 border border-gray-200">
-                <p className="text-gray-800 font-medium">{schedule.instance_name || 'N/A'}</p>
+              <div className="bg-white dark:bg-[#333] rounded-xl p-4 border border-gray-200 dark:border-[#404040]">
+                <p className="text-gray-800 dark:text-white font-medium">{schedule.instance_name || 'N/A'}</p>
               </div>
             </div>
           ) : (
             <div>
               <div className="flex items-center gap-2 mb-2">
-                <Users className="w-5 h-5 text-gray-600" />
-                <span className="text-sm font-semibold text-gray-700 uppercase tracking-wider">Instância:</span>
+                <Users className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                <span className="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Instância:</span>
               </div>
-              <div className="bg-white rounded-xl p-4 border border-gray-200">
+              <div className="bg-white dark:bg-[#333] rounded-xl p-4 border border-gray-200 dark:border-[#404040]">
                 {loadingOptions ? (
-                  <div className="flex items-center gap-2 text-gray-500 text-sm">
+                  <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400 text-sm">
                     <Loader2 className="w-4 h-4 animate-spin" />
                     Carregando instâncias...
                   </div>
@@ -413,7 +413,7 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
                   <select
                     value={formData.instance_name}
                     onChange={(e) => setFormData({ ...formData, instance_name: e.target.value })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-800"
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-800 dark:text-white bg-white dark:bg-[#333]"
                   >
                     <option value="">Selecione a instância</option>
                     {instancesWithCurrent.map((inst) => (
@@ -431,8 +431,8 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
           <div>
             <div className="flex items-center justify-between gap-2 mb-2">
               <div className="flex items-center gap-2">
-                <Users className="w-5 h-5 text-gray-600" />
-                <span className="text-sm font-semibold text-gray-700 uppercase tracking-wider">
+                <Users className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                <span className="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
                   Grupos neste disparo {groupSchedules.length > 0 ? `(${groupSchedules.length})` : ''}
                 </span>
               </div>
@@ -447,21 +447,21 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
                 </button>
               )}
             </div>
-            <div className="bg-white rounded-xl p-4 border border-gray-200 space-y-2">
+            <div className="bg-white dark:bg-[#333] rounded-xl p-4 border border-gray-200 dark:border-[#404040] space-y-2">
               {groupSchedules.length > 0 ? (
                 <ul className="space-y-2">
                   {groupSchedules.map((s) => (
                     <li
                       key={s.id}
-                      className="flex items-center justify-between gap-2 py-2 border-b border-gray-100 last:border-0"
+                      className="flex items-center justify-between gap-2 py-2 border-b border-gray-100 dark:border-[#404040] last:border-0"
                     >
-                      <span className="text-gray-800 font-medium truncate">
+                      <span className="text-gray-800 dark:text-white font-medium truncate">
                         {s.group_subject || s.group_id}
                       </span>
                       <button
                         type="button"
                         onClick={() => handleRemoveFromDisparo(s.id)}
-                        className="shrink-0 px-2 py-1 text-red-600 hover:bg-red-50 rounded text-sm font-medium flex items-center gap-1"
+                        className="shrink-0 px-2 py-1 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded text-sm font-medium flex items-center gap-1"
                         title="Remover este grupo do disparo"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -472,25 +472,25 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
                 </ul>
               ) : (
                 <>
-                  <p className="text-gray-800 font-medium">
+                  <p className="text-gray-800 dark:text-white font-medium">
                     {schedule.group_subject || schedule.group_id || 'N/A'}
                   </p>
                   {schedule.group_subject && schedule.group_id && schedule.group_subject !== schedule.group_id && (
-                    <p className="text-xs text-gray-500 mt-1">ID: {schedule.group_id}</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">ID: {schedule.group_id}</p>
                   )}
                 </>
               )}
             </div>
             {showAddGroups && (
-              <div className="mt-4 p-4 bg-gray-50 rounded-xl border border-gray-200">
-                <p className="text-sm font-semibold text-gray-700 mb-2">Selecione os grupos a adicionar:</p>
+              <div className="mt-4 p-4 bg-gray-50 dark:bg-[#333] rounded-xl border border-gray-200 dark:border-[#404040]">
+                <p className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">Selecione os grupos a adicionar:</p>
                 {loadingOptions ? (
-                  <div className="flex items-center gap-2 text-gray-500 text-sm">
+                  <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400 text-sm">
                     <Loader2 className="w-4 h-4 animate-spin" />
                     Carregando grupos...
                   </div>
                 ) : availableGroupsToAdd.length === 0 ? (
-                  <p className="text-sm text-gray-500">Todos os seus grupos já estão neste disparo.</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Todos os seus grupos já estão neste disparo.</p>
                 ) : (
                   <div className="space-y-2 max-h-48 overflow-y-auto">
                     {availableGroupsToAdd.map((g) => (
@@ -507,7 +507,7 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
                           }}
                           className="rounded border-gray-300 text-[#8CD955] focus:ring-[#8CD955]"
                         />
-                        <span className="text-sm text-gray-800">{g.group_subject || g.group_id}</span>
+                        <span className="text-sm text-gray-800 dark:text-white">{g.group_subject || g.group_id}</span>
                       </label>
                     ))}
                   </div>
@@ -525,7 +525,7 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
                   <button
                     type="button"
                     onClick={() => { setShowAddGroups(false); setSelectedGroupIdsToAdd([]); }}
-                    className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg text-sm font-medium"
+                    className="px-4 py-2 bg-gray-200 dark:bg-[#404040] hover:bg-gray-300 dark:hover:bg-[#505050] text-gray-700 dark:text-white rounded-lg text-sm font-medium"
                   >
                     Cancelar
                   </button>
@@ -535,7 +535,7 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
             {isEditing && groupSchedules.length === 0 && (
               <div className="mt-2">
                 {loadingOptions ? (
-                  <div className="flex items-center gap-2 text-gray-500 text-sm">
+                  <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400 text-sm">
                     <Loader2 className="w-4 h-4 animate-spin" />
                     Carregando grupos...
                   </div>
@@ -550,7 +550,7 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
                         group_subject: g?.group_subject || '',
                       });
                     }}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-800"
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-800 dark:text-white bg-white dark:bg-[#333]"
                   >
                     <option value="">Selecione o grupo</option>
                     {groupsWithCurrent.map((g) => (
@@ -567,19 +567,19 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
           {/* Informações Adicionais */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <span className="text-xs text-gray-600 font-semibold uppercase tracking-wider block mb-2">
+              <span className="text-xs text-gray-600 dark:text-gray-400 font-semibold uppercase tracking-wider block mb-2">
                 Criação:
               </span>
-              <div className="bg-white rounded-xl p-4 border border-gray-200">
-                <p className="text-gray-800 text-sm">{formatDate(schedule.created_at)}</p>
+              <div className="bg-white dark:bg-[#333] rounded-xl p-4 border border-gray-200 dark:border-[#404040]">
+                <p className="text-gray-800 dark:text-white text-sm">{formatDate(schedule.created_at)}</p>
               </div>
             </div>
             <div>
-              <span className="text-xs text-gray-600 font-semibold uppercase tracking-wider block mb-2">
+              <span className="text-xs text-gray-600 dark:text-gray-400 font-semibold uppercase tracking-wider block mb-2">
                 Última Execução:
               </span>
-              <div className="bg-white rounded-xl p-4 border border-gray-200">
-                <p className="text-gray-800 text-sm">
+              <div className="bg-white dark:bg-[#333] rounded-xl p-4 border border-gray-200 dark:border-[#404040]">
+                <p className="text-gray-800 dark:text-white text-sm">
                   {schedule.sent_at ? formatDate(schedule.sent_at) : 'Nunca executado'}
                 </p>
               </div>
@@ -588,18 +588,18 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
 
           {schedule.last_error && (
             <div>
-              <span className="text-xs text-gray-600 font-semibold uppercase tracking-wider block mb-2">
+              <span className="text-xs text-gray-600 dark:text-gray-400 font-semibold uppercase tracking-wider block mb-2">
                 Último Erro:
               </span>
-              <div className="bg-red-50 border border-red-200 rounded-xl p-4">
-                <p className="text-red-800 text-sm">{schedule.last_error}</p>
+              <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-xl p-4">
+                <p className="text-red-800 dark:text-red-300 text-sm">{schedule.last_error}</p>
               </div>
             </div>
           )}
         </div>
 
         {/* Footer */}
-        <div className="p-6 border-t border-gray-200 bg-white flex gap-3">
+        <div className="p-6 border-t border-gray-200 dark:border-[#404040] bg-white dark:bg-[#333] flex gap-3">
           {!isEditing ? (
             <button
               onClick={() => setIsEditing(true)}
@@ -626,7 +626,7 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
           )}
           <button
             onClick={onClose}
-            className="px-4 py-3 bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold rounded-xl transition-colors"
+            className="px-4 py-3 bg-gray-200 dark:bg-[#404040] hover:bg-gray-300 dark:hover:bg-[#505050] text-gray-800 dark:text-white font-bold rounded-xl transition-colors"
           >
             Fechar
           </button>

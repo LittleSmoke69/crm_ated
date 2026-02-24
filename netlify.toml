@@ -18,6 +18,12 @@
     schedule = "*/5 * * * *"
   [functions."list-cleaning-resume"]
     schedule = "*/1 * * * *"
+  [functions."audit-group-names-sync"]
+    schedule = "*/1 * * * *"
+  [functions."academy-vturb-snapshots"]
+    schedule = "0 2 * * *"
+  [functions."transfer-expired-notify"]
+    schedule = "0 8 * * *"
   # [functions."maturation-tick"]
   #   schedule = "*/1 * * * *"
   # [functions."maturation-scheduler"]

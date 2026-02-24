@@ -339,14 +339,14 @@ const GroupsPage = () => {
       <div className="space-y-6 w-full">
         <div className="flex items-center justify-between gap-4">
           <div className="flex-1">
-            <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 mb-2">Gestão de Grupos</h1>
-            <p className="text-sm sm:text-base text-gray-600">Crie e gerencie grupos do WhatsApp</p>
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 dark:text-white mb-2">Gestão de Grupos</h1>
+            <p className="text-sm sm:text-base text-gray-600 dark:text-gray-400">Crie e gerencie grupos do WhatsApp</p>
           </div>
           {/* Botão Toggle da Sidebar - Apenas no mobile, no topo direito */}
           <div className="lg:hidden flex-shrink-0">
             <button
               onClick={() => setIsMobileOpen(!isMobileOpen)}
-              className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-gray-100 transition text-gray-600 shadow-md bg-white"
+              className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-gray-100 dark:hover:bg-[#404040] transition text-gray-600 dark:text-gray-400 shadow-md bg-white dark:bg-[#2a2a2a]"
               aria-label="Toggle sidebar"
             >
               <Menu className="w-5 h-5" />
@@ -354,23 +354,23 @@ const GroupsPage = () => {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 lg:items-stretch">
           {/* Coluna Esquerda */}
-          <div className="space-y-6">
+          <div className="flex flex-col gap-6">
             {/* Criar Novo Grupo */}
-            <div className="bg-gray-100 rounded-xl shadow-md p-6 border border-gray-200">
-              <h2 className="text-lg font-semibold text-gray-800 mb-4">Criar Novo Grupo</h2>
+            <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-md p-6 border border-gray-200 dark:border-[#404040]">
+              <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">Criar Novo Grupo</h2>
 
               <div className="space-y-4">
                 {/* Seleção de Instância */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Instância *
                   </label>
                   <select
                     value={selectedInstanceForCreate}
                     onChange={(e) => setSelectedInstanceForCreate(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] outline-none text-gray-700 placeholder:text-gray-400 bg-white"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] outline-none text-gray-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 bg-white dark:bg-[#333]"
                     disabled={loadingCreate}
                   >
                     <option value="">Selecione uma instância</option>
@@ -381,7 +381,7 @@ const GroupsPage = () => {
                     ))}
                   </select>
                   {connectedInstances.length === 0 && (
-                    <p className="mt-1 text-sm text-amber-600">
+                    <p className="mt-1 text-sm text-amber-600 dark:text-amber-400">
                       Nenhuma instância conectada disponível
                     </p>
                   )}
@@ -389,7 +389,7 @@ const GroupsPage = () => {
 
                 {/* Nome do Grupo */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Nome do Grupo (Subject) *
                   </label>
                   <input
@@ -397,14 +397,14 @@ const GroupsPage = () => {
                     value={subject}
                     onChange={(e) => setSubject(e.target.value)}
                     placeholder="Ex: Grupo de Vendas"
-                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] outline-none text-gray-700 placeholder:text-gray-400 bg-white"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] outline-none text-gray-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 bg-white dark:bg-[#333]"
                     disabled={loadingCreate}
                   />
                 </div>
 
                 {/* Descrição */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Descrição (Opcional)
                   </label>
                   <textarea
@@ -412,7 +412,7 @@ const GroupsPage = () => {
                     onChange={(e) => setDescription(e.target.value)}
                     placeholder="Descrição do grupo..."
                     rows={3}
-                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] outline-none resize-none text-gray-700 placeholder:text-gray-400 bg-white"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] outline-none resize-none text-gray-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 bg-white dark:bg-[#333]"
                     disabled={loadingCreate}
                   />
                 </div>
@@ -420,7 +420,7 @@ const GroupsPage = () => {
                 {/* Participantes */}
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <label className="block text-sm font-medium text-gray-700">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                       Participantes *
                     </label>
                     <button
@@ -439,9 +439,9 @@ const GroupsPage = () => {
                       {participants.map((phone, index) => (
                         <div
                           key={index}
-                          className="flex items-center justify-between px-4 py-2 bg-gray-50 rounded-lg border border-gray-200"
+                          className="flex items-center justify-between px-4 py-2 bg-gray-50 dark:bg-[#333] rounded-lg border border-gray-200 dark:border-[#404040]"
                         >
-                          <span className="text-sm text-gray-700 font-mono">{phone}</span>
+                          <span className="text-sm text-gray-700 dark:text-gray-300 font-mono">{phone}</span>
                           <button
                             type="button"
                             onClick={() => handleRemoveParticipant(phone)}
@@ -454,7 +454,7 @@ const GroupsPage = () => {
                       ))}
                     </div>
                   ) : (
-                    <div className="px-4 py-3 bg-gray-50 rounded-lg border border-gray-200 text-sm text-gray-500 text-center">
+                    <div className="px-4 py-3 bg-gray-50 dark:bg-[#333] rounded-lg border border-gray-200 dark:border-[#404040] text-sm text-gray-500 dark:text-gray-400 text-center">
                       Nenhum participante adicionado. Clique em "Adicionar Contato Aleatório" para adicionar.
                     </div>
                   )}
@@ -489,17 +489,17 @@ const GroupsPage = () => {
             </div>
 
             {/* Gerenciar Grupos da Instância */}
-            <div className="bg-gray-100 rounded-xl shadow-md p-6 border border-gray-200">
-              <h2 className="text-lg font-semibold text-gray-800 mb-4">Gerenciar Grupos da Instância</h2>
+            <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-md p-6 border border-gray-200 dark:border-[#404040]">
+              <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">Gerenciar Grupos da Instância</h2>
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Escolha a Instância*
                   </label>
                   <select
                     value={selectedInstance}
                     onChange={e => setSelectedInstance(e.target.value)}
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700"
+                    className="w-full px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                   >
                     <option value="">Selecione uma Instância</option>
                     {instances.map(inst => (
@@ -511,91 +511,37 @@ const GroupsPage = () => {
                 </div>
               </div>
             </div>
-
-            {/* Grupos Salvos no Banco */}
-            <div className="bg-gray-100 rounded-xl shadow-md p-6 border border-gray-200">
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4">
-                <div className="flex-1 min-w-0">
-                  <h2 className="text-lg font-semibold text-gray-800 break-words">Grupos Salvos no Banco</h2>
-                  <p className="text-sm text-gray-500">Selecione um para usar no envio</p>
-                </div>
-                <div className="flex gap-2 w-full sm:w-auto">
-                  <div className="relative flex-1 sm:flex-none">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500" />
-                    <input
-                      type="text"
-                      value={savedGroupsSearch}
-                      onChange={e => setSavedGroupsSearch(e.target.value)}
-                      placeholder="Pesquisar..."
-                      className="w-full sm:w-auto pl-10 pr-4 py-2 bg-gray-100 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 text-gray-900 placeholder:text-gray-500"
-                    />
-                  </div>
-                </div>
-              </div>
-              <div className="space-y-2 max-h-64 overflow-y-auto">
-                {pagedSavedGroups.length === 0 ? (
-                  <p className="text-sm text-gray-500 text-center py-4">Nenhum grupo salvo</p>
-                ) : (
-                  pagedSavedGroups.map(group => (
-                    <div
-                      key={group.group_id}
-                      className="p-3 border rounded-lg cursor-pointer transition border-gray-200 hover:border-[#8CD95540] hover:bg-[#8CD95515]"
-                    >
-                      <p className="font-medium text-gray-800">{group.group_subject || 'Sem nome'}</p>
-                      <p className="text-xs text-gray-500 font-mono">{group.group_id}</p>
-                    </div>
-                  ))
-                )}
-              </div>
-              {filteredSavedGroups.length > savedGroupsPerPage && (
-                <div className="flex justify-between items-center mt-4">
-                  <button
-                    onClick={() => setSavedGroupsPage(p => Math.max(1, p - 1))}
-                    disabled={savedGroupsPage === 1}
-                    className="px-3 py-1 border rounded disabled:opacity-50"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </button>
-                  <span className="text-sm text-gray-600">
-                    Página {savedGroupsPage} de {Math.ceil(filteredSavedGroups.length / savedGroupsPerPage)}
-                  </span>
-                  <button
-                    onClick={() => setSavedGroupsPage(p => Math.min(Math.ceil(filteredSavedGroups.length / savedGroupsPerPage), p + 1))}
-                    disabled={savedGroupsPage >= Math.ceil(filteredSavedGroups.length / savedGroupsPerPage)}
-                    className="px-3 py-1 border rounded disabled:opacity-50"
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </button>
-                </div>
-              )}
-            </div>
           </div>
 
-          {/* Coluna Direita */}
-          <div className="space-y-6">
-            {/* Grupos da API (Evolution) */}
-            <div className="bg-gray-100 rounded-xl shadow-md p-6 border border-gray-200">
-              <div className="flex justify-between items-center mb-4">
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-800">Grupos da API (Evolution)</h2>
-                  <p className="text-sm text-gray-500">Pesquise, págine e salve no banco</p>
-                </div>
+          {/* Coluna Direita - preenche a altura da coluna esquerda */}
+          <div className="flex flex-col gap-6 min-h-0">
+            {/* Grupos da API (Evolution) - Extrair grupos no topo, lista expande para preencher espaço */}
+            <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-md p-6 border border-gray-200 dark:border-[#404040] flex flex-col flex-1 min-h-[400px]">
+              <div className="mb-4">
+                <h2 className="text-lg font-semibold text-gray-800 dark:text-white">Grupos da API (Evolution)</h2>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Extraia, pesquise e salve no banco</p>
               </div>
               <div className="space-y-3 mb-4">
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500" />
-                  <input
-                    type="text"
-                    value={availGroupsSearch}
-                    onChange={e => setAvailGroupsSearch(e.target.value)}
-                    placeholder="Pesquisar nos grupos da API..."
-                    className="w-full pl-10 pr-4 py-2 bg-gray-100 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-900 placeholder:text-gray-500"
-                  />
+                {/* Instância + Carregar Grupos no topo */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Instância *</label>
+                  <select
+                    value={selectedInstance}
+                    onChange={e => setSelectedInstance(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333] mb-2"
+                  >
+                    <option value="">Selecione uma instância</option>
+                    {instances.map(inst => (
+                      <option key={inst.id || inst.instance_name} value={inst.instance_name}>
+                        {inst.instance_name} ({inst.status})
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <button
                   onClick={handleLoadGroups}
                   disabled={!selectedInstance || groupsLoading}
-                  className="w-full py-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition disabled:opacity-50"
+                  className="w-full py-3 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition disabled:opacity-50 flex items-center justify-center gap-2"
                 >
                   {groupsLoading ? (
                     <span className="inline-flex items-center">
@@ -610,22 +556,33 @@ const GroupsPage = () => {
                     'Carregar Grupos da instância'
                   )}
                 </button>
+                {/* Pesquisa abaixo do botão extrair */}
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-gray-400" />
+                  <input
+                    type="text"
+                    value={availGroupsSearch}
+                    onChange={e => setAvailGroupsSearch(e.target.value)}
+                    placeholder="Pesquisar nos grupos da API..."
+                    className="w-full pl-10 pr-4 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400"
+                  />
+                </div>
               </div>
-              <div className="space-y-2 max-h-64 overflow-y-auto">
+              <div className="flex-1 min-h-[240px] overflow-y-auto space-y-2">
                 {pagedAvailGroups.length === 0 ? (
-                  <p className="text-sm text-gray-500 text-center py-4">
-                    {availableGroups.length === 0 ? 'Nenhum grupo carregado' : 'Nenhum grupo encontrado na busca'}
+                  <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-8 flex items-center justify-center min-h-[200px]">
+                    {availableGroups.length === 0 ? 'Nenhum grupo carregado. Selecione uma instância e clique em "Carregar Grupos da instância".' : 'Nenhum grupo encontrado na busca'}
                   </p>
                 ) : (
                   pagedAvailGroups.map(group => (
                     <div
                       key={group.id}
-                      className="p-3 border border-gray-200 rounded-lg flex justify-between items-center"
+                      className="p-3 border border-gray-200 dark:border-[#404040] rounded-lg flex justify-between items-center bg-white dark:bg-[#333]"
                     >
                       <div className="flex-1">
-                        <p className="font-medium text-gray-800">{group.subject || 'Sem nome'}</p>
-                        <p className="text-xs text-gray-500 font-mono">{group.id}</p>
-                        {group.size && <p className="text-xs text-gray-500">{group.size} membros</p>}
+                        <p className="font-medium text-gray-800 dark:text-white">{group.subject || 'Sem nome'}</p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 font-mono">{group.id}</p>
+                        {group.size && <p className="text-xs text-gray-500 dark:text-gray-400">{group.size} membros</p>}
                       </div>
                       <button
                         onClick={() => handleSaveGroup(group)}
@@ -642,17 +599,75 @@ const GroupsPage = () => {
                   <button
                     onClick={() => setAvailGroupsPage(p => Math.max(1, p - 1))}
                     disabled={availGroupsPage === 1}
-                    className="px-3 py-1 border rounded disabled:opacity-50"
+                    className="px-3 py-1 border border-gray-300 dark:border-[#555] rounded disabled:opacity-50 text-gray-700 dark:text-white bg-white dark:bg-[#333] hover:bg-gray-50 dark:hover:bg-[#404040]"
                   >
                     <ChevronLeft className="w-4 h-4" />
                   </button>
-                  <span className="text-sm text-gray-600">
+                  <span className="text-sm text-gray-600 dark:text-gray-400">
                     Página {availGroupsPage} de {Math.ceil(filteredAvailGroups.length / availGroupsPerPage)}
                   </span>
                   <button
                     onClick={() => setAvailGroupsPage(p => Math.min(Math.ceil(filteredAvailGroups.length / availGroupsPerPage), p + 1))}
                     disabled={availGroupsPage >= Math.ceil(filteredAvailGroups.length / availGroupsPerPage)}
-                    className="px-3 py-1 border rounded disabled:opacity-50"
+                    className="px-3 py-1 border border-gray-300 dark:border-[#555] rounded disabled:opacity-50 text-gray-700 dark:text-white bg-white dark:bg-[#333] hover:bg-gray-50 dark:hover:bg-[#404040]"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Grupos Salvos no Banco - na coluna direita para equilibrar o layout */}
+            <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-md p-6 border border-gray-200 dark:border-[#404040] flex-1 min-h-[280px] flex flex-col">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4">
+                <div className="flex-1 min-w-0">
+                  <h2 className="text-lg font-semibold text-gray-800 dark:text-white break-words">Grupos Salvos no Banco</h2>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Selecione um para usar no envio</p>
+                </div>
+                <div className="flex gap-2 w-full sm:w-auto">
+                  <div className="relative flex-1 sm:flex-none">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-gray-400" />
+                    <input
+                      type="text"
+                      value={savedGroupsSearch}
+                      onChange={e => setSavedGroupsSearch(e.target.value)}
+                      placeholder="Pesquisar..."
+                      className="w-full sm:w-auto pl-10 pr-4 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="space-y-2 flex-1 min-h-[160px] overflow-y-auto">
+                {pagedSavedGroups.length === 0 ? (
+                  <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-6">Nenhum grupo salvo</p>
+                ) : (
+                  pagedSavedGroups.map(group => (
+                    <div
+                      key={group.group_id}
+                      className="p-3 border rounded-lg cursor-pointer transition border-gray-200 dark:border-[#404040] hover:border-[#8CD95540] dark:hover:border-[#8CD955]/50 hover:bg-[#8CD95515] dark:hover:bg-[#8CD955]/10"
+                    >
+                      <p className="font-medium text-gray-800 dark:text-white">{group.group_subject || 'Sem nome'}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 font-mono">{group.group_id}</p>
+                    </div>
+                  ))
+                )}
+              </div>
+              {filteredSavedGroups.length > savedGroupsPerPage && (
+                <div className="flex justify-between items-center mt-4">
+                  <button
+                    onClick={() => setSavedGroupsPage(p => Math.max(1, p - 1))}
+                    disabled={savedGroupsPage === 1}
+                    className="px-3 py-1 border border-gray-300 dark:border-[#555] rounded disabled:opacity-50 text-gray-700 dark:text-white bg-white dark:bg-[#333] hover:bg-gray-50 dark:hover:bg-[#404040]"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                  <span className="text-sm text-gray-600 dark:text-gray-400">
+                    Página {savedGroupsPage} de {Math.ceil(filteredSavedGroups.length / savedGroupsPerPage)}
+                  </span>
+                  <button
+                    onClick={() => setSavedGroupsPage(p => Math.min(Math.ceil(filteredSavedGroups.length / savedGroupsPerPage), p + 1))}
+                    disabled={savedGroupsPage >= Math.ceil(filteredSavedGroups.length / savedGroupsPerPage)}
+                    className="px-3 py-1 border border-gray-300 dark:border-[#555] rounded disabled:opacity-50 text-gray-700 dark:text-white bg-white dark:bg-[#333] hover:bg-gray-50 dark:hover:bg-[#404040]"
                   >
                     <ChevronRight className="w-4 h-4" />
                   </button>

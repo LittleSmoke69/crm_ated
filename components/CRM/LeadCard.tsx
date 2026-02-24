@@ -1289,7 +1289,12 @@ const LeadCard: React.FC<LeadCardProps> = ({
               <Clock className="w-3.5 h-3.5 shrink-0 text-gray-400" />
               <span>{createdDateFormatted}</span>
             </div>
-            {lead.transferred && lead.transferred_at ? (
+            {lead.transferred && lead.vinculado ? (
+              <div className="flex items-center gap-1.5 text-[10px] font-bold mt-0.5 flex-wrap text-emerald-600" title="Lead resolvido como vinculado à sua carteira (converteu no prazo).">
+                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                <span>Lead na carteira</span>
+              </div>
+            ) : lead.transferred && lead.transferred_at ? (
               <div className="flex items-center gap-1.5 text-[10px] font-bold mt-0.5 flex-wrap" title={`Prazo para conversão: ${transferDeadlineDays} dias. Contador em tempo real até o próximo dia.`}>
                 <RefreshCw className="w-3.5 h-3.5 shrink-0 text-gray-400" />
                 {(() => {
@@ -1397,8 +1402,14 @@ const LeadCard: React.FC<LeadCardProps> = ({
                 </span>
               </div>
             )}
-            {/* Timer para leads transferidos: contagem regressiva em tempo real (10d em Transferido, 90d no CRM principal) */}
-            {lead.transferred && lead.transferred_at && (() => {
+            {/* Lead vinculado (converteu no prazo) ou timer para transferidos */}
+            {lead.transferred && lead.vinculado && (
+              <div className="mt-1.5 flex items-center gap-1.5 text-emerald-600" title="Lead resolvido como vinculado à sua carteira (converteu no prazo).">
+                <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />
+                <span className="text-[10px] font-bold">Lead na carteira</span>
+              </div>
+            )}
+            {lead.transferred && lead.transferred_at && !lead.vinculado && (() => {
               const transferredAt = new Date(lead.transferred_at);
               const now = new Date();
               const diffMs = now.getTime() - transferredAt.getTime();
@@ -2041,11 +2052,11 @@ const LeadCard: React.FC<LeadCardProps> = ({
           }}
         >
           <div 
-            className="bg-white rounded-xl sm:rounded-2xl shadow-2xl w-full max-w-3xl max-h-[95vh] sm:max-h-[90vh] overflow-hidden flex flex-col"
+            className="bg-white dark:bg-[#2a2a2a] rounded-xl sm:rounded-2xl shadow-2xl w-full max-w-3xl max-h-[95vh] sm:max-h-[90vh] overflow-hidden flex flex-col border border-gray-200 dark:border-[#404040]"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header do Modal */}
-            <div className="sticky top-0 bg-white border-b border-gray-200 px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between z-10">
+            <div className="sticky top-0 bg-white dark:bg-[#2a2a2a] border-b border-gray-200 dark:border-[#404040] px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between z-10">
               <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
                 <div 
                   className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full flex items-center justify-center font-bold text-base sm:text-lg shrink-0 shadow-sm border-2 border-white ${
@@ -2058,11 +2069,11 @@ const LeadCard: React.FC<LeadCardProps> = ({
                   {getInitials(lead.name)}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <h2 className="text-lg sm:text-xl font-bold text-gray-800 flex items-center gap-2 truncate">
+                  <h2 className="text-lg sm:text-xl font-bold text-gray-800 dark:text-white flex items-center gap-2 truncate">
                     <span className="truncate">{lead.name}</span>
                     {isVIP && <span className="text-indigo-600 shrink-0">💎</span>}
                   </h2>
-                  <p className="text-xs sm:text-sm text-gray-500 truncate">Detalhes completos do lead</p>
+                  <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400 truncate">Detalhes completos do lead</p>
                 </div>
               </div>
               <button
@@ -2078,7 +2089,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
                   setSelectedBetForModal(null);
                   setShowAllBets(false);
                 }}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors shrink-0 ml-2"
+                className="p-2 hover:bg-gray-100 dark:hover:bg-[#404040] rounded-lg transition-colors shrink-0 ml-2"
               >
                 <XIcon className="w-5 h-5 text-gray-500" />
               </button>
@@ -2087,16 +2098,16 @@ const LeadCard: React.FC<LeadCardProps> = ({
             {/* Conteúdo do Modal */}
             <div className="overflow-y-auto flex-1 px-4 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-6">
               {/* Informações Básicas */}
-              <div className="bg-gray-50 rounded-lg sm:rounded-xl p-4 sm:p-5">
-                <h3 className="text-base sm:text-lg font-bold text-gray-800 mb-3 sm:mb-4 flex items-center gap-2">
+              <div className="bg-gray-50 dark:bg-[#333] rounded-lg sm:rounded-xl p-4 sm:p-5">
+                <h3 className="text-base sm:text-lg font-bold text-gray-800 dark:text-white mb-3 sm:mb-4 flex items-center gap-2">
                   <User className="w-4 h-4 sm:w-5 sm:h-5 text-[#8CD955] shrink-0" />
                   <span>Informações Básicas</span>
                 </h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                   <div className="sm:col-span-2">
-                    <p className="text-xs font-bold text-gray-500 uppercase mb-1">Nome Completo</p>
+                    <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Nome Completo</p>
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-sm font-semibold text-gray-800 break-words">{lead.name} {lead.last_name || ''}</span>
+                      <span className="text-sm font-semibold text-gray-800 dark:text-white break-words">{lead.name} {lead.last_name || ''}</span>
                       <button
                         onClick={copyName}
                         className="p-1.5 text-gray-400 hover:text-[#8CD955] hover:bg-[#8CD955]/10 rounded-lg transition-all shrink-0 inline-flex items-center"
@@ -2113,7 +2124,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
                   <div>
                     <p className="text-xs font-bold text-gray-500 uppercase mb-1">Email</p>
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-sm font-semibold text-gray-800 break-all">{lead.email || '-'}</span>
+                      <span className="text-sm font-semibold text-gray-800 dark:text-white break-all">{lead.email || '-'}</span>
                       {lead.email && (
                         <button
                           onClick={copyEmail}
@@ -2131,52 +2142,52 @@ const LeadCard: React.FC<LeadCardProps> = ({
                   </div>
                   <div>
                     <p className="text-xs font-bold text-gray-500 uppercase mb-1">Telefone</p>
-                    <p className="text-sm font-semibold text-gray-800 break-words">{formatPhone(lead.phone) || '-'}</p>
+                    <p className="text-sm font-semibold text-gray-800 dark:text-white break-words">{formatPhone(lead.phone) || '-'}</p>
                   </div>
                   {(lead as any).whatsapp && (
                     <div>
                       <p className="text-xs font-bold text-gray-500 uppercase mb-1">WhatsApp</p>
-                      <p className="text-sm font-semibold text-gray-800 break-words">{formatPhone((lead as any).whatsapp)}</p>
+                      <p className="text-sm font-semibold text-gray-800 dark:text-white break-words">{formatPhone((lead as any).whatsapp)}</p>
                     </div>
                   )}
                   <div>
                     <p className="text-xs font-bold text-gray-500 uppercase mb-1">Data de Cadastro</p>
-                    <p className="text-sm font-semibold text-gray-800">{formatCreatedDate(lead.created_at)}</p>
+                    <p className="text-sm font-semibold text-gray-800 dark:text-white">{formatCreatedDate(lead.created_at)}</p>
                   </div>
                   <div>
                     <p className="text-xs font-bold text-gray-500 uppercase mb-1">Status</p>
-                    <p className="text-sm font-semibold text-gray-800 capitalize">{lead.status || '-'}</p>
+                    <p className="text-sm font-semibold text-gray-800 dark:text-white capitalize">{lead.status || '-'}</p>
                   </div>
                   <div>
                     <p className="text-xs font-bold text-gray-500 uppercase mb-1">Temperatura</p>
-                    <p className="text-sm font-semibold text-gray-800">
+                    <p className="text-sm font-semibold text-gray-800 dark:text-white">
                       {lead.temperature ? `${getTemperatureEmoji(lead.temperature)} ${getTemperatureLabel(lead.temperature)}` : '-'}
                     </p>
                   </div>
                   {lead.banca_name && (
                     <div className="sm:col-span-2">
                       <p className="text-xs font-bold text-gray-500 uppercase mb-1">Cadastrado na banca</p>
-                      <p className="text-sm font-semibold text-gray-800">{lead.banca_name}</p>
+                      <p className="text-sm font-semibold text-gray-800 dark:text-white">{lead.banca_name}</p>
                     </div>
                   )}
                   {(lead as any).user_level && (
                     <div>
                       <p className="text-xs font-bold text-gray-500 uppercase mb-1">Nível do Usuário</p>
-                      <p className="text-sm font-semibold text-gray-800">{(lead as any).user_level || '-'}</p>
+                      <p className="text-sm font-semibold text-gray-800 dark:text-white">{(lead as any).user_level || '-'}</p>
                     </div>
                   )}
                   {lead.origin && (
                     <div className="sm:col-span-2">
                       <p className="text-xs font-bold text-gray-500 uppercase mb-1">Origem</p>
-                      <p className="text-sm font-semibold text-gray-800 break-words">{lead.origin}</p>
+                      <p className="text-sm font-semibold text-gray-800 dark:text-white break-words">{lead.origin}</p>
                     </div>
                   )}
                 </div>
               </div>
 
               {/* Adicionar bônus - dropdown sempre visível; só Roleta ativo */}
-              <div className="bg-amber-50 rounded-lg sm:rounded-xl p-4 sm:p-5 border border-amber-200/60">
-                <h3 className="text-base sm:text-lg font-bold text-gray-800 mb-3 sm:mb-4 flex items-center gap-2">
+              <div className="bg-amber-50 dark:bg-amber-900/20 rounded-lg sm:rounded-xl p-4 sm:p-5 border border-amber-200/60 dark:border-amber-700/40">
+                <h3 className="text-base sm:text-lg font-bold text-gray-800 dark:text-white mb-3 sm:mb-4 flex items-center gap-2">
                   <Gift className="w-4 h-4 sm:w-5 sm:h-5 text-amber-600 shrink-0" />
                   <span>Adicionar bônus</span>
                 </h3>
@@ -2300,7 +2311,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
 
               {/* Informações Financeiras - fluxo: Entrada → Apostas → Resultados → Bônus/Outros */}
               <div className="bg-green-50 rounded-lg sm:rounded-xl p-4 sm:p-5">
-                <h3 className="text-base sm:text-lg font-bold text-gray-800 mb-3 sm:mb-4 flex items-center gap-2">
+                <h3 className="text-base sm:text-lg font-bold text-gray-800 dark:text-white mb-3 sm:mb-4 flex items-center gap-2">
                   <Target className="w-4 h-4 sm:w-5 sm:h-5 text-[#8CD955] shrink-0" />
                   <span>Informações Financeiras</span>
                 </h3>
@@ -2310,69 +2321,69 @@ const LeadCard: React.FC<LeadCardProps> = ({
                   return (
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
                       {/* Entrada */}
-                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                      <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-[#404040]">
                         <p className="text-xs font-bold text-gray-500 uppercase mb-1">Total Depositado</p>
-                        <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency(L.total_depositado || 0)}</p>
+                        <p className="text-base sm:text-lg font-bold text-gray-800 dark:text-white">{formatCurrency(L.total_depositado || 0)}</p>
                       </div>
-                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                      <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-[#404040]">
                         <p className="text-xs font-bold text-gray-500 uppercase mb-1">Qtd. Depósitos</p>
-                        <p className="text-base sm:text-lg font-bold text-gray-800">{L.total_depositos_count ?? 0}</p>
+                        <p className="text-base sm:text-lg font-bold text-gray-800 dark:text-white">{L.total_depositos_count ?? 0}</p>
                       </div>
-                      <div className="bg-white rounded-lg p-3 sm:p-4 border-2 border-gray-200">
+                      <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border-2 border-gray-200 dark:border-[#404040]">
                         <p className="text-xs font-bold text-gray-500 uppercase mb-2">Último Depósito</p>
-                        <p className="text-xs sm:text-sm font-semibold text-gray-700 mb-1">
-                          Data: <span className="text-gray-900">{L.last_deposit_at ? formatRelativeDate(L.last_deposit_at, 'Nunca') : 'Nunca'}</span>
+                        <p className="text-xs sm:text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">
+                          Data: <span className="text-gray-900 dark:text-white">{L.last_deposit_at ? formatRelativeDate(L.last_deposit_at, 'Nunca') : 'Nunca'}</span>
                         </p>
-                        <p className="text-base sm:text-lg font-bold text-gray-800">
+                        <p className="text-base sm:text-lg font-bold text-gray-800 dark:text-white">
                           Valor: {L.last_deposit_value != null ? formatCurrency(L.last_deposit_value) : 'R$ 0,00'}
                         </p>
                       </div>
                       {/* Apostas */}
-                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                      <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-[#404040]">
                         <p className="text-xs font-bold text-gray-500 uppercase mb-1">Total Apostado</p>
-                        <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency(L.total_apostado || 0)}</p>
+                        <p className="text-base sm:text-lg font-bold text-gray-800 dark:text-white">{formatCurrency(L.total_apostado || 0)}</p>
                       </div>
                       {hasLoteriaBichao && (
                         <>
-                          <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                          <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-[#404040]">
                             <p className="text-xs font-bold text-gray-500 uppercase mb-1">Apostado Loteria</p>
-                            <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency((L as any).total_apostado_loteria ?? 0)}</p>
+                            <p className="text-base sm:text-lg font-bold text-gray-800 dark:text-white">{formatCurrency((L as any).total_apostado_loteria ?? 0)}</p>
                           </div>
-                          <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                          <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-[#404040]">
                             <p className="text-xs font-bold text-gray-500 uppercase mb-1">Apostado Bichão</p>
-                            <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency((L as any).total_apostado_bichao ?? 0)}</p>
+                            <p className="text-base sm:text-lg font-bold text-gray-800 dark:text-white">{formatCurrency((L as any).total_apostado_bichao ?? 0)}</p>
                           </div>
                         </>
                       )}
                       {/* Resultados */}
-                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-[#8CD955]/30">
+                      <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border border-[#8CD955]/30 dark:border-[#8CD955]/50">
                         <p className="text-xs font-bold text-gray-500 uppercase mb-1">Total Ganho</p>
                         <p className="text-base sm:text-lg font-bold text-[#8CD955]">{formatCurrency(L.total_ganho || 0)}</p>
                       </div>
-                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                      <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-[#404040]">
                         <p className="text-xs font-bold text-gray-500 uppercase mb-1">Total Saque</p>
-                        <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency(L.total_saque ?? 0)}</p>
+                        <p className="text-base sm:text-lg font-bold text-gray-800 dark:text-white">{formatCurrency(L.total_saque ?? 0)}</p>
                       </div>
-                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                      <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-[#404040]">
                         <p className="text-xs font-bold text-gray-500 uppercase mb-1">Saldo Banca</p>
-                        <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency(L.balance ?? 0)}</p>
+                        <p className="text-base sm:text-lg font-bold text-gray-800 dark:text-white">{formatCurrency(L.balance ?? 0)}</p>
                       </div>
-                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                      <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-[#404040]">
                         <p className="text-xs font-bold text-gray-500 uppercase mb-1">Disponível para Saque</p>
-                        <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency(L.available_withdraw ?? 0)}</p>
+                        <p className="text-base sm:text-lg font-bold text-gray-800 dark:text-white">{formatCurrency(L.available_withdraw ?? 0)}</p>
                       </div>
                       {/* Bônus e outros */}
-                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                      <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-[#404040]">
                         <p className="text-xs font-bold text-gray-500 uppercase mb-1">Bonus Ganho</p>
-                        <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency(L.bonus ?? 0)}</p>
+                        <p className="text-base sm:text-lg font-bold text-gray-800 dark:text-white">{formatCurrency(L.bonus ?? 0)}</p>
                       </div>
-                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                      <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-[#404040]">
                         <p className="text-xs font-bold text-gray-500 uppercase mb-1">Valor Convertido</p>
-                        <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency(L.convert ?? 0)}</p>
+                        <p className="text-base sm:text-lg font-bold text-gray-800 dark:text-white">{formatCurrency(L.convert ?? 0)}</p>
                       </div>
-                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                      <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-[#404040]">
                         <p className="text-xs font-bold text-gray-500 uppercase mb-1">Total Afiliados</p>
-                        <p className="text-base sm:text-lg font-bold text-gray-800" title="Quantidade de pessoas que se cadastraram pelo link deste cliente">{L.total_afiliate ?? 0}</p>
+                        <p className="text-base sm:text-lg font-bold text-gray-800 dark:text-white" title="Quantidade de pessoas que se cadastraram pelo link deste cliente">{L.total_afiliate ?? 0}</p>
                       </div>
                     </div>
                   );
@@ -2380,8 +2391,8 @@ const LeadCard: React.FC<LeadCardProps> = ({
               </div>
 
               {/* Classificações - Nível Estrela, valor no programa, tipo de cliente, avaliação */}
-              <div className="rounded-lg sm:rounded-xl p-4 sm:p-5 border border-gray-200 bg-gradient-to-b from-gray-50 to-white">
-                <h3 className="text-base sm:text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
+              <div className="rounded-lg sm:rounded-xl p-4 sm:p-5 border border-gray-200 dark:border-[#404040] bg-gradient-to-b from-gray-50 to-white dark:from-[#333] dark:to-[#2a2a2a]">
+                <h3 className="text-base sm:text-lg font-bold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
                   <Star className="w-4 h-4 sm:w-5 sm:h-5 text-[#8CD955] shrink-0" />
                   <span>Classificações</span>
                 </h3>
@@ -2465,23 +2476,23 @@ const LeadCard: React.FC<LeadCardProps> = ({
               </div>
 
               {/* Saques e Vitórias - dados do lead já vêm do card (sem nova busca na API) */}
-              <div className="bg-yellow-50 rounded-lg sm:rounded-xl p-4 sm:p-5">
-                  <h3 className="text-base sm:text-lg font-bold text-gray-800 mb-3 sm:mb-4 flex items-center gap-2">
+              <div className="bg-yellow-50 dark:bg-amber-900/20 rounded-lg sm:rounded-xl p-4 sm:p-5 border border-yellow-200/60 dark:border-amber-700/40">
+                  <h3 className="text-base sm:text-lg font-bold text-gray-800 dark:text-white mb-3 sm:mb-4 flex items-center gap-2">
                     <Target className="w-4 h-4 sm:w-5 sm:h-5 text-[#8CD955] shrink-0" />
                     <span>Saques e Vitórias</span>
                   </h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                     {(leadDetails || lead).total_saque !== undefined && (
-                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                      <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-[#404040]">
                         <p className="text-xs font-bold text-gray-500 uppercase mb-1">Total Sacado</p>
-                        <p className="text-base sm:text-lg font-bold text-gray-800">{formatCurrency((leadDetails || lead).total_saque || 0)}</p>
+                        <p className="text-base sm:text-lg font-bold text-gray-800 dark:text-white">{formatCurrency((leadDetails || lead).total_saque || 0)}</p>
                       </div>
                     )}
                     {/* Último Saque - Data e Valor juntos */}
-                    <div className="bg-white rounded-lg p-3 sm:p-4 border-2 border-gray-200">
+                    <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border-2 border-gray-200 dark:border-[#404040]">
                       <p className="text-xs font-bold text-gray-500 uppercase mb-2">Último Saque</p>
                       <p className="text-xs sm:text-sm font-semibold text-gray-700 mb-1">
-                        Data: <span className="text-gray-900">
+                        Data: <span className="text-gray-900 dark:text-white">
                           {(leadDetails || lead).last_withdraw_at 
                             ? formatRelativeDate((leadDetails || lead).last_withdraw_at!, 'Nunca sacou')
                             : 'Nunca sacou'}
@@ -2494,10 +2505,10 @@ const LeadCard: React.FC<LeadCardProps> = ({
                       </p>
                     </div>
                     {/* Último Ganho - Data e Valor */}
-                    <div className="bg-white rounded-lg p-3 sm:p-4 border-2 border-[#8CD955]/30">
+                    <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border-2 border-[#8CD955]/30 dark:border-[#8CD955]/50">
                       <p className="text-xs font-bold text-gray-500 uppercase mb-2">Último Ganho</p>
                       <p className="text-xs sm:text-sm font-semibold text-gray-700 mb-1">
-                        Data: <span className="text-gray-900">
+                        Data: <span className="text-gray-900 dark:text-white">
                           {(leadDetails || lead).last_winner_at
                             ? formatRelativeDate((leadDetails || lead).last_winner_at!, 'Nunca')
                             : 'Nunca'}
@@ -2514,26 +2525,26 @@ const LeadCard: React.FC<LeadCardProps> = ({
 
               {/* Informações do Consultor */}
               {((lead as any).consultant_name || (lead as any).consultant_email) && (
-                <div className="bg-indigo-50 rounded-lg sm:rounded-xl p-4 sm:p-5">
-                  <h3 className="text-base sm:text-lg font-bold text-gray-800 mb-3 sm:mb-4 flex items-center gap-2">
+                <div className="bg-indigo-50 dark:bg-indigo-900/20 rounded-lg sm:rounded-xl p-4 sm:p-5 border border-indigo-200/60 dark:border-indigo-700/40">
+                  <h3 className="text-base sm:text-lg font-bold text-gray-800 dark:text-white mb-3 sm:mb-4 flex items-center gap-2">
                     <User className="w-4 h-4 sm:w-5 sm:h-5 text-[#8CD955] shrink-0" />
                     <span>Consultor Responsável</span>
                   </h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                     {(lead as any).consultant_name && (
-                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                      <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-[#404040]">
                         <p className="text-xs font-bold text-gray-500 uppercase mb-1">Nome do Consultor</p>
                         <p className="text-sm font-semibold text-gray-800 break-words">{(lead as any).consultant_name}</p>
                       </div>
                     )}
                     {(lead as any).consultant_email && (
-                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                      <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-[#404040]">
                         <p className="text-xs font-bold text-gray-500 uppercase mb-1">Email do Consultor</p>
                         <p className="text-sm font-semibold text-gray-800 break-all">{(lead as any).consultant_email}</p>
                       </div>
                     )}
                     {(lead as any).consultant_id && (
-                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 sm:col-span-2">
+                      <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-[#404040] sm:col-span-2">
                         <p className="text-xs font-bold text-gray-500 uppercase mb-1">ID do Consultor</p>
                         <p className="text-sm font-semibold text-gray-800">#{(lead as any).consultant_id}</p>
                       </div>
@@ -2543,13 +2554,13 @@ const LeadCard: React.FC<LeadCardProps> = ({
               )}
 
               {/* Interações e Histórico */}
-              <div className="bg-purple-50 rounded-lg sm:rounded-xl p-4 sm:p-5">
-                <h3 className="text-base sm:text-lg font-bold text-gray-800 mb-3 sm:mb-4 flex items-center gap-2">
+              <div className="bg-purple-50 dark:bg-purple-900/20 rounded-lg sm:rounded-xl p-4 sm:p-5 border border-purple-200/60 dark:border-purple-700/40">
+                <h3 className="text-base sm:text-lg font-bold text-gray-800 dark:text-white mb-3 sm:mb-4 flex items-center gap-2">
                   <History className="w-4 h-4 sm:w-5 sm:h-5 text-[#8CD955] shrink-0" />
                   <span>Histórico e Interações</span>
                 </h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                  <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                  <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-[#404040]">
                     <p className="text-xs font-bold text-gray-500 uppercase mb-1">Última Interação</p>
                     <p className="text-sm font-semibold text-gray-800">
                       {lead.last_interaction || lead.lastInteractionAt 
@@ -2557,7 +2568,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
                         : 'Nunca'}
                     </p>
                   </div>
-                  <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200">
+                  <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-[#404040]">
                     <p className="text-xs font-bold text-gray-500 uppercase mb-1">Tem Interação</p>
                     <p className="text-sm font-semibold text-gray-800">
                       {lead.has_interaction ? '✅ Sim' : '❌ Não'}
@@ -2568,7 +2579,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
 
               {/* Histórico de Depósitos */}
               <div className="bg-green-50 rounded-lg sm:rounded-xl p-4 sm:p-5">
-                <h3 className="text-base sm:text-lg font-bold text-gray-800 mb-3 sm:mb-4 flex items-center gap-2">
+                <h3 className="text-base sm:text-lg font-bold text-gray-800 dark:text-white mb-3 sm:mb-4 flex items-center gap-2">
                   <History className="w-4 h-4 sm:w-5 sm:h-5 text-[#8CD955] shrink-0" />
                   <span>Histórico de Depósitos</span>
                 </h3>
@@ -2647,7 +2658,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
 
               {/* Histórico de Saques */}
               <div className="bg-blue-50 rounded-lg sm:rounded-xl p-4 sm:p-5">
-                <h3 className="text-base sm:text-lg font-bold text-gray-800 mb-3 sm:mb-4 flex items-center gap-2">
+                <h3 className="text-base sm:text-lg font-bold text-gray-800 dark:text-white mb-3 sm:mb-4 flex items-center gap-2">
                   <History className="w-4 h-4 sm:w-5 sm:h-5 text-[#8CD955] shrink-0" />
                   <span>Histórico de Saques</span>
                 </h3>
@@ -2726,7 +2737,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
 
               {/* Histórico de Apostas */}
               <div className="bg-purple-50 rounded-lg sm:rounded-xl p-4 sm:p-5">
-                <h3 className="text-base sm:text-lg font-bold text-gray-800 mb-3 sm:mb-4 flex items-center gap-2">
+                <h3 className="text-base sm:text-lg font-bold text-gray-800 dark:text-white mb-3 sm:mb-4 flex items-center gap-2">
                   <History className="w-4 h-4 sm:w-5 sm:h-5 text-[#8CD955] shrink-0" />
                   <span>Histórico de Apostas</span>
                 </h3>
@@ -3041,7 +3052,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
               {/* Etiquetas */}
               {lead.tags && lead.tags.length > 0 && (
                 <div className="bg-pink-50 rounded-lg sm:rounded-xl p-4 sm:p-5">
-                  <h3 className="text-base sm:text-lg font-bold text-gray-800 mb-3 sm:mb-4 flex items-center gap-2">
+                  <h3 className="text-base sm:text-lg font-bold text-gray-800 dark:text-white mb-3 sm:mb-4 flex items-center gap-2">
                     <TagIcon className="w-4 h-4 sm:w-5 sm:h-5 text-[#8CD955] shrink-0" />
                     <span>Etiquetas</span>
                   </h3>

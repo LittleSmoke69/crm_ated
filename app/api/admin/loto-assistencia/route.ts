@@ -10,7 +10,15 @@ import { requireAuth } from '@/lib/middleware/auth';
 
 const KEY_INSTANCE = 'loto_assistencia_instance_id';
 const KEY_MESSAGE = 'loto_assistencia_message';
+const KEY_MESSAGE_DISCONNECTED = 'loto_assistencia_message_instance_disconnected';
+const KEY_MESSAGE_VERIFICATION_REPORT = 'loto_assistencia_message_verification_report';
+const KEY_NOTIFY_USER_ID = 'loto_assistencia_notify_user_id';
+const KEY_MESSAGE_TRANSFER_EXPIRED = 'loto_assistencia_message_transfer_expired';
 const DEFAULT_MESSAGE = 'Seu código de recuperação de senha Zaploto é: *{{Código}}*. Válido por 15 minutos. Não compartilhe.';
+const DEFAULT_MESSAGE_DISCONNECTED = '⚠️ *Zaploto*: A instância *{{NomeInstancia}}* foi desconectada. Status: {{Status}}. Acesse o painel para reconectar.';
+const DEFAULT_MESSAGE_VERIFICATION_REPORT = '📋 *Relatório de instâncias Zaploto*\n\n{{Relatório}}\n\nVerifique o painel para mais detalhes.';
+const DEFAULT_MESSAGE_TRANSFER_EXPIRED =
+  '⏱️ *Zaploto – Prazo de transferência encerrado*\nBanca: {{Banca}}\nData da transferência: {{DataTransferencia}}\nOrigem: {{ConsultorOrigem}}\nDestino: {{ConsultorDestino}}\nLeads: {{QuantidadeLeads}}\n\nAcesse Admin → Transferência de Leads para resolver (vincular ou repassar).';
 
 async function requireAdminOrSuperAdmin(userId: string) {
   const { data: profile } = await supabaseServiceRole
@@ -30,9 +38,22 @@ export async function GET(req: NextRequest) {
     const { userId } = await requireAuth(req);
     await requireAdminOrSuperAdmin(userId);
 
-    const [instanceRes, messageRes, instancesRes] = await Promise.all([
+    const [
+      instanceRes,
+      messageRes,
+      msgDisconnectedRes,
+      msgReportRes,
+      notifyUserRes,
+      msgTransferExpiredRes,
+      instancesRes,
+      profilesRes,
+    ] = await Promise.all([
       supabaseServiceRole.from('system_settings').select('value').eq('key', KEY_INSTANCE).maybeSingle(),
       supabaseServiceRole.from('system_settings').select('value').eq('key', KEY_MESSAGE).maybeSingle(),
+      supabaseServiceRole.from('system_settings').select('value').eq('key', KEY_MESSAGE_DISCONNECTED).maybeSingle(),
+      supabaseServiceRole.from('system_settings').select('value').eq('key', KEY_MESSAGE_VERIFICATION_REPORT).maybeSingle(),
+      supabaseServiceRole.from('system_settings').select('value').eq('key', KEY_NOTIFY_USER_ID).maybeSingle(),
+      supabaseServiceRole.from('system_settings').select('value').eq('key', KEY_MESSAGE_TRANSFER_EXPIRED).maybeSingle(),
       supabaseServiceRole
         .from('evolution_instances')
         .select(`
@@ -43,11 +64,21 @@ export async function GET(req: NextRequest) {
         `)
         .eq('is_master', true)
         .order('instance_name', { ascending: true }),
+      supabaseServiceRole
+        .from('profiles')
+        .select('id, full_name, email, telefone')
+        .in('status', ['admin', 'super_admin'])
+        .order('full_name', { ascending: true }),
     ]);
 
     const selectedId = instanceRes.data?.value ?? null;
     const messageTemplate = messageRes.data?.value ?? DEFAULT_MESSAGE;
+    const message_instance_disconnected = msgDisconnectedRes.data?.value ?? DEFAULT_MESSAGE_DISCONNECTED;
+    const message_verification_report = msgReportRes.data?.value ?? DEFAULT_MESSAGE_VERIFICATION_REPORT;
+    const notify_user_id = (notifyUserRes.data?.value ?? '').trim() || null;
+    const message_transfer_expired = msgTransferExpiredRes.data?.value ?? DEFAULT_MESSAGE_TRANSFER_EXPIRED;
     const { data: instances, error: instErr } = instancesRes;
+    const { data: notifyProfiles } = profilesRes;
 
     if (instErr) {
       return errorResponse('Erro ao buscar instâncias mestres', 500);
@@ -57,6 +88,16 @@ export async function GET(req: NextRequest) {
       instances: instances || [],
       selected_instance_id: selectedId,
       message_template: messageTemplate,
+      message_instance_disconnected,
+      message_verification_report,
+      notify_user_id,
+      message_transfer_expired,
+      notify_profiles: (notifyProfiles || []).map((p: { id: string; full_name?: string | null; email?: string | null; telefone?: string | null }) => ({
+        id: p.id,
+        full_name: p.full_name ?? p.email ?? p.id,
+        email: p.email ?? '',
+        telefone: p.telefone ?? '',
+      })),
     });
   } catch (err: any) {
     if (err.message === 'Acesso negado. Apenas admin e super_admin.') {
@@ -67,8 +108,8 @@ export async function GET(req: NextRequest) {
 }
 
 /**
- * PUT - Define instância e mensagem para Loto Assistência.
- * Body: { evolution_instance_id?: string | null, message_template?: string }
+ * PUT - Define instância e mensagens para Loto Assistência.
+ * Body: { evolution_instance_id?: string | null, message_template?: string, message_instance_disconnected?: string, message_verification_report?: string }
  */
 export async function PUT(req: NextRequest) {
   try {
@@ -78,6 +119,10 @@ export async function PUT(req: NextRequest) {
     const body = await req.json().catch(() => ({}));
     const evolutionInstanceId = body.evolution_instance_id;
     const messageTemplate = body.message_template;
+    const messageInstanceDisconnected = body.message_instance_disconnected;
+    const messageVerificationReport = body.message_verification_report;
+    const notifyUserId = body.notify_user_id;
+    const messageTransferExpired = body.message_transfer_expired;
 
     if (evolutionInstanceId !== null && evolutionInstanceId !== undefined) {
       if (typeof evolutionInstanceId !== 'string' || !evolutionInstanceId.trim()) {
@@ -109,6 +154,31 @@ export async function PUT(req: NextRequest) {
         updated_at: now,
       });
     }
+    if (typeof messageInstanceDisconnected === 'string') {
+      updates.push({
+        key: KEY_MESSAGE_DISCONNECTED,
+        value: messageInstanceDisconnected.trim() || DEFAULT_MESSAGE_DISCONNECTED,
+        updated_at: now,
+      });
+    }
+    if (typeof messageVerificationReport === 'string') {
+      updates.push({
+        key: KEY_MESSAGE_VERIFICATION_REPORT,
+        value: messageVerificationReport.trim() || DEFAULT_MESSAGE_VERIFICATION_REPORT,
+        updated_at: now,
+      });
+    }
+    if (notifyUserId !== undefined && notifyUserId !== null) {
+      const v = typeof notifyUserId === 'string' ? notifyUserId.trim() : '';
+      updates.push({ key: KEY_NOTIFY_USER_ID, value: v || '', updated_at: now });
+    }
+    if (typeof messageTransferExpired === 'string') {
+      updates.push({
+        key: KEY_MESSAGE_TRANSFER_EXPIRED,
+        value: messageTransferExpired.trim() || DEFAULT_MESSAGE_TRANSFER_EXPIRED,
+        updated_at: now,
+      });
+    }
 
     for (const row of updates) {
       const { error: upsertErr } = await supabaseServiceRole
@@ -120,7 +190,14 @@ export async function PUT(req: NextRequest) {
     }
 
     return successResponse(
-      { loto_assistencia_instance_id: instanceValue, message_template: typeof messageTemplate === 'string' ? messageTemplate.trim() || DEFAULT_MESSAGE : undefined },
+      {
+        loto_assistencia_instance_id: instanceValue,
+        message_template: typeof messageTemplate === 'string' ? messageTemplate.trim() || DEFAULT_MESSAGE : undefined,
+        message_instance_disconnected: typeof messageInstanceDisconnected === 'string' ? messageInstanceDisconnected.trim() || DEFAULT_MESSAGE_DISCONNECTED : undefined,
+        message_verification_report: typeof messageVerificationReport === 'string' ? messageVerificationReport.trim() || DEFAULT_MESSAGE_VERIFICATION_REPORT : undefined,
+        notify_user_id: notifyUserId !== undefined && notifyUserId !== null ? (typeof notifyUserId === 'string' ? notifyUserId.trim() : '') : undefined,
+        message_transfer_expired: typeof messageTransferExpired === 'string' ? messageTransferExpired.trim() || DEFAULT_MESSAGE_TRANSFER_EXPIRED : undefined,
+      },
       'Configuração salva'
     );
   } catch (err: any) {

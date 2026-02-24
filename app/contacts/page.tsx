@@ -3,7 +3,7 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import Layout from '@/components/Layout';
-import { useDashboardData, Contact, WhatsAppInstance } from '@/hooks/useDashboardData';
+import { useDashboardData, Contact } from '@/hooks/useDashboardData';
 import {
   Eye,
   Trash2,
@@ -37,7 +37,6 @@ const ContactsPage = () => {
     toasts,
     setToasts,
     loadInitialData,
-    instances: dashboardInstances,
   } = useDashboardData();
 
   const [itemsPerPage, setItemsPerPage] = useState<number>(10);
@@ -45,14 +44,7 @@ const ContactsPage = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [selectedContacts, setSelectedContacts] = useState<Set<string>>(new Set());
-  const [instances, setInstances] = useState<WhatsAppInstance[]>([]);
-  const [selectedInstance, setSelectedInstance] = useState<string>('');
   const [dbGroups, setDbGroups] = useState<Array<{ group_id: string; group_subject: string }>>([]);
-  const [availableGroups, setAvailableGroups] = useState<any[]>([]);
-  const [selectedGroup, setSelectedGroup] = useState<string>('');
-  const [extractedContacts, setExtractedContacts] = useState<any[]>([]);
-  const [loadingGroups, setLoadingGroups] = useState(false);
-  const [extractingContacts, setExtractingContacts] = useState(false);
   const [customListName, setCustomListName] = useState('');
   const [showCustomListModal, setShowCustomListModal] = useState(false);
   const [customLists, setCustomLists] = useState<any[]>([]);
@@ -331,34 +323,24 @@ const ContactsPage = () => {
     }
   };
 
-  useEffect(() => {
-    if (dashboardInstances) {
-      setInstances(dashboardInstances);
-    }
-  }, [dashboardInstances]);
-
   const loadDbGroups = useCallback(async () => {
-    if (!selectedInstance || !userId) {
+    if (!userId) return;
+    try {
+      const res = await fetch('/api/groups', { headers: { 'X-User-Id': userId } });
+      const json = await res.json();
+      if (res.ok && json.data) {
+        setDbGroups(json.data);
+      } else {
+        setDbGroups([]);
+      }
+    } catch {
       setDbGroups([]);
-      return;
     }
-    const { data, error } = await supabase
-      .from('whatsapp_groups')
-      .select('group_id, group_subject')
-      .eq('user_id', userId)
-      .eq('instance_name', selectedInstance)
-      .order('group_subject', { ascending: true });
-
-    if (error) {
-      addLog(`Erro ao carregar grupos: ${error.message}`, 'error');
-    } else {
-      setDbGroups((data || []) as Array<{ group_id: string; group_subject: string }>);
-    }
-  }, [selectedInstance, userId, addLog]);
+  }, [userId]);
 
   useEffect(() => {
-    loadDbGroups();
-  }, [loadDbGroups]);
+    if (showCustomListModal && userId) loadDbGroups();
+  }, [showCustomListModal, userId, loadDbGroups]);
 
   const handleClearList = () => {
     if (!confirm('Tem certeza que deseja limpar a lista de contatos? (Isso não exclui do banco de dados)')) return;
@@ -466,153 +448,6 @@ const ContactsPage = () => {
       setSelectedContacts(new Set());
     } else {
       setSelectedContacts(new Set(selectableContacts.map(c => c.id)));
-    }
-  };
-
-  const handleLoadGroups = async () => {
-    if (!userId || !selectedInstance) {
-      showToast('Selecione uma instância', 'error');
-      return;
-    }
-
-    setLoadingGroups(true);
-    try {
-      const response = await fetch('/api/groups/fetch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-        body: JSON.stringify({ instanceName: selectedInstance }),
-      });
-
-      const data = await response.json();
-      if (response.ok && data.data) {
-        const groups = data.data;
-        setAvailableGroups(groups);
-        
-        // Salva todos os grupos no banco automaticamente
-        let savedCount = 0;
-        let errorCount = 0;
-        
-        for (const group of groups) {
-          try {
-            const saveResponse = await fetch('/api/groups', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-              body: JSON.stringify({
-                instanceName: selectedInstance,
-                groupId: group.id,
-                groupSubject: group.subject,
-                pictureUrl: group.pictureUrl,
-                size: group.size,
-              }),
-            });
-            
-            if (saveResponse.ok) {
-              savedCount++;
-            } else {
-              errorCount++;
-            }
-          } catch (error) {
-            errorCount++;
-          }
-        }
-        
-        // Recarrega os grupos do banco
-        await loadDbGroups();
-        
-        if (savedCount > 0) {
-          showToast(`${savedCount} grupo(s) carregado(s) e salvos${errorCount > 0 ? ` (${errorCount} erros)` : ''}`, 'success');
-        } else {
-          showToast('Grupos carregados, mas nenhum foi salvo', 'info');
-        }
-      } else {
-        showToast(data.error || 'Erro ao carregar grupos', 'error');
-      }
-    } catch (error) {
-      showToast('Erro ao carregar grupos', 'error');
-    } finally {
-      setLoadingGroups(false);
-    }
-  };
-
-  const handleExtractContactsFromGroup = async () => {
-    if (!userId || !selectedInstance || !selectedGroup) {
-      showToast('Selecione uma instância e um grupo', 'error');
-      return;
-    }
-
-    setExtractingContacts(true);
-    try {
-      const response = await fetch('/api/groups/extract-contacts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-        body: JSON.stringify({ instanceName: selectedInstance, groupId: selectedGroup }),
-      });
-
-      const data = await response.json();
-      if (response.ok && data.data) {
-        setExtractedContacts(data.data);
-        showToast(`${data.data.length} contato(s) extraído(s)`, 'success');
-      } else {
-        showToast(data.error || 'Erro ao extrair contatos', 'error');
-      }
-    } catch (error) {
-      showToast('Erro ao extrair contatos', 'error');
-    } finally {
-      setExtractingContacts(false);
-    }
-  };
-
-  const handleDownloadExtractedContacts = () => {
-    if (extractedContacts.length === 0) {
-      showToast('Nenhum contato para baixar', 'error');
-      return;
-    }
-
-    const headers = ['Nome', 'Telefone', 'Grupo'];
-    const groupName = dbGroups.find(g => g.group_id === selectedGroup)?.group_subject || selectedGroup;
-    const rows = extractedContacts.map(c => [
-      c.name || '',
-      c.telefone || '',
-      groupName,
-    ]);
-
-    const csvContent = [headers, ...rows].map(row => row.join(',')).join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `contatos_extraidos_${new Date().toISOString().split('T')[0]}.csv`;
-    link.click();
-    showToast('Lista de contatos baixada!', 'success');
-  };
-
-  const handleImportExtractedContacts = async () => {
-    if (!userId || extractedContacts.length === 0) {
-      showToast('Nenhum contato extraído para importar', 'error');
-      return;
-    }
-
-    try {
-      const contactsToImport = extractedContacts.map(c => ({
-        name: c.name || '',
-        telefone: c.telefone || '',
-      }));
-
-      const response = await fetch('/api/contacts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-        body: JSON.stringify({ contacts: contactsToImport }),
-      });
-
-      const data = await response.json();
-      if (response.ok) {
-        showToast(`${data.data?.inserted || 0} contato(s) importado(s) com sucesso`, 'success');
-        setExtractedContacts([]);
-        await loadInitialData();
-      } else {
-        showToast(data.error || 'Erro ao importar contatos', 'error');
-      }
-    } catch (error) {
-      showToast('Erro ao importar contatos', 'error');
     }
   };
 
@@ -866,9 +701,9 @@ const ContactsPage = () => {
 
   if (checking || userId === null) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-200 text-center">
-          <p className="text-gray-700 font-medium">Carregando...</p>
+      <div className="min-h-screen flex items-center justify-center bg-[#1a1a1a]">
+        <div className="bg-[#2a2a2a] rounded-xl shadow-lg p-6 border border-[#404040] text-center">
+          <p className="text-gray-300 font-medium">Carregando...</p>
         </div>
       </div>
     );
@@ -876,6 +711,7 @@ const ContactsPage = () => {
 
   return (
     <Layout onSignOut={handleSignOut}>
+      <div className="-m-4 sm:-m-6 lg:-m-8 p-4 sm:p-6 lg:p-8 min-h-screen bg-[#1a1a1a]">
       {/* Toasts */}
       <div className="fixed top-4 left-4 right-4 sm:left-auto sm:right-4 z-50 space-y-2 max-w-sm sm:max-w-none">
         {toasts.map(toast => (
@@ -902,15 +738,15 @@ const ContactsPage = () => {
       <div className="space-y-4 sm:space-y-6 px-4 sm:px-0">
         <div className="flex items-center justify-between gap-4">
           <div className="flex-1">
-            <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 mb-1 sm:mb-2">Contatos Ativos</h1>
-            <p className="text-sm sm:text-base text-gray-600">Gerencie seus contatos ({contacts.length} total)</p>
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-100 mb-1 sm:mb-2">Contatos Ativos</h1>
+            <p className="text-sm sm:text-base text-gray-400">Gerencie seus contatos ({contacts.length} total)</p>
           </div>
           <div className="flex flex-wrap gap-2 items-center flex-shrink-0">
             {/* Botão Toggle da Sidebar - Apenas no mobile, no topo direito */}
             <div className="lg:hidden">
               <button
                 onClick={() => setIsMobileOpen(!isMobileOpen)}
-                className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-gray-100 transition text-gray-600 shadow-md bg-white"
+                className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-[#404040] transition text-gray-400 shadow-md bg-[#2a2a2a] border border-[#404040]"
                 aria-label="Toggle sidebar"
               >
                 <Menu className="w-5 h-5" />
@@ -966,24 +802,24 @@ const ContactsPage = () => {
         </div>
 
         {/* Filtros */}
-        <div className="bg-gray-100 rounded-xl shadow-md p-4 sm:p-6 border border-gray-200">
+        <div className="bg-[#2a2a2a] rounded-xl shadow-md p-4 sm:p-6 border border-[#404040]">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Buscar</label>
+              <label className="block text-sm font-medium text-gray-300 mb-2">Buscar</label>
               <input
                 type="text"
                 value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
                 placeholder="Nome ou telefone..."
-                className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] placeholder:text-gray-400 text-gray-700 bg-white"
+                className="w-full px-4 py-2 border-2 border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] placeholder:text-gray-500 text-gray-200 bg-[#333]"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Filtrar por Status</label>
+              <label className="block text-sm font-medium text-gray-300 mb-2">Filtrar por Status</label>
               <select
                 value={filterStatus}
                 onChange={e => setFilterStatus(e.target.value)}
-                className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 bg-white"
+                className="w-full px-4 py-2 border-2 border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-200 bg-[#333]"
               >
                 <option value="all">Todos</option>
                 <option value="active">Ativos</option>
@@ -993,14 +829,14 @@ const ContactsPage = () => {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Itens por página</label>
+              <label className="block text-sm font-medium text-gray-300 mb-2">Itens por página</label>
               <select
                 value={itemsPerPage}
                 onChange={e => {
                   setItemsPerPage(Number(e.target.value));
                   setCurrentPage(1);
                 }}
-                className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 bg-white"
+                className="w-full px-4 py-2 border-2 border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-200 bg-[#333]"
               >
                 <option value="10">10</option>
                 <option value="25">25</option>
@@ -1012,17 +848,17 @@ const ContactsPage = () => {
         </div>
 
         {/* Lista de Contatos */}
-        <div className="bg-gray-100 rounded-xl shadow-md p-4 sm:p-6 overflow-x-hidden border border-gray-200" data-tour-id="contatos-lista">
+        <div className="bg-[#2a2a2a] rounded-xl shadow-md p-4 sm:p-6 overflow-x-hidden border border-[#404040]" data-tour-id="contatos-lista">
           {/* Banner de Edição de Lista */}
           {isEditingList && (() => {
             const editingList = customLists.find(l => l.id === isEditingList);
             return (
-              <div className="mb-4 p-4 bg-blue-50 border-2 border-blue-200 rounded-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div className="mb-4 p-4 bg-blue-900/20 border-2 border-blue-600/50 rounded-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
                 <div className="flex-1">
-                  <p className="text-sm font-semibold text-blue-800 mb-1">
+                  <p className="text-sm font-semibold text-blue-300 mb-1">
                     Editando contatos da lista: <span className="font-bold">{editingList?.name || 'Lista'}</span>
                   </p>
-                  <p className="text-xs text-blue-600">
+                  <p className="text-xs text-blue-400">
                     Selecione ou desmarque os contatos que deseja adicionar ou remover desta lista.
                   </p>
                 </div>
@@ -1032,7 +868,7 @@ const ContactsPage = () => {
                     setSelectedContacts(new Set());
                     showToast('Edição da lista cancelada', 'info');
                   }}
-                  className="px-4 py-2 bg-white hover:bg-blue-100 border-2 border-blue-300 text-blue-700 rounded-lg transition flex items-center justify-center gap-2 text-sm font-medium whitespace-nowrap"
+                  className="px-4 py-2 bg-[#333] hover:bg-blue-900/30 border-2 border-blue-500/50 text-blue-300 rounded-lg transition flex items-center justify-center gap-2 text-sm font-medium whitespace-nowrap"
                 >
                   <X className="w-4 h-4" />
                   Cancelar Edição
@@ -1044,11 +880,11 @@ const ContactsPage = () => {
           {loadingInitial ? (
             <div className="flex flex-col items-center justify-center py-16 gap-4" data-tour-id="contatos-loading">
               <Loader2 className="w-12 h-12 text-[#8CD955] animate-spin" aria-hidden />
-              <p className="text-gray-600 font-medium">Carregando contatos...</p>
+              <p className="text-gray-400 font-medium">Carregando contatos...</p>
             </div>
           ) : paginatedContacts.length === 0 ? (
             <div className="text-center py-12">
-              <p className="text-gray-500">Nenhum contato encontrado</p>
+              <p className="text-gray-400">Nenhum contato encontrado</p>
             </div>
           ) : (
             <>
@@ -1060,7 +896,7 @@ const ContactsPage = () => {
                     onChange={handleSelectAll}
                     className="w-5 h-5 text-[#8CD955] rounded focus:ring-[#8CD955]"
                   />
-                  <span className="text-sm text-gray-600">
+                  <span className="text-sm text-gray-400">
                     {selectedContacts.size > 0 ? `${selectedContacts.size} selecionado(s)` : 'Selecionar todos'}
                   </span>
                 </div>
@@ -1105,10 +941,10 @@ const ContactsPage = () => {
                       key={contact.id}
                       className={`flex flex-col sm:flex-row items-start sm:items-center justify-between p-3 sm:p-4 border-2 rounded-lg transition ${
                         displayAsBlocked
-                          ? 'border-blue-100 bg-blue-50/30 opacity-80'
+                          ? 'border-blue-900/50 bg-blue-900/20 opacity-80'
                           : selectedContacts.has(contact.id)
                           ? 'border-[#8CD955] bg-[#8CD95515]'
-                          : 'border-gray-200 hover:border-[#8CD95540]'
+                          : 'border-[#404040] hover:border-[#8CD95540] bg-[#333]'
                       }`}
                     >
                     <div className="flex items-start sm:items-center gap-3 flex-1 w-full sm:w-auto min-w-0">
@@ -1121,7 +957,7 @@ const ContactsPage = () => {
                       />
                       <div className="flex-1 min-w-0">
                         <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-                          <h3 className="font-semibold text-gray-800 text-sm sm:text-base truncate">
+                          <h3 className="font-semibold text-gray-200 text-sm sm:text-base truncate">
                             {contact.name || `Contato ${contact.id.slice(0, 8)}`}
                           </h3>
                           <span
@@ -1129,8 +965,8 @@ const ContactsPage = () => {
                               contact.status === 'active'
                                 ? 'bg-[#8CD95515] text-[#6AB83D]'
                                 : contact.status === 'pending'
-                                ? 'bg-yellow-100 text-yellow-700'
-                                : 'bg-gray-100 text-gray-600'
+                                ? 'bg-yellow-900/30 text-yellow-400'
+                                : 'bg-[#404040] text-gray-400'
                             }`}
                           >
                             {contact.status || 'N/A'}
@@ -1142,10 +978,10 @@ const ContactsPage = () => {
                             </span>
                           )}
                         </div>
-                        <p className="text-xs sm:text-sm text-gray-600 mt-1 break-all sm:break-normal">
+                        <p className="text-xs sm:text-sm text-gray-400 mt-1 break-all sm:break-normal">
                           {contact.telefone ? `+55 ${contact.telefone}` : 'Sem telefone'}
                         </p>
-                        <div className="flex flex-wrap gap-2 sm:gap-4 mt-2 text-xs text-gray-500">
+                        <div className="flex flex-wrap gap-2 sm:gap-4 mt-2 text-xs text-gray-500 dark:text-gray-400">
                           {contact.status_disparo && (
                             <span className="flex items-center gap-1">
                               <CheckCircle2 className="w-3 h-3" />
@@ -1176,7 +1012,7 @@ const ContactsPage = () => {
                       </button>
                       <button
                         onClick={() => handleDeleteContact(contact.id)}
-                        className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition"
+                        className="p-2 text-red-500 hover:bg-red-900/20 rounded-lg transition"
                         title="Excluir"
                       >
                         <Trash2 className="w-5 h-5" />
@@ -1189,21 +1025,21 @@ const ContactsPage = () => {
 
               {/* Paginação */}
               {totalPages > 1 && (
-                <div className="flex flex-col sm:flex-row justify-between items-center gap-3 mt-6 pt-4 border-t border-gray-300">
+                <div className="flex flex-col sm:flex-row justify-between items-center gap-3 mt-6 pt-4 border-t border-[#404040]">
                   <button
                     onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
                     disabled={currentPage === 1}
-                    className="w-full sm:w-auto px-4 py-2 border-2 border-gray-400 text-gray-800 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100 hover:border-gray-500 transition font-medium"
+                    className="w-full sm:w-auto px-4 py-2 border-2 border-[#404040] text-gray-200 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[#404040] hover:border-[#555] transition font-medium bg-[#333]"
                   >
                     Anterior
                   </button>
-                  <span className="text-sm font-medium text-gray-800 text-center">
+                  <span className="text-sm font-medium text-gray-300 text-center">
                     Página {currentPage} de {totalPages} ({filteredContacts.length} contatos)
                   </span>
                   <button
                     onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
                     disabled={currentPage === totalPages}
-                    className="w-full sm:w-auto px-4 py-2 border-2 border-gray-400 text-gray-800 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100 hover:border-gray-500 transition font-medium"
+                    className="w-full sm:w-auto px-4 py-2 border-2 border-[#404040] text-gray-200 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[#404040] hover:border-[#555] transition font-medium bg-[#333]"
                   >
                     Próxima
                   </button>
@@ -1214,9 +1050,9 @@ const ContactsPage = () => {
         </div>
 
         {/* Seção: Listas Personalizadas */}
-        <div className="bg-gray-100 rounded-xl shadow-md p-4 sm:p-6 border border-gray-200">
+        <div className="bg-[#2a2a2a] rounded-xl shadow-md p-4 sm:p-6 border border-[#404040]">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-gray-800">Suas Listas Personalizadas</h2>
+            <h2 className="text-lg font-semibold text-gray-100">Suas Listas Personalizadas</h2>
             <span className="text-sm text-gray-500">{customLists.length} listas</span>
           </div>
           
@@ -1226,16 +1062,16 @@ const ContactsPage = () => {
               <p className="text-gray-500">Carregando listas...</p>
             </div>
           ) : customLists.length === 0 ? (
-            <div className="text-center py-8 border-2 border-dashed border-gray-200 rounded-xl">
-              <List className="w-8 h-8 mx-auto text-gray-300 mb-2" />
+            <div className="text-center py-8 border-2 border-dashed border-[#404040] rounded-xl">
+              <List className="w-8 h-8 mx-auto text-gray-500 mb-2" />
               <p className="text-gray-500">Nenhuma lista criada ainda</p>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {customLists.map(list => (
-                <div key={list.id} className="p-4 border-2 border-gray-100 rounded-xl hover:border-[#8CD95540] hover:bg-[#8CD95515] transition bg-gray-50/50">
+                <div key={list.id} className="p-4 border-2 border-[#404040] rounded-xl hover:border-[#8CD95540] hover:bg-[#8CD95510] transition bg-[#333]">
                   <div className="flex justify-between items-start mb-2">
-                    <h3 className="font-bold text-gray-800 truncate pr-2">{list.name}</h3>
+                    <h3 className="font-bold text-gray-200 truncate pr-2">{list.name}</h3>
                     <div className="flex gap-1">
                       <button
                         onClick={() => {
@@ -1244,7 +1080,7 @@ const ContactsPage = () => {
                           setListSelectedGroup(list.group_id || '');
                           setShowCustomListModal(true);
                         }}
-                        className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition"
+                        className="p-1.5 text-blue-400 hover:bg-blue-900/20 rounded transition"
                         title="Editar Nome/Grupo"
                       >
                         <Save className="w-4 h-4" />
@@ -1278,7 +1114,7 @@ const ContactsPage = () => {
                       </button>
                       <button
                         onClick={() => handleDeleteCustomList(list.id)}
-                        className="p-1.5 text-red-600 hover:bg-red-50 rounded transition"
+                        className="p-1.5 text-red-500 hover:bg-red-900/20 rounded transition"
                         title="Excluir Lista"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -1286,7 +1122,7 @@ const ContactsPage = () => {
                     </div>
                   </div>
                   <div className="space-y-1">
-                    <p className="text-sm text-gray-600 flex items-center gap-2">
+                    <p className="text-sm text-gray-400 flex items-center gap-2">
                       <Users className="w-3.5 h-3.5" />
                       {list.contact_ids?.length || 0} contatos
                     </p>
@@ -1306,137 +1142,14 @@ const ContactsPage = () => {
           )}
         </div>
 
-        {/* Seção: Gerenciar Instância */}
-        <div className="bg-gray-100 rounded-xl shadow-md p-4 sm:p-6 border border-gray-200">
-          <h2 className="text-lg font-semibold text-gray-800 mb-4">Gerenciar Grupos da Instância</h2>
-          <div className="space-y-4">
-            <div data-tour-id="contatos-selecionar-instancia">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Escolha a Instância*
-              </label>
-              <select
-                value={selectedInstance}
-                onChange={e => {
-                  setSelectedInstance(e.target.value);
-                  setAvailableGroups([]);
-                  setSelectedGroup('');
-                }}
-                className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 bg-white"
-              >
-                <option value="">Selecione uma Instância</option>
-                {instances.map(inst => (
-                  <option key={inst.id || inst.instance_name} value={inst.instance_name}>
-                    {inst.instance_name} ({inst.status})
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-        </div>
-
-        {/* Seção: Extrair Contatos do Grupo */}
-        <div className="bg-gray-100 rounded-xl shadow-md p-4 sm:p-6 border border-gray-200">
-          <h2 className="text-lg font-semibold text-gray-800 mb-4">Extrair Contatos do Grupo</h2>
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Selecione o Grupo*
-              </label>
-              <select
-                value={selectedGroup}
-                onChange={e => setSelectedGroup(e.target.value)}
-                disabled={!selectedInstance}
-                className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 text-gray-700 bg-white"
-              >
-                <option value="">
-                  {!selectedInstance 
-                    ? 'Selecione uma instância primeiro' 
-                    : dbGroups.length === 0 
-                    ? 'Carregue os grupos primeiro' 
-                    : 'Selecione um Grupo'}
-                </option>
-                {dbGroups.map(group => (
-                  <option key={group.group_id} value={group.group_id}>
-                    {group.group_subject || group.group_id}
-                  </option>
-                ))}
-              </select>
-              {!selectedInstance && (
-                <p className="text-xs text-gray-500 mt-1">Selecione uma instância primeiro</p>
-              )}
-            </div>
-            {selectedInstance && (
-              <button
-                onClick={handleLoadGroups}
-                disabled={!selectedInstance || loadingGroups}
-                className="w-full py-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition disabled:opacity-50 flex items-center justify-center gap-2"
-                data-tour-id="contatos-carregar-grupos"
-              >
-                <RefreshCw className={`w-4 h-4 ${loadingGroups ? 'animate-spin' : ''}`} />
-                {loadingGroups ? (
-                  <span className="inline-flex items-center">
-                    Isso pode demorar um pouco
-                    <span className="inline-flex ml-1 gap-0">
-                      <span className="wave-dot-1">.</span>
-                      <span className="wave-dot-2">.</span>
-                      <span className="wave-dot-3">.</span>
-                    </span>
-                  </span>
-                ) : (
-                  'Carregar Grupos da instância'
-                )}
-              </button>
-            )}
-            <button
-              onClick={handleExtractContactsFromGroup}
-                disabled={!selectedGroup || !selectedInstance || extractingContacts}
-                className="w-full py-3 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition disabled:opacity-50"
-                data-tour-id="contatos-extrair"
-              >
-              {extractingContacts ? 'Extraindo...' : 'Extrair Contatos'}
-            </button>
-          </div>
-        </div>
-
-        {/* Contatos Extraídos */}
-        <div className="bg-gray-100 rounded-xl shadow-md p-6 border border-gray-200">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-lg font-semibold text-gray-800">Contatos Extraídos</h2>
-            <select className="text-sm border border-gray-300 rounded-lg px-3 py-1.5 text-gray-700 bg-white">
-              <option>Últimos 7 dias</option>
-              <option>Últimos 30 dias</option>
-            </select>
-          </div>
-          <div className="space-y-3 max-h-96 overflow-y-auto">
-            {extractedContacts.length === 0 ? (
-              <p className="text-sm text-gray-500 text-center py-4">Nenhum contato extraído</p>
-            ) : (
-              extractedContacts.map((contact, idx) => (
-                <div key={idx} className="p-3 border border-gray-200 rounded-lg">
-                  <p className="font-medium text-gray-800">{contact.name || 'Sem nome'}</p>
-                  <p className="text-sm text-gray-600">Grupo Selecionado: {dbGroups.find(g => g.group_id === selectedGroup)?.group_subject || selectedGroup}</p>
-                  <p className="text-sm text-gray-600">Número de Telefone: {contact.telefone}</p>
-                </div>
-              ))
-            )}
-          </div>
-          {extractedContacts.length > 0 && (
-            <button
-                  onClick={handleDownloadExtractedContacts}
-                  className="w-full mt-4 py-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition"
-                >
-              Baixar Lista Contatos Extraídos ({extractedContacts.length})
-            </button>
-          )}
-        </div>
       </div>
 
       {/* Modal: Criar/Editar Lista Personalizada */}
       {showCustomListModal && (
-        <div className="fixed inset-0 bg-white/40 backdrop-blur-md flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl p-4 sm:p-6 max-w-md w-full max-h-[90vh] overflow-y-auto border border-white/20">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-50 p-4">
+          <div className="bg-[#2a2a2a] rounded-2xl shadow-2xl p-4 sm:p-6 max-w-md w-full max-h-[90vh] overflow-y-auto border border-[#404040]">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg sm:text-xl font-semibold text-gray-800">
+              <h3 className="text-lg sm:text-xl font-semibold text-gray-100">
                 {isEditingList ? 'Editar Lista' : 'Criar Lista Personalizada'}
               </h3>
               <button
@@ -1450,14 +1163,14 @@ const ContactsPage = () => {
                   setCreatingList(false); // Reset loading ao fechar
                 }}
                 disabled={creatingList}
-                className={`text-gray-400 hover:text-gray-600 flex-shrink-0 ${creatingList ? 'opacity-50 cursor-not-allowed' : ''}`}
+                className={`text-gray-400 hover:text-gray-200 flex-shrink-0 ${creatingList ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-300 mb-2">
                   Nome da Lista*
                 </label>
                 <input
@@ -1465,14 +1178,14 @@ const ContactsPage = () => {
                   value={customListName}
                   onChange={e => setCustomListName(e.target.value)}
                   placeholder="Ex: Lista de Vendas"
-                  className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] placeholder:text-gray-400 text-gray-700 bg-white"
+                  className="w-full px-4 py-2 border-2 border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] placeholder:text-gray-500 text-gray-200 bg-[#333]"
                 />
               </div>
 
               {!isEditingList && (
                 <>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <label className="block text-sm font-medium text-gray-300 mb-2">
                       Quantidade de Contatos
                     </label>
                     <div className="flex gap-2">
@@ -1480,13 +1193,13 @@ const ContactsPage = () => {
                         type="number"
                         value={listContactCount}
                         onChange={e => setListContactCount(Number(e.target.value))}
-                        className="flex-1 px-4 py-2 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 bg-white"
+                        className="flex-1 px-4 py-2 border-2 border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-200 bg-[#333]"
                         min="0"
                         max={availableContactsCount}
                       />
                       <button
                         onClick={() => setListContactCount(availableContactsCount)}
-                        className="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition text-sm font-medium"
+                        className="px-3 py-2 bg-[#404040] hover:bg-[#555] text-gray-200 rounded-lg transition text-sm font-medium"
                       >
                         Todos Disp.
                       </button>
@@ -1507,13 +1220,13 @@ const ContactsPage = () => {
               )}
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-300 mb-2">
                   Grupo Associado (Opcional)
                 </label>
                 <select
                   value={listSelectedGroup}
                   onChange={e => setListSelectedGroup(e.target.value)}
-                  className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 bg-white"
+                  className="w-full px-4 py-2 border-2 border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-200 bg-[#333]"
                 >
                   <option value="">Nenhum Grupo</option>
                   {dbGroups.map(group => (
@@ -1536,7 +1249,7 @@ const ContactsPage = () => {
                     setCreatingList(false); // Reset loading ao cancelar
                   }}
                   disabled={creatingList}
-                  className={`flex-1 px-4 py-2 border-2 border-gray-400 text-gray-800 rounded-lg hover:bg-gray-50 transition font-medium ${creatingList ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  className={`flex-1 px-4 py-2 border-2 border-[#404040] text-gray-200 rounded-lg hover:bg-[#404040] transition font-medium bg-[#333] ${creatingList ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
                   Cancelar
                 </button>
@@ -1562,6 +1275,7 @@ const ContactsPage = () => {
           </div>
         </div>
       )}
+      </div>
     </Layout>
   );
 };

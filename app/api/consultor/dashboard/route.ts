@@ -42,22 +42,30 @@ async function getUserWithdrawals(bancaUrl: string, oddsUserId: number, apiKey: 
  */
 export async function GET(req: NextRequest) {
   try {
-    const { userId } = await requireStatus(req, ['consultor']);
+    const { userId, profile } = await requireStatus(req, ['consultor', 'super_admin', 'admin']);
 
-    // Busca parâmetros de data da query string
     const { searchParams } = req.nextUrl;
     const dateFrom = searchParams.get('date_from');
     const dateTo = searchParams.get('date_to');
     const bancaUrlFilter = searchParams.get('banca_url');
-    const searchBy = searchParams.get('search_by') || 'created_at'; // Padrão: created_at
+    const searchBy = searchParams.get('search_by') || 'created_at';
+    const consultorIdFilter = searchParams.get('consultor_id')?.trim() || null;
 
-    // Busca o dono de banca acima do consultor na hierarquia (fallback se não houver filtro)
+    const isAdminOrSuperAdmin = profile?.status === 'super_admin' || profile?.status === 'admin';
+
+    // super_admin/admin podem ver desempenho de outro consultor: consultor_id + banca_url obrigatórios
+    let effectiveUserId = userId;
+    if (isAdminOrSuperAdmin && consultorIdFilter) {
+      const targetProfile = await getUserProfile(consultorIdFilter);
+      if (targetProfile?.status === 'consultor') {
+        effectiveUserId = consultorIdFilter;
+      }
+    }
+
     let bancaUrl = bancaUrlFilter;
-    
     if (!bancaUrl) {
-      const hierarchyPath = await getHierarchyPath(userId);
+      const hierarchyPath = await getHierarchyPath(effectiveUserId);
       const donoBanca = hierarchyPath.find(p => p.status === 'dono_banca');
-      
       if (donoBanca) {
         const { data: donoProfile } = await supabaseServiceRole
           .from('profiles')
@@ -67,9 +75,11 @@ export async function GET(req: NextRequest) {
         bancaUrl = donoProfile?.banca_url;
       }
     }
-    
-    // Busca dados do consultor
-    const consultorProfile = await getUserProfile(userId);
+    if (isAdminOrSuperAdmin && consultorIdFilter && !bancaUrl) {
+      return errorResponse('Para visualizar desempenho de um consultor, informe banca_url e consultor_id.', 400);
+    }
+
+    const consultorProfile = await getUserProfile(effectiveUserId);
     
     let externalKpis = null;
     let externalKpisError: string | null = null;

@@ -189,8 +189,8 @@ export default function FlowsPage() {
       <div className="p-6 space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">Flows (Automações)</h1>
-            <p className="text-sm text-gray-600 mt-1">
+            <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">Flows (Automações)</h1>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
               Crie e gerencie automações baseadas em eventos webhook
             </p>
           </div>
@@ -247,8 +247,8 @@ export default function FlowsPage() {
             <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
           </div>
         ) : flows.length === 0 ? (
-          <div className="bg-white rounded-lg shadow-md p-8 text-center text-gray-500">
-            <Workflow className="w-16 h-16 mx-auto mb-4 text-gray-400" />
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-lg shadow-md p-8 text-center text-gray-500 dark:text-gray-400">
+            <Workflow className="w-16 h-16 mx-auto mb-4 text-gray-400 dark:text-gray-500" />
             <p className="text-lg font-medium mb-2">Nenhum flow criado ainda</p>
             <p className="text-sm mb-4">Crie seu primeiro flow para começar a automatizar</p>
             <button
@@ -261,24 +261,24 @@ export default function FlowsPage() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {flows.map((flow) => (
-              <div key={flow.id} className="bg-white rounded-lg shadow-md border border-gray-200 p-6 hover:shadow-lg transition-shadow">
+              <div key={flow.id} className="bg-white dark:bg-[#2a2a2a] rounded-lg shadow-md border border-gray-200 dark:border-[#404040] p-6 hover:shadow-lg transition-shadow">
                 <div className="flex items-start justify-between mb-4">
                   <div className="flex-1">
-                    <h3 className="font-bold text-lg text-gray-900 mb-1">{flow.name}</h3>
+                    <h3 className="font-bold text-lg text-gray-900 dark:text-gray-100 mb-1">{flow.name}</h3>
                     {flow.description && (
-                      <p className="text-sm text-gray-600 mb-2">{flow.description}</p>
+                      <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">{flow.description}</p>
                     )}
                     <div className="flex items-center gap-2">
                       <span className={`px-2 py-1 text-xs font-medium rounded ${
                         flow.status === 'active'
-                          ? 'bg-green-100 text-green-800'
+                          ? 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-300'
                           : flow.status === 'inactive'
-                          ? 'bg-gray-100 text-gray-600'
-                          : 'bg-yellow-100 text-yellow-800'
+                          ? 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300'
+                          : 'bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-300'
                       }`}>
                         {flow.status === 'active' ? 'Ativo' : flow.status === 'inactive' ? 'Inativo' : 'Rascunho'}
                       </span>
-                      <span className="px-2 py-1 text-xs font-medium rounded bg-blue-100 text-blue-800">
+                      <span className="px-2 py-1 text-xs font-medium rounded bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-300">
                         {flow.type === 'automation' ? 'Automação' : 'Template'}
                       </span>
                     </div>
@@ -286,11 +286,11 @@ export default function FlowsPage() {
                   <Workflow className="w-8 h-8 text-[#8CD955] flex-shrink-0" />
                 </div>
 
-                <div className="text-xs text-gray-500 mb-4">
+                <div className="text-xs text-gray-500 dark:text-gray-400 mb-4">
                   Criado em: {new Date(flow.created_at).toLocaleDateString('pt-BR')}
                 </div>
 
-                <div className="flex flex-wrap gap-2 pt-4 border-t border-gray-100">
+                <div className="flex flex-wrap gap-2 pt-4 border-t border-gray-100 dark:border-[#353535]">
                   <button
                     onClick={() => router.push(`/admin/flows/${flow.id}`)}
                     className="flex-1 min-w-[100px] px-3 py-2 bg-[#8CD955] hover:bg-[#7CC845] text-white rounded-lg font-medium text-sm transition flex items-center justify-center gap-2"
@@ -300,7 +300,7 @@ export default function FlowsPage() {
                   </button>
                   <button
                     onClick={() => router.push(`/admin/flows/${flow.id}/activations`)}
-                    className="px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-sm transition flex items-center gap-2"
+                    className="px-3 py-2 bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50 text-blue-700 dark:text-blue-300 rounded-lg text-sm transition flex items-center gap-2"
                     title="Ver quem ativou (dono de banca, gerentes, consultores)"
                   >
                     <Users className="w-4 h-4" />
@@ -308,7 +308,7 @@ export default function FlowsPage() {
                   </button>
                   <button
                     onClick={() => router.push(`/admin/flows/${flow.id}/executions`)}
-                    className="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm transition flex items-center gap-2"
+                    className="px-3 py-2 bg-gray-100 dark:bg-[#383838] hover:bg-gray-200 dark:hover:bg-[#404040] text-gray-700 dark:text-gray-300 rounded-lg text-sm transition flex items-center gap-2"
                     title="Ver execuções"
                   >
                     <ListOrdered className="w-4 h-4" />
@@ -316,7 +316,7 @@ export default function FlowsPage() {
                   </button>
                   <button
                     onClick={() => toggleFlowStatus(flow)}
-                    className="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm transition"
+                    className="px-3 py-2 bg-gray-100 dark:bg-[#383838] hover:bg-gray-200 dark:hover:bg-[#404040] text-gray-700 dark:text-gray-300 rounded-lg text-sm transition"
                     title={flow.status === 'active' ? 'Desativar' : 'Ativar'}
                   >
                     {flow.status === 'active' ? (
@@ -327,7 +327,7 @@ export default function FlowsPage() {
                   </button>
                   <button
                     onClick={() => handleDelete(flow)}
-                    className="px-3 py-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg text-sm transition"
+                    className="px-3 py-2 bg-red-50 dark:bg-red-900/30 hover:bg-red-100 dark:hover:bg-red-900/50 text-red-600 dark:text-red-400 rounded-lg text-sm transition"
                     title="Deletar"
                   >
                     <Trash2 className="w-4 h-4" />

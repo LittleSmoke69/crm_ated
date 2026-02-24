@@ -52,18 +52,34 @@ interface Conversation {
   user_id?: string;
 }
 
-interface Instance {
+interface ChannelEvolution {
+  type: 'evolution';
   id: string;
   instance_name: string;
   status: string;
 }
 
+interface ChannelWhatsAppOfficial {
+  type: 'whatsapp_official';
+  id: string;
+  name: string;
+  phone_number_id: string;
+}
+
+type Channel = ChannelEvolution | ChannelWhatsAppOfficial;
+
 type ConversationFilter = 'all' | 'mine' | 'unassigned';
+
+type UserStatus = 'super_admin' | 'admin' | 'suporte' | string | null;
 
 export default function ChatPage() {
   const { checking, userId } = useRequireAuth();
-  const [instances, setInstances] = useState<Instance[]>([]);
-  const [selectedInstanceId, setSelectedInstanceId] = useState<string>('');
+  const [userStatus, setUserStatus] = useState<UserStatus>(null);
+  const [channels, setChannels] = useState<{ evolution: ChannelEvolution[]; whatsapp_official: ChannelWhatsAppOfficial[] }>({
+    evolution: [],
+    whatsapp_official: [],
+  });
+  const [selectedChannel, setSelectedChannel] = useState<Channel | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<string>('');
   const [messages, setMessages] = useState<Message[]>([]);
@@ -76,6 +92,9 @@ export default function ChatPage() {
   const [showResolveMenu, setShowResolveMenu] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  const authHeaders = (): Record<string, string> => (userId ? { 'X-User-Id': userId } : {});
+  const canSelectChannel = userStatus === 'super_admin' || userStatus === 'admin';
+
   const handleSignOut = async () => {
     if (typeof window !== 'undefined') {
       sessionStorage.removeItem('user_id');
@@ -86,36 +105,61 @@ export default function ChatPage() {
     window.location.href = '/login';
   };
 
-  // Carregar instâncias
+  // Carregar perfil (status) para controle de exibição do canal
+  useEffect(() => {
+    if (!userId) return;
+    const loadProfile = async () => {
+      try {
+        const res = await fetch('/api/user/profile', { headers: authHeaders() });
+        const data = await res.json();
+        if (data.success && data.data?.status) setUserStatus(data.data.status);
+      } catch {
+        setUserStatus(null);
+      }
+    };
+    loadProfile();
+  }, [userId]);
+
+  // Carregar canais (Evolution + WhatsApp Oficial)
   useEffect(() => {
     if (!userId) return;
 
-    const loadInstances = async () => {
+    const loadChannels = async () => {
       try {
-        const response = await fetch('/api/chat/instances');
+        const response = await fetch('/api/chat/channels', { headers: authHeaders() });
         const result = await response.json();
-        if (result.success) {
-          setInstances(result.data || []);
-          if (result.data && result.data.length > 0 && !selectedInstanceId) {
-            setSelectedInstanceId(result.data[0].id);
+        if (result.success && result.data) {
+          setChannels({
+            evolution: result.data.evolution || [],
+            whatsapp_official: result.data.whatsapp_official || [],
+          });
+          const evo = result.data.evolution || [];
+          const wa = result.data.whatsapp_official || [];
+          if (!selectedChannel && (evo.length > 0 || wa.length > 0)) {
+            if (evo.length > 0) setSelectedChannel(evo[0]);
+            else setSelectedChannel(wa[0]);
           }
         }
       } catch (error) {
-        console.error('Erro ao carregar instâncias:', error);
+        console.error('Erro ao carregar canais:', error);
       }
     };
 
-    loadInstances();
-  }, [userId, selectedInstanceId]);
+    loadChannels();
+  }, [userId]);
 
-  // Carregar conversas quando instância mudar
+  // Carregar conversas quando o canal mudar
   useEffect(() => {
-    if (!selectedInstanceId) return;
+    if (!selectedChannel) return;
 
     const loadConversations = async () => {
       setLoading(true);
       try {
-        const response = await fetch(`/api/chat/conversations?instance_id=${selectedInstanceId}`);
+        const params =
+          selectedChannel.type === 'evolution'
+            ? `instance_id=${selectedChannel.id}`
+            : `whatsapp_config_id=${selectedChannel.id}`;
+        const response = await fetch(`/api/chat/conversations?${params}`, { headers: authHeaders() });
         const result = await response.json();
         if (result.success) {
           setConversations(result.data || []);
@@ -128,7 +172,7 @@ export default function ChatPage() {
     };
 
     loadConversations();
-  }, [selectedInstanceId]);
+  }, [selectedChannel]);
 
   // Carregar mensagens quando conversa mudar
   useEffect(() => {
@@ -140,7 +184,9 @@ export default function ChatPage() {
     const loadMessages = async () => {
       setLoading(true);
       try {
-        const response = await fetch(`/api/chat/messages?conversation_id=${selectedConversationId}&limit=100`);
+        const response = await fetch(`/api/chat/messages?conversation_id=${selectedConversationId}&limit=100`, {
+          headers: authHeaders(),
+        });
         const result = await response.json();
         if (result.success) {
           setMessages(result.data || []);
@@ -193,19 +239,22 @@ export default function ChatPage() {
     };
   }, [selectedConversationId]);
 
-  // Supabase Realtime para conversas
+  // Supabase Realtime para conversas (Evolution por instance_id, Oficial por whatsapp_config_id)
   useEffect(() => {
-    if (!selectedInstanceId) return;
+    if (!selectedChannel) return;
+
+    const filterCol = selectedChannel.type === 'evolution' ? 'instance_id' : 'whatsapp_config_id';
+    const filterVal = selectedChannel.id;
 
     const channel = supabase
-      .channel(`chat_conversations_${selectedInstanceId}`)
+      .channel(`chat_conversations_${selectedChannel.type}_${selectedChannel.id}`)
       .on(
         'postgres_changes',
         {
           event: '*',
           schema: 'public',
           table: 'chat_conversations',
-          filter: `instance_id=eq.${selectedInstanceId}`,
+          filter: `${filterCol}=eq.${filterVal}`,
         },
         (payload) => {
           if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
@@ -228,35 +277,53 @@ export default function ChatPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [selectedInstanceId]);
+  }, [selectedChannel]);
 
   const handleSendMessage = async () => {
-    if (!messageText.trim() || !selectedConversationId || sending) return;
+    if (!messageText.trim() || !selectedConversationId || !selectedChannel || sending) return;
 
     const conversation = conversations.find((c) => c.id === selectedConversationId);
     if (!conversation) return;
 
     setSending(true);
     try {
-      const response = await fetch('/api/chat/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          instance_id: selectedInstanceId,
-          remoteJid: conversation.remote_jid,
-          type: 'text',
-          text: messageText,
-        }),
-      });
-
-      const result = await response.json();
-      if (result.success) {
-        setMessageText('');
-        if (textareaRef.current) {
-          textareaRef.current.style.height = 'auto';
+      if (selectedChannel.type === 'evolution') {
+        const response = await fetch('/api/chat/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({
+            instance_id: selectedChannel.id,
+            remoteJid: conversation.remote_jid,
+            type: 'text',
+            text: messageText,
+          }),
+        });
+        const result = await response.json();
+        if (result.success) {
+          setMessageText('');
+          if (textareaRef.current) textareaRef.current.style.height = 'auto';
+        } else {
+          alert(result.error || result.message || 'Erro ao enviar mensagem');
         }
       } else {
-        alert(result.message || 'Erro ao enviar mensagem');
+        const to = (conversation.remote_jid || '').replace(/@s\.whatsapp\.net$/, '').replace(/\D/g, '') || conversation.remote_jid;
+        const response = await fetch('/api/chat/whatsapp-official/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({
+            config_id: selectedChannel.id,
+            to,
+            type: 'text',
+            text: messageText,
+          }),
+        });
+        const result = await response.json();
+        if (result.success) {
+          setMessageText('');
+          if (textareaRef.current) textareaRef.current.style.height = 'auto';
+        } else {
+          alert(result.error || result.message || 'Erro ao enviar mensagem');
+        }
       }
     } catch (error) {
       console.error('Erro ao enviar mensagem:', error);
@@ -361,8 +428,8 @@ export default function ChatPage() {
   if (checking) {
     return (
       <Layout onSignOut={handleSignOut}>
-        <div className="flex items-center justify-center h-screen">
-          <div className="text-gray-500">Carregando...</div>
+        <div className="flex items-center justify-center h-screen bg-[var(--background)]">
+          <div className="text-[var(--muted-foreground)]">Carregando...</div>
         </div>
       </Layout>
     );
@@ -372,18 +439,18 @@ export default function ChatPage() {
 
   return (
     <Layout onSignOut={handleSignOut}>
-      <div className="flex h-[calc(100vh-80px)] bg-gray-50">
+      <div className="flex h-[calc(100vh-80px)] bg-gray-50 dark:bg-[#1e1e1e]">
         {/* Painel Esquerdo - Navegação e Instâncias */}
-        <div className="w-64 bg-white border-r border-gray-200 flex flex-col">
-          <div className="p-4 border-b border-gray-200">
-            <h2 className="text-lg font-semibold text-gray-900 mb-3">Zaploto Chat</h2>
+        <div className="w-64 bg-white dark:bg-[#2a2a2a] border-r border-gray-200 dark:border-[#404040] flex flex-col">
+          <div className="p-4 border-b border-gray-200 dark:border-[#404040]">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-3">Zaploto Chat</h2>
             <div className="space-y-2">
-              <button className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 text-gray-700">
+              <button className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-[#333] text-gray-700 dark:text-gray-200">
                 <Inbox className="w-5 h-5" />
                 <span className="text-sm font-medium">Minha Caixa</span>
               </button>
               <div className="space-y-1">
-                <div className="px-3 py-1 text-xs font-semibold text-gray-500 uppercase">Conversas</div>
+                <div className="px-3 py-1 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Conversas</div>
                 <button
                   className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-white"
                   style={{ backgroundColor: '#8CD955' }}
@@ -391,11 +458,11 @@ export default function ChatPage() {
                   <MessageCircle className="w-5 h-5" />
                   <span className="text-sm font-medium">Todas as conversas</span>
                 </button>
-                <button className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 text-gray-700">
+                <button className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-[#333] text-gray-700 dark:text-gray-200">
                   <AlertCircle className="w-5 h-5" />
                   <span className="text-sm">Menções</span>
                 </button>
-                <button className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 text-gray-700">
+                <button className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-[#333] text-gray-700 dark:text-gray-200">
                   <Clock className="w-5 h-5" />
                   <span className="text-sm">Por responder</span>
                 </button>
@@ -403,64 +470,102 @@ export default function ChatPage() {
             </div>
           </div>
 
-          <div className="p-4 border-b border-gray-200">
-            <label className="block text-xs font-semibold text-gray-500 uppercase mb-2">
-              Instância WhatsApp
-            </label>
-            <select
-              value={selectedInstanceId}
-              onChange={(e) => {
-                setSelectedInstanceId(e.target.value);
-                setSelectedConversationId('');
-              }}
-              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
-              style={{ borderColor: '#8CD955' }}
-            >
-              <option value="">Selecione uma instância</option>
-              {instances.map((inst) => (
-                <option key={inst.id} value={inst.id}>
-                  {inst.instance_name} ({inst.status})
-                </option>
-              ))}
-            </select>
-          </div>
+          {/* Canal: apenas super_admin e admin podem trocar; suporte e outros só usam o canal atual */}
+          {canSelectChannel ? (
+            <div className="p-4 border-b border-gray-200 dark:border-[#404040]">
+              <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">
+                Canal
+              </label>
+              <select
+                value={selectedChannel ? `${selectedChannel.type}:${selectedChannel.id}` : ''}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (!v) {
+                    setSelectedChannel(null);
+                    setSelectedConversationId('');
+                    return;
+                  }
+                  const [type, id] = v.split(':');
+                  if (type === 'evolution') {
+                    const ch = channels.evolution.find((c) => c.id === id);
+                    if (ch) setSelectedChannel(ch);
+                  } else {
+                    const ch = channels.whatsapp_official.find((c) => c.id === id);
+                    if (ch) setSelectedChannel(ch);
+                  }
+                  setSelectedConversationId('');
+                }}
+                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100"
+                style={{ borderColor: '#8CD955' }}
+              >
+                <option value="">Selecione um canal</option>
+                {channels.evolution.length > 0 && (
+                  <optgroup label="Evolution">
+                    {channels.evolution.map((ch) => (
+                      <option key={ch.id} value={`evolution:${ch.id}`}>
+                        {ch.instance_name} ({ch.status})
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {channels.whatsapp_official.length > 0 && (
+                  <optgroup label="WhatsApp Oficial">
+                    {channels.whatsapp_official.map((ch) => (
+                      <option key={ch.id} value={`whatsapp_official:${ch.id}`}>
+                        {ch.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+            </div>
+          ) : selectedChannel ? (
+            <div className="p-4 border-b border-gray-200 dark:border-[#404040]">
+              <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">Chat</div>
+              <div className="text-sm text-gray-700 dark:text-gray-200">
+                {selectedChannel.type === 'evolution' ? selectedChannel.instance_name : selectedChannel.name}
+              </div>
+            </div>
+          ) : null}
 
           <div className="flex-1 overflow-y-auto p-4">
-            {!selectedInstanceId ? (
-              <div className="text-center text-gray-500 text-sm mt-8">
-                Selecione uma instância
+            {!selectedChannel ? (
+              <div className="text-center text-gray-500 dark:text-gray-400 text-sm mt-8">
+                {canSelectChannel ? 'Selecione um canal' : 'Carregando...'}
               </div>
-            ) : (
-              <div className="text-xs text-gray-500">
-                {instances.find((i) => i.id === selectedInstanceId)?.instance_name || 'Instância'}
+            ) : !canSelectChannel ? null : (
+              <div className="text-xs text-gray-500 dark:text-gray-400">
+                {selectedChannel.type === 'evolution'
+                  ? selectedChannel.instance_name
+                  : selectedChannel.name}
               </div>
             )}
           </div>
         </div>
 
         {/* Painel Central - Lista de Conversas */}
-        <div className="w-80 bg-white border-r border-gray-200 flex flex-col">
+        <div className="w-80 bg-white dark:bg-[#2a2a2a] border-r border-gray-200 dark:border-[#404040] flex flex-col">
           {/* Header com Busca */}
-          <div className="p-4 border-b border-gray-200">
+          <div className="p-4 border-b border-gray-200 dark:border-[#404040]">
             <div className="relative mb-4">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 w-4 h-4" />
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 dark:text-gray-400 w-4 h-4" />
               <input
                 type="text"
                 placeholder="Search..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 text-sm bg-gray-100 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-900 placeholder:text-gray-500"
+                className="w-full pl-10 pr-4 py-2 text-sm bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400"
               />
             </div>
 
             {/* Abas de Filtro */}
-            <div className="flex items-center gap-1 border-b border-gray-200 -mx-4 px-4">
+            <div className="flex items-center gap-1 border-b border-gray-200 dark:border-[#404040] -mx-4 px-4">
               <button
                 onClick={() => setConversationFilter('mine')}
                 className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
                   conversationFilter === 'mine'
                     ? 'border-[#8CD955] text-[#8CD955]'
-                    : 'border-transparent text-gray-600 hover:text-gray-900'
+                    : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'
                 }`}
               >
                 Minhas ({mineCount})
@@ -470,7 +575,7 @@ export default function ChatPage() {
                 className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
                   conversationFilter === 'unassigned'
                     ? 'border-[#8CD955] text-[#8CD955]'
-                    : 'border-transparent text-gray-600 hover:text-gray-900'
+                    : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'
                 }`}
               >
                 Não atribuídas ({unassignedCount})
@@ -480,7 +585,7 @@ export default function ChatPage() {
                 className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
                   conversationFilter === 'all'
                     ? 'border-[#8CD955] text-[#8CD955]'
-                    : 'border-transparent text-gray-600 hover:text-gray-900'
+                    : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'
                 }`}
               >
                 Todas ({allCount})
@@ -490,11 +595,11 @@ export default function ChatPage() {
 
           {/* Lista de Conversas */}
           <div className="flex-1 overflow-y-auto">
-            {loading && !selectedInstanceId ? (
-              <div className="p-4 text-center text-gray-500 text-sm">Carregando...</div>
+            {loading && !selectedChannel ? (
+              <div className="p-4 text-center text-gray-500 dark:text-gray-400 text-sm">Carregando...</div>
             ) : filteredConversations.length === 0 ? (
-              <div className="p-4 text-center text-gray-500 text-sm">
-                {selectedInstanceId ? 'Nenhuma conversa encontrada' : 'Selecione uma instância'}
+              <div className="p-4 text-center text-gray-500 dark:text-gray-400 text-sm">
+                {selectedChannel ? 'Nenhuma conversa encontrada' : 'Selecione um canal'}
               </div>
             ) : (
               filteredConversations.map((conv) => {
@@ -506,8 +611,8 @@ export default function ChatPage() {
                   <div
                     key={conv.id}
                     onClick={() => setSelectedConversationId(conv.id)}
-                    className={`p-3 border-b border-gray-100 cursor-pointer hover:bg-gray-50 transition-colors ${
-                      isSelected ? 'bg-[#8CD95515] border-l-4 border-l-[#8CD955]' : ''
+                    className={`p-3 border-b border-gray-100 dark:border-[#404040] cursor-pointer hover:bg-gray-50 dark:hover:bg-[#333] transition-colors ${
+                      isSelected ? 'bg-[#8CD95515] dark:bg-[#8CD95520] border-l-4 border-l-[#8CD955]' : ''
                     }`}
                   >
                     <div className="flex items-start gap-3">
@@ -523,12 +628,12 @@ export default function ChatPage() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between mb-1">
-                          <h3 className="text-sm font-semibold text-gray-900 truncate">{conv.title}</h3>
-                          <span className="text-xs text-gray-500 flex-shrink-0 ml-2">
+                          <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">{conv.title}</h3>
+                          <span className="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0 ml-2">
                             {formatTime(conv.last_message_at)}
                           </span>
                         </div>
-                        <p className="text-xs text-gray-600 truncate mb-1">{conv.last_message_preview}</p>
+                        <p className="text-xs text-gray-600 dark:text-gray-400 truncate mb-1">{conv.last_message_preview}</p>
                         <div className="flex items-center justify-end">
                           {conv.unread_count > 0 && (
                             <span
@@ -549,11 +654,11 @@ export default function ChatPage() {
         </div>
 
         {/* Painel Direito - Chat Ativo */}
-        <div className="flex-1 flex flex-col bg-gray-50">
+        <div className="flex-1 flex flex-col bg-gray-50 dark:bg-[#1e1e1e]">
           {selectedConversationId && selectedConversation ? (
             <>
               {/* Header da Conversa */}
-              <div className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between">
+              <div className="bg-white dark:bg-[#2a2a2a] border-b border-gray-200 dark:border-[#404040] px-4 py-3 flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div
                     className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-semibold"
@@ -566,8 +671,8 @@ export default function ChatPage() {
                     )}
                   </div>
                   <div>
-                    <h2 className="font-semibold text-gray-900">{selectedConversation.title}</h2>
-                    <p className="text-xs text-gray-500">{selectedConversation.remote_jid}</p>
+                    <h2 className="font-semibold text-gray-900 dark:text-gray-100">{selectedConversation.title}</h2>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">{selectedConversation.remote_jid}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -581,8 +686,8 @@ export default function ChatPage() {
                       <CheckCircle2 className="w-4 h-4" />
                     </button>
                   </div>
-                  <button className="p-2 hover:bg-gray-100 rounded-lg">
-                    <MoreVertical className="w-5 h-5 text-gray-600" />
+                  <button className="p-2 hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg text-gray-600 dark:text-gray-300">
+                    <MoreVertical className="w-5 h-5" />
                   </button>
                 </div>
               </div>
@@ -590,9 +695,9 @@ export default function ChatPage() {
               {/* Mensagens */}
               <div className="flex-1 overflow-y-auto p-4 space-y-4">
                 {loading ? (
-                  <div className="text-center text-gray-500 text-sm">Carregando mensagens...</div>
+                  <div className="text-center text-gray-500 dark:text-gray-400 text-sm">Carregando mensagens...</div>
                 ) : messages.length === 0 ? (
-                  <div className="text-center text-gray-500 text-sm mt-8">Nenhuma mensagem ainda</div>
+                  <div className="text-center text-gray-500 dark:text-gray-400 text-sm mt-8">Nenhuma mensagem ainda</div>
                 ) : (
                   messages.map((msg, index) => {
                     const showDate =
@@ -603,7 +708,7 @@ export default function ChatPage() {
                     return (
                       <React.Fragment key={msg.id}>
                         {showDate && (
-                          <div className="text-center text-xs text-gray-500 my-4">
+                          <div className="text-center text-xs text-gray-500 dark:text-gray-400 my-4">
                             {new Date(msg.timestamp * 1000).toLocaleDateString('pt-BR', {
                               day: 'numeric',
                               month: 'short',
@@ -625,20 +730,20 @@ export default function ChatPage() {
                             className={`max-w-md px-4 py-2 rounded-lg ${
                               msg.from_me
                                 ? 'bg-[#8CD955] text-white rounded-br-none'
-                                : 'bg-white text-gray-900 rounded-bl-none border border-gray-200'
+                                : 'bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 rounded-bl-none border border-gray-200 dark:border-[#404040]'
                             }`}
                           >
                             {msg.text && (
                               <p className="text-sm whitespace-pre-wrap break-words">{msg.text}</p>
                             )}
                             {msg.caption && (
-                              <p className={`text-sm mt-1 ${msg.from_me ? 'text-white/90' : 'text-gray-600'}`}>
+                              <p className={`text-sm mt-1 ${msg.from_me ? 'text-white/90' : 'text-gray-600 dark:text-gray-300'}`}>
                                 {msg.caption}
                               </p>
                             )}
                             <div
                               className={`flex items-center justify-end gap-1 mt-1 ${
-                                msg.from_me ? 'text-white/80' : 'text-gray-500'
+                                msg.from_me ? 'text-white/80' : 'text-gray-500 dark:text-gray-400'
                               }`}
                             >
                               <span className="text-xs">{formatMessageTime(msg.timestamp)}</span>
@@ -654,12 +759,12 @@ export default function ChatPage() {
               </div>
 
               {/* Input de Mensagem */}
-              <div className="bg-white border-t border-gray-200 p-4">
+              <div className="bg-white dark:bg-[#2a2a2a] border-t border-gray-200 dark:border-[#404040] p-4">
                 <div className="mb-2 flex items-center gap-2">
-                  <button className="px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-lg">
+                  <button className="px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg">
                     Responder
                   </button>
-                  <button className="px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-lg">
+                  <button className="px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg">
                     Nota Privada
                   </button>
                 </div>
@@ -683,25 +788,25 @@ export default function ChatPage() {
                       }}
                       placeholder="Shift + Enter para nova linha. Comece com '/' para selecionar uma resposta pronta."
                       rows={1}
-                      className="w-full px-4 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] resize-none overflow-y-auto"
+                      className="w-full px-4 py-2 text-sm border border-gray-300 dark:border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 resize-none overflow-y-auto"
                       style={{ minHeight: '40px', maxHeight: '120px' }}
                       disabled={sending}
                     />
                   </div>
                   <div className="flex items-center gap-1">
-                    <button className="p-2 hover:bg-gray-100 rounded-lg text-gray-600">
+                    <button className="p-2 hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg text-gray-600 dark:text-gray-300">
                       <Smile className="w-5 h-5" />
                     </button>
-                    <button className="p-2 hover:bg-gray-100 rounded-lg text-gray-600">
+                    <button className="p-2 hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg text-gray-600 dark:text-gray-300">
                       <Paperclip className="w-5 h-5" />
                     </button>
-                    <button className="p-2 hover:bg-gray-100 rounded-lg text-gray-600">
+                    <button className="p-2 hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg text-gray-600 dark:text-gray-300">
                       <Mic className="w-5 h-5" />
                     </button>
-                    <button className="p-2 hover:bg-gray-100 rounded-lg text-gray-600">
+                    <button className="p-2 hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg text-gray-600 dark:text-gray-300">
                       <FileText className="w-5 h-5" />
                     </button>
-                    <button className="p-2 hover:bg-gray-100 rounded-lg text-gray-600">
+                    <button className="p-2 hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg text-gray-600 dark:text-gray-300">
                       <MessageSquare className="w-5 h-5" />
                     </button>
                     <button
@@ -727,8 +832,8 @@ export default function ChatPage() {
           ) : (
             <div className="flex-1 flex items-center justify-center">
               <div className="text-center">
-                <MessageSquare className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-                <p className="text-gray-600">Selecione uma conversa para começar</p>
+                <MessageSquare className="w-16 h-16 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
+                <p className="text-gray-600 dark:text-gray-400">Selecione uma conversa para começar</p>
               </div>
             </div>
           )}

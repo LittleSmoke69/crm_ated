@@ -284,18 +284,20 @@ export async function GET(req: NextRequest) {
     const leadIdsForLookup = filteredLeads.map((l: any) => String(l._originalId ?? l.id));
     const bancaIdsForLookup = listBancas.map(b => b.id);
     let transferDateByLeadId: Record<string, string> = {};
+    const vinculadoLeadIds = new Set<string>();
     if (leadIdsForLookup.length > 0 && bancaIdsForLookup.length > 0) {
       const { data: entries } = await supabaseServiceRole
         .from('admin_lead_transfer_entries')
-        .select('lead_id, created_at')
+        .select('lead_id, created_at, resolution_status')
         .in('lead_id', leadIdsForLookup)
         .eq('target_consultant_email', consultantEmail)
         .in('banca_id', bancaIdsForLookup)
         .order('created_at', { ascending: false });
       if (entries?.length) {
-        entries.forEach((row: { lead_id: string; created_at: string }) => {
+        entries.forEach((row: { lead_id: string; created_at: string; resolution_status?: string }) => {
           const lid = String(row.lead_id);
           if (!transferDateByLeadId[lid]) transferDateByLeadId[lid] = row.created_at;
+          if (row.resolution_status === 'vinculado') vinculadoLeadIds.add(lid);
         });
       }
     }
@@ -357,6 +359,7 @@ export async function GET(req: NextRequest) {
         original_consultant_id: l.original_consultant_id ?? null,
         original_consultant_name: l.original_consultant_name ?? null,
         original_consultant_email: l.original_consultant_email ?? null,
+        vinculado: vinculadoLeadIds.has(leadIdStr),
       };
     });
 

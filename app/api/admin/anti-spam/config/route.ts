@@ -47,15 +47,17 @@ export async function POST(req: NextRequest) {
       scan_mode,
     } = body;
 
-    if (!banca_id || !master_instance_id || !denuncia_group_jid) {
-      return errorResponse('banca_id, master_instance_id e denuncia_group_jid são obrigatórios', 400);
+    if (!banca_id || !master_instance_id) {
+      return errorResponse('banca_id e master_instance_id são obrigatórios', 400);
     }
     const payload: Record<string, unknown> = {
+      owner_type: 'banca',
+      owner_id: null,
       banca_id,
       is_enabled: is_enabled ?? true,
       master_instance_id,
       watcher_instance_id: watcher_instance_id || null,
-      denuncia_group_jid,
+      denuncia_group_jid: denuncia_group_jid ?? '',
       scan_mode: scan_mode === 'selected_groups' ? 'selected_groups' : 'all_groups',
     };
 

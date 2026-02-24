@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
     // 1. Validar acesso à conversa
     const { data: conversation, error: convError } = await supabaseServiceRole
       .from('chat_conversations')
-      .select('instance_id, user_id, workspace_id')
+      .select('instance_id, whatsapp_config_id, user_id, workspace_id')
       .eq('id', conversation_id)
       .single();
 
@@ -38,11 +38,14 @@ export async function GET(req: NextRequest) {
 
     const { data: profile } = await supabaseServiceRole
       .from('profiles')
-      .select('status')
+      .select('status, zaploto_id')
       .eq('id', userId)
       .single();
 
-    if (profile?.status !== 'admin' && conversation.user_id !== userId) {
+    const isAdmin = profile?.status === 'admin' || profile?.status === 'super_admin';
+    const canAccessEvolution = conversation.instance_id && (isAdmin || conversation.user_id === userId);
+    const canAccessWhatsAppOfficial = conversation.whatsapp_config_id && (isAdmin || conversation.workspace_id === profile?.zaploto_id);
+    if (!canAccessEvolution && !canAccessWhatsAppOfficial) {
       return errorResponse('Acesso negado.', 403);
     }
 

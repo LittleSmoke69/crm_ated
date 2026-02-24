@@ -568,7 +568,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
     const crmHours = formatTime((user as { total_crm_time?: number | null }).total_crm_time ?? 0);
     const showRemoveFromBanca = bancaId && (role === 'gerente' || role === 'consultor');
     return (
-      <div className="bg-white rounded-xl shadow-md border border-gray-200 p-3 sm:p-4 hover:shadow-lg transition-shadow overflow-hidden">
+      <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-md border border-gray-200 dark:border-[#404040] p-3 sm:p-4 hover:shadow-lg transition-shadow overflow-hidden">
         <div className="flex items-start justify-between gap-2 mb-3 sm:mb-4">
           <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0">
             <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full ${config.bg} text-white flex items-center justify-center font-bold text-sm flex-shrink-0 shadow-lg`}>
@@ -582,7 +582,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
             </div>
           </div>
           <div className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0">
-            <button onClick={() => handleEditUser(user)} className="p-2.5 sm:p-2 min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 flex items-center justify-center text-gray-400 hover:text-[#8CD955] hover:bg-gray-50 rounded-lg transition-colors touch-manipulation" title="Editar usuário">
+            <button onClick={() => handleEditUser(user)} className="p-2.5 sm:p-2 min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 flex items-center justify-center text-gray-400 dark:text-[#888] hover:text-[#8CD955] dark:hover:text-[#00ff00] hover:bg-gray-50 dark:hover:bg-[#333] rounded-lg transition-colors touch-manipulation" title="Editar usuário">
               <EditIcon className="w-5 h-5" />
             </button>
             {showRemoveFromBanca && (
@@ -598,14 +598,14 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
             <span className="truncate">{user.email}</span>
           </div>
           <div className="grid grid-cols-2 gap-2 sm:gap-3">
-            <div className="bg-gray-50 rounded-lg p-2 min-w-0">
+            <div className="bg-gray-50 dark:bg-[#333] rounded-lg p-2 min-w-0">
               <div className="flex items-center gap-1 mb-0.5">
                 <Clock className="w-3 h-3 text-gray-500 flex-shrink-0" />
                 <span className="text-[10px] sm:text-xs font-medium text-gray-600 truncate">Zaploto</span>
               </div>
               <p className="text-xs sm:text-sm font-bold text-gray-800">{zaplotoHours}</p>
             </div>
-            <div className="bg-gray-50 rounded-lg p-2 min-w-0">
+            <div className="bg-gray-50 dark:bg-[#333] rounded-lg p-2 min-w-0">
               <div className="flex items-center gap-1 mb-0.5">
                 <TrendingUp className="w-3 h-3 text-gray-500 flex-shrink-0" />
                 <span className="text-[10px] sm:text-xs font-medium text-gray-600 truncate">CRM</span>
@@ -722,7 +722,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
             {owner ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">{renderUserCard(owner, 'dono')}</div>
             ) : (
-              <div className="bg-white rounded-xl border border-gray-200 p-6 text-gray-600">
+              <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] p-6 text-gray-600 dark:text-[#aaa]">
                 <p className="font-medium">Nenhum dono cadastrado para esta banca.</p>
                 <p className="text-sm text-gray-500 mt-1">Crie um Dono de Banca ou atribua Gerentes/Consultores diretamente a esta banca.</p>
               </div>
@@ -743,14 +743,14 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                   {gestores.length > 0 && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 mb-3">
                       {gestores.map((u: any) => (
-                        <div key={u.id} className="bg-white rounded-xl border border-teal-100 p-4 flex items-center justify-between gap-2">
+                        <div key={u.id} className="bg-white dark:bg-[#333] rounded-xl border border-teal-100 dark:border-teal-800 p-4 flex items-center justify-between gap-2">
                           <div className="min-w-0">
                             <p className="font-medium text-gray-900 truncate">{u.full_name || u.email}</p>
                             <p className="text-xs text-gray-500 truncate">{u.email}</p>
                             <span className="inline-block mt-1 px-2 py-0.5 rounded text-xs font-bold bg-teal-100 text-teal-700">Gestor</span>
                           </div>
                           <div className="flex items-center gap-1">
-                            <button type="button" onClick={() => handleEditUser(u)} className="p-1.5 text-gray-500 hover:bg-gray-100 rounded" title="Editar"><EditIcon className="w-4 h-4" /></button>
+                            <button type="button" onClick={() => handleEditUser(u)} className="p-1.5 text-gray-500 dark:text-[#888] hover:bg-gray-100 dark:hover:bg-[#404040] rounded" title="Editar"><EditIcon className="w-4 h-4" /></button>
                             <button type="button" onClick={() => removeGestorFromBanca(u.id, crmBanca.id)} disabled={gestorBancaLoading === crmBanca.id} className="p-1.5 text-red-500 hover:bg-red-50 rounded disabled:opacity-50" title="Remover gestor da banca"><X className="w-4 h-4" /></button>
                           </div>
                         </div>
@@ -759,7 +759,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                   )}
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-sm font-medium text-gray-600">Adicionar gestor:</span>
-                    <select value="" onChange={(e) => { const v = e.target.value; if (v) addGestorToBanca(v, crmBanca.id); e.target.value = ''; }} disabled={gestorBancaLoading === crmBanca.id || gestoresAvailable.length === 0} className="bg-white border border-gray-200 px-3 py-2 rounded-lg text-sm font-medium text-gray-700 min-w-[200px] disabled:opacity-50">
+                    <select value="" onChange={(e) => { const v = e.target.value; if (v) addGestorToBanca(v, crmBanca.id); e.target.value = ''; }} disabled={gestorBancaLoading === crmBanca.id || gestoresAvailable.length === 0} className="bg-white dark:bg-[#333] border border-gray-200 dark:border-[#555] px-3 py-2 rounded-lg text-sm font-medium text-gray-700 dark:text-white min-w-[200px] disabled:opacity-50">
                       <option value="">{gestoresAvailable.length === 0 ? 'Nenhum gestor disponível' : 'Selecione um gestor'}</option>
                       {gestoresAvailable.map((u: any) => <option key={u.id} value={u.id}>{u.full_name || u.email}</option>)}
                     </select>
@@ -810,7 +810,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                     </div>
                   ))}
                   {consultoresSemGerenteNaBanca.length > 0 && (
-                    <div className="bg-gray-50/50 rounded-lg p-4 border border-gray-200">
+                    <div className="bg-gray-50/50 dark:bg-[#333] rounded-lg p-4 border border-gray-200 dark:border-[#404040]">
                       <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-3 flex items-center gap-2">
                         <User className="w-4 h-4 text-gray-600" />
                         Consultores diretos (sem gerente nesta banca)
@@ -858,10 +858,10 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
     );
   } else if (dataLoaded) {
     bancasWhenLoaded = (
-      <div className="bg-white rounded-xl shadow-lg border border-gray-200 p-12 text-center">
-        <Building2 className="w-16 h-16 mx-auto mb-4 text-gray-300" />
-        <h3 className="text-xl font-bold text-gray-800 mb-2">Nenhuma banca cadastrada no CRM</h3>
-        <p className="text-gray-600">Cadastre bancas em crm_bancas para que elas apareçam aqui.</p>
+      <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-lg border border-gray-200 dark:border-[#404040] p-12 text-center">
+        <Building2 className="w-16 h-16 mx-auto mb-4 text-gray-300 dark:text-[#555]" />
+        <h3 className="text-xl font-bold text-gray-800 dark:text-white mb-2">Nenhuma banca cadastrada no CRM</h3>
+        <p className="text-gray-600 dark:text-[#aaa]">Cadastre bancas em crm_bancas para que elas apareçam aqui.</p>
       </div>
     );
   }
@@ -870,14 +870,14 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
     <div className="space-y-6 min-w-0 overflow-x-hidden">
       {/* Bancas e Hierarquia - exibido primeiro */}
       <div className="space-y-6">
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-3 sm:p-4 flex flex-col gap-3">
+        <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-sm border border-gray-200 dark:border-[#404040] p-3 sm:p-4 flex flex-col gap-3">
           <div className="flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
             <div className="flex-1 relative w-full min-w-0">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-5 h-5 pointer-events-none" />
-              <input type="text" value={bancaSearch} onChange={(e) => { setBancaSearch(e.target.value); setBancasCurrentPage(1); }} placeholder="Pesquisar banca por nome ou URL..." className="w-full min-w-0 pl-10 pr-4 py-2.5 sm:py-2 text-base sm:text-sm bg-gray-100 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-900 placeholder:text-gray-500" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 dark:text-[#888] w-5 h-5 pointer-events-none" />
+              <input type="text" value={bancaSearch} onChange={(e) => { setBancaSearch(e.target.value); setBancasCurrentPage(1); }} placeholder="Pesquisar banca por nome ou URL..." className="w-full min-w-0 pl-10 pr-4 py-2.5 sm:py-2 text-base sm:text-sm bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-[#888]" />
             </div>
             <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-              <select value={selectedBancaMode} onChange={(e) => { setSelectedBancaMode(e.target.value); setBancasCurrentPage(1); }} disabled={initialLoading} className="flex-1 sm:flex-none px-3 py-2.5 sm:py-2 text-base sm:text-sm border border-gray-300 rounded-lg text-gray-700 bg-white min-w-0 sm:min-w-[180px] disabled:opacity-60 touch-manipulation" title="Bancas a carregar">
+              <select value={selectedBancaMode} onChange={(e) => { setSelectedBancaMode(e.target.value); setBancasCurrentPage(1); }} disabled={initialLoading} className="flex-1 sm:flex-none px-3 py-2.5 sm:py-2 text-base sm:text-sm border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-white bg-white dark:bg-[#333] min-w-0 sm:min-w-[180px] disabled:opacity-60 touch-manipulation" title="Bancas a carregar">
                 <option value="all">{initialLoading ? 'Carregando bancas...' : 'Todas as bancas'}</option>
                 {!initialLoading && (crmBancasBasic || []).map((b: any) => (
                   <option key={b.id} value={b.id}>{b.name || b.url || b.id}</option>
@@ -888,12 +888,12 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
               </button>
               {dataLoaded && (
                 <>
-                  <select value={bancaFilter} onChange={(e) => { setBancaFilter(e.target.value as any); setBancasCurrentPage(1); }} className="px-3 py-2.5 sm:py-2 text-base sm:text-sm border border-gray-300 rounded-lg text-gray-700 bg-white touch-manipulation" title="Filtro de bancas">
+                  <select value={bancaFilter} onChange={(e) => { setBancaFilter(e.target.value as any); setBancasCurrentPage(1); }} className="px-3 py-2.5 sm:py-2 text-base sm:text-sm border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-white bg-white dark:bg-[#333] touch-manipulation" title="Filtro de bancas">
                     <option value="all">Todas</option>
                     <option value="sem_dono">Sem dono</option>
                     <option value="com_dono">Com dono</option>
                   </select>
-                  <button onClick={() => loadHierarchyData(true)} disabled={dataLoading} className="px-3 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-2 touch-manipulation" title="Recarregar">
+                  <button onClick={() => loadHierarchyData(true)} disabled={dataLoading} className="px-3 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-[#ccc] hover:bg-gray-50 dark:hover:bg-[#333] transition-colors flex items-center gap-2 touch-manipulation" title="Recarregar">
                     <RefreshCw className="w-4 h-4" />
                     <span className="hidden sm:inline">Recarregar</span>
                   </button>
@@ -902,19 +902,19 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
             </div>
           </div>
           {!dataLoaded && (
-            <p className="text-sm text-gray-600">Selecione &quot;Todas as bancas&quot; ou uma banca específica e clique em <strong>Carregar dados</strong> para exibir a hierarquia.</p>
+            <p className="text-sm text-gray-600 dark:text-[#aaa]">Selecione &quot;Todas as bancas&quot; ou uma banca específica e clique em <strong>Carregar dados</strong> para exibir a hierarquia.</p>
           )}
         </div>
 
         {dataLoading ? (
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
-            <Loader2 className="w-12 h-12 mx-auto mb-4 text-[#8CD955] animate-spin" />
-            <p className="text-gray-600">Carregando hierarquia...</p>
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-sm border border-gray-200 dark:border-[#404040] p-12 text-center">
+            <Loader2 className="w-12 h-12 mx-auto mb-4 text-[#8CD955] dark:text-[#00ff00] animate-spin" />
+            <p className="text-gray-600 dark:text-[#aaa]">Carregando hierarquia...</p>
           </div>
         ) : !dataLoaded ? (
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
-            <Building2 className="w-16 h-16 mx-auto mb-4 text-gray-300" />
-            <p className="text-gray-600">Selecione uma opção acima e clique em <strong>Carregar dados</strong> para visualizar as bancas e a hierarquia.</p>
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-sm border border-gray-200 dark:border-[#404040] p-12 text-center">
+            <Building2 className="w-16 h-16 mx-auto mb-4 text-gray-300 dark:text-[#555]" />
+            <p className="text-gray-600 dark:text-[#aaa]">Selecione uma opção acima e clique em <strong>Carregar dados</strong> para visualizar as bancas e a hierarquia.</p>
           </div>
         ) : (
           bancasWhenLoaded
@@ -925,8 +925,8 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
 
       {showEditModal && editingUser && (
         <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="p-6 border-b border-gray-200 flex items-center justify-between bg-gradient-to-r from-[#8CD955] to-[#7BC84A] text-white">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-gray-200 dark:border-[#404040]">
+            <div className="p-6 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between bg-gradient-to-r from-[#8CD955] to-[#7BC84A] dark:from-[#00ff00] dark:to-[#00e600] text-white">
               <h2 className="text-xl font-bold flex items-center gap-2"><EditIcon className="w-6 h-6" /> Editar Usuário</h2>
               <button onClick={() => { setShowEditModal(false); setEditingUser(null); }} className="hover:bg-white/20 p-1.5 rounded-lg transition-colors"><X className="w-6 h-6" /></button>
             </div>
@@ -950,8 +950,8 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
 
       {showCreateModal && (
         <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="p-6 border-b border-gray-200 flex items-center justify-between bg-gradient-to-r from-blue-600 to-blue-500 text-white">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-gray-200 dark:border-[#404040]">
+            <div className="p-6 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between bg-gradient-to-r from-blue-600 to-blue-500 text-white">
               <h2 className="text-xl font-bold flex items-center gap-2">
                 <UserPlus className="w-6 h-6" />
                 Criar {createFormData.status === 'dono_banca' ? 'Dono de Banca' : createFormData.status === 'gestor' ? 'Gestor de Tráfego' : createFormData.status === 'gerente' ? 'Gerente' : 'Consultor'}
@@ -1009,28 +1009,28 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
 
       {showFixModal && fixingIssue && (
         <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="p-6 border-b border-gray-200 flex items-center justify-between bg-gradient-to-r from-amber-600 to-amber-500 text-white">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-gray-200 dark:border-[#404040]">
+            <div className="p-6 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between bg-gradient-to-r from-amber-600 to-amber-500 text-white">
               <h2 className="text-xl font-bold flex items-center gap-2"><AlertCircle className="w-6 h-6" /> Corrigir Problema</h2>
               <button onClick={() => { setShowFixModal(false); setFixingIssue(null); setSelectedEnroller(''); }} className="hover:bg-white/20 p-1.5 rounded-lg transition-colors"><X className="w-6 h-6" /></button>
             </div>
             <div className="p-6 space-y-4">
-              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-                <p className="text-sm font-medium text-red-800 mb-1">Usuário:</p>
-                <p className="text-sm text-red-700">{fixingIssue.email}</p>
-                <p className="text-sm font-medium text-red-800 mt-2 mb-1">Problema:</p>
-                <p className="text-sm text-red-700">{fixingIssue.issue}</p>
+              <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg p-4">
+                <p className="text-sm font-medium text-red-800 dark:text-red-300 mb-1">Usuário:</p>
+                <p className="text-sm text-red-700 dark:text-red-200">{fixingIssue.email}</p>
+                <p className="text-sm font-medium text-red-800 dark:text-red-300 mt-2 mb-1">Problema:</p>
+                <p className="text-sm text-red-700 dark:text-red-200">{fixingIssue.issue}</p>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Banca (CRM)</label>
-                <select value={selectedFixBancaId} onChange={(e) => { setSelectedFixBancaId(e.target.value); setSelectedEnroller(''); }} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 text-gray-700">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Banca (CRM)</label>
+                <select value={selectedFixBancaId} onChange={(e) => { setSelectedFixBancaId(e.target.value); setSelectedEnroller(''); }} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 text-gray-700">
                   <option value="">Selecione...</option>
                   {(crmBancas || []).map((b: any) => <option key={b.id} value={String(b.id)}>{b.name} ({normalizeBancaUrl(b.url)})</option>)}
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Cargo</label>
-                <select value={selectedFixRole} onChange={(e) => { setSelectedFixRole(e.target.value as any); setSelectedEnroller(''); }} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 text-gray-700">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Cargo</label>
+                <select value={selectedFixRole} onChange={(e) => { setSelectedFixRole(e.target.value as any); setSelectedEnroller(''); }} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 text-gray-700">
                   <option value="dono_banca">Dono de banca</option>
                   <option value="gerente">Gerente</option>
                   <option value="consultor">Consultor</option>
@@ -1038,15 +1038,15 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
               </div>
               {selectedFixRole === 'consultor' && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Selecione o Gerente</label>
-                  <select value={selectedEnroller} onChange={(e) => setSelectedEnroller(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 text-gray-700">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Selecione o Gerente</label>
+                  <select value={selectedEnroller} onChange={(e) => setSelectedEnroller(e.target.value)} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 text-gray-700">
                     <option value="">Selecione...</option>
                     {selectedFixBancaId && getManagersByCrmBanca(selectedFixBancaId).map((m: any) => <option key={m.id} value={m.id}>{m.full_name || m.email}</option>)}
                   </select>
                 </div>
               )}
               <div className="flex justify-end gap-3 pt-4">
-                <button type="button" onClick={() => { setShowFixModal(false); setFixingIssue(null); setSelectedEnroller(''); }} className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors">Cancelar</button>
+                <button type="button" onClick={() => { setShowFixModal(false); setFixingIssue(null); setSelectedEnroller(''); }} className="px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors">Cancelar</button>
                 <button onClick={handleSaveFix} disabled={!selectedFixBancaId || (selectedFixRole === 'consultor' && !selectedEnroller)} className="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed">Corrigir</button>
               </div>
             </div>
@@ -1056,8 +1056,8 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
 
       {showAssignModal && assignFormData && (
         <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
-            <div className="p-6 border-b border-gray-200 flex items-center justify-between bg-gradient-to-r from-teal-600 to-teal-500 text-white">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden border border-gray-200 dark:border-[#404040]">
+            <div className="p-6 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between bg-gradient-to-r from-teal-600 to-teal-500 text-white">
               <h2 className="text-xl font-bold flex items-center gap-2">
                 <UserCheck className="w-6 h-6" />
                 Atribuir {assignFormData.status === 'dono_banca' ? 'Dono de Banca' : assignFormData.status === 'gerente' ? 'Gerente' : 'Consultor'}
@@ -1067,8 +1067,8 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
             <div className="p-6 space-y-4">
               {assignFormData.status === 'consultor' && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Selecione o Gerente</label>
-                  <select value={assignFormData.enroller} onChange={(e) => setAssignFormData((prev: any) => prev ? { ...prev, enroller: e.target.value } : prev)} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500 text-gray-700">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Selecione o Gerente</label>
+                  <select value={assignFormData.enroller} onChange={(e) => setAssignFormData((prev: any) => prev ? { ...prev, enroller: e.target.value } : prev)} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500 text-gray-700">
                     <option value="">Selecione o gerente...</option>
                     {getManagersByCrmBanca(assignFormData.bancaId).map((m: any) => (
                       <option key={m.id} value={m.id}>{m.full_name || m.email}</option>
@@ -1079,18 +1079,18 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                   )}
                 </div>
               )}
-              <p className="text-sm text-gray-600">Selecione um ou mais usuários que já possuem conta para atribuir a esse cargo:</p>
+              <p className="text-sm text-gray-600 dark:text-gray-400">Selecione um ou mais usuários que já possuem conta para atribuir a esse cargo:</p>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Buscar usuário</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Buscar usuário</label>
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500" />
-                  <input type="text" value={assignUserSearch} onChange={(e) => setAssignUserSearch(e.target.value)} placeholder="Nome ou email..." className="w-full pl-10 pr-4 py-2 bg-gray-100 border border-gray-200 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500 text-gray-900 placeholder:text-gray-500" />
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500 dark:text-gray-400" />
+                  <input type="text" value={assignUserSearch} onChange={(e) => setAssignUserSearch(e.target.value)} placeholder="Nome ou email..." className="w-full pl-10 pr-4 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#555] dark:text-white rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500 text-gray-900 placeholder:text-gray-500 dark:placeholder:text-gray-400" />
                 </div>
               </div>
               {assignSelectedUserIds.length > 0 && (
                 <p className="text-xs text-teal-600 font-medium">{assignSelectedUserIds.length} usuário(s) selecionado(s)</p>
               )}
-              <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+              <div className="max-h-64 overflow-y-auto border border-gray-200 dark:border-[#404040] rounded-lg divide-y divide-gray-100 dark:divide-[#404040]">
                 {(() => {
                   const search = assignUserSearch.trim().toLowerCase();
                   const filtered = (allUsers || []).filter((u: any) => {
@@ -1101,15 +1101,15 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                   return filtered.length > 0 ? filtered.map((u: any) => {
                     const alreadyAssignedToThisGerente = selectedGerenteId && u.status === 'consultor' && u.enroller === selectedGerenteId;
                     return (
-                      <button key={u.id} type="button" onClick={() => toggleAssignUser(u.id)} className={`w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-gray-50 transition-colors ${assignSelectedUserIds.includes(u.id) ? 'bg-teal-50 border-l-4 border-teal-500' : ''} ${alreadyAssignedToThisGerente ? 'border-l-4 border-amber-400 bg-amber-50/50' : ''}`}>
-                        <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center font-bold text-gray-600 flex-shrink-0">{(u.full_name || u.email)[0]?.toUpperCase() || '?'}</div>
+                      <button key={u.id} type="button" onClick={() => toggleAssignUser(u.id)} className={`w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-gray-50 dark:hover:bg-[#333] transition-colors ${assignSelectedUserIds.includes(u.id) ? 'bg-teal-50 dark:bg-teal-900/30 border-l-4 border-teal-500' : ''} ${alreadyAssignedToThisGerente ? 'border-l-4 border-amber-400 bg-amber-50/50 dark:bg-amber-900/20' : ''}`}>
+                        <div className="w-10 h-10 rounded-full bg-gray-200 dark:bg-[#404040] flex items-center justify-center font-bold text-gray-600 dark:text-gray-300 flex-shrink-0">{(u.full_name || u.email)[0]?.toUpperCase() || '?'}</div>
                         <div className="flex-1 min-w-0">
-                          <p className="font-medium text-gray-900 truncate">{u.full_name || 'Sem nome'}</p>
-                          <p className="text-xs text-gray-500 truncate">{u.email}</p>
+                          <p className="font-medium text-gray-900 dark:text-white truncate">{u.full_name || 'Sem nome'}</p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{u.email}</p>
                           <div className="flex flex-wrap items-center gap-1.5 mt-1">
-                            <span className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">{u.status}</span>
+                            <span className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-gray-100 dark:bg-[#404040] text-gray-600 dark:text-gray-300">{u.status}</span>
                             {alreadyAssignedToThisGerente && (
-                              <span className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200" title="Este consultor já está atribuído a este gerente">
+                              <span className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200 border border-amber-200 dark:border-amber-700" title="Este consultor já está atribuído a este gerente">
                                 Já atribuído
                               </span>
                             )}
@@ -1119,12 +1119,12 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                       </button>
                     );
                   }) : (
-                    <div className="px-4 py-8 text-center text-gray-500 text-sm">Nenhum usuário encontrado. Verifique se há usuários cadastrados.</div>
+                    <div className="px-4 py-8 text-center text-gray-500 dark:text-gray-400 text-sm">Nenhum usuário encontrado. Verifique se há usuários cadastrados.</div>
                   );
                 })()}
               </div>
               <div className="flex justify-end gap-3 pt-4">
-                <button type="button" onClick={() => { setShowAssignModal(false); setAssignFormData(null); setAssignSelectedUserIds([]); }} className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors">Cancelar</button>
+                <button type="button" onClick={() => { setShowAssignModal(false); setAssignFormData(null); setAssignSelectedUserIds([]); }} className="px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors">Cancelar</button>
                 <button onClick={handleAssignUser} disabled={assignSelectedUserIds.length === 0 || assignLoading || (assignFormData.status === 'consultor' && !assignFormData.enroller)} className="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2">
                   {assignLoading ? <><Loader2 className="w-4 h-4 animate-spin" /> Atribuindo...</> : `Atribuir${assignSelectedUserIds.length > 0 ? ` (${assignSelectedUserIds.length})` : ''}`}
                 </button>
@@ -1136,8 +1136,8 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
 
       {showMoveConsultantsModal && moveContext && (
         <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
-            <div className="p-6 border-b border-gray-200 flex items-center justify-between bg-gradient-to-r from-amber-500 to-amber-600 text-white">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden border border-gray-200 dark:border-[#404040]">
+            <div className="p-6 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between bg-gradient-to-r from-amber-500 to-amber-600 text-white">
               <h2 className="text-xl font-bold flex items-center gap-2">
                 <ArrowRightLeft className="w-6 h-6" />
                 Mover consultores para outro gerente
@@ -1145,12 +1145,12 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
               <button onClick={() => { setShowMoveConsultantsModal(false); setMoveContext(null); setMoveSelectedConsultantIds([]); setMoveTargetGerenteId(''); setMoveConsultantSearch(''); }} className="hover:bg-white/20 p-1.5 rounded-lg transition-colors"><X className="w-6 h-6" /></button>
             </div>
             <div className="p-6 space-y-4">
-              <p className="text-sm text-gray-600">
-                Gerente atual: <strong>{moveContext.sourceGerente.full_name || moveContext.sourceGerente.email}</strong>
+              <p className="text-sm text-gray-600 dark:text-gray-400">
+                Gerente atual: <strong className="text-gray-900 dark:text-white">{moveContext.sourceGerente.full_name || moveContext.sourceGerente.email}</strong>
               </p>
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <label className="block text-sm font-medium text-gray-700">Selecione os consultores a mover:</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Selecione os consultores a mover:</label>
                   {(() => {
                     const subordinates = moveContext.sourceGerente.subordinates || [];
                     const search = moveConsultantSearch.trim().toLowerCase();
@@ -1167,25 +1167,25 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                   })()}
                 </div>
                 <div className="relative mb-2">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
-                  <input type="text" value={moveConsultantSearch} onChange={(e) => setMoveConsultantSearch(e.target.value)} placeholder="Buscar por nome ou e-mail..." className="w-full pl-9 pr-4 py-2 bg-gray-100 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500 text-gray-900 placeholder:text-gray-500" />
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-gray-400" />
+                  <input type="text" value={moveConsultantSearch} onChange={(e) => setMoveConsultantSearch(e.target.value)} placeholder="Buscar por nome ou e-mail..." className="w-full pl-9 pr-4 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#555] dark:text-white rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500 text-gray-900 placeholder:text-gray-500 dark:placeholder:text-gray-400" />
                 </div>
-                <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+                <div className="max-h-48 overflow-y-auto border border-gray-200 dark:border-[#404040] rounded-lg divide-y divide-gray-100 dark:divide-[#404040]">
                   {(() => {
                     const subordinates = moveContext.sourceGerente.subordinates || [];
                     const search = moveConsultantSearch.trim().toLowerCase();
                     const filtered = search ? subordinates.filter((c: any) => (String(c.full_name || '').toLowerCase().includes(search) || String(c.email || '').toLowerCase().includes(search))) : subordinates;
                     return filtered.length > 0 ? filtered.map((c: any) => (
-                    <button key={c.id} type="button" onClick={() => toggleMoveConsultant(c.id)} className={`w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-gray-50 transition-colors ${moveSelectedConsultantIds.includes(c.id) ? 'bg-amber-50 border-l-4 border-amber-500' : ''}`}>
-                      <div className="w-9 h-9 rounded-full bg-green-200 flex items-center justify-center font-bold text-green-800 text-sm flex-shrink-0">{(c.full_name || c.email)[0]?.toUpperCase() || '?'}</div>
+                    <button key={c.id} type="button" onClick={() => toggleMoveConsultant(c.id)} className={`w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-gray-50 dark:hover:bg-[#333] transition-colors ${moveSelectedConsultantIds.includes(c.id) ? 'bg-amber-50 dark:bg-amber-900/30 border-l-4 border-amber-500' : ''}`}>
+                      <div className="w-9 h-9 rounded-full bg-green-200 dark:bg-green-900/50 flex items-center justify-center font-bold text-green-800 dark:text-green-300 text-sm flex-shrink-0">{(c.full_name || c.email)[0]?.toUpperCase() || '?'}</div>
                       <div className="flex-1 min-w-0">
-                        <p className="font-medium text-gray-900 truncate">{c.full_name || 'Sem nome'}</p>
-                        <p className="text-xs text-gray-500 truncate">{c.email}</p>
+                        <p className="font-medium text-gray-900 dark:text-white truncate">{c.full_name || 'Sem nome'}</p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{c.email}</p>
                       </div>
                       {moveSelectedConsultantIds.includes(c.id) && <CheckCircle2 className="w-5 h-5 text-amber-600 flex-shrink-0" />}
                     </button>
                   )) : (
-                    <div className="px-4 py-6 text-center text-gray-500 text-sm">
+                    <div className="px-4 py-6 text-center text-gray-500 dark:text-gray-400 text-sm">
                       {moveConsultantSearch.trim() ? `Nenhum consultor encontrado com "${moveConsultantSearch.trim()}"` : 'Nenhum consultor na lista'}
                     </div>
                   );
@@ -1196,8 +1196,8 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                 )}
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Mover para o gerente:</label>
-                <select value={moveTargetGerenteId} onChange={(e) => setMoveTargetGerenteId(e.target.value)} className="w-full border border-gray-300 rounded-lg px-4 py-2 text-gray-700 focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Mover para o gerente:</label>
+                <select value={moveTargetGerenteId} onChange={(e) => setMoveTargetGerenteId(e.target.value)} className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-4 py-2 text-gray-700 focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
                   <option value="">Selecione o gerente de destino</option>
                   {(moveContext.owner.subordinates || [])
                     .filter((g: any) => g.id !== moveContext.sourceGerente.id)
@@ -1207,7 +1207,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                 </select>
               </div>
               <div className="flex justify-end gap-3 pt-4">
-                <button type="button" onClick={() => { setShowMoveConsultantsModal(false); setMoveContext(null); setMoveSelectedConsultantIds([]); setMoveTargetGerenteId(''); setMoveConsultantSearch(''); }} className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors">Cancelar</button>
+                <button type="button" onClick={() => { setShowMoveConsultantsModal(false); setMoveContext(null); setMoveSelectedConsultantIds([]); setMoveTargetGerenteId(''); setMoveConsultantSearch(''); }} className="px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors">Cancelar</button>
                 <button onClick={handleMoveConsultants} disabled={moveSelectedConsultantIds.length === 0 || !moveTargetGerenteId || moveLoading} className="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2">
                   {moveLoading ? <><Loader2 className="w-4 h-4 animate-spin" /> Movendo...</> : `Mover (${moveSelectedConsultantIds.length || 0})`}
                 </button>

@@ -217,6 +217,10 @@ export default function AdminLeadTransferPage() {
     total_apostado_snapshot?: number | null;
     total_ganho_snapshot?: number | null;
     available_withdraw_snapshot?: number | null;
+    resolution_status?: 'pending' | 'vinculado' | 'disponivel_retransferencia';
+    resolved_at?: string | null;
+    current_total_depositado_at_resolution?: number | null;
+    current_total_apostado_at_resolution?: number | null;
     name?: string | null;
     last_name?: string | null;
     email?: string | null;
@@ -232,6 +236,10 @@ export default function AdminLeadTransferPage() {
   const [modalEntries, setModalEntries] = useState<ModalEntry[]>([]);
   const [loadingModalEntries, setLoadingModalEntries] = useState(false);
   const [modalLeadsPage, setModalLeadsPage] = useState(1);
+  const [resolvingTransfer, setResolvingTransfer] = useState(false);
+  const [moveToNextOpen, setMoveToNextOpen] = useState(false);
+  const [moveTargetEmail, setMoveTargetEmail] = useState('');
+  const [movingLeads, setMovingLeads] = useState(false);
   /** Valor mínimo em reais: mostra apenas leads cuja soma dos saldos atinge esse valor (ordem: maior saldo primeiro) */
   const [minSumBalance, setMinSumBalance] = useState<string>('');
   /** Atualizando saldos das transferências (backfill) */
@@ -909,6 +917,118 @@ export default function AdminLeadTransferPage() {
     }
   };
 
+  const loadModalEntries = useCallback(async () => {
+    if (!bancaId || !userId || !selectedLogForModal?.id) return;
+    setLoadingModalEntries(true);
+    try {
+      const res = await fetch(
+        `/api/admin/crm/transfer-logs/entries?log_id=${encodeURIComponent(selectedLogForModal.id)}&banca_id=${encodeURIComponent(bancaId)}`,
+        { headers: headers() }
+      );
+      const json = await res.json();
+      if (res.ok && json.success && Array.isArray(json.data)) {
+        setModalEntries(json.data);
+      } else {
+        setModalEntries([]);
+      }
+    } catch {
+      setModalEntries([]);
+    } finally {
+      setLoadingModalEntries(false);
+    }
+  }, [bancaId, userId, selectedLogForModal?.id]);
+
+  const RESOLVE_MANY_LEADS_THRESHOLD = 30;
+
+  const runResolveTransfer = async () => {
+    if (!bancaId || !userId || !selectedLogForModal?.id) return;
+    const count = modalEntries.length;
+    const runInBackground = count >= RESOLVE_MANY_LEADS_THRESHOLD;
+
+    if (runInBackground) {
+      const confirmed = window.confirm(
+        `Esta transferência tem ${count} leads. A resolução pode demorar e será executada em segundo plano. Você pode fechar o modal e reabrir depois para ver o resultado.\n\nDeseja continuar?`
+      );
+      if (!confirmed) return;
+    }
+
+    const doResolve = () => {
+      if (runInBackground) {
+        showToast(`Resolução em andamento em segundo plano (${count} leads). Reabra o modal em alguns minutos para ver o resultado.`, 'info');
+        setResolvingTransfer(false);
+      } else {
+        setResolvingTransfer(true);
+      }
+
+      fetch('/api/admin/crm/transfer-logs/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers() },
+        body: JSON.stringify({ log_id: selectedLogForModal!.id, banca_id: bancaId }),
+      })
+        .then((res) => res.json())
+        .then(async (json) => {
+          if (json.success) {
+            const msg = json.data?.message ?? 'Resolução concluída.';
+            showToast(msg, 'success');
+            await loadModalEntries();
+          } else {
+            showToast(json?.error ?? 'Erro ao resolver transferência.', 'error');
+          }
+        })
+        .catch(() => {
+          showToast('Erro ao resolver transferência.', 'error');
+        })
+        .finally(() => {
+          setResolvingTransfer(false);
+        });
+    };
+
+    doResolve();
+  };
+
+  const runMoveToNext = async () => {
+    const sourceEmail = (selectedLogForModal as { target_consultant_email?: string })?.target_consultant_email?.trim();
+    if (!bancaId || !userId || !sourceEmail || !moveTargetEmail?.trim()) {
+      showToast('Selecione o consultor destino para repassar os leads.', 'info');
+      return;
+    }
+    const disponivelEntries = modalEntries.filter((e) => e.resolution_status === 'disponivel_retransferencia');
+    const leadIds = disponivelEntries.map((e) => e.lead_id);
+    if (leadIds.length === 0) {
+      showToast('Nenhum lead disponível para repasse.', 'info');
+      return;
+    }
+    setMovingLeads(true);
+    try {
+      const res = await fetch('/api/admin/crm/redistribute-leads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers() },
+        body: JSON.stringify({
+          banca_id: bancaId,
+          source_consultant_email: sourceEmail,
+          target_consultant_email: moveTargetEmail.trim(),
+          leads_ids: leadIds,
+          transfer_type: 'TF',
+        }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        showToast(json?.data?.message ?? `${leadIds.length} lead(s) repassado(s).`, 'success');
+        setMoveToNextOpen(false);
+        setMoveTargetEmail('');
+        await loadTransferLogs();
+        await loadTransferStats();
+        await loadModalEntries();
+      } else {
+        showToast(json?.error ?? 'Erro ao repassar leads.', 'error');
+      }
+    } catch {
+      showToast('Erro ao repassar leads.', 'error');
+    } finally {
+      setMovingLeads(false);
+    }
+  };
+
   const loadTransferStatsByBanca = async () => {
     if (!userId) return;
     setLoadingStatsByBanca(true);
@@ -1067,47 +1187,47 @@ export default function AdminLeadTransferPage() {
 
   return (
     <Layout>
-      <div className="min-h-screen bg-gray-50/50">
+      <div className="min-h-screen bg-gray-50/50 dark:bg-[#1a1a1a]">
         <div className="p-4 md:p-6 max-w-[1600px] w-full mx-auto space-y-6">
           <div className="flex items-center gap-2 text-sm">
             <button
               type="button"
               onClick={() => router.push('/admin')}
-              className="text-[#8CD955] font-medium hover:underline"
+              className="text-[#8CD955] dark:text-[#00ff00] font-medium hover:underline"
             >
               Admin
             </button>
-            <span className="text-gray-400">/</span>
-            <span className="text-gray-600 font-medium">Transferência de Leads</span>
+            <span className="text-gray-400 dark:text-[#666]">/</span>
+            <span className="text-gray-600 dark:text-[#aaa] font-medium">Transferência de Leads</span>
           </div>
 
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div>
-              <h1 className="text-xl md:text-2xl font-bold text-gray-900 flex items-center gap-3">
+              <h1 className="text-xl md:text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
                 <div className="p-2.5 rounded-xl bg-[#8CD955]/15 border border-[#8CD955]/30">
                   <ArrowRightLeft className="w-6 h-6 text-[#8CD955]" />
                 </div>
                 Transferência de Leads
               </h1>
-              <p className="text-gray-600 text-sm mt-1.5 max-w-xl">
+              <p className="text-gray-600 dark:text-[#aaa] text-sm mt-1.5 max-w-xl">
                 Redistribua leads de um consultor para outro na mesma banca.
               </p>
             </div>
           </div>
 
           {/* Abas: Transferir | Histórico */}
-          <div className="flex gap-1 p-1 bg-gray-100 rounded-xl w-fit">
+          <div className="flex gap-1 p-1 bg-gray-100 dark:bg-[#333] rounded-xl w-fit">
             <button
               type="button"
               onClick={() => setActiveTab('transfer')}
-              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'transfer' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'transfer' ? 'bg-white dark:bg-[#2a2a2a] text-gray-900 dark:text-white shadow-sm' : 'text-gray-600 dark:text-[#aaa] hover:text-gray-900 dark:hover:text-white'}`}
             >
               Transferir
             </button>
             <button
               type="button"
               onClick={() => setActiveTab('history')}
-              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'history' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'history' ? 'bg-white dark:bg-[#2a2a2a] text-gray-900 dark:text-white shadow-sm' : 'text-gray-600 dark:text-[#aaa] hover:text-gray-900 dark:hover:text-white'}`}
             >
               Histórico & Conversão
             </button>
@@ -1115,36 +1235,36 @@ export default function AdminLeadTransferPage() {
 
           {activeTab === 'history' ? (
             /* Conteúdo da aba Histórico (Gestão) - colapsado em aba separada */
-            <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm ring-1 ring-gray-100">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl border border-gray-200 dark:border-[#404040] p-5 shadow-sm ring-1 ring-gray-100 dark:ring-transparent">
               <div className="mb-4">
-                <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                <h2 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
                   <BarChart3 className="w-5 h-5 text-[#8CD955]" />
                   Histórico e conversão
                 </h2>
                 <p className="text-sm text-gray-600 mt-1">Dados carregados por padrão (últimos 30 dias). Filtros de data, tipo e consultor para refinar.</p>
               </div>
               {/* Seleção de período: clique abre calendário (sem digitar data) */}
-              <div className="flex flex-wrap items-end gap-3 p-4 bg-white rounded-xl border border-gray-200 mb-6">
-                <span className="text-sm font-medium text-gray-700">Período:</span>
-                <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 px-3 py-2 rounded-lg">
+              <div className="flex flex-wrap items-end gap-3 p-4 bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] mb-6">
+                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Período:</span>
+                <div className="flex items-center gap-2 bg-gray-50 dark:bg-[#333] border border-gray-200 dark:border-[#555] px-3 py-2 rounded-lg">
                   <Calendar className="w-4 h-4 text-gray-400 shrink-0" aria-hidden />
                   <DateInputDDMMYYYY
                     value={managementFrom}
                     onChange={setManagementFrom}
                     maxDate={getTodaySãoPaulo()}
-                    className="w-28 bg-transparent text-sm font-semibold text-gray-700"
+                    className="w-28 bg-transparent text-sm font-semibold text-gray-700 dark:text-gray-200"
                   />
-                  <span className="text-gray-300">—</span>
+                  <span className="text-gray-300 dark:text-gray-500">—</span>
                   <DateInputDDMMYYYY
                     value={managementTo}
                     onChange={setManagementTo}
                     maxDate={getTodaySãoPaulo()}
-                    className="w-28 bg-transparent text-sm font-semibold text-gray-700"
+                    className="w-28 bg-transparent text-sm font-semibold text-gray-700 dark:text-gray-200"
                   />
                 </div>
-                <div className="border-l border-gray-200 pl-3 ml-1">
-                  <label className="text-xs font-semibold text-gray-600 block mb-1">Tipo</label>
-                  <select value={managementTransferType} onChange={(e) => setManagementTransferType(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[100px]">
+                <div className="border-l border-gray-200 dark:border-[#404040] pl-3 ml-1">
+                  <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Tipo</label>
+                  <select value={managementTransferType} onChange={(e) => setManagementTransferType(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[100px]">
                     <option value="">Todos</option>
                     <option value="TF">TF</option>
                     <option value="TF1">TF1</option>
@@ -1153,15 +1273,15 @@ export default function AdminLeadTransferPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs font-semibold text-gray-600 block mb-1">Consultor (conversão)</label>
+                  <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Consultor (conversão)</label>
                   <button
                     type="button"
                     onClick={openConversionConsultantModal}
                     disabled={!bancaId || loadingConsultants}
-                    className="flex items-center gap-2 min-w-[200px] max-w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-left bg-white hover:bg-gray-50 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex items-center gap-2 min-w-[200px] max-w-full border border-gray-300 dark:border-[#555] rounded-lg px-3 py-2 text-sm text-left bg-white dark:bg-[#333] dark:text-white hover:bg-gray-50 dark:hover:bg-[#404040] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    <User className="w-4 h-4 text-gray-500 flex-shrink-0" />
-                    <span className="truncate text-gray-800">
+                    <User className="w-4 h-4 text-gray-500 dark:text-gray-400 flex-shrink-0" />
+                    <span className="truncate text-gray-800 dark:text-white">
                       {!bancaId ? 'Selecione a banca' : loadingConsultants ? 'Carregando...' : consultants.length === 0 ? 'Nenhum consultor' : conversionConsultant ? (consultants.find((c) => c.email === conversionConsultant)?.full_name || conversionConsultant) : 'Selecionar consultor (conversão)'}
                     </span>
                     <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0 ml-auto" />
@@ -1179,20 +1299,20 @@ export default function AdminLeadTransferPage() {
               {managementLoaded && (
                 <>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-                  <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
-                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Transferidos (total)</p>
+                  <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl p-4 shadow-sm">
+                    <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Transferidos (total)</p>
                     <p className="text-2xl font-bold text-[#8CD955] mt-1">{transferStats?.totalTransferred ?? 0}</p>
                   </div>
-                  <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
-                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Com saldo</p>
+                  <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl p-4 shadow-sm">
+                    <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Com saldo</p>
                     <p className="text-2xl font-bold text-emerald-600 mt-1">{transferStats?.transferidos_com_saldo ?? 0}</p>
                   </div>
-                  <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
-                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Sem saldo</p>
+                  <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl p-4 shadow-sm">
+                    <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Sem saldo</p>
                     <p className="text-2xl font-bold text-gray-600 mt-1">{transferStats?.transferidos_sem_saldo ?? 0}</p>
                   </div>
-                  <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
-                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Convertidos (destino)</p>
+                  <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl p-4 shadow-sm">
+                    <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Convertidos (destino)</p>
                     <p className="text-2xl font-bold text-[#8CD955] mt-1">
                       {conversionConsultant ? `${transferStats?.convertedCount ?? 0} / ${transferStats?.receivedByTarget ?? 0}` : '-'}
                     </p>
@@ -1200,8 +1320,8 @@ export default function AdminLeadTransferPage() {
                 </div>
                 {SHOW_BAR_CHART_BY_BANCA && (
                 <div className="mb-6">
-                  <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
-                    <h3 className="text-sm font-bold text-gray-800 mb-3">Transferências por banca (quantidade total de leads)</h3>
+                  <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-2xl p-5 shadow-sm">
+                    <h3 className="text-sm font-bold text-gray-800 dark:text-white mb-3">Transferências por banca (quantidade total de leads)</h3>
                     <p className="text-xs text-gray-500 mb-3">Bancas com transferências aparecem primeiro, ordenadas pela quantidade de leads.</p>
                     <div className="min-h-[420px] h-[32rem] max-h-[520px] w-full">
                       {loadingStatsByBanca ? (
@@ -1219,8 +1339,8 @@ export default function AdminLeadTransferPage() {
                                 if (!active || !payload?.length) return null;
                                 const value = payload[0]?.value ?? payload[0]?.payload?.total_leads ?? 0;
                                 return (
-                                  <div className="bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2 text-sm">
-                                    <p className="font-semibold text-gray-800">{label}</p>
+                                  <div className="bg-white dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg shadow-lg px-3 py-2 text-sm">
+                                    <p className="font-semibold text-gray-800 dark:text-white">{label}</p>
                                     <p className="text-[#8CD955] font-bold tabular-nums">{Number(value).toLocaleString('pt-BR')} leads</p>
                                   </div>
                                 );
@@ -1241,8 +1361,8 @@ export default function AdminLeadTransferPage() {
                 </div>
                 )}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-                  <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
-                    <h3 className="text-sm font-bold text-gray-800 mb-3">Quantidade por tipo</h3>
+                  <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-2xl p-5 shadow-sm">
+                    <h3 className="text-sm font-bold text-gray-800 dark:text-white mb-3">Quantidade por tipo</h3>
                     <div className="h-64">
                       {loadingStats ? (
                         <div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" /></div>
@@ -1262,8 +1382,8 @@ export default function AdminLeadTransferPage() {
                       })()}
                     </div>
                   </div>
-                  <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
-                    <h3 className="text-sm font-bold text-gray-800 mb-3">Conversão</h3>
+                  <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-2xl p-5 shadow-sm">
+                    <h3 className="text-sm font-bold text-gray-800 dark:text-white mb-3">Conversão</h3>
                     {loadingStats ? <div className="flex items-center justify-center h-64"><Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" /></div> : conversionConsultant ? (() => {
                       const received = transferStats?.receivedByTarget ?? 0;
                       const converted = transferStats?.convertedCount ?? 0;
@@ -1282,31 +1402,31 @@ export default function AdminLeadTransferPage() {
                 </div>
                 </>
               )}
-              <div className="overflow-x-auto border border-gray-200 rounded-2xl shadow-sm bg-white">
+              <div className="overflow-x-auto border border-gray-200 dark:border-[#404040] rounded-2xl shadow-sm bg-white dark:bg-[#2a2a2a]">
                 <table className="w-full text-sm min-w-[1000px]">
-                  <thead className="bg-gray-100 border-b-2 border-gray-200">
+                  <thead className="bg-gray-100 dark:bg-[#333] border-b-2 border-gray-200 dark:border-[#404040]">
                     <tr>
-                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 w-[120px]">Banca</th>
-                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 w-[140px]">Data/Hora</th>
-                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 w-[52px]">Tipo</th>
-                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 min-w-[120px]">Origem</th>
-                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 min-w-[120px]">Destino</th>
-                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 w-[90px]">Quem fez</th>
-                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 w-[56px]">Qtd</th>
-                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 w-[100px]">Total saldo</th>
-                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 min-w-[140px]">Leads (IDs)</th>
-                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 w-[90px]">Re-transfer.</th>
-                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 w-[130px]">Prazo 10d</th>
-                      <th className="text-center py-3.5 px-4 font-semibold text-gray-700 w-[100px]">Ações</th>
+                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[120px]">Banca</th>
+                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[140px]">Data/Hora</th>
+                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[52px]">Tipo</th>
+                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white min-w-[120px]">Origem</th>
+                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white min-w-[120px]">Destino</th>
+                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[90px]">Quem fez</th>
+                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[56px]">Qtd</th>
+                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[100px]">Total saldo</th>
+                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white min-w-[140px]">Leads (IDs)</th>
+                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[90px]">Re-transfer.</th>
+                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[130px]">Prazo 10d</th>
+                      <th className="text-center py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[100px]">Ações</th>
                     </tr>
                   </thead>
                   <tbody>
                     {loadingLogs ? (
                       <tr><td colSpan={12} className="p-10 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-[#8CD955]" /></td></tr>
                     ) : !bancaId ? (
-                      <tr><td colSpan={12} className="p-8 text-center text-gray-500">Selecione a banca para ver o histórico.</td></tr>
+                      <tr><td colSpan={12} className="p-8 text-center text-gray-500 dark:text-white">Selecione a banca para ver o histórico.</td></tr>
                     ) : transferLogs.length === 0 ? (
-                      <tr><td colSpan={12} className="p-8 text-center text-gray-500">Nenhuma transferência nos filtros. Ajuste data/tipo ou faça uma nova transferência.</td></tr>
+                      <tr><td colSpan={12} className="p-8 text-center text-gray-500 dark:text-white">Nenhuma transferência nos filtros. Ajuste data/tipo ou faça uma nova transferência.</td></tr>
                     ) : (
                       transferLogsPaginated.map((log) => {
                         const ids = Array.isArray(log.leads_ids) ? log.leads_ids : [];
@@ -1319,21 +1439,21 @@ export default function AdminLeadTransferPage() {
                         const quemFez = (log as { performed_by_name?: string | null }).performed_by_name ?? '-';
                         const bancaLabel = selectedBanca?.name || selectedBanca?.url || bancaName || '-';
                         return (
-                          <tr key={log.id} className="border-t border-gray-100 hover:bg-gray-50/80 transition-colors">
-                            <td className="py-3 px-4 text-gray-600 truncate max-w-[110px]" title={bancaLabel}>{bancaLabel}</td>
-                            <td className="py-3 px-4 text-gray-600 whitespace-nowrap">{formatDatePtBR(log.created_at)}</td>
-                            <td className="py-3 px-4 font-medium text-gray-800">{log.transfer_type || 'TF'}</td>
-                            <td className="py-3 px-4 text-gray-600 truncate max-w-[140px]" title={log.source_consultant_email ?? undefined}>{origemNome}</td>
-                            <td className="py-3 px-4 text-gray-600 truncate max-w-[140px]" title={log.target_consultant_email ?? undefined}>{destinoNome}</td>
-                            <td className="py-3 px-4 text-gray-700 truncate max-w-[80px]" title={quemFez}>{(quemFez as string) !== '-' ? quemFez : '-'}</td>
-                            <td className="py-3 px-4 text-gray-600 tabular-nums">{log.count ?? ids.length}</td>
-                            <td className="py-3 px-4 text-gray-600 tabular-nums">{fmtSaldo}</td>
-                            <td className="py-3 px-4 text-gray-600 truncate max-w-[160px] font-mono text-xs" title={ids.join(', ')}>{ids.length ? ids.slice(0, 6).join(', ') + (ids.length > 6 ? ` +${ids.length - 6}` : '') : '-'}</td>
-                            <td className="py-3 px-4">{reTransferidos > 0 ? <span className="text-amber-600 font-medium">{reTransferidos}</span> : '-'}</td>
+                          <tr key={log.id} className="border-t border-gray-100 dark:border-[#404040] hover:bg-gray-50/80 dark:hover:bg-[#333] transition-colors">
+                            <td className="py-3 px-4 text-gray-600 dark:text-white truncate max-w-[110px]" title={bancaLabel}>{bancaLabel}</td>
+                            <td className="py-3 px-4 text-gray-600 dark:text-white whitespace-nowrap">{formatDatePtBR(log.created_at)}</td>
+                            <td className="py-3 px-4 font-medium text-gray-800 dark:text-white">{log.transfer_type || 'TF'}</td>
+                            <td className="py-3 px-4 text-gray-600 dark:text-white truncate max-w-[140px]" title={log.source_consultant_email ?? undefined}>{origemNome}</td>
+                            <td className="py-3 px-4 text-gray-600 dark:text-white truncate max-w-[140px]" title={log.target_consultant_email ?? undefined}>{destinoNome}</td>
+                            <td className="py-3 px-4 text-gray-700 dark:text-white truncate max-w-[80px]" title={quemFez}>{(quemFez as string) !== '-' ? quemFez : '-'}</td>
+                            <td className="py-3 px-4 text-gray-600 dark:text-white tabular-nums">{log.count ?? ids.length}</td>
+                            <td className="py-3 px-4 text-gray-600 dark:text-white tabular-nums">{fmtSaldo}</td>
+                            <td className="py-3 px-4 text-gray-600 dark:text-white truncate max-w-[160px] font-mono text-xs" title={ids.join(', ')}>{ids.length ? ids.slice(0, 6).join(', ') + (ids.length > 6 ? ` +${ids.length - 6}` : '') : '-'}</td>
+                            <td className="py-3 px-4 text-gray-600 dark:text-white">{reTransferidos > 0 ? <span className="text-amber-500 dark:text-amber-400 font-medium">{reTransferidos}</span> : '-'}</td>
                             <td className="py-3 px-4" title="Prazo de 10 dias para conversão a partir da transferência. Após isso o lead pode ser repassado.">
                               <span className="inline-flex items-center gap-1 text-sm">
-                                <Clock className="w-3.5 h-3.5 flex-shrink-0 text-gray-600" />
-                                <span className="text-red-600 font-medium">
+                                <Clock className="w-3.5 h-3.5 flex-shrink-0 text-gray-600 dark:text-white" />
+                                <span className="text-red-600 dark:text-red-400 font-medium">
                                   {deadline.expired ? 'Expirado' : `${deadline.daysLeft} dia(s) restante(s)`}
                                 </span>
                               </span>
@@ -1358,7 +1478,7 @@ export default function AdminLeadTransferPage() {
               </div>
               {!loadingLogs && bancaId && transferLogs.length > 0 && totalLogsPages > 1 && (
                 <div className="flex flex-wrap items-center justify-between gap-3 mt-4 px-1">
-                  <p className="text-sm text-gray-600">
+                  <p className="text-sm text-gray-600 dark:text-white">
                     Exibindo <strong>{(logsPage - 1) * LOGS_PAGE_SIZE + 1}</strong> a <strong>{Math.min(logsPage * LOGS_PAGE_SIZE, transferLogs.length)}</strong> de <strong>{transferLogs.length}</strong> transferências
                   </p>
                   <div className="flex items-center gap-2">
@@ -1366,19 +1486,19 @@ export default function AdminLeadTransferPage() {
                       type="button"
                       onClick={() => setLogsPage((p) => Math.max(1, p - 1))}
                       disabled={logsPage <= 1}
-                      className="p-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      className="p-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-white hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                       aria-label="Página anterior"
                     >
                       <ChevronLeft className="w-5 h-5" />
                     </button>
-                    <span className="text-sm font-medium text-gray-700 min-w-[100px] text-center">
+                    <span className="text-sm font-medium text-gray-700 dark:text-white min-w-[100px] text-center">
                       Página {logsPage} de {totalLogsPages}
                     </span>
                     <button
                       type="button"
                       onClick={() => setLogsPage((p) => Math.min(totalLogsPages, p + 1))}
                       disabled={logsPage >= totalLogsPages}
-                      className="p-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      className="p-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-white hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                       aria-label="Próxima página"
                     >
                       <ChevronRight className="w-5 h-5" />
@@ -1388,56 +1508,122 @@ export default function AdminLeadTransferPage() {
               )}
               {selectedLogForModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setSelectedLogForModal(null)} role="dialog" aria-modal="true" aria-labelledby="modal-leads-title">
-                  <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full max-h-[85vh] flex flex-col border border-gray-200" onClick={(e) => e.stopPropagation()}>
-                    <div className="flex items-center justify-between p-4 border-b border-gray-200">
-                      <h2 id="modal-leads-title" className="text-lg font-bold text-gray-900">Leads da transferência</h2>
-                      <button type="button" onClick={() => setSelectedLogForModal(null)} className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors" aria-label="Fechar">
+                  <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-xl max-w-2xl w-full max-h-[85vh] flex flex-col border border-gray-200 dark:border-[#404040]" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-[#404040]">
+                      <h2 id="modal-leads-title" className="text-lg font-bold text-gray-900 dark:text-white">Leads da transferência</h2>
+                      <button type="button" onClick={() => setSelectedLogForModal(null)} className="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#404040] hover:text-gray-700 dark:hover:text-white transition-colors" aria-label="Fechar">
                         <X className="w-5 h-5" />
                       </button>
                     </div>
-                    <div className="p-4 text-sm text-gray-600 border-b border-gray-100">
+                    <div className="p-4 text-sm text-gray-700 dark:text-gray-200 border-b border-gray-100 dark:border-[#404040]">
                       {selectedLogForModal.created_at && <span>Data: {formatDatePtBR(selectedLogForModal.created_at)}</span>}
                       {(selectedLogForModal as any).target_consultant_name && <span className="ml-4">Destino: {(selectedLogForModal as any).target_consultant_name}</span>}
                     </div>
-                    <div className="px-4 pt-3 pb-2 flex items-center justify-between gap-4 border-b border-gray-100">
-                      <p className="text-sm font-semibold text-gray-800">
+                    <div className="px-4 pt-3 pb-2 flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 dark:border-[#404040]">
+                      <p className="text-sm font-semibold text-gray-800 dark:text-white">
                         Total saldo: <span className="tabular-nums text-[#8CD955]">
                           R$ {modalEntries.reduce((s, e) => s + (e.saldo_snapshot != null ? Number(e.saldo_snapshot) : 0), 0).toFixed(2).replace('.', ',')}
                         </span>
                       </p>
-                      <button
-                        type="button"
-                        onClick={runRecalcBalanceForLog}
-                        disabled={backfillingBalances}
-                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium bg-[#8CD955]/20 text-[#6B8E3F] hover:bg-[#8CD955]/30 border border-[#8CD955]/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                        title="Busca os saldos atuais dos leads desta transferência no CRM, atualiza e soma no total"
-                      >
-                        {backfillingBalances ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                        {backfillingBalances ? 'Recalculando…' : 'Recalcular saldo'}
-                      </button>
+                      <div className="flex items-center gap-2">
+                        {(() => {
+                          const modalDeadline = getTransferDeadlineInfo(selectedLogForModal?.created_at);
+                          const disponivelCount = modalEntries.filter((e) => e.resolution_status === 'disponivel_retransferencia').length;
+                          return (
+                            <>
+                              {modalDeadline.expired && (
+                                <button
+                                  type="button"
+                                  onClick={runResolveTransfer}
+                                  disabled={resolvingTransfer}
+                                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium bg-amber-500/20 text-amber-700 dark:text-amber-400 hover:bg-amber-500/30 border border-amber-500/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                  title="Comparar dados atuais do CRM com o snapshot e marcar leads como Vinculado ou Disponível para repasse"
+                                >
+                                  {resolvingTransfer ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                                  {resolvingTransfer ? 'Resolvendo…' : 'Resolver transferência'}
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={runRecalcBalanceForLog}
+                                disabled={backfillingBalances}
+                                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium bg-[#8CD955]/20 text-[#6B8E3F] hover:bg-[#8CD955]/30 border border-[#8CD955]/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                title="Busca os saldos atuais dos leads desta transferência no CRM, atualiza e soma no total"
+                              >
+                                {backfillingBalances ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                                {backfillingBalances ? 'Recalculando…' : 'Recalcular saldo'}
+                              </button>
+                              {disponivelCount > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => { if (consultants.length === 0 && bancaId) loadConsultants(); setMoveToNextOpen(true); }}
+                                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium bg-blue-500/20 text-blue-700 dark:text-blue-400 hover:bg-blue-500/30 border border-blue-500/50 transition-colors"
+                                  title={`Mover ${disponivelCount} lead(s) disponível(is) para outro consultor`}
+                                >
+                                  Mover para próximo ({disponivelCount})
+                                </button>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </div>
                     </div>
                     <div className="flex-1 overflow-auto p-4">
                       {loadingModalEntries ? (
                         <div className="flex items-center justify-center py-12"><Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" /></div>
                       ) : modalEntries.length === 0 ? (
-                        <p className="text-gray-500 text-center py-6">Nenhum lead encontrado para esta transferência.</p>
+                        <p className="text-gray-600 dark:text-gray-300 text-center py-6">Nenhum lead encontrado para esta transferência.</p>
                       ) : (
                         <>
+                          {/* Resumo geral: Antes x Depois (totais da transferência) */}
+                          {(() => {
+                            const sumDepAntes = modalEntries.reduce((s, e) => s + (e.total_depositado_snapshot != null ? Number(e.total_depositado_snapshot) : 0), 0);
+                            const sumDepDepois = modalEntries.reduce((s, e) => {
+                              const v = e.current_total_depositado_at_resolution != null ? Number(e.current_total_depositado_at_resolution) : (e.total_depositado != null ? Number(e.total_depositado) : 0);
+                              return s + v;
+                            }, 0);
+                            const sumApostaAntes = modalEntries.reduce((s, e) => s + (e.total_apostado_snapshot != null ? Number(e.total_apostado_snapshot) : 0), 0);
+                            const sumApostaDepois = modalEntries.reduce((s, e) => {
+                              const v = e.current_total_apostado_at_resolution != null ? Number(e.current_total_apostado_at_resolution) : (e.total_apostado != null ? Number(e.total_apostado) : 0);
+                              return s + v;
+                            }, 0);
+                            const fmtR = (v: number) => `R$ ${v.toFixed(2).replace('.', ',')}`;
+                            return (
+                              <div className="mb-4 p-3 rounded-xl bg-gray-50 dark:bg-[#333] border border-gray-200 dark:border-[#404040]">
+                                <p className="text-xs font-bold text-gray-600 dark:text-gray-400 uppercase tracking-wide mb-2">Resumo geral — Antes x Depois</p>
+                                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                                  <div className="text-gray-700 dark:text-gray-200">
+                                    <span className="text-gray-500 dark:text-gray-400">Total depositado:</span>{' '}
+                                    <span className="font-medium">{fmtR(sumDepAntes)}</span>
+                                    <span className="text-gray-400 dark:text-gray-500 mx-1">→</span>
+                                    <span className="font-semibold text-[#8CD955]">{fmtR(sumDepDepois)}</span>
+                                  </div>
+                                  <div className="text-gray-700 dark:text-gray-200">
+                                    <span className="text-gray-500 dark:text-gray-400">Total apostado:</span>{' '}
+                                    <span className="font-medium">{fmtR(sumApostaAntes)}</span>
+                                    <span className="text-gray-400 dark:text-gray-500 mx-1">→</span>
+                                    <span className="font-semibold text-[#8CD955]">{fmtR(sumApostaDepois)}</span>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })()}
                           <div className="overflow-x-auto">
-                            <table className="w-full text-sm min-w-[900px]">
-                              <thead className="bg-gray-50 border-b border-gray-200">
+                            <table className="w-full text-sm min-w-[960px]">
+                              <thead className="bg-gray-50 dark:bg-[#333] border-b border-gray-200 dark:border-[#404040]">
                                 <tr>
-                                  <th className="text-left py-2.5 px-3 font-semibold text-gray-700 w-14">ID</th>
-                                  <th className="text-left py-2.5 px-3 font-semibold text-gray-700 min-w-[140px]">Nome</th>
-                                  <th className="text-left py-2.5 px-3 font-semibold text-gray-700 min-w-[110px]">Telefone</th>
-                                  <th className="text-left py-2.5 px-3 font-semibold text-gray-700 min-w-[140px]">E-mail</th>
-                                  <th className="text-left py-2.5 px-3 font-semibold text-gray-700 w-20">Status</th>
-                                  <th className="text-left py-2.5 px-3 font-semibold text-gray-700 w-24">Tinha saldo</th>
-                                  <th className="text-right py-2.5 px-3 font-semibold text-gray-700 w-24">Saldo (R$)</th>
-                                  <th className="text-right py-2.5 px-3 font-semibold text-gray-700 w-24">Total Depositado</th>
-                                  <th className="text-right py-2.5 px-3 font-semibold text-gray-700 w-24">Total apostado</th>
-                                  <th className="text-right py-2.5 px-3 font-semibold text-gray-700 w-24">Total Prêmio</th>
-                                  <th className="text-right py-2.5 px-3 font-semibold text-gray-700 w-24">Saque disp.</th>
+                                  <th className="text-left py-2.5 px-3 font-semibold text-gray-700 dark:text-gray-200 w-14">ID</th>
+                                  <th className="text-left py-2.5 px-3 font-semibold text-gray-700 dark:text-gray-200 min-w-[120px]">Nome</th>
+                                  <th className="text-left py-2.5 px-3 font-semibold text-gray-700 dark:text-gray-200 min-w-[100px]">Telefone</th>
+                                  <th className="text-left py-2.5 px-3 font-semibold text-gray-700 dark:text-gray-200 min-w-[140px]">E-mail</th>
+                                  <th className="text-left py-2.5 px-3 font-semibold text-gray-700 dark:text-gray-200 w-20">Status</th>
+                                  <th className="text-left py-2.5 px-3 font-semibold text-gray-700 dark:text-gray-200 min-w-[120px]">Resolução</th>
+                                  <th className="text-left py-2.5 px-3 font-semibold text-gray-700 dark:text-gray-200 w-20">Tinha saldo</th>
+                                  <th className="text-right py-2.5 px-3 font-semibold text-gray-700 dark:text-gray-200 w-24">Saldo (R$)</th>
+                                  <th className="text-right py-2.5 px-3 font-semibold text-gray-700 dark:text-gray-200 min-w-[140px]">Dep. antes → depois</th>
+                                  <th className="text-right py-2.5 px-3 font-semibold text-gray-700 dark:text-gray-200 min-w-[140px]">Aposta antes → depois</th>
+                                  <th className="text-right py-2.5 px-3 font-semibold text-gray-700 dark:text-gray-200 w-24">Prêmio</th>
+                                  <th className="text-right py-2.5 px-3 font-semibold text-gray-700 dark:text-gray-200 w-24">Saque disp.</th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -1447,19 +1633,42 @@ export default function AdminLeadTransferPage() {
                                   const email = (entry.email ?? '').trim() || '-';
                                   const globalIdx = (modalLeadsPage - 1) * MODAL_LEADS_PAGE_SIZE + idx;
                                   const fmt = (v: number | null | undefined) => (v != null ? `R$ ${Number(v).toFixed(2).replace('.', ',')}` : '-');
+                                  const depAntes = entry.total_depositado_snapshot != null ? Number(entry.total_depositado_snapshot) : null;
+                                  const depDepois = entry.current_total_depositado_at_resolution != null ? Number(entry.current_total_depositado_at_resolution) : (entry.total_depositado != null ? Number(entry.total_depositado) : null);
+                                  const apostaAntes = entry.total_apostado_snapshot != null ? Number(entry.total_apostado_snapshot) : null;
+                                  const apostaDepois = entry.current_total_apostado_at_resolution != null ? Number(entry.current_total_apostado_at_resolution) : (entry.total_apostado != null ? Number(entry.total_apostado) : null);
+                                  const evoluiuDep = depDepois != null && depAntes != null && depDepois > depAntes;
+                                  const evoluiuAposta = apostaDepois != null && apostaAntes != null && apostaDepois > apostaAntes;
                                   return (
-                                    <tr key={`${entry.lead_id}-${globalIdx}`} className="border-t border-gray-100 hover:bg-gray-50/50">
-                                      <td className="py-2.5 px-3 font-mono text-gray-800 text-xs">{String(entry.lead_id)}</td>
-                                      <td className="py-2.5 px-3 text-gray-800 truncate max-w-[180px]" title={fullName}>{fullName}</td>
-                                      <td className="py-2.5 px-3 text-gray-600 font-mono text-xs truncate max-w-[120px]" title={phone}>{phone}</td>
-                                      <td className="py-2.5 px-3 text-gray-600 text-xs truncate max-w-[160px]" title={email}>{email}</td>
-                                      <td className="py-2.5 px-3 text-gray-600">{entry.status ?? '-'}</td>
-                                      <td className="py-2.5 px-3">{entry.had_balance ? <span className="text-emerald-600 font-medium">Sim</span> : <span className="text-gray-500">Não</span>}</td>
-                                      <td className="py-2.5 px-3 text-right tabular-nums text-gray-700 font-medium">{fmt(entry.saldo_snapshot)}</td>
-                                      <td className="py-2.5 px-3 text-right tabular-nums text-gray-600 text-xs">{fmt(entry.total_depositado_snapshot)}</td>
-                                      <td className="py-2.5 px-3 text-right tabular-nums text-gray-600 text-xs">{fmt(entry.total_apostado_snapshot)}</td>
-                                      <td className="py-2.5 px-3 text-right tabular-nums text-gray-600 text-xs">{fmt(entry.total_ganho_snapshot)}</td>
-                                      <td className="py-2.5 px-3 text-right tabular-nums text-gray-600 text-xs">{fmt(entry.available_withdraw_snapshot)}</td>
+                                    <tr key={`${entry.lead_id}-${globalIdx}`} className="border-t border-gray-100 dark:border-[#404040] hover:bg-gray-50/50 dark:hover:bg-[#333]">
+                                      <td className="py-2.5 px-3 font-mono text-gray-800 dark:text-gray-200 text-xs">{String(entry.lead_id)}</td>
+                                      <td className="py-2.5 px-3 text-gray-800 dark:text-gray-200 truncate max-w-[180px]" title={fullName}>{fullName}</td>
+                                      <td className="py-2.5 px-3 text-gray-600 dark:text-gray-300 font-mono text-xs truncate max-w-[120px]" title={phone}>{phone}</td>
+                                      <td className="py-2.5 px-3 text-gray-600 dark:text-gray-300 text-xs truncate max-w-[160px]" title={email}>{email}</td>
+                                      <td className="py-2.5 px-3 text-gray-600 dark:text-gray-300">{entry.status ?? '-'}</td>
+                                      <td className="py-2.5 px-3">
+                                        {entry.resolution_status === 'vinculado' ? (
+                                          <span className="text-emerald-600 dark:text-emerald-400 font-medium">Vinculado</span>
+                                        ) : entry.resolution_status === 'disponivel_retransferencia' ? (
+                                          <span className="text-amber-600 dark:text-amber-400 font-medium">Disponível para repasse</span>
+                                        ) : (
+                                          <span className="text-gray-500 dark:text-gray-400">No prazo</span>
+                                        )}
+                                      </td>
+                                      <td className="py-2.5 px-3 text-gray-700 dark:text-gray-300">{entry.had_balance ? <span className="text-emerald-600 dark:text-emerald-400 font-medium">Sim</span> : <span className="text-gray-500 dark:text-gray-400">Não</span>}</td>
+                                      <td className="py-2.5 px-3 text-right tabular-nums text-gray-700 dark:text-gray-200 font-medium">{fmt(entry.saldo_snapshot)}</td>
+                                      <td className="py-2.5 px-3 text-right text-xs">
+                                        <span className="tabular-nums text-gray-600 dark:text-gray-400">{fmt(depAntes)}</span>
+                                        <span className="text-gray-400 dark:text-gray-500 mx-0.5">→</span>
+                                        <span className={`tabular-nums font-medium ${evoluiuDep ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-700 dark:text-gray-200'}`}>{fmt(depDepois)}</span>
+                                      </td>
+                                      <td className="py-2.5 px-3 text-right text-xs">
+                                        <span className="tabular-nums text-gray-600 dark:text-gray-400">{fmt(apostaAntes)}</span>
+                                        <span className="text-gray-400 dark:text-gray-500 mx-0.5">→</span>
+                                        <span className={`tabular-nums font-medium ${evoluiuAposta ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-700 dark:text-gray-200'}`}>{fmt(apostaDepois)}</span>
+                                      </td>
+                                      <td className="py-2.5 px-3 text-right tabular-nums text-gray-600 dark:text-gray-300 text-xs">{fmt(entry.total_ganho_snapshot)}</td>
+                                      <td className="py-2.5 px-3 text-right tabular-nums text-gray-600 dark:text-gray-300 text-xs">{fmt(entry.available_withdraw_snapshot)}</td>
                                     </tr>
                                   );
                                 })}
@@ -1467,28 +1676,28 @@ export default function AdminLeadTransferPage() {
                             </table>
                           </div>
                           {totalModalLeadsPages > 1 && (
-                            <div className="flex flex-wrap items-center justify-between gap-3 mt-4 px-1 border-t border-gray-100 pt-3">
-                              <p className="text-sm text-gray-600">
-                                Exibindo <strong>{(modalLeadsPage - 1) * MODAL_LEADS_PAGE_SIZE + 1}</strong> a <strong>{Math.min(modalLeadsPage * MODAL_LEADS_PAGE_SIZE, modalEntries.length)}</strong> de <strong>{modalEntries.length}</strong> leads
+                            <div className="flex flex-wrap items-center justify-between gap-3 mt-4 px-1 border-t border-gray-100 dark:border-[#404040] pt-3">
+                              <p className="text-sm text-gray-600 dark:text-gray-300">
+                                Exibindo <strong className="text-gray-800 dark:text-gray-200">{(modalLeadsPage - 1) * MODAL_LEADS_PAGE_SIZE + 1}</strong> a <strong className="text-gray-800 dark:text-gray-200">{Math.min(modalLeadsPage * MODAL_LEADS_PAGE_SIZE, modalEntries.length)}</strong> de <strong className="text-gray-800 dark:text-gray-200">{modalEntries.length}</strong> leads
                               </p>
                               <div className="flex items-center gap-2">
                                 <button
                                   type="button"
                                   onClick={() => setModalLeadsPage((p) => Math.max(1, p - 1))}
                                   disabled={modalLeadsPage <= 1}
-                                  className="p-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                  className="p-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                                   aria-label="Página anterior"
                                 >
                                   <ChevronLeft className="w-5 h-5" />
                                 </button>
-                                <span className="text-sm font-medium text-gray-700 min-w-[90px] text-center">
+                                <span className="text-sm font-medium text-gray-700 dark:text-gray-200 min-w-[90px] text-center">
                                   Página {modalLeadsPage} de {totalModalLeadsPages}
                                 </span>
                                 <button
                                   type="button"
                                   onClick={() => setModalLeadsPage((p) => Math.min(totalModalLeadsPages, p + 1))}
                                   disabled={modalLeadsPage >= totalModalLeadsPages}
-                                  className="p-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                  className="p-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                                   aria-label="Próxima página"
                                 >
                                   <ChevronRight className="w-5 h-5" />
@@ -1499,6 +1708,56 @@ export default function AdminLeadTransferPage() {
                         </>
                       )}
                     </div>
+                    {/* Sub-modal: Mover para próximo consultor */}
+                    {moveToNextOpen && (
+                      <div className="absolute inset-0 z-10 flex items-center justify-center p-4 bg-black/60 rounded-2xl" onClick={(e) => e.stopPropagation()}>
+                        <div className="bg-white dark:bg-[#1f1f1f] rounded-xl border border-gray-200 dark:border-[#404040] shadow-xl max-w-md w-full p-4" onClick={(e) => e.stopPropagation()}>
+                          <h3 className="text-base font-bold text-gray-900 dark:text-white mb-2">Mover leads para próximo consultor</h3>
+                          <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+                            Leads marcados como &quot;Disponível para repasse&quot; serão transferidos do consultor atual para o consultor escolhido.
+                          </p>
+                          <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Consultor destino</label>
+                          <select
+                            value={moveTargetEmail}
+                            onChange={(e) => setMoveTargetEmail(e.target.value)}
+                            className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm mb-4 focus:ring-2 focus:ring-[#8CD955]"
+                          >
+                            <option value="">Selecionar consultor</option>
+                            {consultants
+                              .filter((c) => c.email?.toLowerCase() !== (selectedLogForModal as { target_consultant_email?: string })?.target_consultant_email?.toLowerCase())
+                              .map((c) => (
+                                <option key={c.email} value={c.email ?? ''}>
+                                  {c.full_name ?? c.email ?? ''}
+                                </option>
+                              ))}
+                          </select>
+                          <div className="flex justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => { setMoveToNextOpen(false); setMoveTargetEmail(''); }}
+                              className="px-3 py-2 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#404040] transition-colors"
+                            >
+                              Cancelar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={runMoveToNext}
+                              disabled={!moveTargetEmail?.trim() || movingLeads}
+                              className="px-4 py-2 rounded-lg text-sm font-medium bg-[#8CD955] text-white hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                            >
+                              {movingLeads ? (
+                                <>
+                                  <Loader2 className="w-4 h-4 animate-spin inline-block mr-1.5 align-middle" />
+                                  Repassando…
+                                </>
+                              ) : (
+                                'Repassar leads'
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -1517,7 +1776,7 @@ export default function AdminLeadTransferPage() {
                   <button
                     type="button"
                     onClick={() => canGo && setCurrentStep(step.id)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex-shrink-0 ${isActive ? 'bg-[#8CD955] text-white' : isPast ? 'bg-gray-200 text-gray-700 hover:bg-gray-300' : 'bg-gray-100 text-gray-400 cursor-default'}`}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex-shrink-0 ${isActive ? 'bg-[#8CD955] text-white' : isPast ? 'bg-gray-200 dark:bg-[#404040] text-gray-700 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-[#555]' : 'bg-gray-100 dark:bg-[#333] text-gray-400 dark:text-gray-500 cursor-default'}`}
                   >
                     <span className="w-6 h-6 rounded-full flex items-center justify-center text-xs bg-white/20">{step.id}</span>
                     <span className="hidden sm:inline">{step.short}</span>
@@ -1529,13 +1788,13 @@ export default function AdminLeadTransferPage() {
 
           {/* Step 1: Banca */}
           {currentStep === 1 && (
-          <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm ring-1 ring-gray-100">
-          <label className="flex items-center gap-2 text-sm font-bold text-gray-800 mb-2">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl border border-gray-200 dark:border-[#404040] p-5 shadow-sm ring-1 ring-gray-100 dark:ring-transparent">
+          <label className="flex items-center gap-2 text-sm font-bold text-gray-800 dark:text-white mb-2">
             <Building2 className="w-4 h-4 text-[#8CD955]" />
             Banca
           </label>
           <div className="relative max-w-md">
-            <div className="flex items-center border border-gray-300 rounded-lg bg-white focus-within:ring-2 focus-within:ring-[#8CD955] focus-within:border-[#8CD955]">
+            <div className="flex items-center border border-gray-300 dark:border-[#555] rounded-lg bg-white dark:bg-[#333] focus-within:ring-2 focus-within:ring-[#8CD955] focus-within:border-[#8CD955]">
               <Search className="w-4 h-4 text-gray-500 flex-shrink-0 ml-3 pointer-events-none" />
               <input
                 type="text"
@@ -1549,7 +1808,7 @@ export default function AdminLeadTransferPage() {
                 onBlur={() => setTimeout(() => setBancaDropdownOpen(false), 180)}
                 disabled={loadingBancas}
                 placeholder="Buscar banca por nome..."
-                className="w-full px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-600 border-0 rounded-r-lg focus:ring-0 focus:outline-none disabled:bg-gray-50 disabled:text-gray-600"
+                className="w-full px-3 py-2.5 text-sm text-gray-800 dark:text-white placeholder:text-gray-600 dark:placeholder-gray-400 border-0 rounded-r-lg bg-transparent focus:ring-0 focus:outline-none disabled:bg-gray-50 dark:disabled:bg-[#404040] disabled:text-gray-600"
               />
               <ChevronDown
                 className={`w-4 h-4 text-gray-500 flex-shrink-0 mr-3 transition-transform ${bancaDropdownOpen ? 'rotate-180' : ''}`}
@@ -1557,7 +1816,7 @@ export default function AdminLeadTransferPage() {
             </div>
             {bancaDropdownOpen && !loadingBancas && (
               <ul
-                className="absolute z-10 w-full mt-1 overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg py-1"
+                className="absolute z-10 w-full mt-1 overflow-auto rounded-lg border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#333] shadow-lg py-1"
                 style={{ maxHeight: `calc(${BANCAS_DROPDOWN_VISIBLE} * 2.5rem)` }}
                 role="listbox"
                 onMouseDown={(e) => e.preventDefault()}
@@ -1576,8 +1835,8 @@ export default function AdminLeadTransferPage() {
                         setBancaSearchQuery(b.name || b.url || b.id);
                         setBancaDropdownOpen(false);
                       }}
-                      className={`px-3 py-2.5 text-sm cursor-pointer hover:bg-gray-100 ${
-                        bancaId === b.id ? 'bg-green-50 text-gray-800 font-medium' : 'text-gray-700'
+                      className={`px-3 py-2.5 text-sm cursor-pointer hover:bg-gray-100 dark:hover:bg-[#404040] ${
+                        bancaId === b.id ? 'bg-green-50 dark:bg-green-900/30 text-gray-800 dark:text-white font-medium' : 'text-gray-700 dark:text-gray-300'
                       }`}
                     >
                       {b.name || b.url || b.id}
@@ -1599,15 +1858,15 @@ export default function AdminLeadTransferPage() {
 
           {/* Step 2: Apenas consultor origem */}
           {currentStep === 2 && (
-          <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm ring-1 ring-gray-100 space-y-4">
-            <label className="flex items-center gap-2 text-sm font-bold text-gray-800"><User className="w-4 h-4 text-[#8CD955]" />Consultor origem</label>
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl border border-gray-200 dark:border-[#404040] p-5 shadow-sm ring-1 ring-gray-100 dark:ring-transparent space-y-4">
+            <label className="flex items-center gap-2 text-sm font-bold text-gray-800 dark:text-white"><User className="w-4 h-4 text-[#8CD955]" />Consultor origem</label>
             <p className="text-xs text-gray-500">Todos os usuários atribuídos à banca (cargo, gerente e consultores vinculados)</p>
             <div className="flex flex-wrap gap-3 items-end">
               <button
                 type="button"
                 onClick={openConsultantOriginModal}
                 disabled={!bancaId || loadingConsultants}
-                className="flex items-center gap-2 min-w-[280px] max-w-full border border-gray-300 rounded-xl px-3 py-2.5 text-sm text-left bg-white hover:bg-gray-50 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex items-center gap-2 min-w-[280px] max-w-full border border-gray-300 dark:border-[#555] rounded-xl px-3 py-2.5 text-sm text-left bg-white dark:bg-[#333] dark:text-white hover:bg-gray-50 dark:hover:bg-[#404040] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <User className="w-4 h-4 text-gray-500 flex-shrink-0" />
                 <span className="truncate text-gray-800">
@@ -1635,8 +1894,8 @@ export default function AdminLeadTransferPage() {
 
           {/* Step 3: Filtros e buscar */}
           {currentStep === 3 && (
-          <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm ring-1 ring-gray-100 space-y-4">
-            <label className="text-sm font-bold text-gray-800 block">Filtros e buscar leads</label>
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl border border-gray-200 dark:border-[#404040] p-5 shadow-sm ring-1 ring-gray-100 dark:ring-transparent space-y-4">
+            <label className="text-sm font-bold text-gray-800 dark:text-white block">Filtros e buscar leads</label>
           <div className="flex flex-wrap gap-4 items-end">
             <div>
               <label className="text-xs font-semibold text-gray-600 block mb-1">Inatividade (dias)</label>
@@ -1827,18 +2086,18 @@ export default function AdminLeadTransferPage() {
 
         {/* Step 4: Tabela de leads + seleção */}
           {currentStep >= 4 && hasSearchedLeads && !loadingLeads && filteredLeads.length === 0 && (
-            <div className="bg-white rounded-2xl border border-gray-200 p-6 shadow-sm text-center ring-1 ring-gray-100">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl border border-gray-200 dark:border-[#404040] p-6 shadow-sm text-center ring-1 ring-gray-100 dark:ring-transparent">
               <p className="text-gray-600">Nenhum lead encontrado com esses filtros.</p>
               <p className="text-sm text-gray-500 mt-1">Tente outro consultor, filtros, valor mínimo ou tag.</p>
               <button type="button" onClick={() => setCurrentStep(3)} className="mt-3 text-[#8CD955] font-medium hover:underline">Voltar aos filtros</button>
             </div>
           )}
           {currentStep >= 4 && filteredLeads.length > 0 && (
-            <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm ring-1 ring-gray-100">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl border border-gray-200 dark:border-[#404040] p-5 shadow-sm ring-1 ring-gray-100 dark:ring-transparent">
             {/* Consultor destino: exibir acima da tabela quando no passo 5 (Destino) — modal + botão Revisar ao lado */}
             {currentStep >= 5 && (
               <div className="mb-5 pb-5 border-b border-gray-200">
-                <label className="flex items-center gap-2 text-sm font-bold text-gray-800 mb-2">
+                <label className="flex items-center gap-2 text-sm font-bold text-gray-800 dark:text-white mb-2">
                   <Users className="w-4 h-4 text-[#8CD955]" />
                   Consultor destino
                 </label>
@@ -1848,10 +2107,10 @@ export default function AdminLeadTransferPage() {
                     type="button"
                     onClick={openConsultantDestinoModal}
                     disabled={!bancaId || loadingConsultants}
-                    className="flex items-center gap-2 min-w-[280px] max-w-full border border-gray-300 rounded-xl px-3 py-2.5 text-sm text-left bg-white hover:bg-gray-50 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex items-center gap-2 min-w-[280px] max-w-full border border-gray-300 dark:border-[#555] rounded-xl px-3 py-2.5 text-sm text-left bg-white dark:bg-[#333] dark:text-white hover:bg-gray-50 dark:hover:bg-[#404040] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <User className="w-4 h-4 text-gray-500 flex-shrink-0" />
-                    <span className="truncate text-gray-800">
+                    <span className="truncate text-gray-800 dark:text-white">
                       {!bancaId ? 'Selecione a banca' : loadingConsultants ? 'Carregando...' : consultantsForDestino.length === 0 ? 'Nenhum consultor na banca' : targetEmail ? (consultants.find((c) => c.email === targetEmail)?.full_name || targetEmail) : 'Selecionar consultor destino'}
                     </span>
                     <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0 ml-auto" />
@@ -1871,7 +2130,7 @@ export default function AdminLeadTransferPage() {
             {/* Barra fixa quando há seleção */}
             {selectedLeadIds.size > 0 && (
               <div className="mb-4 p-3 rounded-xl bg-[#8CD955]/10 border border-[#8CD955]/30 flex flex-wrap items-center justify-between gap-3">
-                <span className="font-semibold text-gray-800">{selectedLeadIds.size} lead(s) selecionado(s)</span>
+                <span className="font-semibold text-gray-800 dark:text-white">{selectedLeadIds.size} lead(s) selecionado(s)</span>
                 <div className="flex gap-2">
                   <button type="button" onClick={() => setSelectedLeadIds(new Set())} className="px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 text-sm hover:bg-gray-50">Limpar</button>
                   <button type="button" onClick={() => setShowSelectedModal(true)} className="px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 text-sm hover:bg-gray-50">Ver selecionados</button>
@@ -2152,7 +2411,7 @@ export default function AdminLeadTransferPage() {
       {/* Modal Selecionar consultor doador (passo Origem) */}
       {showConsultantOriginModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setShowConsultantOriginModal(false)} role="dialog" aria-modal="true" aria-labelledby="modal-consultant-origin-title">
-          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full max-h-[85vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-xl max-w-md w-full max-h-[85vh] overflow-hidden flex flex-col border border-gray-200 dark:border-[#404040]" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-4 py-3 bg-[#20c997] text-white rounded-t-2xl">
               <div className="flex items-center gap-2">
                 <Users className="w-5 h-5 flex-shrink-0" />
@@ -2163,27 +2422,27 @@ export default function AdminLeadTransferPage() {
               </button>
             </div>
             <div className="p-4 flex flex-col flex-1 min-h-0">
-              <p className="text-sm text-gray-600 mb-3">
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
                 Selecione o usuário que cederá os leads (consultor origem). Todos os usuários atribuídos à banca estão listados abaixo.
               </p>
-              <label className="text-sm font-semibold text-gray-700 block mb-1.5">Buscar usuário</label>
+              <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 block mb-1.5">Buscar usuário</label>
               <div className="relative mb-3">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-gray-400 pointer-events-none" />
                 <input
                   type="text"
                   value={consultantOriginSearchQuery}
                   onChange={(e) => setConsultantOriginSearchQuery(e.target.value)}
                   placeholder="Nome ou email..."
-                  className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-800 placeholder:text-gray-500 focus:ring-2 focus:ring-[#20c997] focus:border-[#20c997] shadow-sm"
+                  className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white dark:placeholder:text-gray-400 rounded-lg text-sm text-gray-800 placeholder:text-gray-500 focus:ring-2 focus:ring-[#20c997] focus:border-[#20c997] shadow-sm"
                 />
               </div>
-              <div className="border border-gray-200 rounded-lg overflow-y-auto flex-1 min-h-[200px]" style={{ maxHeight: '320px' }}>
+              <div className="border border-gray-200 dark:border-[#404040] rounded-lg overflow-y-auto flex-1 min-h-[200px]" style={{ maxHeight: '320px' }}>
                 {loadingConsultants ? (
                   <div className="p-6 text-center text-sm text-gray-500">Carregando consultores...</div>
                 ) : consultantOriginFilteredList.length === 0 ? (
                   <div className="p-6 text-center text-sm text-gray-500">Nenhum usuário encontrado.</div>
                 ) : (
-                  <ul className="divide-y divide-gray-100">
+                  <ul className="divide-y divide-gray-100 dark:divide-[#404040]">
                     {consultantOriginFilteredList.map((c) => {
                       const isSelected = consultantOriginPendingEmail?.toLowerCase() === c.email?.toLowerCase();
                       const role = (c as { role?: string }).role;
@@ -2193,17 +2452,17 @@ export default function AdminLeadTransferPage() {
                           <button
                             type="button"
                             onClick={() => setConsultantOriginPendingEmail(c.email)}
-                            className={`w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-gray-50 transition-colors ${isSelected ? 'bg-[#20c997]/10 ring-1 ring-[#20c997]/30' : ''}`}
+                            className={`w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-gray-50 dark:hover:bg-[#333] transition-colors ${isSelected ? 'bg-[#20c997]/10 dark:bg-[#20c997]/20 ring-1 ring-[#20c997]/30' : ''}`}
                           >
-                            <span className="flex-shrink-0 w-9 h-9 rounded-full bg-gray-200 text-gray-700 flex items-center justify-center text-sm font-semibold">
+                            <span className="flex-shrink-0 w-9 h-9 rounded-full bg-gray-200 dark:bg-[#404040] text-gray-700 dark:text-gray-300 flex items-center justify-center text-sm font-semibold">
                               {initial}
                             </span>
                             <div className="flex-1 min-w-0">
-                              <p className="font-semibold text-gray-900 truncate">{c.full_name || c.email || '-'}</p>
-                              <p className="text-xs text-gray-500 truncate">{c.email}</p>
+                              <p className="font-semibold text-gray-900 dark:text-white truncate">{c.full_name || c.email || '-'}</p>
+                              <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{c.email}</p>
                             </div>
                             {role && (
-                              <span className="flex-shrink-0 px-2 py-0.5 rounded-md bg-gray-100 text-gray-600 text-xs font-medium">
+                              <span className="flex-shrink-0 px-2 py-0.5 rounded-md bg-gray-100 dark:bg-[#404040] text-gray-600 dark:text-gray-300 text-xs font-medium">
                                 {role}
                               </span>
                             )}
@@ -2215,8 +2474,8 @@ export default function AdminLeadTransferPage() {
                 )}
               </div>
             </div>
-            <div className="flex gap-2 justify-end p-4 border-t border-gray-200 bg-gray-50 rounded-b-2xl">
-              <button type="button" onClick={() => setShowConsultantOriginModal(false)} className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 bg-white hover:bg-gray-50 font-medium">
+            <div className="flex gap-2 justify-end p-4 border-t border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#333] rounded-b-2xl">
+              <button type="button" onClick={() => setShowConsultantOriginModal(false)} className="px-4 py-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 bg-white dark:bg-[#333] hover:bg-gray-50 dark:hover:bg-[#404040] font-medium">
                 Cancelar
               </button>
               <button type="button" onClick={confirmConsultantOrigin} disabled={!consultantOriginPendingEmail} className="px-4 py-2 rounded-lg bg-[#20c997] text-white font-medium hover:bg-[#0eb892] disabled:opacity-50 disabled:cursor-not-allowed">
@@ -2230,7 +2489,7 @@ export default function AdminLeadTransferPage() {
       {/* Modal Selecionar consultor destino (passo Destino) */}
       {showConsultantDestinoModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setShowConsultantDestinoModal(false)} role="dialog" aria-modal="true" aria-labelledby="modal-consultant-destino-title">
-          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full max-h-[85vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-xl max-w-md w-full max-h-[85vh] overflow-hidden flex flex-col border border-gray-200 dark:border-[#404040]" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-4 py-3 bg-[#20c997] text-white rounded-t-2xl">
               <div className="flex items-center gap-2">
                 <Users className="w-5 h-5 flex-shrink-0" />
@@ -2241,27 +2500,27 @@ export default function AdminLeadTransferPage() {
               </button>
             </div>
             <div className="p-4 flex flex-col flex-1 min-h-0">
-              <p className="text-sm text-gray-600 mb-3">
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
                 Selecione o usuário que receberá os leads. Apenas consultores da mesma banca (consultor origem não aparece na lista).
               </p>
-              <label className="text-sm font-semibold text-gray-700 block mb-1.5">Buscar usuário</label>
+              <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 block mb-1.5">Buscar usuário</label>
               <div className="relative mb-3">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-gray-400 pointer-events-none" />
                 <input
                   type="text"
                   value={consultantDestinoSearchQuery}
                   onChange={(e) => setConsultantDestinoSearchQuery(e.target.value)}
                   placeholder="Nome ou email..."
-                  className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-800 placeholder:text-gray-500 focus:ring-2 focus:ring-[#20c997] focus:border-[#20c997] shadow-sm"
+                  className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white dark:placeholder:text-gray-400 rounded-lg text-sm text-gray-800 placeholder:text-gray-500 focus:ring-2 focus:ring-[#20c997] focus:border-[#20c997] shadow-sm"
                 />
               </div>
-              <div className="border border-gray-200 rounded-lg overflow-y-auto flex-1 min-h-[200px]" style={{ maxHeight: '320px' }}>
+              <div className="border border-gray-200 dark:border-[#404040] rounded-lg overflow-y-auto flex-1 min-h-[200px]" style={{ maxHeight: '320px' }}>
                 {loadingConsultants ? (
                   <div className="p-6 text-center text-sm text-gray-500">Carregando consultores...</div>
                 ) : consultantDestinoFilteredList.length === 0 ? (
                   <div className="p-6 text-center text-sm text-gray-500">Nenhum usuário encontrado.</div>
                 ) : (
-                  <ul className="divide-y divide-gray-100">
+                  <ul className="divide-y divide-gray-100 dark:divide-[#404040]">
                     {consultantDestinoFilteredList.map((c) => {
                       const isSelected = consultantDestinoPendingEmail?.toLowerCase() === c.email?.toLowerCase();
                       const role = (c as { role?: string }).role;
@@ -2271,17 +2530,17 @@ export default function AdminLeadTransferPage() {
                           <button
                             type="button"
                             onClick={() => setConsultantDestinoPendingEmail(c.email)}
-                            className={`w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-gray-50 transition-colors ${isSelected ? 'bg-[#20c997]/10 ring-1 ring-[#20c997]/30' : ''}`}
+                            className={`w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-gray-50 dark:hover:bg-[#333] transition-colors ${isSelected ? 'bg-[#20c997]/10 dark:bg-[#20c997]/20 ring-1 ring-[#20c997]/30' : ''}`}
                           >
-                            <span className="flex-shrink-0 w-9 h-9 rounded-full bg-gray-200 text-gray-700 flex items-center justify-center text-sm font-semibold">
+                            <span className="flex-shrink-0 w-9 h-9 rounded-full bg-gray-200 dark:bg-[#404040] text-gray-700 dark:text-gray-300 flex items-center justify-center text-sm font-semibold">
                               {initial}
                             </span>
                             <div className="flex-1 min-w-0">
-                              <p className="font-semibold text-gray-900 truncate">{c.full_name || c.email || '-'}</p>
-                              <p className="text-xs text-gray-500 truncate">{c.email}</p>
+                              <p className="font-semibold text-gray-900 dark:text-white truncate">{c.full_name || c.email || '-'}</p>
+                              <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{c.email}</p>
                             </div>
                             {role && (
-                              <span className="flex-shrink-0 px-2 py-0.5 rounded-md bg-gray-100 text-gray-600 text-xs font-medium">
+                              <span className="flex-shrink-0 px-2 py-0.5 rounded-md bg-gray-100 dark:bg-[#404040] text-gray-600 dark:text-gray-300 text-xs font-medium">
                                 {role}
                               </span>
                             )}
@@ -2293,8 +2552,8 @@ export default function AdminLeadTransferPage() {
                 )}
               </div>
             </div>
-            <div className="flex gap-2 justify-end p-4 border-t border-gray-200 bg-gray-50 rounded-b-2xl">
-              <button type="button" onClick={() => setShowConsultantDestinoModal(false)} className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 bg-white hover:bg-gray-50 font-medium">
+            <div className="flex gap-2 justify-end p-4 border-t border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#333] rounded-b-2xl">
+              <button type="button" onClick={() => setShowConsultantDestinoModal(false)} className="px-4 py-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 bg-white dark:bg-[#333] hover:bg-gray-50 dark:hover:bg-[#404040] font-medium">
                 Cancelar
               </button>
               <button type="button" onClick={confirmConsultantDestino} disabled={!consultantDestinoPendingEmail} className="px-4 py-2 rounded-lg bg-[#20c997] text-white font-medium hover:bg-[#0eb892] disabled:opacity-50 disabled:cursor-not-allowed">
@@ -2308,7 +2567,7 @@ export default function AdminLeadTransferPage() {
       {/* Modal Selecionar consultor (conversão) — aba Histórico & Conversão */}
       {showConversionConsultantModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setShowConversionConsultantModal(false)} role="dialog" aria-modal="true" aria-labelledby="modal-conversion-consultant-title">
-          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full max-h-[85vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-xl max-w-md w-full max-h-[85vh] overflow-hidden flex flex-col border border-gray-200 dark:border-[#404040]" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-4 py-3 bg-[#20c997] text-white rounded-t-2xl">
               <div className="flex items-center gap-2">
                 <Users className="w-5 h-5 flex-shrink-0" />
@@ -2319,35 +2578,35 @@ export default function AdminLeadTransferPage() {
               </button>
             </div>
             <div className="p-4 flex flex-col flex-1 min-h-0">
-              <p className="text-sm text-gray-600 mb-3">
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
                 Escolha o consultor para ver as métricas de conversão (leads recebidos e convertidos no período). Deixe em &quot;Nenhum&quot; para não filtrar por consultor.
               </p>
-              <label className="text-sm font-semibold text-gray-700 block mb-1.5">Buscar usuário</label>
+              <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 block mb-1.5">Buscar usuário</label>
               <div className="relative mb-3">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-gray-400 pointer-events-none" />
                 <input
                   type="text"
                   value={conversionConsultantSearchQuery}
                   onChange={(e) => setConversionConsultantSearchQuery(e.target.value)}
                   placeholder="Nome ou email..."
-                  className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-800 placeholder:text-gray-500 focus:ring-2 focus:ring-[#20c997] focus:border-[#20c997] shadow-sm"
+                  className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white dark:placeholder:text-gray-400 rounded-lg text-sm text-gray-800 placeholder:text-gray-500 focus:ring-2 focus:ring-[#20c997] focus:border-[#20c997] shadow-sm"
                 />
               </div>
-              <div className="border border-gray-200 rounded-lg overflow-y-auto flex-1 min-h-[200px]" style={{ maxHeight: '320px' }}>
+              <div className="border border-gray-200 dark:border-[#404040] rounded-lg overflow-y-auto flex-1 min-h-[200px]" style={{ maxHeight: '320px' }}>
                 {loadingConsultants ? (
                   <div className="p-6 text-center text-sm text-gray-500">Carregando consultores...</div>
                 ) : (
-                  <ul className="divide-y divide-gray-100">
+                  <ul className="divide-y divide-gray-100 dark:divide-[#404040]">
                     <li>
                       <button
                         type="button"
                         onClick={() => setConversionConsultantPendingEmail(null)}
-                        className={`w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-gray-50 transition-colors ${conversionConsultantPendingEmail === null ? 'bg-[#20c997]/10 ring-1 ring-[#20c997]/30' : ''}`}
+                        className={`w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-gray-50 dark:hover:bg-[#333] transition-colors ${conversionConsultantPendingEmail === null ? 'bg-[#20c997]/10 dark:bg-[#20c997]/20 ring-1 ring-[#20c997]/30' : ''}`}
                       >
-                        <span className="flex-shrink-0 w-9 h-9 rounded-full bg-gray-100 text-gray-500 flex items-center justify-center text-sm font-semibold">—</span>
+                        <span className="flex-shrink-0 w-9 h-9 rounded-full bg-gray-100 dark:bg-[#404040] text-gray-500 dark:text-gray-400 flex items-center justify-center text-sm font-semibold">—</span>
                         <div className="flex-1 min-w-0">
-                          <p className="font-semibold text-gray-700">Nenhum</p>
-                          <p className="text-xs text-gray-500">Não filtrar por consultor</p>
+                          <p className="font-semibold text-gray-700 dark:text-gray-300">Nenhum</p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">Não filtrar por consultor</p>
                         </div>
                       </button>
                     </li>
@@ -2360,17 +2619,17 @@ export default function AdminLeadTransferPage() {
                           <button
                             type="button"
                             onClick={() => setConversionConsultantPendingEmail(c.email)}
-                            className={`w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-gray-50 transition-colors ${isSelected ? 'bg-[#20c997]/10 ring-1 ring-[#20c997]/30' : ''}`}
+                            className={`w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-gray-50 dark:hover:bg-[#333] transition-colors ${isSelected ? 'bg-[#20c997]/10 dark:bg-[#20c997]/20 ring-1 ring-[#20c997]/30' : ''}`}
                           >
-                            <span className="flex-shrink-0 w-9 h-9 rounded-full bg-gray-200 text-gray-700 flex items-center justify-center text-sm font-semibold">
+                            <span className="flex-shrink-0 w-9 h-9 rounded-full bg-gray-200 dark:bg-[#404040] text-gray-700 dark:text-gray-300 flex items-center justify-center text-sm font-semibold">
                               {initial}
                             </span>
                             <div className="flex-1 min-w-0">
-                              <p className="font-semibold text-gray-900 truncate">{c.full_name || c.email || '-'}</p>
-                              <p className="text-xs text-gray-500 truncate">{c.email}</p>
+                              <p className="font-semibold text-gray-900 dark:text-white truncate">{c.full_name || c.email || '-'}</p>
+                              <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{c.email}</p>
                             </div>
                             {role && (
-                              <span className="flex-shrink-0 px-2 py-0.5 rounded-md bg-gray-100 text-gray-600 text-xs font-medium">
+                              <span className="flex-shrink-0 px-2 py-0.5 rounded-md bg-gray-100 dark:bg-[#404040] text-gray-600 dark:text-gray-300 text-xs font-medium">
                                 {role}
                               </span>
                             )}
@@ -2382,8 +2641,8 @@ export default function AdminLeadTransferPage() {
                 )}
               </div>
             </div>
-            <div className="flex gap-2 justify-end p-4 border-t border-gray-200 bg-gray-50 rounded-b-2xl">
-              <button type="button" onClick={() => setShowConversionConsultantModal(false)} className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 bg-white hover:bg-gray-50 font-medium">
+            <div className="flex gap-2 justify-end p-4 border-t border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#333] rounded-b-2xl">
+              <button type="button" onClick={() => setShowConversionConsultantModal(false)} className="px-4 py-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 bg-white dark:bg-[#333] hover:bg-gray-50 dark:hover:bg-[#404040] font-medium">
                 Cancelar
               </button>
               <button type="button" onClick={confirmConversionConsultant} className="px-4 py-2 rounded-lg bg-[#20c997] text-white font-medium hover:bg-[#0eb892]">
@@ -2397,13 +2656,13 @@ export default function AdminLeadTransferPage() {
       {/* Modal Ver selecionados */}
       {showSelectedModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setShowSelectedModal(false)}>
-          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full max-h-[80vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
-            <div className="p-4 border-b border-gray-200 flex items-center justify-between">
-              <h3 className="font-bold text-gray-900">Leads selecionados ({selectedLeadIds.size})</h3>
-              <button type="button" onClick={() => setShowSelectedModal(false)} className="p-1 rounded-lg hover:bg-gray-100"><X className="w-5 h-5" /></button>
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-xl max-w-md w-full max-h-[80vh] overflow-hidden flex flex-col border border-gray-200 dark:border-[#404040]" onClick={(e) => e.stopPropagation()}>
+            <div className="p-4 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between">
+              <h3 className="font-bold text-gray-900 dark:text-white">Leads selecionados ({selectedLeadIds.size})</h3>
+              <button type="button" onClick={() => setShowSelectedModal(false)} className="p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-[#404040] text-gray-600 dark:text-gray-300"><X className="w-5 h-5" /></button>
             </div>
             <div className="p-4 overflow-y-auto flex-1">
-              <p className="text-sm text-gray-600 mb-2">IDs: {Array.from(selectedLeadIds).slice(0, 20).join(', ')}{selectedLeadIds.size > 20 ? ` ... +${selectedLeadIds.size - 20} mais` : ''}</p>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">IDs: {Array.from(selectedLeadIds).slice(0, 20).join(', ')}{selectedLeadIds.size > 20 ? ` ... +${selectedLeadIds.size - 20} mais` : ''}</p>
             </div>
           </div>
         </div>
@@ -2412,17 +2671,17 @@ export default function AdminLeadTransferPage() {
       {/* Modal de confirmação / Revisão */}
       {showConfirmModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-          <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6 border border-gray-200 dark:border-[#404040]">
             <div className="flex items-center gap-2 text-amber-600 mb-4">
               <AlertCircle className="w-6 h-6 flex-shrink-0" />
               <span className="font-semibold">Revisar e confirmar transferência</span>
             </div>
-            <div className="space-y-3 text-sm text-gray-700 mb-4">
+            <div className="space-y-3 text-sm text-gray-700 dark:text-gray-300 mb-4">
               <p><strong>Banca:</strong> {bancaName || bancaId}</p>
               <p><strong>Origem → Destino:</strong> {sourceEmail} → {targetEmail}</p>
               <p><strong>Quantidade:</strong> {selectedCount} lead(s)</p>
               <p><strong>Tipo:</strong>
-                <select value={transferType} onChange={(e) => setTransferType(e.target.value as 'TF' | 'TF1' | 'TF2' | 'TF3')} className="ml-2 border border-gray-300 rounded-lg px-2 py-1 text-gray-800">
+                <select value={transferType} onChange={(e) => setTransferType(e.target.value as 'TF' | 'TF1' | 'TF2' | 'TF3')} className="ml-2 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1 text-gray-800">
                   <option value="TF">TF</option>
                   <option value="TF1">TF1</option>
                   <option value="TF2">TF2</option>
@@ -2432,14 +2691,14 @@ export default function AdminLeadTransferPage() {
               <p><strong>IDs (amostra):</strong> {Array.from(selectedLeadIds).slice(0, 10).join(', ')}{selectedCount > 10 ? ` ... +${selectedCount - 10} mais` : ''}</p>
             </div>
             {selectedCount > 50 && (
-              <label className="flex items-center gap-2 mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200">
+              <label className="flex items-center gap-2 mb-4 p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700">
                 <input type="checkbox" checked={confirmAcknowledged} onChange={(e) => setConfirmAcknowledged(e.target.checked)} className="rounded border-gray-400" />
                 <span className="text-sm text-amber-800">Entendi que isso altera o responsável por estes leads.</span>
               </label>
             )}
-            <p className="text-xs text-gray-500 mb-4">Esta ação será registrada em auditoria.</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">Esta ação será registrada em auditoria.</p>
             <div className="flex gap-3 justify-end">
-              <button type="button" onClick={() => { setShowConfirmModal(false); setConfirmAcknowledged(false); }} disabled={transferring} className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50">Cancelar</button>
+              <button type="button" onClick={() => { setShowConfirmModal(false); setConfirmAcknowledged(false); }} disabled={transferring} className="px-4 py-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040]">Cancelar</button>
               <button type="button" onClick={confirmTransfer} disabled={transferring || !canExecuteTransfer || (selectedCount > 50 && !confirmAcknowledged)} className="px-4 py-2 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A] disabled:opacity-50 flex items-center gap-2">
                 {transferring ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                 Confirmar transferência

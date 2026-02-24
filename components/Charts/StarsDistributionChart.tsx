@@ -19,7 +19,7 @@ interface StarsDistributionChartProps {
 export default function StarsDistributionChart({ data }: StarsDistributionChartProps) {
   if (!data || Object.keys(data).length === 0) {
     return (
-      <div className="flex items-center justify-center h-64 text-gray-500">
+      <div className="flex items-center justify-center h-64 text-gray-500 dark:text-gray-400">
         Nenhum dado disponível
       </div>
     );
@@ -43,22 +43,23 @@ export default function StarsDistributionChart({ data }: StarsDistributionChartP
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={chartData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+        <CartesianGrid strokeDasharray="3 3" stroke="#404040" />
         <XAxis
           dataKey="estrelas"
-          stroke="#6b7280"
+          stroke="#9ca3af"
           style={{ fontSize: '12px' }}
         />
         <YAxis
-          stroke="#6b7280"
+          stroke="#9ca3af"
           style={{ fontSize: '12px' }}
         />
         <Tooltip
           contentStyle={{
-            backgroundColor: '#fff',
-            border: '1px solid #e5e7eb',
+            backgroundColor: '#2a2a2a',
+            border: '1px solid #404040',
             borderRadius: '8px',
             padding: '8px',
+            color: '#e5e7eb',
           }}
         />
         <Legend />

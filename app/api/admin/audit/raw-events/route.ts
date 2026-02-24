@@ -23,6 +23,7 @@ export async function GET(req: NextRequest) {
     const { searchParams } = req.nextUrl;
 
     const env = searchParams.get('env') || undefined;
+    const instanceName = searchParams.get('instance_name') || undefined;
     const dateFrom = searchParams.get('date_from') || undefined;
     const dateTo = searchParams.get('date_to') || undefined;
     const actionFilter = searchParams.get('action') || undefined; // 'add' | 'remove'
@@ -38,6 +39,9 @@ export async function GET(req: NextRequest) {
 
     if (env && (env === 'prod' || env === 'test')) {
       query = query.eq('env', env);
+    }
+    if (instanceName && instanceName.trim()) {
+      query = query.eq('instance_name', instanceName.trim());
     }
     if (dateFrom) {
       query = query.gte('received_at', dateFrom);

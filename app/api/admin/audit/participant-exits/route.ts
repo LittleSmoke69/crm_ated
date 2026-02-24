@@ -26,10 +26,20 @@ export async function GET(req: NextRequest) {
 
     const bancaId = searchParams.get('banca_id') || undefined;
     const groupId = searchParams.get('group_id') || undefined;
+    const instanceNameQ = searchParams.get('instance_name') || undefined;
     const groupNameQ = searchParams.get('group_name') || searchParams.get('q') || undefined;
     const dateFrom = searchParams.get('date_from') || undefined;
     const dateTo = searchParams.get('date_to') || undefined;
     const list = (searchParams.get('list') as ListMode) || 'recent';
+    let instanceIdsFilter: string[] | undefined;
+    if (instanceNameQ && instanceNameQ.trim()) {
+      const { data: instRows } = await supabaseServiceRole
+        .from('evolution_instances')
+        .select('id')
+        .eq('instance_name', instanceNameQ.trim());
+      instanceIdsFilter = (instRows || []).map((r: { id: string }) => r.id);
+      if (instanceIdsFilter.length === 0) instanceIdsFilter = [''];
+    }
     let groupIdsByName: string[] | undefined;
     if (groupNameQ && groupNameQ.trim()) {
       const { data: nameRows } = await supabaseServiceRole
@@ -53,6 +63,7 @@ export async function GET(req: NextRequest) {
 
       if (bancaId) query = query.eq('banca_id', bancaId);
       if (groupId) query = query.eq('group_id', groupId);
+      if (instanceIdsFilter) query = query.in('evolution_instance_id', instanceIdsFilter);
       if (groupIdsByName) query = query.in('group_id', groupIdsByName);
       if (dateFrom) query = query.gte('occurred_at', dateFrom);
       if (dateTo) query = query.lte('occurred_at', dateTo);
@@ -93,6 +104,7 @@ export async function GET(req: NextRequest) {
 
       if (bancaId) query = query.eq('banca_id', bancaId);
       if (groupId) query = query.eq('group_id', groupId);
+      if (instanceIdsFilter) query = query.in('evolution_instance_id', instanceIdsFilter);
       if (groupIdsByName) query = query.in('group_id', groupIdsByName);
       if (dateFrom) query = query.gte('occurred_at', dateFrom);
       if (dateTo) query = query.lte('occurred_at', dateTo);
@@ -129,6 +141,7 @@ export async function GET(req: NextRequest) {
 
     if (bancaId) query = query.eq('banca_id', bancaId);
     if (groupId) query = query.eq('group_id', groupId);
+    if (instanceIdsFilter) query = query.in('evolution_instance_id', instanceIdsFilter);
     if (groupIdsByName) query = query.in('group_id', groupIdsByName);
     if (dateFrom) query = query.gte('occurred_at', dateFrom);
     if (dateTo) query = query.lte('occurred_at', dateTo);

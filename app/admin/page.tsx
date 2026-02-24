@@ -434,6 +434,11 @@ export default function AdminDashboard() {
   const [lotoAssistenciaInstances, setLotoAssistenciaInstances] = useState<any[]>([]);
   const [lotoAssistenciaSelectedId, setLotoAssistenciaSelectedId] = useState<string | null>(null);
   const [lotoAssistenciaMessage, setLotoAssistenciaMessage] = useState<string>('');
+  const [lotoAssistenciaMessageDisconnected, setLotoAssistenciaMessageDisconnected] = useState<string>('');
+  const [lotoAssistenciaMessageReport, setLotoAssistenciaMessageReport] = useState<string>('');
+  const [lotoAssistenciaNotifyUserId, setLotoAssistenciaNotifyUserId] = useState<string | null>(null);
+  const [lotoAssistenciaMessageTransferExpired, setLotoAssistenciaMessageTransferExpired] = useState<string>('');
+  const [lotoAssistenciaNotifyProfiles, setLotoAssistenciaNotifyProfiles] = useState<{ id: string; full_name: string; email: string; telefone: string }[]>([]);
   const [lotoAssistenciaLoading, setLotoAssistenciaLoading] = useState(false);
   const [lotoAssistenciaSaving, setLotoAssistenciaSaving] = useState(false);
 
@@ -448,6 +453,11 @@ export default function AdminDashboard() {
         setLotoAssistenciaInstances(data.data.instances || []);
         setLotoAssistenciaSelectedId(data.data.selected_instance_id || null);
         setLotoAssistenciaMessage(data.data.message_template ?? '');
+        setLotoAssistenciaMessageDisconnected(data.data.message_instance_disconnected ?? '');
+        setLotoAssistenciaMessageReport(data.data.message_verification_report ?? '');
+        setLotoAssistenciaNotifyUserId(data.data.notify_user_id || null);
+        setLotoAssistenciaMessageTransferExpired(data.data.message_transfer_expired ?? '');
+        setLotoAssistenciaNotifyProfiles(data.data.notify_profiles ?? []);
       }
     } catch (e) {
       console.error('Erro ao carregar Loto Assistência:', e);
@@ -645,17 +655,6 @@ export default function AdminDashboard() {
     }
   };
 
-  if (checking || loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center">
-          <RefreshCw className="w-8 h-8 animate-spin text-[#8CD955] mx-auto mb-4" />
-          <p className="text-gray-600">Carregando...</p>
-        </div>
-      </div>
-    );
-  }
-
   const handleSignOut = async () => {
     if (typeof window !== 'undefined') {
       sessionStorage.removeItem('user_id');
@@ -666,6 +665,18 @@ export default function AdminDashboard() {
     }
     router.push('/admin/login');
   };
+
+  if (checking) {
+    return null;
+  }
+
+  if (loading) {
+    return (
+      <Layout onSignOut={handleSignOut}>
+        <div className="flex items-center justify-center min-h-[50vh]" />
+      </Layout>
+    );
+  }
 
   if (!isAdmin && !loading) {
     return (
@@ -690,12 +701,12 @@ export default function AdminDashboard() {
       <div className="space-y-8 w-full">
         <div className="flex items-center justify-between gap-4 w-full">
           <div className="flex-1">
-            <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 mb-2">Painel Administrativo</h1>
-            <p className="text-sm sm:text-base text-gray-600">Gerenciamento completo do sistema</p>
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 dark:text-white mb-2">Painel Administrativo</h1>
+            <p className="text-sm sm:text-base text-gray-600 dark:text-[#aaa]">Gerenciamento completo do sistema</p>
           </div>
           <div className="flex items-center gap-2 sm:gap-4 flex-shrink-0">
             {isSuperAdmin && <TenantSwitcher />}
-            <button className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-white rounded-lg shadow border border-gray-200 hover:bg-gray-50 text-sm sm:text-base">
+            <button className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-white dark:bg-[#2a2a2a] rounded-lg shadow border border-gray-200 dark:border-[#404040] hover:bg-gray-50 dark:hover:bg-[#333] text-gray-800 dark:text-white text-sm sm:text-base">
               <Calendar className="w-4 h-4" />
               <span className="hidden sm:inline">Últimos 7 dias</span>
               <span className="sm:hidden">7 dias</span>
@@ -705,7 +716,7 @@ export default function AdminDashboard() {
             <div className="lg:hidden">
               <button
                 onClick={() => setIsMobileOpen(!isMobileOpen)}
-                className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-gray-100 transition text-gray-600 shadow-md bg-white"
+                className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] transition text-gray-600 dark:text-[#aaa] shadow-md bg-white dark:bg-[#2a2a2a]"
                 aria-label="Toggle sidebar"
               >
                 <Menu className="w-5 h-5" />
@@ -714,13 +725,13 @@ export default function AdminDashboard() {
           </div>
         </div>
 
-        <div className="bg-white rounded-xl shadow-md p-2 flex flex-wrap gap-2">
+        <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-md p-2 flex flex-wrap gap-2 border border-gray-200 dark:border-[#404040]">
           <button
             onClick={() => setActiveSection('overview')}
             className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base ${
               activeSection === 'overview'
                 ? 'text-white'
-                : 'text-gray-700 hover:bg-gray-100'
+                : 'text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]'
             }`}
             style={activeSection === 'overview' ? { backgroundColor: '#8CD955' } : {}}
           >
@@ -733,7 +744,7 @@ export default function AdminDashboard() {
             className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base ${
               activeSection === 'users'
                 ? 'text-white'
-                : 'text-gray-700 hover:bg-gray-100'
+                : 'text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]'
             }`}
             style={activeSection === 'users' ? { backgroundColor: '#8CD955' } : {}}
           >
@@ -748,7 +759,7 @@ export default function AdminDashboard() {
               className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base ${
                 activeSection === 'crm'
                   ? 'text-white'
-                  : 'text-gray-700 hover:bg-gray-100'
+                  : 'text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]'
               }`}
               style={activeSection === 'crm' ? { backgroundColor: '#8CD955' } : {}}
             >
@@ -761,7 +772,7 @@ export default function AdminDashboard() {
           {(isSuperAdmin || adminStatus === 'admin' || adminStatus === 'auditoria') && (
             <button
               onClick={() => router.push('/admin/crm/lead-transfer')}
-              className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base text-gray-700 hover:bg-gray-100"
+              className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]"
             >
               <ArrowRightLeft className="w-4 h-4 sm:w-5 sm:h-5" />
               <span>Transferência de Leads</span>
@@ -775,7 +786,7 @@ export default function AdminDashboard() {
               className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base ${
                 activeSection === 'disparo'
                   ? 'text-white'
-                  : 'text-gray-700 hover:bg-gray-100'
+                  : 'text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]'
               }`}
               style={activeSection === 'disparo' ? { backgroundColor: '#8CD955' } : {}}
             >
@@ -791,7 +802,7 @@ export default function AdminDashboard() {
               className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base ${
                 activeSection === 'loto_assistencia'
                   ? 'text-white'
-                  : 'text-gray-700 hover:bg-gray-100'
+                  : 'text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]'
               }`}
               style={activeSection === 'loto_assistencia' ? { backgroundColor: '#8CD955' } : {}}
             >
@@ -804,7 +815,7 @@ export default function AdminDashboard() {
           {(isSuperAdmin || adminStatus === 'admin') && (
             <button
               onClick={() => router.push('/admin/meta')}
-              className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base text-gray-700 hover:bg-gray-100"
+              className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]"
             >
               <TrendingUp className="w-4 h-4 sm:w-5 sm:h-5" />
               <span>Meta Ads</span>
@@ -815,7 +826,7 @@ export default function AdminDashboard() {
           {(isSuperAdmin || adminStatus === 'admin') && (
             <button
               onClick={() => router.push('/admin/vsl')}
-              className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base text-gray-700 hover:bg-gray-100"
+              className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]"
             >
               <ExternalLink className="w-4 h-4 sm:w-5 sm:h-5" />
               <span>VSL & Redirect</span>
@@ -829,7 +840,7 @@ export default function AdminDashboard() {
               className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base ${
                 activeSection === 'settings'
                   ? 'text-white'
-                  : 'text-gray-700 hover:bg-gray-100'
+                  : 'text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]'
               }`}
               style={activeSection === 'settings' ? { backgroundColor: '#8CD955' } : {}}
             >
@@ -846,7 +857,7 @@ export default function AdminDashboard() {
                 className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base ${
                   activeSection === 'campaigns'
                     ? 'text-white'
-                    : 'text-gray-700 hover:bg-gray-100'
+                    : 'text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]'
                 }`}
                 style={activeSection === 'campaigns' ? { backgroundColor: '#8CD955' } : {}}
               >
@@ -859,7 +870,7 @@ export default function AdminDashboard() {
                 className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base ${
                   activeSection === 'proxys'
                     ? 'text-white'
-                    : 'text-gray-700 hover:bg-gray-100'
+                    : 'text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]'
                 }`}
                 style={activeSection === 'proxys' ? { backgroundColor: '#8CD955' } : {}}
               >
@@ -872,7 +883,7 @@ export default function AdminDashboard() {
                 className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base ${
                   activeSection === 'maturador'
                     ? 'text-white'
-                    : 'text-gray-700 hover:bg-gray-100'
+                    : 'text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]'
                 }`}
                 style={activeSection === 'maturador' ? { backgroundColor: '#8CD955' } : {}}
               >
@@ -882,7 +893,7 @@ export default function AdminDashboard() {
 
               <button
                 onClick={() => router.push('/admin/zaploto')}
-                className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base text-gray-700 hover:bg-gray-100"
+                className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]"
               >
                 <Globe className="w-4 h-4 sm:w-5 sm:h-5" />
                 <span>White Label & Cargos</span>
@@ -935,7 +946,7 @@ export default function AdminDashboard() {
 
               {(isSuperAdmin || adminStatus === 'admin') && stats.dispatches && (
                 <>
-                  <h2 className="text-base font-semibold text-gray-800 mt-2">Disparos CRM (Activations)</h2>
+                  <h2 className="text-base font-semibold text-gray-800 dark:text-white mt-2">Disparos CRM (Activations)</h2>
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 w-full">
                     <MetricCard
                       title="Disparadas hoje"
@@ -966,14 +977,14 @@ export default function AdminDashboard() {
               )}
 
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 w-full">
-                <div className="lg:col-span-2 bg-gradient-to-br from-white to-blue-50 rounded-xl shadow-lg border border-blue-100 p-4 sm:p-6 relative overflow-hidden">
+                <div className="lg:col-span-2 bg-gradient-to-br from-white to-blue-50 dark:from-[#2a2a2a] dark:to-blue-900/20 rounded-xl shadow-lg border border-blue-100 dark:border-blue-800 p-4 sm:p-6 relative overflow-hidden">
                   {/* Decorative background elements */}
-                  <div className="absolute top-0 right-0 w-32 h-32 bg-blue-200/20 rounded-full -mr-16 -mt-16"></div>
-                  <div className="absolute bottom-0 left-0 w-24 h-24 bg-blue-300/10 rounded-full -ml-12 -mb-12"></div>
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-blue-200/20 dark:bg-blue-500/10 rounded-full -mr-16 -mt-16"></div>
+                  <div className="absolute bottom-0 left-0 w-24 h-24 bg-blue-300/10 dark:bg-blue-500/5 rounded-full -ml-12 -mb-12"></div>
                   
                   <div className="relative z-10">
                     <div className="flex items-center justify-between mb-4">
-                      <h2 className="text-lg sm:text-xl font-bold text-gray-800">
+                      <h2 className="text-lg sm:text-xl font-bold text-gray-800 dark:text-white">
                         Leads Adicionados vs Falhas
                       </h2>
                       <BarChart3 className="w-5 h-5 text-blue-600" />
@@ -1028,14 +1039,14 @@ export default function AdminDashboard() {
                   </div>
                 </div>
 
-                <div className="bg-gradient-to-br from-white to-emerald-50 rounded-xl shadow-lg border border-emerald-100 p-6 sm:p-8 relative overflow-hidden">
+                <div className="bg-gradient-to-br from-white to-emerald-50 dark:from-[#2a2a2a] dark:to-emerald-900/20 rounded-xl shadow-lg border border-emerald-100 dark:border-emerald-800 p-6 sm:p-8 relative overflow-hidden">
                   {/* Decorative background element */}
-                  <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-200/20 rounded-full -mr-16 -mt-16"></div>
-                  <div className="absolute bottom-0 left-0 w-24 h-24 bg-emerald-300/10 rounded-full -ml-12 -mb-12"></div>
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-200/20 dark:bg-emerald-500/10 rounded-full -mr-16 -mt-16"></div>
+                  <div className="absolute bottom-0 left-0 w-24 h-24 bg-emerald-300/10 dark:bg-emerald-500/5 rounded-full -ml-12 -mb-12"></div>
                   
                   <div className="relative z-10">
                     <div className="flex items-center justify-between mb-6">
-                      <h2 className="text-lg sm:text-xl font-bold text-gray-800">
+                      <h2 className="text-lg sm:text-xl font-bold text-gray-800 dark:text-white">
                         Sucesso de Adição aos Grupos
                       </h2>
                       <div className={`p-2 rounded-lg ${
@@ -1109,14 +1120,14 @@ export default function AdminDashboard() {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 w-full">
-                <div className="bg-gradient-to-br from-gray-100 to-gray-50 rounded-xl shadow-lg border border-gray-200 p-4 sm:p-6 relative overflow-hidden">
+                <div className="bg-gradient-to-br from-gray-100 to-gray-50 dark:from-[#2a2a2a] dark:to-[#2a2a2a] rounded-xl shadow-lg border border-gray-200 dark:border-[#404040] p-4 sm:p-6 relative overflow-hidden">
                   {/* Decorative background elements */}
-                  <div className="absolute top-0 right-0 w-32 h-32 bg-purple-200/20 rounded-full -mr-16 -mt-16"></div>
-                  <div className="absolute bottom-0 left-0 w-24 h-24 bg-purple-300/10 rounded-full -ml-12 -mb-12"></div>
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-[#8CD955]/10 dark:bg-[#8CD955]/5 rounded-full -mr-16 -mt-16"></div>
+                  <div className="absolute bottom-0 left-0 w-24 h-24 bg-[#8CD955]/5 dark:bg-[#8CD955]/5 rounded-full -ml-12 -mb-12"></div>
                   
                   <div className="relative z-10">
                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
-                      <h2 className="text-lg sm:text-xl font-bold text-gray-800">Lista de Instâncias</h2>
+                      <h2 className="text-lg sm:text-xl font-bold text-gray-800 dark:text-white">Lista de Instâncias</h2>
                       <div className="flex items-center gap-2 w-full sm:w-auto">
                         <div className="relative flex-1 sm:flex-initial">
                           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500" />
@@ -1128,23 +1139,23 @@ export default function AdminDashboard() {
                               setInstancesSearch(e.target.value);
                               setInstancesCurrentPage(1); // Reset para primeira página ao buscar
                             }}
-                            className="pl-10 pr-4 py-2 bg-gray-100 border border-gray-200 rounded-lg text-sm text-gray-900 placeholder:text-gray-500 focus:ring-2 focus:ring-purple-500 focus:border-purple-500 w-full sm:w-64"
+                            className="pl-10 pr-4 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] w-full sm:w-64"
                           />
                         </div>
                         <button
                           onClick={loadInstances}
                           disabled={loadingInstances}
-                          className="p-1.5 text-purple-600 hover:bg-purple-50 rounded-lg transition-colors disabled:opacity-50 flex-shrink-0"
+                          className="p-1.5 text-[#8CD955] hover:bg-[#8CD955]/10 dark:hover:bg-[#8CD955]/10 rounded-lg transition-colors disabled:opacity-50 flex-shrink-0"
                           title="Recarregar instâncias"
                         >
                           <RefreshCw className={`w-4 h-4 ${loadingInstances ? 'animate-spin' : ''}`} />
                         </button>
-                        <Settings className="w-5 h-5 text-purple-600 flex-shrink-0" />
+                        <Settings className="w-5 h-5 text-[#8CD955] flex-shrink-0" />
                       </div>
                     </div>
                     {loadingInstances ? (
                       <div className="text-center py-4">
-                        <RefreshCw className="w-5 h-5 animate-spin text-purple-600 mx-auto" />
+                        <RefreshCw className="w-5 h-5 animate-spin text-[#8CD955] mx-auto" />
                       </div>
                     ) : (
                       <div>
@@ -1179,12 +1190,12 @@ export default function AdminDashboard() {
                                     return (
                                   <div
                                     key={inst.id || i}
-                                    className="p-3 bg-gray-50/80 rounded-lg border border-gray-200 hover:border-purple-300 transition-colors"
+                                    className="p-3 bg-gray-50/80 dark:bg-[#333] rounded-lg border border-gray-200 dark:border-[#404040] hover:border-[#8CD955]/50 dark:hover:border-[#8CD955]/50 transition-colors"
                                   >
                                     <div className="flex items-start justify-between gap-2">
                                       <div className="flex-1 min-w-0">
                                         <div className="flex items-center gap-2 mb-1 flex-wrap">
-                                          <div className="font-medium text-gray-800 truncate">
+                                          <div className="font-medium text-gray-800 dark:text-white truncate">
                                             {inst.instance_name}
                                           </div>
                                           {inst.is_master && (
@@ -1202,7 +1213,7 @@ export default function AdminDashboard() {
                                             </span>
                                           )}
                                         </div>
-                                        <div className="text-sm text-gray-500">
+                                        <div className="text-sm text-gray-500 dark:text-gray-400">
                                           {inst.status}
                                           {evolutionApi && ` â€¢ ${evolutionApi.name}`}
                                         </div>
@@ -1252,23 +1263,23 @@ export default function AdminDashboard() {
                   </div>
                 </div>
 
-                <div className="bg-gradient-to-br from-gray-100 to-gray-50 rounded-xl shadow-lg border border-gray-200 p-4 sm:p-6 relative overflow-hidden">
+                <div className="bg-gradient-to-br from-gray-100 to-gray-50 dark:from-[#2a2a2a] dark:to-[#2a2a2a] rounded-xl shadow-lg border border-gray-200 dark:border-[#404040] p-4 sm:p-6 relative overflow-hidden">
                   {/* Decorative background elements */}
-                  <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-200/20 rounded-full -mr-16 -mt-16"></div>
-                  <div className="absolute bottom-0 left-0 w-24 h-24 bg-indigo-300/10 rounded-full -ml-12 -mb-12"></div>
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-[#8CD955]/10 dark:bg-[#8CD955]/5 rounded-full -mr-16 -mt-16"></div>
+                  <div className="absolute bottom-0 left-0 w-24 h-24 bg-[#8CD955]/5 dark:bg-[#8CD955]/5 rounded-full -ml-12 -mb-12"></div>
                   
                   <div className="relative z-10">
                     <div className="flex justify-between items-center mb-4">
-                      <h2 className="text-lg sm:text-xl font-bold text-gray-800">Grupos Salvos no Banco</h2>
-                      <Users className="w-5 h-5 text-indigo-600" />
+                      <h2 className="text-lg sm:text-xl font-bold text-gray-800 dark:text-white">Grupos Salvos no Banco</h2>
+                      <Users className="w-5 h-5 text-[#8CD955]" />
                     </div>
                     {loadingGroups ? (
                       <div className="text-center py-4">
-                        <RefreshCw className="w-5 h-5 animate-spin text-indigo-600 mx-auto" />
+                        <RefreshCw className="w-5 h-5 animate-spin text-[#8CD955] mx-auto" />
                       </div>
                     ) : (
                       <div>
-                        <div className="text-4xl sm:text-5xl font-extrabold mb-2 bg-gradient-to-r from-indigo-600 to-indigo-500 bg-clip-text text-transparent">
+                        <div className="text-4xl sm:text-5xl font-extrabold mb-2 text-[#8CD955]">
                           {groups.dbGroups.length}
                         </div>
                         {groups.dbGroups.length > 0 ? (
@@ -1280,7 +1291,7 @@ export default function AdminDashboard() {
                                   groupsCurrentPage * groupsPerPage
                                 )
                                 .map((g, i) => (
-                                  <div key={g.id || i} className="truncate p-2 bg-gray-50/80 rounded border border-gray-200 hover:border-indigo-300 transition-colors">
+                                  <div key={g.id || i} className="truncate p-2 bg-gray-50/80 dark:bg-[#333] rounded border border-gray-200 dark:border-[#404040] hover:border-[#8CD955]/50 dark:hover:border-[#8CD955]/50 transition-colors text-gray-800 dark:text-white">
                                     {g.group_subject || g.group_id}
                                   </div>
                                 ))}
@@ -1303,14 +1314,14 @@ export default function AdminDashboard() {
                   </div>
                 </div>
 
-                <div className="bg-gradient-to-br from-gray-100 to-gray-50 rounded-xl shadow-lg border border-gray-200 p-4 sm:p-6 relative overflow-hidden">
+                <div className="bg-gradient-to-br from-gray-100 to-gray-50 dark:from-[#2a2a2a] dark:to-[#2a2a2a] rounded-xl shadow-lg border border-gray-200 dark:border-[#404040] p-4 sm:p-6 relative overflow-hidden">
                   {/* Decorative background elements */}
-                  <div className="absolute top-0 right-0 w-32 h-32 bg-amber-200/20 rounded-full -mr-16 -mt-16"></div>
-                  <div className="absolute bottom-0 left-0 w-24 h-24 bg-amber-300/10 rounded-full -ml-12 -mb-12"></div>
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-[#8CD955]/10 dark:bg-[#8CD955]/5 rounded-full -mr-16 -mt-16"></div>
+                  <div className="absolute bottom-0 left-0 w-24 h-24 bg-[#8CD955]/5 dark:bg-[#8CD955]/5 rounded-full -ml-12 -mb-12"></div>
                   
                   <div className="relative z-10">
                     <div className="flex justify-between items-center mb-4">
-                      <h2 className="text-lg sm:text-xl font-bold text-gray-800">Campanhas Finalizadas</h2>
+                      <h2 className="text-lg sm:text-xl font-bold text-gray-800 dark:text-white">Campanhas Finalizadas</h2>
                       <CheckCircle2 className="w-5 h-5 text-amber-600" />
                     </div>
                     {loadingFinishedCampaigns ? (
@@ -1319,7 +1330,7 @@ export default function AdminDashboard() {
                       </div>
                     ) : (
                       <div>
-                        <div className="text-4xl sm:text-5xl font-extrabold mb-2 bg-gradient-to-r from-amber-600 to-amber-500 bg-clip-text text-transparent">
+                        <div className="text-4xl sm:text-5xl font-extrabold mb-2 text-[#8CD955]">
                           {finishedCampaigns.length}
                         </div>
                         {finishedCampaigns.length > 0 ? (
@@ -1331,7 +1342,7 @@ export default function AdminDashboard() {
                                   campaignsCurrentPage * campaignsPerPage
                                 )
                                 .map((c, i) => (
-                                  <div key={c.id || i} className="flex justify-between items-center gap-2 p-2 bg-gray-50/80 rounded border border-gray-200 hover:border-amber-300 transition-colors">
+                                  <div key={c.id || i} className="flex justify-between items-center gap-2 p-2 bg-gray-50/80 dark:bg-[#333] rounded border border-gray-200 dark:border-[#404040] hover:border-[#8CD955]/50 dark:hover:border-[#8CD955]/50 transition-colors">
                                     <div className="truncate flex-1 min-w-0" title={c.group_subject || c.group_id}>
                                       {c.group_subject || c.group_id}
                                     </div>
@@ -1391,7 +1402,7 @@ export default function AdminDashboard() {
           {activeSection === 'disparo' && (isSuperAdmin || adminStatus === 'admin') && (
             <div className="space-y-6 w-full">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                <h1 className="text-xl font-bold text-gray-800">Disparo de mensagens</h1>
+                <h1 className="text-xl font-bold text-gray-800 dark:text-white">Disparo de mensagens</h1>
                 <a
                   href="/crm/activations"
                   target="_blank"
@@ -1404,20 +1415,20 @@ export default function AdminDashboard() {
               </div>
 
               {/* Filtro de data */}
-              <div className="flex flex-wrap items-center gap-3 p-4 bg-white rounded-xl border border-gray-200">
-                <span className="text-sm font-medium text-gray-700">Período:</span>
+              <div className="flex flex-wrap items-center gap-3 p-4 bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040]">
+                <span className="text-sm font-medium text-gray-700 dark:text-[#ccc]">Período:</span>
                 <input
                   type="date"
                   value={disparoFrom}
                   onChange={(e) => setDisparoFrom(e.target.value)}
-                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  className="px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-sm bg-white dark:bg-[#333] text-gray-800 dark:text-white"
                 />
-                <span className="text-gray-500">até</span>
+                <span className="text-gray-500 dark:text-[#888]">até</span>
                 <input
                   type="date"
                   value={disparoTo}
                   onChange={(e) => setDisparoTo(e.target.value)}
-                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  className="px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-sm bg-white dark:bg-[#333] text-gray-800 dark:text-white"
                 />
                 <button
                   type="button"
@@ -1427,7 +1438,7 @@ export default function AdminDashboard() {
                     setDisparoFrom(d.toISOString().slice(0, 10));
                     setDisparoTo(new Date().toISOString().slice(0, 10));
                   }}
-                  className="px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg"
+                  className="px-3 py-2 text-sm text-gray-600 dark:text-[#aaa] hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg"
                 >
                   Últimos 7 dias
                 </button>
@@ -1439,7 +1450,7 @@ export default function AdminDashboard() {
                     setDisparoFrom(d.toISOString().slice(0, 10));
                     setDisparoTo(new Date().toISOString().slice(0, 10));
                   }}
-                  className="px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg"
+                  className="px-3 py-2 text-sm text-gray-600 dark:text-[#aaa] hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg"
                 >
                   Este mês
                 </button>
@@ -1452,9 +1463,9 @@ export default function AdminDashboard() {
               </div>
 
               {loadingDisparo && !disparoData ? (
-                <div className="bg-gray-50 border border-gray-200 rounded-xl p-12 text-center">
+                <div className="bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl p-12 text-center">
                   <RefreshCw className="w-8 h-8 animate-spin text-[#8CD955] mx-auto mb-2" />
-                  <p className="text-gray-500">Carregando dados de disparo…</p>
+                  <p className="text-gray-500 dark:text-[#aaa]">Carregando dados de disparo…</p>
                 </div>
               ) : disparoData ? (
                 <>
@@ -1487,8 +1498,8 @@ export default function AdminDashboard() {
                   </div>
 
                   {/* Progressão por dia da semana (disparos no período) */}
-                  <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
-                    <h2 className="text-lg font-semibold text-gray-800 mb-4">Disparos por dia da semana (no período)</h2>
+                  <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] p-4 sm:p-6">
+                    <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">Disparos por dia da semana (no período)</h2>
                     <div className="h-64">
                       <ResponsiveContainer width="100%" height="100%">
                         <LineChart data={disparoData.byWeekday} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
@@ -1503,8 +1514,8 @@ export default function AdminDashboard() {
                   </div>
 
                   {/* Dados diários (disparos por dia no período) */}
-                  <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
-                    <h2 className="text-lg font-semibold text-gray-800 mb-4">Disparos por dia (no período)</h2>
+                  <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] p-4 sm:p-6">
+                    <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">Disparos por dia (no período)</h2>
                     <div className="h-56 w-full min-h-[200px]" style={{ minWidth: 320 }}>
                       <ResponsiveContainer width="100%" height="100%">
                         <LineChart data={disparoData.daily || []} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
@@ -1519,8 +1530,8 @@ export default function AdminDashboard() {
                   </div>
 
                   {/* Próximos agendamentos */}
-                  <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
-                    <h2 className="text-lg font-semibold text-gray-800 mb-4">Próximos agendamentos</h2>
+                  <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] p-4 sm:p-6">
+                    <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">Próximos agendamentos</h2>
                     {disparoData.upcoming?.length > 0 ? (
                       <>
                         <div className="overflow-x-auto">
@@ -1617,19 +1628,19 @@ export default function AdminDashboard() {
                 Selecione a instância WhatsApp (mestre) e personalize a mensagem enviada no fluxo &quot;Esqueci a senha&quot;. São listadas todas as instâncias marcadas como mestre no sistema.
               </p>
               {lotoAssistenciaLoading ? (
-                <div className="bg-gray-50 border border-gray-200 rounded-xl p-8 text-center">
+                <div className="bg-gray-50 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-xl p-8 text-center">
                   <Loader2 className="w-8 h-8 animate-spin text-[#8CD955] mx-auto mb-2" />
                   <p className="text-gray-500">Carregando…</p>
                 </div>
               ) : (
                 <div className="space-y-6 max-w-2xl">
-                  <div className="bg-white rounded-xl border border-gray-200 p-6">
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Instância para envio do código (Esqueci a senha)</label>
+                  <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] p-6">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Instância para envio do código (Esqueci a senha)</label>
                     <div className="flex flex-wrap items-center gap-3">
                       <select
                         value={lotoAssistenciaSelectedId || ''}
                         onChange={(e) => setLotoAssistenciaSelectedId(e.target.value || null)}
-                        className="flex-1 min-w-[200px] px-3 py-2 border border-gray-300 rounded-lg text-gray-800 bg-white"
+                        className="flex-1 min-w-[200px] px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-800 dark:text-white bg-white dark:bg-[#333]"
                       >
                         <option value="">Nenhuma selecionada</option>
                         {lotoAssistenciaInstances.map((inst: any) => (
@@ -1645,15 +1656,68 @@ export default function AdminDashboard() {
                     )}
                   </div>
 
-                  <div className="bg-white rounded-xl border border-gray-200 p-6">
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Mensagem enviada no disparo do código</label>
-                    <p className="text-xs text-gray-500 mb-2">Use <code className="bg-gray-100 px-1 rounded">{'{{Código}}'}</code> no texto para indicar onde o código de 6 dígitos será inserido.</p>
+                  <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] p-6">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Mensagem enviada no disparo do código</label>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Use <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">{'{{Código}}'}</code> no texto para indicar onde o código de 6 dígitos será inserido.</p>
                     <textarea
                       value={lotoAssistenciaMessage}
                       onChange={(e) => setLotoAssistenciaMessage(e.target.value)}
                       placeholder="Seu código de recuperação de senha Zaploto é: *{{Código}}*. Válido por 15 minutos. Não compartilhe."
                       rows={4}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-800 bg-white placeholder:text-gray-400 resize-y"
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-800 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-400 dark:placeholder-gray-500 resize-y"
+                    />
+                  </div>
+
+                  <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] p-6">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Mensagem quando uma instância desconectar</label>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Enviada ao telefone do perfil do dono da instância. Use <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">{'{{NomeInstancia}}'}</code> e <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">{'{{Status}}'}</code>.</p>
+                    <textarea
+                      value={lotoAssistenciaMessageDisconnected}
+                      onChange={(e) => setLotoAssistenciaMessageDisconnected(e.target.value)}
+                      placeholder="⚠️ *Zaploto*: A instância *{{NomeInstancia}}* foi desconectada. Status: {{Status}}. Acesse o painel para reconectar."
+                      rows={3}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-800 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-400 dark:placeholder-gray-500 resize-y"
+                    />
+                  </div>
+
+                  <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] p-6">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Mensagem do relatório de verificação de instâncias</label>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Enviada ao clicar em &quot;Verificar todas&quot;. Use <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">{'{{Relatório}}'}</code> para a lista (nome | telefone | status).</p>
+                    <textarea
+                      value={lotoAssistenciaMessageReport}
+                      onChange={(e) => setLotoAssistenciaMessageReport(e.target.value)}
+                      placeholder={'📋 *Relatório de instâncias Zaploto*\n\n{{Relatório}}\n\nVerifique o painel para mais detalhes.'}
+                      rows={3}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-800 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-400 dark:placeholder-gray-500 resize-y"
+                    />
+                  </div>
+
+                  <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] p-6">
+                    <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200 mb-2">Quando o prazo de transferência de leads acabar (10 dias)</h3>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+                      Uma mensagem é enviada pelo Loto Assistente para o telefone do perfil escolhido. Configure um perfil com telefone cadastrado.
+                    </p>
+                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Perfil que recebe a notificação (telefone do perfil)</label>
+                    <select
+                      value={lotoAssistenciaNotifyUserId || ''}
+                      onChange={(e) => setLotoAssistenciaNotifyUserId(e.target.value || null)}
+                      className="w-full max-w-md px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-800 dark:text-white bg-white dark:bg-[#333] mb-3"
+                    >
+                      <option value="">Nenhum (não enviar)</option>
+                      {lotoAssistenciaNotifyProfiles.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.full_name} {p.telefone ? `(${p.telefone})` : '(sem telefone)'}
+                        </option>
+                      ))}
+                    </select>
+                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Mensagem enviada ao expirar o prazo</label>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Use: <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">{'{{Banca}}'}</code>, <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">{'{{DataTransferencia}}'}</code>, <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">{'{{ConsultorOrigem}}'}</code>, <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">{'{{ConsultorDestino}}'}</code>, <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">{'{{QuantidadeLeads}}'}</code>.</p>
+                    <textarea
+                      value={lotoAssistenciaMessageTransferExpired}
+                      onChange={(e) => setLotoAssistenciaMessageTransferExpired(e.target.value)}
+                      placeholder="⏱️ *Zaploto – Prazo de transferência encerrado*..."
+                      rows={6}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-800 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-400 dark:placeholder-gray-500 resize-y"
                     />
                   </div>
 
@@ -1672,6 +1736,10 @@ export default function AdminDashboard() {
                             body: JSON.stringify({
                               evolution_instance_id: lotoAssistenciaSelectedId,
                               message_template: lotoAssistenciaMessage,
+                              message_instance_disconnected: lotoAssistenciaMessageDisconnected,
+                              message_verification_report: lotoAssistenciaMessageReport,
+                              notify_user_id: lotoAssistenciaNotifyUserId || '',
+                              message_transfer_expired: lotoAssistenciaMessageTransferExpired,
                             }),
                           });
                           const data = await res.json();
@@ -1711,7 +1779,7 @@ export default function AdminDashboard() {
       {/* Modal de Detalhes da Campanha */}
       {showCampaignModal && (
         <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden animate-in fade-in zoom-in duration-200">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-[#404040]">
             <div className="p-6 border-b border-gray-200 flex items-center justify-between bg-gradient-to-r from-amber-500 to-amber-600 text-white">
               <h2 className="text-xl font-bold flex items-center gap-2">
                 <Target className="w-6 h-6" />
@@ -1904,19 +1972,19 @@ const MetricCard = ({ title, value, icon, bgColor }: any) => {
   const isGray = bgColor.includes('gray');
   
   return (
-    <div className={`bg-gradient-to-br ${isEmerald ? 'from-white to-emerald-50 border-emerald-100' : isGray ? 'from-white to-gray-50 border-gray-100' : 'from-white to-blue-50 border-blue-100'} rounded-xl shadow-lg border p-4 sm:p-6 relative overflow-hidden`}>
+    <div className={`bg-gradient-to-br ${isEmerald ? 'from-white to-emerald-50 dark:from-[#2a2a2a] dark:to-emerald-900/20 border-emerald-100 dark:border-emerald-800' : isGray ? 'from-white to-gray-50 dark:from-[#2a2a2a] dark:to-[#333] border-gray-100 dark:border-[#404040]' : 'from-white to-blue-50 dark:from-[#2a2a2a] dark:to-blue-900/20 border-blue-100 dark:border-blue-800'} rounded-xl shadow-lg border p-4 sm:p-6 relative overflow-hidden`}>
       {/* Decorative background elements */}
-      <div className={`absolute top-0 right-0 w-32 h-32 ${isEmerald ? 'bg-emerald-200/20' : isGray ? 'bg-gray-200/20' : 'bg-blue-200/20'} rounded-full -mr-16 -mt-16`}></div>
-      <div className={`absolute bottom-0 left-0 w-24 h-24 ${isEmerald ? 'bg-emerald-300/10' : isGray ? 'bg-gray-300/10' : 'bg-blue-300/10'} rounded-full -ml-12 -mb-12`}></div>
+      <div className={`absolute top-0 right-0 w-32 h-32 ${isEmerald ? 'bg-emerald-200/20 dark:bg-emerald-500/10' : isGray ? 'bg-gray-200/20 dark:bg-gray-500/10' : 'bg-blue-200/20 dark:bg-blue-500/10'} rounded-full -mr-16 -mt-16`}></div>
+      <div className={`absolute bottom-0 left-0 w-24 h-24 ${isEmerald ? 'bg-emerald-300/10 dark:bg-emerald-500/5' : isGray ? 'bg-gray-300/10 dark:bg-gray-500/5' : 'bg-blue-300/10 dark:bg-blue-500/5'} rounded-full -ml-12 -mb-12`}></div>
       
       <div className="relative z-10">
         <div className="flex items-center justify-between mb-3 sm:mb-4">
           <div className={`${bgColor} p-2 sm:p-3 rounded-lg text-white shadow-md`}>{icon}</div>
         </div>
-        <div className={`text-2xl sm:text-3xl font-extrabold mb-1 ${isEmerald ? 'bg-gradient-to-r from-[#8CD955] to-[#A8E677]' : isGray ? 'bg-gradient-to-r from-gray-600 to-gray-500' : 'bg-gradient-to-r from-blue-600 to-blue-500'} bg-clip-text text-transparent`}>
+        <div className={`text-2xl sm:text-3xl font-extrabold mb-1 ${isEmerald ? 'bg-gradient-to-r from-[#8CD955] to-[#A8E677] dark:from-[#00ff00] dark:to-[#7BC84A]' : isGray ? 'bg-gradient-to-r from-gray-600 to-gray-500 dark:from-gray-400 dark:to-gray-500' : 'bg-gradient-to-r from-blue-600 to-blue-500 dark:from-blue-400 dark:to-blue-500'} bg-clip-text text-transparent`}>
           {value}
         </div>
-        <div className="text-xs sm:text-sm text-gray-600 font-medium">{title}</div>
+        <div className="text-xs sm:text-sm text-gray-600 dark:text-[#aaa] font-medium">{title}</div>
       </div>
     </div>
   );
@@ -2299,9 +2367,9 @@ const UsersSection = ({
   return (
     <div className="space-y-6">
       {/* Busca */}
-        <div className="bg-gray-100 p-4 rounded-xl shadow-sm border border-gray-200">
+        <div className="bg-gray-100 dark:bg-[#2a2a2a] p-4 rounded-xl shadow-sm border border-gray-200 dark:border-[#404040]">
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 w-5 h-5" />
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 dark:text-[#888] w-5 h-5" />
           <input
             type="text"
             placeholder="Buscar por nome, email, ID ou banca..."
@@ -2310,7 +2378,7 @@ const UsersSection = ({
               setSearchQuery(e.target.value);
               setCurrentPage(1); // Volta para primeira página ao buscar
             }}
-            className="w-full pl-10 pr-4 py-2.5 bg-gray-200 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-sm text-gray-900 placeholder:text-gray-600"
+            className="w-full pl-10 pr-4 py-2.5 bg-gray-200 dark:bg-[#333] border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-sm text-gray-900 dark:text-white placeholder:text-gray-600 dark:placeholder-gray-400"
           />
           {searchQuery && (
             <button
@@ -2325,13 +2393,13 @@ const UsersSection = ({
 
       {/* Filtros de Status e Botão Criar */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="bg-gray-100 p-2 rounded-xl shadow-sm border border-gray-200 flex flex-wrap gap-2">
+        <div className="bg-gray-100 dark:bg-[#2a2a2a] p-2 rounded-xl shadow-sm border border-gray-200 dark:border-[#404040] flex flex-wrap gap-2">
           <button
             onClick={() => {
               setStatusFilter('todos');
               setCurrentPage(1);
             }}
-            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'todos' ? 'bg-[#8CD955] text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'todos' ? 'bg-[#8CD955] text-white' : 'bg-gray-100 dark:bg-[#333] text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-[#404040]'}`}
           >
             Todos
           </button>
@@ -2340,7 +2408,7 @@ const UsersSection = ({
               setStatusFilter('admin');
               setCurrentPage(1);
             }}
-            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'admin' ? 'bg-red-600 text-white' : 'bg-red-50 text-red-600 hover:bg-red-100'}`}
+            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'admin' ? 'bg-red-600 text-white' : 'bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/50'}`}
           >
             Admins
           </button>
@@ -2349,7 +2417,7 @@ const UsersSection = ({
               setStatusFilter('dono_banca');
               setCurrentPage(1);
             }}
-            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'dono_banca' ? 'bg-purple-600 text-white' : 'bg-purple-50 text-purple-600 hover:bg-purple-100'}`}
+            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'dono_banca' ? 'bg-purple-600 text-white' : 'bg-purple-50 dark:bg-purple-900/30 text-purple-600 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/50'}`}
           >
             Donos de Banca
           </button>
@@ -2358,7 +2426,7 @@ const UsersSection = ({
               setStatusFilter('gerente');
               setCurrentPage(1);
             }}
-            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'gerente' ? 'bg-blue-600 text-white' : 'bg-blue-50 text-blue-600 hover:bg-blue-100'}`}
+            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'gerente' ? 'bg-blue-600 text-white' : 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/50'}`}
           >
             Gerentes
           </button>
@@ -2367,7 +2435,7 @@ const UsersSection = ({
               setStatusFilter('consultor');
               setCurrentPage(1);
             }}
-            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'consultor' ? 'bg-[#8CD955] text-white' : 'bg-emerald-50 text-[#8CD955] hover:bg-emerald-100'}`}
+            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'consultor' ? 'bg-[#8CD955] text-white' : 'bg-emerald-50 dark:bg-[#8CD955]/20 text-[#8CD955] dark:text-[#8CD955] hover:bg-emerald-100 dark:hover:bg-[#8CD955]/30'}`}
           >
             Consultores
           </button>
@@ -2376,7 +2444,7 @@ const UsersSection = ({
               setStatusFilter('gestor');
               setCurrentPage(1);
             }}
-            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'gestor' ? 'bg-teal-600 text-white' : 'bg-teal-50 text-teal-600 hover:bg-teal-100'}`}
+            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'gestor' ? 'bg-teal-600 text-white' : 'bg-teal-50 dark:bg-teal-900/30 text-teal-600 dark:text-teal-300 hover:bg-teal-100 dark:hover:bg-teal-900/50'}`}
           >
             Gestores de Tráfego
           </button>
@@ -2385,7 +2453,7 @@ const UsersSection = ({
               setStatusFilter('auditoria');
               setCurrentPage(1);
             }}
-            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'auditoria' ? 'bg-orange-600 text-white' : 'bg-orange-50 text-orange-600 hover:bg-orange-100'}`}
+            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'auditoria' ? 'bg-orange-600 text-white' : 'bg-orange-50 dark:bg-orange-900/30 text-orange-600 dark:text-orange-300 hover:bg-orange-100 dark:hover:bg-orange-900/50'}`}
           >
             Auditoria
           </button>
@@ -2394,7 +2462,7 @@ const UsersSection = ({
               setStatusFilter('suporte');
               setCurrentPage(1);
             }}
-            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'suporte' ? 'bg-cyan-600 text-white' : 'bg-cyan-50 text-cyan-600 hover:bg-cyan-100'}`}
+            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'suporte' ? 'bg-cyan-600 text-white' : 'bg-cyan-50 dark:bg-cyan-900/30 text-cyan-600 dark:text-cyan-300 hover:bg-cyan-100 dark:hover:bg-cyan-900/50'}`}
           >
             Suporte
           </button>
@@ -2412,8 +2480,8 @@ const UsersSection = ({
       {/* Modal de Criação */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in duration-200">
-            <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-[#8CD955] text-white">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-[#404040]">
+            <div className="p-6 border-b border-gray-100 dark:border-[#404040] flex items-center justify-between bg-[#8CD955] text-white">
               <h2 className="text-xl font-bold flex items-center gap-2">
                 <UserPlus className="w-6 h-6" />
                 Novo Usuário
@@ -2431,7 +2499,7 @@ const UsersSection = ({
                     type="text" 
                     required
                     placeholder="Nome do usuário"
-                    className="w-full bg-gray-50 border-gray-100 rounded-xl focus:ring-emerald-500 focus:border-emerald-500 p-3 text-sm text-gray-700"
+                    className="w-full bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-700 dark:text-white dark:placeholder-gray-400"
                     value={createFormData.fullName}
                     onChange={e => setCreateCreateFormData({...createFormData, fullName: e.target.value})}
                   />
@@ -2443,7 +2511,7 @@ const UsersSection = ({
                     type="email" 
                     required
                     placeholder="exemplo@email.com"
-                    className="w-full bg-gray-50 border-gray-100 rounded-xl focus:ring-emerald-500 focus:border-emerald-500 p-3 text-sm text-gray-700"
+                    className="w-full bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-700 dark:text-white dark:placeholder-gray-400"
                     value={createFormData.email}
                     onChange={e => setCreateCreateFormData({...createFormData, email: e.target.value})}
                   />
@@ -2455,7 +2523,7 @@ const UsersSection = ({
                     type="password" 
                     required
                     placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
-                    className="w-full bg-gray-50 border-gray-100 rounded-xl focus:ring-emerald-500 focus:border-emerald-500 p-3 text-sm text-gray-700"
+                    className="w-full bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-700 dark:text-white dark:placeholder-gray-400"
                     value={createFormData.password}
                     onChange={e => setCreateCreateFormData({...createFormData, password: e.target.value})}
                   />
@@ -2464,7 +2532,7 @@ const UsersSection = ({
                 <div className="col-span-2">
                   <label className="block text-xs font-bold text-gray-500 uppercase mb-1.5 ml-1">Tipo de Usuário</label>
                   <select
-                    className="w-full bg-gray-50 border-gray-100 rounded-xl focus:ring-emerald-500 focus:border-emerald-500 p-3 text-sm text-gray-700"
+                    className="w-full bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-700 dark:text-white dark:placeholder-gray-400"
                     value={createFormData.status}
                     onChange={e => setCreateCreateFormData({...createFormData, status: e.target.value, enroller: ''})}
                   >
@@ -2486,7 +2554,7 @@ const UsersSection = ({
                         type="text" 
                         required
                         placeholder="Ex: Banca Prime"
-                        className="w-full bg-gray-50 border-gray-100 rounded-xl focus:ring-emerald-500 focus:border-emerald-500 p-3 text-sm text-gray-700"
+                        className="w-full bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-700 dark:text-white dark:placeholder-gray-400"
                         value={createFormData.bancaName}
                         onChange={e => setCreateCreateFormData({...createFormData, bancaName: e.target.value})}
                       />
@@ -2497,7 +2565,7 @@ const UsersSection = ({
                         type="url" 
                         required
                         placeholder="https://..."
-                        className="w-full bg-gray-50 border-gray-100 rounded-xl focus:ring-emerald-500 focus:border-emerald-500 p-3 text-sm text-gray-700"
+                        className="w-full bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-700 dark:text-white dark:placeholder-gray-400"
                         value={createFormData.bancaUrl}
                         onChange={e => setCreateCreateFormData({...createFormData, bancaUrl: e.target.value})}
                       />
@@ -2518,7 +2586,7 @@ const UsersSection = ({
                       )}
                     </label>
                     <select 
-                      className="w-full bg-gray-50 border-gray-100 rounded-xl focus:ring-emerald-500 focus:border-emerald-500 p-3 text-sm text-gray-700"
+                      className="w-full bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-700 dark:text-white dark:placeholder-gray-400"
                       value={createFormData.enroller}
                       onChange={e => setCreateCreateFormData({...createFormData, enroller: e.target.value})}
                       required={createFormData.status === 'consultor'}
@@ -2539,7 +2607,7 @@ const UsersSection = ({
                       Selecionar Admin (Opcional)
                     </label>
                     <select 
-                      className="w-full bg-gray-50 border-gray-100 rounded-xl focus:ring-emerald-500 focus:border-emerald-500 p-3 text-sm text-gray-700"
+                      className="w-full bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-700 dark:text-white dark:placeholder-gray-400"
                       value={createFormData.enroller}
                       onChange={e => setCreateCreateFormData({...createFormData, enroller: e.target.value})}
                     >
@@ -2580,7 +2648,7 @@ const UsersSection = ({
         </div>
       )}
 
-      <div className="bg-gradient-to-br from-white to-emerald-50 rounded-xl shadow-lg border border-emerald-100 overflow-hidden relative">
+      <div className="bg-gradient-to-br from-white to-emerald-50 dark:from-[#2a2a2a] dark:to-[#2a2a2a] rounded-xl shadow-lg border border-emerald-100 dark:border-[#404040] overflow-hidden relative">
         {/* Decorative background elements */}
         <div className="absolute top-0 right-0 w-40 h-40 bg-emerald-200/20 rounded-full -mr-20 -mt-20"></div>
         <div className="absolute bottom-0 left-0 w-32 h-32 bg-emerald-300/10 rounded-full -ml-16 -mb-16"></div>
@@ -2589,9 +2657,9 @@ const UsersSection = ({
           <div className="flex justify-between items-center mb-6">
             <div className="flex items-center gap-3">
               <Users className="w-6 h-6 text-[#8CD955]" />
-              <h2 className="text-xl sm:text-2xl font-bold text-gray-800">Gestão de Usuários</h2>
+              <h2 className="text-xl sm:text-2xl font-bold text-gray-800 dark:text-white">Gestão de Usuários</h2>
             </div>
-            <span className="text-sm text-gray-600 font-medium bg-gray-50/80 px-3 py-1 rounded-lg border border-gray-200">{filteredUsers.length} usuários encontrados</span>
+            <span className="text-sm text-gray-600 dark:text-[#aaa] font-medium bg-gray-50/80 dark:bg-[#333] px-3 py-1 rounded-lg border border-gray-200 dark:border-[#404040]">{filteredUsers.length} usuários encontrados</span>
           </div>
 
           {usersLoadError && (
@@ -2610,9 +2678,9 @@ const UsersSection = ({
           <div className="overflow-x-auto -mx-4 sm:mx-0">
             <table className="w-full min-w-[1000px]">
               <thead>
-                <tr className="border-b border-gray-200 bg-gray-50">
+                <tr className="border-b border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#333]">
                   <th 
-                    className="text-left p-4 text-gray-700 text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors select-none"
+                    className="text-left p-4 text-gray-700 dark:text-gray-300 text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-[#404040] transition-colors select-none"
                     onClick={() => handleSort('full_name')}
                   >
                     <div className="flex items-center gap-2">
@@ -2623,7 +2691,7 @@ const UsersSection = ({
                     </div>
                   </th>
                   <th 
-                    className="text-left p-4 text-gray-700 text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors select-none"
+                    className="text-left p-4 text-gray-700 dark:text-gray-300 text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-[#404040] transition-colors select-none"
                     onClick={() => handleSort('status')}
                   >
                     <div className="flex items-center gap-2">
@@ -2634,7 +2702,7 @@ const UsersSection = ({
                     </div>
                   </th>
                   <th 
-                    className="text-center p-4 text-gray-700 text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors select-none"
+                    className="text-center p-4 text-gray-700 dark:text-gray-300 text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-[#404040] transition-colors select-none"
                     onClick={() => handleSort('total_online_time')}
                   >
                     <div className="flex items-center justify-center gap-2">
@@ -2646,7 +2714,7 @@ const UsersSection = ({
                   </th>
                   <th className="text-center p-4 text-gray-700 text-xs font-bold uppercase tracking-wider">Limites</th>
                   <th 
-                    className="text-center p-4 text-gray-700 text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors select-none"
+                    className="text-center p-4 text-gray-700 dark:text-gray-300 text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-[#404040] transition-colors select-none"
                     onClick={() => handleSort('stats')}
                   >
                     <div className="flex items-center justify-center gap-2">
@@ -2656,12 +2724,12 @@ const UsersSection = ({
                       )}
                     </div>
                   </th>
-                  <th className="text-right p-4 text-gray-700 text-xs font-bold uppercase tracking-wider">Ações</th>
+                  <th className="text-right p-4 text-gray-700 dark:text-gray-300 text-xs font-bold uppercase tracking-wider">Ações</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {paginatedUsers.map((user: User) => (
-                  <tr key={user.id} className="hover:bg-gray-50 transition-colors">
+                  <tr key={user.id} className="hover:bg-gray-50 dark:hover:bg-[#333] transition-colors border-b border-gray-100 dark:border-[#404040]">
                     <td className="p-4">
                       {editingUser === user.id ? (
                         <div className="space-y-2">
@@ -2769,17 +2837,17 @@ const UsersSection = ({
                         <div>
                           <div className="flex items-center gap-2 mb-1">
                           <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                            user.status === 'admin' ? 'bg-red-100 text-red-700' :
-                            user.status === 'dono_banca' ? 'bg-purple-100 text-purple-700' :
-                            user.status === 'gestor' ? 'bg-teal-100 text-teal-700' :
-                            user.status === 'gerente' ? 'bg-blue-100 text-blue-700' :
-                            user.status === 'auditoria' ? 'bg-orange-100 text-orange-700' :
-                            user.status === 'suporte' ? 'bg-cyan-100 text-cyan-700' :
-                            'bg-emerald-100 text-emerald-700'
+                            user.status === 'admin' ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300' :
+                            user.status === 'dono_banca' ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300' :
+                            user.status === 'gestor' ? 'bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300' :
+                            user.status === 'gerente' ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300' :
+                            user.status === 'auditoria' ? 'bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300' :
+                            user.status === 'suporte' ? 'bg-cyan-100 dark:bg-cyan-900/40 text-cyan-700 dark:text-cyan-300' :
+                            'bg-emerald-100 dark:bg-[#8CD955]/20 text-emerald-700 dark:text-[#8CD955]'
                           }`}>
                             {user.status}
                           </span>
-                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${user.settings?.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${user.settings?.is_active ? 'bg-green-100 dark:bg-[#8CD955]/30 text-green-700 dark:text-[#8CD955]' : 'bg-gray-100 dark:bg-[#404040] text-gray-500 dark:text-gray-400'}`}>
                               {user.settings?.is_active ? 'ATIVO' : 'INATIVO'}
                             </span>
                           </div>
@@ -2805,7 +2873,7 @@ const UsersSection = ({
                             {isOnline(user.last_seen_at) ? 'Online' : 'Offline'}
                           </span>
                         </div>
-                        <div className="text-sm font-black text-gray-800" title="Tempo total acumulado">
+                        <div className="text-sm font-black text-gray-800 dark:text-white" title="Tempo total acumulado">
                           {formatTime(user.total_online_time)}
                         </div>
                         {user.last_seen_at && (
@@ -2839,7 +2907,7 @@ const UsersSection = ({
                         </div>
                       ) : (
                         <div className="text-center">
-                          <div className="text-xs font-bold text-gray-700">{user.settings?.max_leads_per_day} Leads/Dia</div>
+                          <div className="text-xs font-bold text-gray-700 dark:text-gray-300">{user.settings?.max_leads_per_day} Leads/Dia</div>
                           <div className="text-[10px] text-gray-500">{user.settings?.max_instances} Instâncias</div>
                         </div>
                       )}
@@ -2848,7 +2916,7 @@ const UsersSection = ({
                       <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-center">
                         <div>
                           <div className="text-[10px] text-gray-400 uppercase font-bold">Camps</div>
-                          <div className="text-xs font-bold text-gray-700">{user.stats.campaigns}</div>
+                          <div className="text-xs font-bold text-gray-700 dark:text-gray-300">{user.stats.campaigns}</div>
                         </div>
                         <div>
                           <div className="text-[10px] text-gray-400 uppercase font-bold">Sucesso</div>
@@ -3101,7 +3169,7 @@ const CampaignsSection = ({ userId }: { userId: string | null }) => {
   };
 
   if (loading) {
-    return <div className="bg-gray-100 rounded-xl shadow p-6 border border-gray-200">Carregando...</div>;
+    return <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow p-6 border border-gray-200 dark:border-[#404040] text-gray-700 dark:text-gray-300">Carregando...</div>;
   }
 
   const totalPages = Math.ceil(campaigns.length / itemsPerPage);
@@ -3110,10 +3178,10 @@ const CampaignsSection = ({ userId }: { userId: string | null }) => {
   const paginatedCampaigns = campaigns.slice(startIndex, endIndex);
 
   return (
-    <div className="bg-gradient-to-br from-white to-blue-50 rounded-xl shadow-lg border border-blue-100 overflow-hidden relative">
+    <div className="bg-gradient-to-br from-white to-blue-50 dark:from-[#2a2a2a] dark:to-blue-900/20 rounded-xl shadow-lg border border-blue-100 dark:border-blue-800 overflow-hidden relative">
       {/* Decorative background elements */}
-      <div className="absolute top-0 right-0 w-40 h-40 bg-blue-200/20 rounded-full -mr-20 -mt-20"></div>
-      <div className="absolute bottom-0 left-0 w-32 h-32 bg-blue-300/10 rounded-full -ml-16 -mb-16"></div>
+      <div className="absolute top-0 right-0 w-40 h-40 bg-blue-200/20 dark:bg-blue-500/10 rounded-full -mr-20 -mt-20"></div>
+      <div className="absolute bottom-0 left-0 w-32 h-32 bg-blue-300/10 dark:bg-blue-500/5 rounded-full -ml-16 -mb-16"></div>
       
       <div className="p-4 sm:p-6 relative z-10">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4 sm:mb-6">
@@ -3154,7 +3222,7 @@ const CampaignsSection = ({ userId }: { userId: string | null }) => {
                 </tr>
               ) : (
                 paginatedCampaigns.map((campaign) => (
-                  <tr key={campaign.id} className="border-b border-gray-100 hover:bg-gray-50">
+                  <tr key={campaign.id} className="border-b border-gray-100 dark:border-[#404040] hover:bg-gray-50 dark:hover:bg-[#333]">
                     <td className="p-3 sm:p-4 text-xs sm:text-sm text-gray-600">{campaign.id.substring(0, 8)}...</td>
                     <td className="p-3 sm:p-4 text-sm sm:text-base text-gray-600">{campaign.profiles?.email || 'N/A'}</td>
                     <td className="p-3 sm:p-4 text-sm sm:text-base text-gray-600">
@@ -3520,24 +3588,24 @@ const SettingsSection = () => {
   };
 
   if (loading) {
-    return <div className="bg-gray-100 rounded-xl shadow p-6 border border-gray-200">Carregando...</div>;
+    return <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow p-6 border border-gray-200 dark:border-[#404040] text-gray-700 dark:text-gray-300">Carregando...</div>;
   }
 
   return (
     <div className="space-y-4 sm:space-y-6">
-      <div className="bg-gradient-to-br from-white to-violet-50 rounded-xl shadow-lg border border-violet-100 p-4 sm:p-6 relative overflow-hidden">
+      <div className="bg-gradient-to-br from-white to-violet-50 dark:from-[#2a2a2a] dark:to-violet-900/20 rounded-xl shadow-lg border border-violet-100 dark:border-violet-800 p-4 sm:p-6 relative overflow-hidden">
         {/* Decorative background elements */}
-        <div className="absolute top-0 right-0 w-32 h-32 bg-violet-200/20 rounded-full -mr-16 -mt-16"></div>
-        <div className="absolute bottom-0 left-0 w-24 h-24 bg-violet-300/10 rounded-full -ml-12 -mb-12"></div>
+        <div className="absolute top-0 right-0 w-32 h-32 bg-violet-200/20 dark:bg-violet-500/10 rounded-full -mr-16 -mt-16"></div>
+        <div className="absolute bottom-0 left-0 w-24 h-24 bg-violet-300/10 dark:bg-violet-500/5 rounded-full -ml-12 -mb-12"></div>
         
         <div className="relative z-10">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div>
               <div className="flex items-center gap-2 mb-2">
                 <Settings className="w-5 h-5 text-violet-600" />
-                <h2 className="text-xl sm:text-2xl font-bold text-gray-800">Chat Interno</h2>
+                <h2 className="text-xl sm:text-2xl font-bold text-gray-800 dark:text-white">Chat Interno</h2>
               </div>
-              <p className="text-sm text-gray-600 mt-1">
+              <p className="text-sm text-gray-600 dark:text-[#aaa] mt-1">
                 Gerencie as instâncias exclusivas usadas pelo chat interno (webhook, eventos e conexão).
               </p>
             </div>
@@ -3552,16 +3620,16 @@ const SettingsSection = () => {
         </div>
       </div>
 
-      <div className="bg-gradient-to-br from-white to-cyan-50 rounded-xl shadow-lg border border-cyan-100 p-4 sm:p-6 relative overflow-hidden">
+      <div className="bg-gradient-to-br from-white to-cyan-50 dark:from-[#2a2a2a] dark:to-cyan-900/20 rounded-xl shadow-lg border border-cyan-100 dark:border-cyan-800 p-4 sm:p-6 relative overflow-hidden">
         {/* Decorative background elements */}
-        <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-200/20 rounded-full -mr-16 -mt-16"></div>
-        <div className="absolute bottom-0 left-0 w-24 h-24 bg-cyan-300/10 rounded-full -ml-12 -mb-12"></div>
+        <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-200/20 dark:bg-cyan-500/10 rounded-full -mr-16 -mt-16"></div>
+        <div className="absolute bottom-0 left-0 w-24 h-24 bg-cyan-300/10 dark:bg-cyan-500/5 rounded-full -ml-12 -mb-12"></div>
         
         <div className="relative z-10">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4 sm:mb-6">
             <div className="flex items-center gap-2">
-              <Settings className="w-6 h-6 text-cyan-600" />
-              <h2 className="text-xl sm:text-2xl font-bold text-gray-800">APIs Evolution</h2>
+              <Settings className="w-6 h-6 text-cyan-600 dark:text-cyan-400" />
+              <h2 className="text-xl sm:text-2xl font-bold text-gray-800 dark:text-white">APIs Evolution</h2>
             </div>
             <div className="flex items-center gap-2">
               {!canEditEvolutionApi && (
@@ -3746,9 +3814,9 @@ const SettingsSection = () => {
       
       {showAddModal && (
         <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-100 rounded-xl shadow-lg p-4 sm:p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-gray-200">
+          <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-lg p-4 sm:p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-gray-200 dark:border-[#404040]">
             <div className="flex justify-between items-center mb-4 sm:mb-6">
-              <h3 className="text-lg sm:text-xl font-semibold text-gray-800">
+              <h3 className="text-lg sm:text-xl font-semibold text-gray-800 dark:text-white">
                 {editingApi ? 'Editar API Evolution' : 'Adicionar API Evolution'}
               </h3>
               <button
@@ -3771,7 +3839,7 @@ const SettingsSection = () => {
                   type="text"
                   value={formData.name}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-700"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                   required
                 />
               </div>
@@ -3784,7 +3852,7 @@ const SettingsSection = () => {
                   type="url"
                   value={formData.base_url}
                   onChange={(e) => setFormData({ ...formData, base_url: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-700"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                   placeholder="https://evolution.example.com/"
                   required
                 />
@@ -3798,7 +3866,7 @@ const SettingsSection = () => {
                   type="text"
                   value={formData.api_key_global}
                   onChange={(e) => setFormData({ ...formData, api_key_global: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-700"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                   required
                 />
               </div>
@@ -3810,7 +3878,7 @@ const SettingsSection = () => {
                 <textarea
                   value={formData.description}
                   onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-700"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                   rows={3}
                 />
               </div>
@@ -4062,14 +4130,14 @@ const ProxySection = () => {
   };
 
   if (loading) {
-    return <div className="bg-gray-100 rounded-xl shadow p-6 border border-gray-200">Carregando...</div>;
+    return <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow p-6 border border-gray-200 dark:border-[#404040] text-gray-700 dark:text-gray-300">Carregando...</div>;
   }
   return (
     <div className="space-y-4 sm:space-y-6">
-      <div className="bg-gradient-to-br from-white to-emerald-50 rounded-xl shadow-lg border border-emerald-100 p-4 sm:p-6 relative overflow-hidden">
+      <div className="bg-gradient-to-br from-white to-emerald-50 dark:from-[#2a2a2a] dark:to-emerald-900/20 rounded-xl shadow-lg border border-emerald-100 dark:border-emerald-800 p-4 sm:p-6 relative overflow-hidden">
         {/* Decorative background elements */}
-        <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-200/20 rounded-full -mr-16 -mt-16"></div>
-        <div className="absolute bottom-0 left-0 w-24 h-24 bg-emerald-300/10 rounded-full -ml-12 -mb-12"></div>
+        <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-200/20 dark:bg-emerald-500/10 rounded-full -mr-16 -mt-16"></div>
+        <div className="absolute bottom-0 left-0 w-24 h-24 bg-emerald-300/10 dark:bg-emerald-500/5 rounded-full -ml-12 -mb-12"></div>
         
         <div className="relative z-10">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4 sm:mb-6">
@@ -4227,7 +4295,7 @@ const ProxySection = () => {
       </div>
       {showAddModalProxy && (
         <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-100 rounded-xl shadow-lg p-4 sm:p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-gray-200">
+          <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-lg p-4 sm:p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-gray-200 dark:border-[#404040]">
             <div className="flex justify-between items-center mb-4 sm:mb-6">
               <h3 className="text-lg sm:text-xl font-semibold text-gray-800">
                 {editingProxy ? 'Editar Proxy' : 'Adicionar Proxy'}
@@ -4252,7 +4320,7 @@ const ProxySection = () => {
                   type="text"
                   value={formDataProxy.name}
                   onChange={(e) => setFormDataProxy({ ...formDataProxy, name: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-700"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                   placeholder="Ex: Proxy Premium 01"
                   required
                 />
@@ -4265,7 +4333,7 @@ const ProxySection = () => {
                   type="text"
                   value={formDataProxy.host}
                   onChange={(e) => setFormDataProxy({ ...formDataProxy, host: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-700"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                   required
                 />
               </div>
@@ -4277,7 +4345,7 @@ const ProxySection = () => {
                   type="text"
                   value={formDataProxy.port}
                   onChange={(e) => setFormDataProxy({ ...formDataProxy, port: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-700"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                   required
                 />
               </div>
@@ -4289,7 +4357,7 @@ const ProxySection = () => {
                   type="text"
                   value={formDataProxy.protocol}
                   onChange={(e) => setFormDataProxy({ ...formDataProxy, protocol: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-700"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                   required
                 />
               </div>
@@ -4301,7 +4369,7 @@ const ProxySection = () => {
                   type="text"
                   value={formDataProxy.username}
                   onChange={(e) => setFormDataProxy({ ...formDataProxy, username: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-700"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                   required
                 />
               </div>
@@ -4313,7 +4381,7 @@ const ProxySection = () => {
                   type="text"
                   value={formDataProxy.password}
                   onChange={(e) => setFormDataProxy({ ...formDataProxy, password: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-700"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                   required
                 />
               </div>

@@ -4,13 +4,12 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
  * Verifica se o usuário tem acesso a uma instância
  * @param userId ID do usuário
  * @param instanceName Nome da instância
- * @returns true se o usuário tem acesso (é dono ou admin), false caso contrário
+ * @returns true se o usuário tem acesso (é dono, admin ou perfil com acesso anti-spam), false caso contrário
  */
 export async function checkInstanceAccess(userId: string, instanceName: string): Promise<boolean> {
   try {
     console.log(`🔍 [checkInstanceAccess] Verificando acesso - userId: ${userId}, instanceName: ${instanceName}`);
     
-    // Verifica se é admin
     const { data: profile, error: profileError } = await supabaseServiceRole
       .from('profiles')
       .select('status')
@@ -27,11 +26,17 @@ export async function checkInstanceAccess(userId: string, instanceName: string):
       profileError: profileError?.message,
     });
 
-    const isAdmin = profile?.status === 'admin';
+    // Acesso a todas as instâncias: perfis que usam anti-spam (admin ou Meu Anti-Spam) e precisam buscar grupos
+    const canAccessAllInstances =
+      profile?.status === 'super_admin' ||
+      profile?.status === 'admin' ||
+      profile?.status === 'auditoria' ||
+      profile?.status === 'dono_banca' ||
+      profile?.status === 'gerente' ||
+      profile?.status === 'consultor';
 
-    // Se for admin, tem acesso a todas as instâncias
-    if (isAdmin) {
-      console.log(`✅ [checkInstanceAccess] Usuário ${userId} é admin - acesso permitido`);
+    if (canAccessAllInstances) {
+      console.log(`✅ [checkInstanceAccess] Usuário ${userId} (${profile?.status}) - acesso permitido`);
       return true;
     }
 

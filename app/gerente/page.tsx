@@ -140,6 +140,15 @@ export default function GerentePage() {
   const [showConsultorFilter, setShowConsultorFilter] = useState(false);
   const [bancaSearchTerm, setBancaSearchTerm] = useState<string>('');
 
+  // Perfil e filtro de gerente para super_admin/admin
+  const [userStatus, setUserStatus] = useState<string | null>(null);
+  const [gerentes, setGerentes] = useState<Array<{ id: string; email: string; full_name: string | null }>>([]);
+  const [gerentesLoading, setGerentesLoading] = useState(false);
+  const [selectedGerente, setSelectedGerente] = useState<string>('');
+  const [showGerenteFilter, setShowGerenteFilter] = useState(false);
+  const [gerenteSearchTerm, setGerenteSearchTerm] = useState('');
+  const [consultorSearchTerm, setConsultorSearchTerm] = useState('');
+
   // Filtros locais da tabela
   const [tableSearchTerm, setTableSearchTerm] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'leads' | 'deposited' | 'profit'>('name');
@@ -207,18 +216,52 @@ export default function GerentePage() {
     return { dateFrom, dateTo };
   };
 
-  // Ao entrar em /gerente, carrega a lista de bancas antes de exibir a tela (busca em todas as bancas via crm_bancas)
+  // Carrega perfil para saber se é super_admin/admin (filtro de gerente)
+  useEffect(() => {
+    if (!userId) return;
+    fetch('/api/user/profile', { headers: { 'X-User-Id': userId } })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.success && res.data?.status) setUserStatus(res.data.status);
+      })
+      .catch(() => {});
+  }, [userId]);
+
+  // Ao entrar em /gerente, carrega a lista de bancas
   useEffect(() => {
     if (!userId) return;
     loadBancas();
   }, [userId]);
 
-  // Opcional: selecionar a primeira banca quando a lista carregar e ainda não houver seleção
+  // Opcional: selecionar a primeira banca quando a lista carregar
   useEffect(() => {
     if (bancas.length > 0 && !selectedBanca) {
       setSelectedBanca(bancas[0].url);
     }
   }, [bancas, selectedBanca]);
+
+  // super_admin/admin: carrega gerentes da banca selecionada
+  const isAdminOrSuperAdmin = userStatus === 'super_admin' || userStatus === 'admin';
+  useEffect(() => {
+    if (!userId || !isAdminOrSuperAdmin || !selectedBanca) {
+      setGerentes([]);
+      setSelectedGerente('');
+      return;
+    }
+    setGerentesLoading(true);
+    fetch(`/api/gerente/gerentes?banca_url=${encodeURIComponent(selectedBanca)}`, {
+      headers: { 'X-User-Id': userId }
+    })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.success && Array.isArray(res.data)) {
+          setGerentes(res.data);
+          if (res.data.length > 0 && !selectedGerente) setSelectedGerente(res.data[0].id);
+          else if (res.data.length === 0) setSelectedGerente('');
+        }
+      })
+      .finally(() => setGerentesLoading(false));
+  }, [userId, isAdminOrSuperAdmin, selectedBanca]);
 
   // useEffect(() => {
   //   if (!userId) return;
@@ -227,30 +270,31 @@ export default function GerentePage() {
   //   }
   // }, [userId]);
 
-  // Carrega dados apenas quando o usuário interagir com os filtros
+  // Carrega dados quando filtros mudam (banca, data, consultor, gerente para admin)
   useEffect(() => {
     if (!userId || initialLoading) return;
-    // Só carrega se houver uma banca selecionada
-    if (selectedBanca) {
-      loadData(false);
-    }
-  }, [dateFilter, appliedStartDate, appliedEndDate, selectedBanca, selectedConsultor]);
+    if (!selectedBanca) return;
+    if (isAdminOrSuperAdmin && gerentes.length > 0 && !selectedGerente) return; // admin aguarda seleção de gerente
+    loadData(false);
+  }, [dateFilter, appliedStartDate, appliedEndDate, selectedBanca, selectedConsultor, selectedGerente, isAdminOrSuperAdmin, gerentes.length]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as HTMLElement;
-      if (!target.closest('.date-filter-container') && !target.closest('.banca-filter-container') && !target.closest('.consultor-filter-container')) {
+      if (!target.closest('.date-filter-container') && !target.closest('.banca-filter-container') && !target.closest('.consultor-filter-container') && !target.closest('.gerente-filter-container')) {
         setShowDatePicker(false);
         setShowBancaFilter(false);
         setShowConsultorFilter(false);
+        setConsultorSearchTerm('');
+        setShowGerenteFilter(false);
+        setGerenteSearchTerm('');
       }
     };
-    
-    if (showDatePicker || showBancaFilter || showConsultorFilter) {
+    if (showDatePicker || showBancaFilter || showConsultorFilter || showGerenteFilter) {
       document.addEventListener('mousedown', handleClickOutside);
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
-  }, [showDatePicker, showBancaFilter, showConsultorFilter]);
+  }, [showDatePicker, showBancaFilter, showConsultorFilter, showGerenteFilter]);
 
   const loadBancas = async () => {
     setBancasLoading(true);
@@ -289,6 +333,9 @@ export default function GerentePage() {
       }
       if (selectedConsultor && selectedConsultor !== 'all') {
         params.append('consultor_id', selectedConsultor);
+      }
+      if (isAdminOrSuperAdmin && selectedGerente) {
+        params.append('gerente_id', selectedGerente);
       }
       if (params.toString()) {
         url += `?${params.toString()}`;
@@ -449,7 +496,7 @@ export default function GerentePage() {
 
   if (checking) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-[#1a1a1a]">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
       </div>
     );
@@ -530,16 +577,16 @@ export default function GerentePage() {
 
   return (
     <Layout onSignOut={handleSignOut}>
-      <div className="w-full space-y-6">
+      <div className="w-full space-y-6 p-4 sm:p-6 bg-gray-50 dark:bg-[#1a1a1a] min-h-screen">
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-[#8CD95515] rounded-xl">
+            <div className="p-2.5 bg-[#8CD95515] dark:bg-[#8CD95525] rounded-xl">
               <Briefcase className="w-6 h-6 text-[#8CD955]" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-gray-800">Painel do Gerente</h1>
-              <p className="text-sm text-gray-500">Gestão de equipe e performance de conversão</p>
+              <h1 className="text-2xl font-bold text-gray-800 dark:text-gray-100">Painel do Gerente</h1>
+              <p className="text-sm text-gray-500 dark:text-gray-400">Gestão de equipe e performance de conversão</p>
             </div>
           </div>
           
@@ -558,7 +605,7 @@ export default function GerentePage() {
                   }
                 }}
                 disabled={bancasLoading}
-                className="flex items-center gap-2 bg-white border border-gray-200 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 hover:bg-gray-50 transition-all shadow-sm disabled:opacity-80 disabled:cursor-wait"
+                className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all shadow-sm disabled:opacity-80 disabled:cursor-wait"
               >
                 {bancasLoading ? (
                   <>
@@ -575,24 +622,24 @@ export default function GerentePage() {
               </button>
               
               {showBancaFilter && (
-                <div className="absolute right-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-50 min-w-[280px] max-h-[400px] overflow-hidden flex flex-col">
+                <div className="absolute right-0 mt-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 rounded-xl shadow-lg z-50 min-w-[280px] max-h-[400px] overflow-hidden flex flex-col">
                   {bancasLoading ? (
                     <div className="p-6 flex flex-col items-center justify-center gap-3 text-center">
                       <div className="animate-spin rounded-full h-10 w-10 border-2 border-[#8CD955] border-t-transparent" />
-                      <p className="text-sm font-medium text-gray-700">Verificando bancas disponíveis</p>
-                      <p className="text-xs text-gray-500">Carregando as bancas em que você pode trabalhar...</p>
+                      <p className="text-sm font-medium text-gray-700 dark:text-gray-300">Verificando bancas disponíveis</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Carregando as bancas em que você pode trabalhar...</p>
                     </div>
                   ) : (
                     <>
-                      <div className="p-3 border-b border-gray-100">
+                      <div className="p-3 border-b border-gray-100 dark:border-gray-700">
                         <div className="relative">
-                          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500" />
+                          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-gray-400" />
                           <input
                             type="text"
                             placeholder="Pesquisar banca..."
                             value={bancaSearchTerm}
                             onChange={(e) => setBancaSearchTerm(e.target.value)}
-                            className="w-full pl-10 pr-3 py-2 bg-gray-100 border border-gray-200 rounded-lg text-sm text-gray-900 font-bold focus:ring-2 focus:ring-[#8CD955]/30 outline-none placeholder:text-gray-500"
+                            className="w-full pl-10 pr-3 py-2 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 font-bold focus:ring-2 focus:ring-[#8CD955]/30 outline-none placeholder:text-gray-500 dark:placeholder:text-gray-400"
                             autoFocus
                           />
                         </div>
@@ -616,15 +663,15 @@ export default function GerentePage() {
                                   setShowBancaFilter(false);
                                   setBancaSearchTerm('');
                                 }}
-                                className={`w-full text-left px-4 py-2.5 rounded-lg text-sm transition-colors hover:bg-gray-50 ${
-                                  selectedBanca === banca.url ? 'bg-[#8CD95515] text-[#8CD955] font-bold' : 'text-gray-700'
+                                className={`w-full text-left px-4 py-2.5 rounded-lg text-sm transition-colors hover:bg-gray-50 dark:hover:bg-gray-700 ${
+                                  selectedBanca === banca.url ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-bold' : 'text-gray-700 dark:text-gray-200'
                                 }`}
                               >
                                 {banca.name}
                               </button>
                             ))
                         ) : (
-                          <div className="px-4 py-8 text-center text-sm text-gray-500">
+                          <div className="px-4 py-8 text-center text-sm text-gray-500 dark:text-gray-400">
                             Nenhuma banca encontrada
                           </div>
                         )}
@@ -635,6 +682,66 @@ export default function GerentePage() {
               )}
             </div>
 
+            {/* Filtro de Gerente (super_admin/admin) */}
+            {isAdminOrSuperAdmin && (
+              <div className="relative gerente-filter-container">
+                <button
+                  onClick={() => {
+                    setShowGerenteFilter(!showGerenteFilter);
+                    setShowBancaFilter(false);
+                    setShowConsultorFilter(false);
+                  }}
+                  disabled={gerentesLoading || gerentes.length === 0}
+                  className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all shadow-sm disabled:opacity-80"
+                >
+                  <Briefcase className="w-4 h-4 text-[#8CD955]" />
+                  {gerentesLoading ? 'Carregando...' : (gerentes.find((g) => g.id === selectedGerente)?.full_name || gerentes.find((g) => g.id === selectedGerente)?.email || 'Selecione um Gerente')}
+                  <ChevronDown className="w-4 h-4" />
+                </button>
+                {showGerenteFilter && (
+                  <div className="absolute right-0 mt-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 rounded-xl shadow-lg z-50 min-w-[240px] max-h-[360px] overflow-hidden flex flex-col">
+                    <div className="p-2 border-b border-gray-100 dark:border-[#404040]">
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500" />
+                        <input
+                          type="text"
+                          placeholder="Pesquisar gerente..."
+                          value={gerenteSearchTerm}
+                          onChange={(e) => setGerenteSearchTerm(e.target.value)}
+                          className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955]/30 outline-none placeholder:text-gray-500 dark:placeholder:text-gray-500"
+                          autoFocus
+                        />
+                      </div>
+                    </div>
+                    <div className="overflow-y-auto max-h-[280px] p-2">
+                      {gerentes
+                        .filter(g => (g.full_name || g.email || '').toLowerCase().includes(gerenteSearchTerm.toLowerCase()))
+                        .map((gerente) => (
+                          <button
+                            key={gerente.id}
+                            onClick={() => {
+                              setSelectedGerente(gerente.id);
+                              setShowGerenteFilter(false);
+                              setGerenteSearchTerm('');
+                            }}
+                            className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                              selectedGerente === gerente.id ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
+                            }`}
+                          >
+                            {gerente.full_name || gerente.email}
+                          </button>
+                        ))}
+                      {gerentes.filter(g => (g.full_name || g.email || '').toLowerCase().includes(gerenteSearchTerm.toLowerCase())).length === 0 && (
+                        <div className="px-3 py-6 text-center text-sm text-gray-500 dark:text-gray-400">
+                          Nenhum gerente encontrado
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Filtro de Consultor */}
             {allConsultores.length > 0 && (
               <div className="relative consultor-filter-container">
@@ -643,7 +750,7 @@ export default function GerentePage() {
                     setShowConsultorFilter(!showConsultorFilter);
                     setShowBancaFilter(false);
                   }}
-                  className="flex items-center gap-2 bg-white border border-gray-200 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 hover:bg-gray-50 transition-all shadow-sm"
+                  className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all shadow-sm"
                 >
                   <Users className="w-4 h-4 text-[#8CD955]" />
                   {selectedConsultor === 'all' 
@@ -653,33 +760,55 @@ export default function GerentePage() {
                 </button>
                 
                 {showConsultorFilter && (
-                  <div className="absolute right-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-50 min-w-[250px] max-h-[300px] overflow-y-auto">
-                    <div className="p-2">
+                  <div className="absolute right-0 mt-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 rounded-xl shadow-lg z-50 min-w-[250px] max-h-[380px] overflow-hidden flex flex-col">
+                    <div className="p-2 border-b border-gray-100 dark:border-[#404040]">
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500" />
+                        <input
+                          type="text"
+                          placeholder="Pesquisar consultor..."
+                          value={consultorSearchTerm}
+                          onChange={(e) => setConsultorSearchTerm(e.target.value)}
+                          className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955]/30 outline-none placeholder:text-gray-500 dark:placeholder:text-gray-500"
+                          autoFocus
+                        />
+                      </div>
+                    </div>
+                    <div className="overflow-y-auto max-h-[300px] p-2">
                       <button
                         onClick={() => {
                           setSelectedConsultor('all');
                           setShowConsultorFilter(false);
+                          setConsultorSearchTerm('');
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          selectedConsultor === 'all' ? 'bg-[#8CD95515] text-[#8CD955] font-medium' : 'text-gray-700 hover:bg-gray-50'
+                          selectedConsultor === 'all' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
                         }`}
                       >
                         Todos os Consultores
                       </button>
-                      {allConsultores.map((consultor) => (
-                        <button
-                          key={consultor.id}
-                          onClick={() => {
-                            setSelectedConsultor(consultor.id);
-                            setShowConsultorFilter(false);
-                          }}
-                          className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                            selectedConsultor === consultor.id ? 'bg-[#8CD95515] text-[#8CD955] font-medium' : 'text-gray-700 hover:bg-gray-50'
-                          }`}
-                        >
-                          {consultor.name || consultor.email}
-                        </button>
-                      ))}
+                      {allConsultores
+                        .filter(c => (c.name || c.email || '').toLowerCase().includes(consultorSearchTerm.toLowerCase()))
+                        .map((consultor) => (
+                          <button
+                            key={consultor.id}
+                            onClick={() => {
+                              setSelectedConsultor(consultor.id);
+                              setShowConsultorFilter(false);
+                              setConsultorSearchTerm('');
+                            }}
+                            className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                              selectedConsultor === consultor.id ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
+                            }`}
+                          >
+                            {consultor.name || consultor.email}
+                          </button>
+                        ))}
+                      {allConsultores.filter(c => (c.name || c.email || '').toLowerCase().includes(consultorSearchTerm.toLowerCase())).length === 0 && consultorSearchTerm && (
+                        <div className="px-3 py-6 text-center text-sm text-gray-500 dark:text-gray-400">
+                          Nenhum consultor encontrado
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -690,7 +819,7 @@ export default function GerentePage() {
             <div className="relative date-filter-container">
               <button
                 onClick={() => setShowDatePicker(!showDatePicker)}
-                className="flex items-center gap-2 bg-white border border-gray-200 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 hover:bg-gray-50 transition-all shadow-sm"
+                className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all shadow-sm"
               >
                 <Calendar className="w-4 h-4 text-[#8CD955]" />
                 {dateFilter === 'daily' && 'Diário'}
@@ -704,7 +833,7 @@ export default function GerentePage() {
               </button>
               
               {showDatePicker && (
-                <div className="absolute right-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-50 min-w-[200px]">
+                <div className="absolute right-0 mt-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 rounded-xl shadow-lg z-50 min-w-[200px]">
                   <div className="p-2">
                     {['daily', 'yesterday', '7days', '15days', '30days', 'custom', 'all'].map((filter) => (
                       <button
@@ -718,7 +847,7 @@ export default function GerentePage() {
                           }
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === filter ? 'bg-[#8CD95515] text-[#8CD955] font-medium' : 'text-gray-700 hover:bg-gray-50'
+                          dateFilter === filter ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
                         }`}
                       >
                         {filter === 'daily' && 'Diário'}
@@ -732,26 +861,26 @@ export default function GerentePage() {
                     ))}
                     
                     {dateFilter === 'custom' && (
-                      <div className="p-3 border-t border-gray-200 space-y-3 mt-2">
+                      <div className="p-3 border-t border-gray-200 dark:border-gray-600 space-y-3 mt-2">
                         <div>
-                          <label className="block text-xs font-medium text-gray-500 mb-1">Data Inicial</label>
+                          <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Data Inicial</label>
                           <input
                             type="date"
                             value={customStartDate}
                             onChange={(e) => setCustomStartDate(e.target.value)}
                             max={customEndDate || new Date().toISOString().split('T')[0]}
-                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                            className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
                           />
                         </div>
                         <div>
-                          <label className="block text-xs font-medium text-gray-500 mb-1">Data Final</label>
+                          <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Data Final</label>
                           <input
                             type="date"
                             value={customEndDate}
                             onChange={(e) => setCustomEndDate(e.target.value)}
                             min={customStartDate}
                             max={new Date().toISOString().split('T')[0]}
-                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                            className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
                           />
                         </div>
                         <button
@@ -763,7 +892,7 @@ export default function GerentePage() {
                             }
                           }}
                           disabled={!customStartDate || !customEndDate}
-                          className="w-full bg-[#8CD955] hover:bg-[#7BC84A] disabled:bg-gray-300 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                          className="w-full bg-[#8CD955] hover:bg-[#7BC84A] disabled:bg-gray-300 dark:disabled:bg-gray-600 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                         >
                           Aplicar
                         </button>
@@ -776,7 +905,7 @@ export default function GerentePage() {
 
             <Link
               href="/add-to-group"
-              className="flex items-center gap-2 bg-white border border-gray-200 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 hover:bg-gray-50 transition-all shadow-sm"
+              className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all shadow-sm"
             >
               <Rocket className="w-4 h-4 text-[#8CD955]" />
               Nova Campanha
@@ -794,7 +923,7 @@ export default function GerentePage() {
         {/* Resumo Geral do Gerente */}
         <div className="relative">
           {dataLoading && (
-            <div className="absolute inset-0 bg-white/80 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
+            <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
             </div>
           )}
@@ -906,13 +1035,13 @@ export default function GerentePage() {
         {/* Gráficos */}
         <div className="relative">
           {dataLoading && (
-            <div className="absolute inset-0 bg-white/80 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
+            <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
             </div>
           )}
           {chartData ? (
-            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-            <h2 className="text-lg font-bold text-gray-800 mb-6 flex items-center gap-2">
+            <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
+            <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-6 flex items-center gap-2">
               <BarChart3 className="w-5 h-5 text-[#8CD955]" />
               Análises e Gráficos
             </h2>
@@ -920,8 +1049,8 @@ export default function GerentePage() {
             <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-2 gap-6">
               {/* Distribuição por Status */}
               {chartData.status_distribution && (
-                <div className="bg-gray-50/50 p-4 rounded-xl border border-gray-100">
-                  <h3 className="text-sm font-bold text-gray-600 mb-4">Distribuição por Status</h3>
+                <div className="bg-gray-50/50 dark:bg-gray-800/50 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
+                  <h3 className="text-sm font-bold text-gray-600 dark:text-gray-400 mb-4">Distribuição por Status</h3>
                   <div className="h-64">
                     <StatusDistributionChart 
                       data={chartData.status_distribution} 
@@ -933,8 +1062,8 @@ export default function GerentePage() {
 
               {/* Métricas Financeiras */}
               {chartData.financial_metrics && (
-                <div className="bg-gray-50/50 p-4 rounded-xl border border-gray-100">
-                  <h3 className="text-sm font-bold text-gray-600 mb-4">Métricas Financeiras</h3>
+                <div className="bg-gray-50/50 dark:bg-gray-800/50 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
+                  <h3 className="text-sm font-bold text-gray-600 dark:text-gray-400 mb-4">Métricas Financeiras</h3>
                   <div className="h-64">
                     <FinancialMetricsBarChart data={chartData.financial_metrics} />
                   </div>
@@ -943,19 +1072,19 @@ export default function GerentePage() {
             </div>
           </div>
           ) : (
-            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+            <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
               <div className="text-center py-8">
-                <AlertCircle className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                <p className="text-gray-600 font-medium">Dados não encontrados</p>
+                <AlertCircle className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
+                <p className="text-gray-600 dark:text-gray-400 font-medium">Dados não encontrados</p>
               </div>
             </div>
           )}
         </div>
 
         {/* Top 5 Consultores por Vendas */}
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-          <h2 className="text-lg font-bold text-gray-800 mb-6 flex items-center gap-2">
-            <Trophy className="w-5 h-5 text-amber-500" />
+        <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
+          <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-6 flex items-center gap-2">
+            <Trophy className="w-5 h-5 text-amber-500 dark:text-amber-400" />
             Top 5 Consultores por Vendas
           </h2>
           
@@ -1015,7 +1144,7 @@ export default function GerentePage() {
                 return (
                   <div
                     key={index}
-                    className={`relative ${style.cardBg} ${style.cardBorder} border-2 rounded-xl p-4 transition-all hover:scale-[1.02] ${style.shadow}`}
+                    className={`relative ${style.cardBg} ${style.cardBorder} dark:bg-gray-800/80 dark:border-gray-600 border-2 rounded-xl p-4 transition-all hover:scale-[1.02] ${style.shadow}`}
                   >
                     <div className="flex items-center gap-4">
                       {/* Posição/Ranking */}
@@ -1039,7 +1168,7 @@ export default function GerentePage() {
 
                       {/* Nome e Valor */}
                       <div className="flex-1 min-w-0">
-                        <h3 className="font-bold text-gray-800 text-base truncate">
+                        <h3 className="font-bold text-gray-800 dark:text-gray-100 text-base truncate">
                           {consultant.name}
                         </h3>
                         <div className="mt-1">
@@ -1056,13 +1185,13 @@ export default function GerentePage() {
 
                       {/* Badge de Destaque para Top 3 */}
                       {position <= 3 && (
-                        <div className="flex items-center gap-1 px-3 py-1 rounded-full bg-white/80 backdrop-blur-sm border border-white/50">
+                        <div className="flex items-center gap-1 px-3 py-1 rounded-full bg-white/80 dark:bg-gray-700/80 backdrop-blur-sm border border-white/50 dark:border-gray-600">
                           <Trophy className={`w-4 h-4 ${
                             position === 1 ? 'text-amber-500' :
-                            position === 2 ? 'text-gray-500' :
+                            position === 2 ? 'text-gray-500 dark:text-gray-400' :
                             'text-orange-500'
                           }`} />
-                          <span className="text-xs font-bold text-gray-700">
+                          <span className="text-xs font-bold text-gray-700 dark:text-gray-200">
                             {position === 1 ? 'Campeão' : position === 2 ? 'Vice' : '3º Lugar'}
                           </span>
                         </div>
@@ -1071,14 +1200,14 @@ export default function GerentePage() {
 
                     {/* Barra de Progresso Visual (comparado com o 1º lugar) */}
                     {position > 1 && top5Consultants[0] && (
-                      <div className="mt-3 pt-3 border-t border-white/50">
-                        <div className="flex items-center justify-between text-xs text-gray-600 mb-1">
+                      <div className="mt-3 pt-3 border-t border-white/50 dark:border-gray-600">
+                        <div className="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400 mb-1">
                           <span>Progresso em relação ao 1º lugar</span>
                           <span className="font-bold">
                             {((consultant.value / top5Consultants[0].value) * 100).toFixed(0)}%
                           </span>
                         </div>
-                        <div className="w-full bg-white/60 rounded-full h-2 overflow-hidden">
+                        <div className="w-full bg-white/60 dark:bg-gray-600 rounded-full h-2 overflow-hidden">
                           <div
                             className={`h-full rounded-full transition-all ${
                               position === 2 ? 'bg-gradient-to-r from-gray-400 to-gray-500' :
@@ -1095,10 +1224,10 @@ export default function GerentePage() {
               })}
             </div>
           ) : (
-            <div className="flex flex-col items-center justify-center py-12 text-gray-500">
-              <Trophy className="w-16 h-16 text-gray-300 mb-4" />
+            <div className="flex flex-col items-center justify-center py-12 text-gray-500 dark:text-gray-400">
+              <Trophy className="w-16 h-16 text-gray-300 dark:text-gray-600 mb-4" />
               <p className="text-base font-medium">Nenhum consultor com vendas no período selecionado</p>
-              <p className="text-sm text-gray-400 mt-2">Altere o filtro de data para ver os resultados</p>
+              <p className="text-sm text-gray-400 dark:text-gray-500 mt-2">Altere o filtro de data para ver os resultados</p>
             </div>
           )}
         </div>
@@ -1106,25 +1235,25 @@ export default function GerentePage() {
         {/* Consultores List */}
         <div className="relative">
           {dataLoading && (
-            <div className="absolute inset-0 bg-white/80 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
+            <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
             </div>
           )}
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-          <div className="p-4 border-b border-gray-100 bg-gray-50/50 flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <h2 className="text-sm font-bold text-gray-600 uppercase tracking-wider flex items-center gap-2">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
+          <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/50 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <h2 className="text-sm font-bold text-gray-600 dark:text-gray-400 uppercase tracking-wider flex items-center gap-2">
               <Users className="w-4 h-4" />
               Desempenho da Equipe
             </h2>
             
             <div className="relative w-full md:w-64">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500" />
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-gray-400" />
               <input
                 type="text"
                 placeholder="Buscar consultor..."
                 value={tableSearchTerm}
                 onChange={(e) => setTableSearchTerm(e.target.value)}
-                className="w-full pl-9 pr-3 py-2 bg-gray-100 border border-gray-200 rounded-lg text-xs text-gray-900 placeholder:text-gray-500 focus:ring-2 focus:ring-[#8CD955] outline-none transition-all"
+                className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-xs text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#8CD955] outline-none transition-all"
               />
             </div>
           </div>
@@ -1134,39 +1263,39 @@ export default function GerentePage() {
             <div className="hidden md:block overflow-x-auto w-full">
               <table className="w-full text-left border-collapse min-w-full">
                 <thead>
-                  <tr className="bg-gray-50/30">
+                  <tr className="bg-gray-50/30 dark:bg-gray-800/60">
                     <th
                       onClick={() => toggleSort('name')}
-                      className="px-6 py-4 text-xs font-bold text-gray-400 uppercase cursor-pointer hover:text-[#8CD955] transition-colors"
+                      className="px-6 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase cursor-pointer hover:text-[#8CD955] transition-colors"
                     >
                       <div className="flex items-center gap-1">
                         Consultor
                         {sortBy === 'name' && (sortOrder === 'asc' ? <ChevronDown className="w-3 h-3 rotate-180" /> : <ChevronDown className="w-3 h-3" />)}
                       </div>
                     </th>
-                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase text-center">Último acesso</th>
-                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase text-center">Horas online</th>
-                    <th className="px-4 py-4 text-xs font-bold text-gray-400 uppercase text-right min-w-[120px]">
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-center">Último acesso</th>
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-center">Horas online</th>
+                    <th className="px-4 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-right min-w-[120px]">
                       Ações
                     </th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100">
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                   {processedMetrics.map((consultor) => (
-                    <tr key={consultor.id} className="hover:bg-gray-50/50 transition-colors">
+                    <tr key={consultor.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-800/50 transition-colors">
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-full bg-[#8CD95515] text-[#8CD955] flex items-center justify-center font-bold text-sm">
+                          <div className="w-9 h-9 rounded-full bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] flex items-center justify-center font-bold text-sm">
                             {(consultor.name || consultor.email)[0].toUpperCase()}
                           </div>
                           <div>
-                            <p className="font-bold text-gray-800 text-sm">{consultor.name || 'Sem nome'}</p>
-                            <p className="text-[11px] text-gray-400">{consultor.email}</p>
+                            <p className="font-bold text-gray-800 dark:text-gray-100 text-sm">{consultor.name || 'Sem nome'}</p>
+                            <p className="text-[11px] text-gray-400 dark:text-gray-500">{consultor.email}</p>
                           </div>
                         </div>
                       </td>
                       <td className="px-6 py-4 text-center">
-                        <span className="text-xs text-gray-600">
+                        <span className="text-xs text-gray-600 dark:text-gray-400">
                           {consultor.lastSeenAt
                             ? new Date(consultor.lastSeenAt).toLocaleString('pt-BR', {
                                 day: '2-digit',
@@ -1179,7 +1308,7 @@ export default function GerentePage() {
                         </span>
                       </td>
                       <td className="px-6 py-4 text-center">
-                        <span className="text-xs font-medium text-gray-700">
+                        <span className="text-xs font-medium text-gray-700 dark:text-gray-300">
                           {formatTime(consultor.totalOnlineTime || 0)}
                         </span>
                       </td>
@@ -1187,7 +1316,7 @@ export default function GerentePage() {
                         <button
                           type="button"
                           onClick={() => setResumoModalConsultor(consultor)}
-                          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold text-gray-700 bg-gray-100 hover:bg-[#8CD95515] hover:text-[#8CD955] border border-gray-200 hover:border-[#8CD955]/30 transition-colors"
+                          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 hover:bg-[#8CD95515] hover:text-[#8CD955] border border-gray-200 dark:border-gray-600 hover:border-[#8CD955]/30 transition-colors"
                         >
                           <BarChart3 className="w-4 h-4" />
                           Resumo
@@ -1200,8 +1329,8 @@ export default function GerentePage() {
             </div>
           ) : (
             <div className="hidden md:block p-8 text-center">
-              <AlertCircle className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-              <p className="text-gray-600 font-medium">
+              <AlertCircle className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
+              <p className="text-gray-600 dark:text-gray-400 font-medium">
                 {tableSearchTerm ? 'Nenhum consultor encontrado com este nome' : 'Dados não encontrados'}
               </p>
             </div>
@@ -1209,33 +1338,33 @@ export default function GerentePage() {
 
           {/* Versão Mobile (Cards) */}
           {processedMetrics && processedMetrics.length > 0 ? (
-            <div className="md:hidden divide-y divide-gray-100">
+            <div className="md:hidden divide-y divide-gray-100 dark:divide-gray-700">
               {processedMetrics.map((consultor) => (
                 <div key={consultor.id} className="p-4 space-y-3">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-[#8CD95515] text-[#8CD955] flex items-center justify-center font-bold text-base shrink-0">
+                    <div className="w-10 h-10 rounded-full bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] flex items-center justify-center font-bold text-base shrink-0">
                       {(consultor.name || consultor.email)[0].toUpperCase()}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="font-bold text-gray-800 truncate">{consultor.name || 'Sem nome'}</p>
-                      <p className="text-xs text-gray-400 truncate">{consultor.email}</p>
+                      <p className="font-bold text-gray-800 dark:text-gray-100 truncate">{consultor.name || 'Sem nome'}</p>
+                      <p className="text-xs text-gray-400 dark:text-gray-500 truncate">{consultor.email}</p>
                     </div>
                     <button
                       type="button"
                       onClick={() => setResumoModalConsultor(consultor)}
-                      className="shrink-0 inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-bold text-gray-700 bg-gray-100 hover:bg-[#8CD95515] hover:text-[#8CD955] border border-gray-200 transition-colors"
+                      className="shrink-0 inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 hover:bg-[#8CD95515] hover:text-[#8CD955] border border-gray-200 dark:border-gray-600 transition-colors"
                     >
                       <BarChart3 className="w-4 h-4" />
                       Resumo
                     </button>
                   </div>
-                  <div className="flex gap-4 text-xs text-gray-600">
+                  <div className="flex gap-4 text-xs text-gray-600 dark:text-gray-400">
                     <div className="flex items-center gap-1">
                       <Clock className="w-3.5 h-3.5" />
                       <span>{consultor.lastSeenAt ? new Date(consultor.lastSeenAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}</span>
                     </div>
                     <div>
-                      <span className="font-medium text-gray-700">{formatTime(consultor.totalOnlineTime || 0)}</span> online
+                      <span className="font-medium text-gray-700 dark:text-gray-300">{formatTime(consultor.totalOnlineTime || 0)}</span> online
                     </div>
                   </div>
                 </div>
@@ -1243,8 +1372,8 @@ export default function GerentePage() {
             </div>
           ) : (
             <div className="md:hidden p-8 text-center">
-              <AlertCircle className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-              <p className="text-gray-600 font-medium">
+              <AlertCircle className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
+              <p className="text-gray-600 dark:text-gray-400 font-medium">
                 {tableSearchTerm ? 'Nenhum consultor encontrado com este nome' : 'Dados não encontrados'}
               </p>
             </div>
@@ -1255,8 +1384,8 @@ export default function GerentePage() {
         {/* Modal Resumo do consultor */}
         {resumoModalConsultor && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200">
-              <div className="p-5 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-[#A8E677] to-[#8CD955] text-white">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-gray-700">
+              <div className="p-5 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-[#A8E677] to-[#8CD955] text-white">
                 <h2 className="text-lg font-bold flex items-center gap-2">
                   <BarChart3 className="w-5 h-5" />
                   Resumo
@@ -1272,21 +1401,21 @@ export default function GerentePage() {
               </div>
               <div className="p-5 space-y-4">
                 <div>
-                  <p className="font-bold text-gray-900 text-base">{resumoModalConsultor.name || 'Sem nome'}</p>
-                  <p className="text-sm text-gray-500">{resumoModalConsultor.email}</p>
+                  <p className="font-bold text-gray-900 dark:text-gray-100 text-base">{resumoModalConsultor.name || 'Sem nome'}</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">{resumoModalConsultor.email}</p>
                 </div>
                 {resumoModalConsultor.externalKpisError ? (
-                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
-                    <div className="flex items-center gap-2 text-amber-700">
+                  <div className="bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 rounded-xl p-3">
+                    <div className="flex items-center gap-2 text-amber-700 dark:text-amber-200">
                       <AlertCircle className="w-4 h-4 flex-shrink-0" />
                       <p className="text-sm font-medium">Consultor não cadastrado na banca selecionada</p>
                     </div>
                   </div>
                 ) : (
                   <div className="grid grid-cols-3 gap-2">
-                    <div className="bg-gray-50 p-3 rounded-xl border border-gray-100 text-center">
-                      <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Leads</p>
-                      <p className="text-base font-bold text-gray-800">{resumoModalConsultor.externalKpis?.total_leads ?? 0}</p>
+                    <div className="bg-gray-50 dark:bg-gray-800 p-3 rounded-xl border border-gray-100 dark:border-gray-700 text-center">
+                      <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase mb-1">Leads</p>
+                      <p className="text-base font-bold text-gray-800 dark:text-gray-100">{resumoModalConsultor.externalKpis?.total_leads ?? 0}</p>
                     </div>
                     <div className="bg-[#8CD95510] p-3 rounded-xl border border-[#8CD955]/20 text-center">
                       <p className="text-[10px] font-bold text-[#8CD955] uppercase mb-1">Depositado</p>
@@ -1294,9 +1423,9 @@ export default function GerentePage() {
                         R$ {(resumoModalConsultor.externalKpis?.total_deposited ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                       </p>
                     </div>
-                    <div className="bg-blue-50 p-3 rounded-xl border border-blue-100 text-center">
-                      <p className="text-[10px] font-bold text-blue-600 uppercase mb-1">Lucro</p>
-                      <p className="text-base font-bold text-blue-700">
+                    <div className="bg-blue-50 dark:bg-blue-900/30 p-3 rounded-xl border border-blue-100 dark:border-blue-800 text-center">
+                      <p className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase mb-1">Lucro</p>
+                      <p className="text-base font-bold text-blue-700 dark:text-blue-300">
                         R$ {(resumoModalConsultor.externalKpis?.net_profit ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                       </p>
                     </div>
@@ -1314,7 +1443,7 @@ export default function GerentePage() {
                   <Link
                     href={`/crm/transferido?userId=${resumoModalConsultor.id}`}
                     onClick={() => setResumoModalConsultor(null)}
-                    className="flex items-center gap-2 w-full px-4 py-3 rounded-xl text-sm font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 transition-colors"
+                    className="flex items-center gap-2 w-full px-4 py-3 rounded-xl text-sm font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/30 border border-emerald-200 dark:border-emerald-700 hover:bg-emerald-100 dark:hover:bg-emerald-800/50 transition-colors"
                   >
                     <ArrowRightLeft className="w-4 h-4" />
                     Acessar Transferidos
@@ -1322,7 +1451,7 @@ export default function GerentePage() {
                   <Link
                     href={`/gerente/consultor/${resumoModalConsultor.id}`}
                     onClick={() => setResumoModalConsultor(null)}
-                    className="flex items-center gap-2 w-full px-4 py-3 rounded-xl text-sm font-bold text-blue-600 bg-blue-50 border border-blue-200 hover:bg-blue-100 transition-colors"
+                    className="flex items-center gap-2 w-full px-4 py-3 rounded-xl text-sm font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-700 hover:bg-blue-100 dark:hover:bg-blue-800/50 transition-colors"
                   >
                     <Info className="w-4 h-4" />
                     Mais detalhes
@@ -1333,7 +1462,7 @@ export default function GerentePage() {
                       setResumoModalConsultor(null);
                       openEditModal(resumoModalConsultor);
                     }}
-                    className="flex items-center gap-2 w-full px-4 py-3 rounded-xl text-sm font-bold text-amber-600 bg-amber-50 border border-amber-200 hover:bg-amber-100 transition-colors"
+                    className="flex items-center gap-2 w-full px-4 py-3 rounded-xl text-sm font-bold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 hover:bg-amber-100 dark:hover:bg-amber-800/50 transition-colors"
                   >
                     <Pencil className="w-4 h-4" />
                     Editar consultor
@@ -1344,7 +1473,7 @@ export default function GerentePage() {
                       setResumoModalConsultor(null);
                       openDeleteModal(resumoModalConsultor);
                     }}
-                    className="flex items-center gap-2 w-full px-4 py-3 rounded-xl text-sm font-bold text-red-600 bg-red-50 border border-red-200 hover:bg-red-100 transition-colors"
+                    className="flex items-center gap-2 w-full px-4 py-3 rounded-xl text-sm font-bold text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 hover:bg-red-100 dark:hover:bg-red-800/50 transition-colors"
                   >
                     <Trash2 className="w-4 h-4" />
                     Excluir consultor
@@ -1358,8 +1487,8 @@ export default function GerentePage() {
         {/* Modal de Cadastro */}
         {isModalOpen && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200">
-              <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-[#A8E677] to-[#8CD955] text-white">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-gray-700">
+              <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-[#A8E677] to-[#8CD955] text-white">
                 <h2 className="text-xl font-bold flex items-center gap-2">
                   <UserPlus className="w-6 h-6" />
                   Novo Consultor
@@ -1370,45 +1499,45 @@ export default function GerentePage() {
               </div>
               
               <form onSubmit={handleCreateConsultor} className="p-6 space-y-4">
-                {formError && <div className="bg-red-50 text-red-600 p-3 rounded-xl text-sm font-medium border border-red-100">{formError}</div>}
-                {formSuccess && <div className="bg-[#8CD95515] text-[#8CD955] p-3 rounded-xl text-sm font-medium border border-[#8CD955]/30">{formSuccess}</div>}
+                {formError && <div className="bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-300 p-3 rounded-xl text-sm font-medium border border-red-100 dark:border-red-800">{formError}</div>}
+                {formSuccess && <div className="bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] p-3 rounded-xl text-sm font-medium border border-[#8CD955]/30">{formSuccess}</div>}
 
                 <div>
-                  <label className="block text-xs font-bold text-gray-700 uppercase mb-1.5 ml-1">Nome do Consultor</label>
+                  <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-1.5 ml-1">Nome do Consultor</label>
                   <input 
                     type="text" 
                     required
                     placeholder="Ex: João Silva"
-                    className="w-full bg-white border border-gray-300 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 placeholder:text-gray-400 font-medium transition-all"
+                    className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium transition-all"
                     value={formData.fullName}
                     onChange={e => setFormData({...formData, fullName: e.target.value})}
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-gray-700 uppercase mb-1.5 ml-1">E-mail</label>
+                  <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-1.5 ml-1">E-mail</label>
                   <input 
                     type="email" 
                     required
                     placeholder="exemplo@email.com"
-                    className="w-full bg-white border border-gray-300 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 placeholder:text-gray-400 font-medium transition-all"
+                    className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium transition-all"
                     value={formData.email}
                     onChange={e => setFormData({...formData, email: e.target.value})}
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-gray-700 uppercase mb-1.5 ml-1">Senha Inicial</label>
+                  <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-1.5 ml-1">Senha Inicial</label>
                   <input 
                     type="password" 
                     required
                     placeholder="••••••••"
-                    className="w-full bg-white border border-gray-300 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 placeholder:text-gray-400 font-medium transition-all"
+                    className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium transition-all"
                     value={formData.password}
                     onChange={e => setFormData({...formData, password: e.target.value})}
                   />
                 </div>
 
                 <div className="pt-4 flex gap-3">
-                  <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 bg-gray-100 text-gray-600 font-bold py-3 rounded-xl">Cancelar</button>
+                  <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 font-bold py-3 rounded-xl">Cancelar</button>
                   <button type="submit" disabled={isSubmitting} className="flex-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white font-bold py-3 rounded-xl disabled:opacity-50 transition-colors">
                     {isSubmitting ? 'Cadastrando...' : 'Cadastrar Consultor'}
                   </button>
@@ -1421,8 +1550,8 @@ export default function GerentePage() {
         {/* Modal de Edição de Consultor */}
         {editModalOpen && consultorToEdit && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200">
-              <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-amber-500 to-amber-600 text-white">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-gray-700">
+              <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-amber-500 to-amber-600 text-white">
                 <h2 className="text-xl font-bold flex items-center gap-2">
                   <Pencil className="w-6 h-6" />
                   Editar Consultor
@@ -1432,42 +1561,42 @@ export default function GerentePage() {
                 </button>
               </div>
               <form onSubmit={handleEditConsultor} className="p-6 space-y-4">
-                {editFormError && <div className="bg-red-50 text-red-600 p-3 rounded-xl text-sm font-medium border border-red-100">{editFormError}</div>}
-                {editFormSuccess && <div className="bg-[#8CD95515] text-[#8CD955] p-3 rounded-xl text-sm font-medium border border-[#8CD955]/30">{editFormSuccess}</div>}
+                {editFormError && <div className="bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-300 p-3 rounded-xl text-sm font-medium border border-red-100 dark:border-red-800">{editFormError}</div>}
+                {editFormSuccess && <div className="bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] p-3 rounded-xl text-sm font-medium border border-[#8CD955]/30">{editFormSuccess}</div>}
                 <div>
-                  <label className="block text-xs font-bold text-gray-700 uppercase mb-1.5 ml-1">Nome</label>
+                  <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-1.5 ml-1">Nome</label>
                   <input
                     type="text"
                     required
                     placeholder="Nome do consultor"
-                    className="w-full bg-white border border-gray-300 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 placeholder:text-gray-400 font-medium transition-all"
+                    className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium transition-all"
                     value={editFormData.fullName}
                     onChange={e => setEditFormData({ ...editFormData, fullName: e.target.value })}
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-gray-700 uppercase mb-1.5 ml-1">E-mail</label>
+                  <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-1.5 ml-1">E-mail</label>
                   <input
                     type="email"
                     required
                     placeholder="exemplo@email.com"
-                    className="w-full bg-white border border-gray-300 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 placeholder:text-gray-400 font-medium transition-all"
+                    className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium transition-all"
                     value={editFormData.email}
                     onChange={e => setEditFormData({ ...editFormData, email: e.target.value })}
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-gray-700 uppercase mb-1.5 ml-1">Nova senha (deixe em branco para manter)</label>
+                  <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-1.5 ml-1">Nova senha (deixe em branco para manter)</label>
                   <input
                     type="password"
                     placeholder="••••••••"
-                    className="w-full bg-white border border-gray-300 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 placeholder:text-gray-400 font-medium transition-all"
+                    className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium transition-all"
                     value={editFormData.password}
                     onChange={e => setEditFormData({ ...editFormData, password: e.target.value })}
                   />
                 </div>
                 <div className="pt-4 flex gap-3">
-                  <button type="button" onClick={() => { setEditModalOpen(false); setConsultorToEdit(null); }} className="flex-1 bg-gray-100 text-gray-600 font-bold py-3 rounded-xl">Cancelar</button>
+                  <button type="button" onClick={() => { setEditModalOpen(false); setConsultorToEdit(null); }} className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 font-bold py-3 rounded-xl">Cancelar</button>
                   <button type="submit" disabled={isEditSubmitting} className="flex-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white font-bold py-3 rounded-xl disabled:opacity-50 transition-colors">
                     {isEditSubmitting ? 'Salvando...' : 'Salvar'}
                   </button>
@@ -1480,8 +1609,8 @@ export default function GerentePage() {
         {/* Modal de Confirmação de Delete */}
         {deleteModalOpen && consultorToDelete && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200">
-              <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-red-500 to-red-600 text-white">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-gray-700">
+              <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-red-500 to-red-600 text-white">
                 <h2 className="text-xl font-bold flex items-center gap-2">
                   <Trash2 className="w-6 h-6" />
                   Confirmar Exclusão
@@ -1500,21 +1629,21 @@ export default function GerentePage() {
               
               <div className="p-6 space-y-4">
                 <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 rounded-full bg-red-100 text-red-600 flex items-center justify-center font-bold text-lg">
+                  <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/50 text-red-600 dark:text-red-400 flex items-center justify-center font-bold text-lg">
                     {(consultorToDelete.name || consultorToDelete.email)[0].toUpperCase()}
                   </div>
                   <div>
-                    <p className="font-bold text-gray-800">{consultorToDelete.name || 'Sem nome'}</p>
-                    <p className="text-sm text-gray-500">{consultorToDelete.email}</p>
+                    <p className="font-bold text-gray-800 dark:text-gray-100">{consultorToDelete.name || 'Sem nome'}</p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">{consultorToDelete.email}</p>
                   </div>
                 </div>
 
-                <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+                <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-xl p-4">
                   <div className="flex items-start gap-3">
-                    <AlertCircle className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" />
+                    <AlertCircle className="w-5 h-5 text-red-600 dark:text-red-400 mt-0.5 flex-shrink-0" />
                     <div>
-                      <p className="text-sm font-bold text-red-800 mb-1">Atenção! Esta ação não pode ser desfeita.</p>
-                      <p className="text-xs text-red-700">
+                      <p className="text-sm font-bold text-red-800 dark:text-red-200 mb-1">Atenção! Esta ação não pode ser desfeita.</p>
+                      <p className="text-xs text-red-700 dark:text-red-300">
                         Você está prestes a deletar permanentemente a conta do consultor <strong>{consultorToDelete.name || consultorToDelete.email}</strong>. 
                         Todos os dados associados a esta conta serão removidos.
                       </p>
@@ -1530,7 +1659,7 @@ export default function GerentePage() {
                       setConsultorToDelete(null);
                     }} 
                     disabled={isDeleting}
-                    className="flex-1 bg-gray-100 text-gray-600 font-bold py-3 rounded-xl hover:bg-gray-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 font-bold py-3 rounded-xl hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Cancelar
                   </button>

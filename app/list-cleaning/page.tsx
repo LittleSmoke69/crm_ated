@@ -85,7 +85,7 @@ interface CleanRow {
   validated_at: string | null;
 }
 
-const ALLOWED_LIST_CLEANING_STATUSES = ['admin', 'dono_banca', 'gerente'] as const;
+const ALLOWED_LIST_CLEANING_STATUSES = ['super_admin', 'admin', 'dono_banca', 'gerente'] as const;
 
 const PROFILE_CHECK_TIMEOUT_MS = 12000;
 
@@ -123,6 +123,10 @@ export default function ListCleaningPage() {
     not_validated: number;
     invalid_phones: string[];
   } | null>(null);
+  const [capabilities, setCapabilities] = useState<{ canDedup: boolean; canWhatsapp: boolean }>({
+    canDedup: true,
+    canWhatsapp: true,
+  });
 
   const fetchJobsList = useCallback(async (page: number = 1) => {
     if (!userId) return;
@@ -193,6 +197,29 @@ export default function ListCleaningPage() {
   useEffect(() => {
     if (accessChecked && userId) fetchJobsList(1);
   }, [accessChecked, userId, fetchJobsList]);
+
+  useEffect(() => {
+    if (!accessChecked || !userId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/list-cleaning/capabilities', {
+          headers: { 'X-User-Id': userId },
+        });
+        if (cancelled) return;
+        const json = await res.json().catch(() => ({}));
+        if (json.success && json.data) {
+          setCapabilities({
+            canDedup: json.data.canDedup !== false,
+            canWhatsapp: json.data.canWhatsapp !== false,
+          });
+        }
+      } catch {
+        // mantém defaults
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [accessChecked, userId]);
 
   const phonesCount = rawText.trim()
     ? Math.min(MAX_NUMBERS, parsePhoneList(rawText.trim()).length)
@@ -536,7 +563,7 @@ export default function ListCleaningPage() {
             <button
               type="button"
               onClick={() => router.push('/')}
-              className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
+              className="px-4 py-2 rounded-lg border border-[#404040] text-gray-300 font-medium hover:bg-[#404040]"
             >
               Ir para início
             </button>
@@ -558,16 +585,17 @@ export default function ListCleaningPage() {
 
   return (
     <Layout>
-      <div className="p-4 lg:p-6 max-w-7xl mx-auto space-y-6">
+      <div className="-m-4 sm:-m-6 lg:-m-8 p-4 sm:p-6 lg:p-8 min-h-screen bg-[#1a1a1a]">
+      <div className="max-w-7xl mx-auto space-y-6">
         <div className="flex items-center gap-2">
           <Trash2 className="w-6 h-6 text-[#8CD955]" />
-          <h1 className="text-2xl font-semibold text-gray-800">Limpeza de Lista</h1>
+          <h1 className="text-2xl font-semibold text-gray-100">Limpeza de Lista</h1>
         </div>
 
         {toast && (
           <div
             className={`p-3 rounded-lg flex items-center justify-between ${
-              toast.type === 'error' ? 'bg-red-50 text-red-800' : 'bg-green-50 text-green-800'
+              toast.type === 'error' ? 'bg-red-900/30 text-red-200 border border-red-500/50' : 'bg-green-900/30 text-green-200 border border-green-500/50'
             }`}
           >
             <span>{toast.message}</span>
@@ -578,14 +606,14 @@ export default function ListCleaningPage() {
         )}
 
         {job?.status === 'done' && (
-          <div className="bg-green-50 border border-green-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="bg-green-900/20 border border-green-500/50 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-green-100">
-                <CheckCircle2 className="w-6 h-6 text-green-700" />
+              <div className="p-2 rounded-lg bg-green-900/40">
+                <CheckCircle2 className="w-6 h-6 text-green-400" />
               </div>
               <div>
-                <p className="font-semibold text-green-800">Verificação concluída</p>
-                <p className="text-sm text-green-700">
+                <p className="font-semibold text-green-200">Verificação concluída</p>
+                <p className="text-sm text-green-300">
                   {job.validated_count > 0
                     ? `${job.validated_count} número(s) validado(s) disponível(is) para download.`
                     : 'Nenhum número validado nesta lista.'}
@@ -605,7 +633,7 @@ export default function ListCleaningPage() {
         )}
 
         {job?.status === 'paused_disconnected' && (
-          <div className="bg-red-100 border border-red-300 text-red-800 p-4 rounded-lg flex items-center gap-3">
+          <div className="bg-red-900/20 border border-red-500/50 text-red-200 p-4 rounded-lg flex items-center gap-3">
             <AlertTriangle className="w-6 h-6 flex-shrink-0" />
             <div>
               <p className="font-semibold">Verificação desativada temporariamente</p>
@@ -615,7 +643,7 @@ export default function ListCleaningPage() {
         )}
 
         {(job?.status === 'verifying' || run?.status === 'running') && (
-          <div className="bg-blue-50 border border-blue-200 text-blue-800 p-4 rounded-xl space-y-3">
+          <div className="bg-blue-900/20 border border-blue-500/50 text-blue-200 p-4 rounded-xl space-y-3">
             <div className="flex items-center gap-4">
               <Loader2 className="w-8 h-8 flex-shrink-0 animate-spin text-blue-600" />
               <div className="flex-1 min-w-0">
@@ -629,9 +657,9 @@ export default function ListCleaningPage() {
             </div>
             {run && run.total_numbers > 0 && (
               <div className="flex items-center gap-3">
-                <div className="flex-1 h-2.5 bg-blue-200 rounded-full overflow-hidden">
+                <div className="flex-1 h-2.5 bg-blue-900/50 rounded-full overflow-hidden">
                   <div
-                    className="h-full bg-blue-600 rounded-full transition-all duration-500 ease-out"
+                    className="h-full bg-blue-500 rounded-full transition-all duration-500 ease-out"
                     style={{ width: `${Math.min(100, (run.processed_numbers / run.total_numbers) * 100)}%` }}
                   />
                 </div>
@@ -643,13 +671,13 @@ export default function ListCleaningPage() {
           </div>
         )}
 
-        {lastVerifySummary && jobId && (
-          <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
-            <h3 className="text-sm font-semibold text-slate-700 mb-2">Resumo do último lote (acompanhamento)</h3>
+        {lastVerifySummary && jobId && capabilities.canWhatsapp && (
+          <div className="bg-slate-800/50 border border-slate-600 rounded-xl p-4">
+            <h3 className="text-sm font-semibold text-slate-200 mb-2">Resumo do último lote (acompanhamento)</h3>
             <div className="flex flex-wrap gap-4 text-sm">
-              <span className="text-slate-600">Processados: <strong>{lastVerifySummary.processed}</strong></span>
-              <span className="text-green-700">Validados: <strong>{lastVerifySummary.validated}</strong></span>
-              <span className="text-red-700">Não validados: <strong>{lastVerifySummary.not_validated}</strong></span>
+              <span className="text-slate-400">Processados: <strong>{lastVerifySummary.processed}</strong></span>
+              <span className="text-green-400">Validados: <strong>{lastVerifySummary.validated}</strong></span>
+              <span className="text-red-400">Não validados: <strong>{lastVerifySummary.not_validated}</strong></span>
             </div>
             {lastVerifySummary.not_validated > 0 && (
               <p className="text-xs text-slate-500 mt-2">Para ver os números não válidos, consulte a tabela &quot;Números não válidos&quot; abaixo.</p>
@@ -659,74 +687,84 @@ export default function ListCleaningPage() {
 
         {job && (
           <section className="space-y-4">
-            <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide">Resumo da limpeza</h2>
+            <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wide">
+              {capabilities.canWhatsapp ? 'Resumo da limpeza' : 'Resumo da deduplicação'}
+            </h2>
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-              <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm flex items-start gap-3">
-                <div className="p-2 rounded-lg bg-gray-100">
-                  <Users className="w-5 h-5 text-gray-600" />
+              <div className="bg-[#2a2a2a] border border-[#404040] rounded-xl p-4 shadow-sm flex items-start gap-3">
+                <div className="p-2 rounded-lg bg-[#404040]">
+                  <Users className="w-5 h-5 text-gray-400" />
                 </div>
                 <div>
-                  <p className="text-xs font-medium text-gray-600 uppercase tracking-wide mb-0.5">Total enviados</p>
-                  <p className="text-2xl font-bold text-gray-800">{job.total_raw}</p>
+                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-0.5">Total enviados</p>
+                  <p className="text-2xl font-bold text-gray-200">{job.total_raw}</p>
                 </div>
               </div>
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 shadow-sm flex items-start gap-3">
-                <div className="p-2 rounded-lg bg-amber-100">
-                  <CopyMinus className="w-5 h-5 text-amber-700" />
+              <div className="bg-amber-900/20 border border-amber-500/50 rounded-xl p-4 shadow-sm flex items-start gap-3">
+                <div className="p-2 rounded-lg bg-amber-900/40">
+                  <CopyMinus className="w-5 h-5 text-amber-400" />
                 </div>
                 <div>
-                  <p className="text-xs font-medium text-amber-700 uppercase tracking-wide mb-0.5">Duplicados removidos</p>
-                  <p className="text-2xl font-bold text-amber-700">{job.duplicates_removed}</p>
+                  <p className="text-xs font-medium text-amber-400 uppercase tracking-wide mb-0.5">Duplicados removidos</p>
+                  <p className="text-2xl font-bold text-amber-400">{job.duplicates_removed}</p>
                 </div>
               </div>
-              <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm flex items-start gap-3">
-                <div className="p-2 rounded-lg bg-blue-50">
-                  <SearchCheck className="w-5 h-5 text-blue-600" />
+              {capabilities.canWhatsapp && (
+              <div className="bg-[#2a2a2a] border border-[#404040] rounded-xl p-4 shadow-sm flex items-start gap-3">
+                <div className="p-2 rounded-lg bg-blue-900/40">
+                  <SearchCheck className="w-5 h-5 text-blue-400" />
                 </div>
                 <div>
-                  <p className="text-xs font-medium text-gray-600 uppercase tracking-wide mb-0.5">Verificados</p>
-                  <p className="text-2xl font-bold text-gray-800">{job.verified_count}</p>
+                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-0.5">Verificados</p>
+                  <p className="text-2xl font-bold text-gray-200">{job.verified_count}</p>
                 </div>
               </div>
-              <div className="bg-green-50 border border-green-200 rounded-xl p-4 shadow-sm flex items-start gap-3">
-                <div className="p-2 rounded-lg bg-green-100">
-                  <CheckCircle2 className="w-5 h-5 text-green-700" />
+              )}
+              {capabilities.canWhatsapp && (
+              <div className="bg-green-900/20 border border-green-500/50 rounded-xl p-4 shadow-sm flex items-start gap-3">
+                <div className="p-2 rounded-lg bg-green-900/40">
+                  <CheckCircle2 className="w-5 h-5 text-green-400" />
                 </div>
                 <div>
-                  <p className="text-xs font-medium text-green-700 uppercase tracking-wide mb-0.5">Validados</p>
-                  <p className="text-2xl font-bold text-green-700">{job.validated_count}</p>
+                  <p className="text-xs font-medium text-green-400 uppercase tracking-wide mb-0.5">Validados</p>
+                  <p className="text-2xl font-bold text-green-400">{job.validated_count}</p>
                 </div>
               </div>
-              <div className="bg-red-50 border border-red-200 rounded-xl p-4 shadow-sm flex items-start gap-3">
-                <div className="p-2 rounded-lg bg-red-100">
-                  <XCircle className="w-5 h-5 text-red-700" />
+              )}
+              {capabilities.canWhatsapp && (
+              <div className="bg-red-900/20 border border-red-500/50 rounded-xl p-4 shadow-sm flex items-start gap-3">
+                <div className="p-2 rounded-lg bg-red-900/40">
+                  <XCircle className="w-5 h-5 text-red-400" />
                 </div>
                 <div>
-                  <p className="text-xs font-medium text-red-700 uppercase tracking-wide mb-0.5">Não validados</p>
-                  <p className="text-2xl font-bold text-red-700">{job.not_validated_count}</p>
+                  <p className="text-xs font-medium text-red-400 uppercase tracking-wide mb-0.5">Não validados</p>
+                  <p className="text-2xl font-bold text-red-400">{job.not_validated_count}</p>
                 </div>
               </div>
-              <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm flex items-start gap-3">
-                <div className="p-2 rounded-lg bg-gray-100">
-                  <Clock className="w-5 h-5 text-gray-600" />
+              )}
+              {capabilities.canWhatsapp && (
+              <div className="bg-[#2a2a2a] border border-[#404040] rounded-xl p-4 shadow-sm flex items-start gap-3">
+                <div className="p-2 rounded-lg bg-[#404040]">
+                  <Clock className="w-5 h-5 text-gray-400" />
                 </div>
                 <div>
-                  <p className="text-xs font-medium text-gray-600 uppercase tracking-wide mb-0.5">Pendentes</p>
-                  <p className="text-2xl font-bold text-gray-800">{job.pending_count}</p>
+                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-0.5">Pendentes</p>
+                  <p className="text-2xl font-bold text-gray-200">{job.pending_count}</p>
                 </div>
               </div>
+              )}
             </div>
           </section>
         )}
 
         {/* Ações em destaque: importar lista e botões (acima das tabelas) */}
-        <section className="border border-gray-200 rounded-xl bg-white shadow-sm p-4 lg:p-5 space-y-4">
+        <section className="border border-[#404040] rounded-xl bg-[#2a2a2a] shadow-sm p-4 lg:p-5 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-base font-semibold text-gray-800">Importar e processar</h2>
+            <h2 className="text-base font-semibold text-gray-200">Importar e processar</h2>
             <button
               onClick={handleClearList}
               type="button"
-              className="inline-flex items-center gap-1.5 rounded-full border border-gray-200 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-gray-600 hover:bg-gray-50 transition"
+              className="inline-flex items-center gap-1.5 rounded-full border border-[#404040] px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-gray-400 hover:bg-[#404040] transition"
             >
               <Trash2 className="w-3.5 h-3.5" />
               Limpar lista
@@ -739,45 +777,45 @@ export default function ListCleaningPage() {
                   onDragOver={handleDragOver}
                   onDragLeave={handleDragLeave}
                   onDrop={handleDrop}
-                  className={`cursor-pointer flex flex-col items-center justify-center gap-2 px-4 py-5 bg-gray-50 border-2 border-dashed rounded-lg transition text-center ${
-                    isDragging ? 'border-[#8CD955] bg-[#8CD95515]' : 'border-gray-300 hover:border-[#8CD95560] hover:bg-[#8CD95508]'
+                  className={`cursor-pointer flex flex-col items-center justify-center gap-2 px-4 py-5 bg-[#1a1a1a] border-2 border-dashed rounded-lg transition text-center ${
+                    isDragging ? 'border-[#8CD955] bg-[#8CD95520]' : 'border-[#404040] hover:border-[#8CD95560] hover:bg-[#8CD95510]'
                   }`}
                 >
                   <Upload className="w-6 h-6 text-[#8CD955]" />
                   <span className="text-sm text-[#8CD955] font-medium">Clique ou arraste arquivo</span>
                   <span className="text-xs text-gray-500">CSV/TXT, coluna phone, até 1000 números</span>
-                  {fileName && <span className="text-xs text-gray-600 truncate max-w-full">Arquivo: {fileName}</span>}
+                  {fileName && <span className="text-xs text-gray-400 truncate max-w-full">Arquivo: {fileName}</span>}
                 </div>
                 <input type="file" accept=".csv,.txt" onChange={handleFileSelect} className="hidden" />
               </label>
               <div>
-                <p className="text-xs font-medium text-gray-600 mb-1">Ou cole os números (um por linha)</p>
+                <p className="text-xs font-medium text-gray-400 mb-1">Ou cole os números (um por linha)</p>
                 <textarea
                   value={rawText}
                   onChange={(e) => { setRawText(e.target.value); if (fileName) setFileName(null); }}
                   placeholder="559876543210&#10;559876543211"
-                  className="w-full h-20 border border-gray-300 rounded-lg p-2.5 text-sm font-mono text-gray-800"
+                  className="w-full h-20 border border-[#404040] rounded-lg p-2.5 text-sm font-mono text-gray-200 bg-[#1a1a1a] placeholder-gray-500"
                   maxLength={MAX_NUMBERS * 20}
                 />
                 <p className="mt-1 text-xs text-gray-500">{phonesCount}/1000</p>
               </div>
               {phonesCount > 0 && (
-                <p className="text-sm text-gray-600"><strong>{phonesCount}</strong> número(s) prontos para deduplicar</p>
+                <p className="text-sm text-gray-400"><strong>{phonesCount}</strong> número(s) prontos para deduplicar</p>
               )}
             </div>
             <div className="flex flex-col gap-3">
-              <div className="rounded-2xl border border-gray-200 bg-gradient-to-b from-white to-gray-50 p-4 shadow-sm space-y-3">
+              <div className="rounded-2xl border border-[#404040] bg-[#2a2a2a] p-4 shadow-sm space-y-3">
                 <div className="flex items-start justify-between gap-2">
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-wide text-[#8CD955]">Etapa 1</p>
-                    <p className="text-lg font-semibold text-gray-900">Preparar lista</p>
-                    <p className="text-sm text-gray-600">Envie um CSV/TXT ou cole os números e remova duplicidades antes da validação.</p>
+                    <p className="text-lg font-semibold text-gray-200">Preparar lista</p>
+                    <p className="text-sm text-gray-500">Envie um CSV/TXT ou cole os números e remova duplicidades antes da validação.</p>
                   </div>
                   <div className="text-right">
-                    <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600">
+                    <span className="inline-flex items-center gap-1 rounded-full bg-[#404040] px-2 py-0.5 text-[11px] font-semibold text-gray-400">
                       Prontos
                     </span>
-                    <p className="text-2xl font-bold text-gray-900">{phonesCount}</p>
+                    <p className="text-2xl font-bold text-gray-200">{phonesCount}</p>
                     <p className="text-xs text-gray-500">de 1000</p>
                   </div>
                 </div>
@@ -790,34 +828,34 @@ export default function ListCleaningPage() {
                   Deduplicar agora
                 </button>
               </div>
-              {jobId ? (
-                <div className="rounded-2xl border border-gray-200 bg-gradient-to-b from-white to-blue-50/30 p-4 shadow-sm space-y-3">
+              {jobId && capabilities.canWhatsapp ? (
+                <div className="rounded-2xl border border-[#404040] bg-[#2a2a2a] p-4 shadow-sm space-y-3">
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <p className="text-xs font-semibold uppercase tracking-wide text-blue-600">Etapa 2</p>
-                      <p className="text-lg font-semibold text-gray-900">Verificar no WhatsApp</p>
-                      <p className="text-sm text-gray-600">O sistema processa até 500 números por rodada e pausa automaticamente.</p>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-blue-400">Etapa 2</p>
+                      <p className="text-lg font-semibold text-gray-200">Verificar no WhatsApp</p>
+                      <p className="text-sm text-gray-500">O sistema processa até 500 números por rodada e pausa automaticamente.</p>
                     </div>
                     {job && (
                       <div className="text-right">
                         <span
                           className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
                             job.status === 'done'
-                              ? 'bg-green-100 text-green-800'
+                              ? 'bg-green-900/40 text-green-400'
                               : job.status === 'verifying'
-                                ? 'bg-blue-100 text-blue-800'
+                                ? 'bg-blue-900/40 text-blue-400'
                                 : job.status === 'coffee_pause'
-                                  ? 'bg-amber-100 text-amber-800'
+                                  ? 'bg-amber-900/40 text-amber-400'
                                   : job.status === 'paused_disconnected' || job.status === 'error'
-                                    ? 'bg-red-100 text-red-800'
-                                    : 'bg-gray-100 text-gray-700'
+                                    ? 'bg-red-900/40 text-red-400'
+                                    : 'bg-[#404040] text-gray-400'
                           }`}
                         >
                           {job.status === 'verifying' && <Loader2 className="w-3 h-3 animate-spin" />}
                           {statusLabel[job.status] ?? job.status}
                         </span>
                         {job.status === 'coffee_pause' && (coffeeSecondsLeft ?? 0) > 0 && (
-                          <p className="mt-1 text-xs font-semibold text-amber-700">
+                          <p className="mt-1 text-xs font-semibold text-amber-400">
                             Próxima rodada em {formatTimer(coffeeSecondsLeft || 0)}
                           </p>
                         )}
@@ -848,7 +886,7 @@ export default function ListCleaningPage() {
                         type="button"
                         onClick={() => handleStopVerify(jobId!)}
                         disabled={stoppingId === jobId}
-                        className="flex w-full items-center justify-center gap-2 rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:opacity-50"
+                        className="flex w-full items-center justify-center gap-2 rounded-xl border border-red-500/50 bg-red-900/30 px-4 py-3 text-sm font-semibold text-red-300 transition hover:bg-red-900/50 disabled:opacity-50"
                       >
                         {stoppingId === jobId ? <Loader2 className="w-4 h-4 animate-spin" /> : <StopCircle className="w-4 h-4" />}
                         Parar verificação
@@ -858,16 +896,33 @@ export default function ListCleaningPage() {
                   {job?.validated_count !== undefined && job.validated_count > 0 && (
                     <button
                       onClick={() => handleDownload(Math.min(job.validated_count, 1000))}
-                      className="flex w-full items-center justify-center gap-2 rounded-xl border border-gray-300 px-4 py-3 text-sm font-semibold text-gray-700 transition hover:bg-white/70"
+                      className="flex w-full items-center justify-center gap-2 rounded-xl border border-[#404040] px-4 py-3 text-sm font-semibold text-gray-300 transition hover:bg-[#404040]"
                     >
                       <Download className="w-4 h-4" />
                       Baixar CSV ({job.validated_count})
                     </button>
                   )}
                 </div>
+              ) : jobId && !capabilities.canWhatsapp ? (
+                <div className="rounded-2xl border border-[#404040] bg-[#2a2a2a] p-4 text-center text-sm text-gray-400">
+                  <p className="font-medium text-gray-300">Deduplicação concluída</p>
+                  <p className="mt-1">Sua lista está pronta. A verificação no WhatsApp não está disponível para seu cargo.</p>
+                    {job && job.total_unique > 0 && (
+                    <button
+                      onClick={() => {
+                        window.open(`/api/list-cleaning/${jobId}/download?limit=${job.total_unique}&mode=dedup`, '_blank');
+                        setToast({ message: `Download iniciado (${job.total_unique} deduplicados)`, type: 'success' });
+                      }}
+                      className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-[#404040] px-4 py-3 text-sm font-semibold text-gray-300 transition hover:bg-[#404040]"
+                    >
+                      <Download className="w-4 h-4" />
+                      Baixar lista deduplicada ({job.total_unique} números)
+                    </button>
+                  )}
+                </div>
               ) : (
-                <div className="rounded-2xl border-2 border-dashed border-gray-200 bg-white p-4 text-center text-sm text-gray-500">
-                  <p className="font-medium text-gray-700">Deduplicação pendente</p>
+                <div className="rounded-2xl border-2 border-dashed border-[#404040] bg-[#2a2a2a] p-4 text-center text-sm text-gray-500">
+                  <p className="font-medium text-gray-400">Deduplicação pendente</p>
                   <p className="mt-1">Assim que concluir a etapa 1, os botões para iniciar a limpeza aparecerão aqui.</p>
                 </div>
               )}
@@ -877,22 +932,22 @@ export default function ListCleaningPage() {
 
         {/* Tabelas: Lista Bruta e Lista Limpa */}
         <section className="space-y-4">
-          <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide">Listas</h2>
+          <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wide">Listas</h2>
           <div className="grid gap-6 lg:grid-cols-2">
-            <div className="border border-gray-200 rounded-lg overflow-hidden shadow-sm">
-              <div className="bg-gray-100 px-4 py-2 font-medium text-gray-800">Lista Bruta</div>
+            <div className="border border-[#404040] rounded-lg overflow-hidden shadow-sm">
+              <div className="bg-[#2a2a2a] px-4 py-2 font-medium text-gray-200">Lista Bruta</div>
               <div className="overflow-x-auto max-h-96 overflow-y-auto">
               <table className="w-full text-sm">
-                <thead className="bg-gray-50 sticky top-0">
+                <thead className="bg-[#2a2a2a] sticky top-0">
                   <tr>
-                    <th className="px-3 py-2 text-left text-gray-700">#</th>
-                    <th className="px-3 py-2 text-left text-gray-700">phone</th>
-                    <th className="px-3 py-2 text-left text-gray-700">status</th>
+                    <th className="px-3 py-2 text-left text-gray-400">#</th>
+                    <th className="px-3 py-2 text-left text-gray-400">phone</th>
+                    <th className="px-3 py-2 text-left text-gray-400">status</th>
                   </tr>
                 </thead>
-                <tbody className="text-gray-800">
+                <tbody className="text-gray-300">
                   {rawList.slice(0, 100).map((r) => (
-                    <tr key={r.index} className="border-t border-gray-100">
+                    <tr key={r.index} className="border-t border-[#404040]">
                       <td className="px-3 py-1">{r.index}</td>
                       <td className="px-3 py-1 font-mono">{r.phone}</td>
                       <td className="px-3 py-1">{r.status_raw}</td>
@@ -901,24 +956,25 @@ export default function ListCleaningPage() {
                 </tbody>
               </table>
               {rawList.length > 100 && (
-                <p className="px-3 py-2 text-xs text-gray-600">Exibindo 100 de {rawList.length}</p>
+                <p className="px-3 py-2 text-xs text-gray-500">Exibindo 100 de {rawList.length}</p>
               )}
             </div>
           </div>
 
-          <div className="border border-gray-200 rounded-lg overflow-hidden shadow-sm">
-            <div className="bg-gray-100 px-4 py-2 font-medium text-gray-800">Lista Limpa</div>
+          {capabilities.canWhatsapp && (
+          <div className="border border-[#404040] rounded-lg overflow-hidden shadow-sm">
+            <div className="bg-[#2a2a2a] px-4 py-2 font-medium text-gray-200">Lista Limpa</div>
             <div className="overflow-x-auto max-h-96 overflow-y-auto">
               <table className="w-full text-sm">
-                <thead className="bg-gray-50 sticky top-0">
+                <thead className="bg-[#2a2a2a] sticky top-0">
                   <tr>
-                    <th className="px-3 py-2 text-left text-gray-700">#</th>
-                    <th className="px-3 py-2 text-left text-gray-700">phone</th>
-                    <th className="px-3 py-2 text-left text-gray-700">whatsapp_status</th>
-                    <th className="px-3 py-2 text-left text-gray-700">validated_at</th>
+                    <th className="px-3 py-2 text-left text-gray-400">#</th>
+                    <th className="px-3 py-2 text-left text-gray-400">phone</th>
+                    <th className="px-3 py-2 text-left text-gray-400">whatsapp_status</th>
+                    <th className="px-3 py-2 text-left text-gray-400">validated_at</th>
                   </tr>
                 </thead>
-                <tbody className="text-gray-800">
+                <tbody className="text-gray-300">
                   {cleanList.slice(0, 100).map((r) => {
                     const isPending = r.whatsapp_status === 'pendente';
                     const isVerifying = job?.status === 'verifying';
@@ -926,39 +982,39 @@ export default function ListCleaningPage() {
                     return (
                       <tr
                         key={r.index}
-                        className={`border-t border-gray-100 transition-colors duration-300 ${
-                          showVerifying ? 'bg-blue-50/60 animate-pulse' : ''
-                        } ${r.whatsapp_status === 'active' ? 'bg-green-50/50' : ''} ${
-                          r.whatsapp_status === 'inactive' || r.whatsapp_status === 'unknown' ? 'bg-red-50/30' : ''
+                        className={`border-t border-[#404040] transition-colors duration-300 ${
+                          showVerifying ? 'bg-blue-900/30 animate-pulse' : ''
+                        } ${r.whatsapp_status === 'active' ? 'bg-green-900/20' : ''} ${
+                          r.whatsapp_status === 'inactive' || r.whatsapp_status === 'unknown' ? 'bg-red-900/20' : ''
                         }`}
                       >
                         <td className="px-3 py-1.5">{r.index}</td>
                         <td className="px-3 py-1.5 font-mono">{r.phone}</td>
                         <td className="px-3 py-1.5">
                           {showVerifying ? (
-                            <span className="inline-flex items-center gap-1.5 text-blue-600">
+                            <span className="inline-flex items-center gap-1.5 text-blue-400">
                               <Loader2 className="w-3.5 h-3.5 animate-spin flex-shrink-0" />
                               <span className="animate-pulse">Verificando...</span>
                             </span>
                           ) : r.whatsapp_status === 'active' ? (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">
+                            <span className="inline-flex items-center gap-1 rounded-full bg-green-900/40 px-2 py-0.5 text-xs font-medium text-green-400">
                               <CheckCircle2 className="w-3.5 h-3.5" />
                               Validado
                             </span>
                           ) : r.whatsapp_status === 'inactive' ? (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800">
+                            <span className="inline-flex items-center gap-1 rounded-full bg-red-900/40 px-2 py-0.5 text-xs font-medium text-red-400">
                               <XCircle className="w-3.5 h-3.5" />
                               Não validado
                             </span>
                           ) : r.whatsapp_status === 'unknown' ? (
-                            <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
+                            <span className="inline-flex items-center rounded-full bg-[#404040] px-2 py-0.5 text-xs font-medium text-gray-500">
                               Indefinido
                             </span>
                           ) : (
                             <span className="text-gray-500">{r.whatsapp_status}</span>
                           )}
                         </td>
-                        <td className="px-3 py-1.5 text-gray-700">
+                        <td className="px-3 py-1.5 text-gray-400">
                           {r.validated_at ? new Date(r.validated_at).toLocaleString() : (showVerifying ? '...' : '-')}
                         </td>
                       </tr>
@@ -967,28 +1023,30 @@ export default function ListCleaningPage() {
                 </tbody>
               </table>
               {cleanList.length > 100 && (
-                <p className="px-3 py-2 text-xs text-gray-600">Exibindo 100 de {cleanList.length}</p>
+                <p className="px-3 py-2 text-xs text-gray-500">Exibindo 100 de {cleanList.length}</p>
               )}
             </div>
           </div>
+          )}
 
           {/* Números não válidos e indefinidos - ocupa toda a largura abaixo das duas listas, altura fixa */}
-          <div className="w-full lg:col-span-2 border border-red-200 rounded-lg overflow-hidden shadow-sm mt-4 flex flex-col">
-            <div className="w-full bg-red-50 px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-left font-medium text-red-800">
+          {capabilities.canWhatsapp && (
+          <div className="w-full lg:col-span-2 border border-red-500/50 rounded-lg overflow-hidden shadow-sm mt-4 flex flex-col bg-[#2a2a2a]">
+            <div className="w-full bg-red-900/30 px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-left font-medium text-red-300">
               <span className="flex items-center gap-2">
                 <XCircle className="w-5 h-5" />
                 Números não válidos (não estão no WhatsApp)
               </span>
               <div className="flex items-center gap-2 text-xs font-semibold">
-                <span className="inline-flex items-center gap-1 rounded-full bg-red-200 px-2 py-0.5 text-red-900">
+                <span className="inline-flex items-center gap-1 rounded-full bg-red-900/50 px-2 py-0.5 text-red-200">
                   {invalidCount} não válido(s)
                 </span>
-                <span className="inline-flex items-center gap-1 rounded-full bg-gray-200 px-2 py-0.5 text-gray-700">
+                <span className="inline-flex items-center gap-1 rounded-full bg-[#404040] px-2 py-0.5 text-gray-300">
                   {unknownCount} indefinido(s)
                 </span>
               </div>
             </div>
-            <div className="h-64 overflow-auto bg-white border-t border-red-100 shrink-0">
+            <div className="h-64 overflow-auto bg-[#1a1a1a] border-t border-red-500/30 shrink-0">
               {nonValidRows.length === 0 ? (
                 <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-gray-500">
                   <CheckCircle2 className="w-6 h-6 text-green-500" />
@@ -997,31 +1055,31 @@ export default function ListCleaningPage() {
               ) : (
                 <>
                   <table className="w-full text-sm">
-                    <thead className="bg-gray-50 sticky top-0 z-10">
+                    <thead className="bg-[#2a2a2a] sticky top-0 z-10">
                       <tr>
-                        <th className="px-3 py-2 text-left text-gray-700">#</th>
-                        <th className="px-3 py-2 text-left text-gray-700">phone</th>
-                        <th className="px-3 py-2 text-left text-gray-700">status</th>
-                        <th className="px-3 py-2 text-left text-gray-700">Ações</th>
+                        <th className="px-3 py-2 text-left text-gray-400">#</th>
+                        <th className="px-3 py-2 text-left text-gray-400">phone</th>
+                        <th className="px-3 py-2 text-left text-gray-400">status</th>
+                        <th className="px-3 py-2 text-left text-gray-400">Ações</th>
                       </tr>
                     </thead>
-                    <tbody className="text-gray-800">
+                    <tbody className="text-gray-300">
                       {nonValidRows.map((r) => {
                         const phoneDigits = String(r.phone).replace(/\D/g, '');
                         const waLink = phoneDigits ? `https://wa.me/${phoneDigits}` : '#';
                         const isInactive = r.whatsapp_status === 'inactive';
                         return (
-                          <tr key={r.index} className="border-t border-gray-100">
+                          <tr key={r.index} className="border-t border-[#404040]">
                             <td className="px-3 py-1.5">{r.index}</td>
                             <td className="px-3 py-1.5 font-mono">{r.phone}</td>
                             <td className="px-3 py-1.5">
                               {isInactive ? (
-                                <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800">
+                                <span className="inline-flex items-center gap-1 rounded-full bg-red-900/40 px-2 py-0.5 text-xs font-medium text-red-400">
                                   <XCircle className="w-3.5 h-3.5" />
                                   Não validado
                                 </span>
                               ) : (
-                                <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
+                                <span className="inline-flex items-center rounded-full bg-[#404040] px-2 py-0.5 text-xs font-medium text-gray-500">
                                   Indefinido
                                 </span>
                               )}
@@ -1049,14 +1107,15 @@ export default function ListCleaningPage() {
               )}
             </div>
           </div>
+          )}
           </div>
         </section>
 
         {/* Histórico de limpezas: feitas ou paradas; continuar com pendentes */}
-        <section className="border border-gray-200 rounded-xl bg-white shadow-sm overflow-hidden">
-          <div className="flex items-center gap-2 px-4 py-3 bg-gray-50 border-b border-gray-200">
-            <History className="w-5 h-5 text-gray-600" />
-            <h2 className="text-base font-semibold text-gray-800">Histórico de limpezas</h2>
+        <section className="border border-[#404040] rounded-xl bg-[#2a2a2a] shadow-sm overflow-hidden">
+          <div className="flex items-center gap-2 px-4 py-3 bg-[#1a1a1a] border-b border-[#404040]">
+            <History className="w-5 h-5 text-gray-400" />
+            <h2 className="text-base font-semibold text-gray-200">Histórico de limpezas</h2>
           </div>
           <div className="overflow-x-auto">
             {jobsListLoading ? (
@@ -1067,20 +1126,20 @@ export default function ListCleaningPage() {
               <p className="px-4 py-8 text-sm text-gray-500 text-center">Nenhuma limpeza ainda. Deduplique uma lista para começar.</p>
             ) : (
               <table className="w-full text-sm">
-                <thead className="bg-gray-50">
+                <thead className="bg-[#1a1a1a]">
                   <tr>
-                    <th className="px-3 py-2.5 text-left text-gray-700 font-medium">Data</th>
+                    <th className="px-3 py-2.5 text-left text-gray-400 font-medium">Data</th>
                     {jobsList.some((j) => j.profiles != null) && (
-                      <th className="px-3 py-2.5 text-left text-gray-700 font-medium">Usuário</th>
+                      <th className="px-3 py-2.5 text-left text-gray-400 font-medium">Usuário</th>
                     )}
-                    <th className="px-3 py-2.5 text-left text-gray-700 font-medium">Status</th>
-                    <th className="px-3 py-2.5 text-right text-gray-700 font-medium">Total</th>
-                    <th className="px-3 py-2.5 text-right text-gray-700 font-medium">Validados</th>
-                    <th className="px-3 py-2.5 text-right text-gray-700 font-medium">Pendentes</th>
-                    <th className="px-3 py-2.5 text-right text-gray-700 font-medium">Ações</th>
+                    <th className="px-3 py-2.5 text-left text-gray-400 font-medium">Status</th>
+                    <th className="px-3 py-2.5 text-right text-gray-400 font-medium">Total</th>
+                    <th className="px-3 py-2.5 text-right text-gray-400 font-medium">Validados</th>
+                    <th className="px-3 py-2.5 text-right text-gray-400 font-medium">Pendentes</th>
+                    <th className="px-3 py-2.5 text-right text-gray-400 font-medium">Ações</th>
                   </tr>
                 </thead>
-                <tbody className="text-gray-800 divide-y divide-gray-100">
+                <tbody className="text-gray-300 divide-y divide-[#404040]">
                   {jobsList.map((j) => {
                     const isCurrent = j.id === jobId;
                     const canContinue = j.pending_count > 0 && j.status !== 'done';
@@ -1088,7 +1147,7 @@ export default function ListCleaningPage() {
                     return (
                       <tr
                         key={j.id}
-                        className={`hover:bg-gray-50/80 ${isCurrent ? 'bg-[#8CD955]/10' : ''}`}
+                        className={`hover:bg-[#404040]/50 ${isCurrent ? 'bg-[#8CD955]/20' : ''}`}
                       >
                         <td className="px-3 py-2 whitespace-nowrap">
                           {new Date(j.created_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}
@@ -1102,14 +1161,14 @@ export default function ListCleaningPage() {
                           <span
                             className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
                               j.status === 'done'
-                                ? 'bg-green-100 text-green-800'
+                                ? 'bg-green-900/40 text-green-400'
                                 : j.status === 'verifying'
-                                  ? 'bg-blue-100 text-blue-800'
+                                  ? 'bg-blue-900/40 text-blue-400'
                                   : j.status === 'coffee_pause'
-                                    ? 'bg-amber-100 text-amber-800'
+                                    ? 'bg-amber-900/40 text-amber-400'
                                     : j.status === 'paused_disconnected' || j.status === 'error'
-                                      ? 'bg-red-100 text-red-800'
-                                      : 'bg-gray-100 text-gray-700'
+                                      ? 'bg-red-900/40 text-red-400'
+                                      : 'bg-[#404040] text-gray-400'
                             }`}
                           >
                             {j.status === 'verifying' && <Loader2 className="w-3 h-3 animate-spin" />}
@@ -1124,7 +1183,7 @@ export default function ListCleaningPage() {
                             <button
                               type="button"
                               onClick={() => openJob(j.id)}
-                              className="inline-flex items-center gap-1 px-2 py-1 rounded border border-gray-300 text-gray-700 text-xs font-medium hover:bg-gray-50 transition"
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded border border-[#404040] text-gray-300 text-xs font-medium hover:bg-[#404040] transition"
                             >
                               <Eye className="w-3.5 h-3.5" />
                               Ver
@@ -1134,7 +1193,7 @@ export default function ListCleaningPage() {
                                 type="button"
                                 onClick={() => handleStopVerify(j.id)}
                                 disabled={stoppingId === j.id}
-                                className="inline-flex items-center gap-1 px-2 py-1 rounded border border-red-300 text-red-700 text-xs font-medium hover:bg-red-50 disabled:opacity-50 transition"
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded border border-red-500/50 text-red-400 text-xs font-medium hover:bg-red-900/30 disabled:opacity-50 transition"
                               >
                                 {stoppingId === j.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <StopCircle className="w-3.5 h-3.5" />}
                                 Parar
@@ -1154,7 +1213,7 @@ export default function ListCleaningPage() {
                               <button
                                 type="button"
                                 onClick={() => handleDownload(Math.min(j.validated_count, 1000), j.id)}
-                                className="inline-flex items-center gap-1 px-2 py-1 rounded border border-gray-300 text-gray-700 text-xs font-medium hover:bg-gray-50 transition"
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded border border-[#404040] text-gray-300 text-xs font-medium hover:bg-[#404040] transition"
                               >
                                 <Download className="w-3.5 h-3.5" />
                                 CSV
@@ -1169,8 +1228,8 @@ export default function ListCleaningPage() {
               </table>
             )}
             {!jobsListLoading && jobsList.length > 0 && (
-              <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-t border-gray-200 bg-gray-50">
-                <p className="text-sm text-gray-600">
+              <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-t border-[#404040] bg-[#1a1a1a]">
+                <p className="text-sm text-gray-400">
                   Página <strong>{jobsListPage}</strong> de <strong>{jobsListTotalPages}</strong>
                   {jobsListTotal > 0 && (
                     <span className="ml-1">({jobsListTotal} registro{jobsListTotal !== 1 ? 's' : ''} no total)</span>
@@ -1181,7 +1240,7 @@ export default function ListCleaningPage() {
                     type="button"
                     onClick={() => fetchJobsList(jobsListPage - 1)}
                     disabled={jobsListPage <= 1}
-                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 text-sm font-medium hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[#404040] text-gray-300 text-sm font-medium hover:bg-[#404040] disabled:opacity-50 disabled:cursor-not-allowed transition"
                   >
                     <ChevronLeft className="w-4 h-4" />
                     Anterior
@@ -1190,7 +1249,7 @@ export default function ListCleaningPage() {
                     type="button"
                     onClick={() => fetchJobsList(jobsListPage + 1)}
                     disabled={jobsListPage >= jobsListTotalPages}
-                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 text-sm font-medium hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[#404040] text-gray-300 text-sm font-medium hover:bg-[#404040] disabled:opacity-50 disabled:cursor-not-allowed transition"
                   >
                     Próxima
                     <ChevronRight className="w-4 h-4" />
@@ -1202,13 +1261,14 @@ export default function ListCleaningPage() {
         </section>
 
         {job?.status === 'coffee_pause' && coffeeSecondsLeft !== null && coffeeSecondsLeft > 0 && (
-          <div className="border-2 border-amber-200 bg-amber-50 rounded-xl p-6 text-center">
-            <Coffee className="w-12 h-12 text-amber-600 mx-auto mb-2" />
-            <p className="text-lg font-semibold text-amber-800">Pausa para o café ☕</p>
-            <p className="text-3xl font-mono font-bold text-amber-700 mt-2">{formatTimer(coffeeSecondsLeft)}</p>
-            <p className="text-sm text-amber-600 mt-1">O sistema continuará automaticamente após o timer.</p>
+          <div className="border-2 border-amber-500/50 bg-amber-900/20 rounded-xl p-6 text-center">
+            <Coffee className="w-12 h-12 text-amber-400 mx-auto mb-2" />
+            <p className="text-lg font-semibold text-amber-300">Pausa para o café ☕</p>
+            <p className="text-3xl font-mono font-bold text-amber-400 mt-2">{formatTimer(coffeeSecondsLeft)}</p>
+            <p className="text-sm text-amber-500 mt-1">O sistema continuará automaticamente após o timer.</p>
           </div>
         )}
+      </div>
       </div>
     </Layout>
   );

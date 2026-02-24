@@ -22,8 +22,18 @@ export async function GET(req: NextRequest) {
     const bancaId = searchParams.get('banca_id') || undefined;
     const groupId = searchParams.get('group_id') || undefined;
     const groupNameQ = searchParams.get('group_name') || searchParams.get('q') || undefined;
+    const instanceNameQ = searchParams.get('instance_name') || undefined;
     const limit = Math.min(5000, Math.max(1, parseInt(searchParams.get('limit') || '1000', 10)));
 
+    let instanceIdsFilter: string[] | undefined;
+    if (instanceNameQ?.trim()) {
+      const { data: instRows } = await supabaseServiceRole
+        .from('evolution_instances')
+        .select('id')
+        .eq('instance_name', instanceNameQ.trim());
+      instanceIdsFilter = (instRows || []).map((r: { id: string }) => r.id);
+      if (instanceIdsFilter.length === 0) instanceIdsFilter = [''];
+    }
     let groupIdsByName: string[] | undefined;
     if (groupNameQ?.trim()) {
       const { data: nameRows } = await supabaseServiceRole
@@ -41,6 +51,7 @@ export async function GET(req: NextRequest) {
       .limit(limit);
     if (bancaId) query = query.eq('banca_id', bancaId);
     if (groupId) query = query.eq('group_id', groupId);
+    if (instanceIdsFilter) query = query.in('evolution_instance_id', instanceIdsFilter);
     if (groupIdsByName) query = query.in('group_id', groupIdsByName);
     if (dateFrom) query = query.gte('occurred_at', dateFrom);
     if (dateTo) query = query.lte('occurred_at', dateTo);

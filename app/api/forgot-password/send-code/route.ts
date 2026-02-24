@@ -69,7 +69,7 @@ export async function POST(req: NextRequest) {
 
     const phone = normalizePhone(phoneRaw);
     if (phone.length < 12) {
-      return errorResponse('Telefone inválido. Use DDD + número (ex: 819512449).', 400);
+      return errorResponse('Telefone inválido. Use DDD + número com 9 (ex: 81999999999 ou 7999999999).', 400);
     }
 
     const { data: profile, error: profileError } = await supabaseServiceRole

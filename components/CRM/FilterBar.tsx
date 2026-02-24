@@ -25,6 +25,8 @@ interface FilterBarProps {
   initialDateFilter?: { value: string; label: string };
   /** Chamado quando a lista de bancas terminar de carregar; recebe a listagem exclusiva (para o Kanban usar só essas bancas em "Todas as Bancas"). */
   onBancasLoaded?: (bancas: { id: string; name: string; url: string }[]) => void;
+  /** Quando informado (ex.: admin visualizando CRM de outro usuário), a API de bancas retorna as bancas do usuário alvo. */
+  targetUserId?: string;
 }
 
 interface Banca {
@@ -39,7 +41,7 @@ interface Tag {
   color: string;
 }
 
-const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initialDateFilter, onBancasLoaded }) => {
+const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initialDateFilter, onBancasLoaded, targetUserId }) => {
   const [searchInputValue, setSearchInputValue] = useState('');
   const [activeFilters, setActiveFilters] = useState<Record<string, any>>(() => {
     if (initialDateFilter) {
@@ -81,7 +83,10 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           return;
         }
 
-        const response = await fetch('/api/crm/bancas', {
+        const bancasUrl = targetUserId
+          ? `/api/crm/bancas?targetUserId=${encodeURIComponent(targetUserId)}`
+          : '/api/crm/bancas';
+        const response = await fetch(bancasUrl, {
           headers: { 'X-User-Id': userId },
           signal,
         });
@@ -109,7 +114,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
 
     loadBancas();
     return () => controller.abort();
-  }, [onBancasLoaded]);
+  }, [onBancasLoaded, targetUserId]);
 
   // Carrega tags
   useEffect(() => {
@@ -238,7 +243,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
 
   return (
     <div className="flex flex-col gap-3 mb-6" ref={containerRef}>
-      <div className="bg-white p-3 rounded-2xl shadow-sm border border-gray-100 flex flex-wrap items-center gap-3">
+      <div className="bg-white dark:bg-[#2a2a2a] p-3 rounded-2xl shadow-sm border border-gray-100 dark:border-[#404040] flex flex-wrap items-center gap-3">
         {/* Search Field */}
         <div className="relative flex-1 min-w-[250px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
@@ -249,7 +254,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
             onChange={(e) => setSearchInputValue(e.target.value)}
             onBlur={() => onSearch(searchInputValue)}
             onKeyDown={(e) => { if (e.key === 'Enter') onSearch(searchInputValue); }}
-            className="w-full pl-10 pr-4 py-2.5 bg-gray-100 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 focus:bg-gray-50 focus:border-[#8CD955]/40 transition-all"
+            className="w-full pl-10 pr-4 py-2.5 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#555] rounded-xl text-sm text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 focus:bg-gray-50 dark:focus:bg-[#333] focus:border-[#8CD955]/40 transition-all"
           />
         </div>
 
@@ -259,7 +264,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
             onClick={() => !bancasLoading && toggleMenu('banca')}
             disabled={bancasLoading}
             className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-xs font-semibold transition-all shadow-sm ${
-              bancasLoading ? 'bg-gray-50 border-gray-100 text-gray-400 cursor-wait' : openMenu === 'banca' ? 'bg-gray-50 border-gray-300 text-[#6AB83D]' : 'bg-white border-gray-100 text-gray-600 hover:bg-gray-50'
+              bancasLoading ? 'bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-400 cursor-wait' : openMenu === 'banca' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#8CD955]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
             }`}
           >
             {bancasLoading ? (
@@ -271,7 +276,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
             <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform ${openMenu === 'banca' ? 'rotate-180' : ''}`} />
           </button>
           {openMenu === 'banca' && (
-            <div className="absolute left-0 top-full mt-2 w-56 bg-white rounded-xl shadow-2xl border border-gray-100 z-[35] animate-in fade-in slide-in-from-top-2 duration-200 overflow-hidden flex flex-col max-h-80">
+            <div className="absolute left-0 top-full mt-2 w-56 bg-white dark:bg-[#333] rounded-xl shadow-2xl border border-gray-100 dark:border-[#404040] z-[35] animate-in fade-in slide-in-from-top-2 duration-200 overflow-hidden flex flex-col max-h-80">
               {bancasLoading ? (
                 <div className="flex items-center justify-center gap-2 px-4 py-8 text-gray-500 text-xs">
                   <Loader2 className="w-4 h-4 animate-spin shrink-0" />
@@ -290,7 +295,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                         onChange={(e) => setBancaSearchTerm(e.target.value)}
                         onClick={(e) => e.stopPropagation()}
                         onKeyDown={(e) => e.stopPropagation()}
-                        className="w-full pl-8 pr-2 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 focus:border-[#8CD955] text-gray-900 placeholder:text-gray-500 bg-gray-100 focus:bg-gray-50 transition-all"
+                        className="w-full pl-8 pr-2 py-1.5 text-xs border border-gray-200 dark:border-[#555] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 focus:border-[#8CD955] text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder-gray-400 bg-gray-100 dark:bg-[#404040] focus:bg-gray-50 dark:focus:bg-[#404040] transition-all"
                       />
                     </div>
                   </div>
@@ -302,8 +307,8 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                         handleFilterSelect('banca', 'all', 'Todas as Bancas');
                         setBancaSearchTerm('');
                       }}
-                      className={`w-full text-left px-4 py-2.5 text-xs hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold border-b border-gray-100 ${
-                        activeFilters.banca?.value === 'all' || !activeFilters.banca?.value ? 'bg-gray-50 text-[#6AB83D]' : 'text-gray-600'
+                      className={`w-full text-left px-4 py-2.5 text-xs hover:bg-gray-50 dark:hover:bg-[#404040] hover:text-[#8CD955] transition-colors font-bold border-b border-gray-100 dark:border-[#404040] ${
+                        activeFilters.banca?.value === 'all' || !activeFilters.banca?.value ? 'bg-gray-50 dark:bg-[#404040] text-[#8CD955]' : 'text-gray-600 dark:text-gray-300'
                       }`}
                     >
                       Todas as Bancas
@@ -318,8 +323,8 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                           handleFilterSelect('banca', banca.url, banca.name);
                           setBancaSearchTerm('');
                         }}
-                        className={`w-full text-left px-4 py-2.5 text-xs hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold ${
-                          activeFilters.banca?.value === banca.url ? 'bg-gray-50 text-[#6AB83D]' : 'text-gray-600'
+                        className={`w-full text-left px-4 py-2.5 text-xs hover:bg-gray-50 dark:hover:bg-[#404040] hover:text-[#8CD955] transition-colors font-bold ${
+                          activeFilters.banca?.value === banca.url ? 'bg-gray-50 dark:bg-[#404040] text-[#8CD955]' : 'text-gray-600 dark:text-gray-300'
                         }`}
                       >
                         {banca.name}
@@ -347,7 +352,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           <button 
             onClick={() => toggleMenu('date')}
             className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-xs font-semibold transition-all shadow-sm ${
-              openMenu === 'date' ? 'bg-gray-50 border-gray-300 text-[#6AB83D]' : 'bg-white border-gray-100 text-gray-600 hover:bg-gray-50'
+              openMenu === 'date' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#8CD955]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
             }`}
           >
             <Calendar className="w-3.5 h-3.5" />
@@ -355,7 +360,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
             <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform ${openMenu === 'date' ? 'rotate-180' : ''}`} />
           </button>
           {openMenu === 'date' && (
-            <div className="absolute left-0 top-full mt-2 w-56 bg-white rounded-xl shadow-2xl border border-gray-100 py-2 z-[35] animate-in fade-in slide-in-from-top-2 duration-200">
+            <div className="absolute left-0 top-full mt-2 w-56 bg-white dark:bg-[#333] rounded-xl shadow-2xl border border-gray-100 dark:border-[#404040] py-2 z-[35] animate-in fade-in slide-in-from-top-2 duration-200">
               {[
                 { value: 'diario', label: 'Diário' },
                 { value: 'ontem', label: 'Ontem' },
@@ -369,8 +374,8 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                   onClick={() => {
                     handleFilterSelect('date', option.value, option.label);
                   }}
-                  className={`w-full text-left px-4 py-2 text-xs hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold ${
-                    activeFilters.date?.value === option.value ? 'bg-gray-50 text-[#6AB83D]' : 'text-gray-600'
+                  className={`w-full text-left px-4 py-2 text-xs hover:bg-gray-50 dark:hover:bg-[#404040] hover:text-[#8CD955] transition-colors font-bold ${
+                    activeFilters.date?.value === option.value ? 'bg-gray-50 dark:bg-[#404040] text-[#8CD955]' : 'text-gray-600 dark:text-gray-300'
                   }`}
                 >
                   {option.label}
@@ -401,7 +406,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
               }
             }}
             className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-xs font-semibold transition-all shadow-sm ${
-              openMenu === 'customDate' || activeFilters.date?.value?.startsWith('custom_') ? 'bg-gray-50 border-gray-300 text-[#6AB83D]' : 'bg-white border-gray-100 text-gray-600 hover:bg-gray-50'
+              openMenu === 'customDate' || activeFilters.date?.value?.startsWith('custom_') ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#8CD955]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
             }`}
           >
             <Calendar className="w-3.5 h-3.5" />
@@ -409,7 +414,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
             <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform ${openMenu === 'customDate' ? 'rotate-180' : ''}`} />
           </button>
           {showCustomDatePicker && openMenu === 'customDate' && (
-            <div className="absolute left-0 top-full mt-2 w-64 bg-white rounded-xl shadow-2xl border border-gray-100 p-4 z-[35] animate-in fade-in slide-in-from-top-2 duration-200">
+            <div className="absolute left-0 top-full mt-2 w-64 bg-white dark:bg-[#333] rounded-xl shadow-2xl border border-gray-100 dark:border-[#404040] p-4 z-[35] animate-in fade-in slide-in-from-top-2 duration-200">
               <div className="space-y-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">Data Inicial</label>
@@ -418,7 +423,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                     value={customStartDate}
                     onChange={(e) => setCustomStartDate(e.target.value)}
                     max={customEndDate || new Date().toISOString().split('T')[0]}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] focus:border-emerald-500 focus:text-gray-900 bg-white transition-all"
+                    className="w-full px-3 py-2 border border-gray-200 dark:border-[#555] rounded-lg text-sm text-gray-800 dark:text-white focus:ring-2 focus:ring-[#8CD955] focus:border-emerald-500 bg-white dark:bg-[#404040] transition-all"
                   />
                 </div>
                 <div>
@@ -429,7 +434,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                     onChange={(e) => setCustomEndDate(e.target.value)}
                     min={customStartDate}
                     max={new Date().toISOString().split('T')[0]}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] focus:border-emerald-500 focus:text-gray-900 bg-white transition-all"
+                    className="w-full px-3 py-2 border border-gray-200 dark:border-[#555] rounded-lg text-sm text-gray-800 dark:text-white focus:ring-2 focus:ring-[#8CD955] focus:border-emerald-500 bg-white dark:bg-[#404040] transition-all"
                   />
                 </div>
                 <div className="flex gap-2">
@@ -478,7 +483,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           <button 
             onClick={() => toggleMenu('affiliate')}
             className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-xs font-semibold transition-all shadow-sm ${
-              openMenu === 'affiliate' ? 'bg-gray-50 border-gray-300 text-[#6AB83D]' : 'bg-white border-gray-100 text-gray-600 hover:bg-gray-50'
+              openMenu === 'affiliate' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#8CD955]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
             }`}
           >
             <Users className="w-3.5 h-3.5" />
@@ -498,7 +503,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           <button 
             onClick={() => toggleMenu('stars')}
             className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-xs font-semibold transition-all shadow-sm ${
-              openMenu === 'stars' ? 'bg-gray-50 border-gray-300 text-[#6AB83D]' : 'bg-white border-gray-100 text-gray-600 hover:bg-gray-50'
+              openMenu === 'stars' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#8CD955]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
             }`}
           >
             <Star className="w-3.5 h-3.5" />
@@ -530,7 +535,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           <button 
             onClick={() => toggleMenu('value')}
             className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-xs font-semibold transition-all shadow-sm ${
-              openMenu === 'value' ? 'bg-gray-50 border-gray-300 text-[#6AB83D]' : 'bg-white border-gray-100 text-gray-600 hover:bg-gray-50'
+              openMenu === 'value' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#8CD955]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
             }`}
           >
             <DollarSign className="w-3.5 h-3.5" />
@@ -641,7 +646,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           <button 
             onClick={() => toggleMenu('valueNextStar')}
             className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-xs font-semibold transition-all shadow-sm ${
-              openMenu === 'valueNextStar' ? 'bg-gray-50 border-gray-300 text-[#6AB83D]' : 'bg-white border-gray-100 text-gray-600 hover:bg-gray-50'
+              openMenu === 'valueNextStar' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#8CD955]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
             }`}
           >
             <Target className="w-3.5 h-3.5" />
@@ -744,7 +749,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           <button 
             onClick={() => toggleMenu('lastDepositDate')}
             className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-xs font-semibold transition-all shadow-sm ${
-              openMenu === 'lastDepositDate' ? 'bg-gray-50 border-gray-300 text-[#6AB83D]' : 'bg-white border-gray-100 text-gray-600 hover:bg-gray-50'
+              openMenu === 'lastDepositDate' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#8CD955]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
             }`}
           >
             <Clock className="w-3.5 h-3.5" />
@@ -752,7 +757,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
             <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform ${openMenu === 'lastDepositDate' ? 'rotate-180' : ''}`} />
           </button>
           {openMenu === 'lastDepositDate' && (
-            <div className="absolute left-0 top-full mt-2 w-56 bg-white rounded-xl shadow-2xl border border-gray-100 py-2 z-[35] animate-in fade-in slide-in-from-top-2 duration-200">
+            <div className="absolute left-0 top-full mt-2 w-56 bg-white dark:bg-[#333] rounded-xl shadow-2xl border border-gray-100 dark:border-[#404040] py-2 z-[35] animate-in fade-in slide-in-from-top-2 duration-200">
               {[
                 { value: 'hoje', label: 'Hoje' },
                 { value: '1', label: '1 dia' },
@@ -781,7 +786,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           <button 
             onClick={() => toggleMenu('temperature')}
             className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-xs font-semibold transition-all shadow-sm ${
-              openMenu === 'temperature' ? 'bg-gray-50 border-gray-300 text-[#6AB83D]' : 'bg-white border-gray-100 text-gray-600 hover:bg-gray-50'
+              openMenu === 'temperature' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#8CD955]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
             }`}
           >
             <Thermometer className="w-3.5 h-3.5" />
@@ -789,7 +794,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
             <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform ${openMenu === 'temperature' ? 'rotate-180' : ''}`} />
           </button>
           {openMenu === 'temperature' && (
-            <div className="absolute left-0 top-full mt-2 w-56 bg-white rounded-xl shadow-2xl border border-gray-100 py-2 z-[35] animate-in fade-in slide-in-from-top-2 duration-200">
+            <div className="absolute left-0 top-full mt-2 w-56 bg-white dark:bg-[#333] rounded-xl shadow-2xl border border-gray-100 dark:border-[#404040] py-2 z-[35] animate-in fade-in slide-in-from-top-2 duration-200">
               {[
                 { value: 'cold', label: 'Frio (Cold)' },
                 { value: 'very_cold', label: 'Muito Frio (Very Cold)' },
@@ -816,7 +821,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           <button 
             onClick={() => toggleMenu('classification')}
             className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-xs font-semibold transition-all shadow-sm ${
-              openMenu === 'classification' ? 'bg-gray-50 border-gray-300 text-[#6AB83D]' : 'bg-white border-gray-100 text-gray-600 hover:bg-gray-50'
+              openMenu === 'classification' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#8CD955]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
             }`}
           >
             <Sparkles className="w-3.5 h-3.5" />
@@ -824,7 +829,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
             <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform ${openMenu === 'classification' ? 'rotate-180' : ''}`} />
           </button>
           {openMenu === 'classification' && (
-            <div className="absolute left-0 top-full mt-2 w-56 bg-white rounded-xl shadow-2xl border border-gray-100 py-2 z-[35] animate-in fade-in slide-in-from-top-2 duration-200">
+            <div className="absolute left-0 top-full mt-2 w-56 bg-white dark:bg-[#333] rounded-xl shadow-2xl border border-gray-100 dark:border-[#404040] py-2 z-[35] animate-in fade-in slide-in-from-top-2 duration-200">
               {[
                 { value: 'high_value', label: 'Alto Valor (High Value)', color: 'yellow' },
                 { value: 'vip', label: 'VIP', color: 'purple' },
@@ -858,7 +863,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           <button 
             onClick={() => toggleMenu('tags')}
             className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-xs font-semibold transition-all shadow-sm ${
-              openMenu === 'tags' ? 'bg-gray-50 border-gray-300 text-[#6AB83D]' : 'bg-white border-gray-100 text-gray-600 hover:bg-gray-50'
+              openMenu === 'tags' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#8CD955]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
             }`}
           >
             <TagIcon className="w-3.5 h-3.5" />
@@ -912,11 +917,11 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
       </div>
 
       {/* Active Filters Display */}
-      {Object.keys(activeFilters).length > 0 && (
+          {Object.keys(activeFilters).length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[10px] uppercase font-bold text-gray-400 tracking-wider ml-1">Filtros ativos:</span>
+          <span className="text-[10px] uppercase font-bold text-gray-400 dark:text-gray-500 tracking-wider ml-1">Filtros ativos:</span>
           {Object.entries(activeFilters).map(([type, filter]) => (
-            <div key={type} className="flex items-center gap-1.5 bg-gray-50 text-[#6AB83D] px-2.5 py-1 rounded-lg text-[10px] font-bold border border-gray-200 transition-all animate-in fade-in zoom-in-95">
+            <div key={type} className="flex items-center gap-1.5 bg-gray-50 dark:bg-[#333] text-[#8CD955] px-2.5 py-1 rounded-lg text-[10px] font-bold border border-gray-200 dark:border-[#404040] transition-all animate-in fade-in zoom-in-95">
               {filter.label}
               <button onClick={() => removeFilter(type)} className="hover:bg-emerald-100 p-0.5 rounded-md transition-colors">
                 <X className="w-3 h-3" />

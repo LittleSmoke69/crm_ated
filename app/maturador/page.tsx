@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { useRouter } from 'next/navigation';
 import Layout from '@/components/Layout';
@@ -86,6 +86,7 @@ export default function MaturadorPage() {
   const [instancesPage, setInstancesPage] = useState(1);
   const instancesPerPage = 8;
   const [mounted, setMounted] = useState(false);
+  const loadDataRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   useEffect(() => {
     setMounted(true);
@@ -109,6 +110,17 @@ export default function MaturadorPage() {
       loadData();
     }
   }, [isAdmin, userId, statusFilter]);
+
+  // Polling: atualiza a lista de jobs enquanto houver algum rodando (para refletir steps e conclusão)
+  const hasRunningJobs = jobs.some((j) => j.status === 'running');
+  useEffect(() => {
+    loadDataRef.current = loadData;
+  });
+  useEffect(() => {
+    if (!isAdmin || !userId || !hasRunningJobs) return;
+    const interval = setInterval(() => loadDataRef.current?.(), 3500);
+    return () => clearInterval(interval);
+  }, [isAdmin, userId, hasRunningJobs]);
 
   async function checkAdmin() {
     try {
@@ -254,18 +266,16 @@ export default function MaturadorPage() {
         setSelectedPlanId('');
         const count = data.job_ids?.length ?? 1;
         if (count > 1) {
-          alert(`${count} jobs iniciados (uma por instância). Processamento na hora.`);
+          alert(`${count} jobs iniciados. O processamento está em andamento (a lista será atualizada automaticamente).`);
         } else {
-          alert('Job iniciado. Processamento na hora.');
+          alert('Job iniciado. O processamento está em andamento (a lista será atualizada automaticamente).');
         }
-        try {
-          await fetch('/api/maturation/process-now', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-User-Id': userId || '' },
-          });
-        } catch {
-          // process-now pode falhar em dev (sem Netlify); steps serão pegos no próximo tick
-        }
+        fetch('/api/maturation/process-now', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId || '' },
+        }).catch(() => {
+          // process-now em segundo plano; falhas não bloqueiam a UI
+        });
       } else {
         alert(data.error || 'Erro ao iniciar job');
       }
@@ -337,7 +347,7 @@ export default function MaturadorPage() {
   function getStatusIcon(status: string) {
     switch (status) {
       case 'running':
-        return <RefreshCw className="w-4 h-4 text-blue-500 animate-spin" />;
+        return <RefreshCw className="w-4 h-4 text-[#8CD955] animate-spin" />;
       case 'finished':
         return <CheckCircle2 className="w-4 h-4 text-green-500" />;
       case 'failed':
@@ -352,14 +362,14 @@ export default function MaturadorPage() {
 
   function getStatusBadge(status: string) {
     const styles: Record<string, string> = {
-      running: 'bg-blue-100 text-blue-700',
-      finished: 'bg-green-100 text-green-700',
-      failed: 'bg-red-100 text-red-700',
-      aborted: 'bg-red-100 text-red-700',
-      paused: 'bg-yellow-100 text-yellow-700',
-      queued: 'bg-gray-100 text-gray-700',
+      running: 'bg-[#8CD955]/20 dark:bg-[#8CD955]/30 text-[#8CD955] dark:text-[#8CD955]',
+      finished: 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400',
+      failed: 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400',
+      aborted: 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400',
+      paused: 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-400',
+      queued: 'bg-gray-100 dark:bg-[#404040] text-gray-700 dark:text-[#aaa]',
     };
-    return styles[status] || 'bg-gray-100 text-gray-700';
+    return styles[status] || 'bg-gray-100 dark:bg-[#404040] text-gray-700 dark:text-[#aaa]';
   }
 
   function formatDate(dateString: string | null) {
@@ -421,40 +431,40 @@ export default function MaturadorPage() {
 
   return (
     <Layout>
-      <div className="min-h-full bg-slate-50/60 p-4 md:p-6">
+      <div className="min-h-full bg-slate-50/60 dark:bg-[#1a1a1a] p-4 md:p-6">
         {/* Header */}
         <div className="mb-6">
-          <h1 className="text-2xl md:text-3xl font-bold text-slate-800 tracking-tight">
+          <h1 className="text-2xl md:text-3xl font-bold text-slate-800 dark:text-white tracking-tight">
             Maturador
           </h1>
-          <p className="text-slate-500 text-sm mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="font-medium text-slate-700">{masterInstances.length} instância(s) conectada(s)</span>
-            <span className="text-slate-400">·</span>
-            <span className="font-semibold text-indigo-600">{availableInstancesCount} disponível(is) para maturação</span>
+          <p className="text-slate-500 dark:text-[#aaa] text-sm mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="font-medium text-slate-700 dark:text-[#ccc]">{masterInstances.length} instância(s) conectada(s)</span>
+            <span className="text-slate-400 dark:text-[#666]">·</span>
+            <span className="font-semibold text-[#8CD955] dark:text-[#8CD955]">{availableInstancesCount} disponível(is) para maturação</span>
           </p>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6">
           {/* Coluna Esquerda - Instâncias */}
           <div className="lg:col-span-1">
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-              <div className="p-4 border-b border-slate-100 bg-white">
-                <h2 className="text-base font-semibold text-slate-800">Instâncias conectadas</h2>
-                <p className="text-xs text-slate-500 mt-0.5">Selecione quais vão rodar no Start (ou deixe vazio = qualquer)</p>
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-sm border border-slate-200 dark:border-[#404040] overflow-hidden">
+              <div className="p-4 border-b border-slate-100 dark:border-[#404040] bg-white dark:bg-[#2a2a2a]">
+                <h2 className="text-base font-semibold text-slate-800 dark:text-white">Instâncias conectadas</h2>
+                <p className="text-xs text-slate-500 dark:text-[#aaa] mt-0.5">Selecione quais vão rodar no Start (ou deixe vazio = qualquer)</p>
                 {availableMasters.length > 0 && (
                   <div className="flex gap-2 mt-3">
                     <button
                       type="button"
                       onClick={selectAllAvailable}
-                      className="text-xs font-medium text-indigo-600 hover:text-indigo-700 hover:underline"
+                      className="text-xs font-medium text-[#8CD955] hover:text-[#7BC84A] dark:hover:text-[#9ae066] hover:underline"
                     >
                       Selecionar todas
                     </button>
-                    <span className="text-slate-300">|</span>
+                    <span className="text-slate-300 dark:text-[#555]">|</span>
                     <button
                       type="button"
                       onClick={deselectAllInstances}
-                      className="text-xs font-medium text-slate-500 hover:text-slate-700 hover:underline"
+                      className="text-xs font-medium text-slate-500 dark:text-[#aaa] hover:text-slate-700 dark:hover:text-white hover:underline"
                     >
                       Desmarcar
                     </button>
@@ -464,10 +474,10 @@ export default function MaturadorPage() {
               <div className="p-3 max-h-[420px] overflow-y-auto">
                 {loading ? (
                   <div className="py-10 text-center">
-                    <Loader2 className="w-6 h-6 animate-spin mx-auto text-slate-400" />
+                    <Loader2 className="w-6 h-6 animate-spin mx-auto text-slate-400 dark:text-[#888]" />
                   </div>
                 ) : masterInstances.length === 0 ? (
-                  <div className="py-10 text-center text-slate-400">
+                  <div className="py-10 text-center text-slate-400 dark:text-[#888]">
                     <WifiOff className="w-10 h-10 mx-auto mb-2 opacity-50" />
                     <p className="text-sm">Nenhuma instância conectada</p>
                   </div>
@@ -484,7 +494,7 @@ export default function MaturadorPage() {
                         <div
                           key={instance.instance_name + evId}
                           className={`p-3 rounded-lg border transition-all ${
-                            isOk ? 'bg-emerald-50/80 border-emerald-200' : 'bg-slate-50 border-slate-200'
+                            isOk ? 'bg-emerald-50/80 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800' : 'bg-slate-50 dark:bg-[#333] border-slate-200 dark:border-[#404040]'
                           }`}
                         >
                           <div className="flex items-start gap-3">
@@ -493,25 +503,25 @@ export default function MaturadorPage() {
                                 type="checkbox"
                                 checked={Boolean(isSelected)}
                                 onChange={() => toggleInstanceSelection(evId)}
-                                className="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                                className="mt-1 h-4 w-4 rounded border-slate-300 dark:border-[#555] text-[#8CD955] focus:ring-[#8CD955] dark:focus:ring-[#8CD955]"
                               />
                             )}
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 flex-wrap">
-                                <span className={`w-2 h-2 rounded-full shrink-0 ${isOk ? 'bg-emerald-500' : 'bg-slate-400'}`} />
-                                <p className={`font-medium text-sm ${isOk ? 'text-slate-800' : 'text-slate-600'}`}>
+                                <span className={`w-2 h-2 rounded-full shrink-0 ${isOk ? 'bg-emerald-500' : 'bg-slate-400 dark:bg-[#666]'}`} />
+                                <p className={`font-medium text-sm ${isOk ? 'text-slate-800 dark:text-white' : 'text-slate-600 dark:text-[#aaa]'}`}>
                                   {instance.instance_name}
                                 </p>
-                                <span className={`text-xs px-1.5 py-0.5 rounded ${isMaster ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>
+                                <span className={`text-xs px-1.5 py-0.5 rounded ${isMaster ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300' : 'bg-slate-100 dark:bg-[#404040] text-slate-600 dark:text-[#aaa]'}`}>
                                   {isMaster ? 'Mestre' : 'Normal'}
                                 </span>
                                 {(instance as any).phone_number && (
-                                  <span className="text-xs text-slate-600 font-mono">
+                                  <span className="text-xs text-slate-600 dark:text-[#aaa] font-mono">
                                     {(instance as any).phone_number}
                                   </span>
                                 )}
                               </div>
-                              <p className="text-xs text-slate-500 mt-0.5">
+                              <p className="text-xs text-slate-500 dark:text-[#888] mt-0.5">
                                 {isOk ? 'OK - Conectada' : instance.status || 'Desconectada'}
                                 {instance.is_locked && ' · Em uso'}
                                 {!canSelect && !hasPhone && ' · Sem telefone (configure na instância)'}
@@ -520,7 +530,7 @@ export default function MaturadorPage() {
                             <button
                               onClick={() => handleCheckConnection(instance.instance_name)}
                               disabled={checkingConnection === instance.instance_name}
-                              className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 transition-colors shrink-0"
+                              className="p-1.5 rounded-lg text-slate-500 dark:text-[#888] hover:bg-slate-100 dark:hover:bg-[#404040] transition-colors shrink-0"
                               title="Verificar conexão"
                             >
                               {checkingConnection === instance.instance_name ? (
@@ -537,19 +547,19 @@ export default function MaturadorPage() {
                 )}
               </div>
               {totalPages > 1 && (
-                <div className="flex items-center justify-between px-3 py-2 border-t border-slate-100 bg-slate-50/50">
+                <div className="flex items-center justify-between px-3 py-2 border-t border-slate-100 dark:border-[#404040] bg-slate-50/50 dark:bg-[#333]">
                   <button
                     onClick={() => setInstancesPage((p) => Math.max(1, p - 1))}
                     disabled={instancesPage === 1}
-                    className="p-2 rounded-lg text-slate-600 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="p-2 rounded-lg text-slate-600 dark:text-[#aaa] hover:bg-slate-100 dark:hover:bg-[#404040] disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <ChevronLeft className="w-4 h-4" />
                   </button>
-                  <span className="text-xs text-slate-500">{instancesPage} de {totalPages}</span>
+                  <span className="text-xs text-slate-500 dark:text-[#888]">{instancesPage} de {totalPages}</span>
                   <button
                     onClick={() => setInstancesPage((p) => Math.min(totalPages, p + 1))}
                     disabled={instancesPage === totalPages}
-                    className="p-2 rounded-lg text-slate-600 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="p-2 rounded-lg text-slate-600 dark:text-[#aaa] hover:bg-slate-100 dark:hover:bg-[#404040] disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <ChevronRight className="w-4 h-4" />
                   </button>
@@ -561,16 +571,16 @@ export default function MaturadorPage() {
           {/* Coluna Direita - Iniciar e Jobs */}
           <div className="lg:col-span-2 space-y-4 md:space-y-6">
             {/* Card Iniciar Maturação */}
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 md:p-6">
-              <h2 className="text-base font-semibold text-slate-800 mb-4">Iniciar Maturação</h2>
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-sm border border-slate-200 dark:border-[#404040] p-4 md:p-6">
+              <h2 className="text-base font-semibold text-slate-800 dark:text-white mb-4">Iniciar Maturação</h2>
               <div className="space-y-4">
                 <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
                   <div className="flex-1 min-w-0">
-                    <label className="block text-xs font-medium text-slate-500 mb-1">Plano</label>
+                    <label className="block text-xs font-medium text-slate-500 dark:text-[#aaa] mb-1">Plano</label>
                     <select
                       value={selectedPlanId}
                       onChange={(e) => setSelectedPlanId(e.target.value)}
-                      className="w-full px-4 py-2.5 border border-slate-300 rounded-lg text-slate-800 bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      className="w-full px-4 py-2.5 border border-slate-300 dark:border-[#555] rounded-lg text-slate-800 dark:text-white bg-white dark:bg-[#333] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
                     >
                       <option value="">Selecione um plano</option>
                       <option value={VIRGIN_MESSAGES_OPTION}>
@@ -582,14 +592,14 @@ export default function MaturadorPage() {
                     </select>
                   </div>
                   <div className="w-full sm:w-28">
-                    <label className="block text-xs font-medium text-slate-500 mb-1">Intervalo (s)</label>
+                    <label className="block text-xs font-medium text-slate-500 dark:text-[#aaa] mb-1">Intervalo (s)</label>
                     <input
                       type="number"
                       min={1}
                       placeholder="Plano"
                       value={delaySecondsOverride}
                       onChange={(e) => setDelaySecondsOverride(e.target.value)}
-                      className="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-slate-800 bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      className="w-full px-3 py-2.5 border border-slate-300 dark:border-[#555] rounded-lg text-slate-800 dark:text-white bg-white dark:bg-[#333] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
                       title="Segundos entre uma mensagem e a próxima (deixe vazio para usar o do plano)"
                     />
                   </div>
@@ -601,7 +611,7 @@ export default function MaturadorPage() {
                       availableInstancesCount === 0 ||
                       (useVirginMessages && virginMessagesCount === 0)
                     }
-                    className="px-5 py-2.5 rounded-lg font-medium transition-colors flex items-center justify-center gap-2 bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                    className="px-5 py-2.5 rounded-lg font-medium transition-colors flex items-center justify-center gap-2 bg-[#8CD955] text-white hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
                     title={
                       mounted
                         ? availableInstancesCount === 0
@@ -621,19 +631,19 @@ export default function MaturadorPage() {
                 </div>
                 {useVirginMessages && (
                   <div>
-                    <label htmlFor="target-chat-id" className="block text-xs font-medium text-slate-500 mb-1">Target Chat ID (opcional)</label>
+                    <label htmlFor="target-chat-id" className="block text-xs font-medium text-slate-500 dark:text-[#aaa] mb-1">Target Chat ID (opcional)</label>
                     <input
                       id="target-chat-id"
                       type="text"
                       value={targetChatIdInput}
                       onChange={(e) => setTargetChatIdInput(e.target.value)}
                       placeholder="Ex: 120363...@g.us"
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-800 bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      className="w-full px-3 py-2 border border-slate-300 dark:border-[#555] rounded-lg text-slate-800 dark:text-white bg-white dark:bg-[#333] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
                     />
                   </div>
                 )}
                 {selectedInstanceIds.size > 0 && (
-                  <p className="text-xs text-slate-500">
+                  <p className="text-xs text-slate-500 dark:text-[#aaa]">
                     {selectedInstanceIds.size} instância(s) selecionada(s) para este job. Sem seleção = qualquer disponível.
                   </p>
                 )}
@@ -659,8 +669,8 @@ export default function MaturadorPage() {
                   onClick={() => setStatusFilter(f.value)}
                   className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
                     statusFilter === f.value
-                      ? 'bg-indigo-600 text-white'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      ? 'bg-[#8CD955] text-white hover:bg-[#7BC84A]'
+                      : 'bg-slate-100 dark:bg-[#333] text-slate-600 dark:text-[#aaa] hover:bg-slate-200 dark:hover:bg-[#404040]'
                   }`}
                 >
                   {f.label}
@@ -668,39 +678,39 @@ export default function MaturadorPage() {
               ))}
             </div>
 
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-              <div className="px-4 py-3 border-b border-slate-100">
-                <h3 className="text-sm font-semibold text-slate-800">Mensagens do Auto maturador</h3>
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-sm border border-slate-200 dark:border-[#404040] overflow-hidden">
+              <div className="px-4 py-3 border-b border-slate-100 dark:border-[#404040]">
+                <h3 className="text-sm font-semibold text-slate-800 dark:text-white">Mensagens do Auto maturador</h3>
               </div>
               {loading ? (
                 <div className="p-8 text-center">
-                  <Loader2 className="w-8 h-8 animate-spin mx-auto text-slate-400" />
-                  <p className="text-slate-500 mt-2 text-sm">Carregando...</p>
+                  <Loader2 className="w-8 h-8 animate-spin mx-auto text-slate-400 dark:text-[#888]" />
+                  <p className="text-slate-500 dark:text-[#aaa] mt-2 text-sm">Carregando...</p>
                 </div>
               ) : jobs.length === 0 ? (
-                <div className="p-8 text-center text-slate-400 text-sm">
+                <div className="p-8 text-center text-slate-400 dark:text-[#888] text-sm">
                   Nenhum job encontrado
                 </div>
               ) : (
-                <div className="divide-y divide-slate-100">
+                <div className="divide-y divide-slate-100 dark:divide-[#404040]">
                   {jobs.map((job) => (
-                    <div key={job.id} className="p-4 hover:bg-slate-50/50 transition-colors">
+                    <div key={job.id} className="p-4 hover:bg-slate-50/50 dark:hover:bg-[#333]/80 transition-colors">
                       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-3 flex-wrap">
                             {getStatusIcon(job.status)}
                             <div>
-                              <p className="font-medium text-slate-800">{job.plan.name}</p>
-                              <p className="text-sm text-slate-500">{job.instance_name || 'Aguardando instância'}</p>
+                              <p className="font-medium text-slate-800 dark:text-white">{job.plan.name}</p>
+                              <p className="text-sm text-slate-500 dark:text-[#aaa]">{job.instance_name || 'Aguardando instância'}</p>
                             </div>
                             <span className={`px-2 py-0.5 rounded text-xs font-medium ${getStatusBadge(job.status)}`}>
                               {job.status}
                             </span>
-                            <span className="text-xs text-slate-400">{formatDate(job.created_at)}</span>
+                            <span className="text-xs text-slate-400 dark:text-[#888]">{formatDate(job.created_at)}</span>
                           </div>
                           {/* Visualização de steps: indicadores 1..N */}
                           <div className="mt-3 flex items-center gap-1 flex-wrap">
-                            <span className="text-xs text-slate-500 mr-1">Steps:</span>
+                            <span className="text-xs text-slate-500 dark:text-[#888] mr-1">Steps:</span>
                             {Array.from({ length: job.progress_total }, (_, i) => {
                               const stepNum = i + 1;
                               const done = stepNum <= job.progress_done;
@@ -710,10 +720,10 @@ export default function MaturadorPage() {
                                   key={stepNum}
                                   className={`inline-flex items-center justify-center w-6 h-6 rounded text-xs font-medium ${
                                     done
-                                      ? 'bg-emerald-100 text-emerald-700'
+                                      ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400'
                                       : current
-                                        ? 'bg-indigo-100 text-indigo-700 ring-1 ring-indigo-300'
-                                        : 'bg-slate-100 text-slate-400'
+                                        ? 'bg-[#8CD955]/20 dark:bg-[#8CD955]/30 text-[#8CD955] ring-1 ring-[#8CD955]/50 dark:ring-[#8CD955]/60'
+                                        : 'bg-slate-100 dark:bg-[#404040] text-slate-400 dark:text-[#888]'
                                   }`}
                                   title={done ? `Step ${stepNum} concluído` : current ? `Step ${stepNum} em andamento` : `Step ${stepNum}`}
                                 >
@@ -721,30 +731,30 @@ export default function MaturadorPage() {
                                 </span>
                               );
                             })}
-                            <span className="text-xs text-slate-400 ml-1">
+                            <span className="text-xs text-slate-400 dark:text-[#888] ml-1">
                               {job.progress_done}/{job.progress_total}
                             </span>
                           </div>
-                          <div className="mt-2 w-full bg-slate-200 rounded-full h-1.5">
+                          <div className="mt-2 w-full bg-slate-200 dark:bg-[#404040] rounded-full h-1.5">
                             <div
-                              className="bg-indigo-500 h-1.5 rounded-full transition-all duration-300"
+                              className="bg-[#8CD955] h-1.5 rounded-full transition-all duration-300"
                               style={{ width: `${job.progress_percent}%` }}
                             />
                           </div>
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
                           {job.status === 'running' && (
-                            <button onClick={() => handlePauseJob(job.id)} className="p-2 text-amber-600 hover:bg-amber-50 rounded-lg" title="Pausar">
+                            <button onClick={() => handlePauseJob(job.id)} className="p-2 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/30 rounded-lg" title="Pausar">
                               <Pause className="w-5 h-5" />
                             </button>
                           )}
                           {job.status === 'paused' && (
-                            <button onClick={() => handleResumeJob(job.id)} className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg" title="Retomar">
+                            <button onClick={() => handleResumeJob(job.id)} className="p-2 text-[#8CD955] hover:bg-[#8CD955]/20 dark:hover:bg-[#8CD955]/30 rounded-lg" title="Retomar">
                               <Play className="w-5 h-5" />
                             </button>
                           )}
                           {(job.status === 'running' || job.status === 'paused') && (
-                            <button onClick={() => handleAbortJob(job.id)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg" title="Abortar">
+                            <button onClick={() => handleAbortJob(job.id)} className="p-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg" title="Abortar">
                               <Square className="w-5 h-5" />
                             </button>
                           )}
