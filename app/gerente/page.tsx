@@ -50,6 +50,7 @@ interface ConsultorMetric {
   successRate: string;
   lastSeenAt?: string | null;
   totalOnlineTime?: number;
+  totalCrmTime?: number;
   externalKpis?: {
     total_leads: number;
     total_deposited: number;
@@ -399,11 +400,15 @@ export default function GerentePage() {
     try {
       setTagsLoading(true);
 
+      const { dateFrom, dateTo } = getDateRange();
       let url = '/api/gerente/reports/tags';
       const params = new URLSearchParams();
       if (isAdminOrSuperAdmin && selectedGerente) {
         params.append('gerente_id', selectedGerente);
       }
+      if (dateFrom) params.append('date_from', dateFrom);
+      if (dateTo) params.append('date_to', dateTo);
+      if (selectedBanca) params.append('banca_url', selectedBanca);
       if (params.toString()) {
         url += `?${params.toString()}`;
       }
@@ -1460,6 +1465,7 @@ export default function GerentePage() {
                       </th>
                       <th className="px-6 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-center">Último acesso</th>
                       <th className="px-6 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-center">Horas online</th>
+                      <th className="px-6 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-center">Horas no CRM (diário)</th>
                       <th className="px-4 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-right min-w-[120px]">
                         Ações
                       </th>
@@ -1495,6 +1501,11 @@ export default function GerentePage() {
                         <td className="px-6 py-4 text-center">
                           <span className="text-xs font-medium text-gray-700 dark:text-gray-300">
                             {formatTime(consultor.totalOnlineTime || 0)}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <span className="text-xs font-medium text-gray-700 dark:text-gray-300">
+                            {formatTime(consultor.totalCrmTime || 0)}
                           </span>
                         </td>
                         <td className="px-4 py-3 align-middle text-right">
@@ -1543,13 +1554,16 @@ export default function GerentePage() {
                         Resumo
                       </button>
                     </div>
-                    <div className="flex gap-4 text-xs text-gray-600 dark:text-gray-400">
+                    <div className="flex flex-wrap gap-4 text-xs text-gray-600 dark:text-gray-400">
                       <div className="flex items-center gap-1">
                         <Clock className="w-3.5 h-3.5" />
                         <span>{consultor.lastSeenAt ? new Date(consultor.lastSeenAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}</span>
                       </div>
                       <div>
                         <span className="font-medium text-gray-700 dark:text-gray-300">{formatTime(consultor.totalOnlineTime || 0)}</span> online
+                      </div>
+                      <div>
+                        <span className="font-medium text-gray-700 dark:text-gray-300">{formatTime(consultor.totalCrmTime || 0)}</span> no CRM
                       </div>
                     </div>
                   </div>

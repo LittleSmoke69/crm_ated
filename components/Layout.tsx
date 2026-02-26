@@ -133,9 +133,14 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
       const id = sessionStorage.getItem('user_id') || localStorage.getItem('profile_id');
       if (!id) return;
 
+      // Contabiliza total_crm_time em: crm/kanban, crm/transferido, demais /crm, /consultor e /gerente
       const isCrmPage =
         typeof pathname === 'string' &&
-        (pathname.startsWith('/crm') || pathname.startsWith('/consultor') || pathname.startsWith('/gerente'));
+        (pathname.startsWith('/crm/kanban') ||
+          pathname.startsWith('/crm/transferido') ||
+          pathname.startsWith('/crm') ||
+          pathname.startsWith('/consultor') ||
+          pathname.startsWith('/gerente'));
 
       try {
         await fetch('/api/user/heartbeat', {
@@ -148,14 +153,21 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
       }
     };
 
-    // Envia o primeiro heartbeat após 10s para confirmar que o usuário realmente entrou
-    const initialTimeout = setTimeout(sendHeartbeat, 10000);
+    // Em página de CRM: envia heartbeat imediatamente para contabilizar tempo desde a entrada na página
+    const isCrmPage =
+      typeof pathname === 'string' &&
+      (pathname.startsWith('/crm/kanban') ||
+        pathname.startsWith('/crm/transferido') ||
+        pathname.startsWith('/crm') ||
+        pathname.startsWith('/consultor') ||
+        pathname.startsWith('/gerente'));
 
-    // Envia heartbeats subsequentes a cada 60 segundos
+    const initialTimeout = isCrmPage ? null : setTimeout(sendHeartbeat, 10000);
+    if (isCrmPage) sendHeartbeat();
+
     const heartbeatInterval = setInterval(sendHeartbeat, 60000);
-
     return () => {
-      clearTimeout(initialTimeout);
+      if (initialTimeout) clearTimeout(initialTimeout);
       clearInterval(heartbeatInterval);
     };
   }, [pathname]);
