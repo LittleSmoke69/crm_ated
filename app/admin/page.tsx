@@ -1233,13 +1233,24 @@ export default function AdminDashboard() {
                                         >
                                           <Crown className={`w-4 h-4 ${inst.is_master ? 'fill-current' : ''}`} />
                                         </button>
-                                        <button
-                                          onClick={() => handleDeleteInstance(inst.id, inst.instance_name)}
-                                          className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                                          title="Excluir instância"
-                                        >
-                                          <Trash2 className="w-4 h-4" />
-                                        </button>
+                                        {isBlocked ? (
+                                          <button
+                                            onClick={() => handleDeleteInstance(inst.id, inst.instance_name)}
+                                            className="px-2 py-1 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 dark:bg-red-900/30 dark:text-red-300 dark:hover:bg-red-900/50 rounded-lg transition-colors flex items-center gap-1"
+                                            title="Deletar instância bloqueada"
+                                          >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                            Deletar
+                                          </button>
+                                        ) : (
+                                          <button
+                                            onClick={() => handleDeleteInstance(inst.id, inst.instance_name)}
+                                            className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                            title="Excluir instância"
+                                          >
+                                            <Trash2 className="w-4 h-4" />
+                                          </button>
+                                        )}
                                       </div>
                                     </div>
                                   </div>
@@ -3341,6 +3352,9 @@ const CampaignsSection = ({ userId }: { userId: string | null }) => {
   );
 };
 
+const EVOLUTION_APIS_PER_PAGE = 10;
+const ATTRIBUTION_USERS_PER_PAGE = 10;
+
 const SettingsSection = () => {
   const [apis, setApis] = useState<EvolutionApi[]>([]);
   const [usersWithApis, setUsersWithApis] = useState<UserWithApis[]>([]);
@@ -3348,6 +3362,8 @@ const SettingsSection = () => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingApi, setEditingApi] = useState<EvolutionApi | null>(null);
   const [canEditEvolutionApi, setCanEditEvolutionApi] = useState(true);
+  const [evolutionApiPage, setEvolutionApiPage] = useState(1);
+  const [attributionPage, setAttributionPage] = useState(1);
   const router = useRouter();
   const [formData, setFormData] = useState({
     name: '',
@@ -3377,6 +3393,16 @@ const SettingsSection = () => {
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const maxEvolutionPage = Math.max(1, Math.ceil(apis.length / EVOLUTION_APIS_PER_PAGE));
+    if (evolutionApiPage > maxEvolutionPage) setEvolutionApiPage(maxEvolutionPage);
+  }, [apis.length, evolutionApiPage]);
+
+  useEffect(() => {
+    const maxAttributionPage = Math.max(1, Math.ceil(usersWithApis.length / ATTRIBUTION_USERS_PER_PAGE));
+    if (attributionPage > maxAttributionPage) setAttributionPage(maxAttributionPage);
+  }, [usersWithApis.length, attributionPage]);
 
   const loadData = async () => {
     setLoading(true);
@@ -3633,7 +3659,7 @@ const SettingsSection = () => {
             </div>
             <div className="flex items-center gap-2">
               {!canEditEvolutionApi && (
-                <span className="text-sm text-amber-600">Somente visualização: sem permissão para alterar APIs Evolution</span>
+                <span className="text-sm text-amber-600 dark:text-amber-400">Somente visualização: sem permissão para alterar APIs Evolution</span>
               )}
               <button
                 onClick={() => {
@@ -3654,50 +3680,52 @@ const SettingsSection = () => {
           <div className="overflow-x-auto -mx-4 sm:mx-0">
           <table className="w-full min-w-[600px]">
             <thead>
-              <tr className="border-b border-gray-200">
-                <th className="text-left p-3 sm:p-4 text-gray-700 text-sm sm:text-base">Nome</th>
-                <th className="text-left p-3 sm:p-4 text-gray-700 text-sm sm:text-base">URL Base</th>
-                <th className="text-left p-3 sm:p-4 text-gray-700 text-sm sm:text-base">Status</th>
-                <th className="text-left p-3 sm:p-4 text-gray-700 text-sm sm:text-base">Usuários</th>
-                <th className="text-left p-3 sm:p-4 text-gray-700 text-sm sm:text-base">Ações</th>
+              <tr className="border-b border-gray-200 dark:border-gray-600">
+                <th className="text-left p-3 sm:p-4 text-gray-700 dark:text-white text-sm sm:text-base">Nome</th>
+                <th className="text-left p-3 sm:p-4 text-gray-700 dark:text-white text-sm sm:text-base">URL Base</th>
+                <th className="text-left p-3 sm:p-4 text-gray-700 dark:text-white text-sm sm:text-base">Status</th>
+                <th className="text-left p-3 sm:p-4 text-gray-700 dark:text-white text-sm sm:text-base">Usuários</th>
+                <th className="text-left p-3 sm:p-4 text-gray-700 dark:text-white text-sm sm:text-base">Ações</th>
               </tr>
             </thead>
             <tbody>
               {apis.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="p-8 text-center text-gray-500">
+                  <td colSpan={5} className="p-8 text-center text-gray-500 dark:text-gray-300">
                     Nenhuma API configurada
                   </td>
                 </tr>
               ) : (
-                apis.map((api) => (
-                  <tr key={api.id} className="border-b border-gray-100 hover:bg-gray-50">
+                apis
+                  .slice((evolutionApiPage - 1) * EVOLUTION_APIS_PER_PAGE, evolutionApiPage * EVOLUTION_APIS_PER_PAGE)
+                  .map((api) => (
+                  <tr key={api.id} className="border-b border-gray-100 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700/50">
                     <td className="p-3 sm:p-4">
-                      <div className="font-medium text-gray-800 text-sm sm:text-base">{api.name}</div>
+                      <div className="font-medium text-gray-800 dark:text-white text-sm sm:text-base">{api.name}</div>
                       {api.description && (
-                        <div className="text-xs sm:text-sm text-gray-500">{api.description}</div>
+                        <div className="text-xs sm:text-sm text-gray-500 dark:text-gray-300">{api.description}</div>
                       )}
                     </td>
-                    <td className="p-3 sm:p-4 text-xs sm:text-sm text-gray-600 break-all">{api.base_url}</td>
+                    <td className="p-3 sm:p-4 text-xs sm:text-sm text-gray-600 dark:text-gray-200 break-all">{api.base_url}</td>
                     <td className="p-3 sm:p-4">
                       <div className="flex flex-col gap-1">
                         <span
                           className={`px-2 py-1 rounded text-xs ${
                             api.is_active
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-gray-100 text-gray-800'
+                              ? 'bg-emerald-100 dark:bg-emerald-900/50 text-emerald-800 dark:text-emerald-200'
+                              : 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
                           }`}
                         >
                           {api.is_active ? 'Ativa' : 'Inativa'}
                         </span>
                         {api.is_blocked_for_instances && (
-                          <span className="px-2 py-1 rounded text-xs bg-orange-100 text-orange-800">
+                          <span className="px-2 py-1 rounded text-xs bg-orange-100 dark:bg-orange-900/50 text-orange-800 dark:text-orange-200">
                             Bloqueada para Instâncias
                           </span>
                         )}
                       </div>
                     </td>
-                    <td className="p-3 sm:p-4 text-sm sm:text-base">{api.user_count}</td>
+                    <td className="p-3 sm:p-4 text-sm sm:text-base text-gray-800 dark:text-white">{api.user_count}</td>
                     <td className="p-3 sm:p-4">
                       <div className="flex gap-2">
                         <button
@@ -3705,8 +3733,8 @@ const SettingsSection = () => {
                           disabled={!canEditEvolutionApi}
                           className={`p-2 rounded disabled:opacity-50 disabled:cursor-not-allowed ${
                             api.is_blocked_for_instances
-                              ? 'text-orange-600 hover:bg-orange-50'
-                              : 'text-gray-600 hover:bg-gray-50'
+                              ? 'text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/30'
+                              : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600'
                           }`}
                           title={!canEditEvolutionApi ? 'Sem permissão' : api.is_blocked_for_instances ? 'Desbloquear para criação de instâncias' : 'Bloquear para criação de instâncias'}
                         >
@@ -3715,7 +3743,7 @@ const SettingsSection = () => {
                         <button
                           onClick={() => canEditEvolutionApi && handleEdit(api)}
                           disabled={!canEditEvolutionApi}
-                          className="p-2 text-[#8CD955] hover:bg-emerald-50 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="p-2 text-[#8CD955] hover:bg-emerald-50 dark:hover:bg-emerald-900/30 rounded disabled:opacity-50 disabled:cursor-not-allowed"
                           title={!canEditEvolutionApi ? 'Sem permissão' : 'Editar'}
                         >
                           <Edit className="w-4 h-4" />
@@ -3723,7 +3751,7 @@ const SettingsSection = () => {
                         <button
                           onClick={() => canEditEvolutionApi && handleDelete(api.id)}
                           disabled={!canEditEvolutionApi}
-                          className="p-2 text-red-600 hover:bg-red-50 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="p-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded disabled:opacity-50 disabled:cursor-not-allowed"
                           title={!canEditEvolutionApi ? 'Sem permissão' : 'Deletar'}
                         >
                           <Trash2 className="w-4 h-4" />
@@ -3735,33 +3763,44 @@ const SettingsSection = () => {
               )}
             </tbody>
           </table>
+          {apis.length > EVOLUTION_APIS_PER_PAGE && (
+            <Pagination
+              currentPage={evolutionApiPage}
+              totalPages={Math.ceil(apis.length / EVOLUTION_APIS_PER_PAGE)}
+              onPageChange={setEvolutionApiPage}
+              itemsPerPage={EVOLUTION_APIS_PER_PAGE}
+              totalItems={apis.length}
+            />
+          )}
         </div>
         </div>
       </div>
 
       
 
-      <div className="bg-gradient-to-br from-white to-slate-50 rounded-xl shadow-lg border border-slate-100 p-4 sm:p-6 relative overflow-hidden">
+      <div className="bg-gradient-to-br from-white to-slate-50 dark:from-[#2a2a2a] dark:to-slate-900/20 rounded-xl shadow-lg border border-slate-100 dark:border-slate-700 p-4 sm:p-6 relative overflow-hidden">
         {/* Decorative background elements */}
-        <div className="absolute top-0 right-0 w-32 h-32 bg-slate-200/20 rounded-full -mr-16 -mt-16"></div>
-        <div className="absolute bottom-0 left-0 w-24 h-24 bg-slate-300/10 rounded-full -ml-12 -mb-12"></div>
+        <div className="absolute top-0 right-0 w-32 h-32 bg-slate-200/20 dark:bg-slate-600/20 rounded-full -mr-16 -mt-16"></div>
+        <div className="absolute bottom-0 left-0 w-24 h-24 bg-slate-300/10 dark:bg-slate-600/10 rounded-full -ml-12 -mb-12"></div>
         
         <div className="relative z-10">
           <div className="flex items-center gap-2 mb-4 sm:mb-6">
-            <Users className="w-5 h-5 sm:w-6 sm:h-6 text-slate-600" />
-            <h2 className="text-xl sm:text-2xl font-bold text-gray-800">Atribuir Usuários às APIs</h2>
+            <Users className="w-5 h-5 sm:w-6 sm:h-6 text-slate-600 dark:text-slate-300" />
+            <h2 className="text-xl sm:text-2xl font-bold text-gray-800 dark:text-white">Atribuir Usuários às APIs</h2>
           </div>
           <div className="space-y-4">
-            {usersWithApis.map((user) => (
-              <div key={user.id} className="bg-gray-50/80 rounded-lg border border-gray-200 p-3 sm:p-4">
+            {usersWithApis
+              .slice((attributionPage - 1) * ATTRIBUTION_USERS_PER_PAGE, attributionPage * ATTRIBUTION_USERS_PER_PAGE)
+              .map((user) => (
+              <div key={user.id} className="bg-gray-50/80 dark:bg-gray-800/80 rounded-lg border border-gray-200 dark:border-gray-600 p-3 sm:p-4">
               <div className="flex flex-col sm:flex-row justify-between items-start gap-3 mb-3">
                 <div className="flex-1">
-                  <div className="font-medium text-gray-800 text-sm sm:text-base">{user.email}</div>
-                  <div className="text-xs sm:text-sm text-gray-500">{user.full_name || 'Sem nome'}</div>
+                  <div className="font-medium text-gray-800 dark:text-white text-sm sm:text-base">{user.email}</div>
+                  <div className="text-xs sm:text-sm text-gray-500 dark:text-gray-300">{user.full_name || 'Sem nome'}</div>
                 </div>
                 <select
                   disabled={!canEditEvolutionApi}
-                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-700 w-full sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="border border-gray-300 dark:border-gray-500 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-white bg-white dark:bg-[#333] w-full sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed"
                   value={user.evolution_apis.find(ua => ua.is_default)?.evolution_apis?.id || ''}
                   onChange={async (e) => {
                     const apiId = e.target.value;
@@ -3800,13 +3839,22 @@ const SettingsSection = () => {
                 </select>
               </div>
               {user.evolution_apis.length > 0 && (
-                <div className="text-sm text-gray-600">
+                <div className="text-sm text-gray-600 dark:text-gray-300">
                   APIs atribuídas: {user.evolution_apis.map(ua => ua.evolution_apis.name).join(', ')}
                 </div>
               )}
             </div>
           ))}
           </div>
+          {usersWithApis.length > ATTRIBUTION_USERS_PER_PAGE && (
+            <Pagination
+              currentPage={attributionPage}
+              totalPages={Math.ceil(usersWithApis.length / ATTRIBUTION_USERS_PER_PAGE)}
+              onPageChange={setAttributionPage}
+              itemsPerPage={ATTRIBUTION_USERS_PER_PAGE}
+              totalItems={usersWithApis.length}
+            />
+          )}
         </div>
       </div>
 
@@ -3824,7 +3872,7 @@ const SettingsSection = () => {
                   setShowAddModal(false);
                   setEditingApi(null);
                 }}
-                className="text-gray-400 hover:text-gray-600"
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-white"
               >
                 <X className="w-5 h-5 sm:w-6 sm:h-6" />
               </button>
@@ -3832,7 +3880,7 @@ const SettingsSection = () => {
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-2">
                   Nome *
                 </label>
                 <input
@@ -3845,7 +3893,7 @@ const SettingsSection = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-2">
                   URL Base *
                 </label>
                 <input
@@ -3859,7 +3907,7 @@ const SettingsSection = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-2">
                   API Key (Master Key) *
                 </label>
                 <input
@@ -3872,7 +3920,7 @@ const SettingsSection = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-2">
                   Descrição
                 </label>
                 <textarea
@@ -3891,7 +3939,7 @@ const SettingsSection = () => {
                   onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
                   className="w-4 h-4 text-[#8CD955] border-gray-300 rounded focus:ring-emerald-500"
                 />
-                <label htmlFor="is_active" className="ml-2 text-sm text-gray-700">
+                <label htmlFor="is_active" className="ml-2 text-sm text-gray-700 dark:text-gray-200">
                   API Ativa
                 </label>
               </div>
@@ -3904,9 +3952,9 @@ const SettingsSection = () => {
                   onChange={(e) => setFormData({ ...formData, is_blocked_for_instances: e.target.checked })}
                   className="w-4 h-4 text-orange-600 border-gray-300 rounded focus:ring-orange-500"
                 />
-                <label htmlFor="is_blocked_for_instances" className="ml-2 text-sm text-gray-700">
+                <label htmlFor="is_blocked_for_instances" className="ml-2 text-sm text-gray-700 dark:text-gray-200">
                   Bloqueada para Criação de Instâncias
-                  <span className="block text-xs text-gray-500 mt-1">
+                  <span className="block text-xs text-gray-500 dark:text-gray-400 mt-1">
                     (A API ainda poderá ser usada para adicionar pessoas em grupos e enviar mensagens)
                   </span>
                 </label>

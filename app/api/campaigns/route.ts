@@ -36,22 +36,33 @@ export async function GET(req: NextRequest) {
     const campaignIds = campaigns.map((c: any) => c.id);
 
     // Recalcula processados/falhas a partir de campaign_contacts (fonte da verdade)
-    // Garante que a UI mostre os números corretos mesmo se updateAggregates não tiver rodado
+    // Usa COUNT por campanha para não depender do limite de 1000 linhas do PostgREST
     if (campaignIds.length > 0) {
-      const { data: jobStats } = await supabaseServiceRole
-        .from('campaign_contacts')
-        .select('campaign_id, status')
-        .in('campaign_id', campaignIds);
-
       const metricsByCampaign = new Map<string, { processed: number; failed: number }>();
       for (const id of campaignIds) {
         metricsByCampaign.set(id, { processed: 0, failed: 0 });
       }
-      (jobStats || []).forEach((row: any) => {
-        const m = metricsByCampaign.get(row.campaign_id);
-        if (!m) return;
-        if (row.status === 'success') m.processed++;
-        else if (row.status === 'failed') m.failed++;
+
+      const countPromises = campaignIds.flatMap((campaignId) => [
+        supabaseServiceRole
+          .from('campaign_contacts')
+          .select('*', { count: 'exact', head: true })
+          .eq('campaign_id', campaignId)
+          .eq('status', 'success'),
+        supabaseServiceRole
+          .from('campaign_contacts')
+          .select('*', { count: 'exact', head: true })
+          .eq('campaign_id', campaignId)
+          .eq('status', 'failed'),
+      ]);
+      const countResults = await Promise.all(countPromises);
+
+      campaignIds.forEach((campaignId, i) => {
+        const m = metricsByCampaign.get(campaignId)!;
+        const successRes = countResults[i * 2];
+        const failedRes = countResults[i * 2 + 1];
+        m.processed = successRes?.count ?? 0;
+        m.failed = failedRes?.count ?? 0;
       });
 
       campaigns.forEach((c: any) => {

@@ -1397,8 +1397,8 @@ const InstancesPage = () => {
                 </div>
               </div>
 
-              {/* Linha 2: Tipo de Instância e Tipo de Maturação — colunas alinhadas e altura uniforme */}
-              <div className={`grid grid-cols-1 ${!isConsultor ? 'lg:grid-cols-2' : ''} gap-5 items-stretch`}>
+              {/* Linha 2: Tipo de Instância e Tipo de Maturação — colunas alinhadas e altura uniforme (consultor e admin) */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-stretch">
                 {/* Tipo de Instância */}
                 <div className="flex flex-col">
                   <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-2 h-5 flex items-center">Tipo de Instância*</label>
@@ -1448,50 +1448,48 @@ const InstancesPage = () => {
                   </div>
                 </div>
 
-                {/* Tipo de Maturação */}
-                {!isConsultor && (
-                  <div className="flex flex-col">
-                    <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-2 h-5 flex items-center">Tipo de Maturação*</label>
-                    <div className="grid grid-rows-2 gap-2 flex-1 min-h-[140px]">
-                      <div
-                        onClick={() => !loading && setMaturationType('maturado')}
-                        className={`border-2 rounded-lg p-3 cursor-pointer transition flex items-center gap-3 min-h-[64px] ${
-                          maturationType === 'maturado' ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD95515] dark:bg-[#00ff0015]' : 'border-gray-200 dark:border-[#555] hover:border-[#8CD95540] dark:hover:border-[#00ff0040] hover:bg-gray-50 dark:hover:bg-[#333]'
-                        } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
-                      >
-                        <div className={`w-5 h-5 shrink-0 rounded-full border-2 flex items-center justify-center ${
-                          maturationType === 'maturado' ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD955] dark:bg-[#00ff00]' : 'border-gray-300 dark:border-[#555]'
-                        }`}>
-                          {maturationType === 'maturado' && <div className="w-3 h-3 rounded-full bg-white" />}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <span className="font-semibold text-gray-800 dark:text-white text-sm block mb-0.5">Maturado</span>
-                          <p className="text-xs text-gray-600 dark:text-[#aaa] leading-snug">
-                            Número já maturado. Pode operar normalmente após conectar.
-                          </p>
-                        </div>
+                {/* Tipo de Maturação — visível para consultor e admin */}
+                <div className="flex flex-col">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-2 h-5 flex items-center">Tipo de Maturação*</label>
+                  <div className="grid grid-rows-2 gap-2 flex-1 min-h-[140px]">
+                    <div
+                      onClick={() => !loading && setMaturationType('maturado')}
+                      className={`border-2 rounded-lg p-3 cursor-pointer transition flex items-center gap-3 min-h-[64px] ${
+                        maturationType === 'maturado' ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD95515] dark:bg-[#00ff0015]' : 'border-gray-200 dark:border-[#555] hover:border-[#8CD95540] dark:hover:border-[#00ff0040] hover:bg-gray-50 dark:hover:bg-[#333]'
+                      } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                      <div className={`w-5 h-5 shrink-0 rounded-full border-2 flex items-center justify-center ${
+                        maturationType === 'maturado' ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD955] dark:bg-[#00ff00]' : 'border-gray-300 dark:border-[#555]'
+                      }`}>
+                        {maturationType === 'maturado' && <div className="w-3 h-3 rounded-full bg-white" />}
                       </div>
-                      <div
-                        onClick={() => !loading && setMaturationType('virgem')}
-                        className={`border-2 rounded-lg p-3 cursor-pointer transition flex items-center gap-3 min-h-[64px] ${
-                          maturationType === 'virgem' ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD95515] dark:bg-[#00ff0015]' : 'border-gray-200 dark:border-[#555] hover:border-[#8CD95540] dark:hover:border-[#00ff0040] hover:bg-gray-50 dark:hover:bg-[#333]'
-                        } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
-                      >
-                        <div className={`w-5 h-5 shrink-0 rounded-full border-2 flex items-center justify-center ${
-                          maturationType === 'virgem' ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD955] dark:bg-[#00ff00]' : 'border-gray-300 dark:border-[#555]'
-                        }`}>
-                          {maturationType === 'virgem' && <div className="w-3 h-3 rounded-full bg-white" />}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <span className="font-semibold text-gray-800 dark:text-white text-sm block mb-0.5">Virgem</span>
-                          <p className="text-xs text-gray-600 dark:text-[#aaa] leading-snug">
-                            Número novo. Após QR Code, auto maturação por 5 dias (bloqueada para campanhas/fluxos).
-                          </p>
-                        </div>
+                      <div className="min-w-0 flex-1">
+                        <span className="font-semibold text-gray-800 dark:text-white text-sm block mb-0.5">Maturado</span>
+                        <p className="text-xs text-gray-600 dark:text-[#aaa] leading-snug">
+                          Número já maturado. Pode operar normalmente após conectar.
+                        </p>
+                      </div>
+                    </div>
+                    <div
+                      onClick={() => !loading && setMaturationType('virgem')}
+                      className={`border-2 rounded-lg p-3 cursor-pointer transition flex items-center gap-3 min-h-[64px] ${
+                        maturationType === 'virgem' ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD95515] dark:bg-[#00ff0015]' : 'border-gray-200 dark:border-[#555] hover:border-[#8CD95540] dark:hover:border-[#00ff0040] hover:bg-gray-50 dark:hover:bg-[#333]'
+                      } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                      <div className={`w-5 h-5 shrink-0 rounded-full border-2 flex items-center justify-center ${
+                        maturationType === 'virgem' ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD955] dark:bg-[#00ff00]' : 'border-gray-300 dark:border-[#555]'
+                      }`}>
+                        {maturationType === 'virgem' && <div className="w-3 h-3 rounded-full bg-white" />}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <span className="font-semibold text-gray-800 dark:text-white text-sm block mb-0.5">Virgem</span>
+                        <p className="text-xs text-gray-600 dark:text-[#aaa] leading-snug">
+                          Número novo. Após QR Code, auto maturação por 5 dias (bloqueada para campanhas/fluxos).
+                        </p>
                       </div>
                     </div>
                   </div>
-                )}
+                </div>
               </div>
 
               {/* Botão Criar */}
