@@ -408,6 +408,7 @@ export async function GET(req: NextRequest) {
           statusCode, // Armazena o código de status para identificar erros 429
           lastSeenAt: (c as { last_seen_at?: string | null }).last_seen_at ?? null,
           totalOnlineTime: (c as { total_online_time?: number | null }).total_online_time ?? 0,
+          totalCrmTime: (c as { total_crm_time?: number | null }).total_crm_time ?? 0,
         };
       })
     );

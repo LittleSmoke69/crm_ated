@@ -3,14 +3,14 @@
 import React, { useEffect, useState } from 'react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { 
-  Briefcase, 
-  Users, 
-  TrendingUp, 
-  Eye, 
-  UserPlus, 
-  Target, 
-  Rocket, 
+import {
+  Briefcase,
+  Users,
+  TrendingUp,
+  Eye,
+  UserPlus,
+  Target,
+  Rocket,
   CheckCircle2,
   X,
   Plus,
@@ -30,11 +30,15 @@ import {
   Trophy,
   TrendingDown,
   Info,
-  Clock
+  Clock,
+  Tag,
+  History,
+  ChevronRight
 } from 'lucide-react';
 import Link from 'next/link';
 import StatusDistributionChart from '@/components/Charts/StatusDistributionChart';
 import FinancialMetricsBarChart from '@/components/Charts/FinancialMetricsBarChart';
+import TagsSummaryChart from '@/components/Charts/TagsSummaryChart';
 
 interface ConsultorMetric {
   id: string;
@@ -46,6 +50,7 @@ interface ConsultorMetric {
   successRate: string;
   lastSeenAt?: string | null;
   totalOnlineTime?: number;
+  totalCrmTime?: number;
   externalKpis?: {
     total_leads: number;
     total_deposited: number;
@@ -89,13 +94,37 @@ interface GerenteDashboardData {
   };
 }
 
+interface TagsReportData {
+  tagUsage: Array<{
+    consultorId: string;
+    consultorName: string;
+    tags: Array<{
+      id: string;
+      label: string;
+      color: string;
+      count: number;
+    }>;
+  }>;
+  recentTaggedClients: Array<{
+    leadId: string;
+    leadName: string;
+    leadPhone: string | null;
+    consultorName: string;
+    tagName: string;
+    tagColor: string;
+    createdAt: string;
+  }>;
+}
+
 export default function GerentePage() {
   const { checking, userId } = useRequireAuth();
   const [initialLoading, setInitialLoading] = useState(false);
   const [dataLoading, setDataLoading] = useState(false);
   const [data, setData] = useState<GerenteDashboardData | null>(null);
+  const [tagsReportData, setTagsReportData] = useState<TagsReportData | null>(null);
+  const [tagsLoading, setTagsLoading] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  
+
   // Filtro de data
   const [dateFilter, setDateFilter] = useState<'daily' | 'yesterday' | '7days' | '15days' | '30days' | 'custom' | 'all'>('daily');
   const [customStartDate, setCustomStartDate] = useState<string>('');
@@ -103,7 +132,7 @@ export default function GerentePage() {
   const [appliedStartDate, setAppliedStartDate] = useState<string>('');
   const [appliedEndDate, setAppliedEndDate] = useState<string>('');
   const [showDatePicker, setShowDatePicker] = useState(false);
-  
+
   // Form state
   const [formData, setFormData] = useState({
     email: '',
@@ -113,7 +142,7 @@ export default function GerentePage() {
   const [formError, setFormError] = useState('');
   const [formSuccess, setFormSuccess] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  
+
   // Modal de confirmação de delete
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [consultorToDelete, setConsultorToDelete] = useState<ConsultorMetric | null>(null);
@@ -129,7 +158,7 @@ export default function GerentePage() {
 
   // Modal Resumo do consultor (nome, email, leads, depositado, lucro + ações)
   const [resumoModalConsultor, setResumoModalConsultor] = useState<ConsultorMetric | null>(null);
-  
+
   // Filtros de banca e consultor
   const [bancas, setBancas] = useState<Array<{ id: string; name: string; url: string }>>([]);
   const [bancasLoading, setBancasLoading] = useState(true);
@@ -158,7 +187,7 @@ export default function GerentePage() {
   const getDateRange = () => {
     let dateFrom: string | null = null;
     let dateTo: string | null = null;
-    
+
     switch (dateFilter) {
       case 'daily':
         // Usa a data de hoje
@@ -212,7 +241,7 @@ export default function GerentePage() {
         dateTo = null;
         break;
     }
-    
+
     return { dateFrom, dateTo };
   };
 
@@ -224,7 +253,7 @@ export default function GerentePage() {
       .then((res) => {
         if (res.success && res.data?.status) setUserStatus(res.data.status);
       })
-      .catch(() => {});
+      .catch(() => { });
   }, [userId]);
 
   // Ao entrar em /gerente, carrega a lista de bancas
@@ -303,7 +332,7 @@ export default function GerentePage() {
         headers: { 'X-User-Id': userId as string }
       });
       const result = await response.json();
-      
+
       if (result.success) {
         setBancas(result.data || []);
       }
@@ -321,9 +350,9 @@ export default function GerentePage() {
       } else {
         setDataLoading(true);
       }
-      
+
       const { dateFrom, dateTo } = getDateRange();
-      
+
       let url = '/api/gerente/dashboard';
       const params = new URLSearchParams();
       if (dateFrom) params.append('date_from', dateFrom);
@@ -340,18 +369,22 @@ export default function GerentePage() {
       if (params.toString()) {
         url += `?${params.toString()}`;
       }
-      
+
       const response = await fetch(url, {
         headers: { 'X-User-Id': userId as string }
       });
       const result = await response.json();
-      
+
       if (result.success) {
         setData(result.data);
         if (!selectedBanca && selectedConsultor === 'all' && result.data.consultorMetrics) {
           setAllConsultores(result.data.consultorMetrics);
         }
       }
+
+      // Carrega relatório de etiquetas
+      loadTagsReport();
+
     } catch (error) {
       console.error('Erro ao carregar dados:', error);
     } finally {
@@ -360,6 +393,38 @@ export default function GerentePage() {
       } else {
         setDataLoading(false);
       }
+    }
+  };
+
+  const loadTagsReport = async () => {
+    try {
+      setTagsLoading(true);
+
+      const { dateFrom, dateTo } = getDateRange();
+      let url = '/api/gerente/reports/tags';
+      const params = new URLSearchParams();
+      if (isAdminOrSuperAdmin && selectedGerente) {
+        params.append('gerente_id', selectedGerente);
+      }
+      if (dateFrom) params.append('date_from', dateFrom);
+      if (dateTo) params.append('date_to', dateTo);
+      if (selectedBanca) params.append('banca_url', selectedBanca);
+      if (params.toString()) {
+        url += `?${params.toString()}`;
+      }
+
+      const response = await fetch(url, {
+        headers: { 'X-User-Id': userId as string }
+      });
+      const result = await response.json();
+
+      if (result.success) {
+        setTagsReportData(result.data);
+      }
+    } catch (error) {
+      console.error('Erro ao carregar relatório de etiquetas:', error);
+    } finally {
+      setTagsLoading(false);
     }
   };
 
@@ -372,7 +437,7 @@ export default function GerentePage() {
     try {
       const response = await fetch('/api/gerente/consultores/create', {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
           'X-User-Id': userId as string
         },
@@ -397,12 +462,12 @@ export default function GerentePage() {
 
   const handleDeleteConsultor = async () => {
     if (!consultorToDelete) return;
-    
+
     setIsDeleting(true);
     try {
       const response = await fetch(`/api/gerente/consultores/${consultorToDelete.id}`, {
         method: 'DELETE',
-        headers: { 
+        headers: {
           'X-User-Id': userId as string
         }
       });
@@ -534,8 +599,8 @@ export default function GerentePage() {
 
   // Filtra e ordena os consultores localmente
   const processedMetrics = [...(consultorMetrics || [])]
-    .filter(c => 
-      c.name.toLowerCase().includes(tableSearchTerm.toLowerCase()) || 
+    .filter(c =>
+      c.name.toLowerCase().includes(tableSearchTerm.toLowerCase()) ||
       c.email.toLowerCase().includes(tableSearchTerm.toLowerCase())
     )
     .sort((a, b) => {
@@ -589,7 +654,7 @@ export default function GerentePage() {
               <p className="text-sm text-gray-500 dark:text-gray-400">Gestão de equipe e performance de conversão</p>
             </div>
           </div>
-          
+
           <div className="flex gap-2 flex-wrap">
             {/* Filtro de Banca */}
             <div className="relative banca-filter-container">
@@ -620,7 +685,7 @@ export default function GerentePage() {
                   </>
                 )}
               </button>
-              
+
               {showBancaFilter && (
                 <div className="absolute right-0 mt-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 rounded-xl shadow-lg z-50 min-w-[280px] max-h-[400px] overflow-hidden flex flex-col">
                   {bancasLoading ? (
@@ -644,15 +709,15 @@ export default function GerentePage() {
                           />
                         </div>
                       </div>
-                      
+
                       <div className="overflow-y-auto max-h-[320px] p-2">
                         {bancas
-                          .filter((banca) => 
+                          .filter((banca) =>
                             banca.name.toLowerCase().includes(bancaSearchTerm.toLowerCase())
                           )
                           .length > 0 ? (
                           bancas
-                            .filter((banca) => 
+                            .filter((banca) =>
                               banca.name.toLowerCase().includes(bancaSearchTerm.toLowerCase())
                             )
                             .map((banca) => (
@@ -663,9 +728,8 @@ export default function GerentePage() {
                                   setShowBancaFilter(false);
                                   setBancaSearchTerm('');
                                 }}
-                                className={`w-full text-left px-4 py-2.5 rounded-lg text-sm transition-colors hover:bg-gray-50 dark:hover:bg-gray-700 ${
-                                  selectedBanca === banca.url ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-bold' : 'text-gray-700 dark:text-gray-200'
-                                }`}
+                                className={`w-full text-left px-4 py-2.5 rounded-lg text-sm transition-colors hover:bg-gray-50 dark:hover:bg-gray-700 ${selectedBanca === banca.url ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-bold' : 'text-gray-700 dark:text-gray-200'
+                                  }`}
                               >
                                 {banca.name}
                               </button>
@@ -724,9 +788,8 @@ export default function GerentePage() {
                               setShowGerenteFilter(false);
                               setGerenteSearchTerm('');
                             }}
-                            className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                              selectedGerente === gerente.id ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
-                            }`}
+                            className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${selectedGerente === gerente.id ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
+                              }`}
                           >
                             {gerente.full_name || gerente.email}
                           </button>
@@ -753,12 +816,12 @@ export default function GerentePage() {
                   className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all shadow-sm"
                 >
                   <Users className="w-4 h-4 text-[#8CD955]" />
-                  {selectedConsultor === 'all' 
-                    ? 'Todos os Consultores' 
+                  {selectedConsultor === 'all'
+                    ? 'Todos os Consultores'
                     : allConsultores.find(c => c.id === selectedConsultor)?.name || 'Consultor'}
                   <ChevronDown className="w-4 h-4" />
                 </button>
-                
+
                 {showConsultorFilter && (
                   <div className="absolute right-0 mt-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 rounded-xl shadow-lg z-50 min-w-[250px] max-h-[380px] overflow-hidden flex flex-col">
                     <div className="p-2 border-b border-gray-100 dark:border-[#404040]">
@@ -781,9 +844,8 @@ export default function GerentePage() {
                           setShowConsultorFilter(false);
                           setConsultorSearchTerm('');
                         }}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          selectedConsultor === 'all' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
-                        }`}
+                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${selectedConsultor === 'all' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
+                          }`}
                       >
                         Todos os Consultores
                       </button>
@@ -797,9 +859,8 @@ export default function GerentePage() {
                               setShowConsultorFilter(false);
                               setConsultorSearchTerm('');
                             }}
-                            className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                              selectedConsultor === consultor.id ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
-                            }`}
+                            className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${selectedConsultor === consultor.id ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
+                              }`}
                           >
                             {consultor.name || consultor.email}
                           </button>
@@ -831,7 +892,7 @@ export default function GerentePage() {
                 {dateFilter === 'all' && 'Todo o Período'}
                 <ChevronDown className="w-4 h-4" />
               </button>
-              
+
               {showDatePicker && (
                 <div className="absolute right-0 mt-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 rounded-xl shadow-lg z-50 min-w-[200px]">
                   <div className="p-2">
@@ -846,9 +907,8 @@ export default function GerentePage() {
                             setDateFilter('custom');
                           }
                         }}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === filter ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
-                        }`}
+                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${dateFilter === filter ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
+                          }`}
                       >
                         {filter === 'daily' && 'Diário'}
                         {filter === 'yesterday' && 'Ontem'}
@@ -859,7 +919,7 @@ export default function GerentePage() {
                         {filter === 'all' && 'Todo o Período'}
                       </button>
                     ))}
-                    
+
                     {dateFilter === 'custom' && (
                       <div className="p-3 border-t border-gray-200 dark:border-gray-600 space-y-3 mt-2">
                         <div>
@@ -910,7 +970,7 @@ export default function GerentePage() {
               <Rocket className="w-4 h-4 text-[#8CD955]" />
               Nova Campanha
             </Link>
-            <button 
+            <button
               onClick={() => setIsModalOpen(true)}
               className="flex items-center gap-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-md shadow-[#8CD955]/20"
             >
@@ -929,99 +989,99 @@ export default function GerentePage() {
           )}
           {gerenteTotalKpis ? (
             <div className="bg-gradient-to-br from-[#A8E677] to-[#8CD955] p-6 rounded-2xl shadow-lg border border-[#8CD955]/40">
-            <div className="flex items-center gap-2 mb-6">
-              <Briefcase className="w-6 h-6 text-white" />
-              <h2 className="text-xl font-bold text-white">Resumo Geral - {gerenteInfo.name || 'Gerente'}</h2>
+              <div className="flex items-center gap-2 mb-6">
+                <Briefcase className="w-6 h-6 text-white" />
+                <h2 className="text-xl font-bold text-white">Resumo Geral - {gerenteInfo.name || 'Gerente'}</h2>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-9 gap-4">
+                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Users className="w-4 h-4 text-white" />
+                    <p className="text-xs font-bold text-white/90 uppercase">Total de Leads</p>
+                  </div>
+                  <p className="text-2xl font-bold text-white">{gerenteTotalKpis.total_leads || 0}</p>
+                </div>
+
+                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <CheckCircle2 className="w-4 h-4 text-white" />
+                    <p className="text-xs font-bold text-white/90 uppercase">Clientes Ativos</p>
+                  </div>
+                  <p className="text-2xl font-bold text-white">{gerenteTotalKpis.active_leads || 0}</p>
+                </div>
+
+                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <DollarSign className="w-4 h-4 text-white" />
+                    <p className="text-xs font-bold text-white/90 uppercase">Total Depositado</p>
+                  </div>
+                  <p className="text-2xl font-bold text-white">
+                    R$ {(gerenteTotalKpis.total_deposited || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                  </p>
+                </div>
+
+                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Target className="w-4 h-4 text-white" />
+                    <p className="text-xs font-bold text-white/90 uppercase">Total Apostado</p>
+                  </div>
+                  <p className="text-2xl font-bold text-white">
+                    R$ {(gerenteTotalKpis.total_bets || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                  </p>
+                </div>
+
+                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Award className="w-4 h-4 text-white" />
+                    <p className="text-xs font-bold text-white/90 uppercase">Total Prêmios</p>
+                  </div>
+                  <p className="text-2xl font-bold text-white">
+                    R$ {(gerenteTotalKpis.total_prizes || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                  </p>
+                </div>
+
+                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Trophy className="w-4 h-4 text-white" />
+                    <p className="text-xs font-bold text-white/90 uppercase">Clientes Premiados</p>
+                  </div>
+                  <p className="text-2xl font-bold text-white">
+                    {gerenteTotalKpis.awarded_clients_count || 0}
+                  </p>
+                </div>
+
+                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Wallet className="w-4 h-4 text-white" />
+                    <p className="text-xs font-bold text-white/90 uppercase">Lucro Líquido</p>
+                  </div>
+                  <p className="text-2xl font-bold text-white">
+                    R$ {(gerenteTotalKpis.net_profit || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                  </p>
+                </div>
+
+                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <BarChart3 className="w-4 h-4 text-white" />
+                    <p className="text-xs font-bold text-white/90 uppercase">Taxa de Conversão</p>
+                  </div>
+                  <p className="text-2xl font-bold text-white">
+                    {(gerenteTotalKpis.conversion_rate || 0).toFixed(2)}%
+                  </p>
+                </div>
+
+                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <TrendingUp className="w-4 h-4 text-white" />
+                    <p className="text-xs font-bold text-white/90 uppercase">LTV Médio</p>
+                  </div>
+                  <p className="text-2xl font-bold text-white">
+                    R$ {(gerenteTotalKpis.ltv_avg || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </p>
+                </div>
+              </div>
             </div>
-            
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-9 gap-4">
-              <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <Users className="w-4 h-4 text-white" />
-                  <p className="text-xs font-bold text-white/90 uppercase">Total de Leads</p>
-                </div>
-                <p className="text-2xl font-bold text-white">{gerenteTotalKpis.total_leads || 0}</p>
-              </div>
-              
-              <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <CheckCircle2 className="w-4 h-4 text-white" />
-                  <p className="text-xs font-bold text-white/90 uppercase">Clientes Ativos</p>
-                </div>
-                <p className="text-2xl font-bold text-white">{gerenteTotalKpis.active_leads || 0}</p>
-              </div>
-              
-              <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <DollarSign className="w-4 h-4 text-white" />
-                  <p className="text-xs font-bold text-white/90 uppercase">Total Depositado</p>
-                </div>
-                <p className="text-2xl font-bold text-white">
-                  R$ {(gerenteTotalKpis.total_deposited || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                </p>
-              </div>
-              
-              <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <Target className="w-4 h-4 text-white" />
-                  <p className="text-xs font-bold text-white/90 uppercase">Total Apostado</p>
-                </div>
-                <p className="text-2xl font-bold text-white">
-                  R$ {(gerenteTotalKpis.total_bets || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                </p>
-              </div>
-              
-              <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <Award className="w-4 h-4 text-white" />
-                  <p className="text-xs font-bold text-white/90 uppercase">Total Prêmios</p>
-                </div>
-                <p className="text-2xl font-bold text-white">
-                  R$ {(gerenteTotalKpis.total_prizes || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                </p>
-              </div>
-              
-              <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <Trophy className="w-4 h-4 text-white" />
-                  <p className="text-xs font-bold text-white/90 uppercase">Clientes Premiados</p>
-                </div>
-                <p className="text-2xl font-bold text-white">
-                  {gerenteTotalKpis.awarded_clients_count || 0}
-                </p>
-              </div>
-              
-              <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <Wallet className="w-4 h-4 text-white" />
-                  <p className="text-xs font-bold text-white/90 uppercase">Lucro Líquido</p>
-                </div>
-                <p className="text-2xl font-bold text-white">
-                  R$ {(gerenteTotalKpis.net_profit || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                </p>
-              </div>
-              
-              <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <BarChart3 className="w-4 h-4 text-white" />
-                  <p className="text-xs font-bold text-white/90 uppercase">Taxa de Conversão</p>
-                </div>
-                <p className="text-2xl font-bold text-white">
-                  {(gerenteTotalKpis.conversion_rate || 0).toFixed(2)}%
-                </p>
-              </div>
-              
-              <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <TrendingUp className="w-4 h-4 text-white" />
-                  <p className="text-xs font-bold text-white/90 uppercase">LTV Médio</p>
-                </div>
-                <p className="text-2xl font-bold text-white">
-                  R$ {(gerenteTotalKpis.ltv_avg || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </p>
-              </div>
-            </div>
-          </div>
           ) : (
             <div className="bg-gradient-to-br from-[#A8E677] to-[#8CD955] p-6 rounded-2xl shadow-lg border border-[#8CD955]/40">
               <div className="text-center py-8">
@@ -1041,36 +1101,36 @@ export default function GerentePage() {
           )}
           {chartData ? (
             <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
-            <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-6 flex items-center gap-2">
-              <BarChart3 className="w-5 h-5 text-[#8CD955]" />
-              Análises e Gráficos
-            </h2>
-            
-            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-2 gap-6">
-              {/* Distribuição por Status */}
-              {chartData.status_distribution && (
-                <div className="bg-gray-50/50 dark:bg-gray-800/50 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
-                  <h3 className="text-sm font-bold text-gray-600 dark:text-gray-400 mb-4">Distribuição por Status</h3>
-                  <div className="h-64">
-                    <StatusDistributionChart 
-                      data={chartData.status_distribution} 
-                      colors={['#10b981', '#ef4444']} 
-                    />
-                  </div>
-                </div>
-              )}
+              <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-6 flex items-center gap-2">
+                <BarChart3 className="w-5 h-5 text-[#8CD955]" />
+                Análises e Gráficos
+              </h2>
 
-              {/* Métricas Financeiras */}
-              {chartData.financial_metrics && (
-                <div className="bg-gray-50/50 dark:bg-gray-800/50 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
-                  <h3 className="text-sm font-bold text-gray-600 dark:text-gray-400 mb-4">Métricas Financeiras</h3>
-                  <div className="h-64">
-                    <FinancialMetricsBarChart data={chartData.financial_metrics} />
+              <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-2 gap-6">
+                {/* Distribuição por Status */}
+                {chartData.status_distribution && (
+                  <div className="bg-gray-50/50 dark:bg-gray-800/50 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
+                    <h3 className="text-sm font-bold text-gray-600 dark:text-gray-400 mb-4">Distribuição por Status</h3>
+                    <div className="h-64">
+                      <StatusDistributionChart
+                        data={chartData.status_distribution}
+                        colors={['#10b981', '#ef4444']}
+                      />
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
+
+                {/* Métricas Financeiras */}
+                {chartData.financial_metrics && (
+                  <div className="bg-gray-50/50 dark:bg-gray-800/50 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
+                    <h3 className="text-sm font-bold text-gray-600 dark:text-gray-400 mb-4">Métricas Financeiras</h3>
+                    <div className="h-64">
+                      <FinancialMetricsBarChart data={chartData.financial_metrics} />
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
           ) : (
             <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
               <div className="text-center py-8">
@@ -1087,7 +1147,7 @@ export default function GerentePage() {
             <Trophy className="w-5 h-5 text-amber-500 dark:text-amber-400" />
             Top 5 Consultores por Vendas
           </h2>
-          
+
           {top5Consultants && top5Consultants.length > 0 ? (
             <div className="space-y-4">
               {top5Consultants.map((consultant, index) => {
@@ -1157,12 +1217,11 @@ export default function GerentePage() {
                       </div>
 
                       {/* Avatar */}
-                      <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-sm text-white shadow-md ${
-                        position === 1 ? 'bg-gradient-to-br from-amber-500 to-amber-700' :
+                      <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-sm text-white shadow-md ${position === 1 ? 'bg-gradient-to-br from-amber-500 to-amber-700' :
                         position === 2 ? 'bg-gradient-to-br from-gray-400 to-gray-600' :
-                        position === 3 ? 'bg-gradient-to-br from-orange-400 to-orange-600' :
-                        'bg-gradient-to-br from-blue-500 to-blue-700'
-                      }`}>
+                          position === 3 ? 'bg-gradient-to-br from-orange-400 to-orange-600' :
+                            'bg-gradient-to-br from-blue-500 to-blue-700'
+                        }`}>
                         {initials}
                       </div>
 
@@ -1186,11 +1245,10 @@ export default function GerentePage() {
                       {/* Badge de Destaque para Top 3 */}
                       {position <= 3 && (
                         <div className="flex items-center gap-1 px-3 py-1 rounded-full bg-white/80 dark:bg-gray-700/80 backdrop-blur-sm border border-white/50 dark:border-gray-600">
-                          <Trophy className={`w-4 h-4 ${
-                            position === 1 ? 'text-amber-500' :
+                          <Trophy className={`w-4 h-4 ${position === 1 ? 'text-amber-500' :
                             position === 2 ? 'text-gray-500 dark:text-gray-400' :
-                            'text-orange-500'
-                          }`} />
+                              'text-orange-500'
+                            }`} />
                           <span className="text-xs font-bold text-gray-700 dark:text-gray-200">
                             {position === 1 ? 'Campeão' : position === 2 ? 'Vice' : '3º Lugar'}
                           </span>
@@ -1209,11 +1267,10 @@ export default function GerentePage() {
                         </div>
                         <div className="w-full bg-white/60 dark:bg-gray-600 rounded-full h-2 overflow-hidden">
                           <div
-                            className={`h-full rounded-full transition-all ${
-                              position === 2 ? 'bg-gradient-to-r from-gray-400 to-gray-500' :
+                            className={`h-full rounded-full transition-all ${position === 2 ? 'bg-gradient-to-r from-gray-400 to-gray-500' :
                               position === 3 ? 'bg-gradient-to-r from-orange-400 to-orange-500' :
-                              'bg-gradient-to-r from-blue-400 to-blue-500'
-                            }`}
+                                'bg-gradient-to-r from-blue-400 to-blue-500'
+                              }`}
                             style={{ width: `${(consultant.value / top5Consultants[0].value) * 100}%` }}
                           />
                         </div>
@@ -1232,6 +1289,139 @@ export default function GerentePage() {
           )}
         </div>
 
+        {/* Resumo de Etiquetas (gráficos) */}
+        <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
+          <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-6 flex items-center gap-2">
+            <Tag className="w-5 h-5 text-[#8CD955]" />
+            Resumo de Etiquetas
+          </h2>
+          {tagsLoading ? (
+            <div className="py-12 flex flex-col items-center justify-center gap-3">
+              <div className="animate-spin rounded-full h-8 w-8 border-2 border-[#8CD955] border-t-transparent" />
+              <p className="text-sm text-gray-500">Carregando resumo...</p>
+            </div>
+          ) : tagsReportData?.tagUsage && tagsReportData.tagUsage.length > 0 ? (
+            <TagsSummaryChart tagUsage={tagsReportData.tagUsage} />
+          ) : (
+            <div className="py-12 text-center text-gray-500">
+              <Tag className="w-12 h-12 text-gray-200 dark:text-gray-700 mx-auto mb-3" />
+              <p className="text-sm">Nenhum uso de etiqueta para exibir no resumo</p>
+            </div>
+          )}
+        </div>
+
+        {/* Relatório de Etiquetas */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Uso de Etiquetas por Consultor */}
+          <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
+            <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-6 flex items-center gap-2">
+              <Tag className="w-5 h-5 text-[#8CD955]" />
+              Uso de Etiquetas por Consultor
+            </h2>
+
+            <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
+              {tagsLoading ? (
+                <div className="py-12 flex flex-col items-center justify-center gap-3">
+                  <div className="animate-spin rounded-full h-8 w-8 border-2 border-[#8CD955] border-t-transparent" />
+                  <p className="text-sm text-gray-500">Carregando dados...</p>
+                </div>
+              ) : tagsReportData?.tagUsage && tagsReportData.tagUsage.length > 0 ? (
+                tagsReportData.tagUsage.map((item, idx) => (
+                  <div key={idx} className="p-4 bg-gray-50 dark:bg-gray-800/50 rounded-xl border border-gray-100 dark:border-gray-700">
+                    <p className="text-sm font-bold text-gray-700 dark:text-gray-200 mb-3 flex items-center gap-2">
+                      <div className="w-6 h-6 rounded-full bg-[#8CD95520] text-[#8CD955] flex items-center justify-center text-[10px]">
+                        {item.consultorName[0].toUpperCase()}
+                      </div>
+                      {item.consultorName}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {item.tags.map((tag, tIdx) => (
+                        <div
+                          key={tIdx}
+                          className="flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium"
+                          style={{
+                            backgroundColor: `${tag.color}15`,
+                            borderColor: `${tag.color}40`,
+                            color: tag.color
+                          }}
+                        >
+                          <span>{tag.label}</span>
+                          <span className="bg-white/50 dark:bg-black/20 px-1.5 py-0.5 rounded-md font-bold">
+                            {tag.count}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="py-12 text-center text-gray-500">
+                  <Tag className="w-12 h-12 text-gray-200 dark:text-gray-700 mx-auto mb-3" />
+                  <p className="text-sm">Nenhum uso de etiqueta registrado</p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Clientes Recentemente Etiquetados */}
+          <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
+            <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-6 flex items-center gap-2">
+              <History className="w-5 h-5 text-blue-500" />
+              Clientes Recentemente Etiquetados
+            </h2>
+
+            <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
+              {tagsLoading ? (
+                <div className="py-12 flex flex-col items-center justify-center gap-3">
+                  <div className="animate-spin rounded-full h-8 w-8 border-2 border-[#8CD955] border-t-transparent" />
+                  <p className="text-sm text-gray-500">Carregando histórico...</p>
+                </div>
+              ) : tagsReportData?.recentTaggedClients && tagsReportData.recentTaggedClients.length > 0 ? (
+                tagsReportData.recentTaggedClients.map((client, idx) => (
+                  <div key={idx} className="flex items-center gap-3 p-3 hover:bg-gray-50 dark:hover:bg-gray-800/50 rounded-xl transition-colors border border-transparent hover:border-gray-100 dark:hover:border-gray-700 group">
+                    <div className="w-10 h-10 rounded-full bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
+                      <Users className="w-5 h-5" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-bold text-gray-800 dark:text-gray-100 truncate">
+                          {client.leadName}
+                        </p>
+                        <span className="text-[10px] text-gray-400 dark:text-gray-500 shrink-0">
+                          {new Date(client.createdAt).toLocaleString('pt-BR', {
+                            day: '2-digit',
+                            month: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 mt-1">
+                        <p className="text-xs text-gray-500 truncate flex items-center gap-1">
+                          <Briefcase className="w-3 h-3" />
+                          {client.consultorName}
+                        </p>
+                        <ChevronRight className="w-3 h-3 text-gray-300" />
+                        <span
+                          className="text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider"
+                          style={{ backgroundColor: `${client.tagColor}20`, color: client.tagColor }}
+                        >
+                          {client.tagName}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="py-12 text-center text-gray-500">
+                  <History className="w-12 h-12 text-gray-200 dark:text-gray-700 mx-auto mb-3" />
+                  <p className="text-sm">Nenhum histórico de etiquetas encontrado</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
         {/* Consultores List */}
         <div className="relative">
           {dataLoading && (
@@ -1240,144 +1430,153 @@ export default function GerentePage() {
             </div>
           )}
           <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
-          <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/50 flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <h2 className="text-sm font-bold text-gray-600 dark:text-gray-400 uppercase tracking-wider flex items-center gap-2">
-              <Users className="w-4 h-4" />
-              Desempenho da Equipe
-            </h2>
-            
-            <div className="relative w-full md:w-64">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-gray-400" />
-              <input
-                type="text"
-                placeholder="Buscar consultor..."
-                value={tableSearchTerm}
-                onChange={(e) => setTableSearchTerm(e.target.value)}
-                className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-xs text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#8CD955] outline-none transition-all"
-              />
-            </div>
-          </div>
+            <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/50 flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <h2 className="text-sm font-bold text-gray-600 dark:text-gray-400 uppercase tracking-wider flex items-center gap-2">
+                <Users className="w-4 h-4" />
+                Desempenho da Equipe
+              </h2>
 
-          {/* Versão Desktop (Table) */}
-          {processedMetrics && processedMetrics.length > 0 ? (
-            <div className="hidden md:block overflow-x-auto w-full">
-              <table className="w-full text-left border-collapse min-w-full">
-                <thead>
-                  <tr className="bg-gray-50/30 dark:bg-gray-800/60">
-                    <th
-                      onClick={() => toggleSort('name')}
-                      className="px-6 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase cursor-pointer hover:text-[#8CD955] transition-colors"
-                    >
-                      <div className="flex items-center gap-1">
-                        Consultor
-                        {sortBy === 'name' && (sortOrder === 'asc' ? <ChevronDown className="w-3 h-3 rotate-180" /> : <ChevronDown className="w-3 h-3" />)}
-                      </div>
-                    </th>
-                    <th className="px-6 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-center">Último acesso</th>
-                    <th className="px-6 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-center">Horas online</th>
-                    <th className="px-4 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-right min-w-[120px]">
-                      Ações
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-                  {processedMetrics.map((consultor) => (
-                    <tr key={consultor.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-800/50 transition-colors">
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-full bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] flex items-center justify-center font-bold text-sm">
-                            {(consultor.name || consultor.email)[0].toUpperCase()}
-                          </div>
-                          <div>
-                            <p className="font-bold text-gray-800 dark:text-gray-100 text-sm">{consultor.name || 'Sem nome'}</p>
-                            <p className="text-[11px] text-gray-400 dark:text-gray-500">{consultor.email}</p>
-                          </div>
+              <div className="relative w-full md:w-64">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Buscar consultor..."
+                  value={tableSearchTerm}
+                  onChange={(e) => setTableSearchTerm(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-xs text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#8CD955] outline-none transition-all"
+                />
+              </div>
+            </div>
+
+            {/* Versão Desktop (Table) */}
+            {processedMetrics && processedMetrics.length > 0 ? (
+              <div className="hidden md:block overflow-x-auto w-full">
+                <table className="w-full text-left border-collapse min-w-full">
+                  <thead>
+                    <tr className="bg-gray-50/30 dark:bg-gray-800/60">
+                      <th
+                        onClick={() => toggleSort('name')}
+                        className="px-6 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase cursor-pointer hover:text-[#8CD955] transition-colors"
+                      >
+                        <div className="flex items-center gap-1">
+                          Consultor
+                          {sortBy === 'name' && (sortOrder === 'asc' ? <ChevronDown className="w-3 h-3 rotate-180" /> : <ChevronDown className="w-3 h-3" />)}
                         </div>
-                      </td>
-                      <td className="px-6 py-4 text-center">
-                        <span className="text-xs text-gray-600 dark:text-gray-400">
-                          {consultor.lastSeenAt
-                            ? new Date(consultor.lastSeenAt).toLocaleString('pt-BR', {
+                      </th>
+                      <th className="px-6 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-center">Último acesso</th>
+                      <th className="px-6 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-center">Horas online</th>
+                      <th className="px-6 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-center">Horas no CRM (diário)</th>
+                      <th className="px-4 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-right min-w-[120px]">
+                        Ações
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                    {processedMetrics.map((consultor) => (
+                      <tr key={consultor.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-800/50 transition-colors">
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-full bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] flex items-center justify-center font-bold text-sm">
+                              {(consultor.name || consultor.email)[0].toUpperCase()}
+                            </div>
+                            <div>
+                              <p className="font-bold text-gray-800 dark:text-gray-100 text-sm">{consultor.name || 'Sem nome'}</p>
+                              <p className="text-[11px] text-gray-400 dark:text-gray-500">{consultor.email}</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <span className="text-xs text-gray-600 dark:text-gray-400">
+                            {consultor.lastSeenAt
+                              ? new Date(consultor.lastSeenAt).toLocaleString('pt-BR', {
                                 day: '2-digit',
                                 month: '2-digit',
                                 year: 'numeric',
                                 hour: '2-digit',
                                 minute: '2-digit'
                               })
-                            : '—'}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 text-center">
-                        <span className="text-xs font-medium text-gray-700 dark:text-gray-300">
-                          {formatTime(consultor.totalOnlineTime || 0)}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 align-middle text-right">
-                        <button
-                          type="button"
-                          onClick={() => setResumoModalConsultor(consultor)}
-                          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 hover:bg-[#8CD95515] hover:text-[#8CD955] border border-gray-200 dark:border-gray-600 hover:border-[#8CD955]/30 transition-colors"
-                        >
-                          <BarChart3 className="w-4 h-4" />
-                          Resumo
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="hidden md:block p-8 text-center">
-              <AlertCircle className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
-              <p className="text-gray-600 dark:text-gray-400 font-medium">
-                {tableSearchTerm ? 'Nenhum consultor encontrado com este nome' : 'Dados não encontrados'}
-              </p>
-            </div>
-          )}
+                              : '—'}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <span className="text-xs font-medium text-gray-700 dark:text-gray-300">
+                            {formatTime(consultor.totalOnlineTime || 0)}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <span className="text-xs font-medium text-gray-700 dark:text-gray-300">
+                            {formatTime(consultor.totalCrmTime || 0)}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 align-middle text-right">
+                          <button
+                            type="button"
+                            onClick={() => setResumoModalConsultor(consultor)}
+                            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 hover:bg-[#8CD95515] hover:text-[#8CD955] border border-gray-200 dark:border-gray-600 hover:border-[#8CD955]/30 transition-colors"
+                          >
+                            <BarChart3 className="w-4 h-4" />
+                            Resumo
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="hidden md:block p-8 text-center">
+                <AlertCircle className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
+                <p className="text-gray-600 dark:text-gray-400 font-medium">
+                  {tableSearchTerm ? 'Nenhum consultor encontrado com este nome' : 'Dados não encontrados'}
+                </p>
+              </div>
+            )}
 
-          {/* Versão Mobile (Cards) */}
-          {processedMetrics && processedMetrics.length > 0 ? (
-            <div className="md:hidden divide-y divide-gray-100 dark:divide-gray-700">
-              {processedMetrics.map((consultor) => (
-                <div key={consultor.id} className="p-4 space-y-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] flex items-center justify-center font-bold text-base shrink-0">
-                      {(consultor.name || consultor.email)[0].toUpperCase()}
+            {/* Versão Mobile (Cards) */}
+            {processedMetrics && processedMetrics.length > 0 ? (
+              <div className="md:hidden divide-y divide-gray-100 dark:divide-gray-700">
+                {processedMetrics.map((consultor) => (
+                  <div key={consultor.id} className="p-4 space-y-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] flex items-center justify-center font-bold text-base shrink-0">
+                        {(consultor.name || consultor.email)[0].toUpperCase()}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-bold text-gray-800 dark:text-gray-100 truncate">{consultor.name || 'Sem nome'}</p>
+                        <p className="text-xs text-gray-400 dark:text-gray-500 truncate">{consultor.email}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setResumoModalConsultor(consultor)}
+                        className="shrink-0 inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 hover:bg-[#8CD95515] hover:text-[#8CD955] border border-gray-200 dark:border-gray-600 transition-colors"
+                      >
+                        <BarChart3 className="w-4 h-4" />
+                        Resumo
+                      </button>
                     </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="font-bold text-gray-800 dark:text-gray-100 truncate">{consultor.name || 'Sem nome'}</p>
-                      <p className="text-xs text-gray-400 dark:text-gray-500 truncate">{consultor.email}</p>
+                    <div className="flex flex-wrap gap-4 text-xs text-gray-600 dark:text-gray-400">
+                      <div className="flex items-center gap-1">
+                        <Clock className="w-3.5 h-3.5" />
+                        <span>{consultor.lastSeenAt ? new Date(consultor.lastSeenAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}</span>
+                      </div>
+                      <div>
+                        <span className="font-medium text-gray-700 dark:text-gray-300">{formatTime(consultor.totalOnlineTime || 0)}</span> online
+                      </div>
+                      <div>
+                        <span className="font-medium text-gray-700 dark:text-gray-300">{formatTime(consultor.totalCrmTime || 0)}</span> no CRM
+                      </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setResumoModalConsultor(consultor)}
-                      className="shrink-0 inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 hover:bg-[#8CD95515] hover:text-[#8CD955] border border-gray-200 dark:border-gray-600 transition-colors"
-                    >
-                      <BarChart3 className="w-4 h-4" />
-                      Resumo
-                    </button>
                   </div>
-                  <div className="flex gap-4 text-xs text-gray-600 dark:text-gray-400">
-                    <div className="flex items-center gap-1">
-                      <Clock className="w-3.5 h-3.5" />
-                      <span>{consultor.lastSeenAt ? new Date(consultor.lastSeenAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}</span>
-                    </div>
-                    <div>
-                      <span className="font-medium text-gray-700 dark:text-gray-300">{formatTime(consultor.totalOnlineTime || 0)}</span> online
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="md:hidden p-8 text-center">
-              <AlertCircle className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
-              <p className="text-gray-600 dark:text-gray-400 font-medium">
-                {tableSearchTerm ? 'Nenhum consultor encontrado com este nome' : 'Dados não encontrados'}
-              </p>
-            </div>
-          )}
+                ))}
+              </div>
+            ) : (
+              <div className="md:hidden p-8 text-center">
+                <AlertCircle className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
+                <p className="text-gray-600 dark:text-gray-400 font-medium">
+                  {tableSearchTerm ? 'Nenhum consultor encontrado com este nome' : 'Dados não encontrados'}
+                </p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1497,42 +1696,42 @@ export default function GerentePage() {
                   <X className="w-6 h-6" />
                 </button>
               </div>
-              
+
               <form onSubmit={handleCreateConsultor} className="p-6 space-y-4">
                 {formError && <div className="bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-300 p-3 rounded-xl text-sm font-medium border border-red-100 dark:border-red-800">{formError}</div>}
                 {formSuccess && <div className="bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] p-3 rounded-xl text-sm font-medium border border-[#8CD955]/30">{formSuccess}</div>}
 
                 <div>
                   <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-1.5 ml-1">Nome do Consultor</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     required
                     placeholder="Ex: João Silva"
                     className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium transition-all"
                     value={formData.fullName}
-                    onChange={e => setFormData({...formData, fullName: e.target.value})}
+                    onChange={e => setFormData({ ...formData, fullName: e.target.value })}
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-1.5 ml-1">E-mail</label>
-                  <input 
-                    type="email" 
+                  <input
+                    type="email"
                     required
                     placeholder="exemplo@email.com"
                     className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium transition-all"
                     value={formData.email}
-                    onChange={e => setFormData({...formData, email: e.target.value})}
+                    onChange={e => setFormData({ ...formData, email: e.target.value })}
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-1.5 ml-1">Senha Inicial</label>
-                  <input 
-                    type="password" 
+                  <input
+                    type="password"
                     required
                     placeholder="••••••••"
                     className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium transition-all"
                     value={formData.password}
-                    onChange={e => setFormData({...formData, password: e.target.value})}
+                    onChange={e => setFormData({ ...formData, password: e.target.value })}
                   />
                 </div>
 
@@ -1615,18 +1814,18 @@ export default function GerentePage() {
                   <Trash2 className="w-6 h-6" />
                   Confirmar Exclusão
                 </h2>
-                <button 
+                <button
                   onClick={() => {
                     setDeleteModalOpen(false);
                     setConsultorToDelete(null);
-                  }} 
+                  }}
                   className="hover:bg-white/20 p-1.5 rounded-xl transition-colors"
                   disabled={isDeleting}
                 >
                   <X className="w-6 h-6" />
                 </button>
               </div>
-              
+
               <div className="p-6 space-y-4">
                 <div className="flex items-center gap-4">
                   <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/50 text-red-600 dark:text-red-400 flex items-center justify-center font-bold text-lg">
@@ -1644,7 +1843,7 @@ export default function GerentePage() {
                     <div>
                       <p className="text-sm font-bold text-red-800 dark:text-red-200 mb-1">Atenção! Esta ação não pode ser desfeita.</p>
                       <p className="text-xs text-red-700 dark:text-red-300">
-                        Você está prestes a deletar permanentemente a conta do consultor <strong>{consultorToDelete.name || consultorToDelete.email}</strong>. 
+                        Você está prestes a deletar permanentemente a conta do consultor <strong>{consultorToDelete.name || consultorToDelete.email}</strong>.
                         Todos os dados associados a esta conta serão removidos.
                       </p>
                     </div>
@@ -1652,20 +1851,20 @@ export default function GerentePage() {
                 </div>
 
                 <div className="pt-4 flex gap-3">
-                  <button 
-                    type="button" 
+                  <button
+                    type="button"
                     onClick={() => {
                       setDeleteModalOpen(false);
                       setConsultorToDelete(null);
-                    }} 
+                    }}
                     disabled={isDeleting}
                     className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 font-bold py-3 rounded-xl hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Cancelar
                   </button>
-                  <button 
+                  <button
                     type="button"
-                    onClick={handleDeleteConsultor} 
+                    onClick={handleDeleteConsultor}
                     disabled={isDeleting}
                     className="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
                   >

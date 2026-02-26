@@ -14,7 +14,7 @@ const HEARTBEAT_INTERVAL_SEC = 60;
 
 /**
  * POST /api/user/heartbeat - Atualiza o status online e o tempo total logado
- * Body opcional: { context: 'crm' } - quando o usuário está em página do CRM (kanban, consultor, gerente).
+ * Body opcional: { context: 'crm' } - quando o usuário está em página do CRM (ex.: crm/kanban, crm/transferido, consultor, gerente).
  * Chamado periodicamente pelo frontend (ex: a cada 60 segundos)
  * Em caso de falha de rede/Supabase, retorna 200 com online: false para não quebrar o front.
  */
