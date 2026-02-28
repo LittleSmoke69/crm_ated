@@ -25,13 +25,15 @@ import {
   Search,
   ChevronDown,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  History
 } from 'lucide-react';
 import StatusDistributionChart from '@/components/Charts/StatusDistributionChart';
 import TemporalEvolutionChart from '@/components/Charts/TemporalEvolutionChart';
 import ConversionFunnelChart from '@/components/Charts/ConversionFunnelChart';
 import ActivityByWeekdayChart from '@/components/Charts/ActivityByWeekdayChart';
 import BancaRankingChart from '@/components/Charts/BancaRankingChart';
+import TagsSummaryChart from '@/components/Charts/TagsSummaryChart';
 
 interface Banca {
   id: string;
@@ -394,6 +396,12 @@ export default function CRMSection({ userId }: CRMSectionProps) {
   const [isSubmittingTag, setIsSubmittingTag] = useState(false);
   const [activeTab, setActiveTab] = useState<'bancas' | 'tags'>('bancas');
 
+  const [tagsReportData, setTagsReportData] = useState<{
+    tagUsage: Array<{ consultorId: string; consultorName: string; tags: Array<{ id: string; label: string; color: string; count: number }> }>;
+    recentTaggedClients: Array<{ leadId: string; leadName: string; leadPhone: string | null; consultorName: string; tagName: string; tagColor: string; createdAt: string }>;
+  } | null>(null);
+  const [tagsReportLoading, setTagsReportLoading] = useState(false);
+
   const initialLoadInFlightRef = useRef(false);
   const dashboardLoadInFlightRef = useRef(false);
 
@@ -405,6 +413,26 @@ export default function CRMSection({ userId }: CRMSectionProps) {
       initialLoadInFlightRef.current = false;
     });
   }, [userId]);
+
+  const selectedBancaId = selectedBanca === 'all' ? null : bancas.find((b) => b.url === selectedBanca)?.id ?? null;
+  useEffect(() => {
+    if (!userId || !selectedBancaId) {
+      setTagsReportData(null);
+      return;
+    }
+    let cancelled = false;
+    setTagsReportLoading(true);
+    const params = new URLSearchParams();
+    params.append('banca_id', selectedBancaId);
+    params.append('date_from', dateFrom);
+    params.append('date_to', dateTo);
+    fetch(`/api/admin/crm/reports/tags?${params.toString()}`, { headers: { 'X-User-Id': userId } })
+      .then((r) => r.json())
+      .then((result) => { if (!cancelled && result.success) setTagsReportData(result.data); })
+      .catch(() => { if (!cancelled) setTagsReportData(null); })
+      .finally(() => { if (!cancelled) setTagsReportLoading(false); });
+    return () => { cancelled = true; };
+  }, [userId, selectedBancaId, dateFrom, dateTo]);
 
   type ConsultantMetricsRow = {
     name: string;
@@ -1092,6 +1120,104 @@ export default function CRMSection({ userId }: CRMSectionProps) {
               </div>
             ) : (
               <Top5ConsultoresCards list={top5List} showBancas={selectedBanca === 'all'} sortKey={top5Sort} />
+            )}
+          </div>
+
+          {/* Relatório de Etiquetas (por banca e período) */}
+          <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-xl border border-gray-100 dark:border-[#404040] shadow-sm">
+            <h3 className="text-sm font-bold text-gray-800 dark:text-white mb-6 flex items-center gap-2">
+              <TagIcon className="w-5 h-5 text-[#8CD955]" />
+              Relatório de Etiquetas
+            </h3>
+            {selectedBanca === 'all' ? (
+              <div className="py-12 text-center text-gray-500 dark:text-gray-400">
+                <TagIcon className="w-12 h-12 mx-auto mb-3 opacity-40" />
+                <p className="text-sm font-medium">Selecione uma banca para ver o relatório de etiquetas.</p>
+              </div>
+            ) : tagsReportLoading ? (
+              <div className="py-12 flex flex-col items-center justify-center gap-3">
+                <Loader2 className="w-8 h-8 text-[#8CD955] animate-spin" />
+                <p className="text-sm text-gray-500">Carregando relatório...</p>
+              </div>
+            ) : tagsReportData ? (
+              <>
+                <div className="mb-6">
+                  <TagsSummaryChart tagUsage={tagsReportData.tagUsage} />
+                </div>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  <div>
+                    <h4 className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-4 flex items-center gap-2">
+                      <TagIcon className="w-4 h-4" />
+                      Uso de Etiquetas por Consultor
+                    </h4>
+                    <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2">
+                      {tagsReportData.tagUsage.length > 0 ? (
+                        tagsReportData.tagUsage.map((item, idx) => (
+                          <div key={idx} className="p-4 bg-gray-50 dark:bg-gray-800/50 rounded-xl border border-gray-100 dark:border-[#404040]">
+                            <p className="text-sm font-bold text-gray-700 dark:text-gray-200 mb-3 flex items-center gap-2">
+                              <span className="w-6 h-6 rounded-full bg-[#8CD95520] text-[#8CD955] flex items-center justify-center text-[10px]">
+                                {item.consultorName[0]?.toUpperCase()}
+                              </span>
+                              {item.consultorName}
+                            </p>
+                            <div className="flex flex-wrap gap-2">
+                              {item.tags.map((tag, tIdx) => (
+                                <div
+                                  key={tIdx}
+                                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium"
+                                  style={{ backgroundColor: `${tag.color}15`, borderColor: `${tag.color}40`, color: tag.color }}
+                                >
+                                  <span>{tag.label}</span>
+                                  <span className="bg-white/50 dark:bg-black/20 px-1.5 py-0.5 rounded-md font-bold">{tag.count}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-sm text-gray-500 py-4">Nenhum uso de etiqueta no período.</p>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-4 flex items-center gap-2">
+                      <History className="w-4 h-4 text-blue-500" />
+                      Clientes Recentemente Etiquetados
+                    </h4>
+                    <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
+                      {tagsReportData.recentTaggedClients.length > 0 ? (
+                        tagsReportData.recentTaggedClients.map((client, idx) => (
+                          <div key={idx} className="flex items-center gap-3 p-3 hover:bg-gray-50 dark:hover:bg-gray-800/50 rounded-xl border border-transparent hover:border-gray-100 dark:hover:border-[#404040]">
+                            <div className="w-10 h-10 rounded-full bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
+                              <Users className="w-5 h-5" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-bold text-gray-800 dark:text-white truncate">{client.leadName}</p>
+                              <span className="text-[10px] text-gray-400 dark:text-gray-500">
+                                {new Date(client.createdAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                              <div className="flex items-center gap-2 mt-1">
+                                <p className="text-xs text-gray-500 truncate">{client.consultorName}</p>
+                                <ChevronRight className="w-3 h-3 text-gray-400" />
+                                <span className="text-[10px] px-2 py-0.5 rounded-full font-bold uppercase" style={{ backgroundColor: `${client.tagColor}20`, color: client.tagColor }}>
+                                  {client.tagName}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-sm text-gray-500 py-4">Nenhum cliente etiquetado no período.</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="py-12 text-center text-gray-500 dark:text-gray-400">
+                <TagIcon className="w-12 h-12 mx-auto mb-3 opacity-40" />
+                <p className="text-sm font-medium">Nenhum dado de etiquetas para esta banca no período.</p>
+              </div>
             )}
           </div>
 
