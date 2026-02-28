@@ -111,9 +111,13 @@ export async function GET(req: NextRequest) {
     const perPage = 2000;
     const fromParam = searchParams.get('from');
     const toParam = searchParams.get('to');
+    // Padrão de busca alinhado ao CRM: get-indicateds-by-consultant com transferred_filter=yes, sort e direction
     const queryParams: string[] = [
       `consultant=${encodeURIComponent(consultantEmail)}`,
       `per_page=${perPage}`,
+      `sort=created_at`,
+      `direction=desc`,
+      `transferred_filter=yes`,
     ];
     if (fromParam?.trim()) queryParams.push(`from=${encodeURIComponent(fromParam.trim())}`);
     if (toParam?.trim()) queryParams.push(`to=${encodeURIComponent(toParam.trim())}`);

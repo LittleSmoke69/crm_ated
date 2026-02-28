@@ -692,6 +692,7 @@ const TransferidoContent = () => {
               initialDateFilter={filters.date}
               onBancasLoaded={handleBancasLoaded}
               targetUserId={targetUserId}
+              transferredFilter="yes"
             />
           </div>
         </div>
