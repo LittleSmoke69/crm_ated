@@ -143,18 +143,24 @@ async function bancaTemConsultoresAbaixoDoGerente(
 /**
  * Verifica se o consultor tem lead na banca via get-indicateds-by-consultant.
  * Requisito do filtro de bancas: per_page=1 e SEM from/to (sem data), para considerar qualquer lead em qualquer período.
+ * transferredFilter: quando 'yes' ou 'no', adiciona transferred_filter na URL (ex.: kanban usa 'no', transferido usa 'yes').
  * Retorna true se a API retorna success === true e há pelo menos 1 lead (data.length > 0).
  */
 async function bancaTemLeadDoConsultor(
   bancaUrl: string,
   email: string,
-  apiKey: string
+  apiKey: string,
+  transferredFilter?: 'yes' | 'no'
 ): Promise<boolean> {
   const base = normalizarUrlBanca(bancaUrl);
   if (!base) return false;
   try {
-    // Apenas consultant e per_page=1; não enviar from/to para verificação de bancas do consultor
-    const url = `${base}/api/crm/get-indicateds-by-consultant?consultant=${encodeURIComponent(email)}&per_page=1`;
+    const params = new URLSearchParams({
+      consultant: email,
+      per_page: '1',
+    });
+    if (transferredFilter) params.set('transferred_filter', transferredFilter);
+    const url = `${base}/api/crm/get-indicateds-by-consultant?${params.toString()}`;
     const res = await fetch(url, {
       method: 'GET',
       headers: { 'X-API-KEY': apiKey.trim(), Accept: 'application/json' },
@@ -203,11 +209,12 @@ async function filtrarBancasParaGerente(
 
 /**
  * Para consultor: filtra bancas em que o consultor tem pelo menos um lead.
- * Usa get-indicateds-by-consultant SEM from/to (sem data), para incluir qualquer banca com lead.
+ * Usa get-indicateds-by-consultant SEM from/to (sem data). transferredFilter opcional (ex.: 'no' para kanban, 'yes' para transferido).
  */
 async function filtrarBancasComLeadDoConsultor(
   bancas: BancaRow[],
-  email: string
+  email: string,
+  transferredFilter?: 'yes' | 'no'
 ): Promise<BancaRow[]> {
   const apiKey = process.env.CRM_API_KEY?.trim();
   if (!apiKey) {
@@ -217,7 +224,9 @@ async function filtrarBancasComLeadDoConsultor(
   if (bancas.length > 0) {
     const base = normalizarUrlBanca(bancas[0].url);
     if (base) {
-      const url = `${base}/api/crm/get-indicateds-by-consultant?consultant=${encodeURIComponent(email)}&per_page=1`;
+      const params = new URLSearchParams({ consultant: email, per_page: '1' });
+      if (transferredFilter) params.set('transferred_filter', transferredFilter);
+      const url = `${base}/api/crm/get-indicateds-by-consultant?${params.toString()}`;
       console.log('[CRM Bancas] Modelo de curl utilizado em todas as bancas para filtrar:');
       console.log('[CRM Bancas] ', buildCurlExample('GET', url, apiKey));
     }
@@ -225,7 +234,7 @@ async function filtrarBancasComLeadDoConsultor(
   const resultados = await mapWithConcurrency(
     bancas,
     EXTERNAL_API_CONCURRENCY,
-    async (banca) => ((await bancaTemLeadDoConsultor(banca.url, email, apiKey)) ? banca : null)
+    async (banca) => ((await bancaTemLeadDoConsultor(banca.url, email, apiKey, transferredFilter)) ? banca : null)
   );
   const bancasQuePassaram = resultados.filter((b): b is BancaRow => b !== null);
   console.log('[CRM Bancas] Bancas que passaram pelo filtro:', bancasQuePassaram.length);
@@ -258,12 +267,21 @@ async function getBancasDoUsuario(userId: string): Promise<BancaRow[]> {
   return bancas as BancaRow[];
 }
 
+/** Opções para getBancasVisiveis (ex.: contexto kanban vs transferido). */
+export type GetBancasVisiveisOptions = { transferredFilter?: 'yes' | 'no' };
+
 /**
  * Retorna a lista de bancas visíveis para o usuário (mesma lógica do GET).
  * Consultor/Gerente: chama API externa (get-indicateds-by-consultant) por banca; status 200 = passa no filtro, 404 = não tem conta na banca.
+ * transferredFilter: quando 'yes' ou 'no', inclui na URL (kanban = 'no', transferido = 'yes').
  */
-export async function getBancasVisiveis(userId: string, profile: UserProfile | null): Promise<BancaRow[]> {
-  console.log('[CRM Bancas] getBancasVisiveis chamado | userId:', userId, '| perfil:', profile?.status ?? 'null', '| email:', profile?.email ? `${profile.email.slice(0, 3)}***` : 'n/a');
+export async function getBancasVisiveis(
+  userId: string,
+  profile: UserProfile | null,
+  options?: GetBancasVisiveisOptions
+): Promise<BancaRow[]> {
+  const transferredFilter = options?.transferredFilter;
+  console.log('[CRM Bancas] getBancasVisiveis chamado | userId:', userId, '| perfil:', profile?.status ?? 'null', '| email:', profile?.email ? `${profile.email.slice(0, 3)}***` : 'n/a', '| transferred_filter:', transferredFilter ?? 'não informado');
   const { data: todasBancas, error } = await supabaseServiceRole
     .from('crm_bancas')
     .select('id, name, url')
@@ -285,7 +303,9 @@ export async function getBancasVisiveis(userId: string, profile: UserProfile | n
       const b = bancas[i];
       const base = normalizarUrlBanca(b.url);
       if (!base) continue;
-      const urlExterna = `${base}/api/crm/get-indicateds-by-consultant?consultant=${encodeURIComponent(email)}&per_page=1`;
+      const params = new URLSearchParams({ consultant: email, per_page: '1' });
+      if (transferredFilter) params.set('transferred_filter', transferredFilter);
+      const urlExterna = `${base}/api/crm/get-indicateds-by-consultant?${params.toString()}`;
       const { status, body } = await fetchGetIndicatedsResponse(urlExterna, apiKey);
       if (status === 200) {
         bancasVisiveis.push(b);
@@ -347,7 +367,9 @@ export async function GET(req: NextRequest) {
       console.log('[CRM Bancas] GET /api/crm/bancas | modo "visualizar como" | targetUserId:', targetUserIdParam);
     }
 
-    const cacheKey = `bancas:${effectiveUserId}:${profile?.status ?? ''}:${profile?.email ?? ''}`;
+    const transferredFilterParam = req.nextUrl.searchParams.get('transferred_filter')?.trim().toLowerCase();
+    const transferredFilter = (transferredFilterParam === 'yes' || transferredFilterParam === 'no') ? transferredFilterParam : undefined;
+    const cacheKey = `bancas:${effectiveUserId}:${profile?.status ?? ''}:${profile?.email ?? ''}:${transferredFilter ?? 'any'}`;
     const cached = getCachedBancas(cacheKey);
     if (cached !== null) {
       console.log('[CRM Bancas] GET /api/crm/bancas solicitado | Cache HIT');
@@ -363,7 +385,7 @@ export async function GET(req: NextRequest) {
 
     let promise = bancasInFlight.get(cacheKey);
     if (!promise) {
-      promise = getBancasVisiveis(effectiveUserId, profile).finally(() => {
+      promise = getBancasVisiveis(effectiveUserId, profile, { transferredFilter }).finally(() => {
         bancasInFlight.delete(cacheKey);
       });
       bancasInFlight.set(cacheKey, promise);

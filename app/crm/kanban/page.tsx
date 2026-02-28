@@ -1350,6 +1350,7 @@ const KanbanContent = () => {
               initialDateFilter={filters.date}
               onBancasLoaded={handleBancasLoaded}
               targetUserId={targetUserId || undefined}
+              transferredFilter="no"
             />
           </div>
         </div>

@@ -26,13 +26,9 @@ import {
   Wallet,
   Trophy,
   Loader2,
-  Filter,
-  Tag,
-  History,
-  ChevronRight
+  Filter
 } from 'lucide-react';
 import Layout from '@/components/Layout';
-import TagsSummaryChart from '@/components/Charts/TagsSummaryChart';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import FinancialMetricsBarChart from '@/components/Charts/FinancialMetricsBarChart';
 import LeadsDistributionChart from '@/components/Charts/LeadsDistributionChart';
@@ -130,11 +126,6 @@ export default function DonoBancaHierarquia({
   const [bancaName, setBancaName] = useState<string | null>(initialData?.bancaInfo?.name || null);
   const [bancaId, setBancaId] = useState<string | null>(initialData?.bancaId || null);
   const [top5Consultants, setTop5Consultants] = useState<Array<{ name: string; value: number }>>(initialData?.top5Consultants || []);
-  const [tagsReportData, setTagsReportData] = useState<{
-    tagUsage: Array<{ consultorId: string; consultorName: string; tags: Array<{ id: string; label: string; color: string; count: number }> }>;
-    recentTaggedClients: Array<{ leadId: string; leadName: string; leadPhone: string | null; consultorName: string; tagName: string; tagColor: string; createdAt: string }>;
-  } | null>(null);
-  const [tagsLoading, setTagsLoading] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   
@@ -225,25 +216,6 @@ export default function DonoBancaHierarquia({
       }
     }
   }, [userId, dateFilter, appliedStartDate, appliedEndDate, selectedBancaId, isAdminOrSuperAdmin]);
-
-  useEffect(() => {
-    if (!isAuthorized || !userId) return;
-    const effectiveBancaId = bancaId || (isAdminOrSuperAdmin ? selectedBancaId || null : null);
-    if (!effectiveBancaId) return;
-    let cancelled = false;
-    setTagsLoading(true);
-    const { dateFrom, dateTo } = getDateRange();
-    const params = new URLSearchParams();
-    params.append('banca_id', effectiveBancaId);
-    if (dateFrom) params.append('date_from', dateFrom);
-    if (dateTo) params.append('date_to', dateTo);
-    fetch(`/api/dono-banca/reports/tags?${params.toString()}`, { headers: { 'X-User-Id': userId as string } })
-      .then((r) => r.json())
-      .then((result) => { if (!cancelled && result.success) setTagsReportData(result.data); })
-      .catch((e) => { if (!cancelled) console.error('Erro ao carregar relatório de etiquetas:', e); })
-      .finally(() => { if (!cancelled) setTagsLoading(false); });
-    return () => { cancelled = true; };
-  }, [bancaId, selectedBancaId, dateFilter, appliedStartDate, appliedEndDate, isAuthorized, userId, isAdminOrSuperAdmin]);
 
   // Período considerado "longo" para aviso de consulta em segundo plano
   const isLongPeriod = (): boolean => {
@@ -1138,99 +1110,6 @@ export default function DonoBancaHierarquia({
               </div>
             )}
           </div>
-        </div>
-
-        {/* Relatório de Etiquetas (métricas da banca) */}
-        <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
-          <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-6 flex items-center gap-2">
-            <Tag className="w-5 h-5 text-[#8CD955]" />
-            Relatório de Etiquetas
-          </h2>
-          {tagsLoading ? (
-            <div className="py-12 flex flex-col items-center justify-center gap-3">
-              <div className="animate-spin rounded-full h-8 w-8 border-2 border-[#8CD955] border-t-transparent" />
-              <p className="text-sm text-gray-500">Carregando relatório...</p>
-            </div>
-          ) : tagsReportData ? (
-            <>
-              <div className="mb-6">
-                <TagsSummaryChart tagUsage={tagsReportData.tagUsage} />
-              </div>
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div>
-                  <h3 className="text-sm font-bold text-gray-600 dark:text-gray-400 mb-4 flex items-center gap-2">
-                    <Tag className="w-4 h-4" />
-                    Uso de Etiquetas por Consultor
-                  </h3>
-                  <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2">
-                    {tagsReportData.tagUsage.length > 0 ? (
-                      tagsReportData.tagUsage.map((item, idx) => (
-                        <div key={idx} className="p-4 bg-gray-50 dark:bg-gray-800/50 rounded-xl border border-gray-100 dark:border-gray-700">
-                          <p className="text-sm font-bold text-gray-700 dark:text-gray-200 mb-3 flex items-center gap-2">
-                            <div className="w-6 h-6 rounded-full bg-[#8CD95520] text-[#8CD955] flex items-center justify-center text-[10px]">
-                              {item.consultorName[0]?.toUpperCase()}
-                            </div>
-                            {item.consultorName}
-                          </p>
-                          <div className="flex flex-wrap gap-2">
-                            {item.tags.map((tag, tIdx) => (
-                              <div
-                                key={tIdx}
-                                className="flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium"
-                                style={{ backgroundColor: `${tag.color}15`, borderColor: `${tag.color}40`, color: tag.color }}
-                              >
-                                <span>{tag.label}</span>
-                                <span className="bg-white/50 dark:bg-black/20 px-1.5 py-0.5 rounded-md font-bold">{tag.count}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <p className="text-sm text-gray-500 py-4">Nenhum uso de etiqueta no período.</p>
-                    )}
-                  </div>
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-gray-600 dark:text-gray-400 mb-4 flex items-center gap-2">
-                    <History className="w-4 h-4 text-blue-500" />
-                    Clientes Recentemente Etiquetados
-                  </h3>
-                  <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
-                    {tagsReportData.recentTaggedClients.length > 0 ? (
-                      tagsReportData.recentTaggedClients.map((client, idx) => (
-                        <div key={idx} className="flex items-center gap-3 p-3 hover:bg-gray-50 dark:hover:bg-gray-800/50 rounded-xl border border-transparent hover:border-gray-100 dark:hover:border-gray-700">
-                          <div className="w-10 h-10 rounded-full bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
-                            <Users className="w-5 h-5" />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-bold text-gray-800 dark:text-gray-100 truncate">{client.leadName}</p>
-                            <span className="text-[10px] text-gray-400 dark:text-gray-500">
-                              {new Date(client.createdAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
-                            </span>
-                            <div className="flex items-center gap-2 mt-1">
-                              <p className="text-xs text-gray-500 truncate">{client.consultorName}</p>
-                              <ChevronRight className="w-3 h-3 text-gray-300" />
-                              <span className="text-[10px] px-2 py-0.5 rounded-full font-bold uppercase" style={{ backgroundColor: `${client.tagColor}20`, color: client.tagColor }}>
-                                {client.tagName}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <p className="text-sm text-gray-500 py-4">Nenhum cliente etiquetado no período.</p>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </>
-          ) : (
-            <div className="py-12 text-center text-gray-500">
-              <Tag className="w-12 h-12 text-gray-200 dark:text-gray-700 mx-auto mb-3" />
-              <p className="text-sm">Selecione a banca e o período para ver o relatório de etiquetas.</p>
-            </div>
-          )}
         </div>
 
         {/* Gerentes e Consultores */}

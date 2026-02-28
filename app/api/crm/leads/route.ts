@@ -77,7 +77,7 @@ export async function GET(req: NextRequest) {
         }
       }
       if (listBancas.length === 0) {
-        const visiveis = await getBancasVisiveis(requesterId, requesterProfile);
+        const visiveis = await getBancasVisiveis(requesterId, requesterProfile, { transferredFilter: 'no' });
         if (visiveis.length > 0) {
           listBancas = visiveis.map(b => ({ id: b.id, url: b.url, name: b.name }));
         } else {
@@ -106,16 +106,21 @@ export async function GET(req: NextRequest) {
     }
     const cleanApiKey = apiKey.trim().replace(/\s+/g, '');
 
-    const queryParams: string[] = [];
-    queryParams.push(`consultant=${targetProfile.email}`);
-    const perPage = 2000;
+    // Padrão de busca alinhado ao CRM Kanban: get-indicateds-by-consultant com transferred_filter=no, sort e direction
+    const queryParams: string[] = [
+      `consultant=${encodeURIComponent(targetProfile.email.trim())}`,
+      `per_page=2000`,
+      `sort=created_at`,
+      `direction=desc`,
+      `transferred_filter=no`,
+    ];
     const optionalParams = ['search', 'status', 'from', 'to', 'star_filter', 'affiliate_filter'];
-    const baseQueryParams = [...queryParams];
     optionalParams.forEach(param => {
       const value = searchParams.get(param);
-      if (value && value.trim()) baseQueryParams.push(`${param}=${value.trim()}`);
+      if (value && value.trim()) queryParams.push(`${param}=${encodeURIComponent(value.trim())}`);
     });
-    baseQueryParams.push(`per_page=${perPage}`);
+    const baseQueryParams = queryParams;
+    const perPage = 2000;
 
     function normalizeBancaUrl(raw: string): string {
       let u = raw.trim().replace(/^https?:\/\//i, '').replace(/\/api\/crm\/?/i, '').replace(/\/+$/, '').trim();

@@ -27,6 +27,8 @@ interface FilterBarProps {
   onBancasLoaded?: (bancas: { id: string; name: string; url: string }[]) => void;
   /** Quando informado (ex.: admin visualizando CRM de outro usuário), a API de bancas retorna as bancas do usuário alvo. */
   targetUserId?: string;
+  /** Para verificação de banca: 'no' = kanban (só bancas com lead não transferido), 'yes' = transferido (só bancas com lead transferido). */
+  transferredFilter?: 'yes' | 'no';
 }
 
 interface Banca {
@@ -41,7 +43,7 @@ interface Tag {
   color: string;
 }
 
-const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initialDateFilter, onBancasLoaded, targetUserId }) => {
+const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initialDateFilter, onBancasLoaded, targetUserId, transferredFilter }) => {
   const [searchInputValue, setSearchInputValue] = useState('');
   const [activeFilters, setActiveFilters] = useState<Record<string, any>>(() => {
     if (initialDateFilter) {
@@ -83,10 +85,10 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           return;
         }
 
-        const bancasUrl = targetUserId
-          ? `/api/crm/bancas?targetUserId=${encodeURIComponent(targetUserId)}`
-          : '/api/crm/bancas';
-        const response = await fetch(bancasUrl, {
+        const url = new URL('/api/crm/bancas', window.location.origin);
+        if (targetUserId) url.searchParams.set('targetUserId', targetUserId);
+        if (transferredFilter) url.searchParams.set('transferred_filter', transferredFilter);
+        const response = await fetch(url.toString(), {
           headers: { 'X-User-Id': userId },
           signal,
         });
@@ -114,7 +116,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
 
     loadBancas();
     return () => controller.abort();
-  }, [onBancasLoaded, targetUserId]);
+  }, [onBancasLoaded, targetUserId, transferredFilter]);
 
   // Carrega tags
   useEffect(() => {
