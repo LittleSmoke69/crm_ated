@@ -22,8 +22,11 @@ import {
   X,
 } from 'lucide-react';
 import Pagination from '@/components/Admin/Pagination';
+import { useToast } from '@/hooks/useToast';
+import ToastContainer from '@/components/Toast/ToastContainer';
 
 export default function HierarchySection({ userId }: { userId: string | null }) {
+  const { toasts, showToast, removeToast } = useToast();
   const [hierarchy, setHierarchy] = useState<any[]>([]);
   const [issues, setIssues] = useState<any[]>([]);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -77,6 +80,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
   const [assignUserSearch, setAssignUserSearch] = useState('');
   const [assignSelectedUserIds, setAssignSelectedUserIds] = useState<string[]>([]);
   const [assignLoading, setAssignLoading] = useState(false);
+  const [createLoading, setCreateLoading] = useState(false);
   const [showMoveConsultantsModal, setShowMoveConsultantsModal] = useState(false);
   const [moveContext, setMoveContext] = useState<{ owner: any; sourceGerente: any; crmBanca: any } | null>(null);
   const [moveSelectedConsultantIds, setMoveSelectedConsultantIds] = useState<string[]>([]);
@@ -151,7 +155,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
 
   const handleImportConsultants = async () => {
     if (!userId || !importConsultantsContext || !importConsultantsGerenteId || importConsultantsRows.length === 0) {
-      alert('Selecione o gerente e importe um CSV com pelo menos um consultor (máx. 10).');
+      showToast('Selecione o gerente e importe um CSV com pelo menos um consultor (máx. 10).', 'error');
       return;
     }
     setImportConsultantsLoading(true);
@@ -179,9 +183,9 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
       }
     }
     setImportConsultantsLoading(false);
-    if (errors.length > 0) alert(`${success} criado(s). Falhas:\n${errors.join('\n')}`);
+    if (errors.length > 0) showToast(`${success} criado(s). Algumas falhas.`, 'info');
     if (success > 0) {
-      alert(success === 1 ? '1 consultor criado com sucesso!' : `${success} consultores criados com sucesso!`);
+      showToast(success === 1 ? '1 consultor criado com sucesso!' : `${success} consultores criados com sucesso!`, 'success');
       setShowImportConsultantsModal(false);
       setImportConsultantsContext(null);
       setImportConsultantsGerenteId('');
@@ -207,10 +211,10 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
         body: JSON.stringify({ banca_ids: [...current, bancaId] }),
       });
       if (putRes.ok) loadHierarchyData();
-      else alert((await putRes.json()).error || 'Erro ao adicionar gestor');
+      else showToast((await putRes.json()).error || 'Erro ao adicionar gestor', 'error');
     } catch (e) {
       console.error(e);
-      alert('Erro ao adicionar gestor');
+      showToast('Erro ao adicionar gestor', 'error');
     } finally {
       setGestorBancaLoading(null);
     }
@@ -230,10 +234,10 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
         body: JSON.stringify({ banca_ids: next }),
       });
       if (putRes.ok) loadHierarchyData();
-      else alert((await putRes.json()).error || 'Erro ao remover gestor');
+      else showToast((await putRes.json()).error || 'Erro ao remover gestor', 'error');
     } catch (e) {
       console.error(e);
-      alert('Erro ao remover gestor');
+      showToast('Erro ao remover gestor', 'error');
     } finally {
       setGestorBancaLoading(null);
     }
@@ -402,16 +406,16 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        alert('Usuário atualizado com sucesso!');
+        showToast('Usuário atualizado com sucesso!', 'success');
         setShowEditModal(false);
         setEditingUser(null);
         loadHierarchyData();
       } else {
-        alert(data.message || 'Erro ao atualizar usuário');
+        showToast(data.message || 'Erro ao atualizar usuário', 'error');
       }
     } catch (error) {
       console.error('Erro ao atualizar usuário:', error);
-      alert('Erro ao atualizar usuário');
+      showToast('Erro ao atualizar usuário', 'error');
     }
   };
 
@@ -431,8 +435,25 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
     return gerentesNaBanca;
   };
 
+  /** Retorna gerentes vinculados à banca para o modal: user_bancas + hierarquia (subordinados do dono). */
+  const getGerentesParaBancaModal = (crmBancaId: string) => {
+    const fromCrm = getManagersByCrmBanca(crmBancaId);
+    const owner = findOwnerByCrmBanca(crmBancaId);
+    const fromHierarchy = (owner?.subordinates || []).filter((s: any) => s && s.status === 'gerente');
+    const seen = new Set<string>(fromCrm.map((g: any) => g.id));
+    const merged = [...fromCrm];
+    fromHierarchy.forEach((g: any) => {
+      if (g?.id && !seen.has(g.id)) {
+        seen.add(g.id);
+        merged.push(g);
+      }
+    });
+    return merged;
+  };
+
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
+    setCreateLoading(true);
     try {
       const res = await fetch('/api/admin/users/create', {
         method: 'POST',
@@ -450,16 +471,19 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        alert(`${createFormData.status === 'dono_banca' ? 'Dono de banca' : createFormData.status === 'gestor' ? 'Gestor de Tráfego' : createFormData.status === 'gerente' ? 'Gerente' : 'Consultor'} criado com sucesso!`);
+        const roleLabel = createFormData.status === 'dono_banca' ? 'Dono de banca' : createFormData.status === 'gestor' ? 'Gestor de Tráfego' : createFormData.status === 'gerente' ? 'Gerente' : 'Consultor';
+        showToast(`${roleLabel} criado com sucesso!`, 'success');
         setShowCreateModal(false);
         setCreateFormData({ email: '', fullName: '', password: '', status: 'consultor', enroller: '', bancaOwnerId: '', bancaName: '', bancaUrl: '', initialBancaIds: [] });
         loadHierarchyData();
       } else {
-        alert(data.message || 'Erro ao criar usuário');
+        showToast(data.message || 'Erro ao criar usuário', 'error');
       }
     } catch (error) {
       console.error('Erro ao criar usuário:', error);
-      alert('Erro ao criar usuário');
+      showToast('Erro ao criar usuário', 'error');
+    } finally {
+      setCreateLoading(false);
     }
   };
 
@@ -483,38 +507,38 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
           }
           setShowFixModal(true);
         } else {
-          alert('Usuário não encontrado');
+          showToast('Usuário não encontrado', 'error');
         }
       }
     } catch (error) {
       console.error('Erro ao buscar informações do usuário:', error);
-      alert('Erro ao buscar informações do usuário');
+      showToast('Erro ao buscar informações do usuário', 'error');
     }
   };
 
   const handleSaveFix = async () => {
     if (!fixingIssue || !selectedFixBancaId) {
-      alert('Selecione uma banca');
+      showToast('Selecione uma banca', 'error');
       return;
     }
     const selectedBanca = (crmBancas || []).find((b: any) => String(b.id) === String(selectedFixBancaId));
     if (!selectedBanca) {
-      alert('Banca inválida');
+      showToast('Banca inválida', 'error');
       return;
     }
     const owner = findOwnerByCrmBanca(selectedFixBancaId);
     if (selectedFixRole === 'gerente' && !owner) {
-      alert('Essa banca ainda não tem Dono cadastrado. Crie o Dono primeiro.');
+      showToast('Essa banca ainda não tem Dono cadastrado. Crie o Dono primeiro.', 'error');
       return;
     }
     if (selectedFixRole === 'consultor') {
       const managers = getManagersByCrmBanca(selectedFixBancaId);
       if (!managers || managers.length === 0) {
-        alert('Essa banca ainda não tem Gerentes cadastrados. Crie um Gerente primeiro.');
+        showToast('Essa banca ainda não tem Gerentes cadastrados. Crie um Gerente primeiro.', 'error');
         return;
       }
       if (!selectedEnroller) {
-        alert('Selecione um gerente');
+        showToast('Selecione um gerente', 'error');
         return;
       }
     }
@@ -536,7 +560,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        alert('Problema corrigido com sucesso!');
+        showToast('Problema corrigido com sucesso!', 'success');
         setShowFixModal(false);
         setFixingIssue(null);
         setSelectedFixBancaId('');
@@ -544,11 +568,11 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
         setSelectedEnroller('');
         loadHierarchyData();
       } else {
-        alert(data.message || 'Erro ao corrigir problema');
+        showToast(data.message || 'Erro ao corrigir problema', 'error');
       }
     } catch (error) {
       console.error('Erro ao corrigir problema:', error);
-      alert('Erro ao corrigir problema');
+      showToast('Erro ao corrigir problema', 'error');
     }
   };
 
@@ -588,7 +612,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
 
   const handleMoveConsultants = async () => {
     if (!moveContext || moveSelectedConsultantIds.length === 0 || !moveTargetGerenteId) {
-      alert('Selecione um ou mais consultores e o gerente de destino.');
+      showToast('Selecione um ou mais consultores e o gerente de destino.', 'error');
       return;
     }
     setMoveLoading(true);
@@ -609,10 +633,10 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
         }
       }
       if (errors.length > 0) {
-        alert(successCount > 0 ? `${successCount} movido(s). Falhas:\n${errors.join('\n')}` : `Falhas:\n${errors.join('\n')}`);
+        showToast(successCount > 0 ? `${successCount} movido(s). Algumas falhas.` : `Falhas: ${errors[0]}${errors.length > 1 ? ` e mais ${errors.length - 1}.` : ''}`, successCount > 0 ? 'info' : 'error');
       }
       if (successCount > 0) {
-        alert(successCount === 1 ? 'Consultor movido com sucesso!' : `${successCount} consultores movidos com sucesso!`);
+        showToast(successCount === 1 ? 'Consultor movido com sucesso!' : `${successCount} consultores movidos com sucesso!`, 'success');
         setShowMoveConsultantsModal(false);
         setMoveContext(null);
         setMoveSelectedConsultantIds([]);
@@ -621,7 +645,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
       }
     } catch (e) {
       console.error(e);
-      alert('Erro ao mover consultores');
+      showToast('Erro ao mover consultores', 'error');
     } finally {
       setMoveLoading(false);
     }
@@ -629,11 +653,11 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
 
   const handleAssignUser = async () => {
     if (!assignFormData || assignSelectedUserIds.length === 0) {
-      alert('Selecione um ou mais usuários');
+      showToast('Selecione um ou mais usuários', 'error');
       return;
     }
     if (assignFormData.status === 'consultor' && !assignFormData.enroller) {
-      alert('Consultor deve ser atribuído a um gerente. Cadastre um gerente na banca primeiro.');
+      showToast('Consultor deve ser atribuído a um gerente. Cadastre um gerente na banca primeiro.', 'error');
       return;
     }
     setAssignLoading(true);
@@ -708,11 +732,12 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
       }
 
       if (errors.length > 0) {
-        alert(successCount > 0 ? `${successCount} atribuído(s). Falhas:\n${errors.join('\n')}` : `Falhas:\n${errors.join('\n')}`);
+        const msg = successCount > 0 ? `${successCount} atribuído(s). Algumas falhas.` : `Falhas: ${errors[0]}${errors.length > 1 ? ` e mais ${errors.length - 1}.` : ''}`;
+        showToast(msg, successCount > 0 ? 'info' : 'error');
       }
       if (successCount > 0) {
         const label = assignFormData.status === 'dono_banca' ? 'Dono(s) de banca' : assignFormData.status === 'gerente' ? 'Gerente(s)' : 'Consultor(es)';
-        alert(successCount === 1 ? `${label} atribuído com sucesso!` : `${successCount} ${label} atribuídos com sucesso!`);
+        showToast(successCount === 1 ? `${label} atribuído com sucesso!` : `${successCount} ${label} atribuídos com sucesso!`, 'success');
         setShowAssignModal(false);
         setAssignFormData(null);
         setAssignSelectedUserIds([]);
@@ -720,7 +745,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
       }
     } catch (error) {
       console.error('Erro ao atribuir usuário:', error);
-      alert('Erro ao atribuir usuário');
+      showToast('Erro ao atribuir usuário', 'error');
     } finally {
       setAssignLoading(false);
     }
@@ -822,77 +847,82 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
       subordinates: consultoresEmGerente.get(gerente.id) || [],
     }));
 
+    const btnClass = 'flex items-center justify-center gap-1.5 sm:gap-2 px-3 py-2.5 sm:px-4 sm:py-2 text-sm rounded-lg font-medium transition-colors touch-manipulation min-h-[44px] sm:min-h-[40px] w-full sm:w-auto min-w-0';
     return (
       <div key={crmBanca.id} className="bg-gradient-to-br from-white to-emerald-50 dark:from-[#2a2a2a] dark:to-emerald-950/30 rounded-xl shadow-lg border border-emerald-100 dark:border-emerald-800 p-4 sm:p-6 relative overflow-hidden">
         <div className="relative z-10">
           <div className="flex flex-col gap-4 mb-4 sm:mb-6 pb-4 border-b border-emerald-100 dark:border-emerald-800">
+            {/* Cabeçalho: avatar + nome + URL em bloco separado do badge para evitar sobreposição */}
             <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-4">
-              <div className="flex items-center gap-3 sm:gap-4 min-w-0">
+              <div className="flex items-start gap-3 sm:gap-4 min-w-0 flex-1">
                 <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-full bg-[#8CD955] dark:bg-[#00e600] text-white flex items-center justify-center font-bold text-lg sm:text-xl flex-shrink-0 shadow-lg shadow-emerald-100 dark:shadow-emerald-900/50">
                   {crmBanca.name ? String(crmBanca.name).substring(0, 2).toUpperCase() : 'BK'}
                 </div>
                 <div className="min-w-0 flex-1">
                   <h2 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white mb-1 truncate">{crmBanca.name || 'Banca sem nome'}</h2>
                   {crmBanca.url && (
-                    <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                      <a href={`https://${normalizeBancaUrl(crmBanca.url)}`} target="_blank" rel="noreferrer" className="text-sm text-[#8CD955] dark:text-[#00ff00] hover:underline font-medium flex items-center gap-1">
-                        <Globe className="w-4 h-4" />
-                        {normalizeBancaUrl(crmBanca.url)}
-                      </a>
-                      {!owner && <span className="text-xs bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 px-2 py-0.5 rounded-md font-bold">Sem dono cadastrado</span>}
-                    </div>
+                    <a href={`https://${normalizeBancaUrl(crmBanca.url)}`} target="_blank" rel="noreferrer" className="text-sm text-[#8CD955] dark:text-[#00ff00] hover:underline font-medium flex items-center gap-1 break-all">
+                      <Globe className="w-4 h-4 flex-shrink-0" />
+                      <span className="break-all">{normalizeBancaUrl(crmBanca.url)}</span>
+                    </a>
+                  )}
+                  {!owner && (
+                    <span className="inline-block mt-2 text-xs bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 px-2 py-1 rounded-md font-bold">
+                      Sem dono cadastrado
+                    </span>
                   )}
                 </div>
               </div>
-              <div className="flex flex-wrap gap-1.5 sm:gap-2">
-                {!owner ? (
-                  <>
-                    <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'dono_banca', enroller: '', bancaOwnerId: '', bancaName: crmBanca.name || '', bancaUrl: normalizeBancaUrl(crmBanca.url || ''), initialBancaIds: [] })); setShowCreateModal(true); }} className="flex items-center gap-1.5 sm:gap-2 px-3 py-2.5 sm:px-4 sm:py-2 text-sm bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] transition-colors font-medium touch-manipulation min-h-[44px] sm:min-h-0">
-                      <UserPlus className="w-4 h-4 flex-shrink-0" /> <span>Criar Dono</span>
+            </div>
+            {/* Grid de botões responsivo: 2 colunas no mobile, 3 no sm, 4 no lg */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-3">
+              {!owner ? (
+                <>
+                  <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'dono_banca', enroller: '', bancaOwnerId: '', bancaName: crmBanca.name || '', bancaUrl: normalizeBancaUrl(crmBanca.url || ''), initialBancaIds: [] })); setShowCreateModal(true); }} className={`${btnClass} bg-[#8CD955] text-white hover:bg-[#7BC84A]`}>
+                    <UserPlus className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Criar Dono</span>
+                  </button>
+                  <button onClick={() => handleOpenAssignModal({ status: 'dono_banca', enroller: '', bancaId: String(crmBanca.id), bancaName: crmBanca.name || '', bancaUrl: normalizeBancaUrl(crmBanca.url || ''), ownerId: '' })} className={`${btnClass} bg-emerald-700/90 text-white hover:bg-emerald-700 border border-emerald-600`}>
+                    <UserCheck className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Atribuir Dono</span>
+                  </button>
+                  <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'gerente', enroller: '', bancaOwnerId: '', bancaName: '', bancaUrl: '', initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className={`${btnClass} bg-blue-600 text-white hover:bg-blue-700`}>
+                    <UserPlus className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Adicionar Gerente</span>
+                  </button>
+                  <button onClick={() => handleOpenAssignModal({ status: 'gerente', enroller: '', bancaId: String(crmBanca.id), bancaName: '', bancaUrl: '', ownerId: '' })} className={`${btnClass} bg-blue-700/90 text-white hover:bg-blue-700 border border-blue-600`}>
+                    <UserCheck className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Atribuir Gerente</span>
+                  </button>
+                  <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'consultor', enroller: '', bancaOwnerId: '', bancaName: '', bancaUrl: '', initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className={`${btnClass} bg-emerald-600 text-white hover:bg-emerald-700`}>
+                    <UserPlus className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Adicionar Consultor</span>
+                  </button>
+                  <button onClick={() => { const managers = getManagersByCrmBanca(String(crmBanca.id)); handleOpenAssignModal({ status: 'consultor', enroller: managers?.length ? managers[0].id : '', bancaId: String(crmBanca.id), bancaName: crmBanca.name || '', bancaUrl: normalizeBancaUrl(crmBanca.url || ''), ownerId: '' }); }} className={`${btnClass} bg-green-700/90 text-white hover:bg-green-700 border border-green-600`}>
+                    <UserCheck className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Atribuir Consultor</span>
+                  </button>
+                  {gerentesInBanca.length > 0 && (
+                    <button onClick={() => openImportConsultantsModal(crmBanca)} className={`${btnClass} bg-slate-600 text-white hover:bg-slate-700 border border-slate-500 col-span-2 sm:col-span-1`} title="Importar até 10 consultores por CSV (nome, email, senha)">
+                      <FileUp className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Importar CSV</span>
                     </button>
-                    <button onClick={() => handleOpenAssignModal({ status: 'dono_banca', enroller: '', bancaId: String(crmBanca.id), bancaName: crmBanca.name || '', bancaUrl: normalizeBancaUrl(crmBanca.url || ''), ownerId: '' })} className="flex items-center gap-2 px-4 py-2 bg-emerald-700/90 text-white rounded-lg hover:bg-emerald-700 transition-colors font-medium border border-emerald-600">
-                      <UserCheck className="w-4 h-4" /> Atribuir Dono
+                  )}
+                </>
+              ) : (
+                <>
+                  <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'gerente', enroller: owner.id, bancaOwnerId: owner.id, bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className={`${btnClass} bg-blue-600 text-white hover:bg-blue-700`}>
+                    <UserPlus className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Adicionar Gerente</span>
+                  </button>
+                  <button onClick={() => handleOpenAssignModal({ status: 'gerente', enroller: owner.id, bancaId: String(crmBanca.id), bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), ownerId: owner.id })} className={`${btnClass} bg-blue-700/90 text-white hover:bg-blue-700 border border-blue-600`}>
+                    <UserCheck className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Atribuir Gerente</span>
+                  </button>
+                  <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'consultor', enroller: owner.id, bancaOwnerId: owner.id, bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className={`${btnClass} bg-emerald-600 text-white hover:bg-emerald-700`}>
+                    <UserPlus className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Adicionar Consultor</span>
+                  </button>
+                  <button onClick={() => { const managers = getManagersByCrmBanca(String(crmBanca.id)); handleOpenAssignModal({ status: 'consultor', enroller: managers?.length ? managers[0].id : '', bancaId: String(crmBanca.id), bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), ownerId: owner.id }); }} className={`${btnClass} bg-green-700/90 text-white hover:bg-green-700 border border-green-600`}>
+                    <UserCheck className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Atribuir Consultor</span>
+                  </button>
+                  {gerentesInBanca.length > 0 && (
+                    <button onClick={() => openImportConsultantsModal(crmBanca)} className={`${btnClass} bg-slate-600 text-white hover:bg-slate-700 border border-slate-500 col-span-2 sm:col-span-1`} title="Importar até 10 consultores por CSV (nome, email, senha)">
+                      <FileUp className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Importar CSV</span>
                     </button>
-                    <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'gerente', enroller: '', bancaOwnerId: '', bancaName: '', bancaUrl: '', initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium">
-                      <UserPlus className="w-4 h-4" /> Adicionar Gerente
-                    </button>
-                    <button onClick={() => handleOpenAssignModal({ status: 'gerente', enroller: '', bancaId: String(crmBanca.id), bancaName: '', bancaUrl: '', ownerId: '' })} className="flex items-center gap-2 px-4 py-2 bg-blue-700/90 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium border border-blue-600">
-                      <UserCheck className="w-4 h-4" /> Atribuir Gerente
-                    </button>
-                    <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'consultor', enroller: '', bancaOwnerId: '', bancaName: '', bancaUrl: '', initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors font-medium">
-                      <UserPlus className="w-4 h-4" /> Adicionar Consultor
-                    </button>
-                    <button onClick={() => { const managers = getManagersByCrmBanca(String(crmBanca.id)); handleOpenAssignModal({ status: 'consultor', enroller: managers?.length ? managers[0].id : '', bancaId: String(crmBanca.id), bancaName: crmBanca.name || '', bancaUrl: normalizeBancaUrl(crmBanca.url || ''), ownerId: '' }); }} className="flex items-center gap-2 px-4 py-2 bg-green-700/90 text-white rounded-lg hover:bg-green-700 transition-colors font-medium border border-green-600">
-                      <UserCheck className="w-4 h-4" /> Atribuir Consultor
-                    </button>
-                    {gerentesInBanca.length > 0 && (
-                      <button onClick={() => openImportConsultantsModal(crmBanca)} className="flex items-center gap-2 px-4 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 transition-colors font-medium border border-slate-500" title="Importar até 10 consultores por CSV (nome, email, senha)">
-                        <FileUp className="w-4 h-4" /> Importar CSV
-                      </button>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'gerente', enroller: owner.id, bancaOwnerId: owner.id, bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium">
-                      <UserPlus className="w-4 h-4" /> Adicionar Gerente
-                    </button>
-                    <button onClick={() => handleOpenAssignModal({ status: 'gerente', enroller: owner.id, bancaId: String(crmBanca.id), bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), ownerId: owner.id })} className="flex items-center gap-2 px-4 py-2 bg-blue-700/90 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium border border-blue-600">
-                      <UserCheck className="w-4 h-4" /> Atribuir Gerente
-                    </button>
-                    <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'consultor', enroller: owner.id, bancaOwnerId: owner.id, bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors font-medium">
-                      <UserPlus className="w-4 h-4" /> Adicionar Consultor
-                    </button>
-                    <button onClick={() => { const managers = getManagersByCrmBanca(String(crmBanca.id)); handleOpenAssignModal({ status: 'consultor', enroller: managers?.length ? managers[0].id : '', bancaId: String(crmBanca.id), bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), ownerId: owner.id }); }} className="flex items-center gap-2 px-4 py-2 bg-green-700/90 text-white rounded-lg hover:bg-green-700 transition-colors font-medium border border-green-600">
-                      <UserCheck className="w-4 h-4" /> Atribuir Consultor
-                    </button>
-                    {gerentesInBanca.length > 0 && (
-                      <button onClick={() => openImportConsultantsModal(crmBanca)} className="flex items-center gap-2 px-4 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 transition-colors font-medium border border-slate-500" title="Importar até 10 consultores por CSV (nome, email, senha)">
-                        <FileUp className="w-4 h-4" /> Importar CSV
-                      </button>
-                    )}
-                  </>
-                )}
-              </div>
+                  )}
+                </>
+              )}
             </div>
           </div>
 
@@ -1207,7 +1237,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                     {createFormData.status === 'consultor' ? (
                       (() => {
                         const bancaId = createFormData.initialBancaIds?.[0];
-                        const managers = bancaId ? getManagersByCrmBanca(bancaId) : (hierarchy || []).flatMap((h: any) => h.subordinates || []);
+                        const managers = bancaId ? getGerentesParaBancaModal(bancaId) : (hierarchy || []).flatMap((h: any) => (h.subordinates || []).filter((s: any) => s?.status === 'gerente'));
                         return managers.map((g: any) => <option key={g.id} value={g.id}>{g.full_name || g.email}</option>);
                       })()
                     ) : (hierarchy || []).map((h: any) => <option key={h.id} value={h.id}>{h.banca_name || h.email}</option>)}
@@ -1227,8 +1257,10 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                 </>
               )}
               <div className="flex justify-end gap-3 pt-4">
-                <button type="button" onClick={() => { setShowCreateModal(false); setCreateFormData({ email: '', fullName: '', password: '', status: 'consultor', enroller: '', bancaOwnerId: '', bancaName: '', bancaUrl: '', initialBancaIds: [] }); }} className="px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors">Cancelar</button>
-                <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium">Criar</button>
+                <button type="button" onClick={() => { setShowCreateModal(false); setCreateFormData({ email: '', fullName: '', password: '', status: 'consultor', enroller: '', bancaOwnerId: '', bancaName: '', bancaUrl: '', initialBancaIds: [] }); }} disabled={createLoading} className="px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Cancelar</button>
+                <button type="submit" disabled={createLoading} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2 min-w-[100px]">
+                  {createLoading ? <><Loader2 className="w-4 h-4 animate-spin" /> Criando...</> : 'Criar'}
+                </button>
               </div>
             </form>
           </div>
@@ -1511,6 +1543,8 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
           </div>
         </div>
       )}
+
+      <ToastContainer toasts={toasts} onClose={removeToast} />
     </div>
   );
 }

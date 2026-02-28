@@ -230,15 +230,29 @@ export class FlowExecutorService {
   }
 
   /**
+   * Normaliza event_type para comparação (Evolution pode enviar GROUP_PARTICIPANTS_UPDATE,
+   * enquanto o flow usa group-participants.update).
+   */
+  private normalizeEventTypeForComparison(eventType: string): string {
+    if (!eventType || typeof eventType !== 'string') return '';
+    return eventType
+      .toLowerCase()
+      .replace(/-/g, '.')
+      .replace(/_/g, '.');
+  }
+
+  /**
    * Verifica se o evento corresponde aos filtros do trigger
    */
   private matchesTrigger(triggerNode: FlowNode, event: any, inputData: any): boolean {
     const config = triggerNode.data.config || {};
     const filters = config.filters || {};
 
-    // Filtro por event_type
-    if (filters.event_type && event.event_type !== filters.event_type) {
-      return false;
+    // Filtro por event_type (compara versões normalizadas: GROUP_PARTICIPANTS_UPDATE === group-participants.update)
+    if (filters.event_type) {
+      const eventNorm = this.normalizeEventTypeForComparison(event.event_type);
+      const filterNorm = this.normalizeEventTypeForComparison(filters.event_type);
+      if (eventNorm !== filterNorm) return false;
     }
 
     // Filtro por instance_name
@@ -246,19 +260,18 @@ export class FlowExecutorService {
       return false;
     }
 
-    // Filtro por action (no payload normalizado)
+    // Filtro por action (no payload normalizado; comparação case-insensitive)
     if (filters.action) {
-      // Tenta múltiplos caminhos para encontrar o action
-      const action = this.resolvePath(inputData, 'normalized.action') || 
+      const action = this.resolvePath(inputData, 'normalized.action') ||
                      this.resolvePath(inputData, 'action') ||
                      this.resolvePath(inputData, 'data.action') ||
                      this.resolvePath(inputData, 'data.update.action') ||
                      this.resolvePath(inputData, '$normalized.action') ||
                      this.resolvePath(inputData, '$json.data.action') ||
                      this.resolvePath(inputData, '$json.action');
-      if (action !== filters.action) {
-        return false;
-      }
+      const actionStr = action != null ? String(action).toLowerCase() : '';
+      const filterActionStr = String(filters.action).toLowerCase();
+      if (actionStr !== filterActionStr) return false;
     }
 
     return true;
@@ -1993,7 +2006,11 @@ REGRAS ANTI-SPAM (OBRIGATÓRIO):
         return [];
       }
 
-      const action = normalizedPayload?.action ?? normalizedPayload?.normalized?.action ?? normalizedPayload?.data?.action;
+      const action =
+        normalizedPayload?.action ??
+        normalizedPayload?.normalized?.action ??
+        normalizedPayload?.data?.action ??
+        normalizedPayload?.data?.update?.action;
       const result: Array<{ flow_id: string; user_id: string; settings_json?: any }> = [];
 
       for (const fi of instances) {
@@ -2020,14 +2037,21 @@ REGRAS ANTI-SPAM (OBRIGATÓRIO):
 
         const filters = triggerNode.data?.config?.filters ?? {};
 
-        if (filters.event_type && filters.event_type !== eventType) {
-          console.log(`⚠️ [FLOW EXECUTOR] Flow ${flow.id} filtro event_type não corresponde: ${filters.event_type} !== ${eventType}`);
-          continue;
+        // Compara event_type normalizado (Evolution: GROUP_PARTICIPANTS_UPDATE vs template: group-participants.update)
+        if (filters.event_type) {
+          const eventNorm = this.normalizeEventTypeForComparison(eventType);
+          const filterNorm = this.normalizeEventTypeForComparison(filters.event_type);
+          if (eventNorm !== filterNorm) {
+            console.log(`⚠️ [FLOW EXECUTOR] Flow ${flow.id} filtro event_type não corresponde: ${filters.event_type} !== ${eventType}`);
+            continue;
+          }
         }
-        
-        // Verifica action se o filtro estiver configurado
+
+        // Verifica action se o filtro estiver configurado (normaliza para string para comparação)
         if (filters.action) {
-          if (filters.action !== action) {
+          const actionStr = action != null ? String(action).toLowerCase() : '';
+          const filterActionStr = String(filters.action).toLowerCase();
+          if (actionStr !== filterActionStr) {
             console.log(`⚠️ [FLOW EXECUTOR] Flow ${flow.id} filtro action não corresponde: ${filters.action} !== ${action}`);
             continue;
           }

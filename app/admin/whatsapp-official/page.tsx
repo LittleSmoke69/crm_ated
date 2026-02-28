@@ -12,6 +12,10 @@ import {
   MessageSquare,
   CheckCircle2,
   XCircle,
+  Copy,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
 } from 'lucide-react';
 import Layout from '@/components/Layout';
 
@@ -28,6 +32,14 @@ interface WhatsAppOfficialConfig {
   zaploto_id: string | null;
   created_at: string;
   updated_at: string;
+}
+
+interface WebhookEventRow {
+  id: string;
+  source: string;
+  event_name: string;
+  raw_payload: Record<string, unknown> | null;
+  created_at: string;
 }
 
 const emptyForm = () => ({
@@ -53,6 +65,13 @@ export default function WhatsAppOfficialAdmin() {
   const [testSending, setTestSending] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
+  const [webhookEvents, setWebhookEvents] = useState<WebhookEventRow[]>([]);
+  const [webhookEventsLoading, setWebhookEventsLoading] = useState(false);
+  const [webhookEventsPage, setWebhookEventsPage] = useState(1);
+  const [webhookEventsTotal, setWebhookEventsTotal] = useState(0);
+  const [webhookEventsTotalPages, setWebhookEventsTotalPages] = useState(0);
+  const [webhookUrlCopied, setWebhookUrlCopied] = useState(false);
+
   const userId = typeof window !== 'undefined' ? (sessionStorage.getItem('user_id') || localStorage.getItem('profile_id')) : null;
   const headers = () => ({ 'Content-Type': 'application/json', 'X-User-Id': userId || '' });
 
@@ -69,9 +88,67 @@ export default function WhatsAppOfficialAdmin() {
     }
   };
 
+  const loadWebhookEvents = async () => {
+    setWebhookEventsLoading(true);
+    try {
+      const res = await fetch(
+        `/api/admin/whatsapp-official/events?page=${webhookEventsPage}&limit=25`,
+        { headers: headers() }
+      );
+      const data = await res.json();
+      if (data.success && Array.isArray(data.data)) {
+        setWebhookEvents(data.data);
+        if (data.pagination) {
+          setWebhookEventsTotal(data.pagination.total);
+          setWebhookEventsTotalPages(data.pagination.totalPages);
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setWebhookEventsLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchConfigs();
   }, []);
+
+  useEffect(() => {
+    loadWebhookEvents();
+  }, [webhookEventsPage]);
+
+  const webhookUrl = typeof window !== 'undefined' ? `${window.location.origin}/api/webhooks/whatsapp-official` : '';
+  const copyWebhookUrl = async () => {
+    if (!webhookUrl) return;
+    try {
+      await navigator.clipboard.writeText(webhookUrl);
+      setWebhookUrlCopied(true);
+      setTimeout(() => setWebhookUrlCopied(false), 2000);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const getEventSummary = (payload: Record<string, unknown> | null): string => {
+    if (!payload || typeof payload !== 'object') return '—';
+    const entry = payload.entry as unknown[] | undefined;
+    if (Array.isArray(entry) && entry.length > 0) {
+      const first = entry[0] as { changes?: unknown[] };
+      const changes = first?.changes;
+      if (Array.isArray(changes) && changes.length > 0) {
+        const value = (changes[0] as { value?: Record<string, unknown> })?.value;
+        if (value) {
+          if (Array.isArray(value.messages)) return `mensagens: ${value.messages.length}`;
+          if (Array.isArray(value.statuses)) return `status: ${value.statuses.length}`;
+          if (Array.isArray(value.contacts)) return 'contatos';
+          return 'entrada';
+        }
+      }
+      return `entries: ${entry.length}`;
+    }
+    return payload.object ? String(payload.object) : '—';
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -445,17 +522,102 @@ export default function WhatsAppOfficialAdmin() {
               </div>
             )}
 
-            <div className="mt-4 p-4 rounded-xl border border-[var(--card-border)] bg-[var(--card)]/50">
-              <h3 className="font-medium mb-2">Webhook</h3>
-              <p className="text-sm text-[var(--muted-foreground)] mb-2">
-                Configure no App da Meta (Developer Console) a URL de webhook:
-              </p>
-              <code className="block text-xs bg-[var(--muted)]/50 p-3 rounded break-all">
-                {typeof window !== 'undefined' ? `${window.location.origin}/api/webhooks/whatsapp-official` : '/api/webhooks/whatsapp-official'}
-              </code>
-              <p className="text-xs text-[var(--muted-foreground)] mt-2">
-                O verify token deve ser igual ao cadastrado em cada configuração.
-              </p>
+            {/* Card: Webhook da API oficial + Eventos de produção */}
+            <div className="mt-6 rounded-xl border border-[var(--card-border)] bg-[var(--card)] overflow-hidden">
+              <div className="p-4 border-b border-[var(--card-border)] bg-[var(--muted)]/30">
+                <h3 className="font-semibold mb-2 flex items-center gap-2">Webhook da API oficial (produção)</h3>
+                <p className="text-sm text-[var(--muted-foreground)] mb-3">
+                  Configure no App da Meta (Developer Console) a URL abaixo. O verify token deve ser igual ao cadastrado em cada configuração.
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <a
+                    href={webhookUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 text-sm text-[var(--zaploto-green)] hover:underline break-all font-mono"
+                  >
+                    {webhookUrl || '/api/webhooks/whatsapp-official'}
+                    <ExternalLink className="w-4 h-4 shrink-0" />
+                  </a>
+                  <button
+                    type="button"
+                    onClick={copyWebhookUrl}
+                    className="p-1.5 rounded border border-[var(--card-border)] hover:bg-[var(--muted)]/50"
+                    title="Copiar URL"
+                  >
+                    {webhookUrlCopied ? (
+                      <CheckCircle2 className="w-4 h-4 text-green-600" />
+                    ) : (
+                      <Copy className="w-4 h-4 text-[var(--muted-foreground)]" />
+                    )}
+                  </button>
+                </div>
+              </div>
+              <div className="p-4">
+                <h4 className="font-medium mb-3">Eventos recebidos (produção)</h4>
+                {webhookEventsLoading ? (
+                  <div className="py-8 text-center text-[var(--muted-foreground)] text-sm">Carregando eventos...</div>
+                ) : webhookEvents.length === 0 ? (
+                  <div className="py-8 text-center text-[var(--muted-foreground)] text-sm">Nenhum evento ainda. Os eventos aparecem aqui quando a Meta envia dados para o webhook.</div>
+                ) : (
+                  <>
+                    <div className="overflow-x-auto -mx-4 px-4">
+                      <table className="w-full text-left text-sm">
+                        <thead>
+                          <tr className="border-b border-[var(--card-border)]">
+                            <th className="py-2 pr-4 font-medium text-[var(--muted-foreground)]">Data/Hora</th>
+                            <th className="py-2 pr-4 font-medium text-[var(--muted-foreground)]">Resumo</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[var(--card-border)]">
+                          {webhookEvents.map((ev) => (
+                            <tr key={ev.id}>
+                              <td className="py-2 pr-4 whitespace-nowrap text-[var(--muted-foreground)]">
+                                {new Date(ev.created_at).toLocaleString('pt-BR')}
+                              </td>
+                              <td className="py-2 pr-4">{getEventSummary(ev.raw_payload)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {webhookEventsTotalPages > 1 && (
+                      <div className="flex items-center justify-between mt-4 pt-3 border-t border-[var(--card-border)]">
+                        <span className="text-xs text-[var(--muted-foreground)]">
+                          {webhookEventsTotal} evento(s) · Página {webhookEventsPage} de {webhookEventsTotalPages}
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setWebhookEventsPage((p) => Math.max(1, p - 1))}
+                            disabled={webhookEventsPage <= 1 || webhookEventsLoading}
+                            className="p-2 rounded border border-[var(--card-border)] disabled:opacity-50 hover:bg-[var(--muted)]/30"
+                          >
+                            <ChevronLeft className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setWebhookEventsPage((p) => Math.min(webhookEventsTotalPages, p + 1))}
+                            disabled={webhookEventsPage >= webhookEventsTotalPages || webhookEventsLoading}
+                            className="p-2 rounded border border-[var(--card-border)] disabled:opacity-50 hover:bg-[var(--muted)]/30"
+                          >
+                            <ChevronRight className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+                {!webhookEventsLoading && webhookEvents.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => loadWebhookEvents()}
+                    className="mt-3 text-sm text-[var(--zaploto-green)] hover:underline flex items-center gap-1"
+                  >
+                    <RefreshCw className="w-4 h-4" /> Atualizar
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>
