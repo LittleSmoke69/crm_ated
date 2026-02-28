@@ -272,6 +272,14 @@ export default function AdminLeadTransferPage() {
   const [showConversionConsultantModal, setShowConversionConsultantModal] = useState(false);
   const [conversionConsultantSearchQuery, setConversionConsultantSearchQuery] = useState('');
   const [conversionConsultantPendingEmail, setConversionConsultantPendingEmail] = useState<string | null>(null);
+  /** Verificador de consultores: leads transferidos que depositaram/jogaram/sacaram depois */
+  const [verifierResults, setVerifierResults] = useState<{ consultant_email: string; consultant_name: string; total_transferidos: number; depositaram_depois: number; jogaram_depois: number; sacaram_depois: number }[]>([]);
+  const [loadingVerifier, setLoadingVerifier] = useState(false);
+  /** Modal detalhe: leads que depositaram ou sacaram depois (por consultor) */
+  const [showVerifierDetailsModal, setShowVerifierDetailsModal] = useState(false);
+  const [verifierDetailsConsultant, setVerifierDetailsConsultant] = useState<{ email: string; name: string } | null>(null);
+  const [verifierDetailsLeads, setVerifierDetailsLeads] = useState<{ lead_id: string; name: string | null; phone: string | null; depositaram_depois: boolean; jogaram_depois: boolean; sacaram_depois: boolean; total_depositado_snapshot: number; total_depositado_atual: number; total_apostado_snapshot: number; total_apostado_atual: number; total_saque_atual: number; available_withdraw_snapshot: number; available_withdraw_atual: number }[]>([]);
+  const [loadingVerifierDetails, setLoadingVerifierDetails] = useState(false);
 
   const selectedBanca = bancas.find((b) => b.id === bancaId);
   const filteredBancas = bancaSearchQuery.trim()
@@ -927,6 +935,59 @@ export default function AdminLeadTransferPage() {
     }
   };
 
+  /** Verificador de consultores: compara DB (admin_lead_transfer_entries) com CRM (get-indicateds-by-consultant transferred_filter=yes). */
+  const runVerifier = async () => {
+    if (!bancaId || !userId) return;
+    setLoadingVerifier(true);
+    setVerifierResults([]);
+    try {
+      const url = new URL('/api/admin/crm/transfer-consultant-verifier', window.location.origin);
+      url.searchParams.set('banca_id', bancaId);
+      url.searchParams.set('from', managementFrom);
+      url.searchParams.set('to', managementTo);
+      if (conversionConsultant?.trim()) url.searchParams.set('consultant', conversionConsultant.trim());
+      const res = await fetch(url.toString(), { headers: headers() });
+      const json = await res.json();
+      if (res.ok && json.success && Array.isArray(json.data)) {
+        setVerifierResults(json.data);
+        if (json.data.length === 0) showToast('Nenhum consultor com leads transferidos no período.', 'info');
+      } else {
+        showToast(json?.error ?? 'Erro ao verificar consultores.', 'error');
+      }
+    } catch {
+      showToast('Erro ao verificar consultores.', 'error');
+    } finally {
+      setLoadingVerifier(false);
+    }
+  };
+
+  /** Abre o modal de detalhes: leads que depositaram ou sacaram depois para o consultor. */
+  const openVerifierDetails = async (row: { consultant_email: string; consultant_name: string }) => {
+    if (!bancaId || !userId) return;
+    setVerifierDetailsConsultant({ email: row.consultant_email, name: row.consultant_name || row.consultant_email });
+    setShowVerifierDetailsModal(true);
+    setVerifierDetailsLeads([]);
+    setLoadingVerifierDetails(true);
+    try {
+      const url = new URL('/api/admin/crm/transfer-consultant-verifier/details', window.location.origin);
+      url.searchParams.set('banca_id', bancaId);
+      url.searchParams.set('from', managementFrom);
+      url.searchParams.set('to', managementTo);
+      url.searchParams.set('consultant_email', row.consultant_email);
+      const res = await fetch(url.toString(), { headers: headers() });
+      const json = await res.json();
+      if (res.ok && json.success && Array.isArray(json.data)) {
+        setVerifierDetailsLeads(json.data);
+      } else {
+        showToast(json?.error ?? 'Erro ao carregar detalhes.', 'error');
+      }
+    } catch {
+      showToast('Erro ao carregar detalhes.', 'error');
+    } finally {
+      setLoadingVerifierDetails(false);
+    }
+  };
+
   const loadModalEntries = useCallback(async () => {
     if (!bancaId || !userId || !selectedLogForModal?.id) return;
     setLoadingModalEntries(true);
@@ -1543,6 +1604,75 @@ export default function AdminLeadTransferPage() {
                   </div>
                 </>
               )}
+              {/* Verificador de consultores: com base em admin_lead_transfer_entries + CRM transferred_filter=yes */}
+              <div className="mb-6 p-4 rounded-xl border border-gray-200 dark:border-[#404040] bg-gray-50/50 dark:bg-[#1f1f1f]/50">
+                <h3 className="text-sm font-bold text-gray-800 dark:text-white mb-2 flex items-center gap-2">
+                  <Users className="w-4 h-4 text-[#8CD955]" />
+                  Verificador de consultores
+                </h3>
+                <p className="text-xs text-gray-600 dark:text-gray-400 mb-3">
+                  Com base nos leads transferidos (banco de dados) e nos dados atuais do CRM (get-indicateds-by-consultant, transferred_filter=yes): quantos depositaram, jogaram e sacaram depois da transferência.
+                </p>
+                <div className="flex flex-wrap items-center gap-3 mb-4">
+                  <button
+                    type="button"
+                    onClick={runVerifier}
+                    disabled={!bancaId || loadingVerifier}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-[#8CD955] text-white hover:bg-[#7BC84A] border border-[#8CD955]/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {loadingVerifier ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                    {loadingVerifier ? 'Verificando...' : 'Verificar consultores'}
+                  </button>
+                  {verifierResults.length > 0 && (
+                    <span className="text-xs text-gray-500 dark:text-gray-400">
+                      Período: {managementFrom} — {managementTo}
+                      {conversionConsultant ? ` • Consultor: ${conversionConsultant}` : ''}
+                    </span>
+                  )}
+                </div>
+                {verifierResults.length > 0 && (
+                  <div className="overflow-x-auto border border-gray-200 dark:border-[#404040] rounded-xl bg-white dark:bg-[#2a2a2a]">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-100 dark:bg-[#333] border-b border-gray-200 dark:border-[#404040]">
+                        <tr>
+                          <th className="text-left py-2.5 px-3 font-semibold text-gray-700 dark:text-white">Consultor</th>
+                          <th className="text-right py-2.5 px-3 font-semibold text-gray-700 dark:text-white">Transferidos</th>
+                          <th className="text-right py-2.5 px-3 font-semibold text-gray-700 dark:text-white">Depositaram depois</th>
+                          <th className="text-right py-2.5 px-3 font-semibold text-gray-700 dark:text-white">Jogaram depois</th>
+                          <th className="text-right py-2.5 px-3 font-semibold text-gray-700 dark:text-white">Sacaram depois</th>
+                          <th className="text-center py-2.5 px-3 font-semibold text-gray-700 dark:text-white w-[100px]">Ações</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {verifierResults.map((row) => {
+                          const hasModifications = row.depositaram_depois > 0 || row.sacaram_depois > 0;
+                          return (
+                            <tr key={row.consultant_email} className="border-t border-gray-100 dark:border-[#404040] hover:bg-gray-50/80 dark:hover:bg-[#333]">
+                              <td className="py-2.5 px-3 text-gray-800 dark:text-white truncate max-w-[200px]" title={row.consultant_email}>{row.consultant_name || row.consultant_email}</td>
+                              <td className="py-2.5 px-3 text-right tabular-nums text-gray-700 dark:text-gray-200">{row.total_transferidos}</td>
+                              <td className="py-2.5 px-3 text-right tabular-nums text-green-600 dark:text-green-400">{row.depositaram_depois}</td>
+                              <td className="py-2.5 px-3 text-right tabular-nums text-blue-600 dark:text-blue-400">{row.jogaram_depois}</td>
+                              <td className="py-2.5 px-3 text-right tabular-nums text-amber-600 dark:text-amber-400">{row.sacaram_depois}</td>
+                              <td className="py-2.5 px-3 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => openVerifierDetails(row)}
+                                  disabled={!hasModifications}
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-[#8CD955]/15 text-[#6B8E3F] hover:bg-[#8CD955]/25 border border-[#8CD955]/40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                  title={hasModifications ? 'Ver leads que depositaram ou sacaram depois' : 'Nenhum lead com depósito ou saque depois'}
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                  Detalhar
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
               <div className="overflow-x-auto border border-gray-200 dark:border-[#404040] rounded-2xl shadow-sm bg-white dark:bg-[#2a2a2a]">
                 <table className="w-full text-sm min-w-[1000px]">
                   <thead className="bg-gray-100 dark:bg-[#333] border-b-2 border-gray-200 dark:border-[#404040]">
@@ -2898,6 +3028,69 @@ export default function AdminLeadTransferPage() {
               <button type="button" onClick={confirmConversionConsultant} className="px-4 py-2 rounded-lg bg-[#20c997] text-white font-medium hover:bg-[#0eb892]">
                 Selecionar
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Detalhe verificador: leads que depositaram ou sacaram depois (por consultor) */}
+      {showVerifierDetailsModal && verifierDetailsConsultant && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setShowVerifierDetailsModal(false)} role="dialog" aria-modal="true" aria-labelledby="modal-verifier-details-title">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col border border-gray-200 dark:border-[#404040]" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-3 bg-[#8CD955]/20 dark:bg-[#8CD955]/10 border-b border-gray-200 dark:border-[#404040] rounded-t-2xl">
+              <h2 id="modal-verifier-details-title" className="font-bold text-lg text-gray-900 dark:text-white">
+                Detalhe: {verifierDetailsConsultant.name} — Depositaram ou sacaram depois
+              </h2>
+              <button type="button" onClick={() => setShowVerifierDetailsModal(false)} className="p-1.5 rounded-lg hover:bg-gray-200 dark:hover:bg-[#404040] text-gray-600 dark:text-gray-300 transition-colors" aria-label="Fechar">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 overflow-y-auto flex-1 min-h-0">
+              {loadingVerifierDetails ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+                </div>
+              ) : verifierDetailsLeads.length === 0 ? (
+                <p className="text-sm text-gray-500 dark:text-gray-400 py-6 text-center">Nenhum lead com depósito ou saque depois da transferência.</p>
+              ) : (
+                <div className="overflow-x-auto border border-gray-200 dark:border-[#404040] rounded-xl">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-100 dark:bg-[#333] border-b border-gray-200 dark:border-[#404040]">
+                      <tr>
+                        <th className="text-left py-2 px-3 font-semibold text-gray-700 dark:text-white">ID / Nome</th>
+                        <th className="text-left py-2 px-3 font-semibold text-gray-700 dark:text-white">Telefone</th>
+                        <th className="text-center py-2 px-3 font-semibold text-gray-700 dark:text-white">Depositou</th>
+                        <th className="text-center py-2 px-3 font-semibold text-gray-700 dark:text-white">Jogou</th>
+                        <th className="text-center py-2 px-3 font-semibold text-gray-700 dark:text-white">Sacou</th>
+                        <th className="text-right py-2 px-3 font-semibold text-gray-700 dark:text-white">Depositado (→ atual)</th>
+                        <th className="text-right py-2 px-3 font-semibold text-gray-700 dark:text-white">Apostado (→ atual)</th>
+                        <th className="text-right py-2 px-3 font-semibold text-gray-700 dark:text-white">Saque atual</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {verifierDetailsLeads.map((lead) => (
+                        <tr key={lead.lead_id} className="border-t border-gray-100 dark:border-[#404040] hover:bg-gray-50/80 dark:hover:bg-[#333]">
+                          <td className="py-2 px-3 text-gray-800 dark:text-white">
+                            <span className="font-mono text-xs text-gray-500 dark:text-gray-400">{lead.lead_id}</span>
+                            {lead.name && <span className="block truncate max-w-[140px]" title={lead.name}>{lead.name}</span>}
+                          </td>
+                          <td className="py-2 px-3 text-gray-600 dark:text-gray-300 font-mono text-xs">{lead.phone ?? '-'}</td>
+                          <td className="py-2 px-3 text-center">{lead.depositaram_depois ? <span className="text-green-600 dark:text-green-400 font-medium">Sim</span> : '-'}</td>
+                          <td className="py-2 px-3 text-center">{lead.jogaram_depois ? <span className="text-blue-600 dark:text-blue-400 font-medium">Sim</span> : '-'}</td>
+                          <td className="py-2 px-3 text-center">{lead.sacaram_depois ? <span className="text-amber-600 dark:text-amber-400 font-medium">Sim</span> : '-'}</td>
+                          <td className="py-2 px-3 text-right tabular-nums text-gray-700 dark:text-gray-200">
+                            R$ {Number(lead.total_depositado_snapshot).toFixed(2).replace('.', ',')} → R$ {Number(lead.total_depositado_atual).toFixed(2).replace('.', ',')}
+                          </td>
+                          <td className="py-2 px-3 text-right tabular-nums text-gray-700 dark:text-gray-200">
+                            R$ {Number(lead.total_apostado_snapshot).toFixed(2).replace('.', ',')} → R$ {Number(lead.total_apostado_atual).toFixed(2).replace('.', ',')}
+                          </td>
+                          <td className="py-2 px-3 text-right tabular-nums text-amber-600 dark:text-amber-400">R$ {Number(lead.total_saque_atual).toFixed(2).replace('.', ',')}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         </div>

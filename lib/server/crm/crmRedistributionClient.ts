@@ -242,18 +242,22 @@ export class CrmRedistributionClient {
 
   /**
    * GET /api/crm/get-indicateds-by-consultant
-   * Query: consultant (email), per_page, page (opcional, para paginação).
+   * Query: consultant (email), per_page, page (opcional), transferred_filter (yes|no), sort, direction.
    * Retorna lista detalhada de indicados do consultor (para enriquecer leads por id).
    */
   async getIndicatedsByConsultant(
     consultantEmail: string,
     perPage: number = 2000,
-    page: number = 1
+    page: number = 1,
+    options?: { transferredFilter?: 'yes' | 'no'; sort?: string; direction?: string }
   ): Promise<GetIndicatedsByConsultantResponse> {
     const search = new URLSearchParams();
     search.set('consultant', consultantEmail.trim());
     search.set('per_page', String(perPage));
     if (page > 1) search.set('page', String(page));
+    if (options?.transferredFilter) search.set('transferred_filter', options.transferredFilter);
+    if (options?.sort) search.set('sort', options.sort);
+    if (options?.direction) search.set('direction', options.direction);
 
     const { data, status } = await this.fetch<GetIndicatedsByConsultantResponse>(
       `/get-indicateds-by-consultant?${search.toString()}`
