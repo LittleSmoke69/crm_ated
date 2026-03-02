@@ -11,6 +11,8 @@ const querySchema = z.object({
   banca_id: z.string().uuid(),
   source_consultant_email: z.string().email(),
   page: z.coerce.number().int().min(1),
+  /** Para comparação com CRM: 'no' = só não transferidos, 'yes' = só transferidos. Default 'no'. */
+  transferred_filter: z.string().optional().transform((v): 'yes' | 'no' | undefined => (v === 'yes' || v === 'no' ? v : undefined)),
 });
 
 /**
@@ -26,6 +28,7 @@ export async function GET(req: NextRequest) {
       banca_id: searchParams.get('banca_id'),
       source_consultant_email: searchParams.get('source_consultant_email'),
       page: searchParams.get('page'),
+      transferred_filter: searchParams.get('transferred_filter') ?? null,
     });
 
     if (!parsed.success) {
@@ -33,7 +36,8 @@ export async function GET(req: NextRequest) {
       return errorResponse(msg, 400);
     }
 
-    const { banca_id, source_consultant_email, page } = parsed.data;
+    const { banca_id, source_consultant_email, page, transferred_filter } = parsed.data;
+    const effectiveTransferredFilter = transferred_filter === 'yes' || transferred_filter === 'no' ? transferred_filter : 'no';
 
     const ctx = await requireAdminLeadTransferContext(req, banca_id);
     const isInBanca = await isConsultantInBanca(ctx.bancaId, source_consultant_email);
@@ -42,7 +46,11 @@ export async function GET(req: NextRequest) {
     }
 
     const client = createCrmRedistributionClient(ctx.crmBaseUrl);
-    const result = await client.getIndicatedsByConsultant(source_consultant_email, DETAIL_PAGE_SIZE, page);
+    const result = await client.getIndicatedsByConsultant(source_consultant_email, DETAIL_PAGE_SIZE, page, {
+      transferredFilter: effectiveTransferredFilter,
+      sort: 'created_at',
+      direction: 'desc',
+    });
 
     if (!result.success) {
       return errorResponse(result.error ?? result.message ?? 'Erro ao buscar detalhes no CRM', 400);

@@ -129,7 +129,11 @@ export async function GET(req: NextRequest) {
       payload.receivedByTarget = listToUse.length;
       try {
         const client = createCrmRedistributionClient(resolved.crmBaseUrl);
-        const result = await client.getIndicatedsByConsultant(targetConsultantEmail, 3000);
+        const result = await client.getIndicatedsByConsultant(targetConsultantEmail, 3000, 1, {
+          transferredFilter: 'yes',
+          sort: 'created_at',
+          direction: 'desc',
+        });
         const leads = result.success && Array.isArray(result.data) ? result.data : [];
         const isTransferred = (lead: any) =>
           lead.transferred === true || lead.transferred === 'true' || lead.transferred === 1;

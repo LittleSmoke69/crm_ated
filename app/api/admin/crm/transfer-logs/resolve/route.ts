@@ -87,7 +87,11 @@ export async function POST(req: NextRequest) {
 
     const client = createCrmRedistributionClient(resolved.crmBaseUrl);
 
-    const result = await client.getIndicatedsByConsultant(targetEmail, 5000);
+    const result = await client.getIndicatedsByConsultant(targetEmail, 5000, 1, {
+      transferredFilter: 'yes',
+      sort: 'created_at',
+      direction: 'desc',
+    });
     const currentByLeadId = new Map<string, { total_depositado?: number; total_apostado?: number }>();
     const details = Array.isArray(result.data) ? result.data : [];
     for (const d of details) {

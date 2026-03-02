@@ -24,6 +24,8 @@ const querySchema = z.object({
   days_inactive: z.union([z.coerce.number().int().min(0), z.null()]).optional().transform((v) => (v == null ? undefined : v)),
   min_inactive_days: z.union([z.coerce.number().int().min(0), z.null()]).optional().transform((v) => (v == null ? undefined : v)),
   tag: z.union([z.string(), z.null()]).optional().transform((v) => (v == null ? undefined : v)),
+  /** Para comparação com CRM: 'no' = só leads ainda não transferidos (busca para transferir), 'yes' = só transferidos. */
+  transferred_filter: z.string().optional().transform((v): 'yes' | 'no' | undefined => (v === 'yes' || v === 'no' ? v : undefined)),
   balance_filter: balanceFilterEnum.optional().default('all'),
   saldo_min: optionalNumber,
   saldo_max: optionalNumber,
@@ -69,6 +71,7 @@ export async function GET(req: NextRequest) {
       days_inactive: searchParams.get('days_inactive') ?? searchParams.get('min_inactive_days') ?? null,
       min_inactive_days: searchParams.get('min_inactive_days') ?? null,
       tag: searchParams.get('tag') ?? null,
+      transferred_filter: searchParams.get('transferred_filter') ?? null,
       balance_filter: searchParams.get('balance_filter') ?? 'all',
       saldo_min: searchParams.get('saldo_min') ?? null,
       saldo_max: searchParams.get('saldo_max') ?? null,
@@ -100,6 +103,7 @@ export async function GET(req: NextRequest) {
       days_inactive,
       min_inactive_days,
       tag,
+      transferred_filter,
       balance_filter,
       saldo_min,
       saldo_max,
@@ -117,7 +121,8 @@ export async function GET(req: NextRequest) {
       total_ganho_max,
     } = parsed.data;
     const effectiveDaysInactive = days_inactive ?? min_inactive_days ?? 10;
-    console.log(`${LOG_PREFIX} GET parsed params: banca_id=${banca_id}, source_consultant_email=${source_consultant_email}, days_inactive=${effectiveDaysInactive}, balance_filter=${balance_filter}, tag=${tag ?? 'n/a'}, saldo_min=${saldo_min ?? 'n/a'}, saldo_max=${saldo_max ?? 'n/a'}, aposta_filter=${aposta_filter}, total_depositado_filter=${total_depositado_filter}, available_withdraw_filter=${available_withdraw_filter}`);
+    const effectiveTransferredFilter = transferred_filter ?? 'no';
+    console.log(`${LOG_PREFIX} GET parsed params: banca_id=${banca_id}, source_consultant_email=${source_consultant_email}, days_inactive=${effectiveDaysInactive}, transferred_filter=${effectiveTransferredFilter}, balance_filter=${balance_filter}, tag=${tag ?? 'n/a'}, saldo_min=${saldo_min ?? 'n/a'}, saldo_max=${saldo_max ?? 'n/a'}, aposta_filter=${aposta_filter}, total_depositado_filter=${total_depositado_filter}, available_withdraw_filter=${available_withdraw_filter}`);
     console.log(`${LOG_PREFIX} GET resolving context for banca_id=${banca_id}`);
 
     const ctx = await requireAdminLeadTransferContext(req, banca_id);
@@ -161,7 +166,11 @@ export async function GET(req: NextRequest) {
       let hasMore = true;
 
       while (hasMore && page <= MAX_DETAIL_PAGES) {
-        const detailsResult = await client.getIndicatedsByConsultant(source_consultant_email, DETAIL_PAGE_SIZE, page);
+        const detailsResult = await client.getIndicatedsByConsultant(source_consultant_email, DETAIL_PAGE_SIZE, page, {
+          transferredFilter: effectiveTransferredFilter,
+          sort: 'created_at',
+          direction: 'desc',
+        });
         if (!detailsResult.success || !Array.isArray(detailsResult.data)) break;
         const chunk = detailsResult.data;
         for (const d of chunk) {

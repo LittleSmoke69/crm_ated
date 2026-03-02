@@ -251,6 +251,8 @@ export default function AdminLeadTransferPage() {
   const [minSumBalance, setMinSumBalance] = useState<string>('');
   /** Atualizando saldos das transferências (backfill) */
   const [backfillingBalances, setBackfillingBalances] = useState(false);
+  /** Ref do intervalo de polling enquanto recalc saldo roda em segundo plano */
+  const recalcPollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [currentStep, setCurrentStep] = useState(1);
   const [activeTab, setActiveTab] = useState<'transfer' | 'history'>('transfer');
@@ -479,6 +481,13 @@ export default function AdminLeadTransferPage() {
     };
   }, [currentStep, daysInactivePreset, daysInactive]);
 
+  useEffect(() => {
+    if (!selectedLogForModal && recalcPollIntervalRef.current) {
+      clearInterval(recalcPollIntervalRef.current);
+      recalcPollIntervalRef.current = null;
+    }
+  }, [selectedLogForModal]);
+
   const loadTags = async () => {
     if (!bancaId || !sourceEmail?.trim() || !userId) return;
     setLoadingTags(true);
@@ -522,6 +531,7 @@ export default function AdminLeadTransferPage() {
       const daysVal = (overrideDays ?? daysInactive).trim();
       params.set('min_inactive_days', daysVal && daysVal !== '0' ? daysVal : '90');
       if (selectedTag.trim()) params.set('tag', selectedTag.trim());
+      params.set('transferred_filter', 'no');
       const res = await fetch(`/api/admin/crm/redistribution-leads?${params.toString()}`, {
         headers: headers(),
       });
@@ -545,6 +555,7 @@ export default function AdminLeadTransferPage() {
               ep.set('banca_id', bancaId);
               ep.set('source_consultant_email', sourceEmail.trim());
               ep.set('page', String(page));
+              ep.set('transferred_filter', 'no');
               const er = await fetch(`/api/admin/crm/redistribution-leads/enrichment?${ep.toString()}`, { headers: headers() });
               const ej = await er.json();
               if (currentLoadId !== loadLeadsIdRef.current) break;
@@ -901,35 +912,64 @@ export default function AdminLeadTransferPage() {
     }
   };
 
-  /** Recalcula total saldo: só soma os saldo_snapshot já gravados nas entries desta transferência (não altera o banco). */
+  /** Recalcula total saldo em segundo plano (lotes de 2000). Polling atualiza a tela aos poucos. */
   const runRecalcBalanceForLog = async () => {
     if (!bancaId || !userId || !selectedLogForModal?.id) return;
     setBackfillingBalances(true);
-    try {
-      const res = await fetch(
-        `/api/admin/crm/transfer-logs/backfill-balances?banca_id=${encodeURIComponent(bancaId)}&log_id=${encodeURIComponent(selectedLogForModal.id)}`,
-        { method: 'POST', headers: headers() }
+    showToast('Recalculando saldo em segundo plano (lotes de 2000). Os valores serão atualizados automaticamente.', 'info');
+
+    const logId = selectedLogForModal.id;
+    const fetchEntries = async () => {
+      const entryRes = await fetch(
+        `/api/admin/crm/transfer-logs/entries?log_id=${encodeURIComponent(logId)}&banca_id=${encodeURIComponent(bancaId)}`,
+        { headers: { 'X-User-Id': userId ?? '' } }
       );
+      const entryJson = await entryRes.json();
+      if (entryRes.ok && entryJson.success && Array.isArray(entryJson.data)) {
+        setModalEntries(entryJson.data);
+      }
+    };
+
+    if (recalcPollIntervalRef.current) {
+      clearInterval(recalcPollIntervalRef.current);
+      recalcPollIntervalRef.current = null;
+    }
+    recalcPollIntervalRef.current = setInterval(fetchEntries, 3000);
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 120000);
+      const res = await fetch(
+        `/api/admin/crm/transfer-logs/backfill-balances?banca_id=${encodeURIComponent(bancaId)}&log_id=${encodeURIComponent(logId)}`,
+        { method: 'POST', headers: headers(), signal: controller.signal }
+      );
+      clearTimeout(timeoutId);
+
+      if (recalcPollIntervalRef.current) {
+        clearInterval(recalcPollIntervalRef.current);
+        recalcPollIntervalRef.current = null;
+      }
+
       const json = await res.json();
+      await fetchEntries();
+      await loadTransferLogs();
+      await loadTransferStats();
+
       if (res.ok && json.success) {
         const total = json.data?.totalBalance;
-        const msg = json.data?.message ?? (total != null ? `Total saldo: R$ ${Number(total).toFixed(2).replace('.', ',')}` : 'Concluído.');
+        const msg = json.data?.message ?? (total != null ? `Total saldo antes: R$ ${Number(total).toFixed(2).replace('.', ',')}` : 'Concluído.');
         showToast(msg, 'success');
-        await loadTransferLogs();
-        await loadTransferStats();
-        const entryRes = await fetch(
-          `/api/admin/crm/transfer-logs/entries?log_id=${encodeURIComponent(selectedLogForModal.id)}&banca_id=${encodeURIComponent(bancaId)}`,
-          { headers: { 'X-User-Id': userId ?? '' } }
-        );
-        const entryJson = await entryRes.json();
-        if (entryRes.ok && entryJson.success && Array.isArray(entryJson.data)) {
-          setModalEntries(entryJson.data);
-        }
       } else {
         showToast(json?.error ?? 'Erro ao recalcular saldo.', 'error');
       }
-    } catch {
-      showToast('Erro ao recalcular saldo.', 'error');
+    } catch (e) {
+      if (recalcPollIntervalRef.current) {
+        clearInterval(recalcPollIntervalRef.current);
+        recalcPollIntervalRef.current = null;
+      }
+      const isAbort = e instanceof Error && e.name === 'AbortError';
+      showToast(isAbort ? 'Recálculo em andamento. Os valores continuarão atualizando em segundo plano.' : 'Erro ao recalcular saldo.', isAbort ? 'info' : 'error');
+      await fetchEntries();
     } finally {
       setBackfillingBalances(false);
     }
@@ -1684,7 +1724,7 @@ export default function AdminLeadTransferPage() {
                       <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white min-w-[120px]">Destino</th>
                       <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[90px]">Quem fez</th>
                       <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[56px]">Qtd</th>
-                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[100px]">Total saldo</th>
+                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[120px]" title="Soma dos saldos dos leads no momento da transferência">Total saldo (antes)</th>
                       <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white min-w-[140px]">Leads (IDs)</th>
                       <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[90px]">Re-transfer.</th>
                       <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[130px]">Prazo 10d</th>
@@ -1791,6 +1831,12 @@ export default function AdminLeadTransferPage() {
                         <X className="w-5 h-5" />
                       </button>
                     </div>
+                    {backfillingBalances && (
+                      <div className="mx-4 mt-2 flex items-center gap-2 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-4 py-2.5 text-sm text-amber-800 dark:text-amber-200">
+                        <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
+                        <span>Recalculando saldo em segundo plano (lotes de 2000 leads). Os valores abaixo serão atualizados automaticamente a cada poucos segundos.</span>
+                      </div>
+                    )}
                     <div className="p-4 text-sm text-gray-700 dark:text-gray-200 border-b border-gray-100 dark:border-[#404040] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                       <div className="flex items-center gap-4">
                         {selectedLogForModal.created_at && <span>Data: {formatDatePtBR(selectedLogForModal.created_at)}</span>}
@@ -1810,7 +1856,8 @@ export default function AdminLeadTransferPage() {
                     <div className="px-5 py-4 flex flex-wrap items-center justify-between gap-4 border-b border-gray-100 dark:border-[#404040] bg-gray-50/30 dark:bg-[#2a2a2a]">
                       <div className="flex items-center gap-6">
                         <div className="flex flex-col">
-                          <span className="text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Total em Saldo</span>
+                          <span className="text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Total saldo antes</span>
+                          <span className="text-xs text-gray-500 dark:text-gray-400 mb-0.5">(no momento da transferência)</span>
                           <span className="text-xl font-bold text-[#8CD955] tabular-nums">
                             R$ {modalEntriesFiltered.reduce((s, e) => s + (e.saldo_snapshot != null ? Number(e.saldo_snapshot) : 0), 0).toFixed(2).replace('.', ',')}
                           </span>
@@ -1974,7 +2021,8 @@ export default function AdminLeadTransferPage() {
                               </thead>
                               <tbody>
                                 {modalEntriesPaginated.map((entry, idx) => {
-                                  const fullName = [entry.name, entry.last_name].filter(Boolean).join(' ').trim() || '-';
+                                  const hasCrmData = Boolean([entry.name, entry.last_name].filter(Boolean).join(' ').trim() || (entry.email ?? '').trim() || entry.phone || entry.whatsapp);
+                                  const fullName = [entry.name, entry.last_name].filter(Boolean).join(' ').trim() || (hasCrmData ? '-' : 'Sem atualização');
                                   const phone = entry.phone || entry.whatsapp || '-';
                                   const email = (entry.email ?? '').trim() || '-';
                                   const globalIdx = (modalLeadsPage - 1) * MODAL_LEADS_PAGE_SIZE + idx;
@@ -2022,7 +2070,7 @@ export default function AdminLeadTransferPage() {
                                           </span>
                                         )}
                                       </td>
-                                      <td className="py-3 px-4 text-right tabular-nums text-sm font-bold text-[#8CD955]">{fmt(entry.saldo_snapshot)}</td>
+                                      <td className="py-3 px-4 text-right tabular-nums text-sm font-bold text-[#8CD955]">{entry.saldo_snapshot != null ? fmt(entry.saldo_snapshot) : <span className="text-gray-500 dark:text-gray-400 font-normal">Sem saldo</span>}</td>
                                       <td className="py-3 px-4 text-right">
                                         <div className="flex flex-col items-end">
                                           <div className="flex items-center gap-1.5">

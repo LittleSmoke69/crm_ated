@@ -64,7 +64,11 @@ export async function GET(req: NextRequest) {
     if (targetEmail && resolved.crmBaseUrl) {
       try {
         const client = createCrmRedistributionClient(resolved.crmBaseUrl);
-        const result = await client.getIndicatedsByConsultant(targetEmail, 2000);
+        const result = await client.getIndicatedsByConsultant(targetEmail, 2000, 1, {
+          transferredFilter: 'yes',
+          sort: 'created_at',
+          direction: 'desc',
+        });
         const details = Array.isArray(result.data) ? result.data : [];
         for (const d of details) {
           const id = d?.id != null ? String(d.id) : '';
@@ -84,7 +88,7 @@ export async function GET(req: NextRequest) {
           });
         }
       } catch (err) {
-        console.warn(`${LOG_PREFIX} CRM enrichment failed (modal ainda mostra ID/saldo):`, err);
+        console.warn(`${LOG_PREFIX} CRM enrichment failed (modal mostra dados do DB; sem saldo/atualização do CRM):`, err);
       }
     }
 

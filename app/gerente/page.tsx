@@ -94,17 +94,19 @@ interface GerenteDashboardData {
   };
 }
 
-interface TagsReportData {
-  tagUsage: Array<{
-    consultorId: string;
-    consultorName: string;
-    tags: Array<{
-      id: string;
-      label: string;
-      color: string;
-      count: number;
-    }>;
+interface TagUsageItem {
+  consultorId: string;
+  consultorName: string;
+  tags: Array<{
+    id: string;
+    label: string;
+    color: string;
+    count: number;
   }>;
+}
+
+interface TagsReportData {
+  tagUsage: TagUsageItem[];
   recentTaggedClients: Array<{
     leadId: string;
     leadName: string;
@@ -114,6 +116,38 @@ interface TagsReportData {
     tagColor: string;
     createdAt: string;
   }>;
+  hasMore?: boolean;
+  loadingInBackground?: boolean;
+  loadedCount?: number;
+}
+
+/** Mescla tagUsage de um novo lote no estado atual (soma contagens por consultor e etiqueta). */
+function mergeTagUsage(current: TagUsageItem[], batch: TagUsageItem[]): TagUsageItem[] {
+  const byConsultor = new Map<string, { name: string; byTag: Map<string, { label: string; color: string; count: number }> }>();
+  current.forEach((item) => {
+    const byTag = new Map<string, { label: string; color: string; count: number }>();
+    item.tags.forEach((t) => byTag.set(t.id, { label: t.label, color: t.color, count: t.count }));
+    byConsultor.set(item.consultorId, { name: item.consultorName, byTag });
+  });
+  batch.forEach((item) => {
+    let entry = byConsultor.get(item.consultorId);
+    if (!entry) {
+      entry = { name: item.consultorName, byTag: new Map() };
+      byConsultor.set(item.consultorId, entry);
+    }
+    item.tags.forEach((t) => {
+      const existing = entry!.byTag.get(t.id);
+      if (existing) existing.count += t.count;
+      else entry!.byTag.set(t.id, { label: t.label, color: t.color, count: t.count });
+    });
+  });
+  return Array.from(byConsultor.entries()).map(([consultorId, { name, byTag }]) => ({
+    consultorId,
+    consultorName: name,
+    tags: Array.from(byTag.entries())
+      .map(([id, t]) => ({ id, label: t.label, color: t.color, count: t.count }))
+      .sort((a, b) => b.count - a.count)
+  }));
 }
 
 export default function GerentePage() {
@@ -123,6 +157,7 @@ export default function GerentePage() {
   const [data, setData] = useState<GerenteDashboardData | null>(null);
   const [tagsReportData, setTagsReportData] = useState<TagsReportData | null>(null);
   const [tagsLoading, setTagsLoading] = useState(false);
+  const [tagsLoadingInBackground, setTagsLoadingInBackground] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   // Filtro de data
@@ -396,33 +431,79 @@ export default function GerentePage() {
     }
   };
 
+  const buildTagsReportUrl = (page: number) => {
+    const { dateFrom, dateTo } = getDateRange();
+    const params = new URLSearchParams();
+    if (isAdminOrSuperAdmin && selectedGerente) params.append('gerente_id', selectedGerente);
+    if (dateFrom) params.append('date_from', dateFrom);
+    if (dateTo) params.append('date_to', dateTo);
+    if (selectedBanca) params.append('banca_url', selectedBanca);
+    if (page > 0) params.append('page', String(page));
+    return `/api/gerente/reports/tags${params.toString() ? `?${params.toString()}` : ''}`;
+  };
+
   const loadTagsReport = async () => {
     try {
       setTagsLoading(true);
+      setTagsLoadingInBackground(false);
 
-      const { dateFrom, dateTo } = getDateRange();
-      let url = '/api/gerente/reports/tags';
-      const params = new URLSearchParams();
-      if (isAdminOrSuperAdmin && selectedGerente) {
-        params.append('gerente_id', selectedGerente);
-      }
-      if (dateFrom) params.append('date_from', dateFrom);
-      if (dateTo) params.append('date_to', dateTo);
-      if (selectedBanca) params.append('banca_url', selectedBanca);
-      if (params.toString()) {
-        url += `?${params.toString()}`;
-      }
-
-      const response = await fetch(url, {
-        headers: { 'X-User-Id': userId as string }
-      });
+      const url = buildTagsReportUrl(0);
+      const response = await fetch(url, { headers: { 'X-User-Id': userId as string } });
       const result = await response.json();
 
-      if (result.success) {
-        setTagsReportData(result.data);
+      if (!result.success) {
+        setTagsReportData(null);
+        return;
+      }
+
+      const data = result.data as TagsReportData & { hasMore?: boolean; loadedCount?: number };
+      setTagsReportData({
+        tagUsage: data.tagUsage ?? [],
+        recentTaggedClients: data.recentTaggedClients ?? [],
+        hasMore: data.hasMore,
+        loadingInBackground: data.loadingInBackground ?? false,
+        loadedCount: data.loadedCount ?? 0
+      });
+
+      if (data.hasMore) {
+        setTagsLoadingInBackground(true);
+        let page = 1;
+        let currentTagUsage = data.tagUsage ?? [];
+
+        const fetchNextPage = async () => {
+          const nextUrl = buildTagsReportUrl(page);
+          const res = await fetch(nextUrl, { headers: { 'X-User-Id': userId as string } });
+          const nextResult = await res.json();
+          if (!nextResult.success) {
+            setTagsLoadingInBackground(false);
+            return;
+          }
+          const nextData = nextResult.data as TagsReportData & { hasMore?: boolean; loadedCount?: number };
+          const merged = mergeTagUsage(currentTagUsage, nextData.tagUsage ?? []);
+          currentTagUsage = merged;
+          setTagsReportData((prev) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              tagUsage: merged,
+              hasMore: nextData.hasMore,
+              loadingInBackground: nextData.hasMore ?? false,
+              loadedCount: nextData.loadedCount ?? prev.loadedCount
+            };
+          });
+          if (nextData.hasMore) {
+            page++;
+            await fetchNextPage();
+          } else {
+            setTagsLoadingInBackground(false);
+          }
+        };
+
+        void fetchNextPage();
       }
     } catch (error) {
       console.error('Erro ao carregar relatório de etiquetas:', error);
+      setTagsLoadingInBackground(false);
     } finally {
       setTagsLoading(false);
     }
@@ -1311,7 +1392,14 @@ export default function GerentePage() {
         </div>
 
         {/* Relatório de Etiquetas */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="space-y-4">
+          {tagsLoadingInBackground && (
+            <div className="flex items-center gap-2 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-4 py-2 text-sm text-amber-800 dark:text-amber-200">
+              <div className="animate-spin rounded-full h-4 w-4 border-2 border-amber-500 border-t-transparent shrink-0" />
+              <span>Carregando dados em segundo plano… Os números podem atualizar em instantes.</span>
+            </div>
+          )}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Uso de Etiquetas por Consultor */}
           <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
             <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-6 flex items-center gap-2">
@@ -1434,6 +1522,7 @@ export default function GerentePage() {
                 </div>
               )}
             </div>
+          </div>
           </div>
         </div>
 
