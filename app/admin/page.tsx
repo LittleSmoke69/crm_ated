@@ -66,7 +66,8 @@ import {
   LogIn,
   ExternalLink,
   ArrowRightLeft,
-  Headphones as HeadphonesIcon
+  Headphones as HeadphonesIcon,
+  Unplug
 } from 'lucide-react';
 import CRMStatCard from '@/components/CRM/CRMStatCard';
 import StatusDistributionChart from '@/components/Charts/StatusDistributionChart';
@@ -3042,6 +3043,17 @@ const UsersSection = ({
   );
 };
 
+interface CampaignHistoryItem {
+  id: string;
+  phone: string;
+  status: string;
+  reason: string;
+  finished_at: string | null;
+  instance_name: string | null;
+  position: number;
+  created_at: string;
+}
+
 const CampaignsSection = ({ userId }: { userId: string | null }) => {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [loading, setLoading] = useState(true);
@@ -3050,6 +3062,12 @@ const CampaignsSection = ({ userId }: { userId: string | null }) => {
   const [editingCampaign, setEditingCampaign] = useState<Campaign | null>(null);
   const [instances, setInstances] = useState<any[]>([]);
   const [saving, setSaving] = useState(false);
+  const [historyCampaign, setHistoryCampaign] = useState<Campaign | null>(null);
+  const [historyItems, setHistoryItems] = useState<CampaignHistoryItem[]>([]);
+  const [historyPagination, setHistoryPagination] = useState<{ page: number; limit: number; total: number; totalPages: number } | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyStatusFilter, setHistoryStatusFilter] = useState<string>('');
 
   useEffect(() => {
     if (userId) {
@@ -3179,6 +3197,38 @@ const CampaignsSection = ({ userId }: { userId: string | null }) => {
     }
   };
 
+  const loadHistory = useCallback(async (campaignId: string, page: number, status?: string) => {
+    if (!userId) return;
+    setHistoryLoading(true);
+    try {
+      const params = new URLSearchParams({ page: String(page), limit: '50' });
+      if (status) params.set('status', status);
+      const res = await fetch(`/api/admin/campaigns/${campaignId}/history?${params}`, {
+        headers: { 'X-User-Id': userId },
+      });
+      const data = await res.json();
+      if (res.ok && data.success && data.data) {
+        setHistoryItems(data.data.items || []);
+        setHistoryPagination(data.data.pagination || null);
+      } else {
+        setHistoryItems([]);
+        setHistoryPagination(null);
+      }
+    } catch (error) {
+      console.error('Erro ao carregar histórico:', error);
+      setHistoryItems([]);
+      setHistoryPagination(null);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    if (historyCampaign && userId) {
+      loadHistory(historyCampaign.id, historyPage, historyStatusFilter || undefined);
+    }
+  }, [historyCampaign?.id, historyPage, historyStatusFilter, userId, loadHistory]);
+
   if (loading) {
     return <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow p-6 border border-gray-200 dark:border-[#404040] text-gray-700 dark:text-gray-300">Carregando...</div>;
   }
@@ -3298,14 +3348,27 @@ const CampaignsSection = ({ userId }: { userId: string | null }) => {
                       </div>
                     </td>
                     <td className="p-3 sm:p-4">
-                      <button
-                        onClick={() => setEditingCampaign(campaign)}
-                        className="px-3 py-1.5 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg text-sm font-medium transition flex items-center gap-2"
-                        title="Editar Campanha"
-                      >
-                        <Edit className="w-4 h-4" />
-                        Editar
-                      </button>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          onClick={() => setEditingCampaign(campaign)}
+                          className="px-3 py-1.5 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg text-sm font-medium transition flex items-center gap-2"
+                          title="Editar Campanha"
+                        >
+                          <Edit className="w-4 h-4" />
+                          Editar
+                        </button>
+                        <button
+                          onClick={() => {
+                            setHistoryCampaign(campaign);
+                            setHistoryPage(1);
+                          }}
+                          className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition flex items-center gap-2"
+                          title="Ver histórico da campanha"
+                        >
+                          <Eye className="w-4 h-4" />
+                          Histórico
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -3314,6 +3377,110 @@ const CampaignsSection = ({ userId }: { userId: string | null }) => {
           </table>
         </div>
       </div>
+
+      {/* Modal Histórico da Campanha */}
+      {historyCampaign && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setHistoryCampaign(null)}>
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] flex flex-col border border-gray-200 dark:border-[#404040]" onClick={e => e.stopPropagation()}>
+            <div className="p-4 border-b border-gray-200 dark:border-[#404040] flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-lg font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2">
+                <BarChart3 className="w-5 h-5 text-blue-600" />
+                Histórico: {historyCampaign.group_subject || historyCampaign.group_id}
+              </h3>
+              <button onClick={() => setHistoryCampaign(null)} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] text-gray-600 dark:text-gray-400">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 border-b border-gray-200 dark:border-[#404040] flex flex-wrap gap-2 items-center">
+              <span className="text-sm text-gray-600 dark:text-gray-400">Filtrar:</span>
+              <select
+                value={historyStatusFilter}
+                onChange={e => { setHistoryStatusFilter(e.target.value); setHistoryPage(1); }}
+                className="rounded-lg border border-gray-300 dark:border-[#404040] bg-white dark:bg-[#333] text-gray-800 dark:text-gray-200 px-3 py-1.5 text-sm"
+              >
+                <option value="">Todos</option>
+                <option value="success">Adicionados</option>
+                <option value="failed">Falhas</option>
+                <option value="queued">Na fila</option>
+              </select>
+            </div>
+            <div className="flex-1 overflow-auto p-4">
+              {historyLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-200 dark:border-[#404040]">
+                        <th className="text-left p-2 text-gray-700 dark:text-gray-300">Número</th>
+                        <th className="text-left p-2 text-gray-700 dark:text-gray-300">Status</th>
+                        <th className="text-left p-2 text-gray-700 dark:text-gray-300">Motivo / Resultado</th>
+                        <th className="text-left p-2 text-gray-700 dark:text-gray-300">Data/Hora</th>
+                        <th className="text-left p-2 text-gray-700 dark:text-gray-300">Instância</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {historyItems.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="p-4 text-center text-gray-500">Nenhum registro</td>
+                        </tr>
+                      ) : (
+                        historyItems.map((item) => (
+                          <tr key={item.id} className="border-b border-gray-100 dark:border-[#333]">
+                            <td className="p-2 font-mono text-gray-800 dark:text-gray-200">{item.phone}</td>
+                            <td className="p-2">
+                              <span className={`px-2 py-0.5 rounded text-xs ${
+                                item.status === 'success' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300' :
+                                item.status === 'failed' ? 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300' :
+                                'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'
+                              }`}>
+                                {item.status === 'success' ? 'Adicionado' : item.status === 'failed' ? 'Falha' : 'Fila'}
+                              </span>
+                            </td>
+                            <td className="p-2 text-gray-700 dark:text-gray-300 max-w-[200px] truncate" title={item.reason}>{item.reason}</td>
+                            <td className="p-2 text-gray-600 dark:text-gray-400">
+                              {item.finished_at ? new Date(item.finished_at).toLocaleString('pt-BR') : '-'}
+                            </td>
+                            <td className="p-2 text-gray-600 dark:text-gray-400">{item.instance_name || '-'}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+            {historyPagination && historyPagination.totalPages > 1 && (
+              <div className="p-4 border-t border-gray-200 dark:border-[#404040] flex items-center justify-between gap-2 flex-wrap">
+                <span className="text-sm text-gray-600 dark:text-gray-400">
+                  Total: {historyPagination.total} registro(s)
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    disabled={historyPage <= 1}
+                    onClick={() => setHistoryPage(p => Math.max(1, p - 1))}
+                    className="px-3 py-1.5 rounded-lg bg-gray-200 dark:bg-[#404040] text-gray-700 dark:text-gray-300 disabled:opacity-50 text-sm"
+                  >
+                    Anterior
+                  </button>
+                  <span className="px-3 py-1.5 text-sm text-gray-600 dark:text-gray-400">
+                    {historyPage} / {historyPagination.totalPages}
+                  </span>
+                  <button
+                    disabled={historyPage >= historyPagination.totalPages}
+                    onClick={() => setHistoryPage(p => p + 1)}
+                    className="px-3 py-1.5 rounded-lg bg-gray-200 dark:bg-[#404040] text-gray-700 dark:text-gray-300 disabled:opacity-50 text-sm"
+                  >
+                    Próxima
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Modal de Edição */}
       {editingCampaign && (
@@ -3988,12 +4155,17 @@ const SettingsSection = () => {
   );
 };
 
+const PROXY_LIST_PER_PAGE = 10;
+const PROXY_ASSIGN_INSTANCES_PER_PAGE = 10;
+
 const ProxySection = () => {
   const [proxys, setProxys] = useState<Proxys[]>([]);
   const [editingProxy, setEditingProxy] = useState<Proxys | null>(null);  
   const [intancesWithProxy, setInstancesWithProxy] = useState<InstanceWithProxy[]>([]);
   const [showAddModalProxy, setShowAddModalProxy] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [proxyPage, setProxyPage] = useState(1);
+  const [assignInstancesPage, setAssignInstancesPage] = useState(1);
   const [formDataProxy, setFormDataProxy] = useState({
     name: '',
     host: '',
@@ -4003,10 +4175,20 @@ const ProxySection = () => {
     protocol: '',
   });
 
+  const proxyTotalPages = Math.ceil(proxys.length / PROXY_LIST_PER_PAGE) || 1;
+  const assignTotalPages = Math.ceil(intancesWithProxy.length / PROXY_ASSIGN_INSTANCES_PER_PAGE) || 1;
+
   useEffect(() => {
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (proxyPage > proxyTotalPages && proxyTotalPages >= 1) setProxyPage(1);
+  }, [proxys.length, proxyPage, proxyTotalPages]);
+  useEffect(() => {
+    if (assignInstancesPage > assignTotalPages && assignTotalPages >= 1) setAssignInstancesPage(1);
+  }, [intancesWithProxy.length, assignInstancesPage, assignTotalPages]);
 
   const loadData = async () => {
     setLoading(true);
@@ -4154,12 +4336,12 @@ const ProxySection = () => {
     }
   };
 
-  const handleUnassignUser = async (apiId: string, userId: string) => {
+  const handleUnassignUser = async (proxyId: string, instanceId: string) => {
     const adminUserId = getStoredUserId();
     if (!adminUserId) return;
     
     try {
-      const res = await fetch(`/api/admin/evolution-apis/${apiId}/assign-user?user_id=${userId}`, {
+      const res = await fetch(`/api/admin/proxy/${proxyId}/assign-user?user_id=${instanceId}`, {
         method: 'DELETE',
         headers: { 'X-User-Id': adminUserId },
       });
@@ -4177,21 +4359,41 @@ const ProxySection = () => {
     }
   };
 
+  const handleSetProxyEnabled = async (proxyId: string, enabled: boolean) => {
+    const adminUserId = getStoredUserId();
+    if (!adminUserId) return;
+    try {
+      const res = await fetch(`/api/admin/proxy/${proxyId}/set-enabled`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': adminUserId },
+        body: JSON.stringify({ enabled }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        await loadData();
+      } else {
+        alert(data.error || 'Erro ao alterar status do proxy.');
+      }
+    } catch (err) {
+      console.error('Erro ao alterar proxy:', err);
+      alert('Erro ao alterar status do proxy.');
+    }
+  };
+
   if (loading) {
     return <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow p-6 border border-gray-200 dark:border-[#404040] text-gray-700 dark:text-gray-300">Carregando...</div>;
   }
   return (
     <div className="space-y-4 sm:space-y-6">
-      <div className="bg-gradient-to-br from-white to-emerald-50 dark:from-[#2a2a2a] dark:to-emerald-900/20 rounded-xl shadow-lg border border-emerald-100 dark:border-emerald-800 p-4 sm:p-6 relative overflow-hidden">
-        {/* Decorative background elements */}
-        <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-200/20 dark:bg-emerald-500/10 rounded-full -mr-16 -mt-16"></div>
-        <div className="absolute bottom-0 left-0 w-24 h-24 bg-emerald-300/10 dark:bg-emerald-500/5 rounded-full -ml-12 -mb-12"></div>
+      <div className="bg-gradient-to-br from-white to-gray-50 dark:from-[#2a2a2a] dark:to-[#333] rounded-xl shadow-lg border border-gray-200 dark:border-[#404040] p-4 sm:p-6 relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-32 h-32 bg-[#8CD955]/10 dark:bg-[#8CD955]/5 rounded-full -mr-16 -mt-16"></div>
+        <div className="absolute bottom-0 left-0 w-24 h-24 bg-[#8CD955]/5 dark:bg-[#8CD955]/5 rounded-full -ml-12 -mb-12"></div>
         
         <div className="relative z-10">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4 sm:mb-6">
             <div className="flex items-center gap-2">
               <Settings className="w-5 h-5 sm:w-6 sm:h-6 text-[#8CD955]" />
-              <h2 className="text-xl sm:text-2xl font-bold text-gray-800">Proxys Evolution</h2>
+              <h2 className="text-xl sm:text-2xl font-bold text-gray-800 dark:text-white">Proxys Evolution</h2>
             </div>
           <button
             onClick={() => {
@@ -4209,58 +4411,67 @@ const ProxySection = () => {
         <div className="overflow-x-auto -mx-4 sm:mx-0">
           <table className="w-full min-w-[600px]">
             <thead>
-              <tr className="border-b border-gray-200">
-                <th className="text-left p-3 sm:p-4 text-gray-700 text-sm sm:text-base">Nome</th>
-                <th className="text-left p-3 sm:p-4 text-gray-700 text-sm sm:text-base">Host</th>
-                <th className="text-left p-3 sm:p-4 text-gray-700 text-sm sm:text-base">Port</th>
-                <th className="text-left p-3 sm:p-4 text-gray-700 text-sm sm:text-base">Protocol</th>
-                <th className="text-left p-3 sm:p-4 text-gray-700 text-sm sm:text-base">Username</th>
-                <th className="text-left p-3 sm:p-4 text-gray-700 text-sm sm:text-base">Status</th>
-                <th className="text-left p-3 sm:p-4 text-gray-700 text-sm sm:text-base">Ações</th>
+              <tr className="border-b border-gray-200 dark:border-[#404040]">
+                <th className="text-left p-3 sm:p-4 text-gray-700 dark:text-gray-300 text-sm sm:text-base">Nome</th>
+                <th className="text-left p-3 sm:p-4 text-gray-700 dark:text-gray-300 text-sm sm:text-base">Host</th>
+                <th className="text-left p-3 sm:p-4 text-gray-700 dark:text-gray-300 text-sm sm:text-base">Port</th>
+                <th className="text-left p-3 sm:p-4 text-gray-700 dark:text-gray-300 text-sm sm:text-base">Protocol</th>
+                <th className="text-left p-3 sm:p-4 text-gray-700 dark:text-gray-300 text-sm sm:text-base">Username</th>
+                <th className="text-left p-3 sm:p-4 text-gray-700 dark:text-gray-300 text-sm sm:text-base">Status</th>
+                <th className="text-left p-3 sm:p-4 text-gray-700 dark:text-gray-300 text-sm sm:text-base">Ações</th>
               </tr>
             </thead>
             <tbody>
               {proxys.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="p-8 text-center text-gray-500">
+                  <td colSpan={7} className="p-8 text-center text-gray-500 dark:text-gray-400">
                     Nenhuma Proxy configurada
                   </td>
                 </tr>
               ) : (
-                proxys.map((proxy) => (
-                  <tr key={proxy.id} className="border-b border-gray-100 hover:bg-gray-50">
+                proxys
+                  .slice((proxyPage - 1) * PROXY_LIST_PER_PAGE, proxyPage * PROXY_LIST_PER_PAGE)
+                  .map((proxy) => (
+                  <tr key={proxy.id} className="border-b border-gray-100 dark:border-[#404040] hover:bg-gray-50 dark:hover:bg-[#333]">
                     <td className="p-3 sm:p-4">
-                      <div className="font-medium text-gray-800 text-sm sm:text-base">{proxy.name || 'Sem nome'}</div>
+                      <div className="font-medium text-gray-800 dark:text-white text-sm sm:text-base">{proxy.name || 'Sem nome'}</div>
                     </td>
                     <td className="p-3 sm:p-4">
-                      <div className="text-gray-600 text-sm sm:text-base">{proxy.host}</div>
+                      <div className="text-gray-600 dark:text-gray-400 text-sm sm:text-base">{proxy.host}</div>
                     </td>
-                    <td className="p-3 sm:p-4 text-xs sm:text-sm text-gray-600 break-all">{proxy.port}</td>
-                    <td className="p-3 sm:p-4 text-xs sm:text-sm text-gray-600 break-all">{proxy.protocol}</td>
-                    <td className="p-3 sm:p-4 text-xs sm:text-sm text-gray-600 break-all">{proxy.username}</td>
+                    <td className="p-3 sm:p-4 text-xs sm:text-sm text-gray-600 dark:text-gray-400 break-all">{proxy.port}</td>
+                    <td className="p-3 sm:p-4 text-xs sm:text-sm text-gray-600 dark:text-gray-400 break-all">{proxy.protocol}</td>
+                    <td className="p-3 sm:p-4 text-xs sm:text-sm text-gray-600 dark:text-gray-400 break-all">{proxy.username}</td>
                     <td className="p-3 sm:p-4">
                       <span
-                        className={`px-2 py-1 rounded text-xs ${
+                        className={`px-2 py-1 rounded text-xs font-medium ${
                           proxy.enabled
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : 'bg-gray-100 text-gray-800'
+                            ? 'bg-[#8CD955]/20 text-[#8CD955] dark:bg-[#8CD955]/20 dark:text-[#8CD955]'
+                            : 'bg-gray-200 dark:bg-[#404040] text-gray-600 dark:text-gray-400'
                         }`}
                       >
                         {proxy.enabled ? 'Ativa' : 'Inativa'}
                       </span>
                     </td>
                     <td className="p-3 sm:p-4">
-                      <div className="flex gap-2">
+                      <div className="flex flex-wrap gap-1">
+                        <button
+                          onClick={() => handleSetProxyEnabled(proxy.id, !proxy.enabled)}
+                          className="p-2 rounded border border-gray-300 dark:border-[#404040] hover:bg-gray-100 dark:hover:bg-[#333] text-gray-700 dark:text-gray-300"
+                          title={proxy.enabled ? 'Bloquear uso do proxy (desativa na Evolution)' : 'Desbloquear proxy (habilita na Evolution)'}
+                        >
+                          {proxy.enabled ? <Lock className="w-4 h-4" /> : <Lock className="w-4 h-4 opacity-50" />}
+                        </button>
                         <button
                           onClick={() => handleEditProxy(proxy)}
-                          className="p-2 text-[#8CD955] hover:bg-emerald-50 rounded"
+                          className="p-2 text-[#8CD955] hover:bg-[#8CD955]/10 dark:hover:bg-[#8CD955]/10 rounded"
                           title="Editar"
                         >
                           <Edit className="w-4 h-4" />
                         </button>
                         <button
                           onClick={() => handleDelete(proxy.id)}
-                          className="p-2 text-red-600 hover:bg-red-50 rounded"
+                          className="p-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 rounded"
                           title="Deletar"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -4273,27 +4484,38 @@ const ProxySection = () => {
             </tbody>
           </table>
         </div>
+        {proxys.length > PROXY_LIST_PER_PAGE && (
+          <Pagination
+            currentPage={proxyPage}
+            totalPages={proxyTotalPages}
+            onPageChange={setProxyPage}
+            itemsPerPage={PROXY_LIST_PER_PAGE}
+            totalItems={proxys.length}
+          />
+        )}
         </div>
       </div>
-      <div className="bg-gradient-to-br from-white to-emerald-50 rounded-xl shadow-lg border border-emerald-100 p-4 sm:p-6 relative overflow-hidden">
-        {/* Decorative background elements */}
-        <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-200/20 rounded-full -mr-16 -mt-16"></div>
-        <div className="absolute bottom-0 left-0 w-24 h-24 bg-emerald-300/10 rounded-full -ml-12 -mb-12"></div>
+      <div className="bg-gradient-to-br from-white to-gray-50 dark:from-[#2a2a2a] dark:to-[#333] rounded-xl shadow-lg border border-gray-200 dark:border-[#404040] p-4 sm:p-6 relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-32 h-32 bg-[#8CD955]/10 dark:bg-[#8CD955]/5 rounded-full -mr-16 -mt-16"></div>
+        <div className="absolute bottom-0 left-0 w-24 h-24 bg-[#8CD955]/5 rounded-full -ml-12 -mb-12"></div>
         
         <div className="relative z-10">
           <div className="flex items-center gap-2 mb-4 sm:mb-6">
             <Users className="w-5 h-5 sm:w-6 sm:h-6 text-[#8CD955]" />
-            <h2 className="text-xl sm:text-2xl font-bold text-gray-800">Atribuir Instancias aos Proxys</h2>
+            <h2 className="text-xl sm:text-2xl font-bold text-gray-800 dark:text-white">Atribuir Instancias aos Proxys</h2>
           </div>
           <div className="space-y-4">
-            {intancesWithProxy.map((instance) => (
-              <div key={instance.id} className="bg-gray-50/80 rounded-lg border border-gray-200 p-3 sm:p-4">
+            {intancesWithProxy
+              .slice((assignInstancesPage - 1) * PROXY_ASSIGN_INSTANCES_PER_PAGE, assignInstancesPage * PROXY_ASSIGN_INSTANCES_PER_PAGE)
+              .map((instance) => (
+              <div key={instance.id} className="bg-gray-50/80 dark:bg-[#333] rounded-lg border border-gray-200 dark:border-[#404040] p-3 sm:p-4">
               <div className="flex flex-col sm:flex-row justify-between items-start gap-3 mb-3">
                 <div className="flex-1">
-                  <div className="font-medium text-gray-800 text-sm sm:text-base">{instance.instance_name}</div>
+                  <div className="font-medium text-gray-800 dark:text-white text-sm sm:text-base">{instance.instance_name}</div>
                 </div>
+                <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
                 <select
-                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-700 w-full sm:w-auto"
+                  className="border border-gray-300 dark:border-[#404040] rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-white bg-white dark:bg-[#2a2a2a] w-full sm:w-auto"
                   value={instance.proxy_instances.find(ua => ua.enabled)?.proxy_instances?.id || ''}
                   onChange={async (e) => {
                     const proxyId = e.target.value;
@@ -4330,22 +4552,56 @@ const ProxySection = () => {
                     </option>
                   ))}
                 </select>
+                {instance.proxy_instances.length > 0 && (() => {
+                  const current = instance.proxy_instances.find(ua => ua.enabled) ?? instance.proxy_instances[0];
+                  const proxyId = current?.proxy_instances?.id ?? current?.id;
+                  const proxyLabel = current?.proxy_instances?.name || current?.proxy_instances?.host || 'proxy';
+                  return proxyId ? (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!confirm(`Tirar o proxy "${proxyLabel}" da instância ${instance.instance_name}?`)) return;
+                      try {
+                        await handleUnassignUser(proxyId, instance.id);
+                        await loadData();
+                      } catch (e) {
+                        alert('Erro ao remover proxy da instância.');
+                      }
+                    }}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-amber-700 dark:text-amber-400 border border-amber-400 dark:border-amber-500 rounded-lg hover:bg-amber-50 dark:hover:bg-amber-500/10"
+                    title="Tirar proxy da instância"
+                  >
+                    <Unplug className="w-3.5 h-3.5" />
+                    Tirar da instância
+                  </button>
+                  ) : null;
+                })()}
+              </div>
               </div>
               {instance.proxy_instances.length > 0 && (
-                <div className="text-sm text-gray-600">
+                <div className="text-sm text-gray-600 dark:text-gray-400">
                   Proxies atribuídos: {instance.proxy_instances.map(pi => pi.proxy_instances.name || pi.proxy_instances.host).join(', ')}
                 </div>
               )}
             </div>
           ))}
           </div>
+          {intancesWithProxy.length > PROXY_ASSIGN_INSTANCES_PER_PAGE && (
+            <Pagination
+              currentPage={assignInstancesPage}
+              totalPages={assignTotalPages}
+              onPageChange={setAssignInstancesPage}
+              itemsPerPage={PROXY_ASSIGN_INSTANCES_PER_PAGE}
+              totalItems={intancesWithProxy.length}
+            />
+          )}
         </div>
       </div>
       {showAddModalProxy && (
         <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-lg p-4 sm:p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-gray-200 dark:border-[#404040]">
             <div className="flex justify-between items-center mb-4 sm:mb-6">
-              <h3 className="text-lg sm:text-xl font-semibold text-gray-800">
+              <h3 className="text-lg sm:text-xl font-semibold text-gray-800 dark:text-white">
                 {editingProxy ? 'Editar Proxy' : 'Adicionar Proxy'}
               </h3>
               <button
@@ -4353,7 +4609,7 @@ const ProxySection = () => {
                   setShowAddModalProxy(false);
                   setEditingProxy(null);
                 }}
-                className="text-gray-400 hover:text-gray-600"
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
               >
                 <X className="w-5 h-5 sm:w-6 sm:h-6" />
               </button>

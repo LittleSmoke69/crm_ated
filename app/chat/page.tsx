@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import Layout from '@/components/Layout';
 import { supabase } from '@/lib/supabase';
@@ -25,6 +25,8 @@ import {
   Inbox,
   MessageCircle,
   AlertCircle,
+  RefreshCw,
+  Database,
 } from 'lucide-react';
 
 interface Message {
@@ -93,7 +95,8 @@ export default function ChatPage() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const authHeaders = (): Record<string, string> => (userId ? { 'X-User-Id': userId } : {});
-  const canSelectChannel = userStatus === 'super_admin' || userStatus === 'admin';
+  const canSelectChannel =
+    userStatus === 'super_admin' || userStatus === 'admin' || userStatus === 'suporte';
 
   const handleSignOut = async () => {
     if (typeof window !== 'undefined') {
@@ -148,11 +151,10 @@ export default function ChatPage() {
     loadChannels();
   }, [userId]);
 
-  // Carregar conversas quando o canal mudar
-  useEffect(() => {
-    if (!selectedChannel) return;
-
-    const loadConversations = async () => {
+  // Carrega conversas do banco (uma por número de telefone; conversas existentes são continuadas, não criadas novas)
+  const loadConversationsFromApi = useCallback(
+    async (keepSelectionIfPresent = false) => {
+      if (!selectedChannel) return;
       setLoading(true);
       try {
         const params =
@@ -162,17 +164,29 @@ export default function ChatPage() {
         const response = await fetch(`/api/chat/conversations?${params}`, { headers: authHeaders() });
         const result = await response.json();
         if (result.success) {
-          setConversations(result.data || []);
+          const list = result.data || [];
+          setConversations(list);
+          // Ao atualizar lista, manter conversa selecionada só se ainda existir no banco
+          if (keepSelectionIfPresent) {
+            setSelectedConversationId((prev) =>
+              prev && list.some((c: Conversation) => c.id === prev) ? prev : ''
+            );
+          }
         }
       } catch (error) {
         console.error('Erro ao carregar conversas:', error);
       } finally {
         setLoading(false);
       }
-    };
+    },
+    [selectedChannel]
+  );
 
-    loadConversations();
-  }, [selectedChannel]);
+  // Carregar conversas do banco quando o canal mudar
+  useEffect(() => {
+    if (!selectedChannel) return;
+    loadConversationsFromApi(false);
+  }, [selectedChannel, loadConversationsFromApi]);
 
   // Carregar mensagens quando conversa mudar
   useEffect(() => {
@@ -239,12 +253,24 @@ export default function ChatPage() {
     };
   }, [selectedConversationId]);
 
+  // Pedir permissão de notificação para suporte/admin/super_admin (nova conversa)
+  useEffect(() => {
+    const canNotify =
+      userStatus === 'super_admin' || userStatus === 'admin' || userStatus === 'suporte';
+    if (!canNotify || typeof window === 'undefined' || !('Notification' in window)) return;
+    if (Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {});
+    }
+  }, [userStatus]);
+
   // Supabase Realtime para conversas (Evolution por instance_id, Oficial por whatsapp_config_id)
   useEffect(() => {
     if (!selectedChannel) return;
 
     const filterCol = selectedChannel.type === 'evolution' ? 'instance_id' : 'whatsapp_config_id';
     const filterVal = selectedChannel.id;
+    const canNotify =
+      userStatus === 'super_admin' || userStatus === 'admin' || userStatus === 'suporte';
 
     const channel = supabase
       .channel(`chat_conversations_${selectedChannel.type}_${selectedChannel.id}`)
@@ -258,17 +284,34 @@ export default function ChatPage() {
         },
         (payload) => {
           if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+            const newConv = payload.new as Conversation;
+            const isNew = payload.eventType === 'INSERT';
+
             setConversations((prev) => {
-              const existing = prev.findIndex((c) => c.id === payload.new.id);
+              const existing = prev.findIndex((c) => c.id === newConv.id);
               if (existing >= 0) {
                 const updated = [...prev];
-                updated[existing] = payload.new as Conversation;
+                updated[existing] = newConv;
                 return updated.sort((a, b) =>
                   new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime()
                 );
               }
-              return [payload.new as Conversation, ...prev];
+              return [newConv, ...prev];
             });
+
+            // Notificar usuários de suporte quando chegar nova conversa (aba em segundo plano)
+            if (isNew && canNotify && typeof window !== 'undefined' && 'Notification' in window) {
+              const convTitle = newConv.title || 'Nova conversa';
+              const preview = (newConv.last_message_preview || '').slice(0, 60);
+              if (document.visibilityState === 'hidden' && Notification.permission === 'granted') {
+                try {
+                  new Notification('Nova conversa no Chat — Zaploto', {
+                    body: preview ? `${convTitle}: ${preview}${preview.length >= 60 ? '...' : ''}` : convTitle,
+                    icon: '/favicon.ico',
+                  });
+                } catch (_) {}
+              }
+            }
           }
         }
       )
@@ -277,7 +320,7 @@ export default function ChatPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [selectedChannel]);
+  }, [selectedChannel, userStatus]);
 
   const handleSendMessage = async () => {
     if (!messageText.trim() || !selectedConversationId || !selectedChannel || sending) return;
@@ -402,11 +445,13 @@ export default function ChatPage() {
     return colors[index];
   };
 
-  // Filtrar conversas
+  // Filtrar conversas (null-safe: title e last_message_preview podem ser null)
   const filteredConversations = conversations.filter((conv) => {
+    const term = (searchTerm || '').trim().toLowerCase();
     const matchesSearch =
-      conv.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      conv.last_message_preview.toLowerCase().includes(searchTerm.toLowerCase());
+      !term ||
+      (conv.title || '').toLowerCase().includes(term) ||
+      (conv.last_message_preview || '').toLowerCase().includes(term);
 
     if (!matchesSearch) return false;
 
@@ -543,10 +588,26 @@ export default function ChatPage() {
           </div>
         </div>
 
-        {/* Painel Central - Lista de Conversas */}
+        {/* Painel Central - Lista de Conversas (sempre do banco; uma conversa por número, continuada) */}
         <div className="w-80 bg-white dark:bg-[#2a2a2a] border-r border-gray-200 dark:border-[#404040] flex flex-col">
-          {/* Header com Busca */}
+          {/* Header: conversas do banco + atualizar */}
           <div className="p-4 border-b border-gray-200 dark:border-[#404040]">
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <span className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+                <Database className="w-4 h-4 text-[#8CD955]" />
+                Conversas do banco
+              </span>
+              <button
+                type="button"
+                onClick={() => loadConversationsFromApi(true)}
+                disabled={!selectedChannel || loading}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-[#8CD955] hover:bg-[#8CD95515] dark:hover:bg-[#8CD95520] rounded-lg border border-[#8CD955] disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Recarregar conversas salvas no banco (por número de telefone)"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+                Atualizar
+              </button>
+            </div>
             <div className="relative mb-4">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 dark:text-gray-400 w-4 h-4" />
               <input
@@ -599,12 +660,24 @@ export default function ChatPage() {
               <div className="p-4 text-center text-gray-500 dark:text-gray-400 text-sm">Carregando...</div>
             ) : filteredConversations.length === 0 ? (
               <div className="p-4 text-center text-gray-500 dark:text-gray-400 text-sm">
-                {selectedChannel ? 'Nenhuma conversa encontrada' : 'Selecione um canal'}
+                {selectedChannel ? (
+                  <>
+                    Nenhuma conversa no banco para este canal.
+                    <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                      Cada número tem uma única conversa; ao chegar nova mensagem ela é continuada, não criada outra.
+                    </p>
+                    {(userStatus === 'super_admin' || userStatus === 'admin' || userStatus === 'suporte') && (
+                      <p className="mt-1 text-xs">Novas mensagens no WhatsApp aparecerão aqui e você será notificado.</p>
+                    )}
+                  </>
+                ) : (
+                  'Selecione um canal'
+                )}
               </div>
             ) : (
               filteredConversations.map((conv) => {
-                const initials = getInitials(conv.title);
-                const bgColor = getConversationColor(conv.title);
+                const initials = getInitials(conv.title || '');
+                const bgColor = getConversationColor(conv.title || '');
                 const isSelected = selectedConversationId === conv.id;
 
                 return (
@@ -628,12 +701,12 @@ export default function ChatPage() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between mb-1">
-                          <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">{conv.title}</h3>
+                          <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">{conv.title || 'Sem nome'}</h3>
                           <span className="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0 ml-2">
                             {formatTime(conv.last_message_at)}
                           </span>
                         </div>
-                        <p className="text-xs text-gray-600 dark:text-gray-400 truncate mb-1">{conv.last_message_preview}</p>
+                        <p className="text-xs text-gray-600 dark:text-gray-400 truncate mb-1">{conv.last_message_preview || '—'}</p>
                         <div className="flex items-center justify-end">
                           {conv.unread_count > 0 && (
                             <span

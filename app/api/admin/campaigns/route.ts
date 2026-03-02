@@ -4,33 +4,38 @@ import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 /**
- * Recalcula métricas de todas as campanhas em uma única operação (1 query + updates paralelos).
- * Não bloqueia com retries longos: em falha de rede, retorna null e a resposta usa métricas já salvas no DB.
+ * Recalcula métricas de todas as campanhas usando COUNT por campanha (evita limite de linhas do PostgREST).
+ * Fonte da verdade: campaign_contacts (status = success | failed).
  */
 async function recalculateAllCampaignsMetrics(
   campaignIds: string[]
 ): Promise<Record<string, { processed: number; failed: number }> | null> {
   if (campaignIds.length === 0) return {};
 
-  const { data: jobRows, error } = await supabaseServiceRole
-    .from('campaign_contacts')
-    .select('campaign_id, status')
-    .in('campaign_id', campaignIds);
-
-  if (error) {
-    console.warn(`⚠️ Erro ao buscar campaign_contacts para recálculo (admin list):`, error.message);
-    // Retorna null para usar métricas já salvas na tabela campaigns
-    return null;
-  }
-
   const byCampaign: Record<string, { processed: number; failed: number }> = {};
   for (const id of campaignIds) {
     byCampaign[id] = { processed: 0, failed: 0 };
   }
-  (jobRows || []).forEach((row: { campaign_id: string; status: string }) => {
-    if (!byCampaign[row.campaign_id]) return;
-    if (row.status === 'success') byCampaign[row.campaign_id].processed++;
-    else if (row.status === 'failed') byCampaign[row.campaign_id].failed++;
+
+  const countPromises = campaignIds.flatMap((campaignId) => [
+    supabaseServiceRole
+      .from('campaign_contacts')
+      .select('*', { count: 'exact', head: true })
+      .eq('campaign_id', campaignId)
+      .eq('status', 'success'),
+    supabaseServiceRole
+      .from('campaign_contacts')
+      .select('*', { count: 'exact', head: true })
+      .eq('campaign_id', campaignId)
+      .eq('status', 'failed'),
+  ]);
+  const countResults = await Promise.all(countPromises);
+
+  campaignIds.forEach((campaignId, i) => {
+    const successRes = countResults[i * 2];
+    const failedRes = countResults[i * 2 + 1];
+    byCampaign[campaignId].processed = (successRes as { count?: number })?.count ?? 0;
+    byCampaign[campaignId].failed = (failedRes as { count?: number })?.count ?? 0;
   });
 
   const now = new Date().toISOString();
@@ -49,7 +54,6 @@ async function recalculateAllCampaignsMetrics(
     );
   } catch (err) {
     console.warn('⚠️ Erro ao persistir métricas recalculadas (admin list):', (err as Error)?.message);
-    // Retorna as métricas calculadas mesmo assim; a resposta fica correta
   }
 
   return byCampaign;

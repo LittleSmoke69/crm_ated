@@ -16,6 +16,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ExternalLink,
+  FileJson,
 } from 'lucide-react';
 import Layout from '@/components/Layout';
 
@@ -71,6 +72,8 @@ export default function WhatsAppOfficialAdmin() {
   const [webhookEventsTotal, setWebhookEventsTotal] = useState(0);
   const [webhookEventsTotalPages, setWebhookEventsTotalPages] = useState(0);
   const [webhookUrlCopied, setWebhookUrlCopied] = useState(false);
+  const [payloadModalEvent, setPayloadModalEvent] = useState<WebhookEventRow | null>(null);
+  const [payloadCopied, setPayloadCopied] = useState(false);
 
   const userId = typeof window !== 'undefined' ? (sessionStorage.getItem('user_id') || localStorage.getItem('profile_id')) : null;
   const headers = () => ({ 'Content-Type': 'application/json', 'X-User-Id': userId || '' });
@@ -100,7 +103,7 @@ export default function WhatsAppOfficialAdmin() {
         setWebhookEvents(data.data);
         if (data.pagination) {
           setWebhookEventsTotal(data.pagination.total);
-          setWebhookEventsTotalPages(data.pagination.totalPages);
+          setWebhookEventsTotalPages(Math.max(1, data.pagination.totalPages));
         }
       }
     } catch (e) {
@@ -567,6 +570,7 @@ export default function WhatsAppOfficialAdmin() {
                           <tr className="border-b border-[var(--card-border)]">
                             <th className="py-2 pr-4 font-medium text-[var(--muted-foreground)]">Data/Hora</th>
                             <th className="py-2 pr-4 font-medium text-[var(--muted-foreground)]">Resumo</th>
+                            <th className="py-2 pr-4 font-medium text-[var(--muted-foreground)] w-24">Ações</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-[var(--card-border)]">
@@ -576,36 +580,47 @@ export default function WhatsAppOfficialAdmin() {
                                 {new Date(ev.created_at).toLocaleString('pt-BR')}
                               </td>
                               <td className="py-2 pr-4">{getEventSummary(ev.raw_payload)}</td>
+                              <td className="py-2 pr-4">
+                                <button
+                                  type="button"
+                                  onClick={() => setPayloadModalEvent(ev)}
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded border border-[var(--card-border)] hover:bg-[var(--muted)]/30 text-xs font-medium"
+                                  title="Ver payload do evento"
+                                >
+                                  <FileJson className="w-3.5 h-3.5" /> Ver payload
+                                </button>
+                              </td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
                     </div>
-                    {webhookEventsTotalPages > 1 && (
-                      <div className="flex items-center justify-between mt-4 pt-3 border-t border-[var(--card-border)]">
-                        <span className="text-xs text-[var(--muted-foreground)]">
-                          {webhookEventsTotal} evento(s) · Página {webhookEventsPage} de {webhookEventsTotalPages}
-                        </span>
-                        <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => setWebhookEventsPage((p) => Math.max(1, p - 1))}
-                            disabled={webhookEventsPage <= 1 || webhookEventsLoading}
-                            className="p-2 rounded border border-[var(--card-border)] disabled:opacity-50 hover:bg-[var(--muted)]/30"
-                          >
-                            <ChevronLeft className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setWebhookEventsPage((p) => Math.min(webhookEventsTotalPages, p + 1))}
-                            disabled={webhookEventsPage >= webhookEventsTotalPages || webhookEventsLoading}
-                            className="p-2 rounded border border-[var(--card-border)] disabled:opacity-50 hover:bg-[var(--muted)]/30"
-                          >
-                            <ChevronRight className="w-4 h-4" />
-                          </button>
-                        </div>
+                    {/* Paginação sempre visível quando há eventos */}
+                    <div className="flex items-center justify-between mt-4 pt-3 border-t border-[var(--card-border)]">
+                      <span className="text-xs text-[var(--muted-foreground)]">
+                        {webhookEventsTotal} evento(s){webhookEventsTotalPages >= 1 ? ` · Página ${webhookEventsPage} de ${webhookEventsTotalPages}` : ''}
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setWebhookEventsPage((p) => Math.max(1, p - 1))}
+                          disabled={webhookEventsPage <= 1 || webhookEventsLoading}
+                          className="p-2 rounded border border-[var(--card-border)] disabled:opacity-50 hover:bg-[var(--muted)]/30"
+                          title="Página anterior"
+                        >
+                          <ChevronLeft className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setWebhookEventsPage((p) => Math.min(webhookEventsTotalPages, p + 1))}
+                          disabled={webhookEventsPage >= webhookEventsTotalPages || webhookEventsLoading}
+                          className="p-2 rounded border border-[var(--card-border)] disabled:opacity-50 hover:bg-[var(--muted)]/30"
+                          title="Próxima página"
+                        >
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
                       </div>
-                    )}
+                    </div>
                   </>
                 )}
                 {!webhookEventsLoading && webhookEvents.length > 0 && (
@@ -621,6 +636,57 @@ export default function WhatsAppOfficialAdmin() {
             </div>
           </div>
         </div>
+
+        {/* Modal: Ver payload do evento */}
+        {payloadModalEvent && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60"
+            onClick={() => setPayloadModalEvent(null)}
+          >
+            <div
+              className="bg-[var(--card)] border border-[var(--card-border)] rounded-xl shadow-xl max-w-4xl w-full max-h-[85vh] flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between p-4 border-b border-[var(--card-border)]">
+                <h3 className="font-semibold flex items-center gap-2">
+                  <FileJson className="w-5 h-5 text-[var(--zaploto-green)]" />
+                  Payload do evento — {new Date(payloadModalEvent.created_at).toLocaleString('pt-BR')}
+                </h3>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const json = JSON.stringify(payloadModalEvent.raw_payload ?? {}, null, 2);
+                        await navigator.clipboard.writeText(json);
+                        setPayloadCopied(true);
+                        setTimeout(() => setPayloadCopied(false), 2000);
+                      } catch (e) {
+                        console.error(e);
+                      }
+                    }}
+                    className="p-2 rounded border border-[var(--card-border)] hover:bg-[var(--muted)]/30"
+                    title="Copiar JSON"
+                  >
+                    {payloadCopied ? <CheckCircle2 className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPayloadModalEvent(null)}
+                    className="p-2 rounded border border-[var(--card-border)] hover:bg-[var(--muted)]/30"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+              <div className="flex-1 overflow-auto p-4">
+                <pre className="text-xs font-mono bg-[var(--muted)]/30 rounded-lg p-4 overflow-x-auto whitespace-pre-wrap break-words">
+                  {JSON.stringify(payloadModalEvent.raw_payload ?? {}, null, 2)}
+                </pre>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </Layout>
   );

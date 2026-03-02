@@ -42,9 +42,15 @@ export async function GET(req: NextRequest) {
       .eq('id', userId)
       .single();
 
-    const isAdmin = profile?.status === 'admin' || profile?.status === 'super_admin';
-    const canAccessEvolution = conversation.instance_id && (isAdmin || conversation.user_id === userId);
-    const canAccessWhatsAppOfficial = conversation.whatsapp_config_id && (isAdmin || conversation.workspace_id === profile?.zaploto_id);
+    const isAdminOrSuporte =
+      profile?.status === 'admin' ||
+      profile?.status === 'super_admin' ||
+      profile?.status === 'suporte';
+    const canAccessEvolution =
+      conversation.instance_id && (isAdminOrSuporte || conversation.user_id === userId);
+    const canAccessWhatsAppOfficial =
+      conversation.whatsapp_config_id &&
+      (isAdminOrSuporte || conversation.workspace_id === profile?.zaploto_id);
     if (!canAccessEvolution && !canAccessWhatsAppOfficial) {
       return errorResponse('Acesso negado.', 403);
     }

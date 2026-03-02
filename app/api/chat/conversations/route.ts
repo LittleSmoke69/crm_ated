@@ -33,7 +33,10 @@ export async function GET(req: NextRequest) {
       .eq('id', userId)
       .single();
 
-    const isAdmin = profile?.status === 'admin' || profile?.status === 'super_admin';
+    const isAdminOrSuporte =
+      profile?.status === 'admin' ||
+      profile?.status === 'super_admin' ||
+      profile?.status === 'suporte';
 
     if (instance_id) {
       const { data: instance, error: instError } = await supabaseServiceRole
@@ -46,7 +49,7 @@ export async function GET(req: NextRequest) {
         return errorResponse('Instância não encontrada', 404);
       }
 
-      if (!isAdmin && instance.user_id !== userId) {
+      if (!isAdminOrSuporte && instance.user_id !== userId) {
         return errorResponse('Acesso negado.', 403);
       }
 
@@ -71,7 +74,7 @@ export async function GET(req: NextRequest) {
       return errorResponse('Configuração WhatsApp Oficial não encontrada', 404);
     }
 
-    if (!isAdmin && config.zaploto_id !== profile?.zaploto_id) {
+    if (!isAdminOrSuporte && config.zaploto_id !== profile?.zaploto_id) {
       return errorResponse('Acesso negado.', 403);
     }
 

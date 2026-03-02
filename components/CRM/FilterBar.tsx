@@ -72,11 +72,19 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
     const controller = new AbortController();
     const { signal } = controller;
 
+    const getUserId = (): string | null => {
+      try {
+        return sessionStorage.getItem('user_id') || localStorage.getItem('profile_id') || null;
+      } catch {
+        return null;
+      }
+    };
+
     const loadBancas = async () => {
       setBancasLoading(true);
       let loadedBancas: { id: string; name: string; url: string }[] = [];
       try {
-        const userId = sessionStorage.getItem('user_id') || localStorage.getItem('profile_id');
+        const userId = getUserId();
         if (!userId) {
           if (!signal.aborted) {
             setBancasLoading(false);
@@ -104,8 +112,9 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           setBancas(result.data);
           loadedBancas = result.data;
         }
-      } catch (err: any) {
-        if (err?.name === 'AbortError') return;
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === 'AbortError') return;
+        console.error('[FilterBar] Erro ao carregar bancas:', err);
       } finally {
         if (!signal.aborted) {
           setBancasLoading(false);
@@ -120,31 +129,38 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
 
   // Carrega tags
   useEffect(() => {
+    const getUserId = (): string | null => {
+      try {
+        return sessionStorage.getItem('user_id') || localStorage.getItem('profile_id') || null;
+      } catch {
+        return null;
+      }
+    };
+
     const loadTags = async () => {
       try {
-        const userId = sessionStorage.getItem('user_id') || localStorage.getItem('profile_id');
+        const userId = getUserId();
         if (!userId) {
-          console.warn('[FilterBar] Usuário não encontrado, não é possível carregar tags');
           return;
         }
-        
+
         const response = await fetch('/api/crm/tags', {
-          headers: { 'X-User-Id': userId }
+          headers: { 'X-User-Id': userId },
         });
-        
+
         if (!response.ok) {
           console.error('[FilterBar] Erro HTTP ao buscar tags:', response.status, response.statusText);
           return;
         }
-        
+
         const result = await response.json();
         if (result.success && Array.isArray(result.data)) {
           setTags(result.data);
         } else {
           console.error('[FilterBar] Erro na resposta das tags:', result.error || 'Resposta inválida');
         }
-      } catch (err: any) {
-        console.error('[FilterBar] Erro ao carregar tags:', err.message || err);
+      } catch (err: unknown) {
+        console.error('[FilterBar] Erro ao carregar tags:', err instanceof Error ? err.message : err);
       }
     };
     loadTags();

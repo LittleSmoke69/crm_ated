@@ -52,11 +52,13 @@ export async function GET(req: NextRequest) {
 
 /**
  * POST - Eventos (mensagens, status)
+ * Sempre persiste o evento primeiro; depois processa. Em falha de processamento
+ * retorna 200 e loga o erro para depuração (evento fica visível em "Ver payload").
  */
 export async function POST(req: NextRequest) {
+  let payload: unknown;
   try {
     const rawBody = await req.text();
-    let payload: unknown;
     try {
       payload = rawBody ? JSON.parse(rawBody) : {};
     } catch {
@@ -67,12 +69,18 @@ export async function POST(req: NextRequest) {
       return new Response('OK', { status: 200 });
     }
 
-    await supabaseServiceRole.from('webhook_events').insert({
+    // 1) Sempre registrar o evento para aparecer na lista e permitir "Ver payload"
+    const { error: insertError } = await supabaseServiceRole.from('webhook_events').insert({
       source: SOURCE,
       event_name: EVENT_NAME,
       raw_payload: payload as object,
     });
+    if (insertError) {
+      console.error('[webhooks/whatsapp-official] Erro ao inserir evento:', insertError.message, insertError.details);
+      return new Response('OK', { status: 200 });
+    }
 
+    // 2) Processar entradas (mensagens → chat; status updates)
     const entries = Array.isArray(payload.entry) ? payload.entry : [];
     for (const entry of entries) {
       const changes = Array.isArray((entry as { changes?: unknown[] }).changes)
@@ -82,18 +90,23 @@ export async function POST(req: NextRequest) {
         const value = (change as { value?: Record<string, unknown> })?.value;
         if (!value || typeof value !== 'object') continue;
 
-        if (Array.isArray(value.messages)) {
-          await handleInboundMessages(value as InboundValue);
-        }
-        if (Array.isArray(value.statuses)) {
-          await handleStatusUpdates(value as StatusValue);
+        try {
+          if (Array.isArray(value.messages)) {
+            await handleInboundMessages(value as InboundValue);
+          }
+          if (Array.isArray(value.statuses)) {
+            await handleStatusUpdates(value as StatusValue);
+          }
+        } catch (err) {
+          console.error('[webhooks/whatsapp-official] Erro ao processar entrada (mensagens/status):', err);
         }
       }
     }
 
     return new Response('OK', { status: 200 });
-  } catch {
-    return new Response('Internal Server Error', { status: 500 });
+  } catch (err) {
+    console.error('[webhooks/whatsapp-official] Erro inesperado:', err);
+    return new Response('OK', { status: 200 });
   }
 }
 

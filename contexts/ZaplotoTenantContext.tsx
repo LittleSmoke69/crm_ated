@@ -52,12 +52,17 @@ export function ZaplotoTenantProvider({ children }: { children: React.ReactNode 
 
   const fetchTenant = async () => {
     try {
-      const userId =
-        typeof window !== 'undefined'
-          ? sessionStorage.getItem('user_id') ||
+      let userId: string | null = null;
+      if (typeof window !== 'undefined') {
+        try {
+          userId =
+            sessionStorage.getItem('user_id') ||
             sessionStorage.getItem('profile_id') ||
-            localStorage.getItem('profile_id')
-          : null;
+            localStorage.getItem('profile_id');
+        } catch {
+          // storage indisponível (ex.: modo privado com restrições)
+        }
+      }
       if (!userId) {
         setTenant(defaultTenant);
         setLoading(false);
