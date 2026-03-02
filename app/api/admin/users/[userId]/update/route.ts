@@ -59,25 +59,27 @@ export async function PATCH(
       updateData.password_hash = bcrypt.hashSync(password, bcrypt.genSaltSync(10));
     }
 
-    // Atualiza status e enroller se fornecidos
+    // Atualiza status e enroller se fornecidos (dono/superior opcional para gerente: "" ou null = sem enroller)
     const newStatus = status || currentUser.status;
-    const newEnroller = enroller !== undefined ? enroller : currentUser.enroller;
+    const rawEnroller = enroller !== undefined ? enroller : currentUser.enroller;
+    const newEnroller =
+      rawEnroller != null && String(rawEnroller).trim() !== ''
+        ? String(rawEnroller).trim()
+        : null;
 
     if (status || enroller !== undefined) {
-      // Valida hierarquia
-      const validation = await validateHierarchy(userId, newStatus as UserStatus, newEnroller || null);
+      const validation = await validateHierarchy(userId, newStatus as UserStatus, newEnroller);
       if (!validation.valid) {
         return errorResponse(validation.error || 'Hierarquia inválida', 400);
       }
 
-      // Verifica ciclos
-      const hasCycle = await hasHierarchyCycle(userId, newEnroller || null);
+      const hasCycle = await hasHierarchyCycle(userId, newEnroller);
       if (hasCycle) {
         return errorResponse('Ciclo detectado na hierarquia', 400);
       }
 
       if (status) updateData.status = status;
-      if (enroller !== undefined) updateData.enroller = enroller || null;
+      if (enroller !== undefined) updateData.enroller = newEnroller;
     }
 
     // Atualiza campos de banca (somente quando fornecidos; tipicamente para dono_banca)

@@ -119,6 +119,7 @@ export async function GET(req: NextRequest) {
             leadsApiUrl.searchParams.append('consultant', consultorProfile.email);
             leadsApiUrl.searchParams.append('per_page', perPage.toString());
             leadsApiUrl.searchParams.append('page', currentPage.toString());
+            leadsApiUrl.searchParams.append('transferred_filter', 'no');
             // Não envia from/to: API externa pode retornar 404 com esses parâmetros
 
             const leadsResponse = await fetch(leadsApiUrl.toString(), {

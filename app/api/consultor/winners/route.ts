@@ -26,24 +26,37 @@ export async function GET(req: NextRequest) {
   console.log(`\n${LOG_PREFIX} ========== INÍCIO DA REQUISIÇÃO ==========`);
 
   try {
-    const { userId } = await requireStatus(req, ['consultor']);
-    console.log(`${LOG_PREFIX} 1. Autenticação: userId=${userId}, perfil=consultor`);
+    const { userId, profile } = await requireStatus(req, ['consultor', 'super_admin', 'admin']);
+    const isAdminOrSuperAdmin = profile?.status === 'super_admin' || profile?.status === 'admin';
+    console.log(`${LOG_PREFIX} 1. Autenticação: userId=${userId}, status=${profile?.status}`);
 
     const { searchParams } = req.nextUrl;
     const dateFrom = searchParams.get('date_from');
     const dateTo = searchParams.get('date_to');
     const bancaUrlFilter = searchParams.get('banca_url');
+    const consultorIdFilter = searchParams.get('consultor_id')?.trim() || null;
+
+    // super_admin e admin podem ver ganhadores de outro consultor informando consultor_id
+    let effectiveUserId = userId;
+    if (isAdminOrSuperAdmin && consultorIdFilter) {
+      const targetProfile = await getUserProfile(consultorIdFilter);
+      if (targetProfile?.status === 'consultor') {
+        effectiveUserId = consultorIdFilter;
+        console.log(`${LOG_PREFIX} 1b. Visualizando como consultor: ${effectiveUserId}`);
+      }
+    }
 
     console.log(`${LOG_PREFIX} 2. Parâmetros da query:`, {
       date_from: dateFrom ?? '(não informado)',
       date_to: dateTo ?? '(não informado)',
       banca_url: bancaUrlFilter ? `${bancaUrlFilter.substring(0, 40)}...` : '(não informado)',
+      consultor_id: consultorIdFilter ?? '(não informado)',
     });
 
     let bancaUrl = bancaUrlFilter;
     if (!bancaUrl) {
       console.log(`${LOG_PREFIX} 3. Banca não veio no filtro; resolvendo pela hierarquia...`);
-      const hierarchyPath = await getHierarchyPath(userId);
+      const hierarchyPath = await getHierarchyPath(effectiveUserId);
       const donoBanca = hierarchyPath.find(p => p.status === 'dono_banca');
       if (donoBanca) {
         const { data: donoProfile } = await supabaseServiceRole
@@ -60,7 +73,7 @@ export async function GET(req: NextRequest) {
       console.log(`${LOG_PREFIX} 3. Banca obtida do filtro da requisição`);
     }
 
-    const consultorProfile = await getUserProfile(userId);
+    const consultorProfile = await getUserProfile(effectiveUserId);
     if (!consultorProfile?.email) {
       console.log(`${LOG_PREFIX} 4. Consultor sem email no perfil → retornando lista vazia`);
       console.log(`${LOG_PREFIX} ========== FIM (0 ganhadores) ==========\n`);
@@ -96,6 +109,7 @@ export async function GET(req: NextRequest) {
       url.searchParams.append('consultant', consultorProfile.email);
       url.searchParams.append('per_page', perPage.toString());
       url.searchParams.append('page', currentPage.toString());
+      url.searchParams.append('transferred_filter', 'no');
 
       const pageStart = Date.now();
       const res = await fetch(url.toString(), {

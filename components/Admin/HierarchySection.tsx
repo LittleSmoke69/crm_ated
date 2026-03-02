@@ -668,7 +668,9 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
         payload.bancaName = assignFormData.bancaName || null;
         payload.bancaUrl = normalizeBancaUrl(assignFormData.bancaUrl || '');
       } else {
-        payload.enroller = assignFormData.enroller || null;
+        // Gerente: superior opcional (null quando vazio); consultor: enroller obrigatório
+        const enrollerVal = (assignFormData.enroller || '').trim();
+        payload.enroller = enrollerVal === '' ? null : enrollerVal;
       }
 
       let successCount = 0;
@@ -1392,6 +1394,19 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
               <button onClick={() => { setShowAssignModal(false); setAssignFormData(null); setAssignSelectedUserIds([]); }} className="hover:bg-white/20 p-1.5 rounded-lg transition-colors"><X className="w-6 h-6" /></button>
             </div>
             <div className="p-6 space-y-4">
+              {assignFormData.status === 'gerente' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Superior (opcional)</label>
+                  <select value={assignFormData.enroller || ''} onChange={(e) => setAssignFormData((prev: any) => prev ? { ...prev, enroller: e.target.value } : prev)} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500 text-gray-700 dark:text-white">
+                    <option value="">Sem superior</option>
+                    {(allUsers || [])
+                      .filter((u: any) => u && (u.status === 'dono_banca' || u.status === 'gerente' || u.status === 'admin'))
+                      .map((u: any) => (
+                        <option key={u.id} value={u.id}>{[u.full_name || u.email, `(${u.status})`].filter(Boolean).join(' ')}</option>
+                      ))}
+                  </select>
+                </div>
+              )}
               {assignFormData.status === 'consultor' && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Selecione o Gerente</label>

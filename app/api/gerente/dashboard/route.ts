@@ -270,28 +270,34 @@ export async function GET(req: NextRequest) {
     if (!bancaUrl) {
       const hierarchyPath = await getHierarchyPath(effectiveUserId);
       const donoBanca = hierarchyPath.find(p => p.status === 'dono_banca');
-      
-      if (!donoBanca) {
-        return successResponse({
-          gerenteInfo: {
-            id: effectiveUserId,
-            email: (await getUserProfile(effectiveUserId))?.email || '',
-            name: (await getUserProfile(effectiveUserId))?.full_name || '',
-          },
-          consultores: [],
-          gerenteTotalKpis: null,
-          chartData: null,
-        });
+
+      if (donoBanca) {
+        const { data: donoProfile } = await supabaseServiceRole
+          .from('profiles')
+          .select('banca_url, banca_name')
+          .eq('id', donoBanca.id)
+          .single();
+        bancaUrl = donoProfile?.banca_url;
       }
 
-      // 2. Busca banca_url do dono de banca
-      const { data: donoProfile } = await supabaseServiceRole
-        .from('profiles')
-        .select('banca_url, banca_name')
-        .eq('id', donoBanca.id)
-        .single();
-
-      bancaUrl = donoProfile?.banca_url;
+      // Gerente sem dono na hierarquia (ex.: enroller = admin ou outro gerente): tenta banca do user_bancas do gerente
+      if (!bancaUrl) {
+        const { data: ubRow } = await supabaseServiceRole
+          .from('user_bancas')
+          .select('banca_ids')
+          .eq('user_id', effectiveUserId)
+          .maybeSingle();
+        const bancaIds = Array.isArray(ubRow?.banca_ids) ? ubRow.banca_ids : [];
+        const firstBancaId = bancaIds[0];
+        if (firstBancaId) {
+          const { data: banca } = await supabaseServiceRole
+            .from('crm_bancas')
+            .select('url')
+            .eq('id', firstBancaId)
+            .single();
+          if (banca?.url) bancaUrl = banca.url;
+        }
+      }
     }
     const apiKey = process.env.CRM_API_KEY;
     

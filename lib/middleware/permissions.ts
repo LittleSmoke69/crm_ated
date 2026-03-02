@@ -339,9 +339,12 @@ export async function getSubordinates(userId: string): Promise<UserProfile[]> {
  * Auditoria e Suporte podem ter Admin como enroller ou NULL
  */
 export async function validateHierarchy(userId: string, status: UserStatus, enroller: string | null): Promise<{ valid: boolean; error?: string }> {
+  // Trata string vazia como null (dono/superior opcional ao atribuir gerente)
+  const enrollerId = (enroller != null && String(enroller).trim() !== '') ? String(enroller).trim() : null;
+
   // Admin sempre deve ter enroller NULL
   if (status === 'admin') {
-    if (enroller !== null) {
+    if (enrollerId !== null) {
       return { valid: false, error: 'Admin não pode ter enroller' };
     }
     return { valid: true };
@@ -349,10 +352,10 @@ export async function validateHierarchy(userId: string, status: UserStatus, enro
 
   // Auditoria e Suporte podem ter enroller NULL ou Admin
   if (status === 'auditoria' || status === 'suporte') {
-    if (enroller === null) {
+    if (enrollerId === null) {
       return { valid: true };
     }
-    const enrollerProfile = await getUserProfile(enroller);
+    const enrollerProfile = await getUserProfile(enrollerId);
     if (!enrollerProfile) {
       return { valid: false, error: 'Enroller não encontrado' };
     }
@@ -363,7 +366,7 @@ export async function validateHierarchy(userId: string, status: UserStatus, enro
   }
 
   // Gerente, Dono de banca e Gestor podem ter enroller NULL (sem superior). Consultor sempre deve ter um Gerente.
-  if (enroller === null) {
+  if (enrollerId === null) {
     if (status === 'consultor') {
       return { valid: false, error: 'Consultor deve ser atribuído a um Gerente' };
     }
@@ -374,7 +377,7 @@ export async function validateHierarchy(userId: string, status: UserStatus, enro
   }
 
   // Verifica se o enroller existe
-  const enrollerProfile = await getUserProfile(enroller);
+  const enrollerProfile = await getUserProfile(enrollerId);
   if (!enrollerProfile) {
     return { valid: false, error: 'Enroller não encontrado' };
   }
@@ -385,8 +388,9 @@ export async function validateHierarchy(userId: string, status: UserStatus, enro
       return { valid: false, error: 'Consultor deve ter um Gerente como enroller' };
     }
   } else if (status === 'gerente') {
-    if (enrollerProfile.status !== 'dono_banca') {
-      return { valid: false, error: 'Gerente deve ter um Dono de banca como enroller' };
+    // Gerente pode ter Dono de banca, outro Gerente ou Admin como enroller (não exige dono_banca)
+    if (enrollerProfile.status !== 'dono_banca' && enrollerProfile.status !== 'gerente' && enrollerProfile.status !== 'admin') {
+      return { valid: false, error: 'Gerente deve ter Dono de banca, outro Gerente ou Admin como enroller' };
     }
   } else if (status === 'dono_banca') {
     // Dono de banca pode ter outro Dono de banca como enroller (estrutura superior)
