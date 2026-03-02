@@ -912,64 +912,99 @@ export default function AdminLeadTransferPage() {
     }
   };
 
-  /** Recalcula total saldo em segundo plano (lotes de 2000). Polling atualiza a tela aos poucos. */
+  /** Busca saldo atual dos leads no CRM e grava no banco como snapshot. Resposta em stream: cada lead atualizado já aparece na tela ao receber. */
   const runRecalcBalanceForLog = async () => {
     if (!bancaId || !userId || !selectedLogForModal?.id) return;
     setBackfillingBalances(true);
-    showToast('Recalculando saldo em segundo plano (lotes de 2000). Os valores serão atualizados automaticamente.', 'info');
+    showToast('Buscando saldo e dados dos leads no CRM… Atualizando lista conforme os dados chegam.', 'info');
 
     const logId = selectedLogForModal.id;
-    const fetchEntries = async () => {
-      const entryRes = await fetch(
-        `/api/admin/crm/transfer-logs/entries?log_id=${encodeURIComponent(logId)}&banca_id=${encodeURIComponent(bancaId)}`,
-        { headers: { 'X-User-Id': userId ?? '' } }
-      );
-      const entryJson = await entryRes.json();
-      if (entryRes.ok && entryJson.success && Array.isArray(entryJson.data)) {
-        setModalEntries(entryJson.data);
-      }
-    };
-
-    if (recalcPollIntervalRef.current) {
-      clearInterval(recalcPollIntervalRef.current);
-      recalcPollIntervalRef.current = null;
-    }
-    recalcPollIntervalRef.current = setInterval(fetchEntries, 3000);
 
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 120000);
       const res = await fetch(
-        `/api/admin/crm/transfer-logs/backfill-balances?banca_id=${encodeURIComponent(bancaId)}&log_id=${encodeURIComponent(logId)}`,
+        `/api/admin/crm/transfer-logs/backfill-balances?banca_id=${encodeURIComponent(bancaId)}&log_id=${encodeURIComponent(logId)}&stream=1`,
         { method: 'POST', headers: headers(), signal: controller.signal }
       );
       clearTimeout(timeoutId);
 
-      if (recalcPollIntervalRef.current) {
-        clearInterval(recalcPollIntervalRef.current);
-        recalcPollIntervalRef.current = null;
-      }
+      const contentType = res.headers.get('content-type') ?? '';
+      const isStream = res.ok && contentType.includes('application/x-ndjson');
 
-      const json = await res.json();
-      await fetchEntries();
-      await loadTransferLogs();
-      await loadTransferStats();
+      if (isStream && res.body) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let donePayload: { totalBalance?: number; message?: string; updated?: number } | null = null;
 
-      if (res.ok && json.success) {
-        const total = json.data?.totalBalance;
-        const msg = json.data?.message ?? (total != null ? `Total saldo antes: R$ ${Number(total).toFixed(2).replace('.', ',')}` : 'Concluído.');
-        showToast(msg, 'success');
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            try {
+              const data = JSON.parse(trimmed) as { type: string; lead_id?: string | number; saldo_snapshot?: number; had_balance?: boolean; total_depositado_snapshot?: number | null; total_apostado_snapshot?: number | null; total_ganho_snapshot?: number | null; available_withdraw_snapshot?: number | null; totalBalance?: number; message?: string; updated?: number; error?: string };
+              if (data.type === 'entry' && data.lead_id != null) {
+                setModalEntries((prev) =>
+                  prev.map((e) =>
+                    String(e.lead_id) === String(data.lead_id)
+                      ? {
+                          ...e,
+                          saldo_snapshot: data.saldo_snapshot ?? e.saldo_snapshot,
+                          had_balance: data.had_balance ?? e.had_balance,
+                          total_depositado_snapshot: data.total_depositado_snapshot ?? e.total_depositado_snapshot,
+                          total_apostado_snapshot: data.total_apostado_snapshot ?? e.total_apostado_snapshot,
+                          total_ganho_snapshot: data.total_ganho_snapshot ?? e.total_ganho_snapshot,
+                          available_withdraw_snapshot: data.available_withdraw_snapshot ?? e.available_withdraw_snapshot,
+                        }
+                      : e
+                  )
+                );
+              } else if (data.type === 'done') {
+                donePayload = { totalBalance: data.totalBalance, message: data.message, updated: data.updated };
+              } else if (data.type === 'error') {
+                showToast(data.error ?? 'Erro ao salvar saldo atual.', 'error');
+              }
+            } catch {
+              // ignora linha inválida
+            }
+          }
+        }
+
+        if (donePayload) {
+          const msg = donePayload.message ?? (donePayload.totalBalance != null ? `Snapshot salvo. Total saldo: R$ ${Number(donePayload.totalBalance).toFixed(2).replace('.', ',')}` : 'Saldo atual salvo.');
+          showToast(msg, 'success');
+        }
+        await loadTransferLogs();
+        await loadTransferStats();
       } else {
-        showToast(json?.error ?? 'Erro ao recalcular saldo.', 'error');
+        const json = await res.json();
+        if (res.ok && json.success) {
+          const total = json.data?.totalBalance;
+          const msg = json.data?.message ?? (total != null ? `Snapshot salvo. Total saldo: R$ ${Number(total).toFixed(2).replace('.', ',')}` : 'Saldo atual salvo.');
+          showToast(msg, 'success');
+        } else {
+          showToast(json?.error ?? 'Erro ao salvar saldo atual.', 'error');
+        }
+        const entryRes = await fetch(
+          `/api/admin/crm/transfer-logs/entries?log_id=${encodeURIComponent(logId)}&banca_id=${encodeURIComponent(bancaId)}`,
+          { headers: { 'X-User-Id': userId ?? '' } }
+        );
+        const entryJson = await entryRes.json();
+        if (entryRes.ok && entryJson.success && Array.isArray(entryJson.data)) {
+          setModalEntries(entryJson.data);
+        }
+        await loadTransferLogs();
+        await loadTransferStats();
       }
     } catch (e) {
-      if (recalcPollIntervalRef.current) {
-        clearInterval(recalcPollIntervalRef.current);
-        recalcPollIntervalRef.current = null;
-      }
       const isAbort = e instanceof Error && e.name === 'AbortError';
-      showToast(isAbort ? 'Recálculo em andamento. Os valores continuarão atualizando em segundo plano.' : 'Erro ao recalcular saldo.', isAbort ? 'info' : 'error');
-      await fetchEntries();
+      showToast(isAbort ? 'Requisição interrompida.' : 'Erro ao salvar saldo atual.', isAbort ? 'info' : 'error');
     } finally {
       setBackfillingBalances(false);
     }
@@ -1834,7 +1869,7 @@ export default function AdminLeadTransferPage() {
                     {backfillingBalances && (
                       <div className="mx-4 mt-2 flex items-center gap-2 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-4 py-2.5 text-sm text-amber-800 dark:text-amber-200">
                         <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
-                        <span>Recalculando saldo em segundo plano (lotes de 2000 leads). Os valores abaixo serão atualizados automaticamente a cada poucos segundos.</span>
+                        <span>Salvando saldo e dados no CRM… A lista é atualizada conforme cada lead é processado.</span>
                       </div>
                     )}
                     <div className="p-4 text-sm text-gray-700 dark:text-gray-200 border-b border-gray-100 dark:border-[#404040] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -1881,10 +1916,11 @@ export default function AdminLeadTransferPage() {
                                 type="button"
                                 onClick={runRecalcBalanceForLog}
                                 disabled={backfillingBalances}
+                                title="Busca o saldo atual dos leads no CRM e grava no banco como snapshot para futura verificação"
                                 className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold bg-[#8CD955]/10 text-[#6B8E3F] hover:bg-[#8CD955]/20 border border-[#8CD955]/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95"
                               >
                                 {backfillingBalances ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                                {backfillingBalances ? 'Recalculando…' : 'Recalcular saldo'}
+                                {backfillingBalances ? 'Salvando…' : 'Salvar saldo atual'}
                               </button>
 
                               {modalDeadline.expired && (
