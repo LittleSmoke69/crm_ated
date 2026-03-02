@@ -129,15 +129,16 @@ export async function GET(req: NextRequest) {
         }
       }
 
-      // Verifica se Gerente tem Dono de banca como enroller
+      // Verifica se Gerente tem enroller válido (dono_banca, gerente, admin ou super_admin)
       if (user.status === 'gerente' && user.enroller) {
         const enroller = allUsers.find((u) => u.id === user.enroller);
-        if (enroller && enroller.status !== 'dono_banca') {
+        const validGerenteEnroller = ['dono_banca', 'gerente', 'admin', 'super_admin'].includes(enroller?.status ?? '');
+        if (enroller && !validGerenteEnroller) {
           brokenHierarchies.push({
             userId: user.id,
             email: user.email,
             status: user.status,
-            expectedEnroller: 'dono_banca',
+            expectedEnroller: 'dono_banca, gerente, admin ou super_admin',
             actualEnroller: enroller.status,
           });
         }

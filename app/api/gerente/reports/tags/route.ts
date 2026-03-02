@@ -115,11 +115,12 @@ export async function GET(req: NextRequest) {
       usageMap[cId][tId].count++;
     });
 
+    // Inclui todos os consultores; os sem etiquetas terão tags: []
     const tagUsage = consultores.map(c => ({
       consultorId: c.id,
       consultorName: c.full_name || c.email,
       tags: Object.values(usageMap[c.id] || {}).sort((a, b) => b.count - a.count)
-    })).filter(c => c.tags.length > 0);
+    }));
 
     // 2. Processa leads recentemente etiquetados (usando os dados já buscados e ordenando)
     const recentAssociations = [...(leadTagAssociations || [])]

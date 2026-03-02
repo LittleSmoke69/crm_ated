@@ -388,19 +388,22 @@ export async function validateHierarchy(userId: string, status: UserStatus, enro
       return { valid: false, error: 'Consultor deve ter um Gerente como enroller' };
     }
   } else if (status === 'gerente') {
-    // Gerente pode ter Dono de banca, outro Gerente ou Admin como enroller (não exige dono_banca)
-    if (enrollerProfile.status !== 'dono_banca' && enrollerProfile.status !== 'gerente' && enrollerProfile.status !== 'admin') {
-      return { valid: false, error: 'Gerente deve ter Dono de banca, outro Gerente ou Admin como enroller' };
+    // Gerente pode ter Dono de banca, outro Gerente, Admin ou Super Admin como enroller (super_admin/admin/suporte podem atribuir sem dono de banca)
+    const validGerenteEnroller = ['dono_banca', 'gerente', 'admin', 'super_admin'].includes(enrollerProfile.status ?? '');
+    if (!validGerenteEnroller) {
+      return { valid: false, error: 'Gerente deve ter Dono de banca, outro Gerente, Admin ou Super Admin como enroller' };
     }
   } else if (status === 'dono_banca') {
-    // Dono de banca pode ter outro Dono de banca como enroller (estrutura superior)
-    if (enrollerProfile.status !== 'dono_banca' && enrollerProfile.status !== 'admin') {
-      return { valid: false, error: 'Dono de banca deve ter outro Dono de banca ou Admin como enroller' };
+    // Dono de banca pode ter outro Dono de banca, Admin ou Super Admin como enroller
+    const validDonoEnroller = ['dono_banca', 'admin', 'super_admin'].includes(enrollerProfile.status ?? '');
+    if (!validDonoEnroller) {
+      return { valid: false, error: 'Dono de banca deve ter outro Dono de banca, Admin ou Super Admin como enroller' };
     }
   } else if (status === 'gestor') {
-    // Gestor de tráfego deve ter Dono de banca ou Admin como enroller (para ver dados da banca)
-    if (enrollerProfile.status !== 'dono_banca' && enrollerProfile.status !== 'admin') {
-      return { valid: false, error: 'Gestor de tráfego deve ter Dono de banca ou Admin como enroller' };
+    // Gestor de tráfego pode ter Dono de banca, Admin ou Super Admin como enroller
+    const validGestorEnroller = ['dono_banca', 'admin', 'super_admin'].includes(enrollerProfile.status ?? '');
+    if (!validGestorEnroller) {
+      return { valid: false, error: 'Gestor de tráfego deve ter Dono de banca, Admin ou Super Admin como enroller' };
     }
   }
 

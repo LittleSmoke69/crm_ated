@@ -1326,34 +1326,49 @@ export default function GerentePage() {
                   <p className="text-sm text-gray-500">Carregando dados...</p>
                 </div>
               ) : tagsReportData?.tagUsage && tagsReportData.tagUsage.length > 0 ? (
-                tagsReportData.tagUsage.map((item, idx) => (
-                  <div key={idx} className="p-4 bg-gray-50 dark:bg-gray-800/50 rounded-xl border border-gray-100 dark:border-gray-700">
-                    <p className="text-sm font-bold text-gray-700 dark:text-gray-200 mb-3 flex items-center gap-2">
-                      <div className="w-6 h-6 rounded-full bg-[#8CD95520] text-[#8CD955] flex items-center justify-center text-[10px]">
-                        {item.consultorName[0].toUpperCase()}
-                      </div>
-                      {item.consultorName}
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {item.tags.map((tag, tIdx) => (
-                        <div
-                          key={tIdx}
-                          className="flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium"
-                          style={{
-                            backgroundColor: `${tag.color}15`,
-                            borderColor: `${tag.color}40`,
-                            color: tag.color
-                          }}
-                        >
-                          <span>{tag.label}</span>
-                          <span className="bg-white/50 dark:bg-black/20 px-1.5 py-0.5 rounded-md font-bold">
-                            {tag.count}
-                          </span>
+                tagsReportData.tagUsage.map((item, idx) =>
+                  item.tags.length === 0 ? (
+                    <div
+                      key={idx}
+                      className="p-4 bg-gray-200/80 dark:bg-gray-700/60 rounded-xl border border-gray-200 dark:border-gray-600"
+                    >
+                      <p className="text-sm font-bold text-gray-600 dark:text-gray-300 mb-2 flex items-center gap-2">
+                        <div className="w-6 h-6 rounded-full bg-gray-400 dark:bg-gray-500 text-gray-600 dark:text-gray-200 flex items-center justify-center text-[10px]">
+                          {item.consultorName[0].toUpperCase()}
                         </div>
-                      ))}
+                        {item.consultorName}
+                      </p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 italic">Não usou etiquetas</p>
                     </div>
-                  </div>
-                ))
+                  ) : (
+                    <div key={idx} className="p-4 bg-gray-50 dark:bg-gray-800/50 rounded-xl border border-gray-100 dark:border-gray-700">
+                      <p className="text-sm font-bold text-gray-700 dark:text-gray-200 mb-3 flex items-center gap-2">
+                        <div className="w-6 h-6 rounded-full bg-[#8CD95520] text-[#8CD955] flex items-center justify-center text-[10px]">
+                          {item.consultorName[0].toUpperCase()}
+                        </div>
+                        {item.consultorName}
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {item.tags.map((tag, tIdx) => (
+                          <div
+                            key={tIdx}
+                            className="flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium"
+                            style={{
+                              backgroundColor: `${tag.color}15`,
+                              borderColor: `${tag.color}40`,
+                              color: tag.color
+                            }}
+                          >
+                            <span>{tag.label}</span>
+                            <span className="bg-white/50 dark:bg-black/20 px-1.5 py-0.5 rounded-md font-bold">
+                              {tag.count}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                )
               ) : (
                 <div className="py-12 text-center text-gray-500">
                   <Tag className="w-12 h-12 text-gray-200 dark:text-gray-700 mx-auto mb-3" />
