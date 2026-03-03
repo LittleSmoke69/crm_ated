@@ -15,6 +15,7 @@ const leadSnapshotSchema = z.object({
   total_apostado: z.union([z.number(), z.null()]).optional(),
   total_ganho: z.union([z.number(), z.null()]).optional(),
   available_withdraw: z.union([z.number(), z.null()]).optional(),
+  total_saque: z.union([z.number(), z.null()]).optional(),
 });
 const bodySchema = z.object({
   banca_id: z.string().uuid(),
@@ -119,6 +120,7 @@ export async function POST(req: NextRequest) {
           total_apostado?: number | null;
           total_ganho?: number | null;
           available_withdraw?: number | null;
+          total_saque?: number | null;
         }>();
         if (Array.isArray(lead_snapshots)) {
           for (const s of lead_snapshots) {
@@ -130,6 +132,7 @@ export async function POST(req: NextRequest) {
               total_apostado: s.total_apostado ?? null,
               total_ganho: s.total_ganho ?? null,
               available_withdraw: s.available_withdraw ?? null,
+              total_saque: s.total_saque ?? null,
             });
           }
         }
@@ -152,6 +155,7 @@ export async function POST(req: NextRequest) {
             total_apostado_snapshot: snap?.total_apostado != null ? Number(snap.total_apostado) : null,
             total_ganho_snapshot: snap?.total_ganho != null ? Number(snap.total_ganho) : null,
             available_withdraw_snapshot: snap?.available_withdraw != null ? Number(snap.available_withdraw) : null,
+            total_saque_snapshot: snap?.total_saque != null ? Number(snap.total_saque) : null,
           };
         });
         const { error: entriesError } = await supabaseServiceRole
@@ -168,6 +172,7 @@ export async function POST(req: NextRequest) {
     return successResponse(
       {
         count,
+        transfer_log_id: insertedLog?.id ?? null,
         message: result.message ?? `${count} lead(s) transferido(s) com sucesso.`,
       },
       result.message ?? `${count} lead(s) transferido(s) com sucesso.`
