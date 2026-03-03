@@ -158,18 +158,23 @@ export class CrmRedistributionClient {
 
   /**
    * GET /api/crm/redistribution-leads
-   * Query: source_consultant_email (obrigatório), days_inactive?, tag?
-   * URL final ex.: .../redistribution-leads?source_consultant_email=adasd%40gmail.com (CRM decodifica e recebe adasd@gmail.com)
+   * Query: source_consultant_email (obrigatório), days_inactive?, tag?, lead_types? (filtros do modal: registered, with_balance, has_won, has_withdrawn).
+   * Se o CRM suportar lead_types, retorna já filtrado; caso contrário filtrar em memória.
    */
   async getRedistributionLeads(params: {
     source_consultant_email: string;
     days_inactive?: number;
     tag?: string;
+    /** Filtros do modal de aprovação: registered | with_balance | has_won | has_withdrawn (enviados ao CRM se suportar) */
+    lead_types?: string[];
   }): Promise<RedistributionLeadsResponse> {
     const search = new URLSearchParams();
     search.set('source_consultant_email', params.source_consultant_email.trim());
     if (params.days_inactive != null) search.set('days_inactive', String(params.days_inactive));
     if (params.tag != null && params.tag.trim()) search.set('tag', params.tag.trim());
+    if (Array.isArray(params.lead_types) && params.lead_types.length > 0) {
+      search.set('lead_types', params.lead_types.join(','));
+    }
 
     const { data, status } = await this.fetch<RedistributionLeadsResponse>(
       `/redistribution-leads?${search.toString()}`
@@ -242,14 +247,20 @@ export class CrmRedistributionClient {
 
   /**
    * GET /api/crm/get-indicateds-by-consultant
-   * Query: consultant (email), per_page, page (opcional), transferred_filter (yes|no), sort, direction.
+   * Query: consultant (email), per_page, page (opcional), transferred_filter (yes|no), sort, direction, lead_types? (filtros do modal).
    * Retorna lista detalhada de indicados do consultor (para enriquecer leads por id).
    */
   async getIndicatedsByConsultant(
     consultantEmail: string,
     perPage: number = 2000,
     page: number = 1,
-    options?: { transferredFilter?: 'yes' | 'no'; sort?: string; direction?: string }
+    options?: {
+      transferredFilter?: 'yes' | 'no';
+      sort?: string;
+      direction?: string;
+      /** Filtros do modal: registered | with_balance | has_won | has_withdrawn (enviados ao CRM se suportar) */
+      leadTypes?: string[];
+    }
   ): Promise<GetIndicatedsByConsultantResponse> {
     const search = new URLSearchParams();
     search.set('consultant', consultantEmail.trim());
@@ -258,6 +269,9 @@ export class CrmRedistributionClient {
     if (options?.transferredFilter) search.set('transferred_filter', options.transferredFilter);
     if (options?.sort) search.set('sort', options.sort);
     if (options?.direction) search.set('direction', options.direction);
+    if (Array.isArray(options?.leadTypes) && options.leadTypes.length > 0) {
+      search.set('lead_types', options.leadTypes.join(','));
+    }
 
     const { data, status } = await this.fetch<GetIndicatedsByConsultantResponse>(
       `/get-indicateds-by-consultant?${search.toString()}`

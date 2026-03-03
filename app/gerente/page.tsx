@@ -33,7 +33,8 @@ import {
   Clock,
   Tag,
   History,
-  ChevronRight
+  ChevronRight,
+  ClipboardList
 } from 'lucide-react';
 import Link from 'next/link';
 import StatusDistributionChart from '@/components/Charts/StatusDistributionChart';
@@ -193,6 +194,15 @@ export default function GerentePage() {
 
   // Modal Resumo do consultor (nome, email, leads, depositado, lucro + ações)
   const [resumoModalConsultor, setResumoModalConsultor] = useState<ConsultorMetric | null>(null);
+
+  // Modal Solicitação de leads
+  const [solicitationModalOpen, setSolicitationModalOpen] = useState(false);
+  const [solicitationBancaId, setSolicitationBancaId] = useState<string>('');
+  const [solicitationLeadTypes, setSolicitationLeadTypes] = useState<Array<'registered' | 'with_balance' | 'has_won' | 'has_withdrawn'>>([]);
+  const [solicitationQuantities, setSolicitationQuantities] = useState<Record<string, number>>({});
+  const [solicitationSubmitting, setSolicitationSubmitting] = useState(false);
+  const [solicitationError, setSolicitationError] = useState('');
+  const [solicitationSuccess, setSolicitationSuccess] = useState('');
 
   // Filtros de banca e consultor
   const [bancas, setBancas] = useState<Array<{ id: string; name: string; url: string }>>([]);
@@ -630,6 +640,95 @@ export default function GerentePage() {
     return `${seconds}s`;
   };
 
+  const LEAD_TYPE_OPTIONS: Array<{ value: 'registered' | 'with_balance' | 'has_won' | 'has_withdrawn'; label: string }> = [
+    { value: 'registered', label: 'Lead apenas cadastrado' },
+    { value: 'with_balance', label: 'Lead que possui saldo na banca' },
+    { value: 'has_won', label: 'Lead que já ganhou na plataforma' },
+    { value: 'has_withdrawn', label: 'Lead que já sacou na plataforma' },
+  ];
+
+  const openSolicitationModal = () => {
+    setSolicitationBancaId(bancas.length > 0 ? (bancas.find((b) => b.url === selectedBanca)?.id ?? bancas[0].id) : '');
+    setSolicitationLeadTypes([]);
+    setSolicitationQuantities({});
+    setSolicitationError('');
+    setSolicitationSuccess('');
+    setSolicitationModalOpen(true);
+  };
+
+  const handleSolicitationConsultorToggle = (consultorId: string, checked: boolean) => {
+    if (checked) {
+      setSolicitationQuantities((prev) => ({ ...prev, [consultorId]: prev[consultorId] || 1 }));
+    } else {
+      setSolicitationQuantities((prev) => {
+        const next = { ...prev };
+        delete next[consultorId];
+        return next;
+      });
+    }
+  };
+
+  const handleSolicitationQuantityChange = (consultorId: string, value: number) => {
+    const num = Number(value);
+    const qty = Number.isNaN(num) ? 0 : Math.max(0, Math.floor(num));
+    setSolicitationQuantities((prev) => (qty > 0 ? { ...prev, [consultorId]: qty } : (() => { const n = { ...prev }; delete n[consultorId]; return n; })()));
+  };
+
+  const handleSolicitationSelectAllConsultors = () => {
+    const next: Record<string, number> = {};
+    consultorMetrics.forEach((c) => { next[c.id] = solicitationQuantities[c.id] && solicitationQuantities[c.id] > 0 ? solicitationQuantities[c.id] : 1; });
+    setSolicitationQuantities(next);
+  };
+
+  const handleSolicitationDeselectAllConsultors = () => {
+    setSolicitationQuantities({});
+  };
+
+  const handleSolicitationSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!solicitationBancaId?.trim()) {
+      setSolicitationError('Selecione a banca para qual os leads serão transferidos.');
+      return;
+    }
+    if (solicitationLeadTypes.length === 0) {
+      setSolicitationError('Selecione ao menos um tipo de lead.');
+      return;
+    }
+    const entries = Object.entries(solicitationQuantities).filter(([, q]) => q > 0);
+    if (entries.length === 0) {
+      setSolicitationError('Selecione ao menos um consultor e informe a quantidade de leads.');
+      return;
+    }
+    setSolicitationError('');
+    setSolicitationSuccess('');
+    setSolicitationSubmitting(true);
+    try {
+      const response = await fetch('/api/gerente/lead-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId as string },
+        body: JSON.stringify({
+          banca_id: solicitationBancaId.trim(),
+          lead_type: solicitationLeadTypes,
+          consultores: entries.map(([consultorId, quantity]) => ({ consultor_id: consultorId, quantity })),
+        }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        setSolicitationSuccess('Solicitação enviada com sucesso.');
+        setSolicitationQuantities({});
+        setTimeout(() => {
+          setSolicitationModalOpen(false);
+        }, 1500);
+      } else {
+        setSolicitationError(result.error || 'Erro ao enviar solicitação.');
+      }
+    } catch {
+      setSolicitationError('Erro de conexão.');
+    } finally {
+      setSolicitationSubmitting(false);
+    }
+  };
+
   const handleSignOut = () => {
     if (typeof window !== 'undefined') {
       sessionStorage.removeItem('user_id');
@@ -1044,13 +1143,13 @@ export default function GerentePage() {
               )}
             </div>
 
-            <Link
-              href="/add-to-group"
+            <button
+              onClick={openSolicitationModal}
               className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all shadow-sm"
             >
-              <Rocket className="w-4 h-4 text-[#8CD955]" />
-              Nova Campanha
-            </Link>
+              <ClipboardList className="w-4 h-4 text-[#8CD955]" />
+              Solicitação de leads
+            </button>
             <button
               onClick={() => setIsModalOpen(true)}
               className="flex items-center gap-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-md shadow-[#8CD955]/20"
@@ -1783,6 +1882,129 @@ export default function GerentePage() {
                   </button>
                 </div>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Solicitação de leads */}
+        {solicitationModalOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-hidden animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-gray-700 flex flex-col">
+              <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-[#A8E677] to-[#8CD955] text-white shrink-0">
+                <h2 className="text-xl font-bold flex items-center gap-2">
+                  <ClipboardList className="w-6 h-6" />
+                  Solicitação de leads
+                </h2>
+                <button onClick={() => setSolicitationModalOpen(false)} className="hover:bg-white/20 p-1.5 rounded-xl transition-colors">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSolicitationSubmit} className="flex flex-col flex-1 overflow-hidden">
+                <div className="p-6 space-y-4 overflow-y-auto flex-1">
+                  {solicitationError && <div className="bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-300 p-3 rounded-xl text-sm font-medium border border-red-100 dark:border-red-800">{solicitationError}</div>}
+                  {solicitationSuccess && <div className="bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] p-3 rounded-xl text-sm font-medium border border-[#8CD955]/30">{solicitationSuccess}</div>}
+
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-2 ml-1">Banca para qual os leads serão transferidos</label>
+                    {bancasLoading ? (
+                      <div className="flex items-center gap-2 py-2 text-sm text-gray-500 dark:text-gray-400">
+                        <div className="animate-spin rounded-full h-4 w-4 border-2 border-[#8CD955] border-t-transparent" />
+                        Carregando bancas...
+                      </div>
+                    ) : (
+                      <select
+                        required
+                        value={solicitationBancaId}
+                        onChange={(e) => setSolicitationBancaId(e.target.value)}
+                        className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium"
+                      >
+                        <option value="">Selecione a banca</option>
+                        {bancas.map((b) => (
+                          <option key={b.id} value={b.id}>{b.name || b.url || b.id}</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-2 ml-1">Tipo de lead (múltipla escolha)</label>
+                    <div className="space-y-2 bg-gray-50 dark:bg-gray-800/50 rounded-xl p-3 border border-gray-200 dark:border-gray-600">
+                      {LEAD_TYPE_OPTIONS.map((opt) => (
+                        <label key={opt.value} className="flex items-center gap-3 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={solicitationLeadTypes.includes(opt.value)}
+                            onChange={() => {
+                              setSolicitationLeadTypes((prev) =>
+                                prev.includes(opt.value) ? prev.filter((t) => t !== opt.value) : [...prev, opt.value]
+                              );
+                            }}
+                            className="rounded text-[#8CD955] focus:ring-[#8CD955]"
+                          />
+                          <span className="text-sm font-medium text-gray-800 dark:text-gray-200">{opt.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-2 ml-1">Consultores recebedores e quantidade</label>
+                    {consultorMetrics.length > 0 && (
+                      <div className="flex gap-2 mb-2">
+                        <button
+                          type="button"
+                          onClick={handleSolicitationSelectAllConsultors}
+                          className="text-xs font-medium text-[#8CD955] hover:text-[#7BC84A] hover:underline"
+                        >
+                          Selecionar todos
+                        </button>
+                        <span className="text-gray-300 dark:text-gray-600">|</span>
+                        <button
+                          type="button"
+                          onClick={handleSolicitationDeselectAllConsultors}
+                          className="text-xs font-medium text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:underline"
+                        >
+                          Desmarcar todos
+                        </button>
+                      </div>
+                    )}
+                    <div className="space-y-2 max-h-[280px] overflow-y-auto border border-gray-200 dark:border-gray-600 rounded-xl p-3 bg-gray-50 dark:bg-gray-800/30">
+                      {consultorMetrics.length === 0 ? (
+                        <p className="text-sm text-gray-500 dark:text-gray-400 py-4 text-center">Nenhum consultor disponível. Ajuste os filtros se necessário.</p>
+                      ) : (
+                        consultorMetrics.map((c) => (
+                          <div key={c.id} className="flex items-center gap-3 py-2 border-b border-gray-200 dark:border-gray-600 last:border-0">
+                            <input
+                              type="checkbox"
+                              checked={solicitationQuantities[c.id] !== undefined && solicitationQuantities[c.id] > 0}
+                              onChange={(e) => handleSolicitationConsultorToggle(c.id, e.target.checked)}
+                              className="rounded text-[#8CD955] focus:ring-[#8CD955]"
+                            />
+                            <span className="flex-1 text-sm font-medium text-gray-800 dark:text-gray-200 truncate">{c.name || c.email}</span>
+                            <input
+                              type="number"
+                              min={1}
+                              value={solicitationQuantities[c.id] ?? ''}
+                              onChange={(e) => handleSolicitationQuantityChange(c.id, e.target.value === '' ? 0 : parseInt(e.target.value, 10))}
+                              disabled={solicitationQuantities[c.id] === undefined}
+                              placeholder="Qtd"
+                              className="w-20 px-2 py-1.5 text-sm bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-gray-100 disabled:opacity-50 disabled:cursor-not-allowed focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                            />
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-6 pt-0 flex gap-3 shrink-0 border-t border-gray-100 dark:border-gray-700">
+                  <button type="button" onClick={() => setSolicitationModalOpen(false)} className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 font-bold py-3 rounded-xl">Cancelar</button>
+                  <button type="submit" disabled={solicitationSubmitting} className="flex-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white font-bold py-3 rounded-xl disabled:opacity-50 transition-colors">
+                    {solicitationSubmitting ? 'Enviando...' : 'Enviar solicitação'}
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         )}
