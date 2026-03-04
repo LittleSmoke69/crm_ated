@@ -57,17 +57,17 @@ export async function GET(req: NextRequest) {
       .in('request_id', requestIds);
 
     const consultantIds = [...new Set((fulfillments ?? []).map((f: { consultant_user_id: string }) => f.consultant_user_id))];
-    let profiles: { id: string; full_name: string | null; email: string }[] = [];
+    let profiles: { id: string; full_name: string | null; email: string; telefone: string | null }[] = [];
     if (consultantIds.length > 0) {
       const { data: p } = await supabaseServiceRole
         .from('profiles')
-        .select('id, full_name, email')
+        .select('id, full_name, email, telefone')
         .in('id', consultantIds);
       profiles = p ?? [];
     }
     const profileById = Object.fromEntries(profiles.map((p) => [p.id, p]));
 
-    const byRequest = new Map<string, { consultant_user_id: string; sent_at: string; full_name: string | null; email: string }[]>();
+    const byRequest = new Map<string, { consultant_user_id: string; sent_at: string; full_name: string | null; email: string; telefone: string | null }[]>();
     for (const f of fulfillments ?? []) {
       const arr = byRequest.get(f.request_id) ?? [];
       const prof = profileById[f.consultant_user_id];
@@ -76,6 +76,7 @@ export async function GET(req: NextRequest) {
         sent_at: f.sent_at,
         full_name: prof?.full_name ?? null,
         email: prof?.email ?? '',
+        telefone: prof?.telefone ?? null,
       });
       byRequest.set(f.request_id, arr);
     }

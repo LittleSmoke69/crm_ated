@@ -109,6 +109,35 @@ export async function POST(req: NextRequest) {
         return errorResponse('Erro ao buscar submissões aprovadas.', 500);
       }
       recipients = (submissions ?? []).map((s: SubRow) => ({ full_name: s.full_name, phone: s.phone }));
+
+      const { data: requestIds } = await supabaseServiceRole
+        .from('zaplink_consultant_requests')
+        .select('id')
+        .eq('gerente_id', userId);
+      const ids = (requestIds ?? []).map((r: { id: string }) => r.id);
+      if (ids.length > 0) {
+        const { data: fulfillments } = await supabaseServiceRole
+          .from('zaplink_consultant_request_fulfillments')
+          .select('consultant_user_id')
+          .in('request_id', ids);
+        const consultantIds = [...new Set((fulfillments ?? []).map((f: { consultant_user_id: string }) => f.consultant_user_id))];
+        if (consultantIds.length > 0) {
+          const { data: profiles } = await supabaseServiceRole
+            .from('profiles')
+            .select('full_name, telefone')
+            .in('id', consultantIds)
+            .not('telefone', 'is', null);
+          const seenPhones = new Set(recipients.map((r) => normalizePhone(r.phone ?? '')));
+          for (const p of profiles ?? []) {
+            const row = p as { full_name: string | null; telefone: string };
+            const phoneNorm = normalizePhone(row.telefone ?? '');
+            if (phoneNorm.length >= 12 && !seenPhones.has(phoneNorm)) {
+              seenPhones.add(phoneNorm);
+              recipients.push({ full_name: row.full_name ?? undefined, phone: row.telefone });
+            }
+          }
+        }
+      }
     } else {
       const { data: notifications, error: notifError } = await supabaseServiceRole
         .from('zaplink_gerente_notifications')
