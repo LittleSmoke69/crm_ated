@@ -177,6 +177,8 @@ interface GerenteLeadRequest {
   status: 'pending' | 'approved' | 'rejected';
   banca_id?: string | null;
   banca_name?: string;
+  /** Prazo em dias solicitado pelo gerente para o pacote (conversão dos leads) */
+  deadline_days?: number | null;
   source_consultant_id?: string | null;
   source_consultant_email?: string | null;
   approved_by_user_id?: string | null;
@@ -365,6 +367,14 @@ export default function AdminLeadTransferPage() {
   /** Consultores da banca da solicitação (carregados ao abrir o modal de aprovar) */
   const [approveModalConsultants, setApproveModalConsultants] = useState<Consultant[]>([]);
   const [loadingApproveModalConsultants, setLoadingApproveModalConsultants] = useState(false);
+  /** E-mail do doador ao redirecionar da aprovação para a aba Transferir (preenchido após loadConsultants) */
+  const [transferFromSolicitationSourceEmail, setTransferFromSolicitationSourceEmail] = useState<string | null>(null);
+  /** E-mail do consultor destino (recebedor) ao redirecionar da solicitação — preenchido quando consultants carregar */
+  const [transferFromSolicitationTargetEmail, setTransferFromSolicitationTargetEmail] = useState<string | null>(null);
+  /** Banca da solicitação ao redirecionar (para garantir seleção mesmo se lista de bancas carregar depois) */
+  const transferFromSolicitationBancaIdRef = useRef<string | null>(null);
+  /** ID da solicitação quando veio de "Ir para transferir" — ao confirmar a transferência, aprovar esta solicitação também */
+  const transferFromSolicitationRequestIdRef = useRef<string | null>(null);
 
   const selectedBanca = bancas.find((b) => b.id === bancaId);
   const filteredBancas = bancaSearchQuery.trim()
@@ -470,6 +480,43 @@ export default function AdminLeadTransferPage() {
     setHasSearchedLeads(false);
   }, [sourceEmail]);
 
+  /** Garante banca da solicitação selecionada na aba Transferir (ex.: quando lista de bancas carrega depois do clique) */
+  useEffect(() => {
+    const pendingBancaId = transferFromSolicitationBancaIdRef.current;
+    if (activeTab !== 'transfer' || !pendingBancaId || bancas.length === 0) return;
+    const banca = bancas.find((b) => b.id === pendingBancaId);
+    if (!banca) return;
+    if (bancaId !== pendingBancaId) {
+      setBancaId(pendingBancaId);
+      setBancaSearchQuery(banca.name || banca.url || pendingBancaId);
+    }
+    transferFromSolicitationBancaIdRef.current = null;
+  }, [activeTab, bancas, bancaId]);
+
+  /** Ao redirecionar da solicitação: preenche banca e doador, dispara busca de leads com eles e leva ao step 4 (Selecionar) para o usuário apenas escolher os leads */
+  useEffect(() => {
+    if (activeTab !== 'transfer' || !bancaId || !transferFromSolicitationSourceEmail || consultants.length === 0) return;
+    const found = consultants.some((c) => (c.email ?? '').trim() === transferFromSolicitationSourceEmail.trim());
+    if (found) {
+      const email = transferFromSolicitationSourceEmail.trim();
+      setSourceEmail(email);
+      setTransferFromSolicitationSourceEmail(null);
+      loadLeads('90', email).then(() => setCurrentStep(4));
+    } else {
+      setTransferFromSolicitationSourceEmail(null);
+    }
+  }, [activeTab, bancaId, consultants, transferFromSolicitationSourceEmail]);
+
+  /** Ao redirecionar da solicitação: preenche consultor destino (recebedor) quando a lista de consultores da banca carregar */
+  useEffect(() => {
+    if (activeTab !== 'transfer' || !transferFromSolicitationTargetEmail || consultants.length === 0) return;
+    const found = consultants.some((c) => (c.email ?? '').trim() === transferFromSolicitationTargetEmail.trim());
+    if (found) {
+      setTargetEmail(transferFromSolicitationTargetEmail.trim());
+    }
+    setTransferFromSolicitationTargetEmail(null);
+  }, [activeTab, consultants, transferFromSolicitationTargetEmail]);
+
   const loadLeadRequests = useCallback(async () => {
     if (!userId) return;
     setLoadingLeadRequests(true);
@@ -521,6 +568,41 @@ export default function AdminLeadTransferPage() {
     setApproveSubmitting(false);
     setApproveRejecting(false);
     setApproveModalConsultants([]);
+  };
+
+  /** Redireciona para a aba Transferir: banca e doador da solicitação preenchidos, busca leads com eles e leva ao step 4 para apenas selecionar os leads a transferir */
+  const handleGoToTransferFromApprove = () => {
+    if (!selectedRequestForApprove?.banca_id?.trim()) {
+      showToast('Solicitação sem banca definida.', 'error');
+      return;
+    }
+    if (!approveFormSourceConsultantId.trim()) {
+      showToast('Selecione o consultor doador antes de ir para a transferência.', 'error');
+      return;
+    }
+    const doador = approveModalConsultants.find((c) => c.id === approveFormSourceConsultantId.trim());
+    const doadorEmail = (doador?.email ?? '').trim();
+    if (!doadorEmail) {
+      showToast('E-mail do consultor doador não encontrado.', 'error');
+      return;
+    }
+    const requestBancaId = selectedRequestForApprove.banca_id.trim();
+    const bancaFromList = bancas.find((b) => b.id === requestBancaId);
+    const bancaDisplayName = bancaFromList?.name || bancaFromList?.url || selectedRequestForApprove.banca_name || requestBancaId;
+    const recebedor = selectedRequestForApprove.consultores?.[0];
+    const recebedorConsultant = recebedor ? approveModalConsultants.find((c) => c.id === recebedor.consultor_id) : null;
+    const recebedorEmail = (recebedorConsultant?.email ?? '').trim();
+
+    transferFromSolicitationBancaIdRef.current = requestBancaId;
+    transferFromSolicitationRequestIdRef.current = selectedRequestForApprove.id;
+    setBancaId(requestBancaId);
+    setBancaSearchQuery(bancaDisplayName);
+    setTransferFromSolicitationSourceEmail(doadorEmail);
+    if (recebedorEmail) setTransferFromSolicitationTargetEmail(recebedorEmail);
+    setCurrentStep(3);
+    setActiveTab('transfer');
+    closeApproveModal();
+    showToast('Buscando leads com a banca e o doador da solicitação. Selecione os leads e depois revise.', 'success');
   };
 
   const handleApproveRequest = async () => {
@@ -759,9 +841,10 @@ export default function AdminLeadTransferPage() {
     }
   };
 
-  /** Busca leads por período (e tag). Filtros (saldo, aposta, etc.) são aplicados no cliente. Só nova requisição ao alterar período. */
-  const loadLeads = async (overrideDays?: string) => {
-    if (!bancaId || !sourceEmail?.trim() || !userId) {
+  /** Busca leads por período (e tag). Filtros (saldo, aposta, etc.) são aplicados no cliente. overrideSourceEmail: quando vindo da solicitação, evita depender do estado sourceEmail ainda não commitado. */
+  const loadLeads = async (overrideDays?: string, overrideSourceEmail?: string) => {
+    const effectiveSourceEmail = (overrideSourceEmail ?? sourceEmail)?.trim();
+    if (!bancaId || !effectiveSourceEmail || !userId) {
       showToast('Selecione a banca e o consultor origem', 'error');
       return;
     }
@@ -776,7 +859,7 @@ export default function AdminLeadTransferPage() {
     try {
       const params = new URLSearchParams();
       params.set('banca_id', bancaId);
-      params.set('source_consultant_email', sourceEmail.trim());
+      params.set('source_consultant_email', effectiveSourceEmail);
       const daysVal = (overrideDays ?? daysInactive).trim();
       params.set('min_inactive_days', daysVal && daysVal !== '0' ? daysVal : '90');
       if (selectedTag.trim()) params.set('tag', selectedTag.trim());
@@ -802,7 +885,7 @@ export default function AdminLeadTransferPage() {
             try {
               const ep = new URLSearchParams();
               ep.set('banca_id', bancaId);
-              ep.set('source_consultant_email', sourceEmail.trim());
+              ep.set('source_consultant_email', effectiveSourceEmail);
               ep.set('page', String(page));
               ep.set('transferred_filter', 'no');
               const er = await fetch(`/api/admin/crm/redistribution-leads/enrichment?${ep.toString()}`, { headers: headers() });
@@ -1104,7 +1187,39 @@ export default function AdminLeadTransferPage() {
       const json = await res.json();
       if (res.ok && json.success) {
         const count = json?.data?.count ?? selectedLeadIds.size;
-        showToast(`${count} lead(s) transferido(s) de ${sourceEmail} para ${targetEmail}. Aba Histórico atualizada.`, 'success');
+        const requestIdToApprove = transferFromSolicitationRequestIdRef.current;
+        if (requestIdToApprove) {
+          const sourceConsultant = consultants.find((c) => (c.email ?? '').trim().toLowerCase() === (sourceEmail ?? '').trim().toLowerCase());
+          const sourceConsultantId = sourceConsultant?.id?.trim();
+          try {
+            if (sourceConsultantId) {
+              const approveRes = await fetch(`/api/admin/crm/lead-requests/${requestIdToApprove}`, {
+                method: 'PATCH',
+                headers: headers(),
+                body: JSON.stringify({
+                  status: 'approved',
+                  source_consultant_id: sourceConsultantId,
+                  source_consultant_email: sourceEmail?.trim() ?? null,
+                  banca_id: bancaId || null,
+                }),
+              });
+              const approveJson = await approveRes.json();
+              if (approveRes.ok && approveJson.success) {
+                showToast(`Transferência concluída e solicitação aprovada. ${count} lead(s) transferido(s).`, 'success');
+                loadLeadRequests();
+              } else {
+                showToast(`${count} lead(s) transferido(s). Solicitação não aprovada: ${approveJson?.error ?? 'erro'}`, 'warning');
+              }
+            } else {
+              showToast(`${count} lead(s) transferido(s). Solicitação não aprovada (consultor origem não encontrado).`, 'warning');
+            }
+          } catch {
+            showToast(`${count} lead(s) transferido(s). Não foi possível aprovar a solicitação.`, 'warning');
+          }
+          transferFromSolicitationRequestIdRef.current = null;
+        } else {
+          showToast(`${count} lead(s) transferido(s) de ${sourceEmail} para ${targetEmail}. Aba Histórico atualizada.`, 'success');
+        }
         setShowConfirmModal(false);
         setConfirmAcknowledged(false);
         setSelectedLeadIds(new Set());
@@ -2017,9 +2132,10 @@ export default function AdminLeadTransferPage() {
                     <thead className="bg-gray-50 dark:bg-[#333] text-left">
                       <tr>
                         <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Gerente</th>
+                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Consultor (receberá)</th>
                         <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Banca</th>
-                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Tipo de lead</th>
-                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Resumo</th>
+                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Quantidade</th>
+                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Período (dias)</th>
                         <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Status</th>
                         <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Data</th>
                         <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Ação</th>
@@ -2028,27 +2144,16 @@ export default function AdminLeadTransferPage() {
                     <tbody className="divide-y divide-gray-200 dark:divide-[#404040]">
                       {leadRequests.map((req) => {
                         const consultoresPendentes = req.consultores ?? [];
+                        const primeiro = consultoresPendentes[0];
                         const totalLeads = consultoresPendentes.reduce((s, c) => s + c.quantity, 0);
-                        const summary = consultoresPendentes.length === 0
-                          ? 'Nenhum consultor'
-                          : `${consultoresPendentes.length} consultor(es), ${totalLeads} lead(s)`;
+                        const consultorNome = primeiro ? (primeiro.consultor_name ?? primeiro.consultor_id) : '-';
                         return (
                           <tr key={req.id} className="hover:bg-gray-50 dark:hover:bg-[#333]/50">
                             <td className="px-4 py-3 text-gray-900 dark:text-white font-medium">{req.gerente_name}</td>
+                            <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{consultorNome}</td>
                             <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{req.banca_name ?? (req.banca_id ? req.banca_id : '-')}</td>
-                            <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{req.lead_type_label}</td>
-                            <td className="px-4 py-3 text-gray-600 dark:text-gray-400">
-                              <span className="block font-medium">{summary}</span>
-                              {consultoresPendentes.length > 0 && (
-                                <ul className="mt-1 text-xs text-gray-500 dark:text-gray-400 space-y-0.5 max-h-20 overflow-y-auto">
-                                  {consultoresPendentes.map((c) => (
-                                    <li key={c.consultor_id}>
-                                      {c.consultor_name ?? c.consultor_id} — {c.quantity} lead(s)
-                                    </li>
-                                  ))}
-                                </ul>
-                              )}
-                            </td>
+                            <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{totalLeads} lead(s)</td>
+                            <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{req.deadline_days != null ? `${req.deadline_days} dias` : '—'}</td>
                             <td className="px-4 py-3">
                               <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${req.status === 'pending' ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200' : req.status === 'approved' ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-200' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'}`}>
                                 {req.status === 'pending' ? 'Pendente' : req.status === 'approved' ? 'Aprovada' : 'Rejeitada'}
@@ -4025,88 +4130,6 @@ export default function AdminLeadTransferPage() {
                 </p>
               )}
               <div>
-                <label className="block text-xs font-bold text-gray-600 dark:text-gray-400 uppercase mb-1">Tipo de lead (múltipla escolha)</label>
-                <div className="space-y-2 border border-gray-300 dark:border-[#555] dark:bg-[#333] rounded-lg p-2">
-                  {LEAD_TYPE_OPTIONS.map((o) => (
-                    <label key={o.value} className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={approveFormLeadTypes.includes(o.value)}
-                        onChange={() => toggleApproveFormLeadType(o.value)}
-                        className="rounded text-[#8CD955] focus:ring-[#8CD955]"
-                      />
-                      <span className="text-sm text-gray-800 dark:text-white">{o.label}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-gray-600 dark:text-gray-400 uppercase mb-1">Consultores pendentes (recebedores e quantidade)</label>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Defina a quantidade de leads por consultor. Use os atalhos para aplicar o mesmo valor a todos.</p>
-                <div className="flex flex-wrap gap-2 mb-2">
-                  <span className="text-xs text-gray-500 dark:text-gray-400 self-center">Definir todos como:</span>
-                  {[5, 10, 15, 20].map((qty) => (
-                    <button
-                      key={qty}
-                      type="button"
-                      onClick={() => setApproveFormConsultores((prev) => prev.map((c) => ({ ...c, quantity: qty })))}
-                      className="px-3 py-1.5 text-sm font-medium rounded-lg border border-[#8CD955] text-[#8CD955] hover:bg-[#8CD955]/10 dark:border-[#8CD955] dark:text-[#8CD955] dark:hover:bg-[#8CD955]/20 transition"
-                    >
-                      {qty}
-                    </button>
-                  ))}
-                  <div className="flex items-center gap-1">
-                    <input
-                      type="number"
-                      min={1}
-                      max={999}
-                      placeholder="Outro"
-                      id="approve-modal-custom-qty"
-                      className="w-16 px-2 py-1.5 text-sm border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg focus:ring-2 focus:ring-[#8CD955]"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const el = document.getElementById('approve-modal-custom-qty') as HTMLInputElement | null;
-                        const v = el ? parseInt(el.value, 10) : NaN;
-                        if (Number.isNaN(v) || v < 1) return;
-                        const qty = Math.min(999, Math.max(1, v));
-                        setApproveFormConsultores((prev) => prev.map((c) => ({ ...c, quantity: qty })));
-                      }}
-                      className="px-2 py-1.5 text-sm font-medium rounded-lg bg-[#8CD955] text-white hover:bg-[#7BC84A]"
-                    >
-                      Aplicar
-                    </button>
-                  </div>
-                </div>
-                <div className="space-y-2 max-h-40 overflow-y-auto border border-gray-200 dark:border-[#404040] rounded-lg p-2 bg-gray-50 dark:bg-gray-800/30">
-                  {approveFormConsultores.length === 0 ? (
-                    <p className="text-sm text-gray-500 dark:text-gray-400 py-2">Nenhum consultor pendente nesta solicitação.</p>
-                  ) : (
-                    approveFormConsultores.map((c, idx) => (
-                      <div key={c.consultor_id} className="flex items-center gap-2">
-                        <span className="flex-1 text-sm text-gray-800 dark:text-gray-200 truncate">{c.consultor_name ?? c.consultor_id}</span>
-                        <input
-                          type="number"
-                          min={1}
-                          value={c.quantity}
-                          onChange={(e) => {
-                            const v = parseInt(e.target.value, 10);
-                            if (Number.isNaN(v) || v < 1) return;
-                            setApproveFormConsultores((prev) => {
-                              const next = [...prev];
-                              next[idx] = { ...next[idx], quantity: v };
-                              return next;
-                            });
-                          }}
-                          className="w-20 px-2 py-1 text-sm border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg focus:ring-2 focus:ring-[#8CD955]"
-                        />
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-              <div>
                 <label className="block text-xs font-bold text-gray-600 dark:text-gray-400 uppercase mb-1">Consultor doador (origem dos leads) *</label>
                 {!selectedRequestForApprove.banca_id?.trim() ? (
                   <p className="text-sm text-amber-600 dark:text-amber-400">Esta solicitação não possui banca definida. Não é possível selecionar o doador.</p>
@@ -4127,7 +4150,7 @@ export default function AdminLeadTransferPage() {
                     ))}
                   </select>
                 )}
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1.5">Consultores da banca da solicitação ({selectedRequestForApprove.banca_name ?? 'banca selecionada'}). Ao aprovar, o sistema busca leads do doador que atendem aos tipos selecionados, verifica disponibilidade e realiza a transferência automaticamente.</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1.5">Consultores da banca da solicitação. Ao clicar em &quot;Ir para transferir&quot;, a aba Transferir abrirá com esta banca e o doador já preenchidos no passo Buscar.</p>
               </div>
             </div>
             <div className="p-4 border-t border-gray-100 dark:border-gray-700 flex gap-3">
@@ -4141,12 +4164,11 @@ export default function AdminLeadTransferPage() {
               </button>
               <button
                 type="button"
-                onClick={handleApproveRequest}
-                disabled={approveSubmitting || approveRejecting || !approveFormSourceConsultantId.trim() || !selectedRequestForApprove.banca_id?.trim() || approveFormLeadTypes.length === 0 || loadingApproveModalConsultants}
+                onClick={handleGoToTransferFromApprove}
+                disabled={approveSubmitting || approveRejecting || !approveFormSourceConsultantId.trim() || !selectedRequestForApprove?.banca_id?.trim() || loadingApproveModalConsultants}
                 className="flex-1 px-4 py-2.5 rounded-xl text-sm font-bold bg-[#8CD955] text-white hover:bg-[#7BC84A] disabled:opacity-50 flex items-center justify-center gap-2"
               >
-                {approveSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                {approveSubmitting ? 'Aprovando...' : 'Aprovar'}
+                Ir para transferir
               </button>
             </div>
           </div>
