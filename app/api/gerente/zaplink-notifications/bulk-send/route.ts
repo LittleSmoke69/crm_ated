@@ -81,8 +81,8 @@ async function getGerenteInstanceByName(gerenteUserId: string, instanceName: str
 export async function POST(req: NextRequest) {
   let userId: string | undefined;
   try {
-    const auth = await requireStatus(req, ['gerente']);
-    userId = auth.userId;
+    const { userId: authUserId } = await requireStatus(req, ['gerente']);
+    userId = authUserId;
 
     const body = await req.json().catch(() => ({}));
     const message =
@@ -151,8 +151,11 @@ export async function POST(req: NextRequest) {
       if (notifError || !notifications || notifications.length === 0) {
         return successResponse({ sent: 0 }, 'Nenhuma notificação para disparar');
       }
-      recipients = (notifications as { zaplink_form_submissions: SubRow | null }[])
-        .map((n) => n.zaplink_form_submissions)
+      recipients = (notifications as { zaplink_form_submissions: SubRow | SubRow[] | null }[])
+        .map((n) => {
+          const sub = n.zaplink_form_submissions;
+          return Array.isArray(sub) ? sub[0] : sub;
+        })
         .filter(Boolean) as SubRow[];
     }
 
@@ -188,7 +191,8 @@ export async function POST(req: NextRequest) {
       const phoneNorm = normalizePhone(sub.phone);
       if (phoneNorm.length < 12) continue;
 
-      const remoteJid = phoneNorm.includes('@') ? phoneNorm : `${phoneNorm}@s.whatsapp.net`;
+      // Evolution API sendText espera "number" apenas com dígitos (sem @s.whatsapp.net)
+      const numberForApi = phoneNorm.includes('@') ? phoneNorm.replace(/@.*$/, '') : phoneNorm;
       const personalizedMsg = message.replace(/\{\{nome\}\}/gi, sub.full_name || '');
 
       try {
@@ -198,22 +202,26 @@ export async function POST(req: NextRequest) {
             apikey: evolution.apikey,
             base_url: evolution.base_url,
           },
-          { remoteJid, type: 'text', text: personalizedMsg }
+          { remoteJid: numberForApi, type: 'text', text: personalizedMsg }
         );
         sent++;
       } catch (sendErr) {
-        console.error('[zaplink/bulk-send] Erro ao enviar para', phoneNorm, sendErr);
+        console.error('[zaplink/bulk-send] Erro ao enviar para', numberForApi, sendErr);
       }
     }
 
     const messagePreview = message.slice(0, 200);
-    await supabaseServiceRole.from('zaplink_bulk_send_log').insert({
-      gerente_id: userId,
-      sent_count: sent,
-      message_preview: messagePreview,
-      delay_seconds: delaySeconds,
-      status: 'success',
-    });
+    try {
+      await supabaseServiceRole.from('zaplink_bulk_send_log').insert({
+        gerente_id: userId,
+        sent_count: sent,
+        message_preview: messagePreview,
+        delay_seconds: delaySeconds,
+        status: 'success',
+      });
+    } catch (logErr) {
+      console.error('[zaplink/bulk-send] Erro ao registrar log (disparo concluído):', logErr);
+    }
 
     return successResponse({ sent }, `Mensagem enviada para ${sent} contato(s)`);
   } catch (e) {
@@ -228,7 +236,9 @@ export async function POST(req: NextRequest) {
           status: 'failed',
           error_message: errMsg.slice(0, 500),
         });
-      } catch (_) {}
+      } catch (_) {
+        console.error('[zaplink/bulk-send] Erro ao registrar log de falha:', _);
+      }
     }
     return serverErrorResponse(e);
   }

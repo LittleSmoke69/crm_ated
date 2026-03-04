@@ -110,6 +110,9 @@ export default function GestorTrafegoZaplinkPage() {
   const [selectedPendingIds, setSelectedPendingIds] = useState<string[]>([]);
   const [consultantRequests, setConsultantRequests] = useState<ConsultantRequest[]>([]);
   const [consultantRequestsLoading, setConsultantRequestsLoading] = useState(false);
+  const [showCreateFormModal, setShowCreateFormModal] = useState(false);
+  const [createFormData, setCreateFormData] = useState({ slug: '', name: '', form_type: 'consultor' as 'consultor' | 'influenciador' });
+  const [creatingForm, setCreatingForm] = useState(false);
 
   const showToast = (type: 'success' | 'error', message: string) => {
     setToast({ type, message });
@@ -318,6 +321,32 @@ export default function GestorTrafegoZaplinkPage() {
     );
   };
 
+  const handleCreateForm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userId) return;
+    setCreatingForm(true);
+    try {
+      const res = await fetch('/api/gestor-trafego/zaplink/forms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify(createFormData),
+      });
+      const json = await res.json();
+      if (json.success) {
+        showToast('success', json.message || 'Formulário criado com sucesso');
+        setShowCreateFormModal(false);
+        setCreateFormData({ slug: '', name: '', form_type: 'consultor' });
+        loadData();
+      } else {
+        showToast('error', json.error || 'Erro ao criar formulário');
+      }
+    } catch {
+      showToast('error', 'Erro ao criar formulário');
+    } finally {
+      setCreatingForm(false);
+    }
+  };
+
   const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
 
   if (checking) {
@@ -407,11 +436,21 @@ export default function GestorTrafegoZaplinkPage() {
 
         {activeTab === 'forms' && (
           <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] overflow-hidden">
+            <div className="flex justify-end p-3 border-b border-gray-200 dark:border-[#404040]">
+              <button
+                type="button"
+                onClick={() => setShowCreateFormModal(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium"
+              >
+                <FileText className="w-4 h-4" />
+                Criar formulário
+              </button>
+            </div>
             {loading ? (
               <div className="p-8 text-center text-gray-500">Carregando...</div>
             ) : forms.length === 0 ? (
               <div className="p-8 text-center text-gray-500">
-                Nenhum formulário atribuído a você. O admin pode transferir formulários para você em Admin → Zaplink.
+                Nenhum formulário ainda. Crie um novo com o botão acima ou o admin pode transferir formulários para você em Admin → Zaplink.
               </div>
             ) : (
               <table className="w-full">
@@ -724,7 +763,7 @@ export default function GestorTrafegoZaplinkPage() {
               ) : null}
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium mb-1">Banca</label>
+                  <label className="block text-sm font-medium mb-1">Sua banca</label>
                   <select
                     value={assignBanca}
                     onChange={(e) => {
@@ -739,9 +778,14 @@ export default function GestorTrafegoZaplinkPage() {
                       <option key={b.id} value={b.id}>{b.name}</option>
                     ))}
                   </select>
+                  {bancas.length === 1 && assignBanca && (
+                    <p className="text-xs text-gray-500 dark:text-[#888] mt-1">
+                      Banca em que você está: {bancas.find((b) => b.id === assignBanca)?.name ?? '—'}
+                    </p>
+                  )}
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">Gerente</label>
+                  <label className="block text-sm font-medium mb-1">Gerente da banca</label>
                   {gerentesLoading && (
                     <p className="text-sm text-amber-600 dark:text-amber-400 mb-1 flex items-center gap-2">
                       <Loader2 className="w-4 h-4 animate-spin" />
@@ -789,7 +833,7 @@ export default function GestorTrafegoZaplinkPage() {
               </p>
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium mb-1">Nova banca</label>
+                  <label className="block text-sm font-medium mb-1">Sua banca</label>
                   <select
                     value={reassignBanca}
                     onChange={(e) => {
@@ -806,7 +850,7 @@ export default function GestorTrafegoZaplinkPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">Novo gerente</label>
+                  <label className="block text-sm font-medium mb-1">Gerente da banca</label>
                   {gerentesLoading && (
                     <p className="text-sm text-amber-600 dark:text-amber-400 mb-1 flex items-center gap-2">
                       <Loader2 className="w-4 h-4 animate-spin" />
@@ -837,6 +881,86 @@ export default function GestorTrafegoZaplinkPage() {
                   Mover
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Criar formulário */}
+        {showCreateFormModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-xl max-w-md w-full p-6">
+              <h2 className="text-lg font-semibold mb-4">Novo formulário</h2>
+              <form onSubmit={handleCreateForm} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Slug (URL)</label>
+                  <input
+                    type="text"
+                    value={createFormData.slug}
+                    onChange={(e) =>
+                      setCreateFormData((p) => ({
+                        ...p,
+                        slug: e.target.value.toLowerCase().replace(/\s/g, '-'),
+                      }))
+                    }
+                    placeholder="ex: cadastro-campanha"
+                    className="w-full px-3 py-2 border rounded-lg dark:bg-[#333] dark:border-[#555]"
+                    required
+                  />
+                  <p className="text-xs text-gray-500 dark:text-[#888] mt-1">
+                    Link: /zl/form/{createFormData.slug || '...'}
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Nome</label>
+                  <input
+                    type="text"
+                    value={createFormData.name}
+                    onChange={(e) => setCreateFormData((p) => ({ ...p, name: e.target.value }))}
+                    placeholder="ex: Cadastro Campanha X"
+                    className="w-full px-3 py-2 border rounded-lg dark:bg-[#333] dark:border-[#555]"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Tipo</label>
+                  <select
+                    value={createFormData.form_type}
+                    onChange={(e) =>
+                      setCreateFormData((p) => ({
+                        ...p,
+                        form_type: e.target.value as 'consultor' | 'influenciador',
+                      }))
+                    }
+                    className="w-full px-3 py-2 border rounded-lg dark:bg-[#333] dark:border-[#555]"
+                  >
+                    <option value="consultor">Consultor</option>
+                    <option value="influenciador">Influenciador</option>
+                  </select>
+                  <p className="text-xs text-gray-500 dark:text-[#888] mt-1">
+                    Influenciador exige campo @ Instagram no formulário.
+                  </p>
+                </div>
+                <div className="flex gap-2 justify-end mt-6">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowCreateFormModal(false);
+                      setCreateFormData({ slug: '', name: '', form_type: 'consultor' });
+                    }}
+                    className="px-4 py-2 border rounded-lg dark:border-[#555]"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={creatingForm}
+                    className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {creatingForm && <Loader2 className="w-4 h-4 animate-spin" />}
+                    Criar
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         )}

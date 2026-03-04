@@ -102,6 +102,7 @@ export default function AdminAntiSpamPage() {
   const [fetchingGroups, setFetchingGroups] = useState(false);
   const [togglingGroupId, setTogglingGroupId] = useState<string | null>(null);
   const [verifyingGroups, setVerifyingGroups] = useState(false);
+  const [markingAllGroups, setMarkingAllGroups] = useState(false);
   const [verifyGroupsResult, setVerifyGroupsResult] = useState<{
     report: { phone_e164: string; groups_count: number; group_jids: string[] }[];
     removals: { phone_e164: string; group_jid: string; success: boolean; error?: string }[];
@@ -405,6 +406,51 @@ export default function AdminAntiSpamPage() {
     },
     [userId, selectedConfigId]
   );
+
+  const handleMarkAllGroups = useCallback(async () => {
+    if (!userId || !selectedConfigId) return;
+    const toAdd = savedGroups.filter((g) => !protectedGroupIds.has(g.group_id));
+    if (toAdd.length === 0) {
+      showToast('success', 'Todos os grupos já estão marcados.');
+      return;
+    }
+    setMarkingAllGroups(true);
+    let success = 0;
+    let failed = 0;
+    try {
+      for (const g of toAdd) {
+        try {
+          const res = await fetch('/api/admin/anti-spam/groups', {
+            method: 'POST',
+            headers: { 'X-User-Id': userId, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              config_id: selectedConfigId,
+              group_jid: g.group_id,
+              group_name: g.group_subject || g.group_id,
+            }),
+          });
+          const json = await res.json();
+          if (json.success) {
+            setProtectedGroupIds((prev) => new Set(prev).add(g.group_id));
+            success++;
+          } else {
+            failed++;
+          }
+        } catch {
+          failed++;
+        }
+      }
+      if (failed > 0) {
+        showToast('error', `Marcados ${success} grupo(s). Falha em ${failed}.`);
+      } else {
+        showToast('success', `Todos os ${success} grupo(s) foram marcados.`);
+      }
+    } catch (e: any) {
+      showToast('error', e?.message || 'Erro ao marcar grupos');
+    } finally {
+      setMarkingAllGroups(false);
+    }
+  }, [userId, selectedConfigId, savedGroups, protectedGroupIds]);
 
   useEffect(() => {
     loadBancas();
@@ -943,7 +989,19 @@ export default function AdminAntiSpamPage() {
                     Nenhum grupo salvo ainda. Use &quot;Buscar grupos da instância&quot; para carregar os grupos da instância da configuração.
                   </p>
                 ) : (
-                  <ul className="space-y-2 max-h-[360px] overflow-y-auto rounded-lg border border-gray-200 dark:border-[#404040] p-3">
+                  <>
+                    <div className="mb-3 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleMarkAllGroups}
+                        disabled={markingAllGroups || savedGroups.every((g) => protectedGroupIds.has(g.group_id))}
+                        className="inline-flex items-center gap-2 rounded-lg border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50 transition"
+                      >
+                        {markingAllGroups ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                        Marcar todos os grupos
+                      </button>
+                    </div>
+                    <ul className="space-y-2 max-h-[360px] overflow-y-auto rounded-lg border border-gray-200 dark:border-[#404040] p-3">
                     {savedGroups.map((g) => {
                       const isProtected = protectedGroupIds.has(g.group_id);
                       const busy = togglingGroupId === g.group_id;
@@ -981,7 +1039,8 @@ export default function AdminAntiSpamPage() {
                         </li>
                       );
                     })}
-                  </ul>
+                    </ul>
+                  </>
                 )}
               </>
             )}
