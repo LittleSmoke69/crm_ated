@@ -20,7 +20,7 @@ export async function GET(
 
     const { data, error } = await supabaseServiceRole
       .from('zaplink_forms')
-      .select('id, slug, name, form_type, created_at, updated_at')
+      .select('id, slug, name, form_type, gestor_trafego_user_id, created_at, updated_at')
       .eq('id', id)
       .single();
 
@@ -46,17 +46,19 @@ export async function PUT(
     const slug = typeof body.slug === 'string' ? body.slug.trim().toLowerCase() : undefined;
     const name = typeof body.name === 'string' ? body.name.trim() : undefined;
     const formType = body.form_type === 'influenciador' ? 'influenciador' : body.form_type === 'consultor' ? 'consultor' : undefined;
+    const gestorTrafegoUserId = body.gestor_trafego_user_id === null || body.gestor_trafego_user_id === '' ? null : (typeof body.gestor_trafego_user_id === 'string' ? body.gestor_trafego_user_id.trim() : undefined);
 
     const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
     if (slug !== undefined) updates.slug = slug;
     if (name !== undefined) updates.name = name;
     if (formType !== undefined) updates.form_type = formType;
+    if (gestorTrafegoUserId !== undefined) updates.gestor_trafego_user_id = gestorTrafegoUserId || null;
 
     const { data, error } = await supabaseServiceRole
       .from('zaplink_forms')
       .update(updates)
       .eq('id', id)
-      .select('id, slug, name, form_type, created_at, updated_at')
+      .select('id, slug, name, form_type, gestor_trafego_user_id, created_at, updated_at')
       .single();
 
     if (error) {

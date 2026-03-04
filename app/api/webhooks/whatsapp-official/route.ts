@@ -215,6 +215,15 @@ async function handleInboundMessages(value: InboundValue) {
       .update({ unread_count: (conversation.unread_count || 0) + 1 })
       .eq('id', conversation.id)
   );
+
+  // Janela de 24h: última mensagem do contato atualiza o marco para envio de mensagem livre
+  const lastMsgTs = messages.length
+    ? parseInt(String(messages[messages.length - 1].timestamp), 10) * 1000
+    : Date.now();
+  await supabaseServiceRole
+    .from('chat_conversations')
+    .update({ last_customer_message_at: new Date(lastMsgTs).toISOString() })
+    .eq('id', conversation.id);
 }
 
 interface StatusValue {

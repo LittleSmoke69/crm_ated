@@ -199,6 +199,12 @@ export async function DELETE(
       }
     }
 
+    // Remove configs de anti-spam que usam esta instância como master (FK anti_spam_configs_master_instance_id_fkey)
+    await supabaseServiceRole
+      .from('anti_spam_configs')
+      .delete()
+      .eq('master_instance_id', instance.id);
+
     // PRIMEIRO: Deleta no banco do Zaploto (sempre deleta, mesmo se não encontrar na Evolution API depois)
     console.log(`🗑️ [DELETE INSTANCE] Deletando instância ${instanceName} (ID: ${instance.id}) do banco Zaploto...`);
     const { error: deleteError } = await supabaseServiceRole

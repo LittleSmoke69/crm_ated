@@ -77,7 +77,7 @@ export async function POST(
       return errorResponse('Submissão não encontrada', 404);
     }
 
-    if (submission.status !== 'assigned') {
+    if (submission.status !== 'assigned' && submission.status !== 'cadastrado') {
       return errorResponse('Só é possível mover leads já atribuídos. Use Atribuir para pendentes.', 400);
     }
 

@@ -78,6 +78,72 @@ export interface RemoveParticipantResult {
   httpStatus?: number;
 }
 
+export interface GetGroupParticipantsResult {
+  success: boolean;
+  participants?: string[];
+  error?: string;
+  httpStatus?: number;
+}
+
+/**
+ * Lista participantes do grupo via Evolution API.
+ * GET /group/participants/{instance}?groupJid=...
+ * Retorna lista de JIDs (ex: 5531999887766@s.whatsapp.net) para comparação com blacklist.
+ */
+export async function getGroupParticipants(
+  instanceId: string,
+  groupJid: string
+): Promise<GetGroupParticipantsResult> {
+  const creds = await getInstanceCredentials(instanceId);
+  if (!creds) {
+    return { success: false, error: 'Instância não encontrada ou sem credenciais' };
+  }
+
+  const baseUrl = normalizeBaseUrl(creds.baseUrl);
+  const url = `${baseUrl}/group/participants/${creds.instanceName}?groupJid=${encodeURIComponent(groupJid)}`;
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { apikey: creds.apikey },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    const text = await response.text();
+    let data: any = {};
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { message: text };
+    }
+
+    if (!response.ok) {
+      return {
+        success: false,
+        error: data?.message || data?.error || `HTTP ${response.status}`,
+        httpStatus: response.status,
+      };
+    }
+
+    const raw = data?.participants ?? data?.data?.participants ?? [];
+    const arr = Array.isArray(raw) ? raw : [];
+    const participants = arr.map((p: any) => {
+      const id = p?.id ?? p?.jid ?? (typeof p === 'string' ? p : null);
+      return id ? String(id).trim() : null;
+    }).filter(Boolean) as string[];
+
+    return { success: true, participants };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err?.message || String(err),
+    };
+  }
+}
+
 /**
  * Remove participante do grupo via Evolution API.
  * participantJidOrPhone: JID (5531999887766@s.whatsapp.net) ou número (31999887766).

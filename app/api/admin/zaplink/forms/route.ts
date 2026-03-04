@@ -15,7 +15,7 @@ export async function GET(_req: NextRequest) {
 
     const { data: forms, error } = await supabaseServiceRole
       .from('zaplink_forms')
-      .select('id, slug, name, form_type, created_at, updated_at')
+      .select('id, slug, name, form_type, gestor_trafego_user_id, created_at, updated_at')
       .order('created_at', { ascending: false });
 
     if (error) {

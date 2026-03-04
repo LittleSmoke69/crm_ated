@@ -115,7 +115,7 @@ export async function GET(
       status: newStatus,
       updated_at: new Date().toISOString(),
     };
-    // Se acabou de conectar e é virgem: inicia auto maturação (5 dias, bloqueada)
+    // Se acabou de conectar e é virgem: inicia auto maturação (5 dias, bloqueada). Auto maturador = mesmo fluxo do maturador manual, mas automático para tipo virgem.
     if (newStatus === 'ok' && instance.maturation_type === 'virgem' && !instance.maturation_status) {
       const now = new Date();
       const endsAt = new Date(now.getTime() + 5 * 24 * 60 * 60 * 1000);
@@ -125,7 +125,7 @@ export async function GET(
       updatePayload.maturation_phase_started_at = now.toISOString();
       updatePayload.current_day = 1;
       updatePayload.is_locked = true;
-      console.log(`🌱 [STATUS] Instância virgem ${instanceName} conectada - iniciando auto maturação (5 dias)`);
+      console.log(`[AUTO-MATURADOR] Instância virgem ${instanceName} conectada → entrou em auto maturação (5 dias) status=waiting_connection_test termina=${endsAt.toISOString()}`);
     }
     const { error: updateError } = await supabaseServiceRole
       .from('evolution_instances')

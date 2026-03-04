@@ -50,6 +50,7 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
   const [instances, setInstances] = useState<any[]>([]);
   const [selectedInstance, setSelectedInstance] = useState<string>('');
   const [fetchingAll, setFetchingAll] = useState(false);
+  const [savingAllGroups, setSavingAllGroups] = useState(false);
   const [loading, setLoading] = useState(false);
   
   // Step 4: Confirm
@@ -129,6 +130,34 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
       showToast('Erro inesperado ao buscar grupos', 'error');
     } finally {
       setFetchingAll(false);
+    }
+  };
+
+  const handleSaveAllGroups = async () => {
+    if (!selectedInstance || groups.length === 0) {
+      showToast('Extraia os grupos primeiro', 'error');
+      return;
+    }
+    setSavingAllGroups(true);
+    try {
+      const payload = groups.map((g) => ({ id: g.id, subject: g.subject || null }));
+      const r = await fetch('/api/groups/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({ instanceName: selectedInstance, groups: payload }),
+      });
+      const data = await r.json();
+      if (r.ok && data.success) {
+        const { inserted = 0, updated = 0 } = data.data || {};
+        showToast(`${inserted + updated} grupo(s) salvos no banco (sem duplicar existentes)`, 'success');
+        await fetchDbGroups();
+      } else {
+        showToast(data.error || 'Erro ao salvar grupos', 'error');
+      }
+    } catch {
+      showToast('Erro ao salvar todos os grupos', 'error');
+    } finally {
+      setSavingAllGroups(false);
     }
   };
 
@@ -354,7 +383,7 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
 
       const data = await response.json();
       if (data.success) {
-        showToast('Agendamento criado com sucesso!', 'success');
+        showToast('Agendamento criado com sucesso! Você também pode criar campanhas de disparo em massa em Ativações > Campanhas de disparo.', 'success');
         onClose();
       } else {
         showToast(`Erro ao criar agendamento: ${data.error || 'Erro desconhecido'}`, 'error');
@@ -659,20 +688,32 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
               )}
 
               {/* Search and Select All */}
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between flex-wrap gap-2">
                 <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Grupos disponíveis *</span>
-                <button 
-                  onClick={fetchEvolutionGroups}
-                  disabled={fetchingAll || !selectedInstance}
-                  className="text-[#8CD955] hover:text-[#7BC84A] flex items-center gap-1.5 font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-                >
-                  {fetchingAll ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <Plus className="w-3.5 h-3.5" />
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={fetchEvolutionGroups}
+                    disabled={fetchingAll || !selectedInstance}
+                    className="text-[#8CD955] hover:text-[#7BC84A] flex items-center gap-1.5 font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                  >
+                    {fetchingAll ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Plus className="w-3.5 h-3.5" />
+                    )}
+                    Extrair todos os grupos
+                  </button>
+                  {groups.length > 0 && (
+                    <button 
+                      onClick={handleSaveAllGroups}
+                      disabled={savingAllGroups || !selectedInstance}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5 font-bold px-2 py-1 rounded-lg text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {savingAllGroups ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                      Salvar todos os grupos
+                    </button>
                   )}
-                  Extrair todos os grupos
-                </button>
+                </div>
               </div>
 
               <div className="relative">

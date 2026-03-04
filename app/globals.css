@@ -308,3 +308,17 @@ body {
   border-color: #8CD955;
   background-color: rgba(140, 217, 85, 0.05);
 }
+
+/* Verificação de grupos — barra de progresso indeterminada */
+@keyframes verify-progress-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+.animate-verify-progress {
+  animation: verify-progress-slide 1.8s ease-in-out infinite;
+}

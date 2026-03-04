@@ -1,13 +1,14 @@
 'use client';
 
 import React from 'react';
-import { X, Send, Calendar } from 'lucide-react';
+import { X, Send, Calendar, Megaphone } from 'lucide-react';
 
 interface SendMessageChoiceModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSendNow: () => void;
   onSchedule: () => void;
+  onMassCampaign?: () => void;
   messageTitle: string;
 }
 
@@ -16,6 +17,7 @@ const SendMessageChoiceModal: React.FC<SendMessageChoiceModalProps> = ({
   onClose,
   onSendNow,
   onSchedule,
+  onMassCampaign,
   messageTitle,
 }) => {
   if (!isOpen) return null;
@@ -46,6 +48,16 @@ const SendMessageChoiceModal: React.FC<SendMessageChoiceModalProps> = ({
             <Send className="w-5 h-5" />
             Enviar agora
           </button>
+
+          {onMassCampaign && (
+            <button
+              onClick={onMassCampaign}
+              className="w-full p-4 bg-white dark:bg-[#333] hover:bg-gray-50 dark:hover:bg-[#404040] border-2 border-blue-500 text-blue-600 dark:text-blue-400 font-bold rounded-xl transition-all flex items-center justify-center gap-3"
+            >
+              <Megaphone className="w-5 h-5" />
+              Criar campanha de disparo em massa
+            </button>
+          )}
 
           <button
             onClick={onSchedule}

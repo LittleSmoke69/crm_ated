@@ -11,7 +11,9 @@ import {
   CheckCircle2,
   XCircle,
   AlertCircle,
+  Trash2,
 } from 'lucide-react';
+import VerifyGroupsOverlay from '@/components/anti-spam/VerifyGroupsOverlay';
 
 interface AntiSpamConfigRow {
   id: string;
@@ -74,6 +76,18 @@ export default function AntiSpamPage() {
   const BLACKLIST_PAGE_SIZE = 10;
   const [activeTab, setActiveTab] = useState<'config' | 'groups' | 'blacklist' | 'events' | 'logs'>('config');
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [savedGroups, setSavedGroups] = useState<{ group_id: string; group_subject: string; instance_name?: string }[]>([]);
+  const [protectedGroupIds, setProtectedGroupIds] = useState<Set<string>>(new Set());
+  const [loadingGroups, setLoadingGroups] = useState(false);
+  const [fetchingGroups, setFetchingGroups] = useState(false);
+  const [togglingGroupId, setTogglingGroupId] = useState<string | null>(null);
+  const [verifyingGroups, setVerifyingGroups] = useState(false);
+  const [verifyGroupsResult, setVerifyGroupsResult] = useState<{
+    report: { phone_e164: string; groups_count: number; group_jids: string[] }[];
+    removals: { phone_e164: string; group_jid: string; success: boolean; error?: string }[];
+    groupErrors?: { groupJid: string; error: string }[];
+    summary: { totalInGroups: number; totalRemovals: number; success: number; failed: number };
+  } | null>(null);
 
   const showToast = (type: 'success' | 'error', message: string) => {
     setToast({ type, message });
@@ -174,11 +188,188 @@ export default function AntiSpamPage() {
     loadConfigs();
   }, [loadConfigs]);
 
+  const loadSavedGroupsAll = useCallback(async () => {
+    if (!userId) return;
+    try {
+      const res = await fetch('/api/groups?allInstances=1', { headers: { 'X-User-Id': userId } });
+      const json = await res.json();
+      if (json.success && Array.isArray(json.data)) {
+        setSavedGroups(
+          json.data.map((g: { group_id: string; group_subject?: string; instance_name?: string }) => ({
+            group_id: g.group_id,
+            group_subject: g.group_subject || g.group_id,
+            instance_name: g.instance_name ?? '',
+          }))
+        );
+      } else {
+        setSavedGroups([]);
+      }
+    } catch (e) {
+      setSavedGroups([]);
+    }
+  }, [userId]);
+
+  const loadProtectedGroups = useCallback(
+    async (configId: string) => {
+      if (!userId || !configId) return;
+      try {
+        const res = await fetch(`/api/anti-spam/groups?config_id=${encodeURIComponent(configId)}`, {
+          headers: { 'X-User-Id': userId },
+        });
+        const json = await res.json();
+        if (json.success && Array.isArray(json.data)) {
+          setProtectedGroupIds(new Set(json.data.map((g: { group_jid: string }) => g.group_jid)));
+        } else {
+          setProtectedGroupIds(new Set());
+        }
+      } catch (e) {
+        setProtectedGroupIds(new Set());
+      }
+    },
+    [userId]
+  );
+
+  const loadGroupsTabData = useCallback(async () => {
+    if (!configs[0] || !userId) return;
+    setLoadingGroups(true);
+    try {
+      await Promise.all([loadSavedGroupsAll(), loadProtectedGroups(configs[0].id)]);
+    } finally {
+      setLoadingGroups(false);
+    }
+  }, [userId, configs, loadSavedGroupsAll, loadProtectedGroups]);
+
+  const fetchGroupsFromInstance = useCallback(async () => {
+    if (!configs[0] || !userId) return;
+    const instanceName = instances.find((i) => i.id === configs[0].master_instance_id)?.instance_name;
+    if (!instanceName) {
+      showToast('error', 'Instância da configuração não encontrada.');
+      return;
+    }
+    setFetchingGroups(true);
+    try {
+      const res = await fetch('/api/groups/fetch', {
+        method: 'POST',
+        headers: { 'X-User-Id': userId, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instanceName }),
+      });
+      const json = await res.json();
+      if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+        const syncRes = await fetch('/api/groups/sync', {
+          method: 'POST',
+          headers: { 'X-User-Id': userId, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ instanceName, groups: json.data }),
+        });
+        const syncJson = await syncRes.json();
+        if (syncJson.success) showToast('success', 'Grupos buscados e salvos.');
+        await loadSavedGroupsAll();
+      } else if (json.success) {
+        showToast('success', 'Nenhum grupo encontrado na instância.');
+        await loadSavedGroupsAll();
+      } else {
+        showToast('error', json.error || 'Erro ao buscar grupos');
+      }
+    } catch (e: any) {
+      showToast('error', e?.message || 'Erro ao buscar grupos');
+    } finally {
+      setFetchingGroups(false);
+    }
+  }, [userId, configs, instances, loadSavedGroupsAll]);
+
+  const toggleGroupProtected = useCallback(
+    async (groupId: string, groupName: string, isCurrentlyProtected: boolean) => {
+      if (!userId || !configs[0]) return;
+      setTogglingGroupId(groupId);
+      try {
+        if (isCurrentlyProtected) {
+          const res = await fetch(
+            `/api/anti-spam/groups?config_id=${encodeURIComponent(configs[0].id)}&group_jid=${encodeURIComponent(groupId)}`,
+            { method: 'DELETE', headers: { 'X-User-Id': userId } }
+          );
+          const json = await res.json();
+          if (json.success) {
+            setProtectedGroupIds((prev) => {
+              const next = new Set(prev);
+              next.delete(groupId);
+              return next;
+            });
+          } else showToast('error', json.error || 'Erro ao remover');
+        } else {
+          const res = await fetch('/api/anti-spam/groups', {
+            method: 'POST',
+            headers: { 'X-User-Id': userId, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ config_id: configs[0].id, group_jid: groupId, group_name: groupName || groupId }),
+          });
+          const json = await res.json();
+          if (json.success) {
+            setProtectedGroupIds((prev) => new Set(prev).add(groupId));
+          } else showToast('error', json.error || 'Erro ao adicionar');
+        }
+      } catch (e: any) {
+        showToast('error', e?.message || 'Erro');
+      } finally {
+        setTogglingGroupId(null);
+      }
+    },
+    [userId, configs]
+  );
+
+  const handleVerifyGroups = useCallback(async () => {
+    if (!userId || !configs[0]) return;
+    setVerifyingGroups(true);
+    setVerifyGroupsResult(null);
+    try {
+      const res = await fetch('/api/anti-spam/verify-groups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({ config_id: configs[0].id }),
+      });
+      const json = await res.json();
+      if (json.success && json.data) {
+        setVerifyGroupsResult(json.data);
+        const s = json.data.summary;
+        if (s.totalRemovals > 0) {
+          showToast(s.failed === 0 ? 'success' : 'error', `Verificação: ${s.success} sucesso${s.failed > 0 ? `, ${s.failed} falha(s)` : ''}.`);
+        } else {
+          showToast('success', json.data.message || 'Nenhum número da blacklist encontrado nos grupos.');
+        }
+        loadActions();
+      } else {
+        showToast('error', json.error || 'Erro ao verificar grupos');
+      }
+    } catch (e: any) {
+      showToast('error', e?.message || 'Erro ao verificar grupos');
+    } finally {
+      setVerifyingGroups(false);
+    }
+  }, [userId, configs, loadActions]);
+
+  const handleRemoveFromBlacklist = async (configId: string, phoneE164: string) => {
+    if (!userId) return;
+    try {
+      const res = await fetch('/api/anti-spam/blacklist/remove', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({ config_id: configId, phone_e164: phoneE164 }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        showToast('success', 'Número removido da lista negra');
+        loadBlacklist();
+      } else {
+        showToast('error', json.error || 'Erro');
+      }
+    } catch (e: any) {
+      showToast('error', e?.message || 'Erro');
+    }
+  };
+
   useEffect(() => {
     if (activeTab === 'blacklist') loadBlacklist();
     if (activeTab === 'events') loadJoinEvents();
     if (activeTab === 'logs') loadActions();
-  }, [activeTab, loadBlacklist, loadJoinEvents, loadActions]);
+    if (activeTab === 'groups') loadGroupsTabData();
+  }, [activeTab, loadBlacklist, loadJoinEvents, loadActions, loadGroupsTabData]);
 
   useEffect(() => {
     setEventsPage(1);
@@ -249,6 +440,12 @@ export default function AntiSpamPage() {
   return (
     <Layout>
       <div className="p-4 md:p-6 lg:p-8 max-w-5xl mx-auto">
+        {verifyingGroups && (
+          <div className="sticky top-0 z-20 -mx-4 -mt-4 px-4 pt-4 pb-2 md:-mx-6 md:-mt-6 md:px-6 md:pt-6 lg:-mx-8 lg:-mt-8 lg:px-8 lg:pt-8 mb-4 flex items-center justify-center gap-2 rounded-b-lg bg-[#8CD955]/15 dark:bg-[#8CD955]/20 border-b-2 border-[#8CD955]/50 shadow-sm">
+            <Loader2 className="h-5 w-5 animate-spin text-[#8CD955]" />
+            <span className="text-sm font-medium text-gray-800 dark:text-gray-200">Verificação de grupos em andamento em segundo plano</span>
+          </div>
+        )}
         <header className="mb-8">
           <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
             <Shield className="h-8 w-8 text-[#8CD955]" />
@@ -378,16 +575,106 @@ export default function AntiSpamPage() {
 
         {activeTab === 'groups' && (
           <div className="rounded-xl border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] p-6 shadow-sm">
+            {verifyingGroups && <VerifyGroupsOverlay isActive={verifyingGroups} />}
             <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">Grupos protegidos</h2>
             <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-              Se você escolheu &quot;Apenas grupos que eu escolher&quot;, adicione aqui os grupos que deseja proteger.
+              Grupos que você já tem salvos em todas as instâncias. Se escolheu &quot;Apenas grupos que eu escolher&quot;, marque os que deseja proteger. Use &quot;Verificar grupos&quot; para remover números da blacklist que ainda estejam em algum grupo.
             </p>
-            <button
-              type="button"
-              className="inline-flex items-center gap-2 rounded-lg border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] transition"
-            >
-              <Upload className="w-4 h-4" /> Importar grupos da instância
-            </button>
+            {!config ? (
+              <p className="text-sm text-amber-600 dark:text-amber-400">Configure primeiro na aba Configuração.</p>
+            ) : (
+              <>
+                <div className="flex flex-wrap items-center gap-2 mb-4">
+                  <button
+                    type="button"
+                    onClick={fetchGroupsFromInstance}
+                    disabled={fetchingGroups || loadingGroups}
+                    className="inline-flex items-center gap-2 rounded-lg border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50 transition"
+                  >
+                    {fetchingGroups ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                    Buscar grupos da instância
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleVerifyGroups}
+                    disabled={verifyingGroups || loadingGroups}
+                    className="inline-flex items-center gap-2 rounded-lg bg-[#8CD955] px-4 py-2 text-sm font-medium text-white hover:bg-[#7BC84A] disabled:opacity-50 transition"
+                  >
+                    {verifyingGroups ? <Loader2 className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
+                    Verificar grupos
+                  </button>
+                  {loadingGroups && (
+                    <span className="text-sm text-gray-500 dark:text-gray-400 flex items-center gap-1">
+                      <Loader2 className="w-4 h-4 animate-spin" /> Carregando…
+                    </span>
+                  )}
+                </div>
+                {verifyGroupsResult && (
+                  <div className="mb-6 rounded-xl border border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#333] p-4 space-y-4">
+                    <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200">Resultado da verificação</h3>
+                    <div className="flex flex-wrap gap-4 text-sm">
+                      <span className="text-gray-600 dark:text-gray-300">
+                        Encontrados em grupos: <strong>{verifyGroupsResult.summary.totalInGroups}</strong>
+                      </span>
+                      <span className="text-gray-600 dark:text-gray-300">
+                        Remoções: <strong className="text-emerald-600 dark:text-emerald-400">{verifyGroupsResult.summary.success} sucesso</strong>
+                        {verifyGroupsResult.summary.failed > 0 && (
+                          <>, <strong className="text-red-600 dark:text-red-400">{verifyGroupsResult.summary.failed} falha(s)</strong></>
+                        )}
+                      </span>
+                    </div>
+                    {verifyGroupsResult.report?.length > 0 && (
+                      <div>
+                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Por número:</span>
+                        <ul className="mt-2 space-y-1 text-sm text-gray-600 dark:text-gray-400">
+                          {verifyGroupsResult.report.map((r, i) => (
+                            <li key={i}><strong>{r.phone_e164}</strong> — em {r.groups_count} grupo(s)</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {verifyGroupsResult.removals?.length > 0 && (
+                      <ul className="text-sm max-h-32 overflow-y-auto space-y-1">
+                        {verifyGroupsResult.removals.map((m, i) => (
+                          <li key={i} className="flex items-center gap-2">
+                            {m.success ? <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" /> : <XCircle className="w-4 h-4 text-red-500 shrink-0" />}
+                            {m.phone_e164} — {m.group_jid} {!m.success && m.error && <span className="text-red-600 dark:text-red-400 text-xs">{m.error}</span>}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+                {savedGroups.length === 0 ? (
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Nenhum grupo salvo. Use &quot;Buscar grupos da instância&quot;.</p>
+                ) : (
+                  <ul className="space-y-2 max-h-[360px] overflow-y-auto rounded-lg border border-gray-200 dark:border-[#404040] p-3">
+                    {savedGroups.map((g) => {
+                      const isProtected = protectedGroupIds.has(g.group_id);
+                      const busy = togglingGroupId === g.group_id;
+                      return (
+                        <li key={g.group_id} className="flex items-center gap-3 py-2 px-2 rounded-lg hover:bg-gray-50 dark:hover:bg-[#333]">
+                          <button
+                            type="button"
+                            onClick={() => toggleGroupProtected(g.group_id, g.group_subject, isProtected)}
+                            disabled={busy}
+                            className="flex items-center gap-2 text-left min-w-0 flex-1"
+                          >
+                            {busy ? <Loader2 className="w-4 h-4 animate-spin shrink-0 text-[#8CD955]" /> : (
+                              <span className={`shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center ${isProtected ? 'bg-[#8CD955] border-[#8CD955] text-white' : 'border-gray-400 dark:border-gray-500'}`}>
+                                {isProtected && <CheckCircle2 className="w-3 h-3" />}
+                              </span>
+                            )}
+                            <span className="text-sm text-gray-800 dark:text-gray-200 truncate">{g.group_subject || g.group_id}</span>
+                            {g.instance_name && <span className="text-xs text-gray-500 dark:text-gray-400 shrink-0">({g.instance_name})</span>}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </>
+            )}
           </div>
         )}
 
@@ -534,6 +821,7 @@ export default function AntiSpamPage() {
                         <th className="py-3 px-3 font-medium text-gray-700 dark:text-gray-300">Motivo</th>
                         <th className="py-3 px-3 font-medium text-gray-700 dark:text-gray-300">Status</th>
                         <th className="py-3 px-3 font-medium text-gray-700 dark:text-gray-300">Última vez</th>
+                        <th className="py-3 px-3 font-medium text-gray-700 dark:text-gray-300">Ação</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -543,6 +831,15 @@ export default function AntiSpamPage() {
                           <td className="py-3 px-3 text-gray-700 dark:text-gray-300">{r.reason}</td>
                           <td className="py-3 px-3 text-gray-700 dark:text-gray-300">{r.status}</td>
                           <td className="py-3 px-3 text-gray-500 dark:text-gray-400">{new Date(r.last_seen_at).toLocaleString('pt-BR')}</td>
+                          <td className="py-3 px-3">
+                            <button
+                              type="button"
+                              onClick={() => configs[0] && handleRemoveFromBlacklist(configs[0].id, r.phone_e164)}
+                              className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium border border-red-300 dark:border-red-600 text-red-700 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition"
+                            >
+                              <Trash2 className="w-3 h-3" /> Remover
+                            </button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>

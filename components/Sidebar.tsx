@@ -72,9 +72,11 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   }, [pathname]);
 
   // Verifica se está nas páginas que devem mostrar o botão Sair
-  const shouldShowLogout = pathname === '/perfil' || 
+  const shouldShowLogout = pathname === '/perfil' ||
                           pathname === '/list-cleaning' ||
                           pathname === '/crm/transferido' ||
+                          pathname === '/anti-spam' ||
+                          pathname?.startsWith('/admin/anti-spam') ||
                           pathname?.startsWith('/admin/webhooks') ||
                           pathname?.startsWith('/admin/whatsapp-official') ||
                           pathname?.startsWith('/admin/meta') ||
@@ -82,6 +84,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
                           pathname?.startsWith('/admin/hierarchy') ||
                           pathname?.startsWith('/admin/zaplink') ||
                           pathname?.startsWith('/gerente/zaplink') ||
+                          pathname?.startsWith('/gestor-trafego/zaplink') ||
                           onSignOut !== undefined;
 
   // Função de logout padrão
@@ -292,6 +295,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const itemVslRedirect: MenuItem = { href: '/admin/vsl', icon: ExternalLink, label: 'VSL & Redirect' };
   const itemZaplink: MenuItem = { href: '/admin/zaplink', icon: Link2, label: 'Zaplink' };
   const itemZaplinkGerente: MenuItem = { href: '/gerente/zaplink', icon: Link2, label: 'Zaplink' };
+  const itemZaplinkGestorTrafego: MenuItem = { href: '/gestor-trafego/zaplink', icon: Link2, label: 'Zaplink' };
   const itemAcademy: MenuItem = {
     href: '/admin/academy',
     icon: BookOpen,
@@ -420,10 +424,11 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
       ];
     }
 
-    // 📈 Gestor de Tráfego - Painel igual ao dono da banca + funil Facebook (vinculado a um dono)
+    // 📈 Gestor de Tráfego - Painel igual ao dono da banca + funil Facebook (vinculado a um dono) + Zaplink (seus formulários e leads)
     if (userStatus === 'gestor') {
       return [
         itemGestaoTrafego,
+        itemZaplinkGestorTrafego,
         itemVslRedirect,
         itemDashboard,
         itemInstances,

@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
     for (const g of uniqueGroups) {
       const { data: existing } = await supabaseServiceRole
         .from('whatsapp_groups')
-        .select('id')
+        .select('id, group_subject, picture_url, size')
         .eq('user_id', userId)
         .eq('instance_name', instanceName)
         .eq('group_id', g.id)
@@ -56,17 +56,23 @@ export async function POST(req: NextRequest) {
         .maybeSingle();
 
       if (existing) {
-        const { error: updateError } = await supabaseServiceRole
-          .from('whatsapp_groups')
-          .update({
-            group_subject: g.subject || null,
-            picture_url: g.pictureUrl || null,
-            size: g.size ?? null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', existing.id);
+        // Grupo já está na base: não inserir de novo. Atualizar apenas se nome/outros campos mudaram.
+        const subjectChanged = (existing.group_subject ?? null) !== (g.subject ?? null);
+        const pictureChanged = (existing.picture_url ?? null) !== (g.pictureUrl ?? null);
+        const sizeChanged = (existing.size ?? null) !== (g.size ?? null);
+        if (subjectChanged || pictureChanged || sizeChanged) {
+          const { error: updateError } = await supabaseServiceRole
+            .from('whatsapp_groups')
+            .update({
+              group_subject: g.subject || null,
+              picture_url: g.pictureUrl || null,
+              size: g.size ?? null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', existing.id);
 
-        if (!updateError) updated++;
+          if (!updateError) updated++;
+        }
       } else {
         const { error: insertError } = await supabaseServiceRole
           .from('whatsapp_groups')

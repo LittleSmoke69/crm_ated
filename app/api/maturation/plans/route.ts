@@ -7,7 +7,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
-import { requireAdmin } from '@/lib/middleware/permissions';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 const isNetworkError = (err: any) =>
@@ -28,7 +27,7 @@ export async function GET(req: NextRequest) {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       const result = await supabaseServiceRole
         .from('maturation_plans')
-        .select('*')
+        .select('id, name, description, is_active, default_target_chat_id, steps_json, created_at, created_by')
         .eq('is_active', true)
         .order('created_at', { ascending: false });
       error = result.error;
@@ -65,8 +64,9 @@ export async function GET(req: NextRequest) {
 }
 
 /**
- * POST: Cria novo plano de maturação
- * 
+ * POST: Cria novo plano de maturação (qualquer usuário autenticado com acesso ao maturador)
+ * O plano fica vinculado ao usuário (created_by) para ele poder editar/excluir depois.
+ *
  * Body esperado:
  * {
  *   name: string,
@@ -75,22 +75,13 @@ export async function GET(req: NextRequest) {
  *   steps: Array<{
  *     type: 'text' | 'video' | 'image' | 'audio',
  *     delay_seconds: number,
- *     payload: {
- *       // Para texto:
- *       text?: string,
- *       // Para mídia (video, image, audio):
- *       media_url?: string,
- *       caption?: string,
- *       mimetype?: string,
- *       filename?: string
- *     }
+ *     payload: { text?: string, media_url?: string, caption?: string, ... }
  *   }>
  * }
  */
 export async function POST(req: NextRequest) {
   try {
-    // Verifica se é admin
-    const { userId } = await requireAdmin(req);
+    const { userId } = await requireAuth(req);
     
     const body = await req.json();
     const { name, description, default_target_chat_id, steps } = body;
@@ -151,7 +142,7 @@ export async function POST(req: NextRequest) {
         default_target_chat_id: default_target_chat_id?.trim() || null,
         steps_json: stepsJson,
         is_active: true,
-        created_by: userId,
+        created_by: userId, // usuário dono do plano (pode editar/excluir no maturador)
       })
       .select()
       .single();
@@ -171,14 +162,6 @@ export async function POST(req: NextRequest) {
     });
   } catch (error: any) {
     console.error('[POST /api/maturation/plans] Erro:', error);
-    
-    if (error.message?.includes('Acesso negado')) {
-      return NextResponse.json(
-        { error: 'Acesso negado. Apenas administradores podem criar planos.' },
-        { status: 403 }
-      );
-    }
-    
     return NextResponse.json(
       { error: error.message || 'Erro ao criar plano' },
       { status: error.message === 'Não autenticado' ? 401 : 500 }

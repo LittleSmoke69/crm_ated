@@ -44,7 +44,11 @@ export async function GET(req: NextRequest) {
       .order('created_at', { ascending: false });
 
     if (status !== 'all') {
-      query = query.eq('status', status);
+      if (status === 'assigned') {
+        query = query.in('status', ['assigned', 'cadastrado']);
+      } else {
+        query = query.eq('status', status);
+      }
     }
     if (formId) {
       query = query.eq('zaplink_form_id', formId);

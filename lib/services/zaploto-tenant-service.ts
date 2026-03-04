@@ -138,6 +138,9 @@ export async function getSidebarItemsForRole(
       if (roleCode === 'gerente' && si.code === 'zaplink') {
         href = '/gerente/zaplink';
       }
+      if (roleCode === 'gestor' && si.code === 'zaplink') {
+        href = '/gestor-trafego/zaplink';
+      }
       return {
         id: si.id,
         code: si.code,

@@ -55,12 +55,27 @@ export async function GET(req: NextRequest) {
       );
     }
     
+    const runningJobIds = (jobs || []).filter((j: any) => j.status === 'running').map((j: any) => j.id);
+    let nextScheduledByJob: Record<string, string> = {};
+    if (runningJobIds.length > 0) {
+      const { data: pendingSteps } = await supabaseServiceRole
+        .from('maturation_steps')
+        .select('job_id, scheduled_at')
+        .in('job_id', runningJobIds)
+        .eq('status', 'pending')
+        .order('scheduled_at', { ascending: true });
+      const byJob: Record<string, string> = {};
+      for (const row of pendingSteps || []) {
+        if (!byJob[row.job_id]) byJob[row.job_id] = row.scheduled_at;
+      }
+      nextScheduledByJob = byJob;
+    }
+    
     // Formata resposta
     const formattedJobs = (jobs || []).map((job: any) => {
       const instance = Array.isArray(job.master_instances?.evolution_instances)
         ? job.master_instances.evolution_instances[0]
         : job.master_instances?.evolution_instances;
-      
       return {
         id: job.id,
         plan: job.maturation_plans,
@@ -75,6 +90,7 @@ export async function GET(req: NextRequest) {
         started_at: job.started_at,
         ended_at: job.ended_at,
         created_at: job.created_at,
+        next_scheduled_at: nextScheduledByJob[job.id] || null,
       };
     });
     

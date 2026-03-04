@@ -37,9 +37,11 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
   const [instances, setInstances] = useState<any[]>([]);
   const [selectedInstance, setSelectedInstance] = useState<string>('');
   const [fetchingAll, setFetchingAll] = useState(false);
+  const [savingAllGroups, setSavingAllGroups] = useState(false);
   const [showChoiceModal, setShowChoiceModal] = useState(false);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
-  
+  const [forceMassSend, setForceMassSend] = useState(false);
+
   const { toasts, showToast, removeToast } = useToast();
 
   // Carrega grupos do banco (whatsapp_groups) filtrados pela instância selecionada
@@ -169,10 +171,38 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
     }
   };
 
-  // Quando o modal abre, mostra primeiro o modal de escolha
+  const handleSaveAllGroups = async () => {
+    if (!selectedInstance || groups.length === 0) {
+      showToast('Extraia os grupos primeiro', 'error');
+      return;
+    }
+    setSavingAllGroups(true);
+    try {
+      const payload = groups.map((g) => ({ id: g.id, subject: g.subject || null }));
+      const r = await fetch('/api/groups/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({ instanceName: selectedInstance, groups: payload }),
+      });
+      const data = await r.json();
+      if (r.ok && data.success) {
+        const { inserted = 0, updated = 0 } = data.data || {};
+        showToast(`${inserted + updated} grupo(s) salvos no banco (sem duplicar existentes)`, 'success');
+        await fetchDbGroups(selectedInstance);
+      } else {
+        showToast(data.error || 'Erro ao salvar grupos', 'error');
+      }
+    } catch {
+      showToast('Erro ao salvar todos os grupos', 'error');
+    } finally {
+      setSavingAllGroups(false);
+    }
+  };
+
+  // Quando o modal abre, mostra primeiro o modal de escolha e reseta força campanha em massa
   useEffect(() => {
     if (isOpen && userId) {
-      // Só mostra o modal de escolha se ainda não foi mostrado
+      setForceMassSend(false);
       if (!showChoiceModal && !showScheduleModal) {
         setShowChoiceModal(true);
       }
@@ -283,6 +313,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
             messageId,
             groupIds: Array.from(selectedGroups),
             instanceName: selectedInstance,
+            ...(forceMassSend && { forceMassSend: true }),
           }),
           signal: controller.signal,
         });
@@ -320,6 +351,15 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
       } catch (parseError: any) {
         console.error('❌ [SEND] Erro ao parsear JSON:', parseError);
         throw new Error('Erro ao processar resposta do servidor. Tente novamente.');
+      }
+
+      if (response.status === 202 && data.mass_send) {
+        showToast(
+          data.message || 'Campanha de disparo em massa criada. O envio continuará em segundo plano. Acompanhe em Ativações > Campanhas de disparo.',
+          'success'
+        );
+        onClose();
+        return;
       }
 
       if (data.success) {
@@ -360,6 +400,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
           onClose();
         }}
         onSendNow={() => {
+          setForceMassSend(false);
           setShowChoiceModal(false);
           // Continua com o fluxo normal de envio; o useEffect (selectedInstance) carrega grupos ao ter instância
           if (instances.length === 0) {
@@ -384,6 +425,22 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
         onSchedule={() => {
           setShowChoiceModal(false);
           setShowScheduleModal(true);
+        }}
+        onMassCampaign={() => {
+          setForceMassSend(true);
+          setShowChoiceModal(false);
+          if (instances.length === 0) {
+            fetch('/api/instances', { headers: { 'X-User-Id': userId } })
+              .then(res => res.json())
+              .then(data => {
+                if (data.success) {
+                  const masterConnected = data.data.filter((i: any) => i.status === 'connected' && i.is_master === true);
+                  setInstances(masterConnected);
+                  if (masterConnected.length > 0) setSelectedInstance(masterConnected[0].instance_name);
+                }
+              })
+              .catch(err => console.error('Erro ao buscar instâncias:', err));
+          }
         }}
         messageTitle={messageTitle}
       />
@@ -450,20 +507,32 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
 
         {/* Filtros e Seleção */}
         <div className="p-4 space-y-4 flex-shrink-0 border-b border-gray-200 dark:border-[#404040]">
-          <div className="flex items-center justify-between text-sm">
+          <div className="flex items-center justify-between text-sm flex-wrap gap-2">
             <span className="text-gray-700 dark:text-gray-300 font-medium">Grupos disponíveis *</span>
-            <button 
-              onClick={fetchEvolutionGroups}
-              disabled={fetchingAll || !selectedInstance}
-              className="text-[#8CD955] hover:text-[#7BC84A] flex items-center gap-1.5 font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {fetchingAll ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <Plus className="w-3.5 h-3.5" />
+            <div className="flex items-center gap-2">
+              <button 
+                onClick={fetchEvolutionGroups}
+                disabled={fetchingAll || !selectedInstance}
+                className="text-[#8CD955] hover:text-[#7BC84A] flex items-center gap-1.5 font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {fetchingAll ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Plus className="w-3.5 h-3.5" />
+                )}
+                Extrair todos os grupos
+              </button>
+              {groups.length > 0 && (
+                <button 
+                  onClick={handleSaveAllGroups}
+                  disabled={savingAllGroups || !selectedInstance}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5 font-bold px-2 py-1 rounded-lg text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {savingAllGroups ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                  Salvar todos os grupos
+                </button>
               )}
-              Extrair todos os grupos
-            </button>
+            </div>
           </div>
 
           <div className="relative">

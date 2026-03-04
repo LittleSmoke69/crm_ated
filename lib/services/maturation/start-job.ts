@@ -219,6 +219,8 @@ export async function runMaturationStart(supabase: SupabaseClient, params: Start
   const { plan_id, target_chat_id, use_virgin_messages, preferred_evolution_instance_ids, delay_seconds_override } = body;
   const useVirgin = use_virgin_messages === true;
 
+  console.log(`[MATURATION] Iniciando job: ${useVirgin ? 'Auto maturador (mensagens virgem)' : 'Maturador manual (plano)'} plan_id=${useVirgin ? 'virgem' : plan_id || ''} user=${userId}`);
+
   const { data: profile } = await supabase.from('profiles').select('id').eq('id', userId).maybeSingle();
   if (!profile) {
     return { success: false, error: 'Usuário inválido', statusCode: 401 };
@@ -433,15 +435,16 @@ export async function runMaturationStart(supabase: SupabaseClient, params: Start
       });
     }
 
-    return {
-      success: true,
-      job_id: participatingInstances[0].jobId,
-      job_ids: participatingInstances.map(p => p.jobId),
-      master_instance: participatingInstances[0].instanceName,
-      master_instances: participatingInstances.map(p => p.instanceName),
-      total_steps: steps.length,
-    };
-  }
+  console.log(`[MATURATION] Jobs criados (múltiplas instâncias): ${participatingInstances.length} job(s) ${steps.length} steps cada`);
+  return {
+    success: true,
+    job_id: participatingInstances[0].jobId,
+    job_ids: participatingInstances.map(p => p.jobId),
+    master_instance: participatingInstances[0].instanceName,
+    master_instances: participatingInstances.map(p => p.instanceName),
+    total_steps: steps.length,
+  };
+}
 
   // Caso de única instância ou qualquer disponível
   const masterInstance = await selectAvailableMasterInstance(supabase, preferred_evolution_instance_ids);
@@ -501,6 +504,7 @@ export async function runMaturationStart(supabase: SupabaseClient, params: Start
     status: 'info',
   });
 
+  console.log(`[MATURATION] Job criado: job_id=${job.id} instance=${masterInstance.instance_name} steps=${steps.length}`);
   return {
     success: true,
     job_id: job.id,

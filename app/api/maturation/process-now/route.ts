@@ -15,13 +15,13 @@ export async function POST(req: NextRequest) {
   try {
     await requireAuth(req);
 
-    console.log('[MATURATION] POST /api/maturation/process-now - Disparando tick em segundo plano');
+    console.log('[MATURATION] POST /api/maturation/process-now - Disparando tick (Maturador manual + Auto maturador virgem) em segundo plano');
     runMaturationTick(supabaseServiceRole)
       .then((result) => {
-        console.log('[MATURATION] POST /api/maturation/process-now - Tick concluído:', result);
+        console.log('[MATURATION] process-now - Tick concluído: steps=', result.processed, 'jobs=', result.jobs?.length ?? 0, 'virgem=', result.virginCount ?? 0);
       })
       .catch((err) => {
-        console.error('[MATURATION] POST /api/maturation/process-now - Erro no tick:', err);
+        console.error('[MATURATION] process-now - Erro no tick:', err);
       });
 
     return NextResponse.json(

@@ -11,13 +11,20 @@ import {
   Clock,
   CheckCircle2,
   XCircle,
-  RefreshCw,
   Loader2,
   AlertTriangle,
   Wifi,
   WifiOff,
   ChevronLeft,
   ChevronRight,
+  Plus,
+  Edit,
+  Trash2,
+  Save,
+  X,
+  FileText,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 
 interface MaturationJob {
@@ -36,13 +43,32 @@ interface MaturationJob {
   started_at: string | null;
   ended_at: string | null;
   created_at: string;
+  /** ISO string do próximo step pendente (para timer em tempo real) */
+  next_scheduled_at: string | null;
+}
+
+interface PlanStepJson {
+  index?: number;
+  type: 'text' | 'video' | 'image' | 'audio';
+  delaySec: number;
+  target_chat_id?: string | null;
+  payload: { text?: string; media_url?: string; caption?: string };
 }
 
 interface MaturationPlan {
   id: string;
   name: string;
-  description?: string;
-  default_target_chat_id?: string;
+  description?: string | null;
+  default_target_chat_id?: string | null;
+  created_by?: string | null;
+  steps_json?: PlanStepJson[];
+}
+
+interface PlanStepForm {
+  type: 'text' | 'video' | 'image' | 'audio';
+  delay_seconds: number;
+  target_chat_id?: string;
+  payload: { text?: string; media_url?: string; caption?: string };
 }
 
 interface MasterInstance {
@@ -81,6 +107,19 @@ export default function MaturadorPage() {
   const [selectedInstanceIds, setSelectedInstanceIds] = useState<Set<string>>(new Set());
   /** Intervalo em segundos entre uma mensagem e a próxima (override do plano). Vazio = usar do plano. */
   const [delaySecondsOverride, setDelaySecondsOverride] = useState<string>('');
+  /** Por job: resultado do último processamento em lote (atrasados) */
+  const [catchUpResults, setCatchUpResults] = useState<Record<string, { sent: number; failed: number; results: Array<{ step_index: number; status: string }> }>>({});
+  const [catchUpLoading, setCatchUpLoading] = useState<string | null>(null);
+  
+  // Configurar plano (no próprio maturador, sem admin)
+  const [showPlanModal, setShowPlanModal] = useState(false);
+  const [editingPlan, setEditingPlan] = useState<MaturationPlan | null>(null);
+  const [planFormName, setPlanFormName] = useState('');
+  const [planFormDescription, setPlanFormDescription] = useState('');
+  const [planFormTargetChatId, setPlanFormTargetChatId] = useState('');
+  const [planFormSteps, setPlanFormSteps] = useState<PlanStepForm[]>([]);
+  const [planSaving, setPlanSaving] = useState(false);
+  const [expandedPlanConfig, setExpandedPlanConfig] = useState<string | null>(null);
   
   // Paginação das instâncias
   const [instancesPage, setInstancesPage] = useState(1);
@@ -121,6 +160,180 @@ export default function MaturadorPage() {
     const interval = setInterval(() => loadDataRef.current?.(), 3500);
     return () => clearInterval(interval);
   }, [canAccess, userId, hasRunningJobs]);
+
+  // Timer em tempo real: atualiza a cada 1s para o countdown do próximo envio
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!hasRunningJobs) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [hasRunningJobs]);
+
+  function getNextSendCountdown(nextScheduledAt: string | null): string | null {
+    if (!nextScheduledAt) return null;
+    const next = new Date(nextScheduledAt).getTime();
+    const diff = Math.max(0, Math.floor((next - now) / 1000));
+    if (diff === 0) return 'Agora';
+    const m = Math.floor(diff / 60);
+    const s = diff % 60;
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  }
+
+  function isNextStepOverdue(nextScheduledAt: string | null): boolean {
+    return !!nextScheduledAt && new Date(nextScheduledAt).getTime() <= now;
+  }
+
+  async function handleProcessCatchUp(jobId: string) {
+    setCatchUpLoading(jobId);
+    try {
+      const res = await fetch(`/api/maturation/jobs/${jobId}/process-catch-up`, {
+        method: 'POST',
+        headers: { 'X-User-Id': userId || '' },
+      });
+      const data = await res.json();
+      if (res.ok && data.results) {
+        setCatchUpResults((prev) => ({
+          ...prev,
+          [jobId]: {
+            sent: data.sent ?? 0,
+            failed: data.failed ?? 0,
+            results: data.results ?? [],
+          },
+        }));
+        await loadData();
+      } else {
+        alert(data.error || 'Erro ao processar atrasados');
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Erro ao processar atrasados');
+    } finally {
+      setCatchUpLoading(null);
+    }
+  }
+
+  function openCreatePlanModal() {
+    setEditingPlan(null);
+    setPlanFormName('');
+    setPlanFormDescription('');
+    setPlanFormTargetChatId('');
+    setPlanFormSteps([{ type: 'text', delay_seconds: 5, payload: { text: '' } }]);
+    setShowPlanModal(true);
+  }
+
+  function openEditPlanModal(plan: MaturationPlan) {
+    setEditingPlan(plan);
+    setPlanFormName(plan.name);
+    setPlanFormDescription(plan.description ?? '');
+    setPlanFormTargetChatId(plan.default_target_chat_id ?? '');
+    const steps = plan.steps_json?.length ? plan.steps_json : [{ type: 'text' as const, delaySec: 5, payload: { text: '' } }];
+    setPlanFormSteps(
+      steps.map((s) => ({
+        type: s.type,
+        delay_seconds: s.delaySec ?? 5,
+        target_chat_id: s.target_chat_id ?? '',
+        payload: s.payload || { text: '', media_url: '', caption: '' },
+      }))
+    );
+    setShowPlanModal(true);
+  }
+
+  function addPlanStep() {
+    setPlanFormSteps([...planFormSteps, { type: 'text', delay_seconds: 5, payload: { text: '' } }]);
+  }
+
+  function removePlanStep(index: number) {
+    if (planFormSteps.length <= 1) return;
+    setPlanFormSteps(planFormSteps.filter((_, i) => i !== index));
+  }
+
+  function updatePlanStep(index: number, field: string, value: string | number) {
+    const next = [...planFormSteps];
+    if (field === 'type') {
+      next[index] = { ...next[index], type: value as PlanStepForm['type'], payload: value === 'text' ? { text: '' } : { media_url: '', caption: '' } };
+    } else if (field === 'delay_seconds') {
+      next[index] = { ...next[index], delay_seconds: Number(value) || 5 };
+    } else if (field === 'target_chat_id') {
+      next[index] = { ...next[index], target_chat_id: String(value) };
+    } else {
+      next[index] = { ...next[index], payload: { ...next[index].payload, [field]: value } };
+    }
+    setPlanFormSteps(next);
+  }
+
+  async function handleSavePlan() {
+    if (!planFormName.trim()) {
+      alert('Nome do plano é obrigatório');
+      return;
+    }
+    for (let i = 0; i < planFormSteps.length; i++) {
+      const s = planFormSteps[i];
+      if (s.type === 'text' && !s.payload.text?.trim()) {
+        alert(`Step ${i + 1}: texto é obrigatório`);
+        return;
+      }
+      if (['video', 'image', 'audio'].includes(s.type) && !s.payload.media_url?.trim()) {
+        alert(`Step ${i + 1}: URL da mídia é obrigatória`);
+        return;
+      }
+    }
+    setPlanSaving(true);
+    try {
+      const url = editingPlan ? `/api/maturation/plans/${editingPlan.id}` : '/api/maturation/plans';
+      const method = editingPlan ? 'PUT' : 'POST';
+      const body = {
+        name: planFormName.trim(),
+        description: planFormDescription.trim() || null,
+        default_target_chat_id: planFormTargetChatId.trim() || null,
+        steps: planFormSteps.map((s) => ({
+          type: s.type,
+          delay_seconds: s.delay_seconds,
+          target_chat_id: s.target_chat_id?.trim() || undefined,
+          payload: s.payload,
+        })),
+      };
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId || '' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || 'Erro ao salvar plano');
+        return;
+      }
+      setShowPlanModal(false);
+      await loadData();
+    } catch (e) {
+      console.error(e);
+      alert('Erro ao salvar plano');
+    } finally {
+      setPlanSaving(false);
+    }
+  }
+
+  async function handleDeletePlan(planId: string) {
+    if (!confirm('Tem certeza que deseja excluir este plano?')) return;
+    try {
+      const res = await fetch(`/api/maturation/plans/${planId}`, {
+        method: 'DELETE',
+        headers: { 'X-User-Id': userId || '' },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || 'Erro ao excluir');
+        return;
+      }
+      await loadData();
+    } catch (e) {
+      console.error(e);
+      alert('Erro ao excluir plano');
+    }
+  }
+
+  function canEditPlan(plan: MaturationPlan): boolean {
+    return plan.created_by != null && plan.created_by === userId;
+  }
 
   async function checkAccess() {
     try {
@@ -347,7 +560,7 @@ export default function MaturadorPage() {
   function getStatusIcon(status: string) {
     switch (status) {
       case 'running':
-        return <RefreshCw className="w-4 h-4 text-[#8CD955] animate-spin" />;
+        return <Play className="w-4 h-4 text-[#8CD955]" />;
       case 'finished':
         return <CheckCircle2 className="w-4 h-4 text-green-500" />;
       case 'failed':
@@ -572,7 +785,17 @@ export default function MaturadorPage() {
           <div className="lg:col-span-2 space-y-4 md:space-y-6">
             {/* Card Iniciar Maturação */}
             <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-sm border border-slate-200 dark:border-[#404040] p-4 md:p-6">
-              <h2 className="text-base font-semibold text-slate-800 dark:text-white mb-4">Iniciar Maturação</h2>
+              <div className="flex items-center justify-between gap-2 mb-4">
+                <h2 className="text-base font-semibold text-slate-800 dark:text-white">Iniciar Maturação</h2>
+                <button
+                  type="button"
+                  onClick={openCreatePlanModal}
+                  className="text-xs font-medium text-[#8CD955] hover:text-[#7BC84A] dark:hover:text-[#9ae066] hover:underline"
+                  title="Criar ou editar plano de conversas"
+                >
+                  Configurar plano
+                </button>
+              </div>
               <div className="space-y-4">
                 <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
                   <div className="flex-1 min-w-0">
@@ -656,6 +879,73 @@ export default function MaturadorPage() {
               )}
             </div>
 
+            {/* Configurar plano de conversas (no maturador, sem admin) */}
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-sm border border-slate-200 dark:border-[#404040] overflow-hidden">
+              <div className="p-4 border-b border-slate-100 dark:border-[#404040] flex items-center justify-between flex-wrap gap-2">
+                <h3 className="text-base font-semibold text-slate-800 dark:text-white">Configurar plano de conversas</h3>
+                <button
+                  type="button"
+                  onClick={openCreatePlanModal}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-[#8CD955] text-white hover:bg-[#7BC84A]"
+                >
+                  <Plus className="w-4 h-4" /> Novo plano
+                </button>
+              </div>
+              <div className="p-3 max-h-[280px] overflow-y-auto">
+                {plansFiltered.length === 0 ? (
+                  <p className="text-sm text-slate-500 dark:text-[#888] py-4 text-center">Nenhum plano. Clique em &quot;Novo plano&quot; para criar.</p>
+                ) : (
+                  <ul className="space-y-2">
+                    {plansFiltered.map((plan) => {
+                      const stepsCount = Array.isArray(plan.steps_json) ? plan.steps_json.length : 0;
+                      const isExpanded = expandedPlanConfig === plan.id;
+                      const canEdit = canEditPlan(plan);
+                      return (
+                        <li key={plan.id} className="rounded-lg border border-slate-200 dark:border-[#404040] bg-slate-50/50 dark:bg-[#333]/50">
+                          <div className="p-3 flex items-center justify-between gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setExpandedPlanConfig(isExpanded ? null : plan.id)}
+                              className="flex-1 flex items-center gap-2 text-left min-w-0"
+                            >
+                              <FileText className="w-4 h-4 text-slate-500 shrink-0" />
+                              <span className="font-medium text-slate-800 dark:text-white truncate">{plan.name}</span>
+                              <span className="text-xs text-slate-500 shrink-0">{stepsCount} step(s)</span>
+                              {isExpanded ? <ChevronUp className="w-4 h-4 shrink-0" /> : <ChevronDown className="w-4 h-4 shrink-0" />}
+                            </button>
+                            {canEdit && (
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button type="button" onClick={() => openEditPlanModal(plan)} className="p-1.5 text-slate-500 hover:text-[#8CD955] rounded" title="Editar">
+                                  <Edit className="w-4 h-4" />
+                                </button>
+                                <button type="button" onClick={() => handleDeletePlan(plan.id)} className="p-1.5 text-slate-500 hover:text-red-500 rounded" title="Excluir">
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                          {isExpanded && (plan.steps_json?.length ?? 0) > 0 && (
+                            <div className="px-3 pb-3 pt-0 border-t border-slate-100 dark:border-[#404040]">
+                              <ul className="mt-2 space-y-1.5 text-xs text-slate-600 dark:text-[#aaa]">
+                                {(plan.steps_json ?? []).map((s, i) => (
+                                  <li key={i} className="flex items-center gap-2">
+                                    <span className="font-mono text-slate-400 w-5">{i + 1}.</span>
+                                    <span>{s.type}</span>
+                                    <span className="text-slate-400">{s.delaySec}s</span>
+                                    {s.type === 'text' && s.payload?.text && <span className="truncate max-w-[180px]">{s.payload.text}</span>}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            </div>
+
             {/* Filtros e Lista de Jobs */}
             <div className="flex gap-2 flex-wrap">
               {[
@@ -722,7 +1012,7 @@ export default function MaturadorPage() {
                                     done
                                       ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400'
                                       : current
-                                        ? 'bg-[#8CD955]/20 dark:bg-[#8CD955]/30 text-[#8CD955] ring-1 ring-[#8CD955]/50 dark:ring-[#8CD955]/60'
+                                        ? 'bg-[#8CD955]/25 dark:bg-[#8CD955]/35 text-[#8CD955] border border-[#8CD955]/50'
                                         : 'bg-slate-100 dark:bg-[#404040] text-slate-400 dark:text-[#888]'
                                   }`}
                                   title={done ? `Step ${stepNum} concluído` : current ? `Step ${stepNum} em andamento` : `Step ${stepNum}`}
@@ -741,6 +1031,48 @@ export default function MaturadorPage() {
                               style={{ width: `${job.progress_percent}%` }}
                             />
                           </div>
+                          {job.status === 'running' && (job.next_scheduled_at != null || (catchUpResults[job.id]?.results?.length ?? 0) > 0) && (
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                              {job.next_scheduled_at != null && (
+                                <span className="inline-flex items-center gap-1.5 text-xs text-slate-600 dark:text-[#aaa]">
+                                  <Clock className="w-3.5 h-3.5" />
+                                  Próximo envio em: <strong className="font-mono text-[#8CD955] tabular-nums">{getNextSendCountdown(job.next_scheduled_at) ?? '—'}</strong>
+                                </span>
+                              )}
+                              {isNextStepOverdue(job.next_scheduled_at) && job.progress_done < job.progress_total && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleProcessCatchUp(job.id)}
+                                  disabled={catchUpLoading === job.id}
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 hover:bg-amber-200 dark:hover:bg-amber-900/60 disabled:opacity-50"
+                                >
+                                  {catchUpLoading === job.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                                  Processar atrasados
+                                </button>
+                              )}
+                              {catchUpResults[job.id] && (
+                                <span className="text-xs text-slate-500 dark:text-[#888]">
+                                  Lote: <span className="text-emerald-600 dark:text-emerald-400">{catchUpResults[job.id].sent} ok</span>
+                                  {catchUpResults[job.id].failed > 0 && <span className="text-red-600 dark:text-red-400">, {catchUpResults[job.id].failed} falha(s)</span>}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                          {job.status === 'running' && catchUpResults[job.id]?.results?.length > 0 && (
+                            <div className="mt-1.5 flex flex-wrap gap-1">
+                              {catchUpResults[job.id].results.map((r) => (
+                                <span
+                                  key={r.step_index}
+                                  className={`inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-medium ${
+                                    r.status === 'sent' ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400' : r.status === 'failed' ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400' : 'bg-slate-100 dark:bg-[#404040] text-slate-500'
+                                  }`}
+                                  title={`Step ${r.step_index + 1}: ${r.status}`}
+                                >
+                                  {r.status === 'sent' ? '✓' : r.status === 'failed' ? '✗' : r.step_index + 1}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
                           {job.status === 'running' && (
@@ -768,6 +1100,141 @@ export default function MaturadorPage() {
           </div>
         </div>
       </div>
+
+      {/* Modal Criar/Editar Plano */}
+      {showPlanModal && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col border border-slate-200 dark:border-[#404040]">
+            <div className="p-4 border-b border-slate-200 dark:border-[#404040] flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-slate-800 dark:text-white">{editingPlan ? 'Editar plano' : 'Novo plano'}</h3>
+              <button type="button" onClick={() => setShowPlanModal(false)} className="p-1.5 text-slate-500 hover:text-slate-700 dark:hover:text-white rounded">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-[#ccc] mb-1">Nome do plano *</label>
+                <input
+                  type="text"
+                  value={planFormName}
+                  onChange={(e) => setPlanFormName(e.target.value)}
+                  placeholder="Ex: Maturação Inicial"
+                  className="w-full px-3 py-2 border border-slate-300 dark:border-[#555] rounded-lg text-slate-800 dark:text-white bg-white dark:bg-[#333] focus:ring-2 focus:ring-[#8CD955]"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-[#ccc] mb-1">Descrição</label>
+                <textarea
+                  value={planFormDescription}
+                  onChange={(e) => setPlanFormDescription(e.target.value)}
+                  placeholder="Opcional"
+                  rows={2}
+                  className="w-full px-3 py-2 border border-slate-300 dark:border-[#555] rounded-lg text-slate-800 dark:text-white bg-white dark:bg-[#333] resize-none focus:ring-2 focus:ring-[#8CD955]"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-[#ccc] mb-1">Target Chat ID padrão (opcional)</label>
+                <input
+                  type="text"
+                  value={planFormTargetChatId}
+                  onChange={(e) => setPlanFormTargetChatId(e.target.value)}
+                  placeholder="Ex: 1203...@g.us"
+                  className="w-full px-3 py-2 border border-slate-300 dark:border-[#555] rounded-lg text-slate-800 dark:text-white bg-white dark:bg-[#333] focus:ring-2 focus:ring-[#8CD955]"
+                />
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-sm font-medium text-slate-700 dark:text-[#ccc]">Steps *</label>
+                  <button type="button" onClick={addPlanStep} className="text-sm text-[#8CD955] hover:underline flex items-center gap-1">
+                    <Plus className="w-4 h-4" /> Adicionar step
+                  </button>
+                </div>
+                <div className="space-y-3">
+                  {planFormSteps.map((step, index) => (
+                    <div key={index} className="p-3 rounded-lg bg-slate-50 dark:bg-[#333] border border-slate-200 dark:border-[#404040]">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm font-medium text-slate-700 dark:text-[#ccc]">Step {index + 1}</span>
+                        <button type="button" onClick={() => removePlanStep(index)} disabled={planFormSteps.length <= 1} className="text-red-500 hover:text-red-600 disabled:opacity-40 text-xs">
+                          Remover
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 mb-2">
+                        <div>
+                          <label className="block text-xs text-slate-500 mb-0.5">Tipo</label>
+                          <select
+                            value={step.type}
+                            onChange={(e) => updatePlanStep(index, 'type', e.target.value)}
+                            className="w-full px-2 py-1.5 border border-slate-300 dark:border-[#555] rounded text-slate-800 dark:text-white bg-white dark:bg-[#2a2a2a] text-sm"
+                          >
+                            <option value="text">Texto</option>
+                            <option value="video">Vídeo</option>
+                            <option value="image">Imagem</option>
+                            <option value="audio">Áudio</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs text-slate-500 mb-0.5">Delay (s)</label>
+                          <input
+                            type="number"
+                            min={1}
+                            value={step.delay_seconds}
+                            onChange={(e) => updatePlanStep(index, 'delay_seconds', e.target.value)}
+                            className="w-full px-2 py-1.5 border border-slate-300 dark:border-[#555] rounded text-slate-800 dark:text-white bg-white dark:bg-[#2a2a2a] text-sm"
+                          />
+                        </div>
+                      </div>
+                      {step.type === 'text' ? (
+                        <div>
+                          <label className="block text-xs text-slate-500 mb-0.5">Mensagem</label>
+                          <textarea
+                            value={step.payload.text || ''}
+                            onChange={(e) => updatePlanStep(index, 'text', e.target.value)}
+                            placeholder="Texto da mensagem..."
+                            rows={2}
+                            className="w-full px-2 py-1.5 border border-slate-300 dark:border-[#555] rounded text-slate-800 dark:text-white bg-white dark:bg-[#2a2a2a] text-sm resize-none"
+                          />
+                        </div>
+                      ) : (
+                        <>
+                          <div className="mb-2">
+                            <label className="block text-xs text-slate-500 mb-0.5">URL da mídia *</label>
+                            <input
+                              type="url"
+                              value={step.payload.media_url || ''}
+                              onChange={(e) => updatePlanStep(index, 'media_url', e.target.value)}
+                              placeholder="https://..."
+                              className="w-full px-2 py-1.5 border border-slate-300 dark:border-[#555] rounded text-slate-800 dark:text-white bg-white dark:bg-[#2a2a2a] text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-slate-500 mb-0.5">Legenda</label>
+                            <input
+                              type="text"
+                              value={step.payload.caption || ''}
+                              onChange={(e) => updatePlanStep(index, 'caption', e.target.value)}
+                              placeholder="Opcional"
+                              className="w-full px-2 py-1.5 border border-slate-300 dark:border-[#555] rounded text-slate-800 dark:text-white bg-white dark:bg-[#2a2a2a] text-sm"
+                            />
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="p-4 border-t border-slate-200 dark:border-[#404040] flex justify-end gap-2">
+              <button type="button" onClick={() => setShowPlanModal(false)} className="px-4 py-2 rounded-lg border border-slate-300 dark:border-[#555] text-slate-700 dark:text-[#aaa] hover:bg-slate-50 dark:hover:bg-[#333]">
+                Cancelar
+              </button>
+              <button type="button" onClick={handleSavePlan} disabled={planSaving} className="px-4 py-2 rounded-lg bg-[#8CD955] text-white hover:bg-[#7BC84A] disabled:opacity-50 flex items-center gap-2">
+                {planSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                {planSaving ? 'Salvando...' : 'Salvar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </Layout>
   );
 }

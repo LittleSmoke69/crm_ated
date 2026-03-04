@@ -42,7 +42,7 @@ export async function GET(req: NextRequest) {
       .from('zaplink_form_submissions')
       .select(selectFields, { count: 'exact' })
       .eq('gerente_id', userId)
-      .eq('status', 'assigned')
+      .in('status', ['assigned', 'cadastrado'])
       .order('created_at', { ascending: false })
       .range(from, to);
 

@@ -369,7 +369,7 @@ export const handler: Handler = async (event, context) => {
               status: result.newStatus,
               updated_at: new Date().toISOString(),
             };
-            // Se acabou de conectar e é virgem: inicia auto maturação (5 dias, bloqueada)
+            // Se acabou de conectar e é virgem: inicia auto maturação (5 dias, bloqueada). Auto maturador = mesmo fluxo do maturador manual, automático para tipo virgem.
             if (result.newStatus === 'ok' && instance.maturation_type === 'virgem' && !instance.maturation_status) {
               const now = new Date();
               const endsAt = new Date(now.getTime() + 5 * 24 * 60 * 60 * 1000);
@@ -379,6 +379,7 @@ export const handler: Handler = async (event, context) => {
               updatePayload.maturation_phase_started_at = now.toISOString();
               updatePayload.current_day = 1;
               updatePayload.is_locked = true;
+              console.log(`[AUTO-MATURADOR] Instância virgem ${instance.instance_name} conectada → entrou em auto maturação (5 dias) status=waiting_connection_test`);
             }
             const { error: updateError } = await supabaseServiceRole
               .from('evolution_instances')

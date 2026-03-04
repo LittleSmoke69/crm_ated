@@ -32,15 +32,21 @@ const supabaseServiceRole = createClient(supabaseUrl, supabaseServiceRoleKey, {
 });
 
 export const handler: Handler = async (event, context) => {
-  console.log(`[maturation-tick] Iniciando processamento...`);
+  console.log('[maturation-tick] ========== Início ==========');
+  console.log('[maturation-tick] Processando: Maturador (manual) + Auto maturador (instâncias virgem)');
   try {
     const result = await runMaturationTick(supabaseServiceRole);
+    const virginCount = result.virginCount ?? 0;
+    const jobs = result.jobs || [];
+    console.log('[maturation-tick] ========== Fim ==========');
+    console.log(`[maturation-tick] Resumo: steps processados=${result.processed} jobs=${jobs.length} instâncias virgem em auto maturação=${virginCount}`);
     return {
       statusCode: 200,
       body: JSON.stringify({
         success: true,
         processed: result.processed,
-        jobs: result.jobs || []
+        virginCount,
+        jobs,
       }),
       headers: { 'Content-Type': 'application/json' },
     };

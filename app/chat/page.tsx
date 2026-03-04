@@ -49,9 +49,11 @@ interface Conversation {
   title: string;
   last_message_preview: string;
   last_message_at: string;
+  last_customer_message_at?: string | null;
   unread_count: number;
   is_group: boolean;
   user_id?: string;
+  whatsapp_config_id?: string | null;
 }
 
 interface ChannelEvolution {
@@ -324,6 +326,10 @@ export default function ChatPage() {
 
   const handleSendMessage = async () => {
     if (!messageText.trim() || !selectedConversationId || !selectedChannel || sending) return;
+    if (selectedChannel.type === 'whatsapp_official' && !canSendFreeMessage) {
+      alert('Fora da janela de 24h. Use mensagem template para iniciar ou reabrir a conversa.');
+      return;
+    }
 
     const conversation = conversations.find((c) => c.id === selectedConversationId);
     if (!conversation) return;
@@ -430,6 +436,13 @@ export default function ChatPage() {
       .slice(0, 2);
   };
 
+  /** Janela de 24h do WhatsApp Oficial: dentro = pode enviar texto livre; fora = só template */
+  const isWithin24hWindow = (conv: Conversation): boolean => {
+    if (!conv.whatsapp_config_id || !conv.last_customer_message_at) return false;
+    const last = new Date(conv.last_customer_message_at).getTime();
+    return Date.now() - last < 24 * 60 * 60 * 1000;
+  };
+
   const getConversationColor = (title: string) => {
     const colors = [
       '#8CD955',
@@ -481,6 +494,9 @@ export default function ChatPage() {
   }
 
   const selectedConversation = conversations.find((c) => c.id === selectedConversationId);
+  const canSendFreeMessage =
+    selectedChannel?.type !== 'whatsapp_official' ||
+    (selectedConversation ? isWithin24hWindow(selectedConversation) : false);
 
   return (
     <Layout onSignOut={handleSignOut}>
@@ -701,7 +717,21 @@ export default function ChatPage() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between mb-1">
-                          <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">{conv.title || 'Sem nome'}</h3>
+                          <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate flex items-center gap-1.5">
+                            {conv.title || 'Sem nome'}
+                            {selectedChannel?.type === 'whatsapp_official' && conv.whatsapp_config_id && (
+                              <span
+                                className={`flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded ${
+                                  isWithin24hWindow(conv)
+                                    ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300'
+                                    : 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300'
+                                }`}
+                                title={isWithin24hWindow(conv) ? 'Janela 24h ativa' : 'Fora da janela'}
+                              >
+                                {isWithin24hWindow(conv) ? '24h' : 'template'}
+                              </span>
+                            )}
+                          </h3>
                           <span className="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0 ml-2">
                             {formatTime(conv.last_message_at)}
                           </span>
@@ -746,6 +776,22 @@ export default function ChatPage() {
                   <div>
                     <h2 className="font-semibold text-gray-900 dark:text-gray-100">{selectedConversation.title}</h2>
                     <p className="text-xs text-gray-500 dark:text-gray-400">{selectedConversation.remote_jid}</p>
+                    {selectedChannel?.type === 'whatsapp_official' && (
+                      <span
+                        className={`inline-flex items-center gap-1 mt-1 text-xs font-medium px-2 py-0.5 rounded ${
+                          isWithin24hWindow(selectedConversation)
+                            ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300'
+                            : 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300'
+                        }`}
+                        title={
+                          isWithin24hWindow(selectedConversation)
+                            ? 'Dentro da janela de 24h: você pode enviar mensagem livre.'
+                            : 'Fora da janela de 24h: use mensagem template para iniciar/reabrir.'
+                        }
+                      >
+                        {isWithin24hWindow(selectedConversation) ? 'Janela 24h ativa' : 'Fora da janela (apenas template)'}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -859,11 +905,15 @@ export default function ChatPage() {
                           handleSendMessage();
                         }
                       }}
-                      placeholder="Shift + Enter para nova linha. Comece com '/' para selecionar uma resposta pronta."
+                      placeholder={
+                        !canSendFreeMessage
+                          ? 'Fora da janela de 24h. Use mensagem template para iniciar ou reabrir.'
+                          : "Shift + Enter para nova linha. Comece com '/' para selecionar uma resposta pronta."
+                      }
                       rows={1}
                       className="w-full px-4 py-2 text-sm border border-gray-300 dark:border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 resize-none overflow-y-auto"
                       style={{ minHeight: '40px', maxHeight: '120px' }}
-                      disabled={sending}
+                      disabled={sending || !canSendFreeMessage}
                     />
                   </div>
                   <div className="flex items-center gap-1">
@@ -891,7 +941,8 @@ export default function ChatPage() {
                     </button>
                     <button
                       onClick={handleSendMessage}
-                      disabled={!messageText.trim() || sending}
+                      disabled={!messageText.trim() || sending || !canSendFreeMessage}
+                      title={!canSendFreeMessage ? 'Fora da janela de 24h. Use mensagem template.' : undefined}
                       className="px-4 py-2 text-sm font-medium text-white rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                       style={{ backgroundColor: '#8CD955' }}
                     >

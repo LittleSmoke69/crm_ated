@@ -18,6 +18,7 @@ export async function GET(_req: NextRequest) {
       { count: totalFormClicks },
       { count: totalPending },
       { count: totalAssigned },
+      { count: totalCadastrados },
     ] = await Promise.all([
       supabaseServiceRole.from('zaplink_clicks').select('*', { count: 'exact', head: true }),
       supabaseServiceRole.from('zaplink_form_clicks').select('*', { count: 'exact', head: true }),
@@ -29,6 +30,10 @@ export async function GET(_req: NextRequest) {
         .from('zaplink_form_submissions')
         .select('*', { count: 'exact', head: true })
         .eq('status', 'assigned'),
+      supabaseServiceRole
+        .from('zaplink_form_submissions')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'cadastrado'),
     ]);
 
     return successResponse({
@@ -36,6 +41,7 @@ export async function GET(_req: NextRequest) {
       total_form_clicks: totalFormClicks ?? 0,
       total_pending: totalPending ?? 0,
       total_assigned: totalAssigned ?? 0,
+      total_cadastrados: totalCadastrados ?? 0,
     });
   } catch (e) {
     return serverErrorResponse(e);

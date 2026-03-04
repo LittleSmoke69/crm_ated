@@ -48,6 +48,7 @@ export async function PATCH(
       return errorResponse('Instância não é do tipo virgem', 400);
     }
 
+    console.log(`[AUTO-MATURADOR] Admin action: instance=${(instance as any).instance_name} action=${action}`);
     const now = new Date().toISOString();
 
     if (action === 'pause') {

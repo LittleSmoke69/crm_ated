@@ -51,6 +51,7 @@ const GroupsPage = () => {
   // Estados para gestão de grupos
   const [selectedInstance, setSelectedInstance] = useState('');
   const [groupsLoading, setGroupsLoading] = useState(false);
+  const [savingAllGroups, setSavingAllGroups] = useState(false);
   
   // Busca e paginação
   const [savedGroupsSearch, setSavedGroupsSearch] = useState('');
@@ -246,6 +247,40 @@ const GroupsPage = () => {
       }
     } catch (error) {
       showToast('Erro ao salvar grupo', 'error');
+    }
+  };
+
+  const handleSaveAllGroups = async () => {
+    if (!userId || !selectedInstance || availableGroups.length === 0) {
+      showToast('Carregue os grupos da instância primeiro', 'error');
+      return;
+    }
+    setSavingAllGroups(true);
+    try {
+      const groups = availableGroups.map((g: EvolutionGroup) => ({
+        id: g.id,
+        subject: g.subject,
+        pictureUrl: g.pictureUrl ?? null,
+        size: g.size ?? null,
+      }));
+      const response = await fetch('/api/groups/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({ instanceName: selectedInstance, groups }),
+      });
+      const data = await response.json();
+      if (response.ok && data.success) {
+        const { inserted = 0, updated = 0 } = data.data || {};
+        showToast(`${inserted + updated} grupo(s) salvos/sincronizados (sem duplicar existentes)`, 'success');
+        await loadDbGroups();
+        await loadInitialData();
+      } else {
+        showToast(data.error || 'Erro ao salvar grupos', 'error');
+      }
+    } catch (error) {
+      showToast('Erro ao salvar todos os grupos', 'error');
+    } finally {
+      setSavingAllGroups(false);
     }
   };
 
@@ -538,24 +573,36 @@ const GroupsPage = () => {
                     ))}
                   </select>
                 </div>
-                <button
-                  onClick={handleLoadGroups}
-                  disabled={!selectedInstance || groupsLoading}
-                  className="w-full py-3 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition disabled:opacity-50 flex items-center justify-center gap-2"
-                >
-                  {groupsLoading ? (
-                    <span className="inline-flex items-center">
-                      Isso pode demorar um pouco
-                      <span className="inline-flex ml-1 gap-0">
-                        <span className="wave-dot-1">.</span>
-                        <span className="wave-dot-2">.</span>
-                        <span className="wave-dot-3">.</span>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <button
+                    onClick={handleLoadGroups}
+                    disabled={!selectedInstance || groupsLoading}
+                    className="flex-1 py-3 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    {groupsLoading ? (
+                      <span className="inline-flex items-center">
+                        Isso pode demorar um pouco
+                        <span className="inline-flex ml-1 gap-0">
+                          <span className="wave-dot-1">.</span>
+                          <span className="wave-dot-2">.</span>
+                          <span className="wave-dot-3">.</span>
+                        </span>
                       </span>
-                    </span>
-                  ) : (
-                    'Carregar Grupos da instância'
+                    ) : (
+                      'Carregar Grupos da instância'
+                    )}
+                  </button>
+                  {availableGroups.length > 0 && (
+                    <button
+                      onClick={handleSaveAllGroups}
+                      disabled={savingAllGroups || !selectedInstance}
+                      className="py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium transition disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                      {savingAllGroups ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                      Salvar todos os grupos
+                    </button>
                   )}
-                </button>
+                </div>
                 {/* Pesquisa abaixo do botão extrair */}
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-gray-400" />

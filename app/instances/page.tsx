@@ -83,6 +83,8 @@ const InstancesPage = () => {
   const [checkingInstance, setCheckingInstance] = useState<string | null>(null); // Instância sendo verificada
   const [showExtractGroupsPrompt, setShowExtractGroupsPrompt] = useState(false);
   const [newlyConnectedInstance, setNewlyConnectedInstance] = useState<string | null>(null);
+  /** No modal de extrair grupos: true enquanto fetch+sync roda (mostra "Extraindo em segundo plano..."). */
+  const [extractGroupsModalExtracting, setExtractGroupsModalExtracting] = useState(false);
   /** Instância cujo extração de grupos está rodando em segundo plano (null = nenhuma). */
   const [groupsProcessingForInstance, setGroupsProcessingForInstance] = useState<string | null>(null);
   /** Verificação de todas as instâncias em andamento. */
@@ -405,6 +407,57 @@ const InstancesPage = () => {
           addLog(`Erro ao extrair grupos (${instanceName}): ${String(error)}`, 'error');
         }
       })();
+    },
+    [userId, showToast, addLog]
+  );
+
+  /** Extrair e salvar todos os grupos no modal: mantém usuário na página, mostra "em segundo plano" e ao terminar fecha o modal. */
+  const handleExtractAndSaveAllInModal = useCallback(
+    async (instanceName: string) => {
+      if (!userId || !instanceName) return;
+      setExtractGroupsModalExtracting(true);
+      setGroupsProcessingForInstance(instanceName);
+      addLog(`Extraindo grupos da instância ${instanceName} (modal)...`, 'info');
+      try {
+        const fetchResponse = await fetch('/api/groups/fetch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+          body: JSON.stringify({ instanceName }),
+        });
+        const fetchData = await fetchResponse.json();
+        if (!fetchResponse.ok || !fetchData.data) {
+          showToast('Erro ao buscar grupos da API', 'error');
+          addLog(`Erro ao buscar grupos da instância ${instanceName}`, 'error');
+          setExtractGroupsModalExtracting(false);
+          setGroupsProcessingForInstance(null);
+          return;
+        }
+        const groups = fetchData.data;
+        const syncResponse = await fetch('/api/groups/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+          body: JSON.stringify({ instanceName, groups }),
+        });
+        const syncData = await syncResponse.json();
+        setGroupsProcessingForInstance(null);
+        setExtractGroupsModalExtracting(false);
+        setShowExtractGroupsPrompt(false);
+        setNewlyConnectedInstance(null);
+        if (syncResponse.ok && syncData.success) {
+          const { inserted = 0, updated = 0 } = syncData.data || {};
+          showToast(`${inserted + updated} grupo(s) salvos/sincronizados com sucesso!`, 'success');
+          addLog(`${inserted + updated} grupos da instância ${instanceName} extraídos e salvos`, 'success');
+        } else {
+          showToast(syncData.error || 'Erro ao sincronizar grupos', 'error');
+        }
+      } catch (error) {
+        setExtractGroupsModalExtracting(false);
+        setGroupsProcessingForInstance(null);
+        setShowExtractGroupsPrompt(false);
+        setNewlyConnectedInstance(null);
+        showToast('Erro ao extrair grupos', 'error');
+        addLog(`Erro ao extrair grupos (${instanceName}): ${String(error)}`, 'error');
+      }
     },
     [userId, showToast, addLog]
   );
@@ -1521,7 +1574,7 @@ const InstancesPage = () => {
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4"
           onClick={(e) => {
-            if (e.target === e.currentTarget) {
+            if (e.target === e.currentTarget && !extractGroupsModalExtracting) {
               setShowExtractGroupsPrompt(false);
               setNewlyConnectedInstance(null);
             }
@@ -1532,36 +1585,44 @@ const InstancesPage = () => {
           
           {/* Modal */}
           <div className="relative bg-white dark:bg-[#2a2a2a] rounded-xl shadow-2xl p-6 max-w-md w-full z-10 animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-[#404040]">
-            <div className="text-center mb-6">
-              <CheckCircle2 className="w-16 h-16 text-[#8CD955] dark:text-[#00ff00] mx-auto mb-4" />
-              <h2 className="text-xl font-semibold text-gray-800 dark:text-white mb-2">Instância Conectada!</h2>
-              <p className="text-gray-600 dark:text-[#ccc]">Deseja extrair e salvar todos os grupos desta instância?</p>
-            </div>
+            {extractGroupsModalExtracting ? (
+              <>
+                <div className="text-center mb-6">
+                  <Loader2 className="w-16 h-16 text-[#8CD955] dark:text-[#00ff00] mx-auto mb-4 animate-spin" />
+                  <h2 className="text-xl font-semibold text-gray-800 dark:text-white mb-2">Extraindo grupos em segundo plano</h2>
+                  <p className="text-gray-600 dark:text-[#ccc]">
+                    Os grupos estão sendo puxados e salvos. Você pode continuar na página da instância; será avisado quando terminar.
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-center mb-6">
+                  <CheckCircle2 className="w-16 h-16 text-[#8CD955] dark:text-[#00ff00] mx-auto mb-4" />
+                  <h2 className="text-xl font-semibold text-gray-800 dark:text-white mb-2">Instância Conectada!</h2>
+                  <p className="text-gray-600 dark:text-[#ccc]">Deseja extrair e salvar todos os grupos desta instância?</p>
+                </div>
 
-            <div className="flex gap-3">
-              <button
-                onClick={() => {
-                  setShowExtractGroupsPrompt(false);
-                  setNewlyConnectedInstance(null);
-                  showToast('Instância conectada com sucesso!', 'success');
-                }}
-                className="flex-1 py-3 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-lg font-medium transition"
-              >
-                Fechar
-              </button>
-              <button
-                onClick={() => {
-                  const instanceName = newlyConnectedInstance;
-                  setShowExtractGroupsPrompt(false);
-                  setNewlyConnectedInstance(null);
-                  showToast('Instância conectada com sucesso!', 'success');
-                  if (instanceName) runExtractGroupsInBackground(instanceName);
-                }}
-                className="flex-1 py-3 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition"
-              >
-                Extrair
-              </button>
-            </div>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => {
+                      setShowExtractGroupsPrompt(false);
+                      setNewlyConnectedInstance(null);
+                      showToast('Instância conectada com sucesso!', 'success');
+                    }}
+                    className="flex-1 py-3 bg-gray-200 hover:bg-gray-300 dark:bg-[#404040] dark:hover:bg-[#555] text-gray-800 dark:text-white rounded-lg font-medium transition"
+                  >
+                    Fechar
+                  </button>
+                  <button
+                    onClick={() => newlyConnectedInstance && handleExtractAndSaveAllInModal(newlyConnectedInstance)}
+                    className="flex-1 py-3 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition flex items-center justify-center gap-2"
+                  >
+                    Extrair e salvar todos
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

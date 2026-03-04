@@ -8,7 +8,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
-import { requireAdmin } from '@/lib/middleware/permissions';
+import { isAdmin } from '@/lib/middleware/permissions';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 interface RouteParams {
@@ -52,7 +52,7 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
 
 export async function PUT(req: NextRequest, { params }: RouteParams) {
   try {
-    const { userId } = await requireAdmin(req);
+    const { userId } = await requireAuth(req);
     const { planId } = await params;
     
     if (!planId) {
@@ -65,10 +65,9 @@ export async function PUT(req: NextRequest, { params }: RouteParams) {
     const body = await req.json();
     const { name, description, default_target_chat_id, steps, is_active } = body;
     
-    // Verifica se o plano existe
     const { data: existingPlan, error: fetchError } = await supabaseServiceRole
       .from('maturation_plans')
-      .select('id')
+      .select('id, created_by')
       .eq('id', planId)
       .single();
     
@@ -76,6 +75,15 @@ export async function PUT(req: NextRequest, { params }: RouteParams) {
       return NextResponse.json(
         { error: 'Plano não encontrado' },
         { status: 404 }
+      );
+    }
+    
+    const isOwner = existingPlan.created_by === userId;
+    const admin = await isAdmin(userId);
+    if (!isOwner && !admin) {
+      return NextResponse.json(
+        { error: 'Apenas o dono do plano ou um administrador pode editá-lo.' },
+        { status: 403 }
       );
     }
     
@@ -169,14 +177,6 @@ export async function PUT(req: NextRequest, { params }: RouteParams) {
     });
   } catch (error: any) {
     console.error('[PUT /api/maturation/plans/[planId]] Erro:', error);
-    
-    if (error.message?.includes('Acesso negado')) {
-      return NextResponse.json(
-        { error: 'Acesso negado. Apenas administradores podem editar planos.' },
-        { status: 403 }
-      );
-    }
-    
     return NextResponse.json(
       { error: error.message || 'Erro ao atualizar plano' },
       { status: error.message === 'Não autenticado' ? 401 : 500 }
@@ -186,13 +186,35 @@ export async function PUT(req: NextRequest, { params }: RouteParams) {
 
 export async function DELETE(req: NextRequest, { params }: RouteParams) {
   try {
-    await requireAdmin(req);
+    const { userId } = await requireAuth(req);
     const { planId } = await params;
     
     if (!planId) {
       return NextResponse.json(
         { error: 'planId é obrigatório' },
         { status: 400 }
+      );
+    }
+    
+    const { data: existingPlan, error: fetchError } = await supabaseServiceRole
+      .from('maturation_plans')
+      .select('id, created_by')
+      .eq('id', planId)
+      .single();
+    
+    if (fetchError || !existingPlan) {
+      return NextResponse.json(
+        { error: 'Plano não encontrado' },
+        { status: 404 }
+      );
+    }
+    
+    const isOwner = existingPlan.created_by === userId;
+    const admin = await isAdmin(userId);
+    if (!isOwner && !admin) {
+      return NextResponse.json(
+        { error: 'Apenas o dono do plano ou um administrador pode excluí-lo.' },
+        { status: 403 }
       );
     }
     
@@ -246,14 +268,6 @@ export async function DELETE(req: NextRequest, { params }: RouteParams) {
     });
   } catch (error: any) {
     console.error('[DELETE /api/maturation/plans/[planId]] Erro:', error);
-    
-    if (error.message?.includes('Acesso negado')) {
-      return NextResponse.json(
-        { error: 'Acesso negado. Apenas administradores podem deletar planos.' },
-        { status: 403 }
-      );
-    }
-    
     return NextResponse.json(
       { error: error.message || 'Erro ao deletar plano' },
       { status: error.message === 'Não autenticado' ? 401 : 500 }

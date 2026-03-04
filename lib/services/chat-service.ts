@@ -36,6 +36,8 @@ export interface ChatConversation {
   is_group: boolean;
   last_message_at?: string;
   last_message_preview?: string;
+  /** Última mensagem recebida do contato (WhatsApp Oficial). Usado para janela de 24h. */
+  last_customer_message_at?: string | null;
   unread_count?: number;
 }
 

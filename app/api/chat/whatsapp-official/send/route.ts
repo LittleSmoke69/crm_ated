@@ -74,6 +74,28 @@ export async function POST(req: NextRequest) {
     }
 
     const normalizedTo = to.replace(/\D/g, '');
+    const remoteJid = `${normalizedTo}@s.whatsapp.net`;
+
+    // Janela de 24h (WhatsApp Oficial): mensagem livre só dentro de 24h da última mensagem do contato
+    const { data: existingConversation } = await supabaseServiceRole
+      .from('chat_conversations')
+      .select('id, last_customer_message_at')
+      .eq('whatsapp_config_id', config_id)
+      .eq('remote_jid', remoteJid)
+      .maybeSingle();
+
+    const WINDOW_24H_MS = 24 * 60 * 60 * 1000;
+    const lastCustomerAt = existingConversation?.last_customer_message_at
+      ? new Date(existingConversation.last_customer_message_at).getTime()
+      : null;
+    const isWithin24h = lastCustomerAt != null && Date.now() - lastCustomerAt < WINDOW_24H_MS;
+
+    if (!isWithin24h) {
+      return errorResponse(
+        'Fora da janela de 24h: o contato não enviou mensagem nas últimas 24 horas. Use mensagem template para iniciar ou reabrir a conversa.',
+        400
+      );
+    }
     const configForApi = {
       id: config.id,
       phone_number_id: config.phone_number_id,
@@ -122,7 +144,7 @@ export async function POST(req: NextRequest) {
       instance_id: null,
       workspace_id: profile?.zaploto_id ?? null,
       user_id: userId,
-      remote_jid: `${normalizedTo}@s.whatsapp.net`,
+      remote_jid: remoteJid,
       title: normalizedTo,
       is_group: false,
       last_message_at: new Date().toISOString(),

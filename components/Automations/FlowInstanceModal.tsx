@@ -178,6 +178,7 @@ export default function FlowInstanceModal({
   const [savedGroups, setSavedGroups] = useState<WhatsAppGroup[]>([]);
   const [loadingGroups, setLoadingGroups] = useState(false);
   const [fetchingGroups, setFetchingGroups] = useState(false);
+  const [savingAllGroups, setSavingAllGroups] = useState(false);
   const [groupsPage, setGroupsPage] = useState(1);
   const groupsPerPage = 5;
 
@@ -340,6 +341,34 @@ export default function FlowInstanceModal({
       alert('Erro ao buscar grupos da instância');
     } finally {
       setFetchingGroups(false);
+    }
+  };
+
+  const handleSaveAllGroups = async () => {
+    if (!userId || !instanceName || availableGroups.length === 0) return;
+    setSavingAllGroups(true);
+    try {
+      const groups = availableGroups.map((g) => ({
+        id: g.group_id,
+        subject: g.group_subject || null,
+      }));
+      const r = await fetch('/api/groups/sync', {
+        method: 'POST',
+        headers: { 'X-User-Id': userId, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instanceName, groups }),
+      });
+      const result = await r.json();
+      if (r.ok && result.success) {
+        const { inserted = 0, updated = 0 } = result.data || {};
+        alert(`${inserted + updated} grupo(s) salvos/sincronizados (sem duplicar existentes).`);
+        await loadSavedGroups(instanceName);
+      } else {
+        alert(result.error || 'Erro ao salvar grupos');
+      }
+    } catch {
+      alert('Erro ao salvar todos os grupos');
+    } finally {
+      setSavingAllGroups(false);
     }
   };
 
@@ -598,23 +627,36 @@ export default function FlowInstanceModal({
                     </p>
                   </div>
                   {instanceName && (
-                    <button
-                      type="button"
-                      onClick={fetchNewGroups}
-                      disabled={fetchingGroups}
-                      className="text-xs text-[#8CD955] hover:text-[#7BC84A] font-semibold flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-[#8CD955]/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {fetchingGroups ? (
-                        <><Loader2 className="w-3.5 h-3.5 animate-spin" />Buscando...</>
-                      ) : (
-                        <>
-                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                          </svg>
-                          Buscar grupos novos
-                        </>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={fetchNewGroups}
+                        disabled={fetchingGroups}
+                        className="text-xs text-[#8CD955] hover:text-[#7BC84A] font-semibold flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-[#8CD955]/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {fetchingGroups ? (
+                          <><Loader2 className="w-3.5 h-3.5 animate-spin" />Buscando...</>
+                        ) : (
+                          <>
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
+                            Buscar grupos novos
+                          </>
+                        )}
+                      </button>
+                      {availableGroups.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={handleSaveAllGroups}
+                          disabled={savingAllGroups}
+                          className="text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-semibold flex items-center gap-1.5 px-2 py-1 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {savingAllGroups ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                          Salvar todos os grupos
+                        </button>
                       )}
-                    </button>
+                    </div>
                   )}
                 </div>
 

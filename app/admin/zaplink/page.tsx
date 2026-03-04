@@ -7,6 +7,7 @@ import {
   Link2,
   FileText,
   Users,
+  User,
   BarChart3,
   Plus,
   Trash2,
@@ -36,9 +37,16 @@ interface ZaplinkForm {
   slug: string;
   name: string;
   form_type?: 'consultor' | 'influenciador';
+  gestor_trafego_user_id?: string | null;
   created_at: string;
   click_count?: number;
   submission_count?: number;
+}
+
+interface GestorOption {
+  id: string;
+  full_name: string | null;
+  email: string;
 }
 
 interface Submission {
@@ -64,6 +72,7 @@ interface Metrics {
   total_form_clicks?: number;
   total_pending: number;
   total_assigned: number;
+  total_cadastrados?: number;
 }
 
 interface BancaOption {
@@ -76,6 +85,7 @@ interface GerenteOption {
   id: string;
   full_name: string | null;
   email: string;
+  telefone?: string | null;
 }
 
 /** Dados do gráfico: atribuições por banca e gerente */
@@ -115,6 +125,7 @@ export default function AdminZaplinkPage() {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [bancas, setBancas] = useState<BancaOption[]>([]);
   const [gerentes, setGerentes] = useState<GerenteOption[]>([]);
+  const [gerentesLoading, setGerentesLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'links' | 'forms' | 'submissions' | 'requests'>('links');
   const [submissionsFilter, setSubmissionsFilter] = useState<'pending' | 'assigned'>('pending');
@@ -125,6 +136,10 @@ export default function AdminZaplinkPage() {
   const [chartByGerente, setChartByGerente] = useState<ByGerenteBancaRow[]>([]);
   const [consultantRequests, setConsultantRequests] = useState<ConsultantRequest[]>([]);
   const [consultantRequestsLoading, setConsultantRequestsLoading] = useState(false);
+  const [gestores, setGestores] = useState<GestorOption[]>([]);
+  const [transferFormId, setTransferFormId] = useState<string | null>(null);
+  const [transferGestorId, setTransferGestorId] = useState('');
+  const [transferring, setTransferring] = useState(false);
   const [fulfillModalRequest, setFulfillModalRequest] = useState<ConsultantRequest | null>(null);
   const [fulfillSubmissionIds, setFulfillSubmissionIds] = useState<string[]>([]);
   const [pendingSubmissionsForFulfill, setPendingSubmissionsForFulfill] = useState<
@@ -170,7 +185,7 @@ export default function AdminZaplinkPage() {
     if (!userId) return;
     setLoading(true);
     try {
-      const [linksRes, formsRes, subsRes, metricsRes, bancasRes, byGerenteRes] = await Promise.all([
+      const [linksRes, formsRes, subsRes, metricsRes, bancasRes, byGerenteRes, gestoresRes] = await Promise.all([
         fetch('/api/admin/zaplink/links', { headers: { 'X-User-Id': userId } }),
         fetch('/api/admin/zaplink/forms', { headers: { 'X-User-Id': userId } }),
         fetch(
@@ -180,6 +195,7 @@ export default function AdminZaplinkPage() {
         fetch('/api/admin/zaplink/metrics', { headers: { 'X-User-Id': userId } }),
         fetch('/api/admin/crm/bancas', { headers: { 'X-User-Id': userId } }),
         fetch('/api/admin/zaplink/stats/by-gerente', { headers: { 'X-User-Id': userId } }),
+        fetch('/api/admin/zaplink/gestores', { headers: { 'X-User-Id': userId } }),
       ]);
 
       const linksJson = await linksRes.json();
@@ -188,9 +204,11 @@ export default function AdminZaplinkPage() {
       const metricsJson = await metricsRes.json();
       const bancasJson = await bancasRes.json();
       const byGerenteJson = await byGerenteRes.json();
+      const gestoresJson = await gestoresRes.json();
 
       if (linksJson.success) setLinks(linksJson.data ?? []);
       if (formsJson.success) setForms(formsJson.data ?? []);
+      if (gestoresJson.success) setGestores(gestoresJson.data ?? []);
       if (subsJson.success) {
         const payload = subsJson.data;
         const list = payload?.data ?? [];
@@ -216,8 +234,10 @@ export default function AdminZaplinkPage() {
     const banca = bancas.find((b) => b.id === bancaId);
     if (!banca?.url) {
       setGerentes([]);
+      setGerentesLoading(false);
       return;
     }
+    setGerentesLoading(true);
     try {
       const res = await fetch(`/api/gerente/gerentes?banca_url=${encodeURIComponent(banca.url)}`, {
         headers: { 'X-User-Id': userId },
@@ -230,6 +250,8 @@ export default function AdminZaplinkPage() {
       }
     } catch {
       setGerentes([]);
+    } finally {
+      setGerentesLoading(false);
     }
   }, [userId, bancas]);
 
@@ -357,6 +379,33 @@ export default function AdminZaplinkPage() {
       }
     } catch {
       showToast('error', 'Erro ao remover');
+    }
+  };
+
+  const handleTransferToGestor = async () => {
+    if (!transferFormId) return;
+    setTransferring(true);
+    try {
+      const res = await fetch(`/api/admin/zaplink/forms/${transferFormId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId! },
+        body: JSON.stringify({
+          gestor_trafego_user_id: transferGestorId || null,
+        }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        showToast('success', transferGestorId ? 'Formulário e leads transferidos para o gestor de tráfego.' : 'Formulário removido do gestor (voltou para o admin).');
+        setTransferFormId(null);
+        setTransferGestorId('');
+        loadData();
+      } else {
+        showToast('error', json.error || 'Erro ao transferir');
+      }
+    } catch {
+      showToast('error', 'Erro ao transferir');
+    } finally {
+      setTransferring(false);
     }
   };
 
@@ -490,7 +539,7 @@ export default function AdminZaplinkPage() {
 
         {/* Métricas */}
         {metrics && (
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-8">
             <div className="bg-white dark:bg-[#2a2a2a] rounded-xl p-4 border border-gray-200 dark:border-[#404040]">
               <div className="flex items-center gap-2 text-gray-600 dark:text-[#aaa] mb-2">
                 <BarChart3 className="w-5 h-5" />
@@ -518,6 +567,13 @@ export default function AdminZaplinkPage() {
                 Atribuídos
               </div>
               <p className="text-2xl font-bold text-green-600 dark:text-green-400">{metrics.total_assigned}</p>
+            </div>
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-xl p-4 border border-gray-200 dark:border-[#404040]">
+              <div className="flex items-center gap-2 text-gray-600 dark:text-[#aaa] mb-2">
+                <User className="w-5 h-5" />
+                Cadastrados
+              </div>
+              <p className="text-2xl font-bold text-teal-600 dark:text-teal-400">{metrics.total_cadastrados ?? 0}</p>
             </div>
           </div>
         )}
@@ -696,6 +752,7 @@ export default function AdminZaplinkPage() {
                       <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Tipo</th>
                       <th className="text-center p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Cliques</th>
                       <th className="text-center p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Cadastros</th>
+                      <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Gestor de tráfego</th>
                       <th className="text-right p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Ações</th>
                     </tr>
                   </thead>
@@ -730,6 +787,22 @@ export default function AdminZaplinkPage() {
                         </td>
                         <td className="p-3 text-center text-gray-700 dark:text-[#ccc]">{f.click_count ?? 0}</td>
                         <td className="p-3 text-center text-gray-700 dark:text-[#ccc]">{f.submission_count ?? 0}</td>
+                        <td className="p-3">
+                          <span className="text-sm text-gray-700 dark:text-[#ccc]">
+                            {f.gestor_trafego_user_id
+                              ? (gestores.find((g) => g.id === f.gestor_trafego_user_id)?.full_name || gestores.find((g) => g.id === f.gestor_trafego_user_id)?.email || '—')
+                              : '—'}
+                          </span>
+                          <button
+                            onClick={() => {
+                              setTransferFormId(f.id);
+                              setTransferGestorId(f.gestor_trafego_user_id || '');
+                            }}
+                            className="ml-2 text-xs px-2 py-1 rounded bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300 hover:bg-teal-200 dark:hover:bg-teal-900/60"
+                          >
+                            Transferir
+                          </button>
+                        </td>
                         <td className="p-3 text-right">
                           <button
                             onClick={() => {
@@ -1321,13 +1394,23 @@ export default function AdminZaplinkPage() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium mb-1">Gerente</label>
+                  {gerentesLoading && (
+                    <p className="text-sm text-amber-600 dark:text-amber-400 mb-1 flex items-center gap-2">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Buscando gerentes...
+                    </p>
+                  )}
                   <select
                     value={assignGerente}
                     onChange={(e) => setAssignGerente(e.target.value)}
-                    className="w-full px-3 py-2 border rounded-lg dark:bg-[#333] dark:border-[#555]"
+                    disabled={gerentesLoading}
+                    className="w-full px-3 py-2 border rounded-lg dark:bg-[#333] dark:border-[#555] disabled:opacity-70"
                   >
+                    <option value="">{gerentesLoading ? 'Carregando...' : 'Selecione o gerente'}</option>
                     {gerentes.map((g) => (
-                      <option key={g.id} value={g.id}>{g.full_name || g.email}</option>
+                      <option key={g.id} value={g.id}>
+                        {g.full_name || g.email}{g.telefone ? ` — ${g.telefone}` : ''}
+                      </option>
                     ))}
                   </select>
                 </div>
@@ -1347,6 +1430,50 @@ export default function AdminZaplinkPage() {
                 >
                   {assigning && <Loader2 className="w-4 h-4 animate-spin" />}
                   {assignSubmissionIds.length > 1 ? `Atribuir ${assignSubmissionIds.length}` : 'Atribuir'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Transferir formulário para gestor de tráfego */}
+        {transferFormId && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-xl max-w-md w-full p-6">
+              <h2 className="text-lg font-semibold mb-2">Transferir formulário para gestor de tráfego</h2>
+              <p className="text-sm text-gray-600 dark:text-[#aaa] mb-4">
+                O formulário e todos os leads que se inscreveram nele passarão a ser visíveis apenas para o gestor selecionado no Zaplink.
+              </p>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Gestor de tráfego</label>
+                  <select
+                    value={transferGestorId}
+                    onChange={(e) => setTransferGestorId(e.target.value)}
+                    className="w-full px-3 py-2 border rounded-lg dark:bg-[#333] dark:border-[#555]"
+                  >
+                    <option value="">— Nenhum (admin)</option>
+                    {gestores.map((g) => (
+                      <option key={g.id} value={g.id}>{g.full_name || g.email}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="flex gap-2 justify-end mt-6">
+                <button
+                  type="button"
+                  onClick={() => { setTransferFormId(null); setTransferGestorId(''); }}
+                  className="px-4 py-2 border rounded-lg dark:border-[#555]"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleTransferToGestor}
+                  disabled={transferring}
+                  className="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 disabled:opacity-50 flex items-center gap-2"
+                >
+                  {transferring && <Loader2 className="w-4 h-4 animate-spin" />}
+                  Transferir
                 </button>
               </div>
             </div>
@@ -1387,13 +1514,23 @@ export default function AdminZaplinkPage() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium mb-1">Novo gerente</label>
+                  {gerentesLoading && (
+                    <p className="text-sm text-amber-600 dark:text-amber-400 mb-1 flex items-center gap-2">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Buscando gerentes...
+                    </p>
+                  )}
                   <select
                     value={reassignGerente}
                     onChange={(e) => setReassignGerente(e.target.value)}
-                    className="w-full px-3 py-2 border rounded-lg dark:bg-[#333] dark:border-[#555]"
+                    disabled={gerentesLoading}
+                    className="w-full px-3 py-2 border rounded-lg dark:bg-[#333] dark:border-[#555] disabled:opacity-70"
                   >
+                    <option value="">{gerentesLoading ? 'Carregando...' : 'Selecione o gerente'}</option>
                     {gerentes.map((g) => (
-                      <option key={g.id} value={g.id}>{g.full_name || g.email}</option>
+                      <option key={g.id} value={g.id}>
+                        {g.full_name || g.email}{g.telefone ? ` — ${g.telefone}` : ''}
+                      </option>
                     ))}
                   </select>
                 </div>

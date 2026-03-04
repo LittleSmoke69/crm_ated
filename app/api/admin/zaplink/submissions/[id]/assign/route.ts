@@ -112,67 +112,102 @@ export async function POST(
 
     const { data: existing } = await supabaseServiceRole
       .from('profiles')
-      .select('id')
+      .select('id, user_id, email, full_name, status, enroller')
       .eq('email', submission.email.trim().toLowerCase())
       .maybeSingle();
 
-    if (existing) {
-      return errorResponse('E-mail já cadastrado no sistema', 400);
-    }
-
-    const password = generatePassword();
-    const passwordHash = bcrypt.hashSync(password, bcrypt.genSaltSync(10));
-    const newUserId = randomUUID();
-
-    const { data: newUser, error: createError } = await supabaseServiceRole
-      .from('profiles')
-      .insert({
-        user_id: newUserId,
-        email: submission.email.trim().toLowerCase(),
-        full_name: submission.full_name || null,
-        password_hash: passwordHash,
-        status: 'consultor',
-        enroller: gerenteId,
-        created_at: new Date().toISOString(),
-      })
-      .select('id, user_id, email, full_name, status, enroller')
-      .single();
-
-    if (createError || !newUser) {
-      return errorResponse(`Erro ao criar consultor: ${createError?.message}`, 500);
-    }
-
-    await supabaseServiceRole
-      .from('user_settings')
-      .insert({
-        user_id: newUser.id,
-        max_leads_per_day: 50,
-        max_instances: 2,
-        is_active: true,
-        created_at: new Date().toISOString(),
-      });
-
-    await supabaseServiceRole
-      .from('user_bancas')
-      .upsert(
-        { user_id: newUser.id, banca_ids: [bancaId] },
-        { onConflict: 'user_id' }
-      );
-
     const assignedAt = new Date().toISOString();
+    let consultorToUse: { id: string; user_id?: string; email: string; full_name: string | null; status: string; enroller: string | null };
+
+    if (existing) {
+      // Usuário já cadastrado: ignora criação e vincula a submissão ao consultor existente (atualiza enroller e banca)
+      consultorToUse = existing as typeof consultorToUse;
+      await supabaseServiceRole
+        .from('profiles')
+        .update({ enroller: gerenteId })
+        .eq('id', existing.id);
+      await supabaseServiceRole
+        .from('user_bancas')
+        .upsert(
+          { user_id: existing.id, banca_ids: [bancaId] },
+          { onConflict: 'user_id' }
+        );
+    } else {
+      const password = generatePassword();
+      const passwordHash = bcrypt.hashSync(password, bcrypt.genSaltSync(10));
+      const newUserId = randomUUID();
+
+      const { data: newUser, error: createError } = await supabaseServiceRole
+        .from('profiles')
+        .insert({
+          user_id: newUserId,
+          email: submission.email.trim().toLowerCase(),
+          full_name: submission.full_name || null,
+          password_hash: passwordHash,
+          status: 'consultor',
+          enroller: gerenteId,
+          created_at: new Date().toISOString(),
+        })
+        .select('id, user_id, email, full_name, status, enroller')
+        .single();
+
+      if (createError || !newUser) {
+        return errorResponse(`Erro ao criar consultor: ${createError?.message}`, 500);
+      }
+
+      await supabaseServiceRole
+        .from('user_settings')
+        .insert({
+          user_id: newUser.id,
+          max_leads_per_day: 50,
+          max_instances: 2,
+          is_active: true,
+          created_at: new Date().toISOString(),
+        });
+
+      await supabaseServiceRole
+        .from('user_bancas')
+        .upsert(
+          { user_id: newUser.id, banca_ids: [bancaId] },
+          { onConflict: 'user_id' }
+        );
+
+      consultorToUse = newUser as typeof consultorToUse;
+
+      // WhatsApp só para novo cadastro
+      try {
+        const evolution = await getLotoAssistenciaInstance();
+        if (evolution) {
+          const phoneNorm = normalizePhone(submission.phone);
+          if (phoneNorm.length >= 12) {
+            const numberOnly = phoneNorm.includes('@') ? phoneNorm.replace(/@.*$/, '') : phoneNorm;
+            const bancaName = banca?.name || 'a banca';
+            const gerenteName = gerente?.full_name || 'o gerente';
+            const welcomeMsg = `Olá, ${submission.full_name}! Seu cadastro foi aprovado. Você foi atribuído à banca *${bancaName}* e seu gerente *${gerenteName}* entrará em contato em breve.`;
+            await evolutionService.sendText(
+              evolution.instance_name,
+              evolution.apikey,
+              evolution.base_url,
+              numberOnly,
+              welcomeMsg
+            );
+          }
+        }
+      } catch (sendErr) {
+        console.error('[zaplink/assign] Erro ao enviar WhatsApp (Loto Assistência):', sendErr);
+      }
+    }
 
     await supabaseServiceRole
       .from('zaplink_form_submissions')
       .update({
-        status: 'assigned',
+        status: existing ? 'cadastrado' : 'assigned',
         banca_id: bancaId,
         gerente_id: gerenteId,
-        consultor_user_id: newUser.id,
+        consultor_user_id: consultorToUse.id,
         assigned_at: assignedAt,
       })
       .eq('id', submissionId);
-
-    const notificationMessage = `Novo consultor atribuído via Zaplink: ${submission.full_name}. O consultor foi adicionado à sua hierarquia.`;
 
     await supabaseServiceRole
       .from('zaplink_gerente_notifications')
@@ -181,36 +216,14 @@ export async function POST(
         zaplink_submission_id: submissionId,
       });
 
-    // Disparo somente após atribuição concluída. Falha no envio não afeta a resposta.
-    try {
-      const evolution = await getLotoAssistenciaInstance();
-      if (evolution) {
-        const phoneNorm = normalizePhone(submission.phone);
-        if (phoneNorm.length >= 12) {
-          const numberOnly = phoneNorm.includes('@') ? phoneNorm.replace(/@.*$/, '') : phoneNorm;
-          const bancaName = banca?.name || 'a banca';
-          const gerenteName = gerente?.full_name || 'o gerente';
-          const welcomeMsg = `Olá, ${submission.full_name}! Seu cadastro foi aprovado. Você foi atribuído à banca *${bancaName}* e seu gerente *${gerenteName}* entrará em contato em breve.`;
-          await evolutionService.sendText(
-            evolution.instance_name,
-            evolution.apikey,
-            evolution.base_url,
-            numberOnly,
-            welcomeMsg
-          );
-        }
-      }
-    } catch (sendErr) {
-      console.error('[zaplink/assign] Erro ao enviar WhatsApp (Loto Assistência) – atribuição já concluída:', sendErr);
-    }
-
     return successResponse(
       {
-        consultor: newUser,
+        consultor: consultorToUse,
         submission_id: submissionId,
         assigned_at: assignedAt,
+        already_registered: !!existing,
       },
-      'Atribuído com sucesso'
+      existing ? 'Lead já cadastrado; atribuição vinculada ao consultor existente.' : 'Atribuído com sucesso'
     );
   } catch (e) {
     return serverErrorResponse(e);

@@ -83,19 +83,20 @@ export async function GET(req: NextRequest) {
       return successResponse([]);
     }
 
-    // Busca apenas perfis com status exatamente 'gerente' (evita retornar consultor, gestor, etc.)
+    // Busca apenas perfis com status exatamente 'gerente' (inclui telefone para exibição no Zaplink)
     const { data: gerentes } = await supabaseServiceRole
       .from('profiles')
-      .select('id, email, full_name, status')
+      .select('id, email, full_name, telefone, status')
       .in('id', allGerenteIds)
       .eq('status', 'gerente');
 
     const list = (gerentes || [])
       .filter((g: { status?: string }) => g.status === 'gerente')
-      .map((g: { id: string; email: string; full_name: string | null }) => ({
+      .map((g: { id: string; email: string; full_name: string | null; telefone?: string | null }) => ({
         id: g.id,
         email: g.email,
         full_name: g.full_name,
+        telefone: g.telefone ?? null,
       }));
 
     return successResponse(list);
