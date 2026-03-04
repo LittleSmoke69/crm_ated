@@ -1404,6 +1404,7 @@ export default function AdminDashboard() {
               onClearUserData={handleClearUserData}
               usersLoadError={usersLoadError}
               onRetryLoad={loadData}
+              isSuperAdmin={isSuperAdmin}
             />
           )}
 
@@ -2008,14 +2009,16 @@ const UsersSection = ({
   selectedUser,
   onClearUserData,
   usersLoadError,
-  onRetryLoad
+  onRetryLoad,
+  isSuperAdmin = false
 }: { 
   users: User[]; 
   onUserSelect: (userId: string | null) => void; 
   selectedUser: string | null;
   onClearUserData?: (userId: string, email: string) => Promise<void>;
   usersLoadError?: string | null;
-  onRetryLoad?: () => void;
+  onRetryLoad?: () => Promise<void>;
+  isSuperAdmin?: boolean;
 }) => {
   const [editingUser, setEditingUser] = useState<string | null>(null);
   const [editFormData, setEditFormData] = useState<any>(null);
@@ -2150,7 +2153,8 @@ const UsersSection = ({
         alert('Usuário atualizado com sucesso!');
         setEditingUser(null);
         setEditFormData(null);
-        window.location.reload();
+        // Refaz o carregamento dos usuários sem reload da página (evita erro removeChild no DOM)
+        await onRetryLoad?.();
       } else {
         console.error('Erro na resposta:', data);
         alert(`Erro ao salvar: ${data.error || 'Erro desconhecido'}`);
@@ -2349,12 +2353,12 @@ const UsersSection = ({
     setCurrentPage(1); // Volta para primeira página ao ordenar
   };
 
-  // Filtra potenciais superiores baseados no status sendo editado
+  // Filtra potenciais superiores baseados no status sendo editado (super_admin pode atribuir qualquer hierarquia)
   const getPotentialEnrollers = (status: string) => {
     if (status === 'consultor') return users.filter(u => u.status === 'gerente');
-    if (status === 'gerente') return users.filter(u => u.status === 'dono_banca');
-    if (status === 'gestor') return users.filter(u => u.status === 'dono_banca' || u.status === 'admin');
-    if (status === 'auditoria' || status === 'suporte') return users.filter(u => u.status === 'admin');
+    if (status === 'gerente') return users.filter(u => ['dono_banca', 'gerente', 'admin', 'super_admin'].includes(u.status));
+    if (status === 'gestor') return users.filter(u => ['dono_banca', 'admin', 'super_admin'].includes(u.status));
+    if (status === 'auditoria' || status === 'suporte') return users.filter(u => u.status === 'admin' || (isSuperAdmin && u.status === 'super_admin'));
     return [];
   };
 
@@ -2415,6 +2419,17 @@ const UsersSection = ({
           >
             Todos
           </button>
+          {isSuperAdmin && (
+            <button
+              onClick={() => {
+                setStatusFilter('super_admin');
+                setCurrentPage(1);
+              }}
+              className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'super_admin' ? 'bg-amber-600 text-white' : 'bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-200 hover:bg-amber-100 dark:hover:bg-amber-900/50'}`}
+            >
+              Super Admins
+            </button>
+          )}
           <button
             onClick={() => {
               setStatusFilter('admin');
@@ -2548,6 +2563,7 @@ const UsersSection = ({
                     value={createFormData.status}
                     onChange={e => setCreateCreateFormData({...createFormData, status: e.target.value, enroller: ''})}
                   >
+                    {isSuperAdmin && <option value="super_admin">Super Admin</option>}
                     <option value="admin">Admin</option>
                     <option value="dono_banca">Dono de Banca</option>
                     <option value="gestor">Gestor de Tráfego</option>
@@ -2784,6 +2800,7 @@ const UsersSection = ({
                             onChange={e => setEditFormData({...editFormData, status: e.target.value, enroller: null})}
                               className="flex-1 px-2 py-1 text-sm border rounded text-gray-700 font-bold"
                           >
+                            {isSuperAdmin && <option value="super_admin">Super Admin</option>}
                             <option value="admin">Admin</option>
                             <option value="dono_banca">Dono de Banca</option>
                             <option value="gestor">Gestor de Tráfego</option>
@@ -2810,6 +2827,18 @@ const UsersSection = ({
                             >
                               <option value="">Sem superior</option>
                               {getPotentialEnrollers(editFormData.status).map(pe => (
+                                <option key={pe.id} value={pe.id}>{pe.full_name || pe.email}</option>
+                              ))}
+                            </select>
+                          )}
+                          {editFormData.status === 'gestor' && (
+                            <select
+                              value={editFormData.enroller || ''}
+                              onChange={e => setEditFormData({...editFormData, enroller: e.target.value || null})}
+                              className="w-full px-2 py-1 text-sm border rounded text-gray-700"
+                            >
+                              <option value="">Sem superior (opcional)</option>
+                              {getPotentialEnrollers('gestor').map(pe => (
                                 <option key={pe.id} value={pe.id}>{pe.full_name || pe.email}</option>
                               ))}
                             </select>
@@ -2849,6 +2878,7 @@ const UsersSection = ({
                         <div>
                           <div className="flex items-center gap-2 mb-1">
                           <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                            user.status === 'super_admin' ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200' :
                             user.status === 'admin' ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300' :
                             user.status === 'dono_banca' ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300' :
                             user.status === 'gestor' ? 'bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300' :

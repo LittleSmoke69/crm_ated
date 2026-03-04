@@ -68,6 +68,23 @@ export async function PATCH(
         : null;
 
     if (status || enroller !== undefined) {
+      // Garante que enroller não seja ID de banca (crm_bancas) - deve ser profile id
+      if (newEnroller) {
+        const [profileRes, bancaRes] = await Promise.all([
+          supabaseServiceRole.from('profiles').select('id').eq('id', newEnroller).maybeSingle(),
+          supabaseServiceRole.from('crm_bancas').select('id').eq('id', newEnroller).maybeSingle(),
+        ]);
+        const enrollerProfile = profileRes.data;
+        const bancaById = bancaRes.data;
+
+        if (!enrollerProfile && bancaById) {
+          return errorResponse(
+            'O valor informado como superior (gerente/dono) é um ID de banca. Selecione um Gerente ou Dono de Banca no dropdown, não a banca.',
+            400
+          );
+        }
+      }
+
       const validation = await validateHierarchy(userId, newStatus as UserStatus, newEnroller);
       if (!validation.valid) {
         return errorResponse(validation.error || 'Hierarquia inválida', 400);

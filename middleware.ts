@@ -35,6 +35,7 @@ const RESERVED_FIRST_SEGMENTS = new Set([
   'perfil',
   'vsl',
   'r',
+  'zl',   // Zaplink: /zl/[slug] (redirect) e /zl/form/[slug] (formulário)
   'academy',
 ]);
 
