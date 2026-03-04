@@ -28,6 +28,7 @@ import {
   Calendar,
   ClipboardList,
   CheckCircle2,
+  ChevronUp,
 } from 'lucide-react';
 import { DateInputDDMMYYYY, getTodaySãoPaulo, getLast30DaysRangeSãoPaulo } from '@/components/Admin/CRMSection';
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
@@ -37,6 +38,8 @@ const MAX_LEADS_SELECT = 200;
 const BANCAS_DROPDOWN_VISIBLE = 4;
 /** Itens por página na tabela de histórico de transferências */
 const LOGS_PAGE_SIZE = 10;
+/** Tamanho do pacote ao carregar logs em segundo plano (deve ser igual ao limit da API). */
+const LOGS_CHUNK_SIZE = 100;
 /** Leads por página no modal "Leads da transferência" */
 const MODAL_LEADS_PAGE_SIZE = 10;
 /** Valor de leadsPageSize quando o usuário escolhe "Personalizado" (input livre). */
@@ -63,15 +66,16 @@ const NUMERIC_FILTER_OPTIONS = [
   { value: 'range', label: 'A partir de (min–máx)' },
 ] as const;
 
-/** Retorna { daysLeft, expired } para o prazo de transferência (10d) a partir da data de transferência */
-function getTransferDeadlineInfo(createdAt: string | null | undefined): { daysLeft: number; expired: boolean } {
+/** Retorna { daysLeft, expired } para o prazo de transferência a partir da data. Se deadlineDays for informado (ex.: do log), usa esse valor; senão usa o padrão 10. */
+function getTransferDeadlineInfo(createdAt: string | null | undefined, deadlineDays?: number | null): { daysLeft: number; expired: boolean } {
   if (!createdAt) return { daysLeft: 0, expired: true };
+  const days = deadlineDays != null && deadlineDays >= 1 ? deadlineDays : DAYS_DEADLINE_TRANSFER;
   const transferredAt = new Date(createdAt);
   const now = new Date();
   const diffMs = now.getTime() - transferredAt.getTime();
   const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-  const daysLeft = Math.max(0, DAYS_DEADLINE_TRANSFER - diffDays);
-  const expired = diffDays >= DAYS_DEADLINE_TRANSFER;
+  const daysLeft = Math.max(0, days - diffDays);
+  const expired = diffDays >= days;
   return { daysLeft, expired };
 }
 const STEPS = [
@@ -191,6 +195,8 @@ export default function AdminLeadTransferPage() {
   const [consultants, setConsultants] = useState<Consultant[]>([]);
   const [sourceEmail, setSourceEmail] = useState('');
   const [targetEmail, setTargetEmail] = useState('');
+  /** Prazo em dias para expiração deste pacote de leads (passo Destino). Selecionado pelo usuário; padrão 10. */
+  const [transferDeadlineDays, setTransferDeadlineDays] = useState<number>(10);
   const [tags, setTags] = useState<string[]>([]);
   const [selectedTag, setSelectedTag] = useState('');
   const [daysInactive, setDaysInactive] = useState<string>('90');
@@ -239,6 +245,8 @@ export default function AdminLeadTransferPage() {
   const [managementPrazoFilter, setManagementPrazoFilter] = useState<'all' | '1' | '5' | '10' | 'custom' | 'expired'>('all');
   /** Quando managementPrazoFilter === 'custom', dias restantes máximos (ex.: 7 = faltando até 7 dias). */
   const [managementPrazoCustomDays, setManagementPrazoCustomDays] = useState<string>('7');
+  /** Filtro de banca na aba Histórico & Conversão: '' = Todas as Bancas, ou id da banca. */
+  const [historyBancaFilter, setHistoryBancaFilter] = useState<string>('');
   const [transferLogs, setTransferLogs] = useState<any[]>([]);
   const [transferStats, setTransferStats] = useState<{
     totalTransferred: number;
@@ -249,13 +257,23 @@ export default function AdminLeadTransferPage() {
     transferidos_sem_saldo?: number;
   } | null>(null);
   const [loadingLogs, setLoadingLogs] = useState(false);
+  /** True enquanto carrega pacotes adicionais de logs em segundo plano. */
+  const [loadingMoreLogs, setLoadingMoreLogs] = useState(false);
   const [loadingStats, setLoadingStats] = useState(false);
+  const loadLogsRunIdRef = useRef(0);
   const [conversionConsultant, setConversionConsultant] = useState('');
   const [managementLoaded, setManagementLoaded] = useState(false);
   const [statsByBanca, setStatsByBanca] = useState<{ banca_id: string; banca_name: string; total_leads: number }[]>([]);
   const [loadingStatsByBanca, setLoadingStatsByBanca] = useState(false);
+  /** Estatísticas de conversão apenas para transferências expiradas (prazo 10d): por banca ou por consultor */
+  const [expiredConversionByBanca, setExpiredConversionByBanca] = useState<{ banca_id: string; banca_name: string; total_transferidos: number; convertidos: number }[]>([]);
+  const [expiredConversionByConsultant, setExpiredConversionByConsultant] = useState<{ consultant_email: string; consultant_name: string; total_transferidos: number; convertidos: number }[]>([]);
+  const [loadingExpiredConversion, setLoadingExpiredConversion] = useState(false);
   /** Paginação da tabela de histórico */
   const [logsPage, setLogsPage] = useState(1);
+  /** Ordenação da tabela de histórico: campo e direção */
+  const [logsSortField, setLogsSortField] = useState<string | null>(null);
+  const [logsSortOrder, setLogsSortOrder] = useState<'asc' | 'desc'>('asc');
   /** Modal de detalhes dos leads transferidos */
   const [selectedLogForModal, setSelectedLogForModal] = useState<any>(null);
   type ModalEntry = {
@@ -319,6 +337,9 @@ export default function AdminLeadTransferPage() {
   const [showConversionConsultantModal, setShowConversionConsultantModal] = useState(false);
   const [conversionConsultantSearchQuery, setConversionConsultantSearchQuery] = useState('');
   const [conversionConsultantPendingEmail, setConversionConsultantPendingEmail] = useState<string | null>(null);
+  /** Consultores que receberam transferência na banca escolhida (para o modal de conversão) */
+  const [conversionTargetConsultants, setConversionTargetConsultants] = useState<Consultant[]>([]);
+  const [loadingConversionTargetConsultants, setLoadingConversionTargetConsultants] = useState(false);
   /** Verificador de consultores: leads transferidos que depositaram/jogaram/sacaram depois */
   const [verifierResults, setVerifierResults] = useState<{ consultant_email: string; consultant_name: string; total_transferidos: number; depositaram_depois: number; jogaram_depois: number; sacaram_depois: number }[]>([]);
   const [loadingVerifier, setLoadingVerifier] = useState(false);
@@ -637,21 +658,49 @@ export default function AdminLeadTransferPage() {
     setShowConsultantDestinoModal(false);
   };
 
-  /** Consultantes filtrados no modal Consultor (conversão) — busca por nome ou email. */
+  /** Consultantes filtrados no modal Consultor (conversão) — lista apenas quem teve transferência na banca; busca por nome ou email. */
   const conversionConsultantFilteredList = React.useMemo(() => {
     const q = conversionConsultantSearchQuery.trim().toLowerCase();
-    const list = !q ? consultants : consultants.filter((c) => {
+    const list = !q ? conversionTargetConsultants : conversionTargetConsultants.filter((c) => {
       const name = String(c.full_name ?? '').toLowerCase();
       const email = String(c.email ?? '').toLowerCase();
       return name.includes(q) || email.includes(q);
     });
     return [...list].sort((a, b) => (a.full_name || a.email || '').localeCompare(b.full_name || b.email || '', 'pt-BR'));
-  }, [consultants, conversionConsultantSearchQuery]);
+  }, [conversionTargetConsultants, conversionConsultantSearchQuery]);
+
+  /** Carrega consultores que receberam transferência na banca escolhida (período dos filtros da aba Histórico). */
+  const loadConversionTargetConsultants = useCallback(async () => {
+    const effectiveBancaId = historyBancaFilter || bancaId;
+    if (!effectiveBancaId || !userId) return;
+    setLoadingConversionTargetConsultants(true);
+    setConversionTargetConsultants([]);
+    try {
+      const params = new URLSearchParams();
+      params.set('banca_id', effectiveBancaId);
+      const from = toYYYYMMDD(managementFrom);
+      const to = toYYYYMMDD(managementTo);
+      if (from) params.set('from', from);
+      if (to) params.set('to', to);
+      const res = await fetch(`/api/admin/crm/transfer-target-consultants?${params.toString()}`, { headers: headers() });
+      const json = await res.json();
+      if (res.ok && json.success && Array.isArray(json.data?.consultants)) {
+        setConversionTargetConsultants(json.data.consultants);
+      } else {
+        showToast(json?.error ?? 'Erro ao carregar consultores.', 'error');
+      }
+    } catch {
+      showToast('Erro ao carregar consultores.', 'error');
+    } finally {
+      setLoadingConversionTargetConsultants(false);
+    }
+  }, [historyBancaFilter, bancaId, userId, managementFrom, managementTo]);
 
   const openConversionConsultantModal = () => {
     setConversionConsultantPendingEmail(conversionConsultant?.trim() || null);
     setConversionConsultantSearchQuery('');
     setShowConversionConsultantModal(true);
+    void loadConversionTargetConsultants();
   };
 
   const confirmConversionConsultant = () => {
@@ -1038,6 +1087,7 @@ export default function AdminLeadTransferPage() {
           target_consultant_email: targetEmail.trim(),
           leads_ids: leadIdsArr,
           transfer_type: transferType,
+          transfer_deadline_days: transferDeadlineDays,
           filters_snapshot: {
             min_inactive_days: daysInactive.trim() || 10,
             balance_filter: balanceFilter,
@@ -1079,32 +1129,86 @@ export default function AdminLeadTransferPage() {
     return t;
   };
 
-  const loadTransferLogs = async () => {
-    if (!bancaId || !userId) return;
+  /**
+   * Carrega logs de transferência. Primeiro pacote é exibido logo; pacotes seguintes carregam em segundo plano e são anexados.
+   * @param bancaIdForHistory - Quando na aba Histórico: '' = Todas as Bancas (API sem banca_id), ou id da banca. Undefined = usa bancaId do passo 1.
+   * @returns Número total de logs (após primeiro pacote; demais vão anexando em background).
+   */
+  const loadTransferLogs = async (bancaIdForHistory?: string): Promise<number> => {
+    const effectiveBancaId = bancaIdForHistory !== undefined ? bancaIdForHistory : bancaId;
+    const isAllBancas = effectiveBancaId === '' && bancaIdForHistory === '';
+    if (!userId) return 0;
+    if (!isAllBancas && !effectiveBancaId) return 0;
+
+    const runId = ++loadLogsRunIdRef.current;
     setLoadingLogs(true);
-    try {
+    setLoadingMoreLogs(false);
+
+    const buildParams = (offset: number, limit: number) => {
       const params = new URLSearchParams();
-      params.set('banca_id', bancaId);
+      if (effectiveBancaId) params.set('banca_id', effectiveBancaId);
       const from = toYYYYMMDD(managementFrom);
       const to = toYYYYMMDD(managementTo);
       if (from) params.set('from', from);
       if (to) params.set('to', to);
       if (managementTransferType.trim()) params.set('transfer_type', managementTransferType.trim());
       if (conversionConsultant.trim()) params.set('target_consultant_email', conversionConsultant.trim());
-      const res = await fetch(`/api/admin/crm/transfer-logs?${params.toString()}`, { headers: headers() });
+      params.set('offset', String(offset));
+      params.set('limit', String(limit));
+      return params;
+    };
+
+    try {
+      const res = await fetch(`/api/admin/crm/transfer-logs?${buildParams(0, LOGS_CHUNK_SIZE).toString()}`, { headers: headers() });
       const json = await res.json();
+      if (runId !== loadLogsRunIdRef.current) return 0;
+
       if (res.ok && json.success && Array.isArray(json.data)) {
-        setTransferLogs(json.data);
+        const firstChunk = json.data;
+        setTransferLogs(firstChunk);
         setManagementLoaded(true);
-      } else {
+        setLoadingLogs(false);
+
+        if (firstChunk.length >= LOGS_CHUNK_SIZE) {
+          setLoadingMoreLogs(true);
+          let offset = LOGS_CHUNK_SIZE;
+          let total = firstChunk.length;
+          const fetchNext = async () => {
+            const nextRes = await fetch(`/api/admin/crm/transfer-logs?${buildParams(offset, LOGS_CHUNK_SIZE).toString()}`, { headers: headers() });
+            const nextJson = await nextRes.json();
+            if (runId !== loadLogsRunIdRef.current) return;
+            if (nextRes.ok && nextJson.success && Array.isArray(nextJson.data)) {
+              const chunk = nextJson.data;
+              total += chunk.length;
+              setTransferLogs((prev) => [...prev, ...chunk]);
+              if (chunk.length >= LOGS_CHUNK_SIZE) {
+                offset += LOGS_CHUNK_SIZE;
+                void fetchNext();
+              } else {
+                setLoadingMoreLogs(false);
+              }
+            } else {
+              setLoadingMoreLogs(false);
+            }
+          };
+          void fetchNext().catch(() => {
+            if (runId === loadLogsRunIdRef.current) setLoadingMoreLogs(false);
+          });
+          return total;
+        }
+        return firstChunk.length;
+      }
+      setTransferLogs([]);
+      setManagementLoaded(true);
+      return 0;
+    } catch {
+      if (runId === loadLogsRunIdRef.current) {
         setTransferLogs([]);
         setManagementLoaded(true);
       }
-    } catch {
-      setTransferLogs([]);
-      setManagementLoaded(true);
+      return 0;
     } finally {
-      setLoadingLogs(false);
+      if (runId === loadLogsRunIdRef.current) setLoadingLogs(false);
     }
   };
 
@@ -1394,12 +1498,20 @@ export default function AdminLeadTransferPage() {
     }
   };
 
-  const loadTransferStats = async () => {
-    if (!bancaId || !userId) return;
+  /**
+   * Carrega métricas de transferência.
+   * @param bancaIdForHistory - Quando na aba Histórico: '' = Todas as Bancas (API sem banca_id), ou id da banca. Undefined = usa bancaId do passo 1.
+   * @returns Total de transferidos (para mensagem de conclusão quando busca "Todas as Bancas").
+   */
+  const loadTransferStats = async (bancaIdForHistory?: string): Promise<number> => {
+    const effectiveBancaId = bancaIdForHistory !== undefined ? bancaIdForHistory : bancaId;
+    const isAllBancas = effectiveBancaId === '' && bancaIdForHistory === '';
+    if (!userId) return 0;
+    if (!isAllBancas && !effectiveBancaId) return 0;
     setLoadingStats(true);
     try {
       const params = new URLSearchParams();
-      params.set('banca_id', bancaId);
+      if (effectiveBancaId) params.set('banca_id', effectiveBancaId);
       const from = toYYYYMMDD(managementFrom);
       const to = toYYYYMMDD(managementTo);
       if (from) params.set('from', from);
@@ -1411,22 +1523,101 @@ export default function AdminLeadTransferPage() {
       const json = await res.json();
       if (res.ok && json.success && json.data) {
         const d = json.data;
+        const total = d.transferidos_total ?? 0;
         setTransferStats({
-          totalTransferred: d.transferidos_total ?? 0,
+          totalTransferred: total,
           byType: d.by_type ?? { TF: 0, TF1: 0, TF2: 0, TF3: 0 },
           receivedByTarget: d.receivedByTarget,
           convertedCount: d.convertedCount,
           transferidos_com_saldo: d.transferidos_com_saldo ?? 0,
           transferidos_sem_saldo: d.transferidos_sem_saldo ?? 0,
         });
-      } else {
-        setTransferStats({ totalTransferred: 0, byType: { TF: 0, TF1: 0, TF2: 0, TF3: 0 }, transferidos_com_saldo: 0, transferidos_sem_saldo: 0 });
+        return total;
       }
+      setTransferStats({ totalTransferred: 0, byType: { TF: 0, TF1: 0, TF2: 0, TF3: 0 }, transferidos_com_saldo: 0, transferidos_sem_saldo: 0 });
+      return 0;
     } catch {
       setTransferStats({ totalTransferred: 0, byType: { TF: 0, TF1: 0, TF2: 0, TF3: 0 }, transferidos_com_saldo: 0, transferidos_sem_saldo: 0 });
+      return 0;
     } finally {
       setLoadingStats(false);
     }
+  };
+
+  /** Carrega estatísticas de conversão apenas para transferências já expiradas (prazo 10d). Em "Todas as Bancas", carrega banca a banca em segundo plano. */
+  const loadExpiredConversionStats = async () => {
+    if (!userId) return;
+    setLoadingExpiredConversion(true);
+    setExpiredConversionByBanca([]);
+    setExpiredConversionByConsultant([]);
+
+    const from = toYYYYMMDD(managementFrom);
+    const to = toYYYYMMDD(managementTo);
+    const baseParams = new URLSearchParams();
+    if (from) baseParams.set('from', from);
+    if (to) baseParams.set('to', to);
+
+    if (historyBancaFilter) {
+      try {
+        baseParams.set('banca_id', historyBancaFilter);
+        const res = await fetch(`/api/admin/crm/transfer-expired-conversion-stats?${baseParams.toString()}`, { headers: headers() });
+        const json = await res.json();
+        if (res.ok && json.success && json.data) {
+          if (Array.isArray(json.data.by_consultant)) setExpiredConversionByConsultant(json.data.by_consultant);
+        }
+      } catch {
+        setExpiredConversionByConsultant([]);
+      } finally {
+        setLoadingExpiredConversion(false);
+      }
+      return;
+    }
+
+    if (bancas.length === 0) {
+      setLoadingExpiredConversion(false);
+      return;
+    }
+
+    setExpiredConversionByBanca([]);
+    let completed = 0;
+    const totalBancas = bancas.length;
+    for (const b of bancas) {
+      try {
+        const params = new URLSearchParams(baseParams);
+        params.set('banca_id', b.id);
+        const res = await fetch(`/api/admin/crm/transfer-expired-conversion-stats?${params.toString()}`, { headers: headers() });
+        const json = await res.json();
+        if (res.ok && json.success && json.data && Array.isArray(json.data.by_consultant)) {
+          const list = json.data.by_consultant as { total_transferidos: number; convertidos: number }[];
+          const total_transferidos = list.reduce((s, r) => s + r.total_transferidos, 0);
+          const convertidos = list.reduce((s, r) => s + r.convertidos, 0);
+          setExpiredConversionByBanca((prev) => [
+            ...prev,
+            { banca_id: b.id, banca_name: b.name || b.url || b.id, total_transferidos, convertidos },
+          ]);
+        }
+      } catch {
+        // ignora erro de uma banca e segue
+      } finally {
+        completed++;
+        if (completed >= totalBancas) setLoadingExpiredConversion(false);
+      }
+    }
+  };
+
+  /** Aplica filtros da aba Histórico; carrega dados em segundo plano, pacote por pacote. */
+  const applyHistoryFilters = () => {
+    const isAllBancas = historyBancaFilter === '';
+    setManagementLoaded(true);
+    showToast(
+      isAllBancas
+        ? 'Carregando dados em segundo plano (pacote por pacote). A tabela e os gráficos serão atualizados conforme os dados chegarem.'
+        : 'Carregando dados em segundo plano. A tabela e os gráficos serão atualizados em instantes.',
+      'info'
+    );
+    void loadTransferLogs(historyBancaFilter);
+    void loadTransferStats(historyBancaFilter);
+    void loadExpiredConversionStats();
   };
 
   useEffect(() => {
@@ -1436,11 +1627,12 @@ export default function AdminLeadTransferPage() {
   }, [activeTab, managementFrom, managementTo]);
 
   useEffect(() => {
-    if (activeTab !== 'history' || !bancaId) return;
+    if (activeTab !== 'history') return;
     setManagementLoaded(true);
-    loadTransferLogs();
-    loadTransferStats();
-  }, [activeTab, bancaId, managementFrom, managementTo, managementTransferType, conversionConsultant]);
+    loadTransferLogs(historyBancaFilter);
+    loadTransferStats(historyBancaFilter);
+    void loadExpiredConversionStats();
+  }, [activeTab, historyBancaFilter, managementFrom, managementTo, managementTransferType, conversionConsultant]);
 
   // Leads transferidos mais de uma vez: contar por lead_id nos logs
   const leadTransferCountMap = React.useMemo(() => {
@@ -1459,22 +1651,94 @@ export default function AdminLeadTransferPage() {
   const transferLogsFiltered = React.useMemo(() => {
     if (managementPrazoFilter === 'all') return transferLogs;
     if (managementPrazoFilter === 'expired') {
-      return transferLogs.filter((log) => getTransferDeadlineInfo(log.created_at).expired);
+      return transferLogs.filter((log) => getTransferDeadlineInfo(log.created_at, (log as { deadline_days?: number }).deadline_days).expired);
     }
     const maxDays =
       managementPrazoFilter === 'custom'
-        ? Math.max(1, Math.min(DAYS_DEADLINE_TRANSFER, parseInt(managementPrazoCustomDays, 10) || 1))
+        ? Math.max(1, Math.min(365, parseInt(managementPrazoCustomDays, 10) || 1))
         : parseInt(managementPrazoFilter, 10);
     return transferLogs.filter((log) => {
-      const { daysLeft, expired } = getTransferDeadlineInfo(log.created_at);
+      const { daysLeft, expired } = getTransferDeadlineInfo(log.created_at, (log as { deadline_days?: number }).deadline_days);
       return !expired && daysLeft >= 1 && daysLeft <= maxDays;
     });
   }, [transferLogs, managementPrazoFilter, managementPrazoCustomDays]);
 
-  const totalLogsPages = Math.max(1, Math.ceil(transferLogsFiltered.length / LOGS_PAGE_SIZE));
+  /** Lista filtrada e ordenada (para paginação). */
+  const transferLogsSorted = React.useMemo(() => {
+    if (!logsSortField || !logsSortOrder) return transferLogsFiltered;
+    const list = [...transferLogsFiltered];
+    const cmp = (a: number | string, b: number | string): number => {
+      if (a === b) return 0;
+      if (typeof a === 'number' && typeof b === 'number') return a - b;
+      const sa = String(a ?? '').toLowerCase();
+      const sb = String(b ?? '').toLowerCase();
+      return sa.localeCompare(sb, 'pt-BR');
+    };
+    list.sort((logA, logB) => {
+      let valA: number | string;
+      let valB: number | string;
+      const idsA = Array.isArray(logA.leads_ids) ? logA.leads_ids : [];
+      const idsB = Array.isArray(logB.leads_ids) ? logB.leads_ids : [];
+      const reTransferA = idsA.filter((id: string | number) => (leadTransferCountMap.get(String(id)) || 0) > 1).length;
+      const reTransferB = idsB.filter((id: string | number) => (leadTransferCountMap.get(String(id)) || 0) > 1).length;
+      const deadlineA = getTransferDeadlineInfo(logA.created_at, (logA as { deadline_days?: number }).deadline_days);
+      const deadlineB = getTransferDeadlineInfo(logB.created_at, (logB as { deadline_days?: number }).deadline_days);
+      const prazoA = deadlineA.expired ? -1 : deadlineA.daysLeft;
+      const prazoB = deadlineB.expired ? -1 : deadlineB.daysLeft;
+      switch (logsSortField) {
+        case 'banca':
+          valA = (logA as { banca_id?: string }).banca_id ?? '';
+          valB = (logB as { banca_id?: string }).banca_id ?? '';
+          break;
+        case 'created_at':
+          valA = logA.created_at ?? '';
+          valB = logB.created_at ?? '';
+          break;
+        case 'transfer_type':
+          valA = logA.transfer_type ?? 'TF';
+          valB = logB.transfer_type ?? 'TF';
+          break;
+        case 'source':
+          valA = (logA as { source_consultant_name?: string }).source_consultant_name ?? logA.source_consultant_email ?? '';
+          valB = (logB as { source_consultant_name?: string }).source_consultant_name ?? logB.source_consultant_email ?? '';
+          break;
+        case 'target':
+          valA = (logA as { target_consultant_name?: string }).target_consultant_name ?? logA.target_consultant_email ?? '';
+          valB = (logB as { target_consultant_name?: string }).target_consultant_name ?? logB.target_consultant_email ?? '';
+          break;
+        case 'performed_by':
+          valA = (logA as { performed_by_name?: string }).performed_by_name ?? '';
+          valB = (logB as { performed_by_name?: string }).performed_by_name ?? '';
+          break;
+        case 'count':
+          valA = logA.count ?? idsA.length;
+          valB = logB.count ?? idsB.length;
+          break;
+        case 'total_balance':
+          valA = (logA as { total_balance_snapshot?: number | null }).total_balance_snapshot ?? 0;
+          valB = (logB as { total_balance_snapshot?: number | null }).total_balance_snapshot ?? 0;
+          break;
+        case 're_transfer':
+          valA = reTransferA;
+          valB = reTransferB;
+          break;
+        case 'prazo':
+          valA = prazoA;
+          valB = prazoB;
+          break;
+        default:
+          return 0;
+      }
+      const r = cmp(valA, valB);
+      return logsSortOrder === 'asc' ? r : -r;
+    });
+    return list;
+  }, [transferLogsFiltered, logsSortField, logsSortOrder, leadTransferCountMap]);
+
+  const totalLogsPages = Math.max(1, Math.ceil(transferLogsSorted.length / LOGS_PAGE_SIZE));
   const transferLogsPaginated = React.useMemo(
-    () => transferLogsFiltered.slice((logsPage - 1) * LOGS_PAGE_SIZE, logsPage * LOGS_PAGE_SIZE),
-    [transferLogsFiltered, logsPage]
+    () => transferLogsSorted.slice((logsPage - 1) * LOGS_PAGE_SIZE, logsPage * LOGS_PAGE_SIZE),
+    [transferLogsSorted, logsPage]
   );
 
   const chartDataByBanca = React.useMemo(() => {
@@ -1543,7 +1807,29 @@ export default function AdminLeadTransferPage() {
 
   useEffect(() => {
     setLogsPage(1);
-  }, [transferLogs.length, managementPrazoFilter, managementPrazoCustomDays]);
+  }, [transferLogs.length, managementPrazoFilter, managementPrazoCustomDays, logsSortField, logsSortOrder]);
+
+  const handleLogsSort = (field: string) => {
+    setLogsSortField(field);
+    setLogsSortOrder((prev) => (logsSortField === field ? (prev === 'asc' ? 'desc' : 'asc') : 'asc'));
+  };
+
+  const ThSort = ({ field, label, className, title }: { field: string; label: string; className?: string; title?: string }) => {
+    const isActive = logsSortField === field;
+    return (
+      <th className={className}>
+        <button
+          type="button"
+          onClick={() => handleLogsSort(field)}
+          title={title ?? `Ordenar por ${label}`}
+          className="flex items-center gap-1 w-full text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white hover:text-[#8CD955] hover:bg-gray-200/50 dark:hover:bg-[#404040] transition-colors rounded"
+        >
+          {label}
+          {isActive && (logsSortOrder === 'asc' ? <ChevronUp className="w-4 h-4 flex-shrink-0" /> : <ChevronDown className="w-4 h-4 flex-shrink-0" />)}
+        </button>
+      </th>
+    );
+  };
 
   useEffect(() => {
     setModalLeadsPage(1);
@@ -1734,6 +2020,25 @@ export default function AdminLeadTransferPage() {
               {/* Filtros: mesmo layout para todos (label + controle + legenda) */}
               <div className="p-4 rounded-xl border border-gray-200 dark:border-[#404040] mb-6 bg-gray-50/50 dark:bg-[#1f1f1f]/50">
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-4 items-end">
+                  {/* Banca — select Todas as Bancas ou banca específica */}
+                  <div className="lg:col-span-3">
+                    <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1.5 flex items-center gap-1">
+                      <Building2 className="w-3.5 h-3.5" /> Banca
+                    </label>
+                    <select
+                      value={historyBancaFilter}
+                      onChange={(e) => setHistoryBancaFilter(e.target.value)}
+                      className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                    >
+                      <option value="">Todas as Bancas</option>
+                      {bancas.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.name || b.url || b.id}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">Filtrar por banca ou ver todas</p>
+                  </div>
                   {/* Período — layout igual ao Prazo */}
                   <div className="lg:col-span-3">
                     <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1.5 flex items-center gap-1">
@@ -1782,11 +2087,11 @@ export default function AdminLeadTransferPage() {
                     <button
                       type="button"
                       onClick={openConversionConsultantModal}
-                      disabled={!bancaId || loadingConsultants}
+                      disabled={!(historyBancaFilter || bancaId) || loadingConsultants}
                       className="w-full flex items-center gap-2 border border-gray-300 dark:border-[#555] rounded-lg px-3 py-2 text-sm text-left bg-white dark:bg-[#333] dark:text-white hover:bg-gray-50 dark:hover:bg-[#404040] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <span className="truncate text-gray-800 dark:text-white">
-                        {!bancaId ? 'Selecione a banca' : loadingConsultants ? 'Carregando...' : consultants.length === 0 ? 'Nenhum consultor' : conversionConsultant ? (consultants.find((c) => c.email === conversionConsultant)?.full_name || conversionConsultant) : 'Selecionar consultor'}
+                        {!(historyBancaFilter || bancaId) ? 'Selecione a banca' : loadingConsultants ? 'Carregando...' : consultants.length === 0 ? 'Nenhum consultor' : conversionConsultant ? (consultants.find((c) => c.email === conversionConsultant)?.full_name || conversionConsultant) : 'Selecionar consultor'}
                       </span>
                       <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0 ml-auto" />
                     </button>
@@ -1815,9 +2120,9 @@ export default function AdminLeadTransferPage() {
                           <input
                             type="number"
                             min={1}
-                            max={DAYS_DEADLINE_TRANSFER}
+                            max={365}
                             value={managementPrazoCustomDays}
-                            onChange={(e) => setManagementPrazoCustomDays(e.target.value.replace(/\D/g, '').slice(0, 2) || '1')}
+                            onChange={(e) => setManagementPrazoCustomDays(e.target.value.replace(/\D/g, '').slice(0, 3) || '1')}
                             className="w-12 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-2 text-sm text-center tabular-nums focus:ring-2 focus:ring-[#8CD955]"
                             title="Faltando até quantos dias para expirar"
                           />
@@ -1832,16 +2137,23 @@ export default function AdminLeadTransferPage() {
                     <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1.5 invisible">Ação</label>
                     <button
                       type="button"
-                      onClick={() => { if (bancaId) { loadTransferLogs(); loadTransferStats(); } else { showToast('Selecione a banca para aplicar os filtros.', 'info'); } }}
-                      className="w-full px-4 py-2 rounded-lg text-sm font-medium bg-[#8CD955] text-white hover:bg-[#7BC84A] border border-[#8CD955]/50 transition-colors shadow-sm focus:ring-2 focus:ring-[#8CD955] focus:ring-offset-1 dark:focus:ring-offset-[#2a2a2a]"
+                      onClick={() => void applyHistoryFilters()}
+                      disabled={loadingLogs || loadingStats}
+                      className="w-full px-4 py-2 rounded-lg text-sm font-medium bg-[#8CD955] text-white hover:bg-[#7BC84A] border border-[#8CD955]/50 transition-colors shadow-sm focus:ring-2 focus:ring-[#8CD955] focus:ring-offset-1 dark:focus:ring-offset-[#2a2a2a] disabled:opacity-70 disabled:cursor-wait"
                     >
-                      Aplicar filtros
+                      {loadingLogs || loadingStats ? 'Buscando...' : 'Aplicar filtros'}
                     </button>
                     <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">Atualiza dados e tabela</p>
                   </div>
                 </div>
               </div>
               <p className="text-xs text-gray-500 dark:text-gray-400 mb-4 -mt-2">Os cards e a tabela usam o período selecionado. O filtro &quot;Prazo&quot; mostra itens por dias restantes (1, 5, 10 ou personalizado) ou apenas expirados.</p>
+              {historyBancaFilter === '' && (loadingLogs || loadingStats) && (
+                <div className="mb-4 flex items-center gap-2 rounded-lg border border-[#8CD955]/40 bg-[#8CD955]/10 dark:bg-[#8CD955]/15 px-4 py-3 text-sm text-gray-700 dark:text-gray-200">
+                  <Loader2 className="w-4 h-4 animate-spin text-[#8CD955] flex-shrink-0" />
+                  <span>Buscando dados de todas as bancas em segundo plano. Os resultados aparecerão abaixo quando estiverem prontos.</span>
+                </div>
+              )}
               {managementLoaded && (
                 <>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
@@ -1906,155 +2218,160 @@ export default function AdminLeadTransferPage() {
                       </div>
                     </div>
                   )}
+                  {/* Gráficos baseados apenas em transferências já expiradas (prazo 10d) */}
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Baseado apenas em transferências já expiradas (prazo 10 dias). Conversão = leads que realizaram depósito após a transferência.</p>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                    {/* Pizza: Todas as Bancas = por banca (convertidos); Uma banca = % convertidos vs sem depósito */}
                     <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-2xl p-5 shadow-sm">
-                      <h3 className="text-sm font-bold text-gray-800 dark:text-white mb-3">Quantidade por tipo</h3>
+                      <h3 className="text-sm font-bold text-gray-800 dark:text-white mb-3">
+                        {historyBancaFilter === '' ? 'Depósitos após transferência por banca' : 'Conversão (convertidos vs sem depósito)'}
+                      </h3>
                       <div className="h-64">
-                        {loadingStats ? (
+                        {loadingExpiredConversion ? (
                           <div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" /></div>
-                        ) : (() => {
-                          const byType = transferStats?.byType || {};
-                          const total = transferStats?.totalTransferred ?? 0;
-                          const data = ['TF', 'TF1', 'TF2', 'TF3'].map((t) => ({ name: t, value: byType[t] || 0 })).filter((d) => d.value > 0);
+                        ) : historyBancaFilter === '' ? (() => {
+                          const data = expiredConversionByBanca
+                            .filter((b) => b.convertidos > 0)
+                            .map((b) => ({ name: b.banca_name, value: b.convertidos }));
                           if (data.length === 0) {
-                            return <div className="flex flex-col items-center justify-center h-full text-gray-500 text-sm gap-1"><span>{total === 0 ? 'Nenhuma transferência no período' : 'Nenhum dado por tipo'}</span></div>;
+                            return <div className="flex flex-col items-center justify-center h-full text-gray-500 text-sm gap-1"><span>Nenhum depósito após transferência (expiradas) no período.</span></div>;
                           }
-                          const COLORS = ['#8CD955', '#22c55e', '#16a34a', '#15803d'];
+                          const COLORS = ['#8CD955', '#22c55e', '#16a34a', '#15803d', '#14532d', '#166534'];
                           return (
                             <ResponsiveContainer width="100%" height="100%">
-                              <PieChart><Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, percent }) => `${name}: ${((percent || 0) * 100).toFixed(0)}%`}>{data.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}</Pie><Tooltip formatter={(value: number) => [value, 'Leads']} /><Legend /></PieChart>
+                              <PieChart><Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, percent }) => `${name}: ${((percent || 0) * 100).toFixed(0)}%`}>{data.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}</Pie><Tooltip formatter={(value: number) => [value, 'Convertidos']} /><Legend /></PieChart>
+                            </ResponsiveContainer>
+                          );
+                        })() : (() => {
+                          const list = expiredConversionByConsultant;
+                          const totalTransferidos = list.reduce((s, r) => s + r.total_transferidos, 0);
+                          const totalConvertidos = list.reduce((s, r) => s + r.convertidos, 0);
+                          const semDeposito = Math.max(0, totalTransferidos - totalConvertidos);
+                          const data = [
+                            { name: 'Convertidos (depósito após transferência)', value: totalConvertidos, color: '#8CD955' },
+                            { name: 'Sem depósito', value: semDeposito, color: '#94a3b8' },
+                          ].filter((d) => d.value > 0);
+                          if (data.length === 0) {
+                            return <div className="flex flex-col items-center justify-center h-full text-gray-500 text-sm gap-1"><span>Nenhuma transferência expirada no período para esta banca.</span></div>;
+                          }
+                          return (
+                            <ResponsiveContainer width="100%" height="100%">
+                              <PieChart><Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, value }) => `${name}: ${value} (${totalTransferidos > 0 ? ((value / totalTransferidos) * 100).toFixed(0) : 0}%)`}>{data.map((entry, i) => <Cell key={i} fill={entry.color} />)}</Pie><Tooltip formatter={(value: number) => [value, totalTransferidos > 0 ? `${((value / totalTransferidos) * 100).toFixed(1)}%` : '-']} /><Legend /></PieChart>
                             </ResponsiveContainer>
                           );
                         })()}
                       </div>
                     </div>
+                    {/* Barras: Todas as Bancas = conversão por banca (ordem maior → menor); Uma banca = conversão por consultor (ordem maior → menor) */}
                     <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-2xl p-5 shadow-sm">
-                      <h3 className="text-sm font-bold text-gray-800 dark:text-white mb-3">Conversão</h3>
-                      {loadingStats ? <div className="flex items-center justify-center h-64"><Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" /></div> : conversionConsultant ? (() => {
-                        const received = transferStats?.receivedByTarget ?? 0;
-                        const converted = transferStats?.convertedCount ?? 0;
-                        const notConverted = Math.max(0, received - converted);
-                        const data = [{ name: 'Convertidos', value: converted, color: '#8CD955' }, { name: 'Sem depósito', value: notConverted, color: '#94a3b8' }].filter((d) => d.value > 0);
-                        if (data.length === 0 && received === 0) return <p className="text-sm text-gray-500 py-4">Nenhum lead transferido para este consultor no período.</p>;
-                        return (
-                          <div className="h-64">
+                      <h3 className="text-sm font-bold text-gray-800 dark:text-white mb-3">
+                        {historyBancaFilter === '' ? 'Conversão por banca (maior → menor)' : 'Conversão por consultor (maior → menor)'}
+                      </h3>
+                      <div className="h-64 min-h-[240px]">
+                        {loadingExpiredConversion ? (
+                          <div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" /></div>
+                        ) : historyBancaFilter === '' ? (() => {
+                          const sorted = [...expiredConversionByBanca].sort((a, b) => b.convertidos - a.convertidos).filter((b) => b.total_transferidos > 0);
+                          if (sorted.length === 0) {
+                            return <div className="flex flex-col items-center justify-center h-full text-gray-500 text-sm gap-1"><span>Nenhuma transferência expirada no período.</span></div>;
+                          }
+                          const chartData = sorted.map((b) => ({ name: b.banca_name, convertidos: b.convertidos, total: b.total_transferidos }));
+                          return (
                             <ResponsiveContainer width="100%" height="100%">
-                              <PieChart><Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80}>{data.map((entry, i) => <Cell key={i} fill={entry.color} />)}</Pie><Tooltip /><Legend /></PieChart>
+                              <BarChart data={chartData} layout="vertical" margin={{ top: 4, right: 24, left: 4, bottom: 4 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" horizontal={false} />
+                                <XAxis type="number" allowDecimals={false} stroke="#6b7280" style={{ fontSize: '12px' }} />
+                                <YAxis type="category" dataKey="name" width={120} stroke="#6b7280" style={{ fontSize: '11px' }} tick={{ fill: '#374151' }} />
+                                <Tooltip content={({ active, payload }) => {
+                                  if (!active || !payload?.length) return null;
+                                  const p = payload[0]?.payload;
+                                  return (
+                                    <div className="bg-white dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg shadow-lg px-3 py-2 text-sm">
+                                      <p className="font-semibold text-gray-800 dark:text-white">{p?.name}</p>
+                                      <p className="text-[#8CD955] font-bold tabular-nums">{p?.convertidos ?? 0} convertidos</p>
+                                      <p className="text-gray-500 dark:text-gray-400 text-xs">{p?.total ?? 0} transferidos (expirados)</p>
+                                    </div>
+                                  );
+                                }} />
+                                <Bar dataKey="convertidos" name="Convertidos" fill="#8CD955" radius={[0, 4, 4, 0]} />
+                              </BarChart>
                             </ResponsiveContainer>
-                          </div>
-                        );
-                      })() : <p className="text-sm text-gray-500 py-4">Selecione um consultor para ver a conversão.</p>}
+                          );
+                        })() : (() => {
+                          const sorted = [...expiredConversionByConsultant].sort((a, b) => b.convertidos - a.convertidos).filter((c) => c.total_transferidos > 0);
+                          if (sorted.length === 0) {
+                            return <div className="flex flex-col items-center justify-center h-full text-gray-500 text-sm gap-1"><span>Nenhum consultor com transferências expiradas no período.</span></div>;
+                          }
+                          const chartData = sorted.map((c) => ({ name: c.consultant_name || c.consultant_email, convertidos: c.convertidos, total: c.total_transferidos }));
+                          return (
+                            <ResponsiveContainer width="100%" height="100%">
+                              <BarChart data={chartData} layout="vertical" margin={{ top: 4, right: 24, left: 4, bottom: 4 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" horizontal={false} />
+                                <XAxis type="number" allowDecimals={false} stroke="#6b7280" style={{ fontSize: '12px' }} />
+                                <YAxis type="category" dataKey="name" width={120} stroke="#6b7280" style={{ fontSize: '11px' }} tick={{ fill: '#374151' }} />
+                                <Tooltip content={({ active, payload }) => {
+                                  if (!active || !payload?.length) return null;
+                                  const p = payload[0]?.payload;
+                                  return (
+                                    <div className="bg-white dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg shadow-lg px-3 py-2 text-sm">
+                                      <p className="font-semibold text-gray-800 dark:text-white">{p?.name}</p>
+                                      <p className="text-[#8CD955] font-bold tabular-nums">{p?.convertidos ?? 0} convertidos</p>
+                                      <p className="text-gray-500 dark:text-gray-400 text-xs">{p?.total ?? 0} transferidos (expirados)</p>
+                                    </div>
+                                  );
+                                }} />
+                                <Bar dataKey="convertidos" name="Convertidos" fill="#8CD955" radius={[0, 4, 4, 0]} />
+                              </BarChart>
+                            </ResponsiveContainer>
+                          );
+                        })()}
+                      </div>
                     </div>
                   </div>
                 </>
               )}
-              {/* Verificador de consultores: com base em admin_lead_transfer_entries + CRM transferred_filter=yes */}
-              <div className="mb-6 p-4 rounded-xl border border-gray-200 dark:border-[#404040] bg-gray-50/50 dark:bg-[#1f1f1f]/50">
-                <h3 className="text-sm font-bold text-gray-800 dark:text-white mb-2 flex items-center gap-2">
-                  <Users className="w-4 h-4 text-[#8CD955]" />
-                  Verificador de consultores
-                </h3>
-                <p className="text-xs text-gray-600 dark:text-gray-400 mb-3">
-                  Com base nos leads transferidos (banco de dados) e nos dados atuais do CRM (get-indicateds-by-consultant, transferred_filter=yes): quantos depositaram, jogaram e sacaram depois da transferência.
-                </p>
-                <div className="flex flex-wrap items-center gap-3 mb-4">
-                  <button
-                    type="button"
-                    onClick={runVerifier}
-                    disabled={!bancaId || loadingVerifier}
-                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-[#8CD955] text-white hover:bg-[#7BC84A] border border-[#8CD955]/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {loadingVerifier ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                    {loadingVerifier ? 'Verificando...' : 'Verificar consultores'}
-                  </button>
-                  {verifierResults.length > 0 && (
-                    <span className="text-xs text-gray-500 dark:text-gray-400">
-                      Período: {managementFrom} — {managementTo}
-                      {conversionConsultant ? ` • Consultor: ${conversionConsultant}` : ''}
-                    </span>
-                  )}
-                </div>
-                {verifierResults.length > 0 && (
-                  <div className="overflow-x-auto border border-gray-200 dark:border-[#404040] rounded-xl bg-white dark:bg-[#2a2a2a]">
-                    <table className="w-full text-sm">
-                      <thead className="bg-gray-100 dark:bg-[#333] border-b border-gray-200 dark:border-[#404040]">
-                        <tr>
-                          <th className="text-left py-2.5 px-3 font-semibold text-gray-700 dark:text-white">Consultor</th>
-                          <th className="text-right py-2.5 px-3 font-semibold text-gray-700 dark:text-white">Transferidos</th>
-                          <th className="text-right py-2.5 px-3 font-semibold text-gray-700 dark:text-white">Depositaram depois</th>
-                          <th className="text-right py-2.5 px-3 font-semibold text-gray-700 dark:text-white">Jogaram depois</th>
-                          <th className="text-right py-2.5 px-3 font-semibold text-gray-700 dark:text-white">Sacaram depois</th>
-                          <th className="text-center py-2.5 px-3 font-semibold text-gray-700 dark:text-white w-[100px]">Ações</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {verifierResults.map((row) => {
-                          const hasModifications = row.depositaram_depois > 0 || row.sacaram_depois > 0;
-                          return (
-                            <tr key={row.consultant_email} className="border-t border-gray-100 dark:border-[#404040] hover:bg-gray-50/80 dark:hover:bg-[#333]">
-                              <td className="py-2.5 px-3 text-gray-800 dark:text-white truncate max-w-[200px]" title={row.consultant_email}>{row.consultant_name || row.consultant_email}</td>
-                              <td className="py-2.5 px-3 text-right tabular-nums text-gray-700 dark:text-gray-200">{row.total_transferidos}</td>
-                              <td className="py-2.5 px-3 text-right tabular-nums text-green-600 dark:text-green-400">{row.depositaram_depois}</td>
-                              <td className="py-2.5 px-3 text-right tabular-nums text-blue-600 dark:text-blue-400">{row.jogaram_depois}</td>
-                              <td className="py-2.5 px-3 text-right tabular-nums text-amber-600 dark:text-amber-400">{row.sacaram_depois}</td>
-                              <td className="py-2.5 px-3 text-center">
-                                <button
-                                  type="button"
-                                  onClick={() => openVerifierDetails(row)}
-                                  disabled={!hasModifications}
-                                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-[#8CD955]/15 text-[#6B8E3F] hover:bg-[#8CD955]/25 border border-[#8CD955]/40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                  title={hasModifications ? 'Ver leads que depositaram ou sacaram depois' : 'Nenhum lead com depósito ou saque depois'}
-                                >
-                                  <Eye className="w-3.5 h-3.5" />
-                                  Detalhar
-                                </button>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
               <div className="overflow-x-auto border border-gray-200 dark:border-[#404040] rounded-2xl shadow-sm bg-white dark:bg-[#2a2a2a]">
                 <table className="w-full text-sm min-w-[1000px]">
                   <thead className="bg-gray-100 dark:bg-[#333] border-b-2 border-gray-200 dark:border-[#404040]">
                     <tr>
-                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[120px]">Banca</th>
-                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[140px]">Data/Hora</th>
-                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[52px]">Tipo</th>
-                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white min-w-[120px]">Origem</th>
-                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white min-w-[120px]">Destino</th>
-                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[90px]">Quem fez</th>
-                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[56px]">Qtd</th>
-                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[120px]" title="Soma dos saldos dos leads no momento da transferência">Total saldo (antes)</th>
+                      <ThSort field="banca" label="Banca" className="w-[120px]" />
+                      <ThSort field="created_at" label="Data/Hora" className="w-[140px]" />
+                      <ThSort field="transfer_type" label="Tipo" className="w-[52px]" />
+                      <ThSort field="source" label="Origem" className="min-w-[120px]" />
+                      <ThSort field="target" label="Destino" className="min-w-[120px]" />
+                      <ThSort field="performed_by" label="Quem fez" className="w-[90px]" />
+                      <ThSort field="count" label="Qtd" className="w-[56px]" />
+                      <ThSort field="total_balance" label="Total saldo (antes)" className="w-[120px]" title="Soma dos saldos no momento da transferência" />
                       <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white min-w-[140px]">Leads (IDs)</th>
-                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[90px]">Re-transfer.</th>
-                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[130px]">Prazo 10d</th>
+                      <ThSort field="re_transfer" label="Re-transfer." className="w-[90px]" />
+                      <ThSort field="prazo" label="Prazo" className="w-[130px]" title="Dias restantes para conversão (prazo definido na transferência)" />
                       <th className="text-center py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[100px]">Ações</th>
                     </tr>
                   </thead>
                   <tbody>
                     {loadingLogs ? (
                       <tr><td colSpan={12} className="p-10 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-[#8CD955]" /></td></tr>
-                    ) : !bancaId ? (
-                      <tr><td colSpan={12} className="p-8 text-center text-gray-500 dark:text-white">Selecione a banca para ver o histórico.</td></tr>
+                    ) : !managementLoaded && !loadingLogs ? (
+                      <tr><td colSpan={12} className="p-8 text-center text-gray-500 dark:text-white">Selecione a banca (ou &quot;Todas as Bancas&quot;) e clique em Aplicar filtros para carregar o histórico.</td></tr>
                     ) : transferLogs.length === 0 ? (
                       <tr><td colSpan={12} className="p-8 text-center text-gray-500 dark:text-white">Nenhuma transferência nos filtros. Ajuste data/tipo ou faça uma nova transferência.</td></tr>
                     ) : transferLogsFiltered.length === 0 ? (
                       <tr><td colSpan={12} className="p-8 text-center text-gray-500 dark:text-white">Nenhuma transferência corresponde ao filtro de prazo. Ajuste &quot;Prazo&quot; ou aplique &quot;Todos&quot;.</td></tr>
                     ) : (
-                      transferLogsPaginated.map((log) => {
+                      <>
+                      {transferLogsPaginated.map((log) => {
                         const ids = Array.isArray(log.leads_ids) ? log.leads_ids : [];
                         const reTransferidos = ids.filter((id: string | number) => (leadTransferCountMap.get(String(id)) || 0) > 1).length;
-                        const deadline = getTransferDeadlineInfo(log.created_at);
+                        const deadline = getTransferDeadlineInfo(log.created_at, (log as { deadline_days?: number }).deadline_days);
                         const totalSaldo = (log as { total_balance_snapshot?: number | null }).total_balance_snapshot;
                         const fmtSaldo = totalSaldo != null ? `R$ ${Number(totalSaldo).toFixed(2).replace('.', ',')}` : '-';
                         const origemNome = (log as { source_consultant_name?: string | null }).source_consultant_name ?? log.source_consultant_email ?? '-';
                         const destinoNome = (log as { target_consultant_name?: string | null }).target_consultant_name ?? log.target_consultant_email ?? '-';
                         const quemFez = (log as { performed_by_name?: string | null }).performed_by_name ?? '-';
-                        const bancaLabel = selectedBanca?.name || selectedBanca?.url || bancaName || '-';
+                        const logBancaId = (log as { banca_id?: string }).banca_id;
+                        const bancaLabel = historyBancaFilter === ''
+                          ? (logBancaId ? (bancas.find((b) => b.id === logBancaId)?.name || bancas.find((b) => b.id === logBancaId)?.url || logBancaId) : '-')
+                          : (selectedBanca?.name || selectedBanca?.url || bancas.find((b) => b.id === historyBancaFilter)?.name || bancas.find((b) => b.id === historyBancaFilter)?.url || bancaName || '-');
                         return (
                           <tr key={log.id} className="border-t border-gray-100 dark:border-[#404040] hover:bg-gray-50/80 dark:hover:bg-[#333] transition-colors">
                             <td className="py-3 px-4 text-gray-600 dark:text-white truncate max-w-[110px]" title={bancaLabel}>{bancaLabel}</td>
@@ -2088,16 +2405,23 @@ export default function AdminLeadTransferPage() {
                             </td>
                           </tr>
                         );
-                      })
+                      })}
+                      </>
                     )}
                   </tbody>
                 </table>
               </div>
-              {!loadingLogs && bancaId && transferLogsFiltered.length > 0 && totalLogsPages > 1 && (
+              {loadingMoreLogs && (
+                <div className="mt-2 flex items-center justify-center gap-2 rounded-lg border border-[#8CD955]/30 bg-[#8CD955]/5 dark:bg-[#8CD955]/10 px-4 py-2.5 text-sm text-gray-700 dark:text-gray-200">
+                  <Loader2 className="w-4 h-4 animate-spin text-[#8CD955] flex-shrink-0" />
+                  <span>Carregando mais registros em segundo plano. A tabela será atualizada automaticamente.</span>
+                </div>
+              )}
+              {!loadingLogs && managementLoaded && transferLogsSorted.length > 0 && totalLogsPages > 1 && (
                 <div className="flex flex-wrap items-center justify-between gap-3 mt-4 px-1">
                   <p className="text-sm text-gray-600 dark:text-white">
-                    Exibindo <strong>{(logsPage - 1) * LOGS_PAGE_SIZE + 1}</strong> a <strong>{Math.min(logsPage * LOGS_PAGE_SIZE, transferLogsFiltered.length)}</strong> de <strong>{transferLogsFiltered.length}</strong> transferências
-                    {transferLogsFiltered.length !== transferLogs.length && (
+                    Exibindo <strong>{(logsPage - 1) * LOGS_PAGE_SIZE + 1}</strong> a <strong>{Math.min(logsPage * LOGS_PAGE_SIZE, transferLogsSorted.length)}</strong> de <strong>{transferLogsSorted.length}</strong> transferências
+                    {transferLogsSorted.length !== transferLogs.length && (
                       <span className="text-gray-500 dark:text-gray-400"> (filtro de prazo aplicado)</span>
                     )}
                   </p>
@@ -2177,7 +2501,7 @@ export default function AdminLeadTransferPage() {
 
                       <div className="flex flex-wrap items-center gap-2">
                         {(() => {
-                          const modalDeadline = getTransferDeadlineInfo(selectedLogForModal?.created_at);
+                          const modalDeadline = getTransferDeadlineInfo(selectedLogForModal?.created_at, (selectedLogForModal as { deadline_days?: number })?.deadline_days);
                           const disponivelCount = modalEntries.filter((e) => e.resolution_status === 'disponivel_retransferencia').length;
                           return (
                             <>
@@ -2830,25 +3154,43 @@ export default function AdminLeadTransferPage() {
                 <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl border border-gray-200 dark:border-[#404040] p-5 shadow-sm ring-1 ring-gray-100 dark:ring-transparent">
                   {/* Consultor destino: exibir acima da tabela quando no passo 5 (Destino) — modal + botão Revisar ao lado */}
                   {currentStep >= 5 && (
-                    <div className="mb-5 pb-5 border-b border-gray-200">
+                    <div className="mb-5 pb-5 border-b border-gray-200 dark:border-[#404040]">
                       <label className="flex items-center gap-2 text-sm font-bold text-gray-800 dark:text-white mb-2">
                         <Users className="w-4 h-4 text-[#8CD955]" />
                         Consultor destino
                       </label>
-                      <p className="text-xs text-gray-500 mt-0.5 mb-3">Para quem os leads serão transferidos (todos da mesma banca, com cargo e gerente)</p>
-                      <div className="flex flex-wrap items-center gap-3">
-                        <button
-                          type="button"
-                          onClick={openConsultantDestinoModal}
-                          disabled={!bancaId || loadingConsultants}
-                          className="flex items-center gap-2 min-w-[280px] max-w-full border border-gray-300 dark:border-[#555] rounded-xl px-3 py-2.5 text-sm text-left bg-white dark:bg-[#333] dark:text-white hover:bg-gray-50 dark:hover:bg-[#404040] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          <User className="w-4 h-4 text-gray-500 flex-shrink-0" />
-                          <span className="truncate text-gray-800 dark:text-white">
-                            {!bancaId ? 'Selecione a banca' : loadingConsultants ? 'Carregando...' : consultantsForDestino.length === 0 ? 'Nenhum consultor na banca' : targetEmail ? (consultants.find((c) => c.email === targetEmail)?.full_name || targetEmail) : 'Selecionar consultor destino'}
-                          </span>
-                          <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0 ml-auto" />
-                        </button>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 mb-3">Para quem os leads serão transferidos (todos da mesma banca, com cargo e gerente)</p>
+                      <div className="flex flex-wrap items-center gap-4">
+                        <div className="flex items-center gap-3 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={openConsultantDestinoModal}
+                            disabled={!bancaId || loadingConsultants}
+                            className="flex items-center gap-2 min-w-[280px] max-w-full border border-gray-300 dark:border-[#555] rounded-xl px-3 py-2.5 text-sm text-left bg-white dark:bg-[#333] dark:text-white hover:bg-gray-50 dark:hover:bg-[#404040] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <User className="w-4 h-4 text-gray-500 flex-shrink-0" />
+                            <span className="truncate text-gray-800 dark:text-white">
+                              {!bancaId ? 'Selecione a banca' : loadingConsultants ? 'Carregando...' : consultantsForDestino.length === 0 ? 'Nenhum consultor na banca' : targetEmail ? (consultants.find((c) => c.email === targetEmail)?.full_name || targetEmail) : 'Selecionar consultor destino'}
+                            </span>
+                            <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0 ml-auto" />
+                          </button>
+                          <div className="flex items-center gap-2">
+                            <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 whitespace-nowrap">Prazo (dias):</label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={365}
+                              value={transferDeadlineDays}
+                              onChange={(e) => {
+                                const v = parseInt(e.target.value.replace(/\D/g, ''), 10);
+                                if (!Number.isNaN(v)) setTransferDeadlineDays(Math.max(1, Math.min(365, v)));
+                              }}
+                              className="w-16 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-2 text-sm text-center tabular-nums focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                              title="Dias para expiração deste pacote (após esse prazo o lead pode ser repassado)"
+                            />
+                            <span className="text-xs text-gray-500 dark:text-gray-400">dias expiração</span>
+                          </div>
+                        </div>
                         <button
                           type="button"
                           onClick={openConfirmModal}
@@ -3312,7 +3654,7 @@ export default function AdminLeadTransferPage() {
             </div>
             <div className="p-4 flex flex-col flex-1 min-h-0">
               <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
-                Escolha o consultor para ver as métricas de conversão (leads recebidos e convertidos no período). Deixe em &quot;Nenhum&quot; para não filtrar por consultor.
+                Consultores que receberam transferência na banca escolhida (no período dos filtros). Escolha um para ver métricas de conversão. Deixe em &quot;Nenhum&quot; para não filtrar.
               </p>
               <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 block mb-1.5">Buscar usuário</label>
               <div className="relative mb-3">
@@ -3326,8 +3668,8 @@ export default function AdminLeadTransferPage() {
                 />
               </div>
               <div className="border border-gray-200 dark:border-[#404040] rounded-lg overflow-y-auto flex-1 min-h-[200px]" style={{ maxHeight: '320px' }}>
-                {loadingConsultants ? (
-                  <div className="p-6 text-center text-sm text-gray-500">Carregando consultores...</div>
+                {loadingConversionTargetConsultants ? (
+                  <div className="p-6 text-center text-sm text-gray-500">Carregando consultores que tiveram transferência na banca...</div>
                 ) : (
                   <ul className="divide-y divide-gray-100 dark:divide-[#404040]">
                     <li>

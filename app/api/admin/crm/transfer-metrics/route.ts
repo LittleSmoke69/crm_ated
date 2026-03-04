@@ -2,7 +2,8 @@ import { NextRequest } from 'next/server';
 import { requireAdmin } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { getAdminBancaId } from '@/lib/server/crm/adminLeadTransferContext';
+import { getAdminBancaId, getAdminAllowedBancaIds } from '@/lib/server/crm/adminLeadTransferContext';
+import { getEffectiveZaplotoId } from '@/lib/tenant-context';
 import { createCrmRedistributionClient } from '@/lib/server/crm/crmRedistributionClient';
 import { normalizeDateParam, dateToStartOfDaySãoPauloISO, dateToEndOfDaySãoPauloISO } from '@/lib/server/crm/transfer-date-utils';
 
@@ -11,7 +12,7 @@ const LOG_PREFIX = '[admin][transfer-metrics]';
 /**
  * GET /api/admin/crm/transfer-metrics
  * KPIs de transferência: total, com saldo, sem saldo; conversão por consultor destino.
- * Query: banca_id (obrigatório), from (YYYY-MM-DD), to (YYYY-MM-DD), transfer_type?, target_consultant_email? (para conversão)
+ * Query: banca_id (opcional; omitir = Todas as Bancas), from, to, transfer_type?, target_consultant_email? (conversão só quando uma banca é selecionada)
  */
 export async function GET(req: NextRequest) {
   try {
@@ -19,13 +20,30 @@ export async function GET(req: NextRequest) {
     const { searchParams } = req.nextUrl;
 
     const bancaId = searchParams.get('banca_id')?.trim() || null;
-    if (!bancaId) {
-      return errorResponse('banca_id é obrigatório.');
-    }
+    let bancaIds: string[];
+    let singleResolved: { bancaId: string; crmBaseUrl: string } | null = null;
 
-    const resolved = await getAdminBancaId(userId, profile, bancaId);
-    if (!resolved) {
-      return errorResponse('Banca não encontrada ou sem permissão.');
+    if (bancaId) {
+      const resolved = await getAdminBancaId(userId, profile, bancaId);
+      if (!resolved) {
+        return errorResponse('Banca não encontrada ou sem permissão.');
+      }
+      bancaIds = [resolved.bancaId];
+      singleResolved = { bancaId: resolved.bancaId, crmBaseUrl: resolved.crmBaseUrl };
+    } else {
+      const zaplotoId = await getEffectiveZaplotoId(req, profile);
+      const allowed = await getAdminAllowedBancaIds(profile, zaplotoId);
+      if (!allowed || allowed.length === 0) {
+        return successResponse({
+          transferidos_total: 0,
+          transferidos_com_saldo: 0,
+          transferidos_sem_saldo: 0,
+          by_type: { TF: 0, TF1: 0, TF2: 0, TF3: 0 },
+          receivedByTarget: undefined,
+          convertedCount: undefined,
+        });
+      }
+      bancaIds = allowed;
     }
 
     const fromParam = normalizeDateParam(searchParams.get('from'));
@@ -36,7 +54,7 @@ export async function GET(req: NextRequest) {
     let idsOnlyQuery = supabaseServiceRole
       .from('admin_lead_transfer_logs')
       .select('id')
-      .eq('banca_id', resolved.bancaId);
+      .in('banca_id', bancaIds);
     if (fromParam) idsOnlyQuery = idsOnlyQuery.gte('created_at', dateToStartOfDaySãoPauloISO(fromParam));
     if (toParam) idsOnlyQuery = idsOnlyQuery.lte('created_at', dateToEndOfDaySãoPauloISO(toParam));
     if (transferType && ['TF', 'TF1', 'TF2', 'TF3'].includes(transferType)) {
@@ -58,7 +76,7 @@ export async function GET(req: NextRequest) {
     let countQuery = supabaseServiceRole
       .from('admin_lead_transfer_entries')
       .select('id', { count: 'exact', head: true })
-      .eq('banca_id', resolved.bancaId)
+      .in('banca_id', bancaIds)
       .in('transfer_log_id', logIdsFilter);
     if (targetConsultantEmail?.trim()) {
       countQuery = countQuery.ilike('target_consultant_email', targetConsultantEmail.trim());
@@ -68,7 +86,7 @@ export async function GET(req: NextRequest) {
     const entriesQuery = supabaseServiceRole
       .from('admin_lead_transfer_entries')
       .select('id, transfer_log_id, lead_id, had_balance, target_consultant_email')
-      .eq('banca_id', resolved.bancaId)
+      .in('banca_id', bancaIds)
       .in('transfer_log_id', logIdsFilter)
       .limit(50000);
     const { data: entries, error: entriesError } = await entriesQuery;
@@ -95,7 +113,7 @@ export async function GET(req: NextRequest) {
       const { data: logsForType } = await supabaseServiceRole
         .from('admin_lead_transfer_logs')
         .select('id, transfer_type')
-        .eq('banca_id', resolved.bancaId)
+        .in('banca_id', bancaIds)
         .in('id', logIdsFromList);
       const logIdToType = new Map<string, string>();
       for (const row of Array.isArray(logsForType) ? logsForType : []) {
@@ -125,10 +143,10 @@ export async function GET(req: NextRequest) {
       by_type: byType,
     };
 
-    if (targetConsultantEmail) {
+    if (targetConsultantEmail && singleResolved) {
       payload.receivedByTarget = listToUse.length;
       try {
-        const client = createCrmRedistributionClient(resolved.crmBaseUrl);
+        const client = createCrmRedistributionClient(singleResolved.crmBaseUrl);
         const result = await client.getIndicatedsByConsultant(targetConsultantEmail, 3000, 1, {
           transferredFilter: 'yes',
           sort: 'created_at',

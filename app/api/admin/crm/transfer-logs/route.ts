@@ -2,15 +2,19 @@ import { NextRequest } from 'next/server';
 import { requireAdmin } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { getAdminBancaId } from '@/lib/server/crm/adminLeadTransferContext';
+import { getAdminBancaId, getAdminAllowedBancaIds } from '@/lib/server/crm/adminLeadTransferContext';
+import { getEffectiveZaplotoId } from '@/lib/tenant-context';
 import { normalizeDateParam, dateToStartOfDaySãoPauloISO, dateToEndOfDaySãoPauloISO } from '@/lib/server/crm/transfer-date-utils';
 
 const LOG_PREFIX = '[admin][transfer-logs]';
 
+const DEFAULT_LIMIT = 100;
+const MAX_LIMIT = 200;
+
 /**
  * GET /api/admin/crm/transfer-logs
  * Lista logs de transferência de leads (auditoria).
- * Query: banca_id (obrigatório), from (YYYY-MM-DD), to (YYYY-MM-DD), transfer_type (TF|TF1|TF2|TF3), target_consultant_email? (filtrar por consultor destino)
+ * Query: banca_id? (opcional), from, to, transfer_type?, target_consultant_email?, offset? (default 0), limit? (default 100, max 200) para carregamento em pacotes.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -18,13 +22,21 @@ export async function GET(req: NextRequest) {
     const { searchParams } = req.nextUrl;
 
     const bancaId = searchParams.get('banca_id')?.trim() || null;
-    if (!bancaId) {
-      return errorResponse('banca_id é obrigatório.');
-    }
+    let bancaIds: string[];
 
-    const resolved = await getAdminBancaId(userId, profile, bancaId);
-    if (!resolved) {
-      return errorResponse('Banca não encontrada ou sem permissão.');
+    if (bancaId) {
+      const resolved = await getAdminBancaId(userId, profile, bancaId);
+      if (!resolved) {
+        return errorResponse('Banca não encontrada ou sem permissão.');
+      }
+      bancaIds = [resolved.bancaId];
+    } else {
+      const zaplotoId = await getEffectiveZaplotoId(req, profile);
+      const allowed = await getAdminAllowedBancaIds(profile, zaplotoId);
+      if (!allowed || allowed.length === 0) {
+        return successResponse([]);
+      }
+      bancaIds = allowed;
     }
 
     const fromParam = normalizeDateParam(searchParams.get('from'));
@@ -32,26 +44,35 @@ export async function GET(req: NextRequest) {
     const transferType = searchParams.get('transfer_type')?.trim();
     const targetConsultantEmail = searchParams.get('target_consultant_email')?.trim() || null;
 
-    let query = supabaseServiceRole
-      .from('admin_lead_transfer_logs')
-      .select('id, banca_id, performed_by_user_id, source_consultant_email, target_consultant_email, leads_ids, count, transfer_type, filters_snapshot, crm_response, created_at')
-      .eq('banca_id', resolved.bancaId)
-      .order('created_at', { ascending: false });
+    const offset = Math.max(0, parseInt(searchParams.get('offset') ?? '0', 10) || 0);
+    const limit = Math.min(MAX_LIMIT, Math.max(1, parseInt(searchParams.get('limit') ?? String(DEFAULT_LIMIT), 10) || DEFAULT_LIMIT));
 
-    if (fromParam) {
-      query = query.gte('created_at', dateToStartOfDaySãoPauloISO(fromParam));
-    }
-    if (toParam) {
-      query = query.lte('created_at', dateToEndOfDaySãoPauloISO(toParam));
-    }
-    if (transferType && ['TF', 'TF1', 'TF2', 'TF3'].includes(transferType)) {
-      query = query.eq('transfer_type', transferType);
-    }
-    if (targetConsultantEmail) {
-      query = query.ilike('target_consultant_email', targetConsultantEmail);
-    }
+    const selectWithDeadline = 'id, banca_id, performed_by_user_id, source_consultant_email, target_consultant_email, leads_ids, count, transfer_type, deadline_days, filters_snapshot, crm_response, created_at';
+    const selectWithoutDeadline = 'id, banca_id, performed_by_user_id, source_consultant_email, target_consultant_email, leads_ids, count, transfer_type, filters_snapshot, crm_response, created_at';
 
-    const { data: logs, error } = await query.limit(500);
+    const runQuery = async (selectColumns: string) => {
+      let q = supabaseServiceRole
+        .from('admin_lead_transfer_logs')
+        .select(selectColumns)
+        .in('banca_id', bancaIds)
+        .order('created_at', { ascending: false });
+      if (fromParam) q = q.gte('created_at', dateToStartOfDaySãoPauloISO(fromParam));
+      if (toParam) q = q.lte('created_at', dateToEndOfDaySãoPauloISO(toParam));
+      if (transferType && ['TF', 'TF1', 'TF2', 'TF3'].includes(transferType)) q = q.eq('transfer_type', transferType);
+      if (targetConsultantEmail) q = q.ilike('target_consultant_email', targetConsultantEmail);
+      return q.range(offset, offset + limit - 1);
+    };
+
+    let result = await runQuery(selectWithDeadline);
+    if (result.error) {
+      const msg = (result.error as { message?: string; code?: string }).message ?? '';
+      const code = (result.error as { code?: string }).code ?? '';
+      if (msg.includes('deadline_days') || code === 'PGRST204' || msg.includes('does not exist')) {
+        console.warn(`${LOG_PREFIX} Coluna deadline_days ausente; buscando sem ela. Execute add_deadline_days_to_admin_lead_transfer_logs.sql no Supabase.`);
+        result = await runQuery(selectWithoutDeadline);
+      }
+    }
+    const { data: logs, error } = result;
 
     if (error) {
       console.error(`${LOG_PREFIX} GET error:`, error);
@@ -138,6 +159,7 @@ export async function GET(req: NextRequest) {
       const performedBy = (log.performed_by_user_id ?? '').trim();
       return {
         ...log,
+        deadline_days: log.deadline_days != null ? log.deadline_days : 10,
         total_balance_snapshot: totalBalance,
         source_consultant_name: sourceEmail ? (emailToName.get(sourceEmail) || log.source_consultant_email) : (log.source_consultant_email ?? '-'),
         target_consultant_name: targetEmail ? (emailToName.get(targetEmail) || log.target_consultant_email) : (log.target_consultant_email ?? '-'),
