@@ -157,7 +157,7 @@ export default function ZaplinkFormPage() {
                 </div>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-2">Telefone</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-2">Telefone <span className="text-red-500">*</span></label>
                 <div className="relative">
                   <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 dark:text-[#888]" />
                   <input

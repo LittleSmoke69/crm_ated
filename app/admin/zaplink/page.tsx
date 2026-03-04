@@ -87,6 +87,12 @@ interface ByGerenteBancaRow {
   count: number;
 }
 
+interface ConsultantSent {
+  id: string;
+  full_name: string | null;
+  email: string;
+}
+
 interface ConsultantRequest {
   id: string;
   gerente_id: string;
@@ -98,6 +104,7 @@ interface ConsultantRequest {
   banca_name?: string | null;
   gerente_name?: string | null;
   gerente_email?: string | null;
+  consultants_sent?: ConsultantSent[];
 }
 
 export default function AdminZaplinkPage() {
@@ -119,8 +126,10 @@ export default function AdminZaplinkPage() {
   const [consultantRequests, setConsultantRequests] = useState<ConsultantRequest[]>([]);
   const [consultantRequestsLoading, setConsultantRequestsLoading] = useState(false);
   const [fulfillModalRequest, setFulfillModalRequest] = useState<ConsultantRequest | null>(null);
-  const [fulfillConsultantIds, setFulfillConsultantIds] = useState<string[]>([]);
-  const [consultorsForFulfill, setConsultorsForFulfill] = useState<{ id: string; full_name: string | null; email: string }[]>([]);
+  const [fulfillSubmissionIds, setFulfillSubmissionIds] = useState<string[]>([]);
+  const [pendingSubmissionsForFulfill, setPendingSubmissionsForFulfill] = useState<
+    { id: string; full_name: string; email: string; phone?: string; instagram_handle?: string | null }[]
+  >([]);
   const [fulfillSubmitting, setFulfillSubmitting] = useState(false);
 
   const [linkForm, setLinkForm] = useState({ slug: '', target_url: '', title: '' });
@@ -1022,19 +1031,23 @@ export default function AdminZaplinkPage() {
                             </span>
                           </td>
                           <td className="p-3 text-right">
-                            {isOpen && (
+                            {isOpen ? (
                               <button
                                 type="button"
                                 onClick={async () => {
                                   setFulfillModalRequest(r);
-                                  setFulfillConsultantIds([]);
+                                  setFulfillSubmissionIds([]);
                                   try {
-                                    const res = await fetch('/api/admin/zaplink/consultant-requests/consultors?limit=100', { headers: { 'X-User-Id': userId! } });
+                                    const res = await fetch(`/api/admin/zaplink/submissions?status=pending&limit=100`, { headers: { 'X-User-Id': userId! } });
                                     const json = await res.json();
-                                    if (json.success && Array.isArray(json.data)) setConsultorsForFulfill(json.data);
-                                    else setConsultorsForFulfill([]);
+                                    if (json.success && json.data?.data) {
+                                      const list = json.data.data as { id: string; full_name: string; email: string; phone?: string; instagram_handle?: string | null }[];
+                                      setPendingSubmissionsForFulfill(Array.isArray(list) ? list : []);
+                                    } else {
+                                      setPendingSubmissionsForFulfill([]);
+                                    }
                                   } catch {
-                                    setConsultorsForFulfill([]);
+                                    setPendingSubmissionsForFulfill([]);
                                   }
                                 }}
                                 className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm"
@@ -1042,7 +1055,19 @@ export default function AdminZaplinkPage() {
                                 <UserPlus className="w-4 h-4" />
                                 Enviar consultores
                               </button>
-                            )}
+                            ) : (r.consultants_sent && r.consultants_sent.length > 0) ? (
+                              <div className="text-right">
+                                <p className="text-xs font-medium text-gray-600 dark:text-[#aaa] mb-1">Consultores enviados:</p>
+                                <ul className="text-sm text-gray-800 dark:text-[#ccc] space-y-0.5">
+                                  {r.consultants_sent.map((c) => (
+                                    <li key={c.id} className="flex flex-col items-end">
+                                      <span className="font-medium">{c.full_name || '—'}</span>
+                                      <span className="text-xs text-gray-500 dark:text-[#888]">{c.email}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            ) : null}
                           </td>
                         </tr>
                       );
@@ -1070,21 +1095,25 @@ export default function AdminZaplinkPage() {
                 <p className="text-sm text-gray-600 dark:text-[#aaa] mb-3">
                   Pedido: {fulfillModalRequest.quantity_requested} | Já enviados: {fulfillModalRequest.quantity_sent} | Faltam: {fulfillModalRequest.quantity_requested - fulfillModalRequest.quantity_sent}
                 </p>
-                <p className="text-sm font-medium text-gray-700 dark:text-[#ccc] mb-2">Selecione os consultores a enviar:</p>
+                <p className="text-sm font-medium text-gray-700 dark:text-[#ccc] mb-2">Selecione as submissões pendentes para aprovar e enviar ao gerente:</p>
                 <div className="space-y-2 max-h-64 overflow-y-auto border border-gray-200 dark:border-[#404040] rounded-lg p-2">
-                  {consultorsForFulfill.length === 0 ? (
-                    <p className="text-sm text-gray-500 py-2">Carregando...</p>
+                  {pendingSubmissionsForFulfill.length === 0 ? (
+                    <p className="text-sm text-gray-500 py-2">Nenhuma submissão pendente.</p>
                   ) : (
-                    consultorsForFulfill.map((c) => (
-                      <label key={c.id} className="flex items-center gap-2 p-2 rounded hover:bg-gray-50 dark:hover:bg-[#333] cursor-pointer">
+                    pendingSubmissionsForFulfill.map((s) => (
+                      <label key={s.id} className="flex items-center gap-2 p-2 rounded hover:bg-gray-50 dark:hover:bg-[#333] cursor-pointer">
                         <input
                           type="checkbox"
-                          checked={fulfillConsultantIds.includes(c.id)}
-                          onChange={(e) => setFulfillConsultantIds((prev) => (e.target.checked ? [...prev, c.id] : prev.filter((id) => id !== c.id)))}
+                          checked={fulfillSubmissionIds.includes(s.id)}
+                          onChange={(e) => setFulfillSubmissionIds((prev) => (e.target.checked ? [...prev, s.id] : prev.filter((id) => id !== s.id)))}
                           className="rounded text-green-600"
                         />
-                        <span className="text-sm font-medium text-gray-800 dark:text-[#ccc]">{c.full_name || c.email}</span>
-                        <span className="text-xs text-gray-500 dark:text-[#888]">{c.email}</span>
+                        <div className="flex flex-col min-w-0">
+                          <span className="text-sm font-medium text-gray-800 dark:text-[#ccc]">{s.full_name || s.email}</span>
+                          <span className="text-xs text-gray-500 dark:text-[#888]">{s.email}</span>
+                          {s.phone && <span className="text-xs text-gray-500 dark:text-[#888]">{s.phone}</span>}
+                          {s.instagram_handle && <span className="text-xs text-pink-600 dark:text-pink-400">{s.instagram_handle}</span>}
+                        </div>
                       </label>
                     ))
                   )}
@@ -1096,20 +1125,21 @@ export default function AdminZaplinkPage() {
                 </button>
                 <button
                   type="button"
-                  disabled={fulfillSubmitting || fulfillConsultantIds.length === 0}
+                  disabled={fulfillSubmitting || fulfillSubmissionIds.length === 0}
                   onClick={async () => {
                     setFulfillSubmitting(true);
                     try {
                       const res = await fetch(`/api/admin/zaplink/consultant-requests/${fulfillModalRequest.id}/fulfill`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'X-User-Id': userId! },
-                        body: JSON.stringify({ consultant_user_ids: fulfillConsultantIds }),
+                        body: JSON.stringify({ submission_ids: fulfillSubmissionIds }),
                       });
                       const json = await res.json();
                       if (json.success) {
-                        showToast('success', json.message || 'Consultores enviados.');
+                        showToast('success', json.message || 'Submissões aprovadas e enviadas ao gerente.');
                         setFulfillModalRequest(null);
                         loadConsultantRequests();
+                        loadData();
                       } else {
                         showToast('error', json.error || 'Erro ao enviar.');
                       }
@@ -1121,7 +1151,7 @@ export default function AdminZaplinkPage() {
                   }}
                   className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {fulfillSubmitting ? 'Enviando...' : `Enviar ${fulfillConsultantIds.length} consultor(es)`}
+                  {fulfillSubmitting ? 'Enviando...' : `Enviar ${fulfillSubmissionIds.length} submissão(ões)`}
                 </button>
               </div>
             </div>
