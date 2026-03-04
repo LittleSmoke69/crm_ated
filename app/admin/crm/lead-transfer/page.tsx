@@ -1208,13 +1208,13 @@ export default function AdminLeadTransferPage() {
                 showToast(`Transferência concluída e solicitação aprovada. ${count} lead(s) transferido(s).`, 'success');
                 loadLeadRequests();
               } else {
-                showToast(`${count} lead(s) transferido(s). Solicitação não aprovada: ${approveJson?.error ?? 'erro'}`, 'warning');
+                showToast(`${count} lead(s) transferido(s). Solicitação não aprovada: ${approveJson?.error ?? 'erro'}`, 'info');
               }
             } else {
-              showToast(`${count} lead(s) transferido(s). Solicitação não aprovada (consultor origem não encontrado).`, 'warning');
+              showToast(`${count} lead(s) transferido(s). Solicitação não aprovada (consultor origem não encontrado).`, 'info');
             }
           } catch {
-            showToast(`${count} lead(s) transferido(s). Não foi possível aprovar a solicitação.`, 'warning');
+            showToast(`${count} lead(s) transferido(s). Não foi possível aprovar a solicitação.`, 'info');
           }
           transferFromSolicitationRequestIdRef.current = null;
         } else {
