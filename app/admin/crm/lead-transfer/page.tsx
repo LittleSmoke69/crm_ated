@@ -26,6 +26,8 @@ import {
   Eye,
   RefreshCw,
   Calendar,
+  ClipboardList,
+  CheckCircle2,
 } from 'lucide-react';
 import { DateInputDDMMYYYY, getTodaySãoPaulo, getLast30DaysRangeSãoPaulo } from '@/components/Admin/CRMSection';
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
@@ -134,6 +136,49 @@ interface Consultant {
 interface Lead {
   id: number | string;
   [key: string]: unknown;
+}
+
+/** Snapshot gravado no momento da aprovação para análise posterior */
+interface ApprovalSnapshot {
+  approved_at_iso: string;
+  approved_by_user_id: string;
+  banca_id: string;
+  source_consultant_id: string;
+  source_consultant_email: string;
+  lead_types: string[];
+  total_leads_transferred: number;
+  total_receivers: number;
+  receivers: Array<{
+    consultor_id: string;
+    consultor_email: string;
+    quantity_requested: number;
+    quantity_transferred: number;
+    transfer_log_id: string | null;
+    lead_ids: string[];
+  }>;
+  transfer_log_ids: string[];
+  filters_applied: { lead_types: string[]; from_solicitation: string };
+  consultores_requested: Array<{ consultor_id: string; quantity: number }>;
+}
+
+/** Solicitação de leads do gerente (lista na aba Solicitações) */
+interface GerenteLeadRequest {
+  id: string;
+  gerente_id: string;
+  gerente_name: string;
+  lead_type: string;
+  lead_type_label: string;
+  consultores: { consultor_id: string; quantity: number; consultor_name?: string }[];
+  status: 'pending' | 'approved' | 'rejected';
+  banca_id?: string | null;
+  banca_name?: string;
+  source_consultant_id?: string | null;
+  source_consultant_email?: string | null;
+  approved_by_user_id?: string | null;
+  approved_at?: string | null;
+  created_at: string;
+  /** Preenchido após aprovação com transferência; usado para análise posterior */
+  approval_snapshot?: ApprovalSnapshot | null;
 }
 
 export default function AdminLeadTransferPage() {
@@ -255,7 +300,7 @@ export default function AdminLeadTransferPage() {
   const recalcPollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [currentStep, setCurrentStep] = useState(1);
-  const [activeTab, setActiveTab] = useState<'transfer' | 'history'>('transfer');
+  const [activeTab, setActiveTab] = useState<'transfer' | 'history' | 'solicitations'>('transfer');
   const [canExecuteTransfer, setCanExecuteTransfer] = useState(true);
   const [confirmAcknowledged, setConfirmAcknowledged] = useState(false);
   const [showSelectedOnly, setShowSelectedOnly] = useState(false);
@@ -282,6 +327,19 @@ export default function AdminLeadTransferPage() {
   const [verifierDetailsConsultant, setVerifierDetailsConsultant] = useState<{ email: string; name: string } | null>(null);
   const [verifierDetailsLeads, setVerifierDetailsLeads] = useState<{ lead_id: string; name: string | null; phone: string | null; depositaram_depois: boolean; jogaram_depois: boolean; sacaram_depois: boolean; total_depositado_snapshot: number; total_depositado_atual: number; total_apostado_snapshot: number; total_apostado_atual: number; total_saque_atual: number; available_withdraw_snapshot: number; available_withdraw_atual: number }[]>([]);
   const [loadingVerifierDetails, setLoadingVerifierDetails] = useState(false);
+  /** Aba Solicitações: solicitações de leads dos gerentes */
+  const [leadRequests, setLeadRequests] = useState<GerenteLeadRequest[]>([]);
+  const [loadingLeadRequests, setLoadingLeadRequests] = useState(false);
+  const [selectedRequestForApprove, setSelectedRequestForApprove] = useState<GerenteLeadRequest | null>(null);
+  const [approveModalOpen, setApproveModalOpen] = useState(false);
+  const [approveFormLeadTypes, setApproveFormLeadTypes] = useState<string[]>([]);
+  const [approveFormConsultores, setApproveFormConsultores] = useState<{ consultor_id: string; quantity: number; consultor_name?: string }[]>([]);
+  const [approveFormSourceConsultantId, setApproveFormSourceConsultantId] = useState<string>('');
+  const [approveSubmitting, setApproveSubmitting] = useState(false);
+  const [approveRejecting, setApproveRejecting] = useState(false);
+  /** Consultores da banca da solicitação (carregados ao abrir o modal de aprovar) */
+  const [approveModalConsultants, setApproveModalConsultants] = useState<Consultant[]>([]);
+  const [loadingApproveModalConsultants, setLoadingApproveModalConsultants] = useState(false);
 
   const selectedBanca = bancas.find((b) => b.id === bancaId);
   const filteredBancas = bancaSearchQuery.trim()
@@ -386,6 +444,144 @@ export default function AdminLeadTransferPage() {
   useEffect(() => {
     setHasSearchedLeads(false);
   }, [sourceEmail]);
+
+  const loadLeadRequests = useCallback(async () => {
+    if (!userId) return;
+    setLoadingLeadRequests(true);
+    try {
+      const res = await fetch('/api/admin/crm/lead-requests', { headers: headers() });
+      const json = await res.json();
+      if (res.ok && json.success && Array.isArray(json.data)) {
+        setLeadRequests(json.data as GerenteLeadRequest[]);
+      } else {
+        showToast(json?.error ?? 'Erro ao carregar solicitações', 'error');
+      }
+    } catch (e) {
+      showToast('Erro ao carregar solicitações', 'error');
+    } finally {
+      setLoadingLeadRequests(false);
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    if (activeTab === 'solicitations') {
+      loadLeadRequests();
+    }
+  }, [activeTab, loadLeadRequests]);
+
+  const openApproveModal = (req: GerenteLeadRequest) => {
+    setSelectedRequestForApprove(req);
+    setApproveFormLeadTypes((req.lead_type ?? '').split(',').map((t) => t.trim()).filter(Boolean));
+    setApproveFormConsultores([...(req.consultores || [])]);
+    setApproveFormSourceConsultantId('');
+    setApproveModalConsultants([]);
+    setApproveModalOpen(true);
+    if (req.banca_id?.trim() && userId) {
+      setLoadingApproveModalConsultants(true);
+      fetch(`/api/admin/crm/consultants?banca_id=${encodeURIComponent(req.banca_id.trim())}`, { headers: headers() })
+        .then(async (res) => {
+          const json = await res.json();
+          if (res.ok && json.success && Array.isArray(json.data?.consultants)) {
+            setApproveModalConsultants(json.data.consultants);
+          }
+        })
+        .catch(() => setApproveModalConsultants([]))
+        .finally(() => setLoadingApproveModalConsultants(false));
+    }
+  };
+
+  const closeApproveModal = () => {
+    setSelectedRequestForApprove(null);
+    setApproveModalOpen(false);
+    setApproveSubmitting(false);
+    setApproveRejecting(false);
+    setApproveModalConsultants([]);
+  };
+
+  const handleApproveRequest = async () => {
+    if (!selectedRequestForApprove) return;
+    if (!approveFormSourceConsultantId.trim()) {
+      showToast('Selecione o consultor doador (origem dos leads).', 'error');
+      return;
+    }
+    if (approveFormLeadTypes.length === 0) {
+      showToast('Selecione ao menos um tipo de lead.', 'error');
+      return;
+    }
+    const requestBancaId = selectedRequestForApprove.banca_id?.trim();
+    if (!requestBancaId) {
+      showToast('Esta solicitação não possui banca definida. Não é possível realizar a transferência.', 'error');
+      return;
+    }
+    const sourceConsultant = approveModalConsultants.find((c) => c.id === approveFormSourceConsultantId);
+    setApproveSubmitting(true);
+    try {
+      const res = await fetch(`/api/admin/crm/lead-requests/${selectedRequestForApprove.id}/approve-and-transfer`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({
+          lead_type: approveFormLeadTypes,
+          consultores: approveFormConsultores.filter((c) => c.quantity > 0),
+          source_consultant_id: approveFormSourceConsultantId.trim(),
+          source_consultant_email: sourceConsultant?.email ?? null,
+          banca_id: requestBancaId,
+        }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        showToast(json?.message ?? 'Solicitação aprovada e transferências realizadas.', 'success');
+        closeApproveModal();
+        loadLeadRequests();
+        if (bancaId === requestBancaId) {
+          setManagementLoaded(true);
+          await Promise.all([loadTransferLogs(), loadTransferStats()]);
+        }
+      } else {
+        showToast(json?.error ?? 'Erro ao aprovar e transferir', 'error');
+      }
+    } catch (e) {
+      showToast('Erro ao aprovar solicitação', 'error');
+    } finally {
+      setApproveSubmitting(false);
+    }
+  };
+
+  const handleRejectRequest = async () => {
+    if (!selectedRequestForApprove) return;
+    setApproveRejecting(true);
+    try {
+      const res = await fetch(`/api/admin/crm/lead-requests/${selectedRequestForApprove.id}`, {
+        method: 'PATCH',
+        headers: headers(),
+        body: JSON.stringify({ status: 'rejected' }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        showToast('Solicitação rejeitada.', 'success');
+        closeApproveModal();
+        loadLeadRequests();
+      } else {
+        showToast(json?.error ?? 'Erro ao rejeitar', 'error');
+      }
+    } catch (e) {
+      showToast('Erro ao rejeitar solicitação', 'error');
+    } finally {
+      setApproveRejecting(false);
+    }
+  };
+
+  const LEAD_TYPE_OPTIONS = [
+    { value: 'registered', label: 'Lead apenas cadastrado' },
+    { value: 'with_balance', label: 'Lead que possui saldo na banca' },
+    { value: 'has_won', label: 'Lead que já ganhou na plataforma' },
+    { value: 'has_withdrawn', label: 'Lead que já sacou na plataforma' },
+  ] as const;
+
+  const toggleApproveFormLeadType = (value: string) => {
+    setApproveFormLeadTypes((prev) =>
+      prev.includes(value) ? prev.filter((t) => t !== value) : [...prev, value]
+    );
+  };
 
   /** Consultantes filtrados no modal de seleção do consultor doador (busca por nome ou email). */
   const consultantOriginFilteredList = React.useMemo(() => {
@@ -912,64 +1108,99 @@ export default function AdminLeadTransferPage() {
     }
   };
 
-  /** Recalcula total saldo em segundo plano (lotes de 2000). Polling atualiza a tela aos poucos. */
+  /** Busca saldo atual dos leads no CRM e grava no banco como snapshot. Resposta em stream: cada lead atualizado já aparece na tela ao receber. */
   const runRecalcBalanceForLog = async () => {
     if (!bancaId || !userId || !selectedLogForModal?.id) return;
     setBackfillingBalances(true);
-    showToast('Recalculando saldo em segundo plano (lotes de 2000). Os valores serão atualizados automaticamente.', 'info');
+    showToast('Buscando saldo e dados dos leads no CRM… Atualizando lista conforme os dados chegam.', 'info');
 
     const logId = selectedLogForModal.id;
-    const fetchEntries = async () => {
-      const entryRes = await fetch(
-        `/api/admin/crm/transfer-logs/entries?log_id=${encodeURIComponent(logId)}&banca_id=${encodeURIComponent(bancaId)}`,
-        { headers: { 'X-User-Id': userId ?? '' } }
-      );
-      const entryJson = await entryRes.json();
-      if (entryRes.ok && entryJson.success && Array.isArray(entryJson.data)) {
-        setModalEntries(entryJson.data);
-      }
-    };
-
-    if (recalcPollIntervalRef.current) {
-      clearInterval(recalcPollIntervalRef.current);
-      recalcPollIntervalRef.current = null;
-    }
-    recalcPollIntervalRef.current = setInterval(fetchEntries, 3000);
 
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 120000);
       const res = await fetch(
-        `/api/admin/crm/transfer-logs/backfill-balances?banca_id=${encodeURIComponent(bancaId)}&log_id=${encodeURIComponent(logId)}`,
+        `/api/admin/crm/transfer-logs/backfill-balances?banca_id=${encodeURIComponent(bancaId)}&log_id=${encodeURIComponent(logId)}&stream=1`,
         { method: 'POST', headers: headers(), signal: controller.signal }
       );
       clearTimeout(timeoutId);
 
-      if (recalcPollIntervalRef.current) {
-        clearInterval(recalcPollIntervalRef.current);
-        recalcPollIntervalRef.current = null;
-      }
+      const contentType = res.headers.get('content-type') ?? '';
+      const isStream = res.ok && contentType.includes('application/x-ndjson');
 
-      const json = await res.json();
-      await fetchEntries();
-      await loadTransferLogs();
-      await loadTransferStats();
+      if (isStream && res.body) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let donePayload: { totalBalance?: number; message?: string; updated?: number } | null = null;
 
-      if (res.ok && json.success) {
-        const total = json.data?.totalBalance;
-        const msg = json.data?.message ?? (total != null ? `Total saldo antes: R$ ${Number(total).toFixed(2).replace('.', ',')}` : 'Concluído.');
-        showToast(msg, 'success');
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            try {
+              const data = JSON.parse(trimmed) as { type: string; lead_id?: string | number; saldo_snapshot?: number; had_balance?: boolean; total_depositado_snapshot?: number | null; total_apostado_snapshot?: number | null; total_ganho_snapshot?: number | null; available_withdraw_snapshot?: number | null; totalBalance?: number; message?: string; updated?: number; error?: string };
+              if (data.type === 'entry' && data.lead_id != null) {
+                setModalEntries((prev) =>
+                  prev.map((e) =>
+                    String(e.lead_id) === String(data.lead_id)
+                      ? {
+                          ...e,
+                          saldo_snapshot: data.saldo_snapshot ?? e.saldo_snapshot,
+                          had_balance: data.had_balance ?? e.had_balance,
+                          total_depositado_snapshot: data.total_depositado_snapshot ?? e.total_depositado_snapshot,
+                          total_apostado_snapshot: data.total_apostado_snapshot ?? e.total_apostado_snapshot,
+                          total_ganho_snapshot: data.total_ganho_snapshot ?? e.total_ganho_snapshot,
+                          available_withdraw_snapshot: data.available_withdraw_snapshot ?? e.available_withdraw_snapshot,
+                        }
+                      : e
+                  )
+                );
+              } else if (data.type === 'done') {
+                donePayload = { totalBalance: data.totalBalance, message: data.message, updated: data.updated };
+              } else if (data.type === 'error') {
+                showToast(data.error ?? 'Erro ao salvar saldo atual.', 'error');
+              }
+            } catch {
+              // ignora linha inválida
+            }
+          }
+        }
+
+        if (donePayload) {
+          const msg = donePayload.message ?? (donePayload.totalBalance != null ? `Snapshot salvo. Total saldo: R$ ${Number(donePayload.totalBalance).toFixed(2).replace('.', ',')}` : 'Saldo atual salvo.');
+          showToast(msg, 'success');
+        }
+        await loadTransferLogs();
+        await loadTransferStats();
       } else {
-        showToast(json?.error ?? 'Erro ao recalcular saldo.', 'error');
+        const json = await res.json();
+        if (res.ok && json.success) {
+          const total = json.data?.totalBalance;
+          const msg = json.data?.message ?? (total != null ? `Snapshot salvo. Total saldo: R$ ${Number(total).toFixed(2).replace('.', ',')}` : 'Saldo atual salvo.');
+          showToast(msg, 'success');
+        } else {
+          showToast(json?.error ?? 'Erro ao salvar saldo atual.', 'error');
+        }
+        const entryRes = await fetch(
+          `/api/admin/crm/transfer-logs/entries?log_id=${encodeURIComponent(logId)}&banca_id=${encodeURIComponent(bancaId)}`,
+          { headers: { 'X-User-Id': userId ?? '' } }
+        );
+        const entryJson = await entryRes.json();
+        if (entryRes.ok && entryJson.success && Array.isArray(entryJson.data)) {
+          setModalEntries(entryJson.data);
+        }
+        await loadTransferLogs();
+        await loadTransferStats();
       }
     } catch (e) {
-      if (recalcPollIntervalRef.current) {
-        clearInterval(recalcPollIntervalRef.current);
-        recalcPollIntervalRef.current = null;
-      }
       const isAbort = e instanceof Error && e.name === 'AbortError';
-      showToast(isAbort ? 'Recálculo em andamento. Os valores continuarão atualizando em segundo plano.' : 'Erro ao recalcular saldo.', isAbort ? 'info' : 'error');
-      await fetchEntries();
+      showToast(isAbort ? 'Requisição interrompida.' : 'Erro ao salvar saldo atual.', isAbort ? 'info' : 'error');
     } finally {
       setBackfillingBalances(false);
     }
@@ -1399,7 +1630,7 @@ export default function AdminLeadTransferPage() {
             </div>
           </div>
 
-          {/* Abas: Transferir | Histórico */}
+          {/* Abas: Transferir | Histórico | Solicitações */}
           <div className="flex gap-1 p-1 bg-gray-100 dark:bg-[#333] rounded-xl w-fit">
             <button
               type="button"
@@ -1415,9 +1646,82 @@ export default function AdminLeadTransferPage() {
             >
               Histórico & Conversão
             </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('solicitations')}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'solicitations' ? 'bg-white dark:bg-[#2a2a2a] text-gray-900 dark:text-white shadow-sm' : 'text-gray-600 dark:text-[#aaa] hover:text-gray-900 dark:hover:text-white'}`}
+            >
+              Solicitações
+            </button>
           </div>
 
-          {activeTab === 'history' ? (
+          {activeTab === 'solicitations' ? (
+            /* Aba Solicitações de leads (gerentes) */
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl border border-gray-200 dark:border-[#404040] p-5 shadow-sm ring-1 ring-gray-100 dark:ring-transparent">
+              <div className="mb-4">
+                <h2 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                  <ClipboardList className="w-5 h-5 text-[#8CD955]" />
+                  Solicitações de leads
+                </h2>
+                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">Solicitações feitas por gerentes. Aprove e defina o consultor doador (origem dos leads).</p>
+              </div>
+              {loadingLeadRequests ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+                </div>
+              ) : leadRequests.length === 0 ? (
+                <div className="py-12 text-center text-gray-500 dark:text-gray-400 text-sm">Nenhuma solicitação no momento.</div>
+              ) : (
+                <div className="overflow-x-auto border border-gray-200 dark:border-[#404040] rounded-xl">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 dark:bg-[#333] text-left">
+                      <tr>
+                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Gerente</th>
+                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Banca</th>
+                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Tipo de lead</th>
+                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Resumo</th>
+                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Status</th>
+                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Data</th>
+                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Ação</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200 dark:divide-[#404040]">
+                      {leadRequests.map((req) => {
+                        const totalLeads = (req.consultores ?? []).reduce((s, c) => s + c.quantity, 0);
+                        const summary = `${(req.consultores ?? []).length} consultor(es), ${totalLeads} lead(s)`;
+                        return (
+                          <tr key={req.id} className="hover:bg-gray-50 dark:hover:bg-[#333]/50">
+                            <td className="px-4 py-3 text-gray-900 dark:text-white font-medium">{req.gerente_name}</td>
+                            <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{req.banca_name ?? (req.banca_id ? req.banca_id : '-')}</td>
+                            <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{req.lead_type_label}</td>
+                            <td className="px-4 py-3 text-gray-600 dark:text-gray-400">{summary}</td>
+                            <td className="px-4 py-3">
+                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${req.status === 'pending' ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200' : req.status === 'approved' ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-200' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'}`}>
+                                {req.status === 'pending' ? 'Pendente' : req.status === 'approved' ? 'Aprovada' : 'Rejeitada'}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-gray-500 dark:text-gray-400">{formatDatePtBR(req.created_at)}</td>
+                            <td className="px-4 py-3">
+                              {req.status === 'pending' && (
+                                <button
+                                  type="button"
+                                  onClick={() => openApproveModal(req)}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-[#8CD955] text-white hover:bg-[#7BC84A] transition-colors"
+                                >
+                                  <CheckCircle2 className="w-4 h-4" />
+                                  Aprovar
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          ) : activeTab === 'history' ? (
             /* Conteúdo da aba Histórico (Gestão) - colapsado em aba separada */
             <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl border border-gray-200 dark:border-[#404040] p-5 shadow-sm ring-1 ring-gray-100 dark:ring-transparent">
               <div className="mb-4">
@@ -1834,7 +2138,7 @@ export default function AdminLeadTransferPage() {
                     {backfillingBalances && (
                       <div className="mx-4 mt-2 flex items-center gap-2 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-4 py-2.5 text-sm text-amber-800 dark:text-amber-200">
                         <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
-                        <span>Recalculando saldo em segundo plano (lotes de 2000 leads). Os valores abaixo serão atualizados automaticamente a cada poucos segundos.</span>
+                        <span>Salvando saldo e dados no CRM… A lista é atualizada conforme cada lead é processado.</span>
                       </div>
                     )}
                     <div className="p-4 text-sm text-gray-700 dark:text-gray-200 border-b border-gray-100 dark:border-[#404040] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -1881,10 +2185,11 @@ export default function AdminLeadTransferPage() {
                                 type="button"
                                 onClick={runRecalcBalanceForLog}
                                 disabled={backfillingBalances}
+                                title="Busca o saldo atual dos leads no CRM e grava no banco como snapshot para futura verificação"
                                 className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold bg-[#8CD955]/10 text-[#6B8E3F] hover:bg-[#8CD955]/20 border border-[#8CD955]/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95"
                               >
                                 {backfillingBalances ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                                {backfillingBalances ? 'Recalculando…' : 'Recalcular saldo'}
+                                {backfillingBalances ? 'Salvando…' : 'Salvar saldo atual'}
                               </button>
 
                               {modalDeadline.expired && (
@@ -3193,6 +3498,113 @@ export default function AdminLeadTransferPage() {
               <button type="button" onClick={confirmTransfer} disabled={transferring || !canExecuteTransfer || (selectedCount > 50 && !confirmAcknowledged)} className="px-4 py-2 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A] disabled:opacity-50 flex items-center gap-2">
                 {transferring ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                 Confirmar transferência
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Aprovar solicitação de leads (consultor doador + edição) */}
+      {approveModalOpen && selectedRequestForApprove && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-hidden flex flex-col border border-gray-200 dark:border-gray-700">
+            <div className="p-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-[#A8E677] to-[#8CD955] text-white">
+              <h2 className="text-lg font-bold">Aprovar solicitação</h2>
+              <button type="button" onClick={closeApproveModal} className="hover:bg-white/20 p-1.5 rounded-xl transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 overflow-y-auto flex-1 space-y-4">
+              <p className="text-sm text-gray-700 dark:text-gray-200">
+                <strong>Gerente:</strong> {selectedRequestForApprove.gerente_name}
+              </p>
+              {selectedRequestForApprove.banca_name && (
+                <p className="text-sm text-gray-700 dark:text-gray-200">
+                  <strong>Banca para transferência:</strong> {selectedRequestForApprove.banca_name}
+                </p>
+              )}
+              <div>
+                <label className="block text-xs font-bold text-gray-600 dark:text-gray-400 uppercase mb-1">Tipo de lead (múltipla escolha)</label>
+                <div className="space-y-2 border border-gray-300 dark:border-[#555] dark:bg-[#333] rounded-lg p-2">
+                  {LEAD_TYPE_OPTIONS.map((o) => (
+                    <label key={o.value} className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={approveFormLeadTypes.includes(o.value)}
+                        onChange={() => toggleApproveFormLeadType(o.value)}
+                        className="rounded text-[#8CD955] focus:ring-[#8CD955]"
+                      />
+                      <span className="text-sm text-gray-800 dark:text-white">{o.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-600 dark:text-gray-400 uppercase mb-1">Consultores recebedores e quantidade</label>
+                <div className="space-y-2 max-h-40 overflow-y-auto border border-gray-200 dark:border-[#404040] rounded-lg p-2 bg-gray-50 dark:bg-gray-800/30">
+                  {approveFormConsultores.map((c, idx) => (
+                    <div key={c.consultor_id} className="flex items-center gap-2">
+                      <span className="flex-1 text-sm text-gray-800 dark:text-gray-200 truncate">{c.consultor_name ?? c.consultor_id}</span>
+                      <input
+                        type="number"
+                        min={1}
+                        value={c.quantity}
+                        onChange={(e) => {
+                          const v = parseInt(e.target.value, 10);
+                          if (Number.isNaN(v) || v < 1) return;
+                          setApproveFormConsultores((prev) => {
+                            const next = [...prev];
+                            next[idx] = { ...next[idx], quantity: v };
+                            return next;
+                          });
+                        }}
+                        className="w-20 px-2 py-1 text-sm border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg focus:ring-2 focus:ring-[#8CD955]"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-600 dark:text-gray-400 uppercase mb-1">Consultor doador (origem dos leads) *</label>
+                {!selectedRequestForApprove.banca_id?.trim() ? (
+                  <p className="text-sm text-amber-600 dark:text-amber-400">Esta solicitação não possui banca definida. Não é possível selecionar o doador.</p>
+                ) : loadingApproveModalConsultants ? (
+                  <div className="flex items-center gap-2 py-2 text-sm text-gray-500 dark:text-gray-400">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Carregando consultores da banca da solicitação...
+                  </div>
+                ) : (
+                  <select
+                    value={approveFormSourceConsultantId}
+                    onChange={(e) => setApproveFormSourceConsultantId(e.target.value)}
+                    className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#8CD955]"
+                  >
+                    <option value="">Selecionar consultor doador</option>
+                    {approveModalConsultants.map((c) => (
+                      <option key={c.id} value={c.id}>{c.full_name ?? c.email ?? c.id}</option>
+                    ))}
+                  </select>
+                )}
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1.5">Consultores da banca da solicitação ({selectedRequestForApprove.banca_name ?? 'banca selecionada'}). Ao aprovar, o sistema busca leads do doador que atendem aos tipos selecionados, verifica disponibilidade e realiza a transferência automaticamente.</p>
+              </div>
+            </div>
+            <div className="p-4 border-t border-gray-100 dark:border-gray-700 flex gap-3">
+              <button
+                type="button"
+                onClick={handleRejectRequest}
+                disabled={approveRejecting || approveSubmitting}
+                className="flex-1 px-4 py-2.5 rounded-xl text-sm font-bold bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50"
+              >
+                {approveRejecting ? 'Rejeitando...' : 'Rejeitar'}
+              </button>
+              <button
+                type="button"
+                onClick={handleApproveRequest}
+                disabled={approveSubmitting || approveRejecting || !approveFormSourceConsultantId.trim() || !selectedRequestForApprove.banca_id?.trim() || approveFormLeadTypes.length === 0 || loadingApproveModalConsultants}
+                className="flex-1 px-4 py-2.5 rounded-xl text-sm font-bold bg-[#8CD955] text-white hover:bg-[#7BC84A] disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {approveSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                {approveSubmitting ? 'Aprovando...' : 'Aprovar'}
               </button>
             </div>
           </div>

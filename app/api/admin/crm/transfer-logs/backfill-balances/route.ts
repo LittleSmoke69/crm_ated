@@ -10,6 +10,15 @@ const LOG_PREFIX = '[admin][transfer-logs][backfill-balances]';
 /** Tamanho do lote ao buscar leads no CRM (recalcular saldo em segundo plano). */
 const BATCH_SIZE = 2000;
 
+/** Snapshot por lead vindo do CRM para gravar em admin_lead_transfer_entries. */
+type LeadSnapshot = {
+  balance: number;
+  total_depositado: number | null;
+  total_apostado: number | null;
+  total_ganho: number | null;
+  available_withdraw: number | null;
+};
+
 /**
  * POST /api/admin/crm/transfer-logs/backfill-balances
  *
@@ -44,6 +53,8 @@ export async function POST(req: NextRequest) {
 
     // Recalcular para uma transferência: buscar saldos no CRM (leads transferidos), atualizar entries e somar no log
     if (logIdParam && bancaIdParam) {
+      const streamRequested = req.nextUrl.searchParams.get('stream') === '1';
+
       const resolved = await getAdminBancaId(userId, profile, bancaIdParam);
       if (!resolved) {
         return errorResponse('Banca não encontrada ou sem permissão.', 403);
@@ -80,22 +91,123 @@ export async function POST(req: NextRequest) {
       const client = createCrmRedistributionClient(resolved.crmBaseUrl);
       let totalUpdated = 0;
 
-      const updateLogTotal = async () => {
-        const { data: entriesSum, error: sumError } = await supabaseServiceRole
-          .from('admin_lead_transfer_entries')
-          .select('id, saldo_snapshot')
-          .eq('banca_id', resolved.bancaId)
-          .eq('transfer_log_id', logIdParam);
-        if (sumError) return;
-        const total = (Array.isArray(entriesSum) ? entriesSum : []).reduce((s, e) => s + (e.saldo_snapshot != null ? Number(e.saldo_snapshot) : 0), 0);
-        await supabaseServiceRole
-          .from('admin_lead_transfer_logs')
-          .update({ total_balance_snapshot: total })
-          .eq('id', logIdParam);
+      const pushEntryLine = (controller: ReadableStreamDefaultController<Uint8Array>, entry: { lead_id: string | number }, snap: LeadSnapshot) => {
+        const hadBalance = snap.balance > 0;
+        const line =
+          JSON.stringify({
+            type: 'entry',
+            lead_id: entry.lead_id,
+            saldo_snapshot: snap.balance,
+            had_balance: hadBalance,
+            total_depositado_snapshot: snap.total_depositado,
+            total_apostado_snapshot: snap.total_apostado,
+            total_ganho_snapshot: snap.total_ganho,
+            available_withdraw_snapshot: snap.available_withdraw,
+          }) + '\n';
+        controller.enqueue(new TextEncoder().encode(line));
       };
+
+      if (streamRequested) {
+        const stream = new ReadableStream({
+          async start(controller) {
+            try {
+              for (const [targetEmail, groupEntries] of byTarget) {
+                try {
+                  const snapshotByLeadId = new Map<string, LeadSnapshot>();
+                  let page = 1;
+                  let hasMore = true;
+                  while (hasMore) {
+                    const result = await client.getIndicatedsByConsultant(targetEmail, BATCH_SIZE, page, {
+                      transferredFilter: 'yes',
+                      sort: 'created_at',
+                      direction: 'desc',
+                    });
+                    const details = Array.isArray(result.data) ? result.data : [];
+                    for (const d of details) {
+                      const id = d?.id != null ? String(d.id) : '';
+                      if (!id) continue;
+                      const rawBalance = (d as { balance?: number; saldo?: number }).balance ?? (d as { balance?: number; saldo?: number }).saldo;
+                      const balance = rawBalance != null && Number.isFinite(Number(rawBalance)) ? Number(rawBalance) : 0;
+                      const totalDep = d.total_depositado != null && Number.isFinite(Number(d.total_depositado)) ? Number(d.total_depositado) : null;
+                      const totalApost = d.total_apostado != null && Number.isFinite(Number(d.total_apostado)) ? Number(d.total_apostado) : null;
+                      const totalGanho = d.total_ganho != null && Number.isFinite(Number(d.total_ganho)) ? Number(d.total_ganho) : null;
+                      const availWithdraw = d.available_withdraw != null && Number.isFinite(Number(d.available_withdraw)) ? Number(d.available_withdraw) : null;
+                      snapshotByLeadId.set(id, {
+                        balance,
+                        total_depositado: totalDep,
+                        total_apostado: totalApost,
+                        total_ganho: totalGanho,
+                        available_withdraw: availWithdraw,
+                      });
+                    }
+                    const lastPage = result.pagination?.last_page ?? 1;
+                    if (details.length < BATCH_SIZE || page >= lastPage) hasMore = false;
+                    else page += 1;
+                  }
+
+                  for (const entry of groupEntries) {
+                    const leadId = String(entry.lead_id ?? '');
+                    const snap = snapshotByLeadId.get(leadId);
+                    if (!snap) continue;
+
+                    const { error: updateError } = await supabaseServiceRole
+                      .from('admin_lead_transfer_entries')
+                      .update({
+                        saldo_snapshot: snap.balance,
+                        had_balance: snap.balance > 0,
+                        total_depositado_snapshot: snap.total_depositado,
+                        total_apostado_snapshot: snap.total_apostado,
+                        total_ganho_snapshot: snap.total_ganho,
+                        available_withdraw_snapshot: snap.available_withdraw,
+                      })
+                      .eq('id', entry.id);
+
+                    if (!updateError) {
+                      totalUpdated += 1;
+                      pushEntryLine(controller, entry, snap);
+                    }
+                  }
+                } catch (err: unknown) {
+                  const msg = err instanceof Error ? err.message : String(err);
+                  console.warn(`${LOG_PREFIX} CRM failed for log ${logIdParam} target ${targetEmail}:`, msg);
+                }
+              }
+
+              const { data: entriesAfter, error: fetchAfterError } = await supabaseServiceRole
+                .from('admin_lead_transfer_entries')
+                .select('id, saldo_snapshot')
+                .eq('banca_id', resolved.bancaId)
+                .eq('transfer_log_id', logIdParam);
+
+              let totalBalance = 0;
+              if (!fetchAfterError && Array.isArray(entriesAfter)) {
+                totalBalance = entriesAfter.reduce((sum, e) => sum + (e.saldo_snapshot != null ? Number(e.saldo_snapshot) : 0), 0);
+              }
+              await supabaseServiceRole
+                .from('admin_lead_transfer_logs')
+                .update({ total_balance_snapshot: totalBalance })
+                .eq('id', logIdParam);
+
+              const message = `Total saldo antes: R$ ${totalBalance.toFixed(2).replace('.', ',')} (${list.length} lead(s)). ${totalUpdated} saldo(s) atualizado(s).`;
+              controller.enqueue(
+                new TextEncoder().encode(JSON.stringify({ type: 'done', updated: totalUpdated, totalBalance, message }) + '\n')
+              );
+            } catch (err: unknown) {
+              const msg = err instanceof Error ? err.message : String(err);
+              controller.enqueue(new TextEncoder().encode(JSON.stringify({ type: 'error', error: msg }) + '\n'));
+            } finally {
+              controller.close();
+            }
+          },
+        });
+        return new Response(stream, {
+          headers: { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store' },
+        });
+      }
 
       for (const [targetEmail, groupEntries] of byTarget) {
         try {
+          const snapshotByLeadId = new Map<string, LeadSnapshot>();
           let page = 1;
           let hasMore = true;
           while (hasMore) {
@@ -105,35 +217,47 @@ export async function POST(req: NextRequest) {
               direction: 'desc',
             });
             const details = Array.isArray(result.data) ? result.data : [];
-            const balanceByLeadId = new Map<string, number>();
             for (const d of details) {
               const id = d?.id != null ? String(d.id) : '';
               if (!id) continue;
-              const raw = (d as { balance?: number; saldo?: number }).balance ?? (d as { balance?: number; saldo?: number }).saldo;
-              const balance = raw != null ? Number(raw) : 0;
-              balanceByLeadId.set(id, Number.isFinite(balance) ? balance : 0);
+              const rawBalance = (d as { balance?: number; saldo?: number }).balance ?? (d as { balance?: number; saldo?: number }).saldo;
+              const balance = rawBalance != null && Number.isFinite(Number(rawBalance)) ? Number(rawBalance) : 0;
+              const totalDep = d.total_depositado != null && Number.isFinite(Number(d.total_depositado)) ? Number(d.total_depositado) : null;
+              const totalApost = d.total_apostado != null && Number.isFinite(Number(d.total_apostado)) ? Number(d.total_apostado) : null;
+              const totalGanho = d.total_ganho != null && Number.isFinite(Number(d.total_ganho)) ? Number(d.total_ganho) : null;
+              const availWithdraw = d.available_withdraw != null && Number.isFinite(Number(d.available_withdraw)) ? Number(d.available_withdraw) : null;
+              snapshotByLeadId.set(id, {
+                balance,
+                total_depositado: totalDep,
+                total_apostado: totalApost,
+                total_ganho: totalGanho,
+                available_withdraw: availWithdraw,
+              });
             }
-
-            for (const entry of groupEntries) {
-              const leadId = String(entry.lead_id ?? '');
-              if (!balanceByLeadId.has(leadId)) continue;
-              const balance = balanceByLeadId.get(leadId)!;
-              const hadBalance = balance > 0;
-              const saldoToSave = Number.isFinite(balance) ? balance : 0;
-
-              const { error: updateError } = await supabaseServiceRole
-                .from('admin_lead_transfer_entries')
-                .update({ saldo_snapshot: saldoToSave, had_balance: hadBalance })
-                .eq('id', entry.id);
-
-              if (!updateError) totalUpdated += 1;
-            }
-
-            await updateLogTotal();
-
             const lastPage = result.pagination?.last_page ?? 1;
             if (details.length < BATCH_SIZE || page >= lastPage) hasMore = false;
             else page += 1;
+          }
+
+          for (const entry of groupEntries) {
+            const leadId = String(entry.lead_id ?? '');
+            const snap = snapshotByLeadId.get(leadId);
+            if (!snap) continue;
+            const hadBalance = snap.balance > 0;
+
+            const { error: updateError } = await supabaseServiceRole
+              .from('admin_lead_transfer_entries')
+              .update({
+                saldo_snapshot: snap.balance,
+                had_balance: hadBalance,
+                total_depositado_snapshot: snap.total_depositado,
+                total_apostado_snapshot: snap.total_apostado,
+                total_ganho_snapshot: snap.total_ganho,
+                available_withdraw_snapshot: snap.available_withdraw,
+              })
+              .eq('id', entry.id);
+
+            if (!updateError) totalUpdated += 1;
           }
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -239,6 +363,14 @@ export async function POST(req: NextRequest) {
 
       const client = createCrmRedistributionClient(crmBaseUrl);
 
+      type LeadSnapshotGlobal = {
+        balance: number;
+        total_depositado: number | null;
+        total_apostado: number | null;
+        total_ganho: number | null;
+        available_withdraw: number | null;
+      };
+
       for (const [targetEmail, groupEntries] of byTargetConsultant) {
         try {
           const result = await client.getIndicatedsByConsultant(targetEmail, 2000, 1, {
@@ -247,26 +379,40 @@ export async function POST(req: NextRequest) {
             direction: 'desc',
           });
           const details = Array.isArray(result.data) ? result.data : [];
-          const balanceByLeadId = new Map<string, number>();
+          const snapshotByLeadId = new Map<string, LeadSnapshot>();
           for (const d of details) {
             const id = d?.id != null ? String(d.id) : '';
             if (!id) continue;
-            const raw = (d as { balance?: number; saldo?: number }).balance ?? (d as { balance?: number; saldo?: number }).saldo;
-            const balance = raw != null ? Number(raw) : 0;
-            balanceByLeadId.set(id, Number.isFinite(balance) ? balance : 0);
+            const rawBalance = (d as { balance?: number; saldo?: number }).balance ?? (d as { balance?: number; saldo?: number }).saldo;
+            const balance = rawBalance != null && Number.isFinite(Number(rawBalance)) ? Number(rawBalance) : 0;
+            const totalDep = d.total_depositado != null && Number.isFinite(Number(d.total_depositado)) ? Number(d.total_depositado) : null;
+            const totalApost = d.total_apostado != null && Number.isFinite(Number(d.total_apostado)) ? Number(d.total_apostado) : null;
+            const totalGanho = d.total_ganho != null && Number.isFinite(Number(d.total_ganho)) ? Number(d.total_ganho) : null;
+            const availWithdraw = d.available_withdraw != null && Number.isFinite(Number(d.available_withdraw)) ? Number(d.available_withdraw) : null;
+            snapshotByLeadId.set(id, {
+              balance,
+              total_depositado: totalDep,
+              total_apostado: totalApost,
+              total_ganho: totalGanho,
+              available_withdraw: availWithdraw,
+            });
           }
 
           for (const entry of groupEntries) {
             const leadId = String(entry.lead_id ?? '');
-            const balance = balanceByLeadId.get(leadId);
-            const hadBalance = balance != null && balance > 0;
-            const saldoToSave = balance != null && Number.isFinite(balance) ? balance : 0;
+            const snap = snapshotByLeadId.get(leadId);
+            if (!snap) continue;
+            const hadBalance = snap.balance > 0;
 
             const { error: updateError } = await supabaseServiceRole
               .from('admin_lead_transfer_entries')
               .update({
-                saldo_snapshot: saldoToSave,
+                saldo_snapshot: snap.balance,
                 had_balance: hadBalance,
+                total_depositado_snapshot: snap.total_depositado,
+                total_apostado_snapshot: snap.total_apostado,
+                total_ganho_snapshot: snap.total_ganho,
+                available_withdraw_snapshot: snap.available_withdraw,
               })
               .eq('id', entry.id);
 
