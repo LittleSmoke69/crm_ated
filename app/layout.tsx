@@ -14,10 +14,10 @@ const jetBrainsMono = JetBrains_Mono({
 });
 
 export const metadata = {
-  title: "ZapLoto — Operador WhatsApp",
+  title: "Zaploto",
   description: "Sistema interno premium de automação via WhatsApp",
   icons: {
-    icon: "/favicon.ico",
+    icon: "/logo_zaploto.png",
   },
 };
 

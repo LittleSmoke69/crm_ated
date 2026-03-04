@@ -25,8 +25,11 @@ export async function GET(req: NextRequest) {
           full_name,
           email,
           phone,
+          instagram_handle,
           status,
-          assigned_at
+          assigned_at,
+          zaplink_forms ( name, slug ),
+          crm_bancas ( name )
         )
       `)
       .eq('gerente_id', userId)
@@ -37,13 +40,30 @@ export async function GET(req: NextRequest) {
       return successResponse([]);
     }
 
-    const list = (notifications ?? []).map((n: any) => ({
-      id: n.id,
-      zaplink_submission_id: n.zaplink_submission_id,
-      seen_at: n.seen_at,
-      created_at: n.created_at,
-      submission: n.zaplink_form_submissions,
-    }));
+    const list = (notifications ?? []).map((n: any) => {
+      const sub = n.zaplink_form_submissions;
+      const form = Array.isArray(sub?.zaplink_forms) ? sub.zaplink_forms[0] : sub?.zaplink_forms;
+      const banca = Array.isArray(sub?.crm_bancas) ? sub.crm_bancas[0] : sub?.crm_bancas;
+      return {
+        id: n.id,
+        zaplink_submission_id: n.zaplink_submission_id,
+        seen_at: n.seen_at,
+        created_at: n.created_at,
+        submission: sub
+          ? {
+              id: sub.id,
+              full_name: sub.full_name,
+              email: sub.email,
+              phone: sub.phone,
+              instagram_handle: sub.instagram_handle ?? null,
+              status: sub.status,
+              assigned_at: sub.assigned_at,
+              form_name: form?.name ?? null,
+              banca_name: banca?.name ?? null,
+            }
+          : null,
+      };
+    });
 
     return successResponse(list);
   } catch (e) {

@@ -35,8 +35,12 @@ export function VturbPlayer({
     };
     document.head.appendChild(script);
     return () => {
-      script.remove();
       scriptLoadedRef.current = false;
+      try {
+        if (script.parentNode) script.parentNode.removeChild(script);
+      } catch {
+        // Nó pode já ter sido removido (ex.: navegação/hidratação) — evita "removeChild" no DOM
+      }
     };
   }, [scriptSrc, playerId]);
 

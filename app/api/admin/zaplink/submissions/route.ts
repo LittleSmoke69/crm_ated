@@ -1,6 +1,6 @@
 /**
- * GET /api/admin/zaplink/submissions - Lista submissões
- * Query: status=pending|assigned|all (default pending)
+ * GET /api/admin/zaplink/submissions - Lista submissões com paginação
+ * Query: status=pending|assigned|all (default pending), page=1, limit=20, form_id=...
  */
 import { NextRequest } from 'next/server';
 import { requireAdmin } from '@/lib/middleware/permissions';
@@ -9,16 +9,19 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 export const dynamic = 'force-dynamic';
 
+const DEFAULT_LIMIT = 20;
+const MAX_LIMIT = 100;
+
 export async function GET(req: NextRequest) {
   try {
     await requireAdmin(req);
 
     const status = req.nextUrl.searchParams.get('status') || 'pending';
     const formId = req.nextUrl.searchParams.get('form_id')?.trim() || null;
+    const page = Math.max(1, parseInt(req.nextUrl.searchParams.get('page') || '1', 10));
+    const limit = Math.min(MAX_LIMIT, Math.max(1, parseInt(req.nextUrl.searchParams.get('limit') || String(DEFAULT_LIMIT), 10)));
 
-    let query = supabaseServiceRole
-      .from('zaplink_form_submissions')
-      .select(`
+    const selectFields = `
         id,
         zaplink_form_id,
         full_name,
@@ -33,7 +36,11 @@ export async function GET(req: NextRequest) {
         created_at,
         zaplink_forms ( slug, name, form_type ),
         crm_bancas ( name )
-      `)
+      `;
+
+    let query = supabaseServiceRole
+      .from('zaplink_form_submissions')
+      .select(selectFields, { count: 'exact' })
       .order('created_at', { ascending: false });
 
     if (status !== 'all') {
@@ -43,7 +50,9 @@ export async function GET(req: NextRequest) {
       query = query.eq('zaplink_form_id', formId);
     }
 
-    const { data: rows, error } = await query;
+    const from = (page - 1) * limit;
+    const to = from + limit - 1;
+    const { data: rows, error, count } = await query.range(from, to);
 
     if (error) {
       return errorResponse(`Erro ao buscar submissões: ${error.message}`, 500);
@@ -83,7 +92,16 @@ export async function GET(req: NextRequest) {
       };
     });
 
-    return successResponse(data);
+    const total = typeof count === 'number' ? count : 0;
+    const totalPages = limit > 0 ? Math.ceil(total / limit) : 0;
+
+    return successResponse({
+      data,
+      total,
+      page,
+      limit,
+      total_pages: totalPages,
+    });
   } catch (e) {
     return serverErrorResponse(e);
   }
