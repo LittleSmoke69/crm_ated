@@ -194,6 +194,11 @@ export default function GerentePage() {
   // Modal Resumo do consultor (nome, email, leads, depositado, lucro + ações)
   const [resumoModalConsultor, setResumoModalConsultor] = useState<ConsultorMetric | null>(null);
 
+  // Zaplink notifications
+  const [zaplinkNotifications, setZaplinkNotifications] = useState<Array<{ id: string; message?: string; submission?: { full_name: string; phone?: string } }>>([]);
+  const [zaplinkModalOpen, setZaplinkModalOpen] = useState(false);
+  const [zaplinkBulkSending, setZaplinkBulkSending] = useState(false);
+
   // Filtros de banca e consultor
   const [bancas, setBancas] = useState<Array<{ id: string; name: string; url: string }>>([]);
   const [bancasLoading, setBancasLoading] = useState(true);
@@ -341,6 +346,20 @@ export default function GerentePage() {
     if (isAdminOrSuperAdmin && gerentes.length > 0 && !selectedGerente) return; // admin aguarda seleção de gerente
     loadData(false);
   }, [dateFilter, appliedStartDate, appliedEndDate, selectedBanca, selectedConsultor, selectedGerente, isAdminOrSuperAdmin, gerentes.length]);
+
+  // Carrega notificações Zaplink não vistas
+  useEffect(() => {
+    if (!userId) return;
+    fetch('/api/gerente/zaplink-notifications', { headers: { 'X-User-Id': userId } })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.success && Array.isArray(res.data) && res.data.length > 0) {
+          setZaplinkNotifications(res.data);
+          setZaplinkModalOpen(true);
+        }
+      })
+      .catch(() => {});
+  }, [userId]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -721,8 +740,82 @@ export default function GerentePage() {
     }
   };
 
+  const handleZaplinkMarkSeen = async () => {
+    if (!userId || zaplinkNotifications.length === 0) return;
+    try {
+      await fetch('/api/gerente/zaplink-notifications/mark-seen', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({
+          notification_ids: zaplinkNotifications.map((n) => n.id),
+        }),
+      });
+      setZaplinkNotifications([]);
+      setZaplinkModalOpen(false);
+    } catch {}
+  };
+
+  const handleZaplinkBulkSend = async () => {
+    if (!userId) return;
+    setZaplinkBulkSending(true);
+    try {
+      const res = await fetch('/api/gerente/zaplink-notifications/bulk-send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({
+          message: 'Olá, {{nome}}! Seu cadastro foi realizado com sucesso. Em breve nosso consultor entrará em contato.',
+        }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        handleZaplinkMarkSeen();
+      }
+    } catch {}
+    finally {
+      setZaplinkBulkSending(false);
+    }
+  };
+
   return (
     <Layout onSignOut={handleSignOut}>
+      {/* Modal Zaplink Notifications */}
+      {zaplinkModalOpen && zaplinkNotifications.length > 0 && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-xl max-w-md w-full p-6">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Novos consultores via Zaplink</h2>
+            <div className="space-y-2 mb-6 max-h-48 overflow-y-auto">
+              {zaplinkNotifications.map((n) => (
+                <p key={n.id} className="text-sm text-gray-600 dark:text-[#aaa]">
+                  Novo consultor atribuído via Zaplink: <strong>{n.submission?.full_name || '—'}</strong>. O consultor foi adicionado à sua hierarquia.
+                </p>
+              ))}
+            </div>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={handleZaplinkMarkSeen}
+                className="px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#404040] transition"
+              >
+                OK
+              </button>
+              <button
+                onClick={handleZaplinkBulkSend}
+                disabled={zaplinkBulkSending}
+                className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2 transition"
+              >
+                {zaplinkBulkSending ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    Enviando...
+                  </>
+                ) : (
+                  'Disparo em massa'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="w-full space-y-6 p-4 sm:p-6 bg-gray-50 dark:bg-[#1a1a1a] min-h-screen">
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">

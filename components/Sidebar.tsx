@@ -34,6 +34,7 @@ import {
   ExternalLink,
   ArrowRightLeft,
   BookOpen,
+  Link2,
 } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import Logo from '@/components/Logo';
@@ -133,7 +134,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const iconMap: Record<string, any> = {
     LayoutDashboard, MessageSquare, Rocket, Users, Plus, Shield, Webhook, Workflow, Bot, Layout,
     Kanban, Activity, BarChart3, Briefcase, Settings, FlaskConical, User, ListOrdered, ClipboardList,
-    ArrowLeftToLine, ExternalLink, ArrowRightLeft, BookOpen,
+    ArrowLeftToLine, ExternalLink, ArrowRightLeft, BookOpen, Link2,
   };
 
   useEffect(() => {
@@ -287,6 +288,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const itemMeuDesempenho: MenuItem = { href: '/consultor', icon: BarChart3, label: 'Meu Desempenho' };
   const itemMetaAds: MenuItem = { href: '/admin/meta', icon: BarChart3, label: 'Meta Ads' };
   const itemVslRedirect: MenuItem = { href: '/admin/vsl', icon: ExternalLink, label: 'VSL & Redirect' };
+  const itemZaplink: MenuItem = { href: '/admin/zaplink', icon: Link2, label: 'Zaplink' };
   const itemAcademy: MenuItem = {
     href: '/admin/academy',
     icon: BookOpen,
@@ -327,6 +329,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemGestaoBanca,
         itemGestaoTrafego,
         itemVslRedirect,
+        itemZaplink,
         itemGestaoConsultores,
         itemAcademy,
       ];
@@ -342,6 +345,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemWebhooks,
         itemMetaAds,
         itemVslRedirect,
+        itemZaplink,
         itemAcademy,
         itemAgentesIAAdmin,
         itemCRM,

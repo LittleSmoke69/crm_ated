@@ -342,10 +342,10 @@ export async function validateHierarchy(userId: string, status: UserStatus, enro
   // Trata string vazia como null (dono/superior opcional ao atribuir gerente)
   const enrollerId = (enroller != null && String(enroller).trim() !== '') ? String(enroller).trim() : null;
 
-  // Admin sempre deve ter enroller NULL
-  if (status === 'admin') {
+  // Admin e Super Admin sempre devem ter enroller NULL
+  if (status === 'admin' || status === 'super_admin') {
     if (enrollerId !== null) {
-      return { valid: false, error: 'Admin não pode ter enroller' };
+      return { valid: false, error: `${status === 'super_admin' ? 'Super Admin' : 'Admin'} não pode ter enroller` };
     }
     return { valid: true };
   }
