@@ -143,7 +143,7 @@ export default function AdminZaplinkPage() {
   const [fulfillModalRequest, setFulfillModalRequest] = useState<ConsultantRequest | null>(null);
   const [fulfillSubmissionIds, setFulfillSubmissionIds] = useState<string[]>([]);
   const [pendingSubmissionsForFulfill, setPendingSubmissionsForFulfill] = useState<
-    { id: string; full_name: string; email: string; phone?: string; instagram_handle?: string | null }[]
+    { id: string; full_name: string; email: string; phone?: string; instagram_handle?: string | null; form_name?: string | null; form_creator_name?: string | null }[]
   >([]);
   const [fulfillSubmitting, setFulfillSubmitting] = useState(false);
 
@@ -1114,7 +1114,7 @@ export default function AdminZaplinkPage() {
                                     const res = await fetch(`/api/admin/zaplink/submissions?status=pending&limit=100`, { headers: { 'X-User-Id': userId! } });
                                     const json = await res.json();
                                     if (json.success && json.data?.data) {
-                                      const list = json.data.data as { id: string; full_name: string; email: string; phone?: string; instagram_handle?: string | null }[];
+                                      const list = json.data.data as { id: string; full_name: string; email: string; phone?: string; instagram_handle?: string | null; form_name?: string | null; form_creator_name?: string | null }[];
                                       setPendingSubmissionsForFulfill(Array.isArray(list) ? list : []);
                                     } else {
                                       setPendingSubmissionsForFulfill([]);
@@ -1186,6 +1186,12 @@ export default function AdminZaplinkPage() {
                           <span className="text-xs text-gray-500 dark:text-[#888]">{s.email}</span>
                           {s.phone && <span className="text-xs text-gray-500 dark:text-[#888]">{s.phone}</span>}
                           {s.instagram_handle && <span className="text-xs text-pink-600 dark:text-pink-400">{s.instagram_handle}</span>}
+                          {(s.form_name || s.form_creator_name) && (
+                            <span className="text-xs text-blue-600 dark:text-blue-400 mt-0.5">
+                              Formulário: {s.form_name || '—'}
+                              {s.form_creator_name && ` • Criado por: ${s.form_creator_name}`}
+                            </span>
+                          )}
                         </div>
                       </label>
                     ))

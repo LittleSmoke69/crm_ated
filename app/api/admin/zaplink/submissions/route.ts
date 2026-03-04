@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
         consultor_user_id,
         assigned_at,
         created_at,
-        zaplink_forms ( slug, name, form_type ),
+        zaplink_forms ( slug, name, form_type, gestor_trafego_user_id ),
         crm_bancas ( name )
       `;
 
@@ -84,15 +84,42 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    type ZaplinkFormRow = { slug?: string; name?: string; form_type?: string; gestor_trafego_user_id?: string | null } | null;
+    const formCreatorIds = [...new Set(
+      list
+        .map((r: Row) => (r.zaplink_forms as ZaplinkFormRow)?.gestor_trafego_user_id)
+        .filter(Boolean)
+    )] as string[];
+    let formCreatorNames: Record<string, string> = {};
+    if (formCreatorIds.length > 0) {
+      const { data: creatorProfiles } = await supabaseServiceRole
+        .from('profiles')
+        .select('id, full_name, email')
+        .in('id', formCreatorIds);
+      formCreatorNames = (creatorProfiles ?? []).reduce(
+        (acc, p: { id: string; full_name: string | null; email: string }) => {
+          acc[p.id] = p.full_name?.trim() || p.email || '—';
+          return acc;
+        },
+        {} as Record<string, string>
+      );
+    }
+
     const data = list.map((r: Row) => {
       const { crm_bancas, ...rest } = r;
       const bancaName = Array.isArray(crm_bancas)
         ? (crm_bancas[0]?.name ?? null)
         : (crm_bancas?.name ?? null);
+      const zf = r.zaplink_forms as ZaplinkFormRow;
+      const formName = zf?.name ?? null;
+      const formCreatorId = zf?.gestor_trafego_user_id ?? null;
+      const formCreatorName = formCreatorId ? (formCreatorNames[formCreatorId] ?? null) : null;
       return {
         ...rest,
         banca_name: bancaName,
         gerente_name: r.gerente_id ? gerenteNames[r.gerente_id] ?? null : null,
+        form_name: formName,
+        form_creator_name: formCreatorName,
       };
     });
 
