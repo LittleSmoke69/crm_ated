@@ -23,6 +23,8 @@ const bodySchema = z.object({
   target_consultant_email: z.string().email(),
   leads_ids: z.array(z.union([z.number(), z.string()])).min(1),
   transfer_type: transferTypeEnum.optional().default('TF'),
+  /** Prazo em dias para conversão (definido pelo usuário no passo Destino). */
+  transfer_deadline_days: z.number().int().min(1).max(365).optional().default(10),
   filters_snapshot: z.record(z.string(), z.unknown()).optional(),
   lead_snapshots: z.array(leadSnapshotSchema).optional(),
 }).refine(
@@ -58,7 +60,7 @@ export async function POST(req: NextRequest) {
       return errorResponse(msg, 400);
     }
 
-    const { banca_id, source_consultant_email, target_consultant_email, leads_ids, transfer_type, filters_snapshot, lead_snapshots } = parsed.data;
+    const { banca_id, source_consultant_email, target_consultant_email, leads_ids, transfer_type, transfer_deadline_days, filters_snapshot, lead_snapshots } = parsed.data;
     const ctx = await requireAdminLeadTransferContext(req, banca_id);
     console.log(`${LOG_PREFIX} POST context: userId=${ctx.userId}, bancaId=${ctx.bancaId}, crmBaseUrl=${ctx.crmBaseUrl}, bancaName=${ctx.bancaName ?? 'n/a'}`);
 
@@ -102,6 +104,7 @@ export async function POST(req: NextRequest) {
         leads_ids,
         count,
         transfer_type,
+        deadline_days: transfer_deadline_days,
         filters_snapshot: filters_snapshot ?? null,
         crm_response: result as unknown as Record<string, unknown>,
       })

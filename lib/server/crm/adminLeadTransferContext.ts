@@ -19,6 +19,29 @@ export interface AdminLeadTransferContext {
 }
 
 /**
+ * Retorna os IDs de todas as bancas permitidas para admin/super_admin (para filtro "Todas as Bancas").
+ * @param zaplotoId - ID do tenant (ex.: de getEffectiveZaplotoId)
+ * @returns Array de banca_ids ou null se não for admin/super_admin
+ */
+export async function getAdminAllowedBancaIds(
+  profile: UserProfile,
+  zaplotoId: string | null
+): Promise<string[] | null> {
+  const isAdminOrSuper = profile.status === 'admin' || profile.status === 'super_admin';
+  if (!isAdminOrSuper) return null;
+
+  const base = supabaseServiceRole
+    .from('crm_bancas')
+    .select('id')
+    .order('name', { ascending: true });
+  const { data: rows, error } = zaplotoId
+    ? await base.or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`)
+    : await base;
+  if (error || !Array.isArray(rows)) return [];
+  return rows.map((r: { id: string }) => r.id);
+}
+
+/**
  * Obtém banca_id permitida para o usuário.
  * Admin e super_admin: qualquer banca_id existente em crm_bancas (controle total na transferência de leads).
  */
