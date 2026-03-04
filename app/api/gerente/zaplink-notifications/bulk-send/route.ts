@@ -1,7 +1,8 @@
 /**
  * POST /api/gerente/zaplink-notifications/bulk-send
- * Envia mensagem via Evolution sendText para os telefones dos leads das submissões atribuídas
- * Usa notificações não vistas do gerente para obter os telefones
+ * Envia mensagem via Evolution sendText para os telefones dos leads das submissões atribuídas.
+ * Usa a instância MESTRE do gerente (não Loto Assistência).
+ * Loto Assistência é usada apenas para avisar quando um consultor é atribuído (banca e nome do gerente).
  */
 import { NextRequest } from 'next/server';
 import { requireStatus } from '@/lib/middleware/permissions';
@@ -19,16 +20,8 @@ function normalizePhone(input: string): string {
   return num;
 }
 
-async function getLotoAssistenciaInstance() {
-  const { data: row } = await supabaseServiceRole
-    .from('system_settings')
-    .select('value')
-    .eq('key', 'loto_assistencia_instance_id')
-    .maybeSingle();
-
-  const instanceId = row?.value;
-  if (!instanceId) return null;
-
+/** Retorna a instância mestre do gerente (conectada), para uso no disparo em massa. */
+async function getGerenteMasterInstance(gerenteUserId: string) {
   const { data: instance, error } = await supabaseServiceRole
     .from('evolution_instances')
     .select(`
@@ -37,8 +30,12 @@ async function getLotoAssistenciaInstance() {
       apikey,
       evolution_apis ( base_url )
     `)
-    .eq('id', instanceId)
-    .single();
+    .eq('user_id', gerenteUserId)
+    .eq('is_master', true)
+    .eq('is_active', true)
+    .in('status', ['ok', 'open', 'connected'])
+    .limit(1)
+    .maybeSingle();
 
   if (error || !instance) return null;
   const apis = instance.evolution_apis as { base_url?: string } | { base_url?: string }[];
@@ -56,7 +53,13 @@ export async function POST(req: NextRequest) {
     const { userId } = await requireStatus(req, ['gerente']);
 
     const body = await req.json().catch(() => ({}));
-    const message = typeof body.message === 'string' ? body.message.trim() : 'Olá! Seu cadastro foi realizado com sucesso. Em breve nosso consultor entrará em contato.';
+    const message =
+      typeof body.message === 'string' && body.message.trim()
+        ? body.message.trim()
+        : 'Olá, {{nome}}! Seu cadastro foi realizado com sucesso. Em breve nosso consultor entrará em contato.';
+    const delayMinutes = Math.max(0, Number(body.delay_minutes) || 0);
+    const delaySecs = Math.max(0, Number(body.delay_seconds) || 0);
+    const delaySeconds = Math.min(3600, delayMinutes * 60 + delaySecs);
 
     const { data: notifications, error: notifError } = await supabaseServiceRole
       .from('zaplink_gerente_notifications')
@@ -72,13 +75,20 @@ export async function POST(req: NextRequest) {
       return successResponse({ sent: 0 }, 'Nenhuma notificação para disparar');
     }
 
-    const evolution = await getLotoAssistenciaInstance();
+    const evolution = await getGerenteMasterInstance(userId);
     if (!evolution) {
-      return errorResponse('Instância Loto Assistência não configurada', 503);
+      return errorResponse('Nenhuma instância mestre conectada encontrada para o seu usuário. Conecte uma instância mestre em Instâncias.', 503);
     }
 
+    const delayMs = delaySeconds * 1000;
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
     let sent = 0;
+    let isFirst = true;
     for (const n of notifications) {
+      if (!isFirst && delayMs > 0) await sleep(delayMs);
+      isFirst = false;
+
       const sub = n.zaplink_form_submissions as { full_name?: string; phone?: string } | null;
       if (!sub?.phone) continue;
 
@@ -86,7 +96,7 @@ export async function POST(req: NextRequest) {
       if (phoneNorm.length < 12) continue;
 
       const remoteJid = phoneNorm.includes('@') ? phoneNorm : `${phoneNorm}@s.whatsapp.net`;
-      const personalizedMsg = message.replace(/\{\{nome\}\}/g, sub.full_name || '');
+      const personalizedMsg = message.replace(/\{\{nome\}\}/gi, sub.full_name || '');
 
       try {
         await chatService.sendMessage(
@@ -102,6 +112,14 @@ export async function POST(req: NextRequest) {
         console.error('[zaplink/bulk-send] Erro ao enviar para', phoneNorm, sendErr);
       }
     }
+
+    const messagePreview = message.slice(0, 200);
+    await supabaseServiceRole.from('zaplink_bulk_send_log').insert({
+      gerente_id: userId,
+      sent_count: sent,
+      message_preview: messagePreview,
+      delay_seconds: delaySeconds,
+    });
 
     return successResponse({ sent }, `Mensagem enviada para ${sent} contato(s)`);
   } catch (e) {

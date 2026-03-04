@@ -20,6 +20,7 @@ import {
   AlertCircle,
   ArrowRightLeft,
 } from 'lucide-react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 interface ZaplinkLink {
   id: string;
@@ -76,6 +77,15 @@ interface GerenteOption {
   email: string;
 }
 
+/** Dados do gráfico: atribuições por banca e gerente */
+interface ByGerenteBancaRow {
+  banca_id: string;
+  banca_name: string;
+  gerente_id: string;
+  gerente_name: string;
+  count: number;
+}
+
 export default function AdminZaplinkPage() {
   const { checking, userId } = useRequireAuth();
   const [links, setLinks] = useState<ZaplinkLink[]>([]);
@@ -87,7 +97,11 @@ export default function AdminZaplinkPage() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'links' | 'forms' | 'submissions'>('links');
   const [submissionsFilter, setSubmissionsFilter] = useState<'pending' | 'assigned'>('pending');
+  const [submissionsPage, setSubmissionsPage] = useState(1);
+  const [submissionsTotal, setSubmissionsTotal] = useState(0);
+  const SUBMISSIONS_LIMIT = 20;
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [chartByGerente, setChartByGerente] = useState<ByGerenteBancaRow[]>([]);
 
   const [linkForm, setLinkForm] = useState({ slug: '', target_url: '', title: '' });
   const [formForm, setFormForm] = useState({ slug: '', name: '', form_type: 'consultor' as 'consultor' | 'influenciador' });
@@ -125,12 +139,16 @@ export default function AdminZaplinkPage() {
     if (!userId) return;
     setLoading(true);
     try {
-      const [linksRes, formsRes, subsRes, metricsRes, bancasRes] = await Promise.all([
+      const [linksRes, formsRes, subsRes, metricsRes, bancasRes, byGerenteRes] = await Promise.all([
         fetch('/api/admin/zaplink/links', { headers: { 'X-User-Id': userId } }),
         fetch('/api/admin/zaplink/forms', { headers: { 'X-User-Id': userId } }),
-        fetch(`/api/admin/zaplink/submissions?status=${submissionsFilter}`, { headers: { 'X-User-Id': userId } }),
+        fetch(
+          `/api/admin/zaplink/submissions?status=${submissionsFilter}&page=${submissionsPage}&limit=${SUBMISSIONS_LIMIT}`,
+          { headers: { 'X-User-Id': userId } }
+        ),
         fetch('/api/admin/zaplink/metrics', { headers: { 'X-User-Id': userId } }),
         fetch('/api/admin/crm/bancas', { headers: { 'X-User-Id': userId } }),
+        fetch('/api/admin/zaplink/stats/by-gerente', { headers: { 'X-User-Id': userId } }),
       ]);
 
       const linksJson = await linksRes.json();
@@ -138,18 +156,29 @@ export default function AdminZaplinkPage() {
       const subsJson = await subsRes.json();
       const metricsJson = await metricsRes.json();
       const bancasJson = await bancasRes.json();
+      const byGerenteJson = await byGerenteRes.json();
 
       if (linksJson.success) setLinks(linksJson.data ?? []);
       if (formsJson.success) setForms(formsJson.data ?? []);
-      if (subsJson.success) setSubmissions(subsJson.data ?? []);
+      if (subsJson.success) {
+        const payload = subsJson.data;
+        const list = payload?.data ?? [];
+        setSubmissions(Array.isArray(list) ? list : []);
+        setSubmissionsTotal(typeof payload?.total === 'number' ? payload.total : 0);
+      }
       if (metricsJson.success) setMetrics(metricsJson.data ?? null);
       if (bancasJson.success) setBancas(bancasJson.data ?? []);
+      if (byGerenteJson.success && Array.isArray(byGerenteJson.data)) {
+        setChartByGerente(byGerenteJson.data as ByGerenteBancaRow[]);
+      } else {
+        setChartByGerente([]);
+      }
     } catch (e) {
       showToast('error', 'Erro ao carregar dados');
     } finally {
       setLoading(false);
     }
-  }, [userId, submissionsFilter]);
+  }, [userId, submissionsFilter, submissionsPage]);
 
   const loadGerentesForBanca = useCallback(async (bancaId: string) => {
     if (!userId || !bancaId) return;
@@ -429,6 +458,45 @@ export default function AdminZaplinkPage() {
           </div>
         )}
 
+        {/* Gráfico: leads atribuídos por gerente e banca */}
+        {chartByGerente.length > 0 && (
+          <div className="mb-8 bg-white dark:bg-[#2a2a2a] rounded-xl p-4 border border-gray-200 dark:border-[#404040]">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+              <BarChart3 className="w-5 h-5 text-green-600 dark:text-green-400" />
+              Leads atribuídos por gerente e banca
+            </h2>
+            <div className="h-[320px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={chartByGerente.map((r) => ({
+                    name: `${r.gerente_name} (${r.banca_name})`,
+                    count: r.count,
+                    gerente: r.gerente_name,
+                    banca: r.banca_name,
+                  }))}
+                  margin={{ top: 8, right: 24, left: 8, bottom: 60 }}
+                  layout="vertical"
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#404040" />
+                  <XAxis type="number" tick={{ fill: '#9ca3af', fontSize: 12 }} />
+                  <YAxis
+                    type="category"
+                    dataKey="name"
+                    width={180}
+                    tick={{ fill: '#9ca3af', fontSize: 11 }}
+                    tickFormatter={(v) => (v.length > 35 ? v.slice(0, 32) + '…' : v)}
+                  />
+                  <Tooltip
+                    formatter={(value: number) => [value, 'Atribuídos']}
+                    contentStyle={{ backgroundColor: 'var(--tooltip-bg, #1f2937)', border: '1px solid #404040', borderRadius: '8px' }}
+                  />
+                  <Bar dataKey="count" fill="#22c55e" radius={[0, 4, 4, 0]} name="Atribuídos" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        )}
+
         {/* Tabs */}
         <div className="flex gap-2 mb-6 border-b border-gray-200 dark:border-[#404040]">
           {(['links', 'forms', 'submissions'] as const).map((tab) => (
@@ -627,27 +695,35 @@ export default function AdminZaplinkPage() {
         {/* Submissions */}
         {activeTab === 'submissions' && (
           <div className="space-y-4">
-            <div className="flex gap-2">
-              <button
-                onClick={() => setSubmissionsFilter('pending')}
-                className={`px-4 py-2 rounded-lg font-medium text-sm transition ${
-                  submissionsFilter === 'pending'
-                    ? 'bg-amber-500 text-white'
-                    : 'bg-gray-100 dark:bg-[#333] text-gray-600 dark:text-[#aaa] hover:bg-gray-200 dark:hover:bg-[#404040]'
-                }`}
-              >
-                Pendentes
-              </button>
-              <button
-                onClick={() => setSubmissionsFilter('assigned')}
-                className={`px-4 py-2 rounded-lg font-medium text-sm transition ${
-                  submissionsFilter === 'assigned'
-                    ? 'bg-green-600 text-white'
-                    : 'bg-gray-100 dark:bg-[#333] text-gray-600 dark:text-[#aaa] hover:bg-gray-200 dark:hover:bg-[#404040]'
-                }`}
-              >
-                Atribuídos
-              </button>
+            <div className="flex gap-2 flex-wrap items-center justify-between">
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    setSubmissionsPage(1);
+                    setSubmissionsFilter('pending');
+                  }}
+                  className={`px-4 py-2 rounded-lg font-medium text-sm transition ${
+                    submissionsFilter === 'pending'
+                      ? 'bg-amber-500 text-white'
+                      : 'bg-gray-100 dark:bg-[#333] text-gray-600 dark:text-[#aaa] hover:bg-gray-200 dark:hover:bg-[#404040]'
+                  }`}
+                >
+                  Pendentes
+                </button>
+                <button
+                  onClick={() => {
+                    setSubmissionsPage(1);
+                    setSubmissionsFilter('assigned');
+                  }}
+                  className={`px-4 py-2 rounded-lg font-medium text-sm transition ${
+                    submissionsFilter === 'assigned'
+                      ? 'bg-green-600 text-white'
+                      : 'bg-gray-100 dark:bg-[#333] text-gray-600 dark:text-[#aaa] hover:bg-gray-200 dark:hover:bg-[#404040]'
+                  }`}
+                >
+                  Atribuídos
+                </button>
+              </div>
             </div>
             <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] overflow-hidden">
               {loading ? (
@@ -756,6 +832,35 @@ export default function AdminZaplinkPage() {
                 </table>
               )}
             </div>
+            {/* Paginação Pendentes / Atribuídos */}
+            {!loading && submissionsTotal > 0 && (
+              <div className="flex items-center justify-between gap-4 py-3 px-2 text-sm text-gray-600 dark:text-[#aaa]">
+                <span>
+                  Mostrando {(submissionsPage - 1) * SUBMISSIONS_LIMIT + 1}–{Math.min(submissionsPage * SUBMISSIONS_LIMIT, submissionsTotal)} de {submissionsTotal}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSubmissionsPage((p) => Math.max(1, p - 1))}
+                    disabled={submissionsPage <= 1}
+                    className="px-3 py-1.5 rounded-lg border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-[#404040]"
+                  >
+                    Anterior
+                  </button>
+                  <span className="px-2">
+                    Página {submissionsPage} de {Math.max(1, Math.ceil(submissionsTotal / SUBMISSIONS_LIMIT))}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setSubmissionsPage((p) => p + 1)}
+                    disabled={submissionsPage >= Math.ceil(submissionsTotal / SUBMISSIONS_LIMIT)}
+                    className="px-3 py-1.5 rounded-lg border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-[#404040]"
+                  >
+                    Próxima
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

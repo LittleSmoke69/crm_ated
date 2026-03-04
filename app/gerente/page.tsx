@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import {
@@ -195,10 +195,30 @@ export default function GerentePage() {
   // Modal Resumo do consultor (nome, email, leads, depositado, lucro + ações)
   const [resumoModalConsultor, setResumoModalConsultor] = useState<ConsultorMetric | null>(null);
 
-  // Zaplink notifications
-  const [zaplinkNotifications, setZaplinkNotifications] = useState<Array<{ id: string; message?: string; submission?: { full_name: string; phone?: string } }>>([]);
+  // Zaplink notifications (apenas atribuições a este gerente, com dados completos)
+  type ZaplinkNotif = {
+    id: string;
+    submission?: {
+      full_name: string;
+      email?: string;
+      phone?: string;
+      instagram_handle?: string | null;
+      form_name?: string | null;
+      banca_name?: string | null;
+    } | null;
+  };
+  const [zaplinkNotifications, setZaplinkNotifications] = useState<ZaplinkNotif[]>([]);
   const [zaplinkModalOpen, setZaplinkModalOpen] = useState(false);
   const [zaplinkBulkSending, setZaplinkBulkSending] = useState(false);
+  const [zaplinkBulkSendConfigOpen, setZaplinkBulkSendConfigOpen] = useState(false);
+  const [zaplinkBulkSendMessage, setZaplinkBulkSendMessage] = useState(
+    'Olá, {{nome}}! Seu cadastro foi realizado com sucesso. Em breve nosso consultor entrará em contato.'
+  );
+  const [zaplinkBulkSendDelayMinutes, setZaplinkBulkSendDelayMinutes] = useState(0);
+  const [zaplinkBulkSendDelaySeconds, setZaplinkBulkSendDelaySeconds] = useState(30);
+  type BulkSendLogItem = { id: string; sent_count: number; message_preview: string; delay_seconds: number; created_at: string };
+  const [zaplinkBulkSendLog, setZaplinkBulkSendLog] = useState<BulkSendLogItem[]>([]);
+  const [zaplinkBulkSendLogLoading, setZaplinkBulkSendLogLoading] = useState(false);
 
   // Modal Solicitação de leads
   const [solicitationModalOpen, setSolicitationModalOpen] = useState(false);
@@ -357,19 +377,49 @@ export default function GerentePage() {
     loadData(false);
   }, [dateFilter, appliedStartDate, appliedEndDate, selectedBanca, selectedConsultor, selectedGerente, isAdminOrSuperAdmin, gerentes.length]);
 
-  // Carrega notificações Zaplink não vistas
-  useEffect(() => {
+  // Carrega notificações Zaplink não vistas (apenas atribuídas a este gerente) — imediato + polling para aparecer mais rápido
+  const fetchZaplinkNotifications = useCallback(() => {
     if (!userId) return;
     fetch('/api/gerente/zaplink-notifications', { headers: { 'X-User-Id': userId } })
       .then((r) => r.json())
       .then((res) => {
         if (res.success && Array.isArray(res.data) && res.data.length > 0) {
-          setZaplinkNotifications(res.data);
-          setZaplinkModalOpen(true);
+          const list = res.data.filter((n: ZaplinkNotif) => n.submission);
+          if (list.length > 0) {
+            setZaplinkNotifications(list);
+            setZaplinkBulkSendConfigOpen(false);
+            setZaplinkModalOpen(true);
+          }
         }
       })
       .catch(() => {});
   }, [userId]);
+
+  const fetchZaplinkBulkSendLog = useCallback(() => {
+    if (!userId) return;
+    setZaplinkBulkSendLogLoading(true);
+    fetch('/api/gerente/zaplink-notifications/bulk-send-log?limit=10', { headers: { 'X-User-Id': userId } })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.success && Array.isArray(res.data)) setZaplinkBulkSendLog(res.data);
+      })
+      .catch(() => {})
+      .finally(() => setZaplinkBulkSendLogLoading(false));
+  }, [userId]);
+
+  useEffect(() => {
+    fetchZaplinkNotifications();
+  }, [fetchZaplinkNotifications]);
+
+  useEffect(() => {
+    if (zaplinkModalOpen && userId) fetchZaplinkBulkSendLog();
+  }, [zaplinkModalOpen, userId, fetchZaplinkBulkSendLog]);
+
+  useEffect(() => {
+    if (!userId) return;
+    const interval = setInterval(fetchZaplinkNotifications, 20000); // a cada 20s para modal aparecer mais rápido
+    return () => clearInterval(interval);
+  }, [userId, fetchZaplinkNotifications]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -854,6 +904,8 @@ export default function GerentePage() {
     } catch {}
   };
 
+  const openZaplinkBulkSendConfig = () => setZaplinkBulkSendConfigOpen(true);
+
   const handleZaplinkBulkSend = async () => {
     if (!userId) return;
     setZaplinkBulkSending(true);
@@ -862,11 +914,15 @@ export default function GerentePage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
         body: JSON.stringify({
-          message: 'Olá, {{nome}}! Seu cadastro foi realizado com sucesso. Em breve nosso consultor entrará em contato.',
+          message: zaplinkBulkSendMessage.trim() || 'Olá, {{nome}}! Seu cadastro foi realizado com sucesso. Em breve nosso consultor entrará em contato.',
+          delay_minutes: Math.max(0, zaplinkBulkSendDelayMinutes),
+          delay_seconds: Math.max(0, Math.min(59, zaplinkBulkSendDelaySeconds)),
         }),
       });
       const json = await res.json();
       if (json.success) {
+        setZaplinkBulkSendConfigOpen(false);
+        fetchZaplinkBulkSendLog();
         handleZaplinkMarkSeen();
       }
     } catch {}
@@ -880,37 +936,120 @@ export default function GerentePage() {
       {/* Modal Zaplink Notifications */}
       {zaplinkModalOpen && zaplinkNotifications.length > 0 && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-xl max-w-md w-full p-6">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Novos consultores via Zaplink</h2>
-            <div className="space-y-2 mb-6 max-h-48 overflow-y-auto">
-              {zaplinkNotifications.map((n) => (
-                <p key={n.id} className="text-sm text-gray-600 dark:text-[#aaa]">
-                  Novo consultor atribuído via Zaplink: <strong>{n.submission?.full_name || '—'}</strong>. O consultor foi adicionado à sua hierarquia.
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
+            {zaplinkBulkSendConfigOpen ? (
+              <>
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Configurar disparo em massa</h2>
+                <p className="text-sm text-gray-600 dark:text-[#aaa] mb-3">Mensagem que será enviada aos novos consultores (use {'{{nome}}'} para personalizar):</p>
+                <textarea
+                  value={zaplinkBulkSendMessage}
+                  onChange={(e) => setZaplinkBulkSendMessage(e.target.value)}
+                  rows={4}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg bg-white dark:bg-[#1f1f1f] text-gray-900 dark:text-gray-100 text-sm resize-y mb-2"
+                  placeholder="Olá, {{nome}}! Seu cadastro foi realizado..."
+                />
+                <p className="text-xs text-gray-500 dark:text-[#888] mb-1">Exemplo com nome:</p>
+                <p className="text-sm text-gray-700 dark:text-[#bbb] mb-4 rounded bg-gray-100 dark:bg-[#1f1f1f] px-3 py-2 border border-gray-200 dark:border-[#444]">
+                  {zaplinkBulkSendMessage.trim().replace(/\{\{nome\}\}/gi, 'João') || '—'}
                 </p>
-              ))}
-            </div>
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={handleZaplinkMarkSeen}
-                className="px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#404040] transition"
-              >
-                OK
-              </button>
-              <button
-                onClick={handleZaplinkBulkSend}
-                disabled={zaplinkBulkSending}
-                className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2 transition"
-              >
-                {zaplinkBulkSending ? (
-                  <>
-                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    Enviando...
-                  </>
-                ) : (
-                  'Disparo em massa'
+                <p className="text-sm text-gray-600 dark:text-[#aaa] mb-2">Intervalo entre uma mensagem e outra:</p>
+                <div className="flex gap-3 items-center mb-6">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={0}
+                      max={59}
+                      value={zaplinkBulkSendDelayMinutes}
+                      onChange={(e) => setZaplinkBulkSendDelayMinutes(Math.max(0, Math.min(59, parseInt(e.target.value, 10) || 0)))}
+                      className="w-16 px-2 py-2 border border-gray-300 dark:border-[#555] rounded-lg bg-white dark:bg-[#1f1f1f] text-gray-900 dark:text-gray-100 text-sm"
+                    />
+                    <span className="text-sm text-gray-600 dark:text-[#aaa]">min</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={0}
+                      max={59}
+                      value={zaplinkBulkSendDelaySeconds}
+                      onChange={(e) => setZaplinkBulkSendDelaySeconds(Math.max(0, Math.min(59, parseInt(e.target.value, 10) || 0)))}
+                      className="w-16 px-2 py-2 border border-gray-300 dark:border-[#555] rounded-lg bg-white dark:bg-[#1f1f1f] text-gray-900 dark:text-gray-100 text-sm"
+                    />
+                    <span className="text-sm text-gray-600 dark:text-[#aaa]">seg</span>
+                  </div>
+                </div>
+                <div className="flex gap-3 justify-end">
+                  <button
+                    onClick={() => setZaplinkBulkSendConfigOpen(false)}
+                    className="px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#404040] transition"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={handleZaplinkBulkSend}
+                    disabled={zaplinkBulkSending}
+                    className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2 transition"
+                  >
+                    {zaplinkBulkSending ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        Enviando...
+                      </>
+                    ) : (
+                      'Enviar'
+                    )}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Novos consultores atribuídos a você (Zaplink)</h2>
+                <div className="space-y-3 mb-4 max-h-48 overflow-y-auto">
+                  {zaplinkNotifications.map((n) => (
+                    <div key={n.id} className="rounded-lg border border-gray-200 dark:border-gray-600 p-3 bg-gray-50 dark:bg-[#1f1f1f]">
+                      <p className="text-sm font-medium text-gray-900 dark:text-white mb-1">{n.submission?.full_name || '—'}</p>
+                      {n.submission?.email && <p className="text-xs text-gray-600 dark:text-[#aaa]">Email: {n.submission.email}</p>}
+                      {n.submission?.phone && <p className="text-xs text-gray-600 dark:text-[#aaa]">Telefone: {n.submission.phone}</p>}
+                      {n.submission?.instagram_handle && <p className="text-xs text-gray-600 dark:text-[#aaa]">Instagram: @{n.submission.instagram_handle.replace(/^@/, '')}</p>}
+                      {n.submission?.banca_name && <p className="text-xs text-gray-500 dark:text-[#888] mt-1">Banca: {n.submission.banca_name}</p>}
+                      {n.submission?.form_name && <p className="text-xs text-gray-500 dark:text-[#888]">Formulário: {n.submission.form_name}</p>}
+                    </div>
+                  ))}
+                </div>
+                {zaplinkBulkSendLog.length > 0 && (
+                  <div className="mb-4">
+                    <p className="text-sm font-medium text-gray-700 dark:text-[#bbb] mb-2">Histórico de disparos em massa (Zaplink)</p>
+                    <div className="space-y-2 max-h-32 overflow-y-auto rounded-lg border border-gray-200 dark:border-[#444] p-2 bg-gray-50 dark:bg-[#1f1f1f]">
+                      {zaplinkBulkSendLog.map((log) => (
+                        <div key={log.id} className="text-xs text-gray-600 dark:text-[#aaa] flex flex-wrap gap-x-2 gap-y-1">
+                          <span className="font-medium text-gray-800 dark:text-[#ccc]">{new Date(log.created_at).toLocaleString('pt-BR')}</span>
+                          <span>{log.sent_count} envio(s)</span>
+                          {log.delay_seconds > 0 && <span>intervalo {log.delay_seconds}s</span>}
+                          <span className="w-full truncate" title={log.message_preview}>{log.message_preview}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 )}
-              </button>
-            </div>
+                {zaplinkBulkSendLogLoading && zaplinkBulkSendLog.length === 0 && (
+                  <p className="text-sm text-gray-500 dark:text-[#888] mb-4">Carregando histórico...</p>
+                )}
+                <div className="flex gap-3 justify-end">
+                  <button
+                    onClick={handleZaplinkMarkSeen}
+                    className="px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#404040] transition"
+                  >
+                    OK
+                  </button>
+                  <button
+                    onClick={openZaplinkBulkSendConfig}
+                    disabled={zaplinkBulkSending}
+                    className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2 transition"
+                  >
+                    Disparo em massa
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
