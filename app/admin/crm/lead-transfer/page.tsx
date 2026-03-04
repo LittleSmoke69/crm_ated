@@ -29,6 +29,7 @@ import {
   ClipboardList,
   CheckCircle2,
   ChevronUp,
+  CalendarPlus,
 } from 'lucide-react';
 import { DateInputDDMMYYYY, getTodaySãoPaulo, getLast30DaysRangeSãoPaulo } from '@/components/Admin/CRMSection';
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
@@ -307,6 +308,9 @@ export default function AdminLeadTransferPage() {
   const [modalSortField, setModalSortField] = useState<keyof ModalEntry | null>(null);
   const [modalSortOrder, setModalSortOrder] = useState<'asc' | 'desc'>('asc');
   const [resolvingTransfer, setResolvingTransfer] = useState(false);
+  const [extendingDeadline, setExtendingDeadline] = useState(false);
+  const [showExtendDeadlineModal, setShowExtendDeadlineModal] = useState(false);
+  const [extendDeadlineDays, setExtendDeadlineDays] = useState(10);
   const [moveToNextOpen, setMoveToNextOpen] = useState(false);
   const [moveTargetEmail, setMoveTargetEmail] = useState('');
   const [movingLeads, setMovingLeads] = useState(false);
@@ -1214,7 +1218,8 @@ export default function AdminLeadTransferPage() {
 
   /** Busca saldo atual dos leads no CRM e grava no banco como snapshot. Resposta em stream: cada lead atualizado já aparece na tela ao receber. */
   const runRecalcBalanceForLog = async () => {
-    if (!bancaId || !userId || !selectedLogForModal?.id) return;
+    const effectiveBancaId = bancaId || selectedLogForModal?.banca_id || '';
+    if (!effectiveBancaId || !userId || !selectedLogForModal?.id) return;
     setBackfillingBalances(true);
     showToast('Buscando saldo e dados dos leads no CRM… Atualizando lista conforme os dados chegam.', 'info');
 
@@ -1224,7 +1229,7 @@ export default function AdminLeadTransferPage() {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 120000);
       const res = await fetch(
-        `/api/admin/crm/transfer-logs/backfill-balances?banca_id=${encodeURIComponent(bancaId)}&log_id=${encodeURIComponent(logId)}&stream=1`,
+        `/api/admin/crm/transfer-logs/backfill-balances?banca_id=${encodeURIComponent(effectiveBancaId)}&log_id=${encodeURIComponent(logId)}&stream=1`,
         { method: 'POST', headers: headers(), signal: controller.signal }
       );
       clearTimeout(timeoutId);
@@ -1292,7 +1297,7 @@ export default function AdminLeadTransferPage() {
           showToast(json?.error ?? 'Erro ao salvar saldo atual.', 'error');
         }
         const entryRes = await fetch(
-          `/api/admin/crm/transfer-logs/entries?log_id=${encodeURIComponent(logId)}&banca_id=${encodeURIComponent(bancaId)}`,
+          `/api/admin/crm/transfer-logs/entries?log_id=${encodeURIComponent(logId)}&banca_id=${encodeURIComponent(effectiveBancaId)}`,
           { headers: { 'X-User-Id': userId ?? '' } }
         );
         const entryJson = await entryRes.json();
@@ -1364,11 +1369,12 @@ export default function AdminLeadTransferPage() {
   };
 
   const loadModalEntries = useCallback(async () => {
-    if (!bancaId || !userId || !selectedLogForModal?.id) return;
+    const effectiveBancaId = bancaId || selectedLogForModal?.banca_id || '';
+    if (!effectiveBancaId || !userId || !selectedLogForModal?.id) return;
     setLoadingModalEntries(true);
     try {
       const res = await fetch(
-        `/api/admin/crm/transfer-logs/entries?log_id=${encodeURIComponent(selectedLogForModal.id)}&banca_id=${encodeURIComponent(bancaId)}`,
+        `/api/admin/crm/transfer-logs/entries?log_id=${encodeURIComponent(selectedLogForModal.id)}&banca_id=${encodeURIComponent(effectiveBancaId)}`,
         { headers: headers() }
       );
       const json = await res.json();
@@ -1382,12 +1388,13 @@ export default function AdminLeadTransferPage() {
     } finally {
       setLoadingModalEntries(false);
     }
-  }, [bancaId, userId, selectedLogForModal?.id]);
+  }, [bancaId, userId, selectedLogForModal?.id, selectedLogForModal?.banca_id]);
 
   const RESOLVE_MANY_LEADS_THRESHOLD = 30;
 
   const runResolveTransfer = async () => {
-    if (!bancaId || !userId || !selectedLogForModal?.id) return;
+    const effectiveBancaId = bancaId || selectedLogForModal?.banca_id || '';
+    if (!effectiveBancaId || !userId || !selectedLogForModal?.id) return;
     const count = modalEntries.length;
     const runInBackground = count >= RESOLVE_MANY_LEADS_THRESHOLD;
 
@@ -1409,7 +1416,7 @@ export default function AdminLeadTransferPage() {
       fetch('/api/admin/crm/transfer-logs/resolve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...headers() },
-        body: JSON.stringify({ log_id: selectedLogForModal!.id, banca_id: bancaId }),
+        body: JSON.stringify({ log_id: selectedLogForModal!.id, banca_id: effectiveBancaId }),
       })
         .then((res) => res.json())
         .then(async (json) => {
@@ -1430,6 +1437,48 @@ export default function AdminLeadTransferPage() {
     };
 
     doResolve();
+  };
+
+  /** Renova o prazo de validade da transferência (opcional): adiciona X dias a partir de hoje (dias definidos pelo usuário). */
+  const runExtendDeadline = async (extraDays: number) => {
+    const effectiveBancaId = bancaId || selectedLogForModal?.banca_id || '';
+    if (!effectiveBancaId || !userId || !selectedLogForModal?.id) return;
+    const days = Math.max(1, Math.min(365, Math.round(extraDays)));
+    setExtendingDeadline(true);
+    try {
+      const res = await fetch('/api/admin/crm/transfer-logs/extend-deadline', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers() },
+        body: JSON.stringify({
+          log_id: selectedLogForModal.id,
+          banca_id: effectiveBancaId,
+          extra_days: days,
+        }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        const newDeadlineDays = json.data?.deadline_days;
+        const msg = json.data?.message ?? 'Prazo renovado.';
+        showToast(msg, 'success');
+        setShowExtendDeadlineModal(false);
+        if (newDeadlineDays != null) {
+          setSelectedLogForModal((prev: typeof selectedLogForModal) =>
+            prev ? { ...prev, deadline_days: newDeadlineDays } : null
+          );
+          setTransferLogs((prev) =>
+            prev.map((log) =>
+              log.id === selectedLogForModal.id ? { ...log, deadline_days: newDeadlineDays } : log
+            )
+          );
+        }
+      } else {
+        showToast(json?.error ?? 'Erro ao renovar prazo.', 'error');
+      }
+    } catch {
+      showToast('Erro ao renovar prazo.', 'error');
+    } finally {
+      setExtendingDeadline(false);
+    }
   };
 
   const runMoveToNext = async () => {
@@ -1836,13 +1885,18 @@ export default function AdminLeadTransferPage() {
   }, [modalEntries.length, selectedLogForModal?.id, modalSearch, modalSortField, modalSortOrder]);
 
   useEffect(() => {
-    if (!selectedLogForModal || !bancaId || !userId) {
+    if (!selectedLogForModal || !userId) {
+      setModalEntries([]);
+      return;
+    }
+    const effectiveBancaId = bancaId || (selectedLogForModal.banca_id ?? '') || '';
+    if (!effectiveBancaId) {
       setModalEntries([]);
       return;
     }
     let cancelled = false;
     setLoadingModalEntries(true);
-    fetch(`/api/admin/crm/transfer-logs/entries?log_id=${encodeURIComponent(selectedLogForModal.id)}&banca_id=${encodeURIComponent(bancaId)}`, {
+    fetch(`/api/admin/crm/transfer-logs/entries?log_id=${encodeURIComponent(selectedLogForModal.id)}&banca_id=${encodeURIComponent(effectiveBancaId)}`, {
       headers: { 'X-User-Id': userId ?? '' },
     })
       .then((res) => res.json())
@@ -2395,7 +2449,7 @@ export default function AdminLeadTransferPage() {
                             <td className="py-3 px-4 text-center">
                               <button
                                 type="button"
-                                onClick={() => setSelectedLogForModal(log)}
+                                onClick={() => { setSelectedLogForModal(log); setShowExtendDeadlineModal(false); }}
                                 className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-[#8CD955]/15 text-[#6B8E3F] hover:bg-[#8CD955]/25 border border-[#8CD955]/40 transition-colors"
                                 title="Ver detalhes dos leads transferidos"
                               >
@@ -2452,12 +2506,102 @@ export default function AdminLeadTransferPage() {
               )}
               {selectedLogForModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={() => setSelectedLogForModal(null)} role="dialog" aria-modal="true" aria-labelledby="modal-leads-title">
-                  <div className="bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl max-w-5xl w-full max-h-[90vh] flex flex-col border border-gray-200 dark:border-[#404040] overflow-hidden" onClick={(e) => e.stopPropagation()}>
-                    <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-[#404040]">
-                      <h2 id="modal-leads-title" className="text-lg font-bold text-gray-900 dark:text-white">Leads da transferência</h2>
-                      <button type="button" onClick={() => setSelectedLogForModal(null)} className="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#404040] hover:text-gray-700 dark:hover:text-white transition-colors" aria-label="Fechar">
-                        <X className="w-5 h-5" />
-                      </button>
+                  <div className="relative bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl max-w-5xl w-full max-h-[90vh] flex flex-col border border-gray-200 dark:border-[#404040] overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                    {showExtendDeadlineModal && (
+                      <div className="absolute inset-0 z-[100] flex items-center justify-center rounded-3xl bg-white dark:bg-[#2a2a2a] p-4" onClick={(e) => e.stopPropagation()}>
+                        <div className="relative z-[101] bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-2xl border border-violet-200 dark:border-violet-500/30 max-w-md w-full overflow-hidden ring-2 ring-black/5 dark:ring-white/5">
+                          <div className="bg-violet-50 dark:bg-violet-500/10 px-6 py-4 border-b border-violet-100 dark:border-violet-500/20">
+                            <div className="flex items-center gap-3">
+                              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500/20 text-violet-600 dark:text-violet-400">
+                                <CalendarPlus className="h-5 w-5" />
+                              </div>
+                              <div>
+                                <h3 className="text-lg font-bold text-gray-900 dark:text-white">Renovar prazo do consultor</h3>
+                                <p className="text-sm text-gray-600 dark:text-gray-400 mt-0.5">Escolha por quantos dias o prazo valerá a partir de hoje.</p>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="p-6 space-y-4">
+                            <div>
+                              <label htmlFor="extend-deadline-days" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Dias para renovação</label>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  id="extend-deadline-days"
+                                  type="number"
+                                  min={1}
+                                  max={365}
+                                  value={extendDeadlineDays}
+                                  onChange={(e) => setExtendDeadlineDays(Math.max(1, Math.min(365, Number(e.target.value) || 10)))}
+                                  className="flex-1 px-4 py-3 rounded-xl border border-gray-200 dark:border-[#555] bg-gray-50 dark:bg-[#333] text-gray-900 dark:text-white text-lg font-semibold tabular-nums focus:ring-2 focus:ring-violet-500 focus:border-violet-500 transition-all"
+                                />
+                                <span className="text-sm font-medium text-gray-500 dark:text-gray-400">dias</span>
+                              </div>
+                              <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                                O consultor terá <strong className="text-violet-600 dark:text-violet-400">{extendDeadlineDays} dia(s)</strong> a partir de hoje para converter os leads.
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {[10, 15, 30, 60].map((d) => (
+                                <button
+                                  key={d}
+                                  type="button"
+                                  onClick={() => setExtendDeadlineDays(d)}
+                                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                                    extendDeadlineDays === d
+                                      ? 'bg-violet-500 text-white ring-2 ring-violet-500 ring-offset-2 dark:ring-offset-[#2a2a2a]'
+                                      : 'bg-gray-100 dark:bg-[#404040] text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-[#505050]'
+                                  }`}
+                                >
+                                  {d} dias
+                                </button>
+                              ))}
+                            </div>
+                            <div className="flex gap-3 pt-2">
+                              <button
+                                type="button"
+                                onClick={() => setShowExtendDeadlineModal(false)}
+                                disabled={extendingDeadline}
+                                className="flex-1 px-4 py-2.5 rounded-xl border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] font-medium transition-colors disabled:opacity-50"
+                              >
+                                Cancelar
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => runExtendDeadline(extendDeadlineDays)}
+                                disabled={extendingDeadline}
+                                className="flex-1 px-4 py-2.5 rounded-xl bg-violet-500 text-white hover:bg-violet-600 font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors inline-flex items-center justify-center gap-2"
+                              >
+                                {extendingDeadline ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                                {extendingDeadline ? 'Renovando…' : 'Renovar prazo'}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    <div className="p-4 pb-3 border-b border-gray-200 dark:border-[#404040] space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <h2 id="modal-leads-title" className="text-lg font-bold text-gray-900 dark:text-white">Leads da transferência</h2>
+                          <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-0.5 text-sm text-gray-600 dark:text-gray-300">
+                            {selectedLogForModal.created_at && <span>Data: {formatDatePtBR(selectedLogForModal.created_at)}</span>}
+                            {(selectedLogForModal as any).target_consultant_name && <span>Destino: {(selectedLogForModal as any).target_consultant_name}</span>}
+                          </div>
+                        </div>
+                        <button type="button" onClick={() => setSelectedLogForModal(null)} className="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#404040] hover:text-gray-700 dark:hover:text-white transition-colors flex-shrink-0" aria-label="Fechar">
+                          <X className="w-5 h-5" />
+                        </button>
+                      </div>
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                        <input
+                          type="text"
+                          placeholder="Pesquisar leads..."
+                          value={modalSearch}
+                          onChange={(e) => setModalSearch(e.target.value)}
+                          className="w-full pl-9 pr-4 py-2 bg-gray-50 dark:bg-[#333] border border-gray-200 dark:border-[#555] rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] transition-all"
+                        />
+                      </div>
                     </div>
                     {backfillingBalances && (
                       <div className="mx-4 mt-2 flex items-center gap-2 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-4 py-2.5 text-sm text-amber-800 dark:text-amber-200">
@@ -2465,22 +2609,6 @@ export default function AdminLeadTransferPage() {
                         <span>Salvando saldo e dados no CRM… A lista é atualizada conforme cada lead é processado.</span>
                       </div>
                     )}
-                    <div className="p-4 text-sm text-gray-700 dark:text-gray-200 border-b border-gray-100 dark:border-[#404040] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                      <div className="flex items-center gap-4">
-                        {selectedLogForModal.created_at && <span>Data: {formatDatePtBR(selectedLogForModal.created_at)}</span>}
-                        {(selectedLogForModal as any).target_consultant_name && <span className="ml-4">Destino: {(selectedLogForModal as any).target_consultant_name}</span>}
-                      </div>
-                      <div className="relative w-full sm:w-64">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                        <input
-                          type="text"
-                          placeholder="Pesquisar leads..."
-                          value={modalSearch}
-                          onChange={(e) => setModalSearch(e.target.value)}
-                          className="w-full pl-9 pr-4 py-1.5 bg-gray-50 dark:bg-[#333] border border-gray-200 dark:border-[#555] rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] transition-all"
-                        />
-                      </div>
-                    </div>
                     <div className="px-5 py-4 flex flex-wrap items-center justify-between gap-4 border-b border-gray-100 dark:border-[#404040] bg-gray-50/30 dark:bg-[#2a2a2a]">
                       <div className="flex items-center gap-6">
                         <div className="flex flex-col">
@@ -2517,15 +2645,27 @@ export default function AdminLeadTransferPage() {
                               </button>
 
                               {modalDeadline.expired && (
-                                <button
-                                  type="button"
-                                  onClick={runResolveTransfer}
-                                  disabled={resolvingTransfer}
-                                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-400 hover:bg-amber-500/20 border border-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95"
-                                >
-                                  {resolvingTransfer ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                                  {resolvingTransfer ? 'Resolvendo…' : 'Resolver transferência'}
-                                </button>
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => { setExtendDeadlineDays(10); setShowExtendDeadlineModal(true); }}
+                                    disabled={extendingDeadline}
+                                    title="Definir novo prazo para o consultor (dias a partir de hoje)"
+                                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold bg-violet-500/10 text-violet-700 dark:text-violet-400 hover:bg-violet-500/20 border border-violet-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95"
+                                  >
+                                    {extendingDeadline ? <Loader2 className="w-4 h-4 animate-spin" /> : <CalendarPlus className="w-4 h-4" />}
+                                    {extendingDeadline ? 'Renovando…' : 'Renovar prazo'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={runResolveTransfer}
+                                    disabled={resolvingTransfer}
+                                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-400 hover:bg-amber-500/20 border border-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95"
+                                  >
+                                    {resolvingTransfer ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                                    {resolvingTransfer ? 'Resolvendo…' : 'Resolver transferência'}
+                                  </button>
+                                </>
                               )}
 
                               {disponivelCount > 0 && (
@@ -2542,11 +2682,16 @@ export default function AdminLeadTransferPage() {
                         })()}
                       </div>
                     </div>
-                    <div className="flex-1 overflow-auto p-4">
+                    <div className="flex-1 min-h-0 overflow-auto p-4">
                       {loadingModalEntries ? (
                         <div className="flex items-center justify-center py-12"><Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" /></div>
                       ) : modalEntries.length === 0 ? (
-                        <p className="text-gray-600 dark:text-gray-300 text-center py-6">Nenhum lead encontrado para esta transferência.</p>
+                        <div className="flex flex-col items-center justify-center py-12 px-4">
+                          <div className="rounded-full bg-gray-100 dark:bg-[#404040] p-4 mb-3">
+                            <Users className="w-8 h-8 text-gray-400 dark:text-gray-500" />
+                          </div>
+                          <p className="text-gray-600 dark:text-gray-300 text-center text-sm">Nenhum lead encontrado para esta transferência.</p>
+                        </div>
                       ) : (
                         <>
                           {/* Resumo geral: Antes x Depois (totais da transferência) */}

@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
       return errorResponse('Banca não encontrada ou sem permissão.');
     }
 
-    const { data: entries, error } = await supabaseServiceRole
+    let { data: entries, error } = await supabaseServiceRole
       .from('admin_lead_transfer_entries')
       .select('lead_id, had_balance, saldo_snapshot, target_consultant_email, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, resolution_status, resolved_at, current_total_depositado_at_resolution, current_total_apostado_at_resolution')
       .eq('banca_id', resolved.bancaId)
@@ -57,7 +57,53 @@ export async function GET(req: NextRequest) {
       return errorResponse('Erro ao buscar leads da transferência.');
     }
 
-    const rawList = Array.isArray(entries) ? entries : [];
+    let rawList = Array.isArray(entries) ? entries : [];
+
+    // Backfill: transferências antigas/expiradas podem ter apenas o log (leads_ids) sem entries; cria entries a partir do log.
+    if (rawList.length === 0) {
+      const { data: logRow, error: logError } = await supabaseServiceRole
+        .from('admin_lead_transfer_logs')
+        .select('id, banca_id, source_consultant_email, target_consultant_email, leads_ids, transfer_type')
+        .eq('id', logId)
+        .eq('banca_id', resolved.bancaId)
+        .single();
+
+      if (!logError && logRow) {
+        const leadsIds = logRow.leads_ids;
+        const sourceEmail = (logRow as { source_consultant_email?: string }).source_consultant_email ?? '';
+        const targetEmail = (logRow as { target_consultant_email?: string }).target_consultant_email ?? '';
+        const transferType = ((logRow as { transfer_type?: string }).transfer_type ?? 'TF').trim();
+        const validType = ['TF', 'TF1', 'TF2', 'TF3'].includes(transferType) ? transferType : 'TF';
+
+        const ids: string[] = Array.isArray(leadsIds)
+          ? leadsIds.map((id: unknown) => (id != null ? String(id).trim() : '')).filter(Boolean)
+          : [];
+        if (ids.length > 0 && sourceEmail && targetEmail) {
+          const insertRows = ids.map((leadId) => ({
+            transfer_log_id: logId,
+            banca_id: resolved.bancaId,
+            lead_id: leadId,
+            source_consultant_email: sourceEmail,
+            target_consultant_email: targetEmail,
+            transfer_type: validType,
+          }));
+          const { error: insertError } = await supabaseServiceRole
+            .from('admin_lead_transfer_entries')
+            .insert(insertRows);
+          if (insertError) {
+            console.warn(`${LOG_PREFIX} Backfill entries from log failed:`, insertError.message);
+          } else {
+            const { data: entriesAfter } = await supabaseServiceRole
+              .from('admin_lead_transfer_entries')
+              .select('lead_id, had_balance, saldo_snapshot, target_consultant_email, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, resolution_status, resolved_at, current_total_depositado_at_resolution, current_total_apostado_at_resolution')
+              .eq('banca_id', resolved.bancaId)
+              .eq('transfer_log_id', logId)
+              .order('lead_id', { ascending: true });
+            rawList = Array.isArray(entriesAfter) ? entriesAfter : [];
+          }
+        }
+      }
+    }
     const targetEmail = rawList[0]?.target_consultant_email?.trim();
     const detailByLeadId = new Map<string, EntryLeadDetail>();
 
