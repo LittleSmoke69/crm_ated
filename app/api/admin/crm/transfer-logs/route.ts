@@ -9,6 +9,22 @@ import { normalizeDateParam, dateToStartOfDaySãoPauloISO, dateToEndOfDaySãoPau
 const LOG_PREFIX = '[admin][transfer-logs]';
 
 const DEFAULT_LIMIT = 100;
+
+/** Tipo da linha retornada pelo select em admin_lead_transfer_logs (evita GenericStringError do Supabase). */
+type TransferLogRow = {
+  id: string;
+  banca_id?: string | null;
+  performed_by_user_id?: string | null;
+  source_consultant_email?: string | null;
+  target_consultant_email?: string | null;
+  leads_ids?: unknown;
+  count?: number | null;
+  transfer_type?: string | null;
+  deadline_days?: number | null;
+  filters_snapshot?: unknown;
+  crm_response?: unknown;
+  created_at?: string | null;
+};
 const MAX_LIMIT = 200;
 
 /**
@@ -79,12 +95,13 @@ export async function GET(req: NextRequest) {
       return errorResponse('Erro ao buscar logs de transferência.');
     }
 
-    const list = Array.isArray(logs) ? logs : [];
-    if (list.length === 0) {
+    const rawList = Array.isArray(logs) ? logs : [];
+    if (rawList.length === 0) {
       return successResponse([]);
     }
+    const list = rawList as unknown as TransferLogRow[];
 
-    const logIds = list.map((r: { id: string }) => r.id);
+    const logIds = list.map((r) => r.id);
     const { data: entries } = await supabaseServiceRole
       .from('admin_lead_transfer_entries')
       .select('transfer_log_id, saldo_snapshot')
@@ -115,7 +132,7 @@ export async function GET(req: NextRequest) {
 
     const emailsLower = new Set<string>();
     const performedByUserIds = new Set<string>();
-    list.forEach((log: { source_consultant_email?: string | null; target_consultant_email?: string | null; performed_by_user_id?: string | null }) => {
+    list.forEach((log) => {
       const s = (log.source_consultant_email ?? '').trim().toLowerCase();
       const t = (log.target_consultant_email ?? '').trim().toLowerCase();
       if (s) emailsLower.add(s);
@@ -151,7 +168,7 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    const enriched = list.map((log: any) => {
+    const enriched = list.map((log) => {
       const sourceEmail = (log.source_consultant_email ?? '').trim().toLowerCase();
       const targetEmail = (log.target_consultant_email ?? '').trim().toLowerCase();
       const storedTotal = storedTotalByLogId.get(log.id) ?? null;
