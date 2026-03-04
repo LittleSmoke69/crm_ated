@@ -2027,14 +2027,28 @@ export default function AdminLeadTransferPage() {
                     </thead>
                     <tbody className="divide-y divide-gray-200 dark:divide-[#404040]">
                       {leadRequests.map((req) => {
-                        const totalLeads = (req.consultores ?? []).reduce((s, c) => s + c.quantity, 0);
-                        const summary = `${(req.consultores ?? []).length} consultor(es), ${totalLeads} lead(s)`;
+                        const consultoresPendentes = req.consultores ?? [];
+                        const totalLeads = consultoresPendentes.reduce((s, c) => s + c.quantity, 0);
+                        const summary = consultoresPendentes.length === 0
+                          ? 'Nenhum consultor'
+                          : `${consultoresPendentes.length} consultor(es), ${totalLeads} lead(s)`;
                         return (
                           <tr key={req.id} className="hover:bg-gray-50 dark:hover:bg-[#333]/50">
                             <td className="px-4 py-3 text-gray-900 dark:text-white font-medium">{req.gerente_name}</td>
                             <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{req.banca_name ?? (req.banca_id ? req.banca_id : '-')}</td>
                             <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{req.lead_type_label}</td>
-                            <td className="px-4 py-3 text-gray-600 dark:text-gray-400">{summary}</td>
+                            <td className="px-4 py-3 text-gray-600 dark:text-gray-400">
+                              <span className="block font-medium">{summary}</span>
+                              {consultoresPendentes.length > 0 && (
+                                <ul className="mt-1 text-xs text-gray-500 dark:text-gray-400 space-y-0.5 max-h-20 overflow-y-auto">
+                                  {consultoresPendentes.map((c) => (
+                                    <li key={c.consultor_id}>
+                                      {c.consultor_name ?? c.consultor_id} — {c.quantity} lead(s)
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                            </td>
                             <td className="px-4 py-3">
                               <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${req.status === 'pending' ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200' : req.status === 'approved' ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-200' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'}`}>
                                 {req.status === 'pending' ? 'Pendente' : req.status === 'approved' ? 'Aprovada' : 'Rejeitada'}
@@ -4027,28 +4041,69 @@ export default function AdminLeadTransferPage() {
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-bold text-gray-600 dark:text-gray-400 uppercase mb-1">Consultores recebedores e quantidade</label>
-                <div className="space-y-2 max-h-40 overflow-y-auto border border-gray-200 dark:border-[#404040] rounded-lg p-2 bg-gray-50 dark:bg-gray-800/30">
-                  {approveFormConsultores.map((c, idx) => (
-                    <div key={c.consultor_id} className="flex items-center gap-2">
-                      <span className="flex-1 text-sm text-gray-800 dark:text-gray-200 truncate">{c.consultor_name ?? c.consultor_id}</span>
-                      <input
-                        type="number"
-                        min={1}
-                        value={c.quantity}
-                        onChange={(e) => {
-                          const v = parseInt(e.target.value, 10);
-                          if (Number.isNaN(v) || v < 1) return;
-                          setApproveFormConsultores((prev) => {
-                            const next = [...prev];
-                            next[idx] = { ...next[idx], quantity: v };
-                            return next;
-                          });
-                        }}
-                        className="w-20 px-2 py-1 text-sm border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg focus:ring-2 focus:ring-[#8CD955]"
-                      />
-                    </div>
+                <label className="block text-xs font-bold text-gray-600 dark:text-gray-400 uppercase mb-1">Consultores pendentes (recebedores e quantidade)</label>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Defina a quantidade de leads por consultor. Use os atalhos para aplicar o mesmo valor a todos.</p>
+                <div className="flex flex-wrap gap-2 mb-2">
+                  <span className="text-xs text-gray-500 dark:text-gray-400 self-center">Definir todos como:</span>
+                  {[5, 10, 15, 20].map((qty) => (
+                    <button
+                      key={qty}
+                      type="button"
+                      onClick={() => setApproveFormConsultores((prev) => prev.map((c) => ({ ...c, quantity: qty })))}
+                      className="px-3 py-1.5 text-sm font-medium rounded-lg border border-[#8CD955] text-[#8CD955] hover:bg-[#8CD955]/10 dark:border-[#8CD955] dark:text-[#8CD955] dark:hover:bg-[#8CD955]/20 transition"
+                    >
+                      {qty}
+                    </button>
                   ))}
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="number"
+                      min={1}
+                      max={999}
+                      placeholder="Outro"
+                      id="approve-modal-custom-qty"
+                      className="w-16 px-2 py-1.5 text-sm border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg focus:ring-2 focus:ring-[#8CD955]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const el = document.getElementById('approve-modal-custom-qty') as HTMLInputElement | null;
+                        const v = el ? parseInt(el.value, 10) : NaN;
+                        if (Number.isNaN(v) || v < 1) return;
+                        const qty = Math.min(999, Math.max(1, v));
+                        setApproveFormConsultores((prev) => prev.map((c) => ({ ...c, quantity: qty })));
+                      }}
+                      className="px-2 py-1.5 text-sm font-medium rounded-lg bg-[#8CD955] text-white hover:bg-[#7BC84A]"
+                    >
+                      Aplicar
+                    </button>
+                  </div>
+                </div>
+                <div className="space-y-2 max-h-40 overflow-y-auto border border-gray-200 dark:border-[#404040] rounded-lg p-2 bg-gray-50 dark:bg-gray-800/30">
+                  {approveFormConsultores.length === 0 ? (
+                    <p className="text-sm text-gray-500 dark:text-gray-400 py-2">Nenhum consultor pendente nesta solicitação.</p>
+                  ) : (
+                    approveFormConsultores.map((c, idx) => (
+                      <div key={c.consultor_id} className="flex items-center gap-2">
+                        <span className="flex-1 text-sm text-gray-800 dark:text-gray-200 truncate">{c.consultor_name ?? c.consultor_id}</span>
+                        <input
+                          type="number"
+                          min={1}
+                          value={c.quantity}
+                          onChange={(e) => {
+                            const v = parseInt(e.target.value, 10);
+                            if (Number.isNaN(v) || v < 1) return;
+                            setApproveFormConsultores((prev) => {
+                              const next = [...prev];
+                              next[idx] = { ...next[idx], quantity: v };
+                              return next;
+                            });
+                          }}
+                          className="w-20 px-2 py-1 text-sm border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg focus:ring-2 focus:ring-[#8CD955]"
+                        />
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
               <div>

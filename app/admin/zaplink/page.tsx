@@ -19,6 +19,7 @@ import {
   Loader2,
   AlertCircle,
   ArrowRightLeft,
+  ClipboardList,
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
@@ -86,6 +87,19 @@ interface ByGerenteBancaRow {
   count: number;
 }
 
+interface ConsultantRequest {
+  id: string;
+  gerente_id: string;
+  banca_id: string;
+  quantity_requested: number;
+  quantity_sent: number;
+  created_at: string;
+  updated_at?: string;
+  banca_name?: string | null;
+  gerente_name?: string | null;
+  gerente_email?: string | null;
+}
+
 export default function AdminZaplinkPage() {
   const { checking, userId } = useRequireAuth();
   const [links, setLinks] = useState<ZaplinkLink[]>([]);
@@ -95,13 +109,19 @@ export default function AdminZaplinkPage() {
   const [bancas, setBancas] = useState<BancaOption[]>([]);
   const [gerentes, setGerentes] = useState<GerenteOption[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'links' | 'forms' | 'submissions'>('links');
+  const [activeTab, setActiveTab] = useState<'links' | 'forms' | 'submissions' | 'requests'>('links');
   const [submissionsFilter, setSubmissionsFilter] = useState<'pending' | 'assigned'>('pending');
   const [submissionsPage, setSubmissionsPage] = useState(1);
   const [submissionsTotal, setSubmissionsTotal] = useState(0);
   const SUBMISSIONS_LIMIT = 20;
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [chartByGerente, setChartByGerente] = useState<ByGerenteBancaRow[]>([]);
+  const [consultantRequests, setConsultantRequests] = useState<ConsultantRequest[]>([]);
+  const [consultantRequestsLoading, setConsultantRequestsLoading] = useState(false);
+  const [fulfillModalRequest, setFulfillModalRequest] = useState<ConsultantRequest | null>(null);
+  const [fulfillConsultantIds, setFulfillConsultantIds] = useState<string[]>([]);
+  const [consultorsForFulfill, setConsultorsForFulfill] = useState<{ id: string; full_name: string | null; email: string }[]>([]);
+  const [fulfillSubmitting, setFulfillSubmitting] = useState(false);
 
   const [linkForm, setLinkForm] = useState({ slug: '', target_url: '', title: '' });
   const [formForm, setFormForm] = useState({ slug: '', name: '', form_type: 'consultor' as 'consultor' | 'influenciador' });
@@ -112,9 +132,11 @@ export default function AdminZaplinkPage() {
   const [saving, setSaving] = useState(false);
 
   const [assignModal, setAssignModal] = useState<Submission | null>(null);
+  const [assignSubmissionIds, setAssignSubmissionIds] = useState<string[]>([]);
   const [assignBanca, setAssignBanca] = useState('');
   const [assignGerente, setAssignGerente] = useState('');
   const [assigning, setAssigning] = useState(false);
+  const [selectedPendingIds, setSelectedPendingIds] = useState<string[]>([]);
 
   const [reassignModal, setReassignModal] = useState<Submission | null>(null);
   const [reassignBanca, setReassignBanca] = useState('');
@@ -205,6 +227,25 @@ export default function AdminZaplinkPage() {
   useEffect(() => {
     if (!checking && userId) loadData();
   }, [checking, userId, loadData]);
+
+  const loadConsultantRequests = useCallback(async () => {
+    if (!userId) return;
+    setConsultantRequestsLoading(true);
+    try {
+      const res = await fetch('/api/admin/zaplink/consultant-requests', { headers: { 'X-User-Id': userId } });
+      const json = await res.json();
+      if (json.success && Array.isArray(json.data)) setConsultantRequests(json.data as ConsultantRequest[]);
+      else setConsultantRequests([]);
+    } catch {
+      setConsultantRequests([]);
+    } finally {
+      setConsultantRequestsLoading(false);
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    if (activeTab === 'requests' && userId) loadConsultantRequests();
+  }, [activeTab, userId, loadConsultantRequests]);
 
   useEffect(() => {
     if (assignModal && assignBanca) loadGerentesForBanca(assignBanca);
@@ -311,26 +352,40 @@ export default function AdminZaplinkPage() {
   };
 
   const handleAssign = async () => {
-    if (!assignModal || !assignBanca || !assignGerente) {
+    const ids = assignSubmissionIds.length > 0 ? assignSubmissionIds : (assignModal ? [assignModal.id] : []);
+    if (ids.length === 0 || !assignBanca || !assignGerente) {
       showToast('error', 'Selecione banca e gerente');
       return;
     }
     setAssigning(true);
+    const payload = { banca_id: assignBanca, gerente_id: assignGerente };
+    let ok = 0;
+    let lastError = '';
     try {
-      const res = await fetch(`/api/admin/zaplink/submissions/${assignModal.id}/assign`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId! },
-        body: JSON.stringify({ banca_id: assignBanca, gerente_id: assignGerente }),
-      });
-      const json = await res.json();
-      if (json.success) {
-        showToast('success', json.message || 'Atribuído com sucesso');
+      for (const submissionId of ids) {
+        const res = await fetch(`/api/admin/zaplink/submissions/${submissionId}/assign`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId! },
+          body: JSON.stringify(payload),
+        });
+        const json = await res.json();
+        if (json.success) ok += 1;
+        else lastError = json.error || 'Erro ao atribuir';
+      }
+      if (ok === ids.length) {
+        showToast('success', ok === 1 ? 'Atribuído com sucesso' : `${ok} submissões atribuídas com sucesso.`);
         setAssignModal(null);
+        setAssignSubmissionIds([]);
         setAssignBanca('');
         setAssignGerente('');
+        setSelectedPendingIds((prev) => prev.filter((id) => !ids.includes(id)));
+        loadData();
+      } else if (ok > 0) {
+        showToast('error', `${ok} de ${ids.length} atribuídas. Último erro: ${lastError}`);
+        setAssignSubmissionIds((prev) => prev.filter((id) => !ids.includes(id)));
         loadData();
       } else {
-        showToast('error', json.error || 'Erro ao atribuir');
+        showToast('error', lastError || 'Erro ao atribuir');
       }
     } catch {
       showToast('error', 'Erro ao atribuir');
@@ -499,7 +554,7 @@ export default function AdminZaplinkPage() {
 
         {/* Tabs */}
         <div className="flex gap-2 mb-6 border-b border-gray-200 dark:border-[#404040]">
-          {(['links', 'forms', 'submissions'] as const).map((tab) => (
+          {(['links', 'forms', 'submissions', 'requests'] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -512,6 +567,7 @@ export default function AdminZaplinkPage() {
               {tab === 'links' && <><Link2 className="w-4 h-4 inline mr-2" />Links</>}
               {tab === 'forms' && <><FileText className="w-4 h-4 inline mr-2" />Formulários</>}
               {tab === 'submissions' && <><Users className="w-4 h-4 inline mr-2" />Submissões</>}
+              {tab === 'requests' && <><ClipboardList className="w-4 h-4 inline mr-2" />Solicitações</>}
             </button>
           ))}
         </div>
@@ -714,6 +770,7 @@ export default function AdminZaplinkPage() {
                   onClick={() => {
                     setSubmissionsPage(1);
                     setSubmissionsFilter('assigned');
+                    setSelectedPendingIds([]);
                   }}
                   className={`px-4 py-2 rounded-lg font-medium text-sm transition ${
                     submissionsFilter === 'assigned'
@@ -733,56 +790,116 @@ export default function AdminZaplinkPage() {
                   {submissionsFilter === 'pending' ? 'Nenhuma submissão pendente' : 'Nenhuma submissão atribuída'}
                 </div>
               ) : submissionsFilter === 'pending' ? (
-                <table className="w-full">
-                  <thead className="bg-gray-50 dark:bg-[#333]">
-                    <tr>
-                      <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Nome</th>
-                      <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">E-mail</th>
-                      <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Telefone</th>
-                      <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Instagram</th>
-                      <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Formulário</th>
-                      <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Data</th>
-                      <th className="text-right p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Ações</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {submissions.map((s) => (
-                      <tr key={s.id} className="border-t border-gray-100 dark:border-[#404040]">
-                        <td className="p-3">{s.full_name}</td>
-                        <td className="p-3">{s.email}</td>
-                        <td className="p-3">{s.phone}</td>
-                        <td className="p-3 text-sm">{s.instagram_handle || '—'}</td>
-                        <td className="p-3 text-sm">{s.zaplink_forms?.name || s.zaplink_form_id}</td>
-                        <td className="p-3 text-sm text-gray-500">{new Date(s.created_at).toLocaleDateString()}</td>
-                        <td className="p-3 text-right">
-                          <div className="flex items-center justify-end gap-1">
-                            <button
-                              onClick={() => {
-                                setAssignModal(s);
-                                const firstBancaId = bancas[0]?.id || '';
-                                setAssignBanca(firstBancaId);
-                                setAssignGerente('');
-                                if (firstBancaId) loadGerentesForBanca(firstBancaId);
-                              }}
-                              className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm"
-                            >
-                              <UserPlus className="w-4 h-4" />
-                              Atribuir
-                            </button>
-                            <button
-                              onClick={() => handleDeletePending(s)}
-                              className="flex items-center gap-1 px-3 py-1.5 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm"
-                              title="Apagar lead pendente"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                              Apagar
-                            </button>
-                          </div>
-                        </td>
+                <>
+                  {selectedPendingIds.length > 0 && (
+                    <div className="flex items-center gap-3 px-4 py-2 bg-green-50 dark:bg-green-900/20 border-b border-gray-200 dark:border-[#404040]">
+                      <span className="text-sm font-medium text-gray-700 dark:text-[#ccc]">
+                        {selectedPendingIds.length} submissão(ões) selecionada(s)
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAssignSubmissionIds([...selectedPendingIds]);
+                          setAssignModal(null);
+                          const firstBancaId = bancas[0]?.id || '';
+                          setAssignBanca(firstBancaId);
+                          setAssignGerente('');
+                          if (firstBancaId) loadGerentesForBanca(firstBancaId);
+                        }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium"
+                      >
+                        <UserPlus className="w-4 h-4" />
+                        Atribuir selecionadas
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedPendingIds([])}
+                        className="text-sm text-gray-600 dark:text-[#888] hover:underline"
+                      >
+                        Limpar seleção
+                      </button>
+                    </div>
+                  )}
+                  <table className="w-full">
+                    <thead className="bg-gray-50 dark:bg-[#333]">
+                      <tr>
+                        <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc] w-10">
+                          <input
+                            type="checkbox"
+                            checked={submissions.length > 0 && submissions.every((s) => selectedPendingIds.includes(s.id))}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedPendingIds(submissions.map((s) => s.id));
+                              } else {
+                                setSelectedPendingIds([]);
+                              }
+                            }}
+                            className="rounded border-gray-300 dark:border-[#555]"
+                          />
+                        </th>
+                        <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Nome</th>
+                        <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">E-mail</th>
+                        <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Telefone</th>
+                        <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Instagram</th>
+                        <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Formulário</th>
+                        <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Data</th>
+                        <th className="text-right p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Ações</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {submissions.map((s) => (
+                        <tr key={s.id} className="border-t border-gray-100 dark:border-[#404040]">
+                          <td className="p-3">
+                            <input
+                              type="checkbox"
+                              checked={selectedPendingIds.includes(s.id)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedPendingIds((prev) => [...prev, s.id]);
+                                } else {
+                                  setSelectedPendingIds((prev) => prev.filter((id) => id !== s.id));
+                                }
+                              }}
+                              className="rounded border-gray-300 dark:border-[#555]"
+                            />
+                          </td>
+                          <td className="p-3">{s.full_name}</td>
+                          <td className="p-3">{s.email}</td>
+                          <td className="p-3">{s.phone}</td>
+                          <td className="p-3 text-sm">{s.instagram_handle || '—'}</td>
+                          <td className="p-3 text-sm">{s.zaplink_forms?.name || s.zaplink_form_id}</td>
+                          <td className="p-3 text-sm text-gray-500">{new Date(s.created_at).toLocaleDateString()}</td>
+                          <td className="p-3 text-right">
+                            <div className="flex items-center justify-end gap-1">
+                              <button
+                                onClick={() => {
+                                  setAssignModal(s);
+                                  setAssignSubmissionIds([s.id]);
+                                  const firstBancaId = bancas[0]?.id || '';
+                                  setAssignBanca(firstBancaId);
+                                  setAssignGerente('');
+                                  if (firstBancaId) loadGerentesForBanca(firstBancaId);
+                                }}
+                                className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm"
+                              >
+                                <UserPlus className="w-4 h-4" />
+                                Atribuir
+                              </button>
+                              <button
+                                onClick={() => handleDeletePending(s)}
+                                className="flex items-center gap-1 px-3 py-1.5 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm"
+                                title="Apagar lead pendente"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                                Apagar
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
               ) : (
                 <table className="w-full">
                   <thead className="bg-gray-50 dark:bg-[#333]">
@@ -861,6 +978,153 @@ export default function AdminZaplinkPage() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Solicitações de consultor */}
+        {activeTab === 'requests' && (
+          <div className="space-y-4">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] overflow-hidden">
+              {consultantRequestsLoading ? (
+                <div className="p-8 text-center text-gray-500">Carregando...</div>
+              ) : consultantRequests.length === 0 ? (
+                <div className="p-8 text-center text-gray-500">Nenhuma solicitação de consultor.</div>
+              ) : (
+                <table className="w-full">
+                  <thead className="bg-gray-50 dark:bg-[#333]">
+                    <tr>
+                      <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Gerente</th>
+                      <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Banca</th>
+                      <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Pedido</th>
+                      <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Enviados</th>
+                      <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Faltam</th>
+                      <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Status</th>
+                      <th className="text-right p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Ação</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {consultantRequests.map((r) => {
+                      const faltam = Math.max(0, r.quantity_requested - r.quantity_sent);
+                      const isOpen = faltam > 0;
+                      return (
+                        <tr key={r.id} className="border-t border-gray-100 dark:border-[#404040]">
+                          <td className="p-3">
+                            <span className="font-medium text-gray-900 dark:text-white">{r.gerente_name ?? '—'}</span>
+                            {r.gerente_email && <span className="block text-xs text-gray-500 dark:text-[#888]">{r.gerente_email}</span>}
+                          </td>
+                          <td className="p-3 text-sm">{r.banca_name ?? '—'}</td>
+                          <td className="p-3 font-medium">{r.quantity_requested}</td>
+                          <td className="p-3">{r.quantity_sent}</td>
+                          <td className="p-3">{faltam}</td>
+                          <td className="p-3">
+                            <span className={`px-2 py-1 rounded text-xs font-medium ${isOpen ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200' : 'bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-200'}`}>
+                              {isOpen ? 'Em aberto' : 'Atendido'}
+                            </span>
+                          </td>
+                          <td className="p-3 text-right">
+                            {isOpen && (
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  setFulfillModalRequest(r);
+                                  setFulfillConsultantIds([]);
+                                  try {
+                                    const res = await fetch('/api/admin/zaplink/consultant-requests/consultors?limit=100', { headers: { 'X-User-Id': userId! } });
+                                    const json = await res.json();
+                                    if (json.success && Array.isArray(json.data)) setConsultorsForFulfill(json.data);
+                                    else setConsultorsForFulfill([]);
+                                  } catch {
+                                    setConsultorsForFulfill([]);
+                                  }
+                                }}
+                                className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm"
+                              >
+                                <UserPlus className="w-4 h-4" />
+                                Enviar consultores
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Modal Enviar consultores (atender solicitação) */}
+        {fulfillModalRequest && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-hidden flex flex-col">
+              <div className="p-4 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between">
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                  Enviar consultores — {fulfillModalRequest.gerente_name} / {fulfillModalRequest.banca_name}
+                </h2>
+                <button type="button" onClick={() => setFulfillModalRequest(null)} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333]">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-4 overflow-y-auto flex-1">
+                <p className="text-sm text-gray-600 dark:text-[#aaa] mb-3">
+                  Pedido: {fulfillModalRequest.quantity_requested} | Já enviados: {fulfillModalRequest.quantity_sent} | Faltam: {fulfillModalRequest.quantity_requested - fulfillModalRequest.quantity_sent}
+                </p>
+                <p className="text-sm font-medium text-gray-700 dark:text-[#ccc] mb-2">Selecione os consultores a enviar:</p>
+                <div className="space-y-2 max-h-64 overflow-y-auto border border-gray-200 dark:border-[#404040] rounded-lg p-2">
+                  {consultorsForFulfill.length === 0 ? (
+                    <p className="text-sm text-gray-500 py-2">Carregando...</p>
+                  ) : (
+                    consultorsForFulfill.map((c) => (
+                      <label key={c.id} className="flex items-center gap-2 p-2 rounded hover:bg-gray-50 dark:hover:bg-[#333] cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={fulfillConsultantIds.includes(c.id)}
+                          onChange={(e) => setFulfillConsultantIds((prev) => (e.target.checked ? [...prev, c.id] : prev.filter((id) => id !== c.id)))}
+                          className="rounded text-green-600"
+                        />
+                        <span className="text-sm font-medium text-gray-800 dark:text-[#ccc]">{c.full_name || c.email}</span>
+                        <span className="text-xs text-gray-500 dark:text-[#888]">{c.email}</span>
+                      </label>
+                    ))
+                  )}
+                </div>
+              </div>
+              <div className="p-4 border-t border-gray-200 dark:border-[#404040] flex gap-2 justify-end">
+                <button type="button" onClick={() => setFulfillModalRequest(null)} className="px-4 py-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-[#ccc]">
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={fulfillSubmitting || fulfillConsultantIds.length === 0}
+                  onClick={async () => {
+                    setFulfillSubmitting(true);
+                    try {
+                      const res = await fetch(`/api/admin/zaplink/consultant-requests/${fulfillModalRequest.id}/fulfill`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId! },
+                        body: JSON.stringify({ consultant_user_ids: fulfillConsultantIds }),
+                      });
+                      const json = await res.json();
+                      if (json.success) {
+                        showToast('success', json.message || 'Consultores enviados.');
+                        setFulfillModalRequest(null);
+                        loadConsultantRequests();
+                      } else {
+                        showToast('error', json.error || 'Erro ao enviar.');
+                      }
+                    } catch {
+                      showToast('error', 'Erro de conexão.');
+                    } finally {
+                      setFulfillSubmitting(false);
+                    }
+                  }}
+                  className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {fulfillSubmitting ? 'Enviando...' : `Enviar ${fulfillConsultantIds.length} consultor(es)`}
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -989,16 +1253,24 @@ export default function AdminZaplinkPage() {
         )}
 
         {/* Modal Atribuir */}
-        {assignModal && (
+        {(assignModal || assignSubmissionIds.length > 0) && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-xl max-w-md w-full p-6">
-              <h2 className="text-lg font-semibold mb-4">Atribuir consultor</h2>
-              <p className="text-sm text-gray-600 dark:text-[#aaa] mb-4">
-                {assignModal.full_name} - {assignModal.email} - {assignModal.phone}
-                {assignModal.instagram_handle && (
-                  <span className="block mt-1 text-pink-600 dark:text-pink-400">Instagram: {assignModal.instagram_handle}</span>
-                )}
-              </p>
+              <h2 className="text-lg font-semibold mb-4">
+                {assignSubmissionIds.length > 1 ? `Atribuir ${assignSubmissionIds.length} submissões` : 'Atribuir consultor'}
+              </h2>
+              {assignModal ? (
+                <p className="text-sm text-gray-600 dark:text-[#aaa] mb-4">
+                  {assignModal.full_name} - {assignModal.email} - {assignModal.phone}
+                  {assignModal.instagram_handle && (
+                    <span className="block mt-1 text-pink-600 dark:text-pink-400">Instagram: {assignModal.instagram_handle}</span>
+                  )}
+                </p>
+              ) : assignSubmissionIds.length > 0 ? (
+                <p className="text-sm text-gray-600 dark:text-[#aaa] mb-4">
+                  {assignSubmissionIds.length} submissão(ões) serão atribuídas à mesma banca e gerente (cada uma vira um novo consultor).
+                </p>
+              ) : null}
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium mb-1">Banca</label>
@@ -1033,7 +1305,7 @@ export default function AdminZaplinkPage() {
               <div className="flex gap-2 justify-end mt-6">
                 <button
                   type="button"
-                  onClick={() => setAssignModal(null)}
+                  onClick={() => { setAssignModal(null); setAssignSubmissionIds([]); }}
                   className="px-4 py-2 border rounded-lg dark:border-[#555]"
                 >
                   Cancelar
@@ -1044,7 +1316,7 @@ export default function AdminZaplinkPage() {
                   className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2"
                 >
                   {assigning && <Loader2 className="w-4 h-4 animate-spin" />}
-                  Atribuir
+                  {assignSubmissionIds.length > 1 ? `Atribuir ${assignSubmissionIds.length}` : 'Atribuir'}
                 </button>
               </div>
             </div>

@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
 
     const { data: logs, error } = await supabaseServiceRole
       .from('zaplink_bulk_send_log')
-      .select('id, sent_count, message_preview, delay_seconds, created_at')
+      .select('id, sent_count, message_preview, delay_seconds, created_at, status, error_message')
       .eq('gerente_id', userId)
       .order('created_at', { ascending: false })
       .limit(limit);

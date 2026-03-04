@@ -80,6 +80,8 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
                           pathname?.startsWith('/admin/meta') ||
                           pathname?.startsWith('/admin/crm/lead-transfer') ||
                           pathname?.startsWith('/admin/hierarchy') ||
+                          pathname?.startsWith('/admin/zaplink') ||
+                          pathname?.startsWith('/gerente/zaplink') ||
                           onSignOut !== undefined;
 
   // Função de logout padrão
@@ -289,6 +291,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const itemMetaAds: MenuItem = { href: '/admin/meta', icon: BarChart3, label: 'Meta Ads' };
   const itemVslRedirect: MenuItem = { href: '/admin/vsl', icon: ExternalLink, label: 'VSL & Redirect' };
   const itemZaplink: MenuItem = { href: '/admin/zaplink', icon: Link2, label: 'Zaplink' };
+  const itemZaplinkGerente: MenuItem = { href: '/gerente/zaplink', icon: Link2, label: 'Zaplink' };
   const itemAcademy: MenuItem = {
     href: '/admin/academy',
     icon: BookOpen,
@@ -440,6 +443,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
     if (userStatus === 'gerente') {
       return [
         itemGestaoConsultores,
+        itemZaplinkGerente,
         itemDashboard,
         itemInstances,
         itemAgentesIA,

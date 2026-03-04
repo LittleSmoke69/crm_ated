@@ -133,15 +133,21 @@ export async function getSidebarItemsForRole(
   const items = roleSidebar
     .map((r: any) => r.zaploto_sidebar_items)
     .filter(Boolean)
-    .map((si: any) => ({
-      id: si.id,
-      code: si.code,
-      label: si.label,
-      href: si.href,
-      icon_name: si.icon_name,
-      parent_code: si.parent_code,
-      sort_order: si.sort_order,
-    })) as SidebarItem[];
+    .map((si: any) => {
+      let href = si.href;
+      if (roleCode === 'gerente' && si.code === 'zaplink') {
+        href = '/gerente/zaplink';
+      }
+      return {
+        id: si.id,
+        code: si.code,
+        label: si.label,
+        href,
+        icon_name: si.icon_name,
+        parent_code: si.parent_code,
+        sort_order: si.sort_order,
+      };
+    }) as SidebarItem[];
 
   // Agrupar submenus
   const root = items.filter((i) => !i.parent_code);

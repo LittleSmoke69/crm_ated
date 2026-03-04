@@ -216,7 +216,7 @@ export default function GerentePage() {
   );
   const [zaplinkBulkSendDelayMinutes, setZaplinkBulkSendDelayMinutes] = useState(0);
   const [zaplinkBulkSendDelaySeconds, setZaplinkBulkSendDelaySeconds] = useState(30);
-  type BulkSendLogItem = { id: string; sent_count: number; message_preview: string; delay_seconds: number; created_at: string };
+  type BulkSendLogItem = { id: string; sent_count: number; message_preview: string; delay_seconds: number; created_at: string; status?: string; error_message?: string | null };
   const [zaplinkBulkSendLog, setZaplinkBulkSendLog] = useState<BulkSendLogItem[]>([]);
   const [zaplinkBulkSendLogLoading, setZaplinkBulkSendLogLoading] = useState(false);
 
@@ -228,6 +228,15 @@ export default function GerentePage() {
   const [solicitationSubmitting, setSolicitationSubmitting] = useState(false);
   const [solicitationError, setSolicitationError] = useState('');
   const [solicitationSuccess, setSolicitationSuccess] = useState('');
+  // Modal de escolha: Pedir lead ou Consultor
+  const [solicitationChoiceOpen, setSolicitationChoiceOpen] = useState(false);
+  // Modal Consultor: seleção de banca + quantidade
+  const [consultorBancaModalOpen, setConsultorBancaModalOpen] = useState(false);
+  const [consultorBancaId, setConsultorBancaId] = useState<string>('');
+  const [consultorQuantity, setConsultorQuantity] = useState<number>(1);
+  const [consultorRequestSubmitting, setConsultorRequestSubmitting] = useState(false);
+  const [consultorRequestError, setConsultorRequestError] = useState('');
+  const [consultorRequestSuccess, setConsultorRequestSuccess] = useState('');
 
   // Filtros de banca e consultor
   const [bancas, setBancas] = useState<Array<{ id: string; name: string; url: string }>>([]);
@@ -315,6 +324,52 @@ export default function GerentePage() {
     return { dateFrom, dateTo };
   };
 
+  // Zaplink: buscar notificações o mais cedo possível (antes de bancas/dados) para modal aparecer de imediato
+  const fetchZaplinkNotifications = useCallback(() => {
+    if (!userId) return;
+    fetch('/api/gerente/zaplink-notifications', { headers: { 'X-User-Id': userId } })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.success && Array.isArray(res.data) && res.data.length > 0) {
+          const list = res.data.filter((n: ZaplinkNotif) => n.submission);
+          if (list.length > 0) {
+            setZaplinkNotifications(list);
+            setZaplinkBulkSendConfigOpen(false);
+            setZaplinkModalOpen(true);
+          }
+        }
+      })
+      .catch(() => {});
+  }, [userId]);
+
+  const fetchZaplinkBulkSendLog = useCallback(() => {
+    if (!userId) return;
+    setZaplinkBulkSendLogLoading(true);
+    fetch('/api/gerente/zaplink-notifications/bulk-send-log?limit=10', { headers: { 'X-User-Id': userId } })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.success && Array.isArray(res.data)) setZaplinkBulkSendLog(res.data);
+      })
+      .catch(() => {})
+      .finally(() => setZaplinkBulkSendLogLoading(false));
+  }, [userId]);
+
+  // Dispara fetch Zaplink logo que tiver userId (primeiro efeito que roda, para modal aparecer de imediato)
+  useEffect(() => {
+    if (!userId) return;
+    fetchZaplinkNotifications();
+  }, [userId, fetchZaplinkNotifications]);
+
+  useEffect(() => {
+    if (zaplinkModalOpen && userId) fetchZaplinkBulkSendLog();
+  }, [zaplinkModalOpen, userId, fetchZaplinkBulkSendLog]);
+
+  useEffect(() => {
+    if (!userId) return;
+    const interval = setInterval(fetchZaplinkNotifications, 20000);
+    return () => clearInterval(interval);
+  }, [userId, fetchZaplinkNotifications]);
+
   // Carrega perfil para saber se é super_admin/admin (filtro de gerente)
   useEffect(() => {
     if (!userId) return;
@@ -376,50 +431,6 @@ export default function GerentePage() {
     if (isAdminOrSuperAdmin && gerentes.length > 0 && !selectedGerente) return; // admin aguarda seleção de gerente
     loadData(false);
   }, [dateFilter, appliedStartDate, appliedEndDate, selectedBanca, selectedConsultor, selectedGerente, isAdminOrSuperAdmin, gerentes.length]);
-
-  // Carrega notificações Zaplink não vistas (apenas atribuídas a este gerente) — imediato + polling para aparecer mais rápido
-  const fetchZaplinkNotifications = useCallback(() => {
-    if (!userId) return;
-    fetch('/api/gerente/zaplink-notifications', { headers: { 'X-User-Id': userId } })
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.success && Array.isArray(res.data) && res.data.length > 0) {
-          const list = res.data.filter((n: ZaplinkNotif) => n.submission);
-          if (list.length > 0) {
-            setZaplinkNotifications(list);
-            setZaplinkBulkSendConfigOpen(false);
-            setZaplinkModalOpen(true);
-          }
-        }
-      })
-      .catch(() => {});
-  }, [userId]);
-
-  const fetchZaplinkBulkSendLog = useCallback(() => {
-    if (!userId) return;
-    setZaplinkBulkSendLogLoading(true);
-    fetch('/api/gerente/zaplink-notifications/bulk-send-log?limit=10', { headers: { 'X-User-Id': userId } })
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.success && Array.isArray(res.data)) setZaplinkBulkSendLog(res.data);
-      })
-      .catch(() => {})
-      .finally(() => setZaplinkBulkSendLogLoading(false));
-  }, [userId]);
-
-  useEffect(() => {
-    fetchZaplinkNotifications();
-  }, [fetchZaplinkNotifications]);
-
-  useEffect(() => {
-    if (zaplinkModalOpen && userId) fetchZaplinkBulkSendLog();
-  }, [zaplinkModalOpen, userId, fetchZaplinkBulkSendLog]);
-
-  useEffect(() => {
-    if (!userId) return;
-    const interval = setInterval(fetchZaplinkNotifications, 20000); // a cada 20s para modal aparecer mais rápido
-    return () => clearInterval(interval);
-  }, [userId, fetchZaplinkNotifications]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -1022,8 +1033,14 @@ export default function GerentePage() {
                       {zaplinkBulkSendLog.map((log) => (
                         <div key={log.id} className="text-xs text-gray-600 dark:text-[#aaa] flex flex-wrap gap-x-2 gap-y-1">
                           <span className="font-medium text-gray-800 dark:text-[#ccc]">{new Date(log.created_at).toLocaleString('pt-BR')}</span>
-                          <span>{log.sent_count} envio(s)</span>
-                          {log.delay_seconds > 0 && <span>intervalo {log.delay_seconds}s</span>}
+                          <span className={log.status === 'failed' ? 'text-red-600 dark:text-red-400 font-medium' : 'text-green-600 dark:text-green-400 font-medium'}>
+                            {log.status === 'failed' ? 'Falhou' : 'Sucesso'}
+                          </span>
+                          {log.status !== 'failed' && <span>{log.sent_count} envio(s)</span>}
+                          {log.delay_seconds > 0 && log.status !== 'failed' && <span>intervalo {log.delay_seconds}s</span>}
+                          {log.status === 'failed' && log.error_message && (
+                            <span className="w-full text-red-600 dark:text-red-400 truncate" title={log.error_message}>{log.error_message}</span>
+                          )}
                           <span className="w-full truncate" title={log.message_preview}>{log.message_preview}</span>
                         </div>
                       ))}
@@ -1376,11 +1393,11 @@ export default function GerentePage() {
             </div>
 
             <button
-              onClick={openSolicitationModal}
+              onClick={() => setSolicitationChoiceOpen(true)}
               className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all shadow-sm"
             >
               <ClipboardList className="w-4 h-4 text-[#8CD955]" />
-              Solicitação de leads
+              Solicitações
             </button>
             <button
               onClick={() => setIsModalOpen(true)}
@@ -1751,22 +1768,22 @@ export default function GerentePage() {
                       key={idx}
                       className="p-4 bg-gray-200/80 dark:bg-gray-700/60 rounded-xl border border-gray-200 dark:border-gray-600"
                     >
-                      <p className="text-sm font-bold text-gray-600 dark:text-gray-300 mb-2 flex items-center gap-2">
+                      <div className="text-sm font-bold text-gray-600 dark:text-gray-300 mb-2 flex items-center gap-2">
                         <div className="w-6 h-6 rounded-full bg-gray-400 dark:bg-gray-500 text-gray-600 dark:text-gray-200 flex items-center justify-center text-[10px]">
                           {item.consultorName[0].toUpperCase()}
                         </div>
                         {item.consultorName}
-                      </p>
+                      </div>
                       <p className="text-xs text-gray-500 dark:text-gray-400 italic">Não usou etiquetas</p>
                     </div>
                   ) : (
                     <div key={idx} className="p-4 bg-gray-50 dark:bg-gray-800/50 rounded-xl border border-gray-100 dark:border-gray-700">
-                      <p className="text-sm font-bold text-gray-700 dark:text-gray-200 mb-3 flex items-center gap-2">
+                      <div className="text-sm font-bold text-gray-700 dark:text-gray-200 mb-3 flex items-center gap-2">
                         <div className="w-6 h-6 rounded-full bg-[#8CD95520] text-[#8CD955] flex items-center justify-center text-[10px]">
                           {item.consultorName[0].toUpperCase()}
                         </div>
                         {item.consultorName}
-                      </p>
+                      </div>
                       <div className="flex flex-wrap gap-2">
                         {item.tags.map((tag, tIdx) => (
                           <div
@@ -2118,6 +2135,50 @@ export default function GerentePage() {
           </div>
         )}
 
+        {/* Modal de escolha: Pedir lead ou Consultor */}
+        {solicitationChoiceOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-gray-700">
+              <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-[#A8E677] to-[#8CD955] text-white shrink-0">
+                <h2 className="text-xl font-bold flex items-center gap-2">
+                  <ClipboardList className="w-6 h-6" />
+                  Solicitações
+                </h2>
+                <button onClick={() => setSolicitationChoiceOpen(false)} className="hover:bg-white/20 p-1.5 rounded-xl transition-colors">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+              <div className="p-6 flex flex-col gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSolicitationChoiceOpen(false);
+                    openSolicitationModal();
+                  }}
+                  className="w-full flex items-center justify-center gap-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white font-bold py-3.5 rounded-xl transition-colors"
+                >
+                  <Users className="w-5 h-5" />
+                  Pedir lead
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSolicitationChoiceOpen(false);
+                    setConsultorBancaId(bancas.length > 0 ? (bancas.find((b) => b.url === selectedBanca)?.id ?? bancas[0].id) : '');
+                    setConsultorQuantity(1);
+                    setConsultorRequestError('');
+                    setConsultorBancaModalOpen(true);
+                  }}
+                  className="w-full flex items-center justify-center gap-2 bg-white dark:bg-gray-700 border-2 border-[#8CD955] text-[#8CD955] dark:text-[#8CD955] font-bold py-3.5 rounded-xl hover:bg-[#8CD955]/10 dark:hover:bg-[#8CD955]/10 transition-colors"
+                >
+                  <UserPlus className="w-5 h-5" />
+                  Consultor
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Modal Solicitação de leads */}
         {solicitationModalOpen && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -2234,6 +2295,108 @@ export default function GerentePage() {
                   <button type="button" onClick={() => setSolicitationModalOpen(false)} className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 font-bold py-3 rounded-xl">Cancelar</button>
                   <button type="submit" disabled={solicitationSubmitting} className="flex-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white font-bold py-3 rounded-xl disabled:opacity-50 transition-colors">
                     {solicitationSubmitting ? 'Enviando...' : 'Enviar solicitação'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Consultor - seleção de banca */}
+        {consultorBancaModalOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-gray-700">
+              <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-[#A8E677] to-[#8CD955] text-white shrink-0">
+                <h2 className="text-xl font-bold flex items-center gap-2">
+                  <UserPlus className="w-6 h-6" />
+                  Solicitação de consultor
+                </h2>
+                <button onClick={() => setConsultorBancaModalOpen(false)} className="hover:bg-white/20 p-1.5 rounded-xl transition-colors">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!consultorBancaId || consultorQuantity < 1) return;
+                  setConsultorRequestError('');
+                  setConsultorRequestSubmitting(true);
+                  try {
+                    const res = await fetch('/api/gerente/consultant-request', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json', 'X-User-Id': userId as string },
+                      body: JSON.stringify({ banca_id: consultorBancaId, quantity_requested: consultorQuantity }),
+                    });
+                    const json = await res.json();
+                    if (json.success) {
+                      setConsultorRequestSuccess(json.message || 'Solicitação registrada.');
+                      setTimeout(() => {
+                        setConsultorBancaModalOpen(false);
+                        setConsultorRequestSuccess('');
+                      }, 1500);
+                    } else {
+                      setConsultorRequestError(json.error || 'Erro ao enviar.');
+                    }
+                  } catch {
+                    setConsultorRequestError('Erro de conexão.');
+                  } finally {
+                    setConsultorRequestSubmitting(false);
+                  }
+                }}
+                className="p-6"
+              >
+                {consultorRequestSuccess && (
+                  <div className="mb-4 p-3 rounded-xl bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-300 text-sm border border-green-200 dark:border-green-800">
+                    {consultorRequestSuccess}
+                  </div>
+                )}
+                {consultorRequestError && (
+                  <div className="mb-4 p-3 rounded-xl bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-300 text-sm border border-red-200 dark:border-red-800">
+                    {consultorRequestError}
+                  </div>
+                )}
+                <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-2 ml-1">Banca</label>
+                {bancasLoading ? (
+                  <div className="flex items-center gap-2 py-2 text-sm text-gray-500 dark:text-gray-400">
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-[#8CD955] border-t-transparent" />
+                    Carregando bancas...
+                  </div>
+                ) : (
+                  <select
+                    value={consultorBancaId}
+                    onChange={(e) => setConsultorBancaId(e.target.value)}
+                    required
+                    className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium mb-4"
+                  >
+                    <option value="">Selecione a banca</option>
+                    {bancas.map((b) => (
+                      <option key={b.id} value={b.id}>{b.name || b.url || b.id}</option>
+                    ))}
+                  </select>
+                )}
+                <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-2 ml-1">Número de consultores</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={500}
+                  value={consultorQuantity}
+                  onChange={(e) => setConsultorQuantity(Math.max(1, Math.min(500, parseInt(e.target.value, 10) || 1)))}
+                  className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium mb-6"
+                />
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setConsultorBancaModalOpen(false)}
+                    className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 font-bold py-3 rounded-xl"
+                  >
+                    Fechar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={consultorRequestSubmitting || !consultorBancaId}
+                    className="flex-1 bg-[#8CD955] hover:bg-[#7BC84A] text-white font-bold py-3 rounded-xl disabled:opacity-50"
+                  >
+                    {consultorRequestSubmitting ? 'Enviando...' : 'Enviar solicitação'}
                   </button>
                 </div>
               </form>
