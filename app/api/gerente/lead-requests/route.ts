@@ -57,7 +57,8 @@ export async function GET(req: NextRequest) {
         namesById.set(p.id, name);
       });
     }
-    const withLabels = list.map((r: { lead_type: string; banca_id?: string | null; consultores?: { consultor_id: string; quantity: number }[] }) => {
+    type RowItem = { status: string; lead_type: string; banca_id?: string | null; consultores?: { consultor_id: string; quantity: number }[] };
+    const withLabels = list.map((r: RowItem) => {
       const types = (r.lead_type ?? '').split(',').map((t: string) => t.trim()).filter(Boolean);
       const lead_type_label = types.length > 0 ? types.map((t) => LEAD_TYPE_LABELS[t] ?? t).join(', ') : (LEAD_TYPE_LABELS[r.lead_type] ?? r.lead_type);
       const banca_name = r.banca_id ? (bancaNamesById.get(r.banca_id) ?? r.banca_id) : null;
@@ -72,7 +73,7 @@ export async function GET(req: NextRequest) {
       };
     });
 
-    const sorted = withLabels.sort((a: { status: string }, b: { status: string }) => {
+    const sorted = withLabels.sort((a, b) => {
       if (a.status === 'pending' && b.status !== 'pending') return -1;
       if (a.status !== 'pending' && b.status === 'pending') return 1;
       return 0;
