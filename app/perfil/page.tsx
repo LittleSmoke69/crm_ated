@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import Layout from '@/components/Layout';
 import { useTheme } from '@/contexts/ThemeContext';
-import { User, Mail, Phone, Building2, Shield, Loader2, Edit2, Save, X, Search, UserCircle, Sun, Moon } from 'lucide-react';
+import { User, Mail, Phone, Building2, Shield, Loader2, Edit2, Save, X, Search, UserCircle, Sun, Moon, RefreshCw } from 'lucide-react';
 
 interface BancaItem {
   id?: string;
@@ -32,6 +32,8 @@ interface UserProfile {
 }
 
 const ROLES_COM_BANCAS = ['consultor', 'gerente', 'gestor', 'super_admin'] as const;
+/** Perfis que podem usar "Carregar bancas" (busca por email nas APIs das bancas). */
+const ROLES_CARREGAR_BANCAS_POR_EMAIL = ['consultor', 'gerente'] as const;
 
 const PerfilPage = () => {
   const { checking, userId } = useRequireAuth();
@@ -49,6 +51,7 @@ const PerfilPage = () => {
   const [bancasLoaded, setBancasLoaded] = useState(false);
   const [modalBancasOpen, setModalBancasOpen] = useState(false);
   const [bancaSearchTerm, setBancaSearchTerm] = useState('');
+  const [loadingLoadBancas, setLoadingLoadBancas] = useState(false);
 
   useEffect(() => {
     if (checking || !userId) return;
@@ -246,6 +249,36 @@ const PerfilPage = () => {
     setError(null);
     if (!bancasLoaded) loadBancasList();
     setModalBancasOpen(true);
+  };
+
+  const handleLoadBancas = async () => {
+    if (!userId || !profile) return;
+    try {
+      setLoadingLoadBancas(true);
+      setError(null);
+      const response = await fetch('/api/user/bancas/load', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        credentials: 'include',
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Erro ao carregar bancas');
+      if (result.success && result.data?.bancas) {
+        setProfile({ ...profile, bancas: result.data.bancas });
+        setAllBancas((prev) => {
+          const byId = new Map(prev.map((b) => [b.id ?? '', b]));
+          result.data.bancas.forEach((b: BancaItem) => {
+            if (b.id && !byId.has(b.id)) byId.set(b.id, { id: b.id, name: b.name, url: b.url ?? null });
+          });
+          return Array.from(byId.values());
+        });
+        setBancasLoaded(true);
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Erro ao carregar bancas');
+    } finally {
+      setLoadingLoadBancas(false);
+    }
   };
 
   const closeModalBancas = () => {
@@ -448,15 +481,36 @@ const PerfilPage = () => {
                         <p className="text-gray-500 dark:text-[#888]">Nenhuma banca associada</p>
                       )}
                     </div>
-                    <button
-                      type="button"
-                      onClick={openModalBancas}
-                      className="flex items-center gap-2 px-3 py-2 text-[#8CD955] dark:text-[#00ff00] hover:bg-green-50 dark:hover:bg-[#00ff0015] rounded-lg transition-colors font-medium shrink-0"
-                      title="Escolher bancas"
-                    >
-                      <Edit2 className="w-4 h-4" />
-                      Escolher bancas
-                    </button>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {ROLES_CARREGAR_BANCAS_POR_EMAIL.includes(profile.status as any) && (
+                        <button
+                          type="button"
+                          onClick={handleLoadBancas}
+                          disabled={loadingLoadBancas}
+                          className="flex items-center gap-2 px-3 py-2 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors font-medium disabled:opacity-50"
+                          title="Buscar e salvar bancas em que você atua (por email)"
+                        >
+                          {loadingLoadBancas ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <RefreshCw className="w-4 h-4" />
+                          )}
+                          Carregar bancas
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={openModalBancas}
+                        className="flex items-center gap-2 px-3 py-2 text-[#8CD955] dark:text-[#00ff00] hover:bg-green-50 dark:hover:bg-[#00ff0015] rounded-lg transition-colors font-medium shrink-0"
+                        title="Escolher bancas"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                        Escolher bancas
+                      </button>
+                    </div>
+                    {error && !editingTelefone && (
+                      <p className="text-sm text-red-600 dark:text-red-400 mt-2 w-full">{error}</p>
+                    )}
                   </div>
                 ) : (
                   <>

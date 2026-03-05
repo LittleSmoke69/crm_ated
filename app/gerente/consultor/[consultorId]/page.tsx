@@ -77,8 +77,9 @@ export default function DetalheConsultor() {
   const [data, setData] = useState<ConsultorDetail | null>(null);
   const [accessingCrm, setAccessingCrm] = useState(false);
   
-  // Filtro de banca
+  // Filtro de banca (apenas as que este consultor tem acesso, conforme API externa)
   const [bancas, setBancas] = useState<Array<{ id: string; name: string; url: string }>>([]);
+  const [bancasLoading, setBancasLoading] = useState(false);
   const [selectedBanca, setSelectedBanca] = useState<string>('');
   const [showBancaFilter, setShowBancaFilter] = useState(false);
   const [bancaSearchTerm, setBancaSearchTerm] = useState<string>('');
@@ -181,17 +182,24 @@ export default function DetalheConsultor() {
   }, [showDatePicker, showBancaFilter]);
 
   const loadBancas = async () => {
+    if (!consultorId) return;
+    setBancasLoading(true);
     try {
-      const response = await fetch('/api/crm/bancas', {
+      const response = await fetch(`/api/gerente/consultores/${consultorId}/bancas`, {
         headers: { 'X-User-Id': userId as string }
       });
       const result = await response.json();
-      
       if (result.success) {
-        setBancas(result.data || []);
+        const list = result.data || [];
+        setBancas(list);
+        if (list.length > 0 && !selectedBanca) {
+          setSelectedBanca(list[0].url);
+        }
       }
     } catch (error) {
       console.error('Erro ao carregar bancas:', error);
+    } finally {
+      setBancasLoading(false);
     }
   };
 
@@ -325,7 +333,7 @@ export default function DetalheConsultor() {
                 <div className="relative banca-filter-container">
                   <button
                     onClick={async () => {
-                      if (!showBancaFilter && bancas.length === 0) {
+                      if (!showBancaFilter && bancas.length === 0 && !bancasLoading) {
                         await loadBancas();
                       }
                       setShowBancaFilter(!showBancaFilter);
@@ -334,17 +342,34 @@ export default function DetalheConsultor() {
                         setBancaSearchTerm('');
                       }
                     }}
-                    className="flex items-center gap-2 bg-white border border-gray-200 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 hover:bg-gray-50 transition-all shadow-sm"
+                    disabled={bancasLoading}
+                    className="flex items-center gap-2 bg-white border border-gray-200 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 hover:bg-gray-50 transition-all shadow-sm disabled:opacity-70 disabled:cursor-wait"
                   >
-                    <Filter className="w-4 h-4 text-[#8CD955]" />
-                    {selectedBanca 
-                      ? bancas.find(b => b.url === selectedBanca)?.name || 'Banca selecionada'
-                      : 'Selecione uma Banca'}
-                    <ChevronDown className="w-4 h-4" />
+                    {bancasLoading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin text-[#8CD955]" />
+                        Verificando bancas do consultor...
+                      </>
+                    ) : (
+                      <>
+                        <Filter className="w-4 h-4 text-[#8CD955]" />
+                        {selectedBanca
+                          ? bancas.find(b => b.url === selectedBanca)?.name || 'Banca selecionada'
+                          : 'Selecione uma Banca'}
+                        <ChevronDown className="w-4 h-4" />
+                      </>
+                    )}
                   </button>
                   
                   {showBancaFilter && (
                     <div className="absolute right-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-50 max-h-[400px] overflow-hidden flex flex-col min-w-[250px]">
+                      {bancasLoading ? (
+                        <div className="p-6 flex items-center justify-center gap-2 text-gray-500">
+                          <Loader2 className="w-5 h-5 animate-spin" />
+                          <span className="text-sm">Verificando acesso do consultor nas bancas...</span>
+                        </div>
+                      ) : (
+                      <>
                       <div className="p-3 border-b border-gray-100">
                         <div className="relative">
                           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500" />
@@ -386,10 +411,14 @@ export default function DetalheConsultor() {
                             ))
                         ) : (
                           <div className="px-4 py-8 text-center text-sm text-gray-500">
-                            Nenhuma banca encontrada
+                            {bancas.length === 0
+                              ? 'Este consultor não tem acesso a nenhuma das suas bancas.'
+                              : 'Nenhuma banca encontrada'}
                           </div>
                         )}
                       </div>
+                      </>
+                      )}
                     </div>
                   )}
                 </div>

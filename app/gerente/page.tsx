@@ -40,6 +40,8 @@ import Link from 'next/link';
 import StatusDistributionChart from '@/components/Charts/StatusDistributionChart';
 import FinancialMetricsBarChart from '@/components/Charts/FinancialMetricsBarChart';
 import TagsSummaryChart from '@/components/Charts/TagsSummaryChart';
+import { useToast } from '@/hooks/useToast';
+import ToastContainer from '@/components/Toast/ToastContainer';
 
 interface ConsultorMetric {
   id: string;
@@ -64,6 +66,8 @@ interface ConsultorMetric {
     net_profit: number;
   } | null;
   externalKpisError?: string | null;
+  /** Bancas em que o consultor tem dados (preenchido quando filtro "Todas as bancas" está ativo). */
+  banca_names?: string[];
 }
 
 interface GerenteDashboardData {
@@ -224,6 +228,8 @@ export default function GerentePage() {
   const [solicitationModalOpen, setSolicitationModalOpen] = useState(false);
   const [solicitationConsultorId, setSolicitationConsultorId] = useState<string>('');
   const [solicitationBancaId, setSolicitationBancaId] = useState<string>('');
+  const [solicitationBancasForConsultant, setSolicitationBancasForConsultant] = useState<Array<{ id: string; name: string; url: string }>>([]);
+  const [solicitationBancasLoading, setSolicitationBancasLoading] = useState(false);
   const [solicitationQuantity, setSolicitationQuantity] = useState<number>(10);
   const [solicitationDeadlineDays, setSolicitationDeadlineDays] = useState<number>(10);
   const [solicitationSubmitting, setSolicitationSubmitting] = useState(false);
@@ -239,7 +245,25 @@ export default function GerentePage() {
   const [consultorRequestError, setConsultorRequestError] = useState('');
   const [consultorRequestSuccess, setConsultorRequestSuccess] = useState('');
 
+  // Histórico de solicitações de leads (abaixo da tabela Sua equipe)
+  type LeadRequestStatus = 'pending' | 'approved' | 'rejected';
+  type LeadRequestItem = {
+    id: string;
+    lead_type: string;
+    lead_type_label: string;
+    consultores: { consultor_id: string; quantity: number; consultor_name?: string }[];
+    status: LeadRequestStatus;
+    banca_id?: string | null;
+    banca_name?: string;
+    created_at: string;
+    approved_at?: string | null;
+    deadline_days?: number | null;
+  };
+  const [leadRequestsHistory, setLeadRequestsHistory] = useState<LeadRequestItem[]>([]);
+  const [leadRequestsHistoryLoading, setLeadRequestsHistoryLoading] = useState(false);
+
   // Filtros de banca e consultor
+  const BANCA_ALL = '__all__'; // valor especial para "Todas as bancas" (apenas gerente)
   const [bancas, setBancas] = useState<Array<{ id: string; name: string; url: string }>>([]);
   const [bancasLoading, setBancasLoading] = useState(true);
   const [allConsultores, setAllConsultores] = useState<ConsultorMetric[]>([]);
@@ -257,11 +281,17 @@ export default function GerentePage() {
   const [showGerenteFilter, setShowGerenteFilter] = useState(false);
   const [gerenteSearchTerm, setGerenteSearchTerm] = useState('');
   const [consultorSearchTerm, setConsultorSearchTerm] = useState('');
+  const { toasts, showToast, removeToast } = useToast();
+  const [backgroundBancasLoading, setBackgroundBancasLoading] = useState(false);
+  const [backgroundBancasProgress, setBackgroundBancasProgress] = useState({ current: 0, total: 0 });
 
-  // Filtros locais da tabela
+  // Filtros e paginação da tabela "Sua equipe"
   const [tableSearchTerm, setTableSearchTerm] = useState('');
-  const [sortBy, setSortBy] = useState<'name' | 'leads' | 'deposited' | 'profit'>('name');
+  type TeamTableSortField = 'name' | 'lastSeenAt' | 'totalOnlineTime' | 'totalCrmTime' | 'leads' | 'deposited' | 'profit';
+  const [sortBy, setSortBy] = useState<TeamTableSortField>('name');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [teamTablePageSize, setTeamTablePageSize] = useState(10);
+  const [teamTablePage, setTeamTablePage] = useState(1);
 
   // Calcula as datas baseado no filtro selecionado
   const getDateRange = () => {
@@ -395,10 +425,10 @@ export default function GerentePage() {
     }
   }, [bancas, selectedBanca]);
 
-  // super_admin/admin: carrega gerentes da banca selecionada
+  // super_admin/admin: carrega gerentes da banca selecionada (ignora quando "Todas as bancas")
   const isAdminOrSuperAdmin = userStatus === 'super_admin' || userStatus === 'admin';
   useEffect(() => {
-    if (!userId || !isAdminOrSuperAdmin || !selectedBanca) {
+    if (!userId || !isAdminOrSuperAdmin || !selectedBanca || selectedBanca === BANCA_ALL) {
       setGerentes([]);
       setSelectedGerente('');
       return;
@@ -429,7 +459,7 @@ export default function GerentePage() {
   useEffect(() => {
     if (!userId || initialLoading) return;
     if (!selectedBanca) return;
-    if (isAdminOrSuperAdmin && gerentes.length > 0 && !selectedGerente) return; // admin aguarda seleção de gerente
+    if (isAdminOrSuperAdmin && selectedBanca !== BANCA_ALL && gerentes.length > 0 && !selectedGerente) return; // admin aguarda seleção de gerente
     loadData(false);
   }, [dateFilter, appliedStartDate, appliedEndDate, selectedBanca, selectedConsultor, selectedGerente, isAdminOrSuperAdmin, gerentes.length]);
 
@@ -451,6 +481,43 @@ export default function GerentePage() {
     }
   }, [showDatePicker, showBancaFilter, showConsultorFilter, showGerenteFilter]);
 
+  // Ajusta página da tabela "Sua equipe" quando o total de itens filtrados diminui (evita página em branco)
+  const consultorMetricsForCount = data?.consultorMetrics ?? [];
+  const teamFilteredCount = consultorMetricsForCount.filter(
+    (c: ConsultorMetric) => c.externalKpis != null && !c.externalKpisError
+  ).filter(
+    (c: ConsultorMetric) =>
+      !tableSearchTerm.trim() ||
+      (c.name || '').toLowerCase().includes(tableSearchTerm.toLowerCase().trim()) ||
+      (c.email || '').toLowerCase().includes(tableSearchTerm.toLowerCase().trim())
+  ).length;
+  useEffect(() => {
+    const tp = Math.max(1, Math.ceil(teamFilteredCount / teamTablePageSize));
+    if (teamTablePage > tp) setTeamTablePage(tp);
+  }, [teamFilteredCount, teamTablePageSize, teamTablePage]);
+
+  const loadLeadRequests = useCallback(async () => {
+    if (!userId) return;
+    setLeadRequestsHistoryLoading(true);
+    try {
+      const res = await fetch('/api/gerente/lead-requests', { headers: { 'X-User-Id': userId } });
+      const json = await res.json();
+      if (json?.success && Array.isArray(json.data)) {
+        setLeadRequestsHistory(json.data as LeadRequestItem[]);
+      } else {
+        setLeadRequestsHistory([]);
+      }
+    } catch {
+      setLeadRequestsHistory([]);
+    } finally {
+      setLeadRequestsHistoryLoading(false);
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    if (userId) loadLeadRequests();
+  }, [userId, loadLeadRequests]);
+
   const loadBancas = async () => {
     setBancasLoading(true);
     try {
@@ -469,6 +536,88 @@ export default function GerentePage() {
     }
   };
 
+  /** Mescla resposta de uma banca no estado atual do dashboard (soma KPIs, concatena banca_names). */
+  const mergeDashboardData = useCallback(
+    (current: GerenteDashboardData | null, incoming: GerenteDashboardData): GerenteDashboardData => {
+      if (!current) return incoming;
+      const byId = new Map(current.consultorMetrics.map((c) => [c.id, { ...c }]));
+      for (const m of incoming.consultorMetrics) {
+        const existing = byId.get(m.id);
+        if (!existing) {
+          byId.set(m.id, { ...m });
+          continue;
+        }
+        const exK = existing.externalKpis;
+        const inK = m.externalKpis;
+        if (!inK) continue;
+        if (!exK) {
+          existing.externalKpis = inK;
+          existing.banca_names = [...(m.banca_names || [])];
+          continue;
+        }
+        const totalLeads = (exK.total_leads || 0) + (inK.total_leads || 0);
+        const totalLeadsLtv = (exK.total_leads || 0) * (exK.ltv_avg || 0) + (inK.total_leads || 0) * (inK.ltv_avg || 0);
+        existing.externalKpis = {
+          total_leads: totalLeads,
+          total_deposited: (exK.total_deposited || 0) + (inK.total_deposited || 0),
+          total_bets: (exK.total_bets || 0) + (inK.total_bets || 0),
+          total_prizes: (exK.total_prizes || 0) + (inK.total_prizes || 0),
+          awarded_clients_count: (exK.awarded_clients_count || 0) + (inK.awarded_clients_count || 0),
+          active_leads: (exK.active_leads || 0) + (inK.active_leads || 0),
+          net_profit: (exK.net_profit || 0) + (inK.net_profit || 0),
+          conversion_rate: totalLeads > 0 ? ((exK.active_leads || 0) + (inK.active_leads || 0)) / totalLeads * 100 : 0,
+          ltv_avg: totalLeads > 0 ? totalLeadsLtv / totalLeads : 0,
+        };
+        const names = new Set([...(existing.banca_names || []), ...(m.banca_names || [])]);
+        existing.banca_names = Array.from(names);
+      }
+      const mergedMetrics = Array.from(byId.values());
+      const curKpis = current.gerenteTotalKpis;
+      const incKpis = incoming.gerenteTotalKpis;
+      let mergedKpis = current.gerenteTotalKpis;
+      if (curKpis && incKpis) {
+        const tLeads = (curKpis.total_leads || 0) + (incKpis.total_leads || 0);
+        const tLeadsLtv = (curKpis.total_leads || 0) * (curKpis.ltv_avg || 0) + (incKpis.total_leads || 0) * (incKpis.ltv_avg || 0);
+        mergedKpis = {
+          total_leads: tLeads,
+          total_deposited: (curKpis.total_deposited || 0) + (incKpis.total_deposited || 0),
+          total_bets: (curKpis.total_bets || 0) + (incKpis.total_bets || 0),
+          total_prizes: (curKpis.total_prizes || 0) + (incKpis.total_prizes || 0),
+          awarded_clients_count: (curKpis.awarded_clients_count || 0) + (incKpis.awarded_clients_count || 0),
+          active_leads: (curKpis.active_leads || 0) + (incKpis.active_leads || 0),
+          net_profit: (curKpis.net_profit || 0) + (incKpis.net_profit || 0),
+          conversion_rate: tLeads > 0 ? ((curKpis.active_leads || 0) + (incKpis.active_leads || 0)) / tLeads * 100 : 0,
+          ltv_avg: tLeads > 0 ? tLeadsLtv / tLeads : 0,
+        };
+      } else if (incKpis) mergedKpis = incKpis;
+      const curChart = current.chartData || {};
+      const incChart = incoming.chartData || {};
+      const status = { ...curChart.status_distribution };
+      for (const k of Object.keys(incChart.status_distribution || {})) {
+        status[k] = (status[k] || 0) + (incChart.status_distribution?.[k] || 0);
+      }
+      const financial = curChart.financial_metrics || { total_deposited: 0, total_bets: 0, total_prizes: 0, net_profit: 0 };
+      const incFin = incChart.financial_metrics || {};
+      const chartData = {
+        ...curChart,
+        status_distribution: status,
+        financial_metrics: {
+          total_deposited: (financial.total_deposited || 0) + (incFin.total_deposited || 0),
+          total_bets: (financial.total_bets || 0) + (incFin.total_bets || 0),
+          total_prizes: (financial.total_prizes || 0) + (incFin.total_prizes || 0),
+          net_profit: (financial.net_profit || 0) + (incFin.net_profit || 0),
+        },
+      };
+      return {
+        gerenteInfo: current.gerenteInfo,
+        consultorMetrics: mergedMetrics,
+        gerenteTotalKpis: mergedKpis || undefined,
+        chartData,
+      };
+    },
+    []
+  );
+
   const loadData = async (isInitial = false) => {
     try {
       if (isInitial) {
@@ -479,11 +628,70 @@ export default function GerentePage() {
 
       const { dateFrom, dateTo } = getDateRange();
 
+      // "Todas as bancas": primeira banca na view imediatamente, demais em segundo plano
+      if (selectedBanca === BANCA_ALL && bancas.length > 0) {
+        setBackgroundBancasLoading(false);
+        const buildParams = (bancaUrl?: string) => {
+          const params = new URLSearchParams();
+          if (dateFrom) params.append('date_from', dateFrom);
+          if (dateTo) params.append('date_to', dateTo);
+          if (bancaUrl) params.append('banca_url', bancaUrl);
+          if (selectedConsultor && selectedConsultor !== 'all') params.append('consultor_id', selectedConsultor);
+          if (isAdminOrSuperAdmin && selectedGerente) params.append('gerente_id', selectedGerente);
+          return params;
+        };
+
+        const firstUrl = `/api/gerente/dashboard?${buildParams(bancas[0].url).toString()}`;
+        const firstRes = await fetch(firstUrl, { headers: { 'X-User-Id': userId as string } });
+        const firstResult = await firstRes.json();
+
+        if (firstResult.success) {
+          setData(firstResult.data);
+          if (selectedConsultor === 'all' && firstResult.data.consultorMetrics) {
+            setAllConsultores(firstResult.data.consultorMetrics);
+          }
+        }
+
+        if (isInitial) setInitialLoading(false);
+        else setDataLoading(false);
+        loadTagsReport();
+
+        if (bancas.length <= 1) return;
+
+        setBackgroundBancasLoading(true);
+        setBackgroundBancasProgress({ current: 1, total: bancas.length });
+
+        let merged: GerenteDashboardData | null = firstResult.success ? firstResult.data : null;
+
+        for (let i = 1; i < bancas.length; i++) {
+          const url = `/api/gerente/dashboard?${buildParams(bancas[i].url).toString()}`;
+          try {
+            const res = await fetch(url, { headers: { 'X-User-Id': userId as string } });
+            const json = await res.json();
+            if (json.success && json.data) {
+              merged = mergeDashboardData(merged, json.data);
+              setData(merged);
+              if (selectedConsultor === 'all' && merged?.consultorMetrics) {
+                setAllConsultores(merged.consultorMetrics);
+              }
+            }
+          } catch {
+            // ignora erro de uma banca e segue
+          }
+          setBackgroundBancasProgress((p) => ({ ...p, current: i + 1 }));
+        }
+
+        setBackgroundBancasLoading(false);
+        setBackgroundBancasProgress({ current: 0, total: 0 });
+        showToast('Todas as bancas foram carregadas.', 'success');
+        return;
+      }
+
       let url = '/api/gerente/dashboard';
       const params = new URLSearchParams();
       if (dateFrom) params.append('date_from', dateFrom);
       if (dateTo) params.append('date_to', dateTo);
-      if (selectedBanca) {
+      if (selectedBanca && selectedBanca !== BANCA_ALL) {
         params.append('banca_url', selectedBanca);
       }
       if (selectedConsultor && selectedConsultor !== 'all') {
@@ -508,7 +716,6 @@ export default function GerentePage() {
         }
       }
 
-      // Carrega relatório de etiquetas
       loadTagsReport();
 
     } catch (error) {
@@ -528,7 +735,7 @@ export default function GerentePage() {
     if (isAdminOrSuperAdmin && selectedGerente) params.append('gerente_id', selectedGerente);
     if (dateFrom) params.append('date_from', dateFrom);
     if (dateTo) params.append('date_to', dateTo);
-    if (selectedBanca) params.append('banca_url', selectedBanca);
+    if (selectedBanca && selectedBanca !== BANCA_ALL) params.append('banca_url', selectedBanca);
     if (page > 0) params.append('page', String(page));
     return `/api/gerente/reports/tags${params.toString() ? `?${params.toString()}` : ''}`;
   };
@@ -723,13 +930,43 @@ export default function GerentePage() {
 
   const openSolicitationModal = () => {
     setSolicitationConsultorId('');
-    setSolicitationBancaId(bancas.length > 0 ? (bancas.find((b) => b.url === selectedBanca)?.id ?? bancas[0].id) : '');
+    setSolicitationBancaId('');
+    setSolicitationBancasForConsultant([]);
+    setSolicitationBancasLoading(false);
     setSolicitationQuantity(10);
     setSolicitationDeadlineDays(10);
     setSolicitationError('');
     setSolicitationSuccess('');
     setSolicitationModalOpen(true);
   };
+
+  // Ao selecionar o consultor no modal de solicitação, carrega as bancas em que ele está cadastrado (testa email em cada banca do gerente).
+  useEffect(() => {
+    if (!solicitationModalOpen || !userId) return;
+    if (!solicitationConsultorId?.trim()) {
+      setSolicitationBancasForConsultant([]);
+      setSolicitationBancaId('');
+      return;
+    }
+    let cancelled = false;
+    setSolicitationBancasLoading(true);
+    setSolicitationBancaId('');
+    fetch(`/api/gerente/consultores/${solicitationConsultorId.trim()}/bancas`, { headers: { 'X-User-Id': userId } })
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled) return;
+        const list = data?.success && Array.isArray(data?.data) ? data.data : [];
+        setSolicitationBancasForConsultant(list);
+        if (list.length > 0) setSolicitationBancaId(list[0].id);
+      })
+      .catch(() => {
+        if (!cancelled) setSolicitationBancasForConsultant([]);
+      })
+      .finally(() => {
+        if (!cancelled) setSolicitationBancasLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [solicitationModalOpen, solicitationConsultorId, userId]);
 
   const handleSolicitationSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -759,6 +996,7 @@ export default function GerentePage() {
       const result = await response.json();
       if (result.success) {
         setSolicitationSuccess('Solicitação enviada com sucesso.');
+        loadLeadRequests();
         setTimeout(() => {
           setSolicitationModalOpen(false);
         }, 1500);
@@ -820,20 +1058,34 @@ export default function GerentePage() {
       email: c.email
     }));
 
-  // Filtra e ordena os consultores localmente
+  // Apenas consultores que trouxeram resultado na requisição (banca(s) + período), filtrados e ordenados
   const processedMetrics = [...(consultorMetrics || [])]
+    .filter(c => c.externalKpis != null && !c.externalKpisError)
     .filter(c =>
-      c.name.toLowerCase().includes(tableSearchTerm.toLowerCase()) ||
-      c.email.toLowerCase().includes(tableSearchTerm.toLowerCase())
+      !tableSearchTerm.trim() ||
+      c.name.toLowerCase().includes(tableSearchTerm.toLowerCase().trim()) ||
+      c.email.toLowerCase().includes(tableSearchTerm.toLowerCase().trim())
     )
     .sort((a, b) => {
-      let valA: any = 0;
-      let valB: any = 0;
+      let valA: string | number | undefined;
+      let valB: string | number | undefined;
 
       switch (sortBy) {
         case 'name':
-          valA = a.name.toLowerCase();
-          valB = b.name.toLowerCase();
+          valA = (a.name || a.email || '').toLowerCase();
+          valB = (b.name || b.email || '').toLowerCase();
+          break;
+        case 'lastSeenAt':
+          valA = a.lastSeenAt ? new Date(a.lastSeenAt).getTime() : 0;
+          valB = b.lastSeenAt ? new Date(b.lastSeenAt).getTime() : 0;
+          break;
+        case 'totalOnlineTime':
+          valA = a.totalOnlineTime ?? 0;
+          valB = b.totalOnlineTime ?? 0;
+          break;
+        case 'totalCrmTime':
+          valA = a.totalCrmTime ?? 0;
+          valB = b.totalCrmTime ?? 0;
           break;
         case 'leads':
           valA = a.externalKpis?.total_leads || 0;
@@ -847,6 +1099,9 @@ export default function GerentePage() {
           valA = a.externalKpis?.net_profit || 0;
           valB = b.externalKpis?.net_profit || 0;
           break;
+        default:
+          valA = (a.name || a.email || '').toLowerCase();
+          valB = (b.name || b.email || '').toLowerCase();
       }
 
       if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
@@ -854,14 +1109,35 @@ export default function GerentePage() {
       return 0;
     });
 
-  const toggleSort = (field: typeof sortBy) => {
+  const totalFiltered = processedMetrics.length;
+  const totalPages = Math.max(1, Math.ceil(totalFiltered / teamTablePageSize));
+  const effectivePage = Math.min(Math.max(1, teamTablePage), totalPages);
+  const paginatedMetrics = processedMetrics.slice(
+    (effectivePage - 1) * teamTablePageSize,
+    effectivePage * teamTablePageSize
+  );
+
+  const toggleSort = (field: TeamTableSortField) => {
     if (sortBy === field) {
       setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
     } else {
       setSortBy(field);
-      setSortOrder('desc');
+      setSortOrder(field === 'name' ? 'asc' : 'desc');
     }
+    setTeamTablePage(1);
   };
+
+  const SortableTh = ({ field, label, align = 'center' }: { field: TeamTableSortField; label: string; align?: 'left' | 'center' | 'right' }) => (
+    <th
+      onClick={() => toggleSort(field)}
+      className={`px-4 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase cursor-pointer hover:text-[#8CD955] transition-colors select-none ${align === 'right' ? 'text-right' : align === 'left' ? 'text-left' : 'text-center'}`}
+    >
+      <div className={`flex items-center gap-1 ${align === 'right' ? 'justify-end' : align === 'left' ? 'justify-start' : 'justify-center'}`}>
+        {label}
+        {sortBy === field && (sortOrder === 'asc' ? <ChevronDown className="w-3 h-3 rotate-180" /> : <ChevronDown className="w-3 h-3" />)}
+      </div>
+    </th>
+  );
 
   const handleZaplinkMarkSeen = async () => {
     if (!userId || zaplinkNotifications.length === 0) return;
@@ -1072,7 +1348,7 @@ export default function GerentePage() {
                 ) : (
                   <>
                     <Filter className="w-4 h-4 text-[#8CD955]" />
-                    {bancas.find(b => b.url === selectedBanca)?.name || 'Selecione uma Banca'}
+                    {selectedBanca === BANCA_ALL ? 'Todas as bancas' : (bancas.find(b => b.url === selectedBanca)?.name || 'Selecione uma Banca')}
                     <ChevronDown className="w-4 h-4" />
                   </>
                 )}
@@ -1103,6 +1379,18 @@ export default function GerentePage() {
                       </div>
 
                       <div className="overflow-y-auto max-h-[320px] p-2">
+                        {userStatus === 'gerente' && (
+                          <button
+                            onClick={() => {
+                              setSelectedBanca(BANCA_ALL);
+                              setShowBancaFilter(false);
+                              setBancaSearchTerm('');
+                            }}
+                            className={`w-full text-left px-4 py-2.5 rounded-lg text-sm transition-colors hover:bg-gray-50 dark:hover:bg-gray-700 ${selectedBanca === BANCA_ALL ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-bold' : 'text-gray-700 dark:text-gray-200'}`}
+                          >
+                            Todas as bancas
+                          </button>
+                        )}
                         {bancas
                           .filter((banca) =>
                             banca.name.toLowerCase().includes(bancaSearchTerm.toLowerCase())
@@ -1371,6 +1659,20 @@ export default function GerentePage() {
             </button>
           </div>
         </div>
+
+        {backgroundBancasLoading && selectedBanca === BANCA_ALL && (
+          <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-200">
+            <div className="animate-spin rounded-full h-5 w-5 border-2 border-blue-500 border-t-transparent shrink-0" />
+            <div>
+              <p className="font-medium text-sm">Carregando mais informações sobre outras bancas em segundo plano</p>
+              <p className="text-xs opacity-90 mt-0.5">
+                {backgroundBancasProgress.total > 0
+                  ? `Banca ${backgroundBancasProgress.current} de ${backgroundBancasProgress.total}`
+                  : 'Aguarde...'}
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Resumo Geral do Gerente */}
         <div className="relative">
@@ -1848,7 +2150,7 @@ export default function GerentePage() {
             <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/50 flex flex-col md:flex-row md:items-center justify-between gap-4">
               <h2 className="text-sm font-bold text-gray-600 dark:text-gray-400 uppercase tracking-wider flex items-center gap-2">
                 <Users className="w-4 h-4" />
-                Desempenho da Equipe
+                Sua equipe
               </h2>
 
               <div className="relative w-full md:w-64">
@@ -1857,7 +2159,10 @@ export default function GerentePage() {
                   type="text"
                   placeholder="Buscar consultor..."
                   value={tableSearchTerm}
-                  onChange={(e) => setTableSearchTerm(e.target.value)}
+                  onChange={(e) => {
+                    setTableSearchTerm(e.target.value);
+                    setTeamTablePage(1);
+                  }}
                   className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-xs text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#8CD955] outline-none transition-all"
                 />
               </div>
@@ -1878,16 +2183,19 @@ export default function GerentePage() {
                           {sortBy === 'name' && (sortOrder === 'asc' ? <ChevronDown className="w-3 h-3 rotate-180" /> : <ChevronDown className="w-3 h-3" />)}
                         </div>
                       </th>
-                      <th className="px-6 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-center">Último acesso</th>
-                      <th className="px-6 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-center">Horas online</th>
-                      <th className="px-6 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-center">Horas no CRM (diário)</th>
+                      <SortableTh field="lastSeenAt" label="Último acesso" />
+                      <SortableTh field="totalOnlineTime" label="Horas online" />
+                      <SortableTh field="totalCrmTime" label="Horas no CRM" />
+                      <SortableTh field="leads" label="Leads" align="right" />
+                      <SortableTh field="deposited" label="Depositado" align="right" />
+                      <SortableTh field="profit" label="Lucro" align="right" />
                       <th className="px-4 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-right min-w-[120px]">
                         Ações
                       </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-                    {processedMetrics.map((consultor) => (
+                    {paginatedMetrics.map((consultor) => (
                       <tr key={consultor.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-800/50 transition-colors">
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-3">
@@ -1923,6 +2231,25 @@ export default function GerentePage() {
                             {formatTime(consultor.totalCrmTime || 0)}
                           </span>
                         </td>
+                        <td className="px-4 py-4 text-right">
+                          <span className="text-xs font-medium text-gray-700 dark:text-gray-300">
+                            {consultor.externalKpis?.total_leads ?? 0}
+                          </span>
+                        </td>
+                        <td className="px-4 py-4 text-right">
+                          <span className="text-xs font-medium text-gray-700 dark:text-gray-300">
+                            {consultor.externalKpis?.total_deposited != null
+                              ? `R$ ${(consultor.externalKpis.total_deposited / 1000).toFixed(1)}k`
+                              : '—'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-4 text-right">
+                          <span className={`text-xs font-medium ${(consultor.externalKpis?.net_profit ?? 0) >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                            {consultor.externalKpis?.net_profit != null
+                              ? `R$ ${(consultor.externalKpis.net_profit / 1000).toFixed(1)}k`
+                              : '—'}
+                          </span>
+                        </td>
                         <td className="px-4 py-3 align-middle text-right">
                           <button
                             type="button"
@@ -1937,20 +2264,62 @@ export default function GerentePage() {
                     ))}
                   </tbody>
                 </table>
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/30">
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs text-gray-600 dark:text-gray-400">Mostrar</span>
+                    <select
+                      value={teamTablePageSize}
+                      onChange={(e) => {
+                        setTeamTablePageSize(Number(e.target.value));
+                        setTeamTablePage(1);
+                      }}
+                      className="px-2 py-1.5 text-xs font-medium bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] outline-none"
+                    >
+                      {[10, 25, 50].map((n) => (
+                        <option key={n} value={n}>{n}</option>
+                      ))}
+                    </select>
+                    <span className="text-xs text-gray-600 dark:text-gray-400">por página</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-600 dark:text-gray-400">
+                      {totalFiltered === 0 ? '0' : `${(effectivePage - 1) * teamTablePageSize + 1}-${Math.min(effectivePage * teamTablePageSize, totalFiltered)}`} de {totalFiltered}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setTeamTablePage((p) => Math.max(1, p - 1))}
+                      disabled={effectivePage <= 1}
+                      className="p-2 rounded-lg border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      aria-label="Página anterior"
+                    >
+                      <ChevronDown className="w-4 h-4 rotate-90" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTeamTablePage((p) => Math.min(totalPages, p + 1))}
+                      disabled={effectivePage >= totalPages}
+                      className="p-2 rounded-lg border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      aria-label="Próxima página"
+                    >
+                      <ChevronDown className="w-4 h-4 -rotate-90" />
+                    </button>
+                  </div>
+                </div>
               </div>
             ) : (
               <div className="hidden md:block p-8 text-center">
                 <AlertCircle className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
                 <p className="text-gray-600 dark:text-gray-400 font-medium">
-                  {tableSearchTerm ? 'Nenhum consultor encontrado com este nome' : 'Dados não encontrados'}
+                  {tableSearchTerm ? 'Nenhum consultor encontrado com este nome' : 'Nenhum consultor trouxe resultado na busca para a banca e período selecionados'}
                 </p>
               </div>
             )}
 
             {/* Versão Mobile (Cards) */}
             {processedMetrics && processedMetrics.length > 0 ? (
+              <>
               <div className="md:hidden divide-y divide-gray-100 dark:divide-gray-700">
-                {processedMetrics.map((consultor) => (
+                {paginatedMetrics.map((consultor) => (
                   <div key={consultor.id} className="p-4 space-y-3">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-full bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] flex items-center justify-center font-bold text-base shrink-0">
@@ -1980,17 +2349,161 @@ export default function GerentePage() {
                       <div>
                         <span className="font-medium text-gray-700 dark:text-gray-300">{formatTime(consultor.totalCrmTime || 0)}</span> no CRM
                       </div>
+                      <div>Leads: <span className="font-medium text-gray-700 dark:text-gray-300">{consultor.externalKpis?.total_leads ?? 0}</span></div>
+                      <div>Dep.: <span className="font-medium text-gray-700 dark:text-gray-300">{consultor.externalKpis?.total_deposited != null ? `R$ ${(consultor.externalKpis.total_deposited / 1000).toFixed(1)}k` : '—'}</span></div>
+                      <div>Lucro: <span className={`font-medium ${(consultor.externalKpis?.net_profit ?? 0) >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>{consultor.externalKpis?.net_profit != null ? `R$ ${(consultor.externalKpis.net_profit / 1000).toFixed(1)}k` : '—'}</span></div>
                     </div>
                   </div>
                 ))}
               </div>
+              <div className="md:hidden flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/30">
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-gray-600 dark:text-gray-400">Mostrar</span>
+                  <select
+                    value={teamTablePageSize}
+                    onChange={(e) => {
+                      setTeamTablePageSize(Number(e.target.value));
+                      setTeamTablePage(1);
+                    }}
+                    className="px-2 py-1.5 text-xs font-medium bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] outline-none"
+                  >
+                    {[10, 25, 50].map((n) => (
+                      <option key={n} value={n}>{n}</option>
+                    ))}
+                  </select>
+                  <span className="text-xs text-gray-600 dark:text-gray-400">por página</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-600 dark:text-gray-400">
+                    {totalFiltered === 0 ? '0' : `${(effectivePage - 1) * teamTablePageSize + 1}-${Math.min(effectivePage * teamTablePageSize, totalFiltered)}`} de {totalFiltered}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setTeamTablePage((p) => Math.max(1, p - 1))}
+                    disabled={effectivePage <= 1}
+                    className="p-2 rounded-lg border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    aria-label="Página anterior"
+                  >
+                    <ChevronDown className="w-4 h-4 rotate-90" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTeamTablePage((p) => Math.min(totalPages, p + 1))}
+                    disabled={effectivePage >= totalPages}
+                    className="p-2 rounded-lg border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    aria-label="Próxima página"
+                  >
+                    <ChevronDown className="w-4 h-4 -rotate-90" />
+                  </button>
+                </div>
+              </div>
+              </>
             ) : (
               <div className="md:hidden p-8 text-center">
                 <AlertCircle className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
                 <p className="text-gray-600 dark:text-gray-400 font-medium">
-                  {tableSearchTerm ? 'Nenhum consultor encontrado com este nome' : 'Dados não encontrados'}
+                  {tableSearchTerm ? 'Nenhum consultor encontrado com este nome' : 'Nenhum consultor trouxe resultado na busca para a banca e período selecionados'}
                 </p>
               </div>
+            )}
+          </div>
+        </div>
+
+        {/* Histórico de solicitações de leads */}
+        <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
+          <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/50">
+            <h2 className="text-sm font-bold text-gray-600 dark:text-gray-400 uppercase tracking-wider flex items-center gap-2">
+              <ClipboardList className="w-4 h-4" />
+              Histórico de solicitações de leads
+            </h2>
+          </div>
+          <div className="p-4">
+            {leadRequestsHistoryLoading ? (
+              <div className="py-12 flex flex-col items-center justify-center gap-3">
+                <div className="animate-spin rounded-full h-8 w-8 border-2 border-[#8CD955] border-t-transparent" />
+                <p className="text-sm text-gray-500 dark:text-gray-400">Carregando solicitações...</p>
+              </div>
+            ) : leadRequestsHistory.length === 0 ? (
+              <p className="text-center py-8 text-gray-500 dark:text-gray-400 text-sm">
+                Nenhuma solicitação de leads ainda. Use o botão acima para solicitar leads para sua equipe.
+              </p>
+            ) : (
+              <>
+                <div className="hidden md:block overflow-x-auto">
+                  <table className="w-full text-left border-collapse min-w-full">
+                    <thead>
+                      <tr className="bg-gray-50/30 dark:bg-gray-800/60 border-b border-gray-100 dark:border-gray-700">
+                        <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase">Data</th>
+                        <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase">Banca</th>
+                        <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase">Tipo de lead</th>
+                        <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase">Consultores / Qtd</th>
+                        <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-center">Prazo (dias)</th>
+                        <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-center">Situação</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                      {leadRequestsHistory.map((req) => (
+                        <tr key={req.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-800/50 transition-colors">
+                          <td className="px-4 py-3 text-xs text-gray-700 dark:text-gray-300 whitespace-nowrap">
+                            {new Date(req.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                          </td>
+                          <td className="px-4 py-3 text-xs font-medium text-gray-800 dark:text-gray-200">{req.banca_name ?? req.banca_id ?? '—'}</td>
+                          <td className="px-4 py-3 text-xs text-gray-700 dark:text-gray-300">{req.lead_type_label ?? req.lead_type}</td>
+                          <td className="px-4 py-3 text-xs text-gray-700 dark:text-gray-300">
+                            {(req.consultores ?? []).map((c) => `${c.consultor_name ?? c.consultor_id}: ${c.quantity}`).join('; ') || '—'}
+                          </td>
+                          <td className="px-4 py-3 text-xs text-center text-gray-700 dark:text-gray-300">{req.deadline_days ?? '—'}</td>
+                          <td className="px-4 py-3 text-center">
+                            <span className={`inline-flex px-2 py-1 rounded-lg text-xs font-bold ${
+                              req.status === 'pending'
+                                ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300'
+                                : req.status === 'approved'
+                                  ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300'
+                                  : 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300'
+                            }`}>
+                              {req.status === 'pending' ? 'Pendente' : req.status === 'approved' ? 'Aprovada' : 'Rejeitada'}
+                            </span>
+                            {req.status === 'approved' && req.approved_at && (
+                              <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">
+                                {new Date(req.approved_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                              </p>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="md:hidden space-y-3">
+                  {leadRequestsHistory.map((req) => (
+                    <div key={req.id} className="p-4 rounded-xl border border-gray-100 dark:border-gray-700 bg-gray-50/30 dark:bg-gray-800/30 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-gray-500 dark:text-gray-400">
+                          {new Date(req.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                        <span className={`inline-flex px-2 py-1 rounded-lg text-xs font-bold ${
+                          req.status === 'pending'
+                            ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300'
+                            : req.status === 'approved'
+                              ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300'
+                              : 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300'
+                        }`}>
+                          {req.status === 'pending' ? 'Pendente' : req.status === 'approved' ? 'Aprovada' : 'Rejeitada'}
+                        </span>
+                      </div>
+                      <p className="text-sm font-medium text-gray-800 dark:text-gray-200">{req.banca_name ?? req.banca_id ?? '—'}</p>
+                      <p className="text-xs text-gray-600 dark:text-gray-400">{req.lead_type_label ?? req.lead_type}</p>
+                      <p className="text-xs text-gray-600 dark:text-gray-400">
+                        {(req.consultores ?? []).map((c) => `${c.consultor_name ?? c.consultor_id}: ${c.quantity}`).join('; ') || '—'}
+                      </p>
+                      {req.deadline_days != null && <p className="text-xs text-gray-500 dark:text-gray-400">Prazo: {req.deadline_days} dias</p>}
+                      {req.status === 'approved' && req.approved_at && (
+                        <p className="text-[10px] text-gray-400 dark:text-gray-500">Aprovada em {new Date(req.approved_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </>
             )}
           </div>
         </div>
@@ -2178,11 +2691,19 @@ export default function GerentePage() {
 
                   <div>
                     <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-2 ml-1">Banca para qual os leads serão transferidos</label>
-                    {bancasLoading ? (
+                    {!solicitationConsultorId?.trim() ? (
+                      <p className="py-2.5 px-3 text-sm text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-xl">
+                        Selecione um consultor para carregar as bancas em que ele está cadastrado
+                      </p>
+                    ) : solicitationBancasLoading ? (
                       <div className="flex items-center gap-2 py-2 text-sm text-gray-500 dark:text-gray-400">
                         <div className="animate-spin rounded-full h-4 w-4 border-2 border-[#8CD955] border-t-transparent" />
-                        Carregando bancas...
+                        Buscando bancas do consultor...
                       </div>
+                    ) : solicitationBancasForConsultant.length === 0 ? (
+                      <p className="py-2.5 px-3 text-sm text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl">
+                        Nenhuma banca encontrada para este consultor na sua base
+                      </p>
                     ) : (
                       <select
                         required
@@ -2191,7 +2712,7 @@ export default function GerentePage() {
                         className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium"
                       >
                         <option value="">Selecione a banca</option>
-                        {bancas.map((b) => (
+                        {solicitationBancasForConsultant.map((b) => (
                           <option key={b.id} value={b.id}>{b.name || b.url || b.id}</option>
                         ))}
                       </select>
@@ -2227,7 +2748,11 @@ export default function GerentePage() {
 
                 <div className="p-6 pt-0 flex gap-3 shrink-0 border-t border-gray-100 dark:border-gray-700 justify-between">
                   <button type="button" onClick={() => setSolicitationModalOpen(false)} className="bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 font-bold py-3 px-6 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors">Cancelar</button>
-                  <button type="submit" disabled={solicitationSubmitting} className="bg-[#8CD955] hover:bg-[#7BC84A] text-white font-bold py-3 px-6 rounded-xl disabled:opacity-50 transition-colors">
+                  <button
+                    type="submit"
+                    disabled={solicitationSubmitting || (!!solicitationConsultorId?.trim() && (solicitationBancasLoading || solicitationBancasForConsultant.length === 0))}
+                    className="bg-[#8CD955] hover:bg-[#7BC84A] text-white font-bold py-3 px-6 rounded-xl disabled:opacity-50 transition-colors"
+                  >
                     {solicitationSubmitting ? 'Enviando...' : 'Enviar solicitação'}
                   </button>
                 </div>
@@ -2541,6 +3066,7 @@ export default function GerentePage() {
           </div>
         )}
       </div>
+      <ToastContainer toasts={toasts} onClose={removeToast} />
     </Layout>
   );
 }

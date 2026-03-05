@@ -272,7 +272,9 @@ export type GetBancasVisiveisOptions = { transferredFilter?: 'yes' | 'no' };
 
 /**
  * Retorna a lista de bancas visíveis para o usuário (mesma lógica do GET).
- * Consultor/Gerente: chama API externa (get-indicateds-by-consultant) por banca; status 200 = passa no filtro, 404 = não tem conta na banca.
+ * Gerente: usa apenas user_bancas (sem API externa).
+ * Consultor: se tiver bancas em user_bancas, usa essas (evita filtro por API ao carregar kanban/transferidos);
+ *            senão chama API externa (get-indicateds-by-consultant) por banca.
  * transferredFilter: quando 'yes' ou 'no', inclui na URL (kanban = 'no', transferido = 'yes').
  */
 export async function getBancasVisiveis(
@@ -293,11 +295,32 @@ export async function getBancasVisiveis(
   }
   const bancas = excluirBancaPorNome(todasBancas as BancaRow[], NOME_BANCA_EXCLUIDA_BUSCA);
 
+  // Gerente: usa apenas user_bancas (sem filtro por API externa). Fallback: todas as bancas.
+  if (profile?.status === 'gerente') {
+    const bancasDoUsuario = await getBancasDoUsuario(userId);
+    if (bancasDoUsuario.length > 0) {
+      console.log('[CRM Bancas] Gerente: usando user_bancas (', bancasDoUsuario.length, ' bancas)');
+      return bancasDoUsuario;
+    }
+    console.log('[CRM Bancas] Gerente: user_bancas vazio; fallback para todas as bancas');
+    return bancas;
+  }
+
+  // Consultor: prioriza user_bancas para não fazer filtro por API ao carregar kanban/transferidos.
+  if (profile?.status === 'consultor') {
+    const bancasDoUsuario = await getBancasDoUsuario(userId);
+    if (bancasDoUsuario.length > 0) {
+      console.log('[CRM Bancas] Consultor: usando user_bancas (', bancasDoUsuario.length, ' bancas) — sem filtro por API');
+      return bancasDoUsuario;
+    }
+  }
+
   const apiKey = process.env.CRM_API_KEY?.trim() ?? '';
   const email = profile?.email?.trim();
 
-  if ((profile?.status === 'consultor' || profile?.status === 'gerente') && email && apiKey) {
-    console.log('[CRM Bancas] Bancas que vão passar pelo filtro (fonte: crm_bancas):', bancas.length);
+  // Consultor sem user_bancas: filtro por API externa (get-indicateds-by-consultant), depois fallback user_bancas / todas.
+  if (profile?.status === 'consultor' && email && apiKey) {
+    console.log('[CRM Bancas] Consultor sem user_bancas: filtro por API (fonte: crm_bancas):', bancas.length);
     const bancasVisiveis: BancaRow[] = [];
     for (let i = 0; i < bancas.length; i++) {
       const b = bancas[i];
@@ -331,18 +354,14 @@ export async function getBancasVisiveis(
     return fallback.length > 0 ? fallback : bancas;
   }
 
-  if (profile?.status === 'gerente') {
-    const fallback = await getBancasDoUsuario(userId);
-    return fallback.length > 0 ? fallback : bancas;
-  }
-
   return bancas;
 }
 
 /**
  * GET /api/crm/bancas - Lista bancas para filtro do CRM e modal "Bancas em que atuo" no perfil.
- * - Consultor/Gerente: chama API externa (get-indicateds-by-consultant) em cada banca; status 200 = passa no filtro, 404 = não tem conta na banca. Fallback: user_bancas ou todas.
- * - super_admin / admin: retorna todas as bancas de crm_bancas (ou, se targetUserId for informado, as bancas visíveis do usuário alvo).
+ * - Gerente: usa apenas user_bancas (sem chamadas às APIs das bancas). Fallback: todas as bancas.
+ * - Consultor: chama API externa (get-indicateds-by-consultant) em cada banca; fallback: user_bancas ou todas.
+ * - super_admin / admin: retorna todas as bancas de crm_bancas (ou, se targetUserId for informado, as bancas do usuário alvo).
  * - Query opcional: targetUserId — quando o requester é super_admin/admin, retorna as bancas do usuário alvo (para CRM "visualizando como").
  */
 export async function GET(req: NextRequest) {
