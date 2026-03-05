@@ -596,8 +596,9 @@ export default function GerentePage() {
       for (const k of Object.keys(incChart.status_distribution || {})) {
         status[k] = (status[k] || 0) + (incChart.status_distribution?.[k] || 0);
       }
-      const financial = curChart.financial_metrics || { total_deposited: 0, total_bets: 0, total_prizes: 0, net_profit: 0 };
-      const incFin = incChart.financial_metrics || {};
+      const defaultFin = { total_deposited: 0, total_bets: 0, total_prizes: 0, net_profit: 0 };
+      const financial = curChart.financial_metrics || defaultFin;
+      const incFin = incChart.financial_metrics || defaultFin;
       const chartData = {
         ...curChart,
         status_distribution: status,
