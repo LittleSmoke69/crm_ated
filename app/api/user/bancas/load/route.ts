@@ -32,8 +32,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const bancas = await getBancasVisiveis(userId, profile);
+    const email = profile.email?.trim() ?? '';
+    console.log('[Perfil] Página /perfil — botão "Carregar bancas" clicado: iniciando busca em TODAS as bancas | userId:', userId, '| perfil:', status, '| email:', email ? `${email.slice(0, 3)}***` : 'n/a');
+    const bancas = await getBancasVisiveis(userId, profile, { forceSearchAllBancas: true });
     const bancaIds = bancas.map((b) => b.id);
+    console.log('[Perfil] Página /perfil — Carregar bancas: resultado', bancas.length, 'banca(s) | ids:', bancaIds.join(', ') || '(nenhuma)');
 
     await saveUserBancas(userId, bancaIds);
 
