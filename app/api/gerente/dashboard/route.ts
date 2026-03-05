@@ -12,6 +12,24 @@ function normalizeBancaUrl(url: string | null | undefined): string {
   return s ? `https://${s}`.toLowerCase() : '';
 }
 
+/** Extrai apenas o slug da URL (subdomínio ou hostname sem TLD) para verificação e exibição, igual ao uso no top 5 vendas. */
+function urlToSlug(url: string | null | undefined): string {
+  if (!url || !String(url).trim()) return '';
+  try {
+    let u = String(url).trim();
+    if (!u.startsWith('http://') && !u.startsWith('https://')) u = `https://${u}`;
+    u = u.replace(/\/api\/crm\/?/i, '').replace(/\/+$/, '');
+    const hostname = new URL(u).hostname;
+    const parts = hostname.split('.');
+    if (parts.length >= 3) return parts[0].toLowerCase();
+    if (parts.length >= 2) return parts[0].toLowerCase();
+    return hostname.toLowerCase();
+  } catch {
+    const withoutProtocol = String(url).replace(/^https?:\/\//i, '').split('/')[0] || '';
+    return withoutProtocol.split('.')[0]?.toLowerCase() || '';
+  }
+}
+
 /**
  * Busca métricas de um consultor com retry automático para erros 429
  */
@@ -264,38 +282,73 @@ export async function GET(req: NextRequest) {
       consultorId: consultorIdFilter || 'todos'
     });
 
-    // 1. Busca o dono de banca acima do gerente na hierarquia (fallback se não houver filtro de banca)
-    let bancaUrl = bancaUrlFilter;
-    
-    if (!bancaUrl) {
-      const hierarchyPath = await getHierarchyPath(effectiveUserId);
-      const donoBanca = hierarchyPath.find(p => p.status === 'dono_banca');
+    // 1. Lista de URLs de banca(s) e mapa slug -> rótulo (slug apenas, sem domínio; mesma verificação do top 5 vendas).
+    let bancaUrls: string[] = [];
+    const bancaSlugToLabel: Record<string, string> = {};
 
-      if (donoBanca) {
-        const { data: donoProfile } = await supabaseServiceRole
-          .from('profiles')
-          .select('banca_url, banca_name')
-          .eq('id', donoBanca.id)
-          .single();
-        bancaUrl = donoProfile?.banca_url;
-      }
-
-      // Gerente sem dono na hierarquia (ex.: enroller = admin ou outro gerente): tenta banca do user_bancas do gerente
-      if (!bancaUrl) {
+    if (bancaUrlFilter) {
+      bancaUrls = [bancaUrlFilter];
+    } else {
+      // Gerente sem banca_url = "Todas as bancas": usar TODAS as bancas de user_bancas (pesquisar em todas).
+      if (profile?.status === 'gerente') {
         const { data: ubRow } = await supabaseServiceRole
           .from('user_bancas')
           .select('banca_ids')
           .eq('user_id', effectiveUserId)
           .maybeSingle();
         const bancaIds = Array.isArray(ubRow?.banca_ids) ? ubRow.banca_ids : [];
-        const firstBancaId = bancaIds[0];
-        if (firstBancaId) {
-          const { data: banca } = await supabaseServiceRole
+        if (bancaIds.length > 0) {
+          const { data: bancas } = await supabaseServiceRole
             .from('crm_bancas')
-            .select('url')
-            .eq('id', firstBancaId)
+            .select('id, name, url')
+            .in('id', bancaIds);
+          const list = (bancas || []) as { id: string; name: string; url: string }[];
+          bancaUrls = list.map((b) => b.url).filter(Boolean);
+          list.forEach((b) => {
+            if (b.url) {
+              const slug = urlToSlug(b.url);
+              if (slug) bancaSlugToLabel[slug] = slug;
+            }
+          });
+        }
+      }
+
+      // Se não é gerente ou user_bancas está vazio: fallback hierarquia / primeira banca
+      if (bancaUrls.length === 0) {
+        const hierarchyPath = await getHierarchyPath(effectiveUserId);
+        const donoBanca = hierarchyPath.find(p => p.status === 'dono_banca');
+        let bancaUrl: string | null = null;
+
+        if (donoBanca) {
+          const { data: donoProfile } = await supabaseServiceRole
+            .from('profiles')
+            .select('banca_url, banca_name')
+            .eq('id', donoBanca.id)
             .single();
-          if (banca?.url) bancaUrl = banca.url;
+          bancaUrl = donoProfile?.banca_url ?? null;
+        }
+
+        if (!bancaUrl) {
+          const { data: ubRow } = await supabaseServiceRole
+            .from('user_bancas')
+            .select('banca_ids')
+            .eq('user_id', effectiveUserId)
+            .maybeSingle();
+          const bancaIds = Array.isArray(ubRow?.banca_ids) ? ubRow.banca_ids : [];
+          if (bancaIds.length > 0) {
+            const { data: banca } = await supabaseServiceRole
+              .from('crm_bancas')
+              .select('id, name, url')
+              .eq('id', bancaIds[0])
+              .single();
+            if (banca?.url) {
+              bancaUrls = [banca.url];
+              const slug = urlToSlug(banca.url);
+              if (slug) bancaSlugToLabel[slug] = slug;
+            }
+          }
+        } else {
+          bancaUrls = [bancaUrl];
         }
       }
     }
@@ -331,71 +384,102 @@ export async function GET(req: NextRequest) {
         const processed = cCampaigns?.reduce((s, camp) => s + (camp.processed_contacts || 0), 0) || 0;
         const failed = cCampaigns?.reduce((s, camp) => s + (camp.failed_contacts || 0), 0) || 0;
 
-        // Busca métricas da API externa dashboard-metrics
-        let externalKpis = null;
+        let externalKpis: {
+          total_leads: number;
+          total_deposited: number;
+          total_bets: number;
+          total_prizes: number;
+          awarded_clients_count: number;
+          active_leads: number;
+          conversion_rate: number;
+          ltv_avg: number;
+          net_profit: number;
+        } | null = null;
         let externalKpisError: string | null = null;
         let statusCode: number | null = null;
-        
-        if (bancaUrl && c.email) {
-          // Normaliza a URL da banca
-          let cleanBancaUrl = bancaUrl.trim();
-          if (!cleanBancaUrl.startsWith('http://') && !cleanBancaUrl.startsWith('https://')) {
-            cleanBancaUrl = `https://${cleanBancaUrl}`;
-          }
-          cleanBancaUrl = cleanBancaUrl.replace(/\/+$/, '');
-          
-          // Adiciona parâmetros de data (date_from e date_to)
-          // Se ambos forem null, não envia parâmetros de data (busca todo o período)
-          let dateFromParam = dateFrom;
-          let dateToParam = dateTo;
-          
-          // Busca métricas usando a função helper com retry
-          const result = await fetchConsultorMetrics(
-            cleanBancaUrl,
-            c.email,
-            dateFromParam,
-            dateToParam,
-            apiKey,
-            apiKeyPreview,
-            2, // maxRetries
-            2000 // retryDelay em ms
-          );
-          
-          statusCode = result.status;
-          
-          if (result.success && result.data) {
-            const metrics = result.data;
-            
-            // Extrai todos os campos da API dashboard-metrics
-            const totalLeads = Number(metrics.total_leads) || 0;
-            const totalDeposited = Number(metrics.total_deposited) || 0;
-            const totalBets = Number(metrics.total_bets) || 0;
-            const totalPrizes = Number(metrics.total_prizes) || 0;
-            const awardedClientsCount = Number(metrics.awarded_clients_count) || 0;
-            const activeLeads = Number(metrics.active_leads) || 0;
-            const conversionRate = Number(metrics.conversion_rate) || 0;
-            const ltvAvg = Number(metrics.ltv_avg) || 0;
-            const netProfit = Number(metrics.net_profit) || 0;
-            
-            externalKpis = {
-              total_leads: totalLeads,
-              total_deposited: totalDeposited,
-              total_bets: totalBets,
-              total_prizes: totalPrizes,
-              awarded_clients_count: awardedClientsCount,
-              active_leads: activeLeads,
-              conversion_rate: conversionRate,
-              ltv_avg: ltvAvg,
-              net_profit: netProfit,
-            };
-            
-            console.log('[Gerente Dashboard API] ✅ Consultor', c.email, `: ${totalLeads} leads, R$ ${(totalDeposited / 1000).toFixed(1)}k depositado`);
-          } else {
-            externalKpisError = result.error;
-            // Se for erro 429, marca para retry posterior
-            if (result.status === 429) {
-              console.log('[Gerente Dashboard API] ⚠️ Consultor', c.email, 'marcado para retry (429)');
+        let totalLeadsForLtv = 0;
+        let sumLtvWeighted = 0;
+        const bancaNames: string[] = [];
+
+        if (bancaUrls.length > 0 && c.email) {
+          for (const bancaUrlItem of bancaUrls) {
+            let cleanBancaUrl = bancaUrlItem.trim();
+            if (!cleanBancaUrl.startsWith('http://') && !cleanBancaUrl.startsWith('https://')) {
+              cleanBancaUrl = `https://${cleanBancaUrl}`;
             }
+            cleanBancaUrl = cleanBancaUrl.replace(/\/+$/, '');
+
+            const result = await fetchConsultorMetrics(
+              cleanBancaUrl,
+              c.email,
+              dateFrom,
+              dateTo,
+              apiKey,
+              apiKeyPreview,
+              2,
+              2000
+            );
+
+            statusCode = result.status;
+
+            if (result.success && result.data) {
+              const slug = urlToSlug(cleanBancaUrl);
+              const label = slug ? (bancaSlugToLabel[slug] || slug) : '';
+              if (label && !bancaNames.includes(label)) bancaNames.push(label);
+              const m = result.data;
+              const totalLeads = Number(m.total_leads) || 0;
+              const totalDeposited = Number(m.total_deposited) || 0;
+              const totalBets = Number(m.total_bets) || 0;
+              const totalPrizes = Number(m.total_prizes) || 0;
+              const awardedClientsCount = Number(m.awarded_clients_count) || 0;
+              const activeLeads = Number(m.active_leads) || 0;
+              const conversionRate = Number(m.conversion_rate) || 0;
+              const ltvAvg = Number(m.ltv_avg) || 0;
+              const netProfit = Number(m.net_profit) || 0;
+
+              if (!externalKpis) {
+                externalKpis = {
+                  total_leads: totalLeads,
+                  total_deposited: totalDeposited,
+                  total_bets: totalBets,
+                  total_prizes: totalPrizes,
+                  awarded_clients_count: awardedClientsCount,
+                  active_leads: activeLeads,
+                  conversion_rate: conversionRate,
+                  ltv_avg: ltvAvg,
+                  net_profit: netProfit,
+                };
+                if (totalLeads > 0) {
+                  sumLtvWeighted = ltvAvg * totalLeads;
+                  totalLeadsForLtv = totalLeads;
+                }
+              } else {
+                externalKpis.total_leads += totalLeads;
+                externalKpis.total_deposited += totalDeposited;
+                externalKpis.total_bets += totalBets;
+                externalKpis.total_prizes += totalPrizes;
+                externalKpis.awarded_clients_count += awardedClientsCount;
+                externalKpis.active_leads += activeLeads;
+                externalKpis.net_profit += netProfit;
+                if (totalLeads > 0) {
+                  sumLtvWeighted += ltvAvg * totalLeads;
+                  totalLeadsForLtv += totalLeads;
+                }
+              }
+              console.log('[Gerente Dashboard API] ✅ Consultor', c.email, `(${cleanBancaUrl}): ${totalLeads} leads, R$ ${(totalDeposited / 1000).toFixed(1)}k depositado`);
+            } else {
+              externalKpisError = result.error ?? externalKpisError;
+              if (result.status === 429) {
+                console.log('[Gerente Dashboard API] ⚠️ Consultor', c.email, 'marcado para retry (429)');
+              }
+            }
+          }
+
+          if (externalKpis && totalLeadsForLtv > 0) {
+            externalKpis.ltv_avg = sumLtvWeighted / totalLeadsForLtv;
+          }
+          if (externalKpis && externalKpis.total_leads > 0) {
+            externalKpis.conversion_rate = (externalKpis.active_leads / externalKpis.total_leads) * 100;
           }
         }
 
@@ -411,50 +495,43 @@ export async function GET(req: NextRequest) {
             : '0.00',
           externalKpis,
           externalKpisError,
-          statusCode, // Armazena o código de status para identificar erros 429
+          statusCode,
           lastSeenAt: (c as { last_seen_at?: string | null }).last_seen_at ?? null,
           totalOnlineTime: (c as { total_online_time?: number | null }).total_online_time ?? 0,
           totalCrmTime: (c as { total_crm_time?: number | null }).total_crm_time ?? 0,
+          ...(bancaNames.length > 0 && { banca_names: bancaNames }),
         };
       })
     );
 
-    // 4.5. Retry para consultores que falharam com erro 429
+    // 4.5. Retry para consultores que falharam com erro 429 (apenas quando uma única banca)
     const failedConsultors = consultorMetrics.filter(c => c.externalKpisError && c.statusCode === 429);
     
-    if (failedConsultors.length > 0) {
+    if (failedConsultors.length > 0 && bancaUrls.length === 1) {
       console.log(`[Gerente Dashboard API] 🔄 Iniciando retry para ${failedConsultors.length} consultores com erro 429`);
       
-      // Aguarda um pouco antes de tentar novamente
       await new Promise(resolve => setTimeout(resolve, 3000));
       
-      // Normaliza a URL da banca (reutiliza do código acima)
-      let cleanBancaUrl = bancaUrl!.trim();
+      let cleanBancaUrl = bancaUrls[0].trim();
       if (!cleanBancaUrl.startsWith('http://') && !cleanBancaUrl.startsWith('https://')) {
         cleanBancaUrl = `https://${cleanBancaUrl}`;
       }
       cleanBancaUrl = cleanBancaUrl.replace(/\/+$/, '');
-      
-      // Prepara parâmetros de data
-      // Se ambos forem null, não envia parâmetros de data (busca todo o período)
-      let dateFromParam = dateFrom;
-      let dateToParam = dateTo;
-      
-      // Retry para cada consultor que falhou
+
       for (const failedConsultor of failedConsultors) {
         console.log(`[Gerente Dashboard API] 🔄 Retry para ${failedConsultor.email}`);
         
         const result = await fetchConsultorMetrics(
           cleanBancaUrl,
           failedConsultor.email,
-          dateFromParam,
-          dateToParam,
+          dateFrom,
+          dateTo,
           apiKey,
           apiKeyPreview,
-          2, // maxRetries
-          2000 // retryDelay em ms
+          2,
+          2000
         );
-        
+
         if (result.success && result.data) {
           const metrics = result.data;
           
@@ -630,7 +707,7 @@ export async function GET(req: NextRequest) {
     console.log('[Gerente Dashboard API]   📅 Filtros aplicados:', {
       date_from: dateFrom || 'hoje',
       date_to: dateTo || 'hoje',
-      banca_url: bancaUrl || 'não informado',
+      banca_url: bancaUrlFilter || (bancaUrls.length > 0 ? (bancaUrls.length === 1 ? bancaUrls[0] : 'todas') : 'não informado'),
       consultor_id: consultorIdFilter || 'todos'
     });
     console.log('[Gerente Dashboard API]   ⏱️  Tempo total de processamento:', `${totalTime}ms`);
