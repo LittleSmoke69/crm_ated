@@ -268,7 +268,11 @@ async function getBancasDoUsuario(userId: string): Promise<BancaRow[]> {
 }
 
 /** Opções para getBancasVisiveis (ex.: contexto kanban vs transferido). */
-export type GetBancasVisiveisOptions = { transferredFilter?: 'yes' | 'no' };
+export type GetBancasVisiveisOptions = {
+  transferredFilter?: 'yes' | 'no';
+  /** Quando true (ex.: botão "Carregar bancas" no perfil), força busca em todas as bancas por API em vez de usar user_bancas. */
+  forceSearchAllBancas?: boolean;
+};
 
 /**
  * Retorna a lista de bancas visíveis para o usuário (mesma lógica do GET).
@@ -283,7 +287,8 @@ export async function getBancasVisiveis(
   options?: GetBancasVisiveisOptions
 ): Promise<BancaRow[]> {
   const transferredFilter = options?.transferredFilter;
-  console.log('[CRM Bancas] getBancasVisiveis chamado | userId:', userId, '| perfil:', profile?.status ?? 'null', '| email:', profile?.email ? `${profile.email.slice(0, 3)}***` : 'n/a', '| transferred_filter:', transferredFilter ?? 'não informado');
+  const forceSearchAllBancas = options?.forceSearchAllBancas === true;
+  console.log('[CRM Bancas] getBancasVisiveis chamado | userId:', userId, '| perfil:', profile?.status ?? 'null', '| email:', profile?.email ? `${profile.email.slice(0, 3)}***` : 'n/a', '| transferred_filter:', transferredFilter ?? 'não informado', '| forceSearchAllBancas:', forceSearchAllBancas);
   const { data: todasBancas, error } = await supabaseServiceRole
     .from('crm_bancas')
     .select('id, name, url')
@@ -295,19 +300,19 @@ export async function getBancasVisiveis(
   }
   const bancas = excluirBancaPorNome(todasBancas as BancaRow[], NOME_BANCA_EXCLUIDA_BUSCA);
 
-  // Gerente: usa apenas user_bancas (sem filtro por API externa). Fallback: todas as bancas.
-  if (profile?.status === 'gerente') {
+  // Gerente: sem "Carregar bancas" usa user_bancas; com "Carregar bancas" (forceSearchAllBancas) usa o mesmo filtro por API que o consultor.
+  if (profile?.status === 'gerente' && !forceSearchAllBancas) {
     const bancasDoUsuario = await getBancasDoUsuario(userId);
     if (bancasDoUsuario.length > 0) {
       console.log('[CRM Bancas] Gerente: usando user_bancas (', bancasDoUsuario.length, ' bancas)');
       return bancasDoUsuario;
     }
-    console.log('[CRM Bancas] Gerente: user_bancas vazio; fallback para todas as bancas');
+    console.log('[CRM Bancas] Gerente: user_bancas vazio; fallback para todas as bancas (total:', bancas.length, ')');
     return bancas;
   }
 
-  // Consultor: prioriza user_bancas para não fazer filtro por API ao carregar kanban/transferidos.
-  if (profile?.status === 'consultor') {
+  // Consultor (sem forceSearchAllBancas): prioriza user_bancas para não fazer filtro por API ao carregar kanban/transferidos.
+  if (profile?.status === 'consultor' && !forceSearchAllBancas) {
     const bancasDoUsuario = await getBancasDoUsuario(userId);
     if (bancasDoUsuario.length > 0) {
       console.log('[CRM Bancas] Consultor: usando user_bancas (', bancasDoUsuario.length, ' bancas) — sem filtro por API');
@@ -318,38 +323,60 @@ export async function getBancasVisiveis(
   const apiKey = process.env.CRM_API_KEY?.trim() ?? '';
   const email = profile?.email?.trim();
 
-  // Consultor sem user_bancas: filtro por API externa (get-indicateds-by-consultant), depois fallback user_bancas / todas.
-  if (profile?.status === 'consultor' && email && apiKey) {
-    console.log('[CRM Bancas] Consultor sem user_bancas: filtro por API (fonte: crm_bancas):', bancas.length);
+  // Consultor ou Gerente (página /perfil — botão "Carregar bancas"): filtro por API externa em TODAS as bancas.
+  // get-indicateds-by-consultant com per_page=15, page=1, sort=created_at, direction=desc, consultant=email.
+  // O curl de cada requisição é exibido no terminal. 200 = apto (user_bancas); 404 = não apto; 500 = erro.
+  if ((profile?.status === 'consultor' || profile?.status === 'gerente') && email && apiKey) {
+    const ctxPerfil = forceSearchAllBancas ? ' [página /perfil — botão Carregar bancas]' : '';
+    console.log('[CRM Bancas] Busca em TODAS as bancas (filtro get-indicateds-by-consultant)' + ctxPerfil + ' | perfil:', profile?.status, '| total:', bancas.length, '| email:', email.slice(0, 3) + '***');
     const bancasVisiveis: BancaRow[] = [];
     for (let i = 0; i < bancas.length; i++) {
       const b = bancas[i];
       const base = normalizarUrlBanca(b.url);
-      if (!base) continue;
-      const params = new URLSearchParams({ consultant: email, per_page: '1' });
+      if (!base) {
+        console.log(`[CRM Bancas]   ${i + 1}. ${(b.name ?? b.id) || b.id} — URL inválida, ignorada`);
+        continue;
+      }
+      const params = new URLSearchParams({
+        consultant: email,
+        per_page: '15',
+        page: '1',
+        sort: 'created_at',
+        direction: 'desc',
+      });
       if (transferredFilter) params.set('transferred_filter', transferredFilter);
       const urlExterna = `${base}/api/crm/get-indicateds-by-consultant?${params.toString()}`;
+      console.log('[CRM Bancas]' + (forceSearchAllBancas ? ' /perfil Carregar bancas —' : '') + ' curl da requisição:', buildCurlExample('GET', urlExterna, apiKey));
       const { status, body } = await fetchGetIndicatedsResponse(urlExterna, apiKey);
       if (status === 200) {
         bancasVisiveis.push(b);
-        console.log(`[CRM Bancas]   ${i + 1}. ${(b.name ?? b.id) || b.id} (id: ${b.id}) | ${b.url} — passou no filtro (status 200)`);
+        console.log(`[CRM Bancas]   ${i + 1}/${bancas.length}. ${(b.name ?? b.id) || b.id} (id: ${b.id}) | ${b.url} — ✅ 200 apto (registrar em user_bancas)`);
       } else if (status === 404) {
-        console.log(`[CRM Bancas]   ${i + 1}. ${(b.name ?? b.id) || b.id} (id: ${b.id}) | ${b.url} — não tem conta na banca (status 404)`);
-        console.log('[CRM Bancas]     Curl:', buildCurlExample('GET', urlExterna, apiKey));
-        console.log('[CRM Bancas]     Resposta body:', body);
+        console.log(`[CRM Bancas]   ${i + 1}/${bancas.length}. ${(b.name ?? b.id) || b.id} (id: ${b.id}) | ${b.url} — ❌ 404 não apto`);
+        if (forceSearchAllBancas) {
+          console.log('[CRM Bancas]     Curl:', buildCurlExample('GET', urlExterna, apiKey));
+          console.log('[CRM Bancas]     Body:', body);
+        }
+      } else if (status === 500) {
+        const bancaNome = (b.name ?? b.id) || b.url;
+        console.error('[CRM Bancas]   Banca retornou 500:', bancaNome, '| url:', urlExterna, '| body:', body);
+        throw new Error(`A banca "${bancaNome}" retornou erro 500 ao verificar indicados. Tente novamente mais tarde.`);
       } else {
-        console.log(`[CRM Bancas]   ${i + 1}. ${(b.name ?? b.id) || b.id} (id: ${b.id}) | ${b.url} — não passou (status ${status})`);
+        console.log(`[CRM Bancas]   ${i + 1}/${bancas.length}. ${(b.name ?? b.id) || b.id} (id: ${b.id}) | ${b.url} — status ${status}`);
         console.log('[CRM Bancas]     Curl:', buildCurlExample('GET', urlExterna, apiKey));
-        console.log('[CRM Bancas]     Resposta body:', body);
+        console.log('[CRM Bancas]     Body:', body);
       }
     }
-    console.log('[CRM Bancas] Bancas que passaram pelo filtro (status 200):', bancasVisiveis.length);
+    console.log('[CRM Bancas] Busca concluída. Bancas aptas (200) para user_bancas:', bancasVisiveis.length, 'de', bancas.length);
     if (bancasVisiveis.length > 0) return bancasVisiveis;
     const fallback = await getBancasDoUsuario(userId);
     return fallback.length > 0 ? fallback : bancas;
   }
 
-  if (profile?.status === 'consultor') {
+  if (profile?.status === 'consultor' || profile?.status === 'gerente') {
+    if (forceSearchAllBancas && (!apiKey || !email)) {
+      console.log('[CRM Bancas] Carregar bancas (' + profile?.status + '): CRM_API_KEY ou email ausente — curl não será exibido. Fallback: user_bancas ou todas.');
+    }
     const fallback = await getBancasDoUsuario(userId);
     return fallback.length > 0 ? fallback : bancas;
   }
