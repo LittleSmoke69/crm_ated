@@ -37,6 +37,18 @@ const STAR_LEVELS = [
   { level: 7, min: 30000, max: 50000 },
 ] as const;
 
+/** Prazo em dias desde o último depósito para "possível transferência" (deve bater com LeadCard). */
+const INACTIVITY_DEADLINE_DAYS = 90;
+
+/** True se o lead tem último depósito e já passou de 90 dias desde essa data. */
+function isLeadPast90DaysInactivity(lead: Lead): boolean {
+  if (!lead.last_deposit_at) return false;
+  const lastDeposit = new Date(lead.last_deposit_at);
+  const deadline = new Date(lastDeposit);
+  deadline.setDate(deadline.getDate() + INACTIVITY_DEADLINE_DAYS);
+  return new Date().getTime() >= deadline.getTime();
+}
+
 /** Retorna o valor (em R$) que falta para a próxima estrela, ou null se já está no nível máximo. */
 function getMissingForNextStar(apostaEstrelas: number): number | null {
   const value = Math.max(0, apostaEstrelas ?? 0);
@@ -191,6 +203,13 @@ const getDefaultColumns = (leads: Lead[] = []): Column[] => {
       totalLeads: leads.filter(l => 
         l.status === 'ativo'
       ).length
+    },
+    { 
+      id: 'possivel_transferencia', 
+      title: '🔄 Possível transferência', 
+      color: 'amber', 
+      leads: leads.filter(l => isLeadPast90DaysInactivity(l)).slice(0, 100),
+      totalLeads: leads.filter(l => isLeadPast90DaysInactivity(l)).length
     }
   ];
 };
@@ -878,6 +897,14 @@ const KanbanContent = () => {
   const { columns, metrics: derivedMetrics } = useMemo(() => {
     let formattedLeads: Lead[] = [...rawLeads];
 
+    // Filtro: apenas leads em possível transferência (90+ dias sem depósito)
+    if (filters.possivelTransferencia) {
+      const value = typeof filters.possivelTransferencia === 'object' ? filters.possivelTransferencia.value : filters.possivelTransferencia;
+      if (value === 'only') {
+        formattedLeads = formattedLeads.filter(l => isLeadPast90DaysInactivity(l));
+      }
+    }
+
     // Filtro de Afiliado
     if (filters.affiliate) {
       const affiliateValue = typeof filters.affiliate === 'object' ? filters.affiliate.value : filters.affiliate;
@@ -1116,6 +1143,10 @@ const KanbanContent = () => {
       (() => {
         const filtered = formattedLeads.filter(l => l.status === 'ativo');
         return { id: 'ativo', title: '✅ CLIENTE ATIVO', color: 'purple', leads: filtered, totalLeads: filtered.length };
+      })(),
+      (() => {
+        const filtered = formattedLeads.filter(l => isLeadPast90DaysInactivity(l));
+        return { id: 'possivel_transferencia', title: '🔄 Possível transferência', color: 'amber', leads: filtered, totalLeads: filtered.length };
       })()
     ];
 
@@ -1169,6 +1200,8 @@ const KanbanContent = () => {
 
   const onDrop = (e: React.DragEvent, newStatus: string) => {
     e.preventDefault();
+    // Coluna "Possível transferência" é apenas vista (90d sem depósito); não altera status do lead
+    if (newStatus === 'possivel_transferencia') return;
     const leadId = e.dataTransfer.getData('leadId');
     setRawLeads(prev =>
       prev.map(l =>

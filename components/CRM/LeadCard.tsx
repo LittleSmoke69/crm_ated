@@ -123,6 +123,9 @@ interface LeadCardProps {
   transferDeadlineDays?: number;
 }
 
+/** Prazo em dias desde o último depósito para considerar "possível transferência" (cronômetro decrescente até 90d). */
+const INACTIVITY_DEADLINE_DAYS = 90;
+
 const LeadCard: React.FC<LeadCardProps> = ({ 
   lead, 
   onFavorite, 
@@ -166,13 +169,14 @@ const LeadCard: React.FC<LeadCardProps> = ({
   const [bonusGirosHistoryLoading, setBonusGirosHistoryLoading] = useState(false);
   const bonusDropdownRef = useRef<HTMLDivElement>(null);
 
-  /** Tick para contagem regressiva em tempo real do prazo de leads transferidos (1s para contador h/m/s) */
+  /** Tick para contagem regressiva em tempo real (leads transferidos e cronômetro 90d desde último depósito) */
   const [nowTick, setNowTick] = useState(0);
   useEffect(() => {
-    if (!lead.transferred || !lead.transferred_at) return;
-    const id = setInterval(() => setNowTick((t) => t + 1), 1000); // atualiza a cada 1 segundo
+    const needsTick = (lead.transferred && lead.transferred_at) || !!lead.last_deposit_at;
+    if (!needsTick) return;
+    const id = setInterval(() => setNowTick((t) => t + 1), 1000);
     return () => clearInterval(id);
-  }, [lead.transferred, lead.transferred_at]);
+  }, [lead.transferred, lead.transferred_at, lead.last_deposit_at]);
 
   /** Retorna tempo até o próximo dia (quando daysLeft diminui) e formata como "Xh Ym Zs" */
   const getCountdownToNextDay = (transferredAt: Date): string => {
@@ -185,6 +189,27 @@ const LeadCard: React.FC<LeadCardProps> = ({
     const m = Math.floor((remaining % 3600) / 60);
     const s = remaining % 60;
     return `${h}h ${m}m ${s}s`;
+  };
+
+  /**
+   * Cronômetro decrescente: data do último depósito + 90 dias = prazo.
+   * Retorna o tempo restante até esse prazo (contagem regressiva) ou expired quando já passou.
+   * Atualiza a cada segundo via nowTick.
+   */
+  const getInactivity90Info = (lastDepositAt: string): { expired: boolean; daysLeft: number; countdownStr: string } => {
+    const lastDeposit = new Date(lastDepositAt);
+    const deadline = new Date(lastDeposit);
+    deadline.setDate(deadline.getDate() + INACTIVITY_DEADLINE_DAYS);
+    const now = new Date();
+    const remainingMs = Math.max(0, deadline.getTime() - now.getTime());
+    const expired = remainingMs === 0;
+    const totalSeconds = Math.floor(remainingMs / 1000);
+    const daysLeft = Math.floor(totalSeconds / (24 * 3600));
+    const h = Math.floor((totalSeconds % (24 * 3600)) / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    const s = totalSeconds % 60;
+    const countdownStr = expired ? '' : `${daysLeft}d ${h}h ${m}m ${s}s`;
+    return { expired, daysLeft, countdownStr };
   };
 
   // Estados para os históricos
@@ -1134,7 +1159,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
     const wagered = Number((lead as any).aposta_estrelas) ?? 0;
     const starInfo = getStarLevelInfo(wagered);
     const levelLabel = starInfo.currentLevel === 0 ? 'Iniciante' : `${starInfo.currentLevel} ${starInfo.currentLevel === 1 ? 'Estrela' : 'Estrelas'}`;
-    const lastDepositText = lead.last_deposit_at ? formatRelativeDate(lead.last_deposit_at, 'Nunca') : 'Nunca depositou';
+    const lastDepositText = lead.last_deposit_at ? formatCreatedDate(lead.last_deposit_at) : 'Nunca depositou';
     const createdDateFormatted = formatCreatedDate(lead.created_at || lead.createdAt);
     return (
       <div
@@ -1321,6 +1346,20 @@ const LeadCard: React.FC<LeadCardProps> = ({
                 <span>Último depósito: {lastDepositText}</span>
               </div>
             )}
+            {/* Cronômetro decrescente: último depósito + 90 dias → tempo restante ou "Possível transferência" */}
+            {lead.last_deposit_at && (() => {
+              const info = getInactivity90Info(lead.last_deposit_at);
+              return (
+                <div className="flex items-center gap-1.5 text-[10px] font-bold mt-0.5 flex-wrap" title={`Contagem regressiva até ${INACTIVITY_DEADLINE_DAYS} dias após o último depósito. Após isso: possível transferência.`}>
+                  <Clock className="w-3.5 h-3.5 shrink-0 text-amber-500" />
+                  {info.expired ? (
+                    <span className="text-amber-600">Possível transferência</span>
+                  ) : (
+                    <span className="text-gray-600 tabular-nums">Faltam {info.countdownStr}</span>
+                  )}
+                </div>
+              );
+            })()}
           </div>
           <button
             type="button"
@@ -1678,24 +1717,30 @@ const LeadCard: React.FC<LeadCardProps> = ({
             <span>{formatCreatedDate(lead.created_at || lead.createdAt)}</span>
           </div>
           {lead.last_deposit_at ? (
-            <>
-              <div className="flex items-center gap-1.5 text-[10px] text-gray-500 font-bold" title="Último depósito">
-                <History className="w-3.5 h-3.5 text-gray-400" /> 
-                <span>{formatLastDeposit(lead.last_deposit_at)}</span>
-              </div>
-              {lead.last_deposit_value !== null && lead.last_deposit_value !== undefined && (
-                <div className="flex items-center gap-1.5 text-[10px] text-gray-500 font-bold" title="Último valor depositado">
-                  <Target className="w-3.5 h-3.5 text-gray-400" /> 
-                  <span>Último valor depositado: {formatCurrency(lead.last_deposit_value)}</span>
-                </div>
-              )}
-            </>
+            <div className="flex items-center gap-1.5 text-[10px] text-gray-500 font-bold" title="Último depósito">
+              <History className="w-3.5 h-3.5 text-gray-400" /> 
+              <span>Último depósito: {formatCreatedDate(lead.last_deposit_at)}</span>
+            </div>
           ) : (
             <div className="flex items-center gap-1.5 text-[10px] text-gray-400 font-medium italic">
               <History className="w-3.5 h-3.5" /> 
               <span>Último depósito: Nunca depositou</span>
             </div>
           )}
+          {/* Cronômetro decrescente: último depósito + 90 dias → tempo restante ou "Possível transferência" */}
+          {lead.last_deposit_at && (() => {
+            const info = getInactivity90Info(lead.last_deposit_at);
+            return (
+              <div className="flex items-center gap-1.5 text-[10px] font-bold mt-0.5" title={`Contagem regressiva até ${INACTIVITY_DEADLINE_DAYS} dias após o último depósito. Após isso: possível transferência.`}>
+                <Clock className="w-3.5 h-3.5 text-amber-500" />
+                {info.expired ? (
+                  <span className="text-amber-600">Possível transferência</span>
+                ) : (
+                  <span className="text-gray-600 tabular-nums">Faltam {info.countdownStr}</span>
+                )}
+              </div>
+            );
+          })()}
         </div>
         
         <div className="flex items-center gap-2">
