@@ -125,6 +125,8 @@ interface LeadCardProps {
 
 /** Prazo em dias desde o último depósito para considerar "possível transferência" (cronômetro decrescente até 90d). */
 const INACTIVITY_DEADLINE_DAYS = 90;
+/** Prazo em dias desde o cadastro para leads que apenas se cadastraram (sem depósito); cronômetro decrescente. */
+const REGISTRATION_DEADLINE_DAYS = 30;
 
 const LeadCard: React.FC<LeadCardProps> = ({ 
   lead, 
@@ -169,14 +171,19 @@ const LeadCard: React.FC<LeadCardProps> = ({
   const [bonusGirosHistoryLoading, setBonusGirosHistoryLoading] = useState(false);
   const bonusDropdownRef = useRef<HTMLDivElement>(null);
 
-  /** Tick para contagem regressiva em tempo real (leads transferidos e cronômetro 90d desde último depósito) */
+  /** Tick para contagem regressiva em tempo real (transferidos, 90d último depósito, 30d cadastro) */
   const [nowTick, setNowTick] = useState(0);
+  const isApenasCadastrado = (lead.total_depositos_count || 0) === 0;
+  const hasCreatedAt = !!(lead.created_at || lead.createdAt);
   useEffect(() => {
-    const needsTick = (lead.transferred && lead.transferred_at) || !!lead.last_deposit_at;
+    const needsTick =
+      (lead.transferred && lead.transferred_at) ||
+      !!lead.last_deposit_at ||
+      (isApenasCadastrado && hasCreatedAt);
     if (!needsTick) return;
     const id = setInterval(() => setNowTick((t) => t + 1), 1000);
     return () => clearInterval(id);
-  }, [lead.transferred, lead.transferred_at, lead.last_deposit_at]);
+  }, [lead.transferred, lead.transferred_at, lead.last_deposit_at, isApenasCadastrado, hasCreatedAt]);
 
   /** Retorna tempo até o próximo dia (quando daysLeft diminui) e formata como "Xh Ym Zs" */
   const getCountdownToNextDay = (transferredAt: Date): string => {
@@ -200,6 +207,26 @@ const LeadCard: React.FC<LeadCardProps> = ({
     const lastDeposit = new Date(lastDepositAt);
     const deadline = new Date(lastDeposit);
     deadline.setDate(deadline.getDate() + INACTIVITY_DEADLINE_DAYS);
+    const now = new Date();
+    const remainingMs = Math.max(0, deadline.getTime() - now.getTime());
+    const expired = remainingMs === 0;
+    const totalSeconds = Math.floor(remainingMs / 1000);
+    const daysLeft = Math.floor(totalSeconds / (24 * 3600));
+    const h = Math.floor((totalSeconds % (24 * 3600)) / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    const s = totalSeconds % 60;
+    const countdownStr = expired ? '' : `${daysLeft}d ${h}h ${m}m ${s}s`;
+    return { expired, daysLeft, countdownStr };
+  };
+
+  /**
+   * Cronômetro decrescente para quem apenas se cadastrou: data de cadastro + 30 dias = prazo.
+   * Retorna tempo restante até esse prazo (contagem regressiva) ou expired quando já passou.
+   */
+  const getRegistration30Info = (createdAt: string): { expired: boolean; daysLeft: number; countdownStr: string } => {
+    const created = new Date(createdAt);
+    const deadline = new Date(created);
+    deadline.setDate(deadline.getDate() + REGISTRATION_DEADLINE_DAYS);
     const now = new Date();
     const remainingMs = Math.max(0, deadline.getTime() - now.getTime());
     const expired = remainingMs === 0;
@@ -1360,6 +1387,21 @@ const LeadCard: React.FC<LeadCardProps> = ({
                 </div>
               );
             })()}
+            {/* Cronômetro decrescente para quem apenas se cadastrou: cadastro + 30 dias */}
+            {!lead.last_deposit_at && (lead.created_at || lead.createdAt) && (() => {
+              const createdAt = lead.created_at || lead.createdAt || '';
+              const info = getRegistration30Info(createdAt);
+              return (
+                <div className="flex items-center gap-1.5 text-[10px] font-bold mt-0.5 flex-wrap" title={`Contagem regressiva até ${REGISTRATION_DEADLINE_DAYS} dias após o cadastro. Após isso: possível transferência.`}>
+                  <Clock className="w-3.5 h-3.5 shrink-0 text-sky-500" />
+                  {info.expired ? (
+                    <span className="text-amber-600">Possível transferência</span>
+                  ) : (
+                    <span className="text-gray-600 tabular-nums">Faltam {info.countdownStr}</span>
+                  )}
+                </div>
+              );
+            })()}
           </div>
           <button
             type="button"
@@ -1733,6 +1775,21 @@ const LeadCard: React.FC<LeadCardProps> = ({
             return (
               <div className="flex items-center gap-1.5 text-[10px] font-bold mt-0.5" title={`Contagem regressiva até ${INACTIVITY_DEADLINE_DAYS} dias após o último depósito. Após isso: possível transferência.`}>
                 <Clock className="w-3.5 h-3.5 text-amber-500" />
+                {info.expired ? (
+                  <span className="text-amber-600">Possível transferência</span>
+                ) : (
+                  <span className="text-gray-600 tabular-nums">Faltam {info.countdownStr}</span>
+                )}
+              </div>
+            );
+          })()}
+          {/* Cronômetro decrescente para quem apenas se cadastrou: cadastro + 30 dias */}
+          {!lead.last_deposit_at && (lead.created_at || lead.createdAt) && (() => {
+            const createdAt = lead.created_at || lead.createdAt || '';
+            const info = getRegistration30Info(createdAt);
+            return (
+              <div className="flex items-center gap-1.5 text-[10px] font-bold mt-0.5" title={`Contagem regressiva até ${REGISTRATION_DEADLINE_DAYS} dias após o cadastro. Após isso: possível transferência.`}>
+                <Clock className="w-3.5 h-3.5 text-sky-500" />
                 {info.expired ? (
                   <span className="text-amber-600">Possível transferência</span>
                 ) : (
