@@ -12,26 +12,41 @@ function normalizarUrlBanca(raw: string): string {
   return u.startsWith('http') ? u : `https://${u}`;
 }
 
+const LOG_PREFIX = '[Solicitação de leads - Verificação de bancas]';
+
 /**
- * Verifica na API externa da banca se o consultor tem acesso (get-indicateds-by-consultant, status 200 = tem conta/dados).
+ * Verifica na API externa da banca se o consultor está cadastrado (total-indicateds-by-consultant).
+ * 200 = consultor cadastrado (listar no dropdown). 404 = não cadastrado (não listar).
  */
 async function consultorTemAcessoNaBanca(
   bancaUrl: string,
   consultantEmail: string,
-  apiKey: string
+  apiKey: string,
+  bancaName?: string
 ): Promise<boolean> {
   const base = normalizarUrlBanca(bancaUrl);
   if (!base || !consultantEmail) return false;
+  const label = bancaName || base;
+  const params = new URLSearchParams({ consultant: consultantEmail });
+  const url = `${base}/api/crm/total-indicateds-by-consultant?${params.toString()}`;
+  const headers = { 'X-API-KEY': apiKey.trim(), Accept: 'application/json' };
+
+  const curlLog = `curl -X GET "${url}" -H "X-API-KEY: ${apiKey.trim().substring(0, 8)}..." -H "Accept: application/json"`;
+  console.log(`${LOG_PREFIX} [curl] ${curlLog}`);
+
   try {
-    const params = new URLSearchParams({ consultant: consultantEmail, per_page: '1' });
-    const url = `${base}/api/crm/get-indicateds-by-consultant?${params.toString()}`;
+    const start = Date.now();
     const res = await fetch(url, {
       method: 'GET',
-      headers: { 'X-API-KEY': apiKey.trim(), Accept: 'application/json' },
+      headers,
       signal: AbortSignal.timeout(15000),
     });
-    return res.status === 200;
-  } catch {
+    const elapsed = Date.now() - start;
+    const cadastrado = res.status === 200;
+    console.log(`${LOG_PREFIX} GET ${url} → ${res.status} (${elapsed}ms) [consultor cadastrado na banca: ${cadastrado}]`);
+    return cadastrado;
+  } catch (err) {
+    console.log(`${LOG_PREFIX} GET ${label}/api/crm/total-indicateds-by-consultant → erro (consultor cadastrado: false)`);
     return false;
   }
 }
@@ -48,6 +63,8 @@ export async function GET(
     const { userId, profile } = await requireStatus(req, ['gerente', 'gestor']);
     const { consultorId } = await params;
     if (!consultorId) return errorResponse('consultorId é obrigatório', 400);
+
+    console.log(`${LOG_PREFIX} Requisição recebida → GET /api/gerente/consultores/${consultorId}/bancas (verificar bancas para solicitação de leads)`);
 
     let managerId: string;
     if (profile?.status === 'gestor') {
@@ -73,6 +90,7 @@ export async function GET(
 
     const consultantEmail = (consultor as { email?: string }).email?.trim();
     if (!consultantEmail) {
+      console.log(`${LOG_PREFIX} Consultor ${consultorId} sem e-mail → retornando lista vazia.`);
       return successResponse([]);
     }
 
@@ -95,16 +113,20 @@ export async function GET(
     if (bancasError || !bancas?.length) return successResponse([]);
 
     const apiKey = process.env.CRM_API_KEY?.trim();
+    const bancasList = bancas as { id: string; name: string; url: string }[];
     if (!apiKey) {
-      return successResponse(bancas as { id: string; name: string; url: string }[]);
+      console.log(`${LOG_PREFIX} Sem CRM_API_KEY → retornando todas as ${bancasList.length} bancas do gerente (sem verificação externa)`);
+      return successResponse(bancasList);
     }
 
+    console.log(`${LOG_PREFIX} Verificando acesso do consultor em ${bancasList.length} banca(s)...`);
     const result: { id: string; name: string; url: string }[] = [];
-    for (const b of bancas as { id: string; name: string; url: string }[]) {
+    for (const b of bancasList) {
       if (!b.url) continue;
-      const hasAccess = await consultorTemAcessoNaBanca(b.url, consultantEmail, apiKey);
+      const hasAccess = await consultorTemAcessoNaBanca(b.url, consultantEmail, apiKey, b.name);
       if (hasAccess) result.push(b);
     }
+    console.log(`${LOG_PREFIX} Concluído → ${result.length}/${bancasList.length} banca(s) em que o consultor tem acesso.`);
 
     return successResponse(result);
   } catch (err: unknown) {

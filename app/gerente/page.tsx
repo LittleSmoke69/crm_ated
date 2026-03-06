@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import {
@@ -165,8 +165,8 @@ export default function GerentePage() {
   const [tagsLoadingInBackground, setTagsLoadingInBackground] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  // Filtro de data
-  const [dateFilter, setDateFilter] = useState<'daily' | 'yesterday' | '7days' | '15days' | '30days' | 'custom' | 'all'>('daily');
+  // Filtro de data (inicial: todo o período)
+  const [dateFilter, setDateFilter] = useState<'daily' | 'yesterday' | '7days' | '15days' | '30days' | 'custom' | 'all'>('all');
   const [customStartDate, setCustomStartDate] = useState<string>('');
   const [customEndDate, setCustomEndDate] = useState<string>('');
   const [appliedStartDate, setAppliedStartDate] = useState<string>('');
@@ -224,7 +224,7 @@ export default function GerentePage() {
   const [zaplinkBulkSendLog, setZaplinkBulkSendLog] = useState<BulkSendLogItem[]>([]);
   const [zaplinkBulkSendLogLoading, setZaplinkBulkSendLogLoading] = useState(false);
 
-  // Modal Solicitação de leads
+  // Modal Solicitação de leads: bancas = filtro das já carregadas (página) pelas bancas em que o consultor faz parte (API)
   const [solicitationModalOpen, setSolicitationModalOpen] = useState(false);
   const [solicitationConsultorId, setSolicitationConsultorId] = useState<string>('');
   const [solicitationBancaId, setSolicitationBancaId] = useState<string>('');
@@ -267,7 +267,7 @@ export default function GerentePage() {
   const [bancas, setBancas] = useState<Array<{ id: string; name: string; url: string }>>([]);
   const [bancasLoading, setBancasLoading] = useState(true);
   const [allConsultores, setAllConsultores] = useState<ConsultorMetric[]>([]);
-  const [selectedBanca, setSelectedBanca] = useState<string>('');
+  const [selectedBanca, setSelectedBanca] = useState<string>(BANCA_ALL);
   const [selectedConsultor, setSelectedConsultor] = useState<string>('all');
   const [showBancaFilter, setShowBancaFilter] = useState(false);
   const [showConsultorFilter, setShowConsultorFilter] = useState(false);
@@ -455,13 +455,17 @@ export default function GerentePage() {
   //   }
   // }, [userId]);
 
-  // Carrega dados quando filtros mudam (banca, data, consultor, gerente para admin)
+  // Busca só na carga inicial; depois o usuário usa o botão FILTRAR para aplicar banca e período
+  const initialLoadDone = useRef(false);
   useEffect(() => {
     if (!userId || initialLoading) return;
     if (!selectedBanca) return;
-    if (isAdminOrSuperAdmin && selectedBanca !== BANCA_ALL && gerentes.length > 0 && !selectedGerente) return; // admin aguarda seleção de gerente
+    if (selectedBanca === BANCA_ALL && bancas.length === 0) return;
+    if (isAdminOrSuperAdmin && selectedBanca !== BANCA_ALL && gerentes.length > 0 && !selectedGerente) return;
+    if (initialLoadDone.current) return;
+    initialLoadDone.current = true;
     loadData(false);
-  }, [dateFilter, appliedStartDate, appliedEndDate, selectedBanca, selectedConsultor, selectedGerente, isAdminOrSuperAdmin, gerentes.length]);
+  }, [userId, selectedBanca, bancas.length, isAdminOrSuperAdmin, gerentes.length, selectedGerente]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -941,7 +945,7 @@ export default function GerentePage() {
     setSolicitationModalOpen(true);
   };
 
-  // Ao selecionar o consultor no modal de solicitação, carrega as bancas em que ele está cadastrado (testa email em cada banca do gerente).
+  // Ao selecionar o consultor: busca bancas em que ele faz parte (API) e filtra as bancas já carregadas da página
   useEffect(() => {
     if (!solicitationModalOpen || !userId) return;
     if (!solicitationConsultorId?.trim()) {
@@ -956,9 +960,11 @@ export default function GerentePage() {
       .then((res) => res.json())
       .then((data) => {
         if (cancelled) return;
-        const list = data?.success && Array.isArray(data?.data) ? data.data : [];
-        setSolicitationBancasForConsultant(list);
-        if (list.length > 0) setSolicitationBancaId(list[0].id);
+        const apiBancas = (data?.success && Array.isArray(data?.data) ? data.data : []) as { id: string; name: string; url: string }[];
+        const idsFromApi = new Set(apiBancas.map((b) => b.id));
+        const filtered = bancas.filter((b) => idsFromApi.has(b.id));
+        setSolicitationBancasForConsultant(filtered);
+        if (filtered.length > 0) setSolicitationBancaId(filtered[0].id);
       })
       .catch(() => {
         if (!cancelled) setSolicitationBancasForConsultant([]);
@@ -967,7 +973,7 @@ export default function GerentePage() {
         if (!cancelled) setSolicitationBancasLoading(false);
       });
     return () => { cancelled = true; };
-  }, [solicitationModalOpen, solicitationConsultorId, userId]);
+  }, [solicitationModalOpen, solicitationConsultorId, userId, bancas]);
 
   const handleSolicitationSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1645,18 +1651,21 @@ export default function GerentePage() {
             </div>
 
             <button
+              type="button"
+              onClick={() => loadData(false)}
+              disabled={dataLoading || (selectedBanca === BANCA_ALL && bancas.length === 0)}
+              className="flex items-center gap-2 bg-[#8CD955] hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed text-white dark:text-gray-900 px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-sm"
+            >
+              <Filter className="w-4 h-4" />
+              Filtrar
+            </button>
+
+            <button
               onClick={() => setSolicitationChoiceOpen(true)}
               className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all shadow-sm"
             >
               <ClipboardList className="w-4 h-4 text-[#8CD955]" />
               Solicitações
-            </button>
-            <button
-              onClick={() => setIsModalOpen(true)}
-              className="flex items-center gap-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-md shadow-[#8CD955]/20"
-            >
-              <UserPlus className="w-4 h-4" />
-              Novo Consultor
             </button>
           </div>
         </div>
@@ -2154,18 +2163,29 @@ export default function GerentePage() {
                 Sua equipe
               </h2>
 
-              <div className="relative w-full md:w-64">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-gray-400" />
-                <input
-                  type="text"
-                  placeholder="Buscar consultor..."
-                  value={tableSearchTerm}
-                  onChange={(e) => {
-                    setTableSearchTerm(e.target.value);
-                    setTeamTablePage(1);
-                  }}
-                  className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-xs text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#8CD955] outline-none transition-all"
-                />
+              <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full md:w-auto">
+                <div className="relative w-full sm:flex-1 md:w-64">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-gray-400" />
+                  <input
+                    type="text"
+                    placeholder="Buscar consultor..."
+                    value={tableSearchTerm}
+                    onChange={(e) => {
+                      setTableSearchTerm(e.target.value);
+                      setTeamTablePage(1);
+                    }}
+                    className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-xs text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#8CD955] outline-none transition-all"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsModalOpen(true)}
+                  className="flex items-center justify-center gap-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-md shadow-[#8CD955]/20 w-full sm:w-auto"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  Novo Consultor
+                </button>
               </div>
             </div>
 
@@ -2684,9 +2704,11 @@ export default function GerentePage() {
                       className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium"
                     >
                       <option value="">Selecione um consultor</option>
-                      {(allConsultores.length > 0 ? allConsultores : consultorMetrics).map((c) => (
-                        <option key={c.id} value={c.id}>{c.name || c.email}</option>
-                      ))}
+                      {[...(allConsultores.length > 0 ? allConsultores : consultorMetrics)]
+                        .sort((a, b) => (a.name || a.email || '').localeCompare((b.name || b.email || ''), 'pt-BR', { sensitivity: 'base' }))
+                        .map((c) => (
+                          <option key={c.id} value={c.id}>{c.name || c.email}</option>
+                        ))}
                     </select>
                   </div>
 
@@ -2714,7 +2736,7 @@ export default function GerentePage() {
                       >
                         <option value="">Selecione a banca</option>
                         {solicitationBancasForConsultant.map((b) => (
-                          <option key={b.id} value={b.id}>{b.name || b.url || b.id}</option>
+                          <option key={b.id} value={b.id}>{b.name || b.url}</option>
                         ))}
                       </select>
                     )}
@@ -2751,7 +2773,7 @@ export default function GerentePage() {
                   <button type="button" onClick={() => setSolicitationModalOpen(false)} className="bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 font-bold py-3 px-6 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors">Cancelar</button>
                   <button
                     type="submit"
-                    disabled={solicitationSubmitting || (!!solicitationConsultorId?.trim() && (solicitationBancasLoading || solicitationBancasForConsultant.length === 0))}
+                    disabled={solicitationSubmitting || (!!solicitationConsultorId?.trim() && (solicitationBancasLoading || solicitationBancasForConsultant.length === 0)) || !solicitationBancaId?.trim()}
                     className="bg-[#8CD955] hover:bg-[#7BC84A] text-white font-bold py-3 px-6 rounded-xl disabled:opacity-50 transition-colors"
                   >
                     {solicitationSubmitting ? 'Enviando...' : 'Enviar solicitação'}

@@ -170,6 +170,21 @@ export async function POST(req: NextRequest) {
           console.log(`${LOG_PREFIX} POST admin_lead_transfer_entries inserted: ${entries.length} row(s)`);
         }
       }
+
+      const isDevolucao = filters_snapshot != null && typeof filters_snapshot === 'object' && 'devolucao' in filters_snapshot && 'log_origem_id' in filters_snapshot;
+      const logOrigemId = isDevolucao && typeof (filters_snapshot as { log_origem_id?: string }).log_origem_id === 'string' ? (filters_snapshot as { log_origem_id: string }).log_origem_id.trim() : null;
+      if (logOrigemId) {
+        const devolvidoAt = new Date().toISOString();
+        const { error: updateDevolvidoError } = await supabaseServiceRole
+          .from('admin_lead_transfer_logs')
+          .update({ devolvido_at: devolvidoAt })
+          .eq('id', logOrigemId);
+        if (updateDevolvidoError) {
+          console.error(`${LOG_PREFIX} POST update devolvido_at on origin log:`, updateDevolvidoError);
+        } else {
+          console.log(`${LOG_PREFIX} POST origin log ${logOrigemId} marked as devolvido_at=${devolvidoAt}`);
+        }
+      }
     }
 
     return successResponse(

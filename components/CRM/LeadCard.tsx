@@ -1177,11 +1177,9 @@ const LeadCard: React.FC<LeadCardProps> = ({
                       <XIcon className="w-3.5 h-3.5" /> Remover Etiqueta
                     </button>
                   )}
-                  {hasInteraction && (
-                    <button onClick={async () => { setShowMenu(false); setShowAllFeedbacksModal(true); await loadAllFeedbacks(); }} className="w-full text-left px-3 py-1.5 text-xs text-gray-600 hover:bg-blue-50 flex items-center gap-2 font-bold">
-                      <MessageSquare className="w-3.5 h-3.5" /> Ver Feedbacks
-                    </button>
-                  )}
+                  <button onClick={async () => { setShowMenu(false); setShowAllFeedbacksModal(true); await loadAllFeedbacks(); }} className="w-full text-left px-3 py-1.5 text-xs text-gray-600 hover:bg-blue-50 flex items-center gap-2 font-bold">
+                    <MessageSquare className="w-3.5 h-3.5" /> Ver todos os feedbacks
+                  </button>
                 </div>
               )}
             </div>
@@ -1484,19 +1482,16 @@ const LeadCard: React.FC<LeadCardProps> = ({
                     <XIcon className="w-4 h-4" /> Remover Etiqueta
                   </button>
                 )}
-                {/* Opção para ver todos os feedbacks - apenas se has_interaction = true */}
-                {hasInteraction && (
-                  <button 
-                    onClick={async () => {
-                      setShowMenu(false);
-                      setShowAllFeedbacksModal(true);
-                      await loadAllFeedbacks();
-                    }} 
-                    className="w-full text-left px-4 py-2 text-sm text-gray-600 hover:bg-blue-50 hover:text-blue-600 flex items-center gap-3 font-bold transition-colors border-t border-gray-100 mt-1 pt-2"
-                  >
-                    <MessageSquare className="w-4 h-4" /> Ver Todos os Feedbacks
-                  </button>
-                )}
+                <button 
+                  onClick={async () => {
+                    setShowMenu(false);
+                    setShowAllFeedbacksModal(true);
+                    await loadAllFeedbacks();
+                  }} 
+                  className="w-full text-left px-4 py-2 text-sm text-gray-600 hover:bg-blue-50 hover:text-blue-600 flex items-center gap-3 font-bold transition-colors border-t border-gray-100 mt-1 pt-2"
+                >
+                  <MessageSquare className="w-4 h-4" /> Ver todos os feedbacks
+                </button>
               </div>
             )}
           </div>
@@ -1708,7 +1703,6 @@ const LeadCard: React.FC<LeadCardProps> = ({
           {isContacted && (
             <button
               onClick={async () => {
-                // Busca o feedback quando o botão for clicado
                 await loadFeedback();
                 setShowFeedbackViewModal(true);
               }}
@@ -1729,15 +1723,15 @@ const LeadCard: React.FC<LeadCardProps> = ({
               )}
             </button>
           )}
-          
           {/* Botão Chamar - abre modal em todos os blocos */}
           <button
             onClick={() => {
               setShowContactFeedbackModal(true);
-              // Abre WhatsApp em nova aba após um pequeno delay
-              setTimeout(() => {
-                window.open(`https://wa.me/55${lead.phone.replace(/\D/g, '')}`, '_blank');
-              }, 100);
+              if (lead.phone) {
+                setTimeout(() => {
+                  window.open(`https://wa.me/55${lead.phone.replace(/\D/g, '')}`, '_blank');
+                }, 100);
+              }
             }}
             className="flex items-center gap-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white px-5 py-2.5 rounded-2xl text-xs font-black transition-all shadow-lg shadow-[#8CD955]/20 active:scale-95 hover:-translate-y-0.5"
           >

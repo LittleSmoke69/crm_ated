@@ -21,6 +21,7 @@ type TransferLogRow = {
   count?: number | null;
   transfer_type?: string | null;
   deadline_days?: number | null;
+  devolvido_at?: string | null;
   filters_snapshot?: unknown;
   crm_response?: unknown;
   created_at?: string | null;
@@ -63,8 +64,9 @@ export async function GET(req: NextRequest) {
     const offset = Math.max(0, parseInt(searchParams.get('offset') ?? '0', 10) || 0);
     const limit = Math.min(MAX_LIMIT, Math.max(1, parseInt(searchParams.get('limit') ?? String(DEFAULT_LIMIT), 10) || DEFAULT_LIMIT));
 
-    const selectWithDeadline = 'id, banca_id, performed_by_user_id, source_consultant_email, target_consultant_email, leads_ids, count, transfer_type, deadline_days, filters_snapshot, crm_response, created_at';
+    const selectWithDeadline = 'id, banca_id, performed_by_user_id, source_consultant_email, target_consultant_email, leads_ids, count, transfer_type, deadline_days, devolvido_at, filters_snapshot, crm_response, created_at';
     const selectWithoutDeadline = 'id, banca_id, performed_by_user_id, source_consultant_email, target_consultant_email, leads_ids, count, transfer_type, filters_snapshot, crm_response, created_at';
+    const selectWithDeadlineNoDevolvido = 'id, banca_id, performed_by_user_id, source_consultant_email, target_consultant_email, leads_ids, count, transfer_type, deadline_days, filters_snapshot, crm_response, created_at';
 
     const runQuery = async (selectColumns: string) => {
       let q = supabaseServiceRole
@@ -83,9 +85,15 @@ export async function GET(req: NextRequest) {
     if (result.error) {
       const msg = (result.error as { message?: string; code?: string }).message ?? '';
       const code = (result.error as { code?: string }).code ?? '';
-      if (msg.includes('deadline_days') || code === 'PGRST204' || msg.includes('does not exist')) {
-        console.warn(`${LOG_PREFIX} Coluna deadline_days ausente; buscando sem ela. Execute add_deadline_days_to_admin_lead_transfer_logs.sql no Supabase.`);
-        result = await runQuery(selectWithoutDeadline);
+      if (msg.includes('devolvido_at') || msg.includes('deadline_days') || code === 'PGRST204' || msg.includes('does not exist')) {
+        if (msg.includes('devolvido_at')) {
+          console.warn(`${LOG_PREFIX} Coluna devolvido_at ausente; buscando sem ela. Execute add_devolvido_at_to_admin_lead_transfer_logs.sql no Supabase.`);
+          result = await runQuery(selectWithDeadlineNoDevolvido);
+        }
+        if (result.error && ((result.error as { message?: string }).message ?? '').includes('deadline_days')) {
+          console.warn(`${LOG_PREFIX} Coluna deadline_days ausente; buscando sem ela.`);
+          result = await runQuery(selectWithoutDeadline);
+        }
       }
     }
     const { data: logs, error } = result;

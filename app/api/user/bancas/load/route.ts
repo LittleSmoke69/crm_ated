@@ -11,7 +11,8 @@ const ROLES_COM_BUSCA_POR_EMAIL = ['consultor', 'gerente'] as const;
 /**
  * POST /api/user/bancas/load
  * Carrega e renova as bancas em que o usuário trabalha, usando o email para
- * pesquisar em cada banca (APIs get-indicateds-by-consultant / user-consultant-info).
+ * pesquisar em cada banca cadastrada (API total-indicateds-by-consultant).
+ * 200 = usuário cadastrado na banca (inclui em user_bancas); 404 = não cadastrado.
  * Persiste o resultado em user_bancas; o gerente passa a figurar na hierarquia da banca
  * pelo vínculo em user_bancas (enroller não é obrigatório).
  */

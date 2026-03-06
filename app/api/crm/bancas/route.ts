@@ -324,11 +324,11 @@ export async function getBancasVisiveis(
   const email = profile?.email?.trim();
 
   // Consultor ou Gerente (página /perfil — botão "Carregar bancas"): filtro por API externa em TODAS as bancas.
-  // get-indicateds-by-consultant com per_page=15, page=1, sort=created_at, direction=desc, consultant=email.
-  // O curl de cada requisição é exibido no terminal. 200 = apto (user_bancas); 404 = não apto; 500 = erro.
+  // total-indicateds-by-consultant?consultant=email — 200 = cadastrado (apto); 404 = não cadastrado (não apto).
+  // O curl de cada requisição é exibido no terminal.
   if ((profile?.status === 'consultor' || profile?.status === 'gerente') && email && apiKey) {
     const ctxPerfil = forceSearchAllBancas ? ' [página /perfil — botão Carregar bancas]' : '';
-    console.log('[CRM Bancas] Busca em TODAS as bancas (filtro get-indicateds-by-consultant)' + ctxPerfil + ' | perfil:', profile?.status, '| total:', bancas.length, '| email:', email.slice(0, 3) + '***');
+    console.log('[CRM Bancas] Busca em TODAS as bancas (filtro total-indicateds-by-consultant)' + ctxPerfil + ' | perfil:', profile?.status, '| total:', bancas.length, '| email:', email.slice(0, 3) + '***');
     const bancasVisiveis: BancaRow[] = [];
     for (let i = 0; i < bancas.length; i++) {
       const b = bancas[i];
@@ -337,22 +337,15 @@ export async function getBancasVisiveis(
         console.log(`[CRM Bancas]   ${i + 1}. ${(b.name ?? b.id) || b.id} — URL inválida, ignorada`);
         continue;
       }
-      const params = new URLSearchParams({
-        consultant: email,
-        per_page: '15',
-        page: '1',
-        sort: 'created_at',
-        direction: 'desc',
-      });
-      if (transferredFilter) params.set('transferred_filter', transferredFilter);
-      const urlExterna = `${base}/api/crm/get-indicateds-by-consultant?${params.toString()}`;
+      const params = new URLSearchParams({ consultant: email });
+      const urlExterna = `${base}/api/crm/total-indicateds-by-consultant?${params.toString()}`;
       console.log('[CRM Bancas]' + (forceSearchAllBancas ? ' /perfil Carregar bancas —' : '') + ' curl da requisição:', buildCurlExample('GET', urlExterna, apiKey));
       const { status, body } = await fetchGetIndicatedsResponse(urlExterna, apiKey);
       if (status === 200) {
         bancasVisiveis.push(b);
-        console.log(`[CRM Bancas]   ${i + 1}/${bancas.length}. ${(b.name ?? b.id) || b.id} (id: ${b.id}) | ${b.url} — ✅ 200 apto (registrar em user_bancas)`);
+        console.log(`[CRM Bancas]   ${i + 1}/${bancas.length}. ${(b.name ?? b.id) || b.id} (id: ${b.id}) | ${b.url} — ✅ 200 cadastrado (registrar em user_bancas)`);
       } else if (status === 404) {
-        console.log(`[CRM Bancas]   ${i + 1}/${bancas.length}. ${(b.name ?? b.id) || b.id} (id: ${b.id}) | ${b.url} — ❌ 404 não apto`);
+        console.log(`[CRM Bancas]   ${i + 1}/${bancas.length}. ${(b.name ?? b.id) || b.id} (id: ${b.id}) | ${b.url} — ❌ 404 não cadastrado`);
         if (forceSearchAllBancas) {
           console.log('[CRM Bancas]     Curl:', buildCurlExample('GET', urlExterna, apiKey));
           console.log('[CRM Bancas]     Body:', body);

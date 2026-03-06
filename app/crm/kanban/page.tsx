@@ -208,12 +208,11 @@ const KanbanContent = () => {
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filters, setFilters] = useState<Record<string, any>>(() => {
-    // Predefinido como diário (dia atual)
-    const today = new Date().toISOString().split('T')[0];
+    // Predefinido como todo o período: ao entrar no CRM já busca todas as bancas + todo o período
     return {
       date: {
-        value: 'diario',
-        label: 'Diário'
+        value: 'todos',
+        label: 'Todo o Período'
       }
     };
   });
@@ -393,10 +392,12 @@ const KanbanContent = () => {
       } else if (exclusiveBancasList.length > 0) {
         url.searchParams.append('banca_urls', exclusiveBancasList.map(b => b.url).join(','));
       }
-      const dateValue = filters.date ? (typeof filters.date === 'object' ? filters.date.value : filters.date) : 'diario';
+      const dateValue = filters.date ? (typeof filters.date === 'object' ? filters.date.value : filters.date) : 'todos';
       const nowSP = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
       const today = nowSP.toISOString().split('T')[0];
-      if (dateValue === 'diario') {
+      if (dateValue === 'todos') {
+        // Todo o período: não envia from/to; a API retorna todos os leads
+      } else if (dateValue === 'diario') {
         url.searchParams.append('from', today);
         url.searchParams.append('to', today);
       } else if (dateValue === 'ontem') {
@@ -1182,12 +1183,11 @@ const KanbanContent = () => {
     setLeadsPerColumn({});
     
     if (type === 'clear') {
-      // Ao limpar, mantém o filtro de data padrão (Diário)
-      const today = new Date().toISOString().split('T')[0];
+      // Ao limpar, volta para o padrão da página (Todo o Período)
       setFilters({
         date: {
-          value: 'diario',
-          label: 'Diário'
+          value: 'todos',
+          label: 'Todo o Período'
         }
       });
     } else if (type === 'date' && value === null) {
@@ -1195,8 +1195,8 @@ const KanbanContent = () => {
       setFilters(prev => ({
         ...prev,
         date: {
-          value: 'diario',
-          label: 'Diário'
+          value: 'todos',
+          label: 'Todo o Período'
         }
       }));
     } else {

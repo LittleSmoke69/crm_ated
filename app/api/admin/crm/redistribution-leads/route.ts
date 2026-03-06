@@ -24,8 +24,8 @@ const querySchema = z.object({
   days_inactive: z.union([z.coerce.number().int().min(0), z.null()]).optional().transform((v) => (v == null ? undefined : v)),
   min_inactive_days: z.union([z.coerce.number().int().min(0), z.null()]).optional().transform((v) => (v == null ? undefined : v)),
   tag: z.union([z.string(), z.null()]).optional().transform((v) => (v == null ? undefined : v)),
-  /** Para comparação com CRM: 'no' = só leads ainda não transferidos (busca para transferir), 'yes' = só transferidos. */
-  transferred_filter: z.string().optional().transform((v): 'yes' | 'no' | undefined => (v === 'yes' || v === 'no' ? v : undefined)),
+  /** Para comparação com CRM: 'no' = só leads ainda não transferidos (busca para transferir), 'yes' = só transferidos. Aceita null quando omitido. */
+  transferred_filter: z.union([z.string(), z.null()]).optional().transform((v): 'yes' | 'no' | undefined => (v === 'yes' || v === 'no' ? v : undefined)),
   balance_filter: balanceFilterEnum.optional().default('all'),
   saldo_min: optionalNumber,
   saldo_max: optionalNumber,
@@ -167,7 +167,6 @@ export async function GET(req: NextRequest) {
 
       while (hasMore && page <= MAX_DETAIL_PAGES) {
         const detailsResult = await client.getIndicatedsByConsultant(source_consultant_email, DETAIL_PAGE_SIZE, page, {
-          transferredFilter: effectiveTransferredFilter,
           sort: 'created_at',
           direction: 'desc',
         });
