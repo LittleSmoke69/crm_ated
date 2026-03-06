@@ -16,7 +16,20 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (!id) return errorResponse('ID da solicitação é obrigatório.', 400);
 
     const body = await req.json();
-    const { status, lead_type: leadType, consultores, source_consultant_id: sourceConsultantId, source_consultant_email: sourceConsultantEmail, banca_id: bancaId } = body;
+    const {
+      status,
+      lead_type: leadType,
+      consultores,
+      source_consultant_id: sourceConsultantId,
+      source_consultant_email: sourceConsultantEmail,
+      banca_id: bancaId,
+      /** Quantidade de leads efetivamente transferidos (ao confirmar transferência na aba Transferir). */
+      leads_transferred_count: leadsTransferredCount,
+      /** Filtros usados na busca (step 3: inatividade; step 4: demais filtros). */
+      transfer_filters_snapshot: transferFiltersSnapshot,
+      /** Prazo em dias para conversão (escolhido no passo Destino ao confirmar transferência). */
+      deadline_days: deadlineDays,
+    } = body;
 
     const { data: existing, error: fetchError } = await supabaseServiceRole
       .from('gerente_lead_requests')
@@ -52,6 +65,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         return errorResponse('Ao aprovar, informe o consultor doador (source_consultant_id).', 400);
       }
 
+      const approvedAtIso = new Date().toISOString();
       const updatePayload: {
         status: string;
         approved_by_user_id: string;
@@ -61,10 +75,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         banca_id?: string | null;
         lead_type?: string;
         consultores?: unknown;
+        deadline_days?: number | null;
+        approval_snapshot?: Record<string, unknown>;
       } = {
         status: 'approved',
         approved_by_user_id: userId,
-        approved_at: new Date().toISOString(),
+        approved_at: approvedAtIso,
         source_consultant_id: sourceConsultantId.trim(),
       };
       if (sourceConsultantEmail != null) updatePayload.source_consultant_email = String(sourceConsultantEmail).trim() || null;
@@ -85,6 +101,26 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         if (valid) {
           updatePayload.consultores = consultores;
         }
+      }
+      if (deadlineDays != null && typeof deadlineDays === 'number' && Number.isInteger(deadlineDays) && deadlineDays >= 1 && deadlineDays <= 365) {
+        updatePayload.deadline_days = deadlineDays;
+      } else if (deadlineDays === null || deadlineDays === '') {
+        updatePayload.deadline_days = null;
+      }
+
+      const hasTransferMetadata =
+        (typeof leadsTransferredCount === 'number' && Number.isInteger(leadsTransferredCount) && leadsTransferredCount >= 0) ||
+        (transferFiltersSnapshot != null && typeof transferFiltersSnapshot === 'object');
+      if (hasTransferMetadata) {
+        updatePayload.approval_snapshot = {
+          approved_at_iso: approvedAtIso,
+          approved_by_user_id: userId,
+          source_consultant_id: sourceConsultantId.trim(),
+          source_consultant_email: sourceConsultantEmail != null ? String(sourceConsultantEmail).trim() || null : null,
+          banca_id: bancaId != null ? (bancaId === '' ? null : bancaId) : null,
+          leads_transferred_count: typeof leadsTransferredCount === 'number' && Number.isInteger(leadsTransferredCount) && leadsTransferredCount >= 0 ? leadsTransferredCount : null,
+          transfer_filters_snapshot: transferFiltersSnapshot != null && typeof transferFiltersSnapshot === 'object' ? transferFiltersSnapshot : null,
+        };
       }
 
       const { error: updateError } = await supabaseServiceRole

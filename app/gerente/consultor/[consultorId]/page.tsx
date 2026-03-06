@@ -84,8 +84,8 @@ export default function DetalheConsultor() {
   const [showBancaFilter, setShowBancaFilter] = useState(false);
   const [bancaSearchTerm, setBancaSearchTerm] = useState<string>('');
   
-  // Filtro de data
-  const [dateFilter, setDateFilter] = useState<'daily' | 'yesterday' | '7days' | '15days' | '30days' | 'custom' | 'all'>('daily');
+  // Filtro de data (inicial: todo o período)
+  const [dateFilter, setDateFilter] = useState<'daily' | 'yesterday' | '7days' | '15days' | '30days' | 'custom' | 'all'>('all');
   const [customStartDate, setCustomStartDate] = useState<string>('');
   const [customEndDate, setCustomEndDate] = useState<string>('');
   const [appliedStartDate, setAppliedStartDate] = useState<string>('');
@@ -159,11 +159,12 @@ export default function DetalheConsultor() {
     loadConsultorInfo();
   }, [userId, consultorId]);
 
-  // Carrega dados do CRM quando banca e filtros mudarem
+  // Carrega dados do CRM quando banca e filtros mudarem (bancas na deps para "todas" recarregar ao ter lista)
   useEffect(() => {
     if (!userId || !consultorId || !selectedBanca) return;
+    if (selectedBanca === 'all' && bancas.length === 0) return;
     loadData();
-  }, [userId, consultorId, selectedBanca, dateFilter, appliedStartDate, appliedEndDate]);
+  }, [userId, consultorId, selectedBanca, dateFilter, appliedStartDate, appliedEndDate, bancas.length]);
 
   // Fecha os seletores ao clicar fora
   useEffect(() => {
@@ -193,7 +194,7 @@ export default function DetalheConsultor() {
         const list = result.data || [];
         setBancas(list);
         if (list.length > 0 && !selectedBanca) {
-          setSelectedBanca(list[0].url);
+          setSelectedBanca('all');
         }
       }
     } catch (error) {
@@ -231,35 +232,144 @@ export default function DetalheConsultor() {
   };
 
   const loadData = async () => {
-    if (!selectedBanca) {
-      return; // Não carrega dados do CRM se não houver banca selecionada
-    }
-    
+    if (!selectedBanca) return;
+
     try {
       setLoading(true);
       const { dateFrom, dateTo } = getDateRange();
-      
-      let url = `/api/gerente/consultores/${consultorId}`;
-      const params = new URLSearchParams();
-      if (dateFrom) params.append('date_from', dateFrom);
-      if (dateTo) params.append('date_to', dateTo);
-      params.append('banca_url', selectedBanca);
-      if (params.toString()) {
-        url += `?${params.toString()}`;
-      }
-      
-      const response = await fetch(url, {
-        headers: { 'X-User-Id': userId as string }
-      });
-      const result = await response.json();
-      
-      if (result.success) {
+
+      if (selectedBanca === 'all') {
+        if (bancas.length === 0) {
+          setLoading(false);
+          return;
+        }
+        const params = new URLSearchParams();
+        if (dateFrom) params.append('date_from', dateFrom);
+        if (dateTo) params.append('date_to', dateTo);
+        const queryString = params.toString();
+
+        const results = await Promise.all(
+          bancas.map(async (banca) => {
+            const url = `/api/gerente/consultores/${consultorId}?banca_url=${encodeURIComponent(banca.url)}${queryString ? `&${queryString}` : ''}`;
+            const res = await fetch(url, { headers: { 'X-User-Id': userId as string } });
+            const json = await res.json();
+            return json.success ? json.data : null;
+          })
+        );
+
+        const validResults = results.filter(Boolean);
+        if (validResults.length === 0) {
+          setData(prev => prev ? { ...prev, externalKpis: null, externalKpisError: 'NO_DATA', chartData: undefined } : null);
+          setLoading(false);
+          return;
+        }
+
+        const first = validResults[0];
+        let aggregatedKpis: ConsultorDetail['externalKpis'] = null;
+        const chartParts: Array<NonNullable<ConsultorDetail['chartData']>> = [];
+
+        for (let i = 0; i < validResults.length; i++) {
+          const d = validResults[i];
+          if (d.externalKpis) {
+            if (!aggregatedKpis) {
+              aggregatedKpis = { ...d.externalKpis };
+            } else {
+              aggregatedKpis.total_leads = (aggregatedKpis.total_leads || 0) + (d.externalKpis?.total_leads || 0);
+              aggregatedKpis.total_deposited = (aggregatedKpis.total_deposited || 0) + (d.externalKpis?.total_deposited || 0);
+              aggregatedKpis.total_bets = (aggregatedKpis.total_bets || 0) + (d.externalKpis?.total_bets || 0);
+              aggregatedKpis.total_prizes = (aggregatedKpis.total_prizes || 0) + (d.externalKpis?.total_prizes || 0);
+              aggregatedKpis.active_leads = (aggregatedKpis.active_leads || 0) + (d.externalKpis?.active_leads || 0);
+              aggregatedKpis.net_profit = (aggregatedKpis.net_profit || 0) + (d.externalKpis?.net_profit || 0);
+              aggregatedKpis.awarded_clients_count = (aggregatedKpis.awarded_clients_count || 0) + (d.externalKpis?.awarded_clients_count || 0);
+            }
+          }
+          if (d.chartData) chartParts.push(d.chartData);
+        }
+
+        if (aggregatedKpis) {
+          const totalLeads = aggregatedKpis.total_leads || 0;
+          aggregatedKpis.conversion_rate = totalLeads > 0 ? ((aggregatedKpis.active_leads || 0) / totalLeads) * 100 : 0;
+          aggregatedKpis.ltv_avg = totalLeads > 0 ? (aggregatedKpis.total_deposited || 0) / totalLeads : 0;
+        }
+
+        const engagementAgg: Record<string, number> = {};
+        const statusAgg: Record<string, number> = {};
+        const starsAgg: Record<string, number> = {};
+        const allBettors: Array<{ name: string; value: number }> = [];
+        const allWinners: Array<{ name: string; value: number }> = [];
+        const allDepositors: Array<{ name: string; value: number }> = [];
+        let totalIndicateds = 0;
+
+        for (const chart of chartParts) {
+          if (chart.engagement_distribution) {
+            for (const [k, v] of Object.entries(chart.engagement_distribution)) {
+              engagementAgg[k] = (engagementAgg[k] || 0) + v;
+            }
+          }
+          if (chart.status_distribution) {
+            for (const [k, v] of Object.entries(chart.status_distribution)) {
+              statusAgg[k] = (statusAgg[k] || 0) + v;
+            }
+          }
+          if (chart.stars_distribution) {
+            for (const [k, v] of Object.entries(chart.stars_distribution)) {
+              starsAgg[k] = (starsAgg[k] || 0) + v;
+            }
+          }
+          if (chart.top_bettors) allBettors.push(...chart.top_bettors);
+          if (chart.top_winners) allWinners.push(...chart.top_winners);
+          if (chart.top_depositors) allDepositors.push(...chart.top_depositors);
+          if (chart.total_indicateds !== undefined) totalIndicateds += chart.total_indicateds;
+        }
+
+        const starsArray = Object.entries(starsAgg)
+          .map(([key, value]) => {
+            const starsNum = parseInt(key.replace(/[^0-9]/g, '')) || 0;
+            return { name: key, value: value as number, starsNum };
+          })
+          .sort((a, b) => a.starsNum - b.starsNum)
+          .map(item => ({ name: item.name, value: item.value }));
+
+        const mergedChartData: ConsultorDetail['chartData'] = {
+          engagement_distribution: Object.keys(engagementAgg).length ? engagementAgg : undefined,
+          status_distribution: Object.keys(statusAgg).length ? statusAgg : undefined,
+          stars_distribution: Object.keys(starsAgg).length ? starsAgg : undefined,
+          stars_distribution_array: starsArray.length ? starsArray : undefined,
+          top_bettors: allBettors.sort((a, b) => b.value - a.value).slice(0, 10),
+          top_winners: allWinners.sort((a, b) => b.value - a.value).slice(0, 10),
+          top_depositors: allDepositors.sort((a, b) => b.value - a.value).slice(0, 10),
+          total_indicateds: totalIndicateds || undefined,
+        };
+
         setData(prev => ({
           ...prev,
-          ...result.data,
+          ...first,
+          consultor: first.consultor || prev?.consultor,
+          externalKpis: aggregatedKpis ?? prev?.externalKpis ?? null,
+          externalKpisError: null,
+          chartData: mergedChartData,
         }));
       } else {
-        console.error('[Frontend Consultor Detail] Erro na resposta:', result.error);
+        let url = `/api/gerente/consultores/${consultorId}`;
+        const params = new URLSearchParams();
+        if (dateFrom) params.append('date_from', dateFrom);
+        if (dateTo) params.append('date_to', dateTo);
+        params.append('banca_url', selectedBanca);
+        if (params.toString()) url += `?${params.toString()}`;
+
+        const response = await fetch(url, {
+          headers: { 'X-User-Id': userId as string }
+        });
+        const result = await response.json();
+
+        if (result.success) {
+          setData(prev => ({
+            ...prev,
+            ...result.data,
+          }));
+        } else {
+          console.error('[Frontend Consultor Detail] Erro na resposta:', result.error);
+        }
       }
     } catch (error) {
       console.error('Erro ao carregar detalhes:', error);
@@ -304,7 +414,7 @@ export default function DetalheConsultor() {
             className="flex items-center gap-2 text-gray-500 hover:text-gray-800 transition-colors w-fit"
           >
             <ArrowLeft className="w-4 h-4" />
-            Voltar para Gerente
+            Voltar para painel
           </button>
           
           <div className="flex items-center justify-between gap-4 bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
@@ -353,9 +463,11 @@ export default function DetalheConsultor() {
                     ) : (
                       <>
                         <Filter className="w-4 h-4 text-[#8CD955]" />
-                        {selectedBanca
-                          ? bancas.find(b => b.url === selectedBanca)?.name || 'Banca selecionada'
-                          : 'Selecione uma Banca'}
+                        {selectedBanca === 'all'
+                          ? 'Todas as bancas'
+                          : selectedBanca
+                            ? bancas.find(b => b.url === selectedBanca)?.name || 'Banca selecionada'
+                            : 'Selecione uma Banca'}
                         <ChevronDown className="w-4 h-4" />
                       </>
                     )}
@@ -385,6 +497,18 @@ export default function DetalheConsultor() {
                       </div>
                       
                       <div className="overflow-y-auto max-h-[320px] p-2">
+                        <button
+                          onClick={() => {
+                            setSelectedBanca('all');
+                            setShowBancaFilter(false);
+                            setBancaSearchTerm('');
+                          }}
+                          className={`w-full text-left px-4 py-2.5 rounded-lg text-sm transition-colors hover:bg-gray-50 ${
+                            selectedBanca === 'all' ? 'bg-[#8CD95515] text-[#8CD955] font-bold' : 'text-gray-700'
+                          }`}
+                        >
+                          Todas as bancas
+                        </button>
                         {bancas
                           .filter((banca) => 
                             banca.name.toLowerCase().includes(bancaSearchTerm.toLowerCase())

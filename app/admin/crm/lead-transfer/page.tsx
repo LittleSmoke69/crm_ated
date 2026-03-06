@@ -30,6 +30,7 @@ import {
   CheckCircle2,
   ChevronUp,
   CalendarPlus,
+  RotateCcw,
 } from 'lucide-react';
 import { DateInputDDMMYYYY, getTodaySãoPaulo, getLast30DaysRangeSãoPaulo } from '@/components/Admin/CRMSection';
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
@@ -124,6 +125,58 @@ function formatDatePtBR(isoOrDate: string | Date | null | undefined): string {
   } catch {
     return '-';
   }
+}
+
+const BALANCE_FILTER_LABELS: Record<string, string> = { with_balance: 'Com saldo', without_balance: 'Sem saldo', range: 'Faixa (min–máx)', all: 'Todos' };
+const NUMERIC_FILTER_LABELS: Record<string, string> = { with_value: 'Com valor', without_value: 'Sem valor', range: 'Faixa (min–máx)', with_bet: 'Com aposta', without_bet: 'Sem aposta', all: 'Todos' };
+
+/** Converte filters_snapshot do log em lista de { label, value } para exibição no modal do pacote. */
+function formatFiltersSnapshotForDisplay(filters: Record<string, unknown> | null | undefined): Array<{ label: string; value: string }> {
+  if (!filters || typeof filters !== 'object') return [];
+  const items: Array<{ label: string; value: string }> = [];
+  const v = (key: string) => {
+    const val = filters[key];
+    if (val == null || val === '') return null;
+    return String(val).trim();
+  };
+  const add = (label: string, value: string | null) => {
+    if (value != null && value !== '') items.push({ label, value });
+  };
+  const num = (key: string) => {
+    const val = filters[key];
+    if (val == null || val === '') return null;
+    const n = typeof val === 'number' ? val : parseFloat(String(val).replace(',', '.'));
+    return Number.isFinite(n) ? n : null;
+  };
+
+  add('Inatividade (dias)', v('min_inactive_days'));
+  const balanceFilter = v('balance_filter');
+  if (balanceFilter) add('Saldo', BALANCE_FILTER_LABELS[balanceFilter] ?? balanceFilter);
+  if (v('saldo_min') || v('saldo_max')) add('Saldo (min–máx)', [v('saldo_min'), v('saldo_max')].filter(Boolean).join(' – ') || '-');
+  add('Tag', v('tag'));
+  add('Busca (texto)', v('search'));
+  add('Status', v('status') ? getStatusLabel(v('status')) : null);
+  add('Temperatura', v('temperature') ? getTemperatureLabel(v('temperature')) : null);
+
+  const apostaFilter = v('aposta_filter');
+  if (apostaFilter) add('Total apostado', NUMERIC_FILTER_LABELS[apostaFilter] ?? apostaFilter);
+  if (v('aposta_min') || v('aposta_max')) add('Total apostado (min–máx)', [v('aposta_min'), v('aposta_max')].filter(Boolean).join(' – ') || '-');
+
+  const tdFilter = v('total_depositado_filter');
+  if (tdFilter) add('Total depositado', NUMERIC_FILTER_LABELS[tdFilter] ?? tdFilter);
+  if (v('total_depositado_min') || v('total_depositado_max')) add('Total depositado (min–máx)', [v('total_depositado_min'), v('total_depositado_max')].filter(Boolean).join(' – ') || '-');
+
+  const awFilter = v('available_withdraw_filter');
+  if (awFilter) add('Saque disponível', NUMERIC_FILTER_LABELS[awFilter] ?? awFilter);
+  if (v('available_withdraw_min') || v('available_withdraw_max')) add('Saque disponível (min–máx)', [v('available_withdraw_min'), v('available_withdraw_max')].filter(Boolean).join(' – ') || '-');
+
+  const tgFilter = v('total_ganho_filter');
+  if (tgFilter) add('Total prêmio', NUMERIC_FILTER_LABELS[tgFilter] ?? tgFilter);
+  if (v('total_ganho_min') || v('total_ganho_max')) add('Total prêmio (min–máx)', [v('total_ganho_min'), v('total_ganho_max')].filter(Boolean).join(' – ') || '-');
+
+  const minSum = num('min_sum_balance');
+  if (minSum != null && minSum > 0) add('Soma mín. saldo (R$)', String(minSum));
+  return items;
 }
 
 interface Banca {
@@ -349,6 +402,10 @@ export default function AdminLeadTransferPage() {
   /** Verificador de consultores: leads transferidos que depositaram/jogaram/sacaram depois */
   const [verifierResults, setVerifierResults] = useState<{ consultant_email: string; consultant_name: string; total_transferidos: number; depositaram_depois: number; jogaram_depois: number; sacaram_depois: number }[]>([]);
   const [loadingVerifier, setLoadingVerifier] = useState(false);
+  /** Modal Devolver: devolver leads do destino para a origem (reverter transferência) */
+  const [showDevolverModal, setShowDevolverModal] = useState(false);
+  const [logSelectedForDevolver, setLogSelectedForDevolver] = useState<typeof transferLogs[0] | null>(null);
+  const [devolverLoading, setDevolverLoading] = useState(false);
   /** Modal detalhe: leads que depositaram ou sacaram depois (por consultor) */
   const [showVerifierDetailsModal, setShowVerifierDetailsModal] = useState(false);
   const [verifierDetailsConsultant, setVerifierDetailsConsultant] = useState<{ email: string; name: string } | null>(null);
@@ -367,6 +424,8 @@ export default function AdminLeadTransferPage() {
   /** Consultores da banca da solicitação (carregados ao abrir o modal de aprovar) */
   const [approveModalConsultants, setApproveModalConsultants] = useState<Consultant[]>([]);
   const [loadingApproveModalConsultants, setLoadingApproveModalConsultants] = useState(false);
+  /** Termo de busca no modal Aprovar (consultor doador: nome ou email) */
+  const [approveModalConsultantSearch, setApproveModalConsultantSearch] = useState('');
   /** E-mail do doador ao redirecionar da aprovação para a aba Transferir (preenchido após loadConsultants) */
   const [transferFromSolicitationSourceEmail, setTransferFromSolicitationSourceEmail] = useState<string | null>(null);
   /** E-mail do consultor destino (recebedor) ao redirecionar da solicitação — preenchido quando consultants carregar */
@@ -493,7 +552,7 @@ export default function AdminLeadTransferPage() {
     transferFromSolicitationBancaIdRef.current = null;
   }, [activeTab, bancas, bancaId]);
 
-  /** Ao redirecionar da solicitação: preenche banca e doador, dispara busca de leads com eles e leva ao step 4 (Selecionar) para o usuário apenas escolher os leads */
+  /** Ao redirecionar da solicitação: preenche banca e doador, dispara busca de leads e mantém no step 3 (Filtros e buscar) com a busca já realizada */
   useEffect(() => {
     if (activeTab !== 'transfer' || !bancaId || !transferFromSolicitationSourceEmail || consultants.length === 0) return;
     const found = consultants.some((c) => (c.email ?? '').trim() === transferFromSolicitationSourceEmail.trim());
@@ -501,7 +560,7 @@ export default function AdminLeadTransferPage() {
       const email = transferFromSolicitationSourceEmail.trim();
       setSourceEmail(email);
       setTransferFromSolicitationSourceEmail(null);
-      loadLeads('90', email).then(() => setCurrentStep(4));
+      loadLeads('90', email);
     } else {
       setTransferFromSolicitationSourceEmail(null);
     }
@@ -547,6 +606,7 @@ export default function AdminLeadTransferPage() {
     setApproveFormConsultores([...(req.consultores || [])]);
     setApproveFormSourceConsultantId('');
     setApproveModalConsultants([]);
+    setApproveModalConsultantSearch('');
     setApproveModalOpen(true);
     if (req.banca_id?.trim() && userId) {
       setLoadingApproveModalConsultants(true);
@@ -568,9 +628,10 @@ export default function AdminLeadTransferPage() {
     setApproveSubmitting(false);
     setApproveRejecting(false);
     setApproveModalConsultants([]);
+    setApproveModalConsultantSearch('');
   };
 
-  /** Redireciona para a aba Transferir: banca e doador da solicitação preenchidos, busca leads com eles e leva ao step 4 para apenas selecionar os leads a transferir */
+  /** Redireciona para a aba Transferir no step 3 (Filtros e buscar): banca e doador preenchidos e busca de leads disparada automaticamente (90 dias). */
   const handleGoToTransferFromApprove = () => {
     if (!selectedRequestForApprove?.banca_id?.trim()) {
       showToast('Solicitação sem banca definida.', 'error');
@@ -597,12 +658,14 @@ export default function AdminLeadTransferPage() {
     transferFromSolicitationRequestIdRef.current = selectedRequestForApprove.id;
     setBancaId(requestBancaId);
     setBancaSearchQuery(bancaDisplayName);
+    setDaysInactivePreset('90');
+    setDaysInactive('90');
     setTransferFromSolicitationSourceEmail(doadorEmail);
     if (recebedorEmail) setTransferFromSolicitationTargetEmail(recebedorEmail);
     setCurrentStep(3);
     setActiveTab('transfer');
     closeApproveModal();
-    showToast('Buscando leads com a banca e o doador da solicitação. Selecione os leads e depois revise.', 'success');
+    showToast('Abrindo transferência no passo Buscar. A busca será feita automaticamente.', 'success');
   };
 
   const handleApproveRequest = async () => {
@@ -700,6 +763,21 @@ export default function AdminLeadTransferPage() {
     });
     return [...list].sort((a, b) => (a.full_name || a.email || '').localeCompare(b.full_name || b.email || '', 'pt-BR'));
   }, [consultants, consultantOriginSearchQuery]);
+
+  /** Consultores do modal Aprovar: ordenados alfabeticamente (nome/email) e filtrados por busca. */
+  const approveModalConsultantsSortedAndFiltered = React.useMemo(() => {
+    const q = approveModalConsultantSearch.trim().toLowerCase();
+    const list = !q
+      ? approveModalConsultants
+      : approveModalConsultants.filter((c) => {
+          const name = String(c.full_name ?? '').toLowerCase();
+          const email = String(c.email ?? '').toLowerCase();
+          return name.includes(q) || email.includes(q);
+        });
+    return [...list].sort((a, b) =>
+      (a.full_name || a.email || '').localeCompare(b.full_name || b.email || '', 'pt-BR')
+    );
+  }, [approveModalConsultants, approveModalConsultantSearch]);
 
   const openConsultantOriginModal = () => {
     setConsultantOriginPendingEmail(sourceEmail?.trim() || null);
@@ -863,7 +941,6 @@ export default function AdminLeadTransferPage() {
       const daysVal = (overrideDays ?? daysInactive).trim();
       params.set('min_inactive_days', daysVal && daysVal !== '0' ? daysVal : '90');
       if (selectedTag.trim()) params.set('tag', selectedTag.trim());
-      params.set('transferred_filter', 'no');
       const res = await fetch(`/api/admin/crm/redistribution-leads?${params.toString()}`, {
         headers: headers(),
       });
@@ -887,7 +964,6 @@ export default function AdminLeadTransferPage() {
               ep.set('banca_id', bancaId);
               ep.set('source_consultant_email', effectiveSourceEmail);
               ep.set('page', String(page));
-              ep.set('transferred_filter', 'no');
               const er = await fetch(`/api/admin/crm/redistribution-leads/enrichment?${ep.toString()}`, { headers: headers() });
               const ej = await er.json();
               if (currentLoadId !== loadLeadsIdRef.current) break;
@@ -1165,6 +1241,31 @@ export default function AdminLeadTransferPage() {
           available_withdraw: Number.isFinite(availableWithdraw) ? availableWithdraw : null,
         };
       });
+      /** Step 3: período de inatividade; Step 4: demais filtros — usados no log e na solicitação ao aprovar. */
+      const transferFiltersSnapshot = {
+        min_inactive_days: daysInactive.trim() || null,
+        balance_filter: balanceFilter !== 'all' ? balanceFilter : null,
+        saldo_min: leadFilterSaldoMin.trim() || null,
+        saldo_max: leadFilterSaldoMax.trim() || null,
+        tag: selectedTag.trim() || null,
+        search: leadSearchQuery.trim() || null,
+        status: leadFilterStatus.trim() || null,
+        temperature: leadFilterTemperature.trim() || null,
+        aposta_filter: leadFilterAposta !== 'all' ? leadFilterAposta : null,
+        aposta_min: leadFilterApostaMin.trim() || null,
+        aposta_max: leadFilterApostaMax.trim() || null,
+        total_depositado_filter: leadFilterTotalDepositado !== 'all' ? leadFilterTotalDepositado : null,
+        total_depositado_min: leadFilterTotalDepositadoMin.trim() || null,
+        total_depositado_max: leadFilterTotalDepositadoMax.trim() || null,
+        available_withdraw_filter: leadFilterSaqueDisponivel !== 'all' ? leadFilterSaqueDisponivel : null,
+        available_withdraw_min: leadFilterSaqueDisponivelMin.trim() || null,
+        available_withdraw_max: leadFilterSaqueDisponivelMax.trim() || null,
+        total_ganho_filter: leadFilterTotalPremio !== 'all' ? leadFilterTotalPremio : null,
+        total_ganho_min: leadFilterTotalPremioMin.trim() || null,
+        total_ganho_max: leadFilterTotalPremioMax.trim() || null,
+        min_sum_balance: minSumBalance.trim() || null,
+        transferred_filter: 'no',
+      };
       const res = await fetch('/api/admin/crm/redistribute-leads', {
         method: 'POST',
         headers: headers(),
@@ -1175,12 +1276,7 @@ export default function AdminLeadTransferPage() {
           leads_ids: leadIdsArr,
           transfer_type: transferType,
           transfer_deadline_days: transferDeadlineDays,
-          filters_snapshot: {
-            min_inactive_days: daysInactive.trim() || 10,
-            balance_filter: balanceFilter,
-            tag: selectedTag.trim() || null,
-            search: leadSearchQuery.trim() || null,
-          },
+          filters_snapshot: transferFiltersSnapshot,
           lead_snapshots: leadSnapshots,
         }),
       });
@@ -1191,17 +1287,26 @@ export default function AdminLeadTransferPage() {
         if (requestIdToApprove) {
           const sourceConsultant = consultants.find((c) => (c.email ?? '').trim().toLowerCase() === (sourceEmail ?? '').trim().toLowerCase());
           const sourceConsultantId = sourceConsultant?.id?.trim();
+          const targetConsultant = consultants.find((c) => (c.email ?? '').trim().toLowerCase() === targetEmail.trim().toLowerCase());
+          const targetConsultantId = targetConsultant?.id?.trim();
           try {
             if (sourceConsultantId) {
+              const approveBody: Record<string, unknown> = {
+                status: 'approved',
+                source_consultant_id: sourceConsultantId,
+                source_consultant_email: sourceEmail?.trim() ?? null,
+                banca_id: bancaId || null,
+                leads_transferred_count: count,
+                transfer_filters_snapshot: transferFiltersSnapshot,
+                deadline_days: transferDeadlineDays,
+              };
+              if (targetConsultantId) {
+                approveBody.consultores = [{ consultor_id: targetConsultantId, quantity: count }];
+              }
               const approveRes = await fetch(`/api/admin/crm/lead-requests/${requestIdToApprove}`, {
                 method: 'PATCH',
                 headers: headers(),
-                body: JSON.stringify({
-                  status: 'approved',
-                  source_consultant_id: sourceConsultantId,
-                  source_consultant_email: sourceEmail?.trim() ?? null,
-                  banca_id: bancaId || null,
-                }),
+                body: JSON.stringify(approveBody),
               });
               const approveJson = await approveRes.json();
               if (approveRes.ok && approveJson.success) {
@@ -1328,6 +1433,55 @@ export default function AdminLeadTransferPage() {
       return 0;
     } finally {
       if (runId === loadLogsRunIdRef.current) setLoadingLogs(false);
+    }
+  };
+
+  /** Devolve os leads do consultor destino de volta para o consultor origem (reverte a transferência). Registra no histórico. */
+  const confirmDevolver = async () => {
+    const log = logSelectedForDevolver;
+    if (!log || !userId) return;
+    const bancaIdLog = (log as { banca_id?: string }).banca_id;
+    const sourceEmail = (log as { source_consultant_email?: string }).source_consultant_email?.trim();
+    const targetEmail = (log as { target_consultant_email?: string }).target_consultant_email?.trim();
+    const leadsIds = Array.isArray((log as { leads_ids?: unknown[] }).leads_ids) ? (log as { leads_ids: (string | number)[] }).leads_ids : [];
+    if (!bancaIdLog || !sourceEmail || !targetEmail || leadsIds.length === 0) {
+      showToast('Dados do pacote incompletos para devolução.', 'error');
+      return;
+    }
+    setDevolverLoading(true);
+    try {
+      const res = await fetch('/api/admin/crm/redistribute-leads', {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({
+          banca_id: bancaIdLog,
+          source_consultant_email: targetEmail,
+          target_consultant_email: sourceEmail,
+          leads_ids: leadsIds,
+          transfer_type: 'TF',
+          transfer_deadline_days: 10,
+          filters_snapshot: { devolucao: true, log_origem_id: log.id },
+        }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        const count = json?.data?.count ?? leadsIds.length;
+        const originLogId = log.id;
+        setShowDevolverModal(false);
+        setLogSelectedForDevolver(null);
+        setTransferLogs((prev) =>
+          prev.map((l) => (l.id === originLogId ? { ...l, devolvido_at: new Date().toISOString() } : l))
+        );
+        showToast(`${count} lead(s) devolvido(s) para o consultor de origem. A transação foi registrada no histórico.`, 'success');
+        await loadTransferLogs(historyBancaFilter || undefined);
+        await loadTransferStats();
+      } else {
+        showToast(json?.error ?? 'Erro ao devolver leads.', 'error');
+      }
+    } catch {
+      showToast('Erro ao devolver leads.', 'error');
+    } finally {
+      setDevolverLoading(false);
     }
   };
 
@@ -2514,6 +2668,7 @@ export default function AdminLeadTransferPage() {
                       <ThSort field="target" label="Destino" className="min-w-[120px]" />
                       <ThSort field="performed_by" label="Quem fez" className="w-[90px]" />
                       <ThSort field="count" label="Qtd" className="w-[56px]" />
+                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[100px]" title="Período de inatividade (dias) usado na busca desse pacote">Inatividade</th>
                       <ThSort field="total_balance" label="Total saldo (antes)" className="w-[120px]" title="Soma dos saldos no momento da transferência" />
                       <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white min-w-[140px]">Leads (IDs)</th>
                       <ThSort field="re_transfer" label="Re-transfer." className="w-[90px]" />
@@ -2523,13 +2678,13 @@ export default function AdminLeadTransferPage() {
                   </thead>
                   <tbody>
                     {loadingLogs ? (
-                      <tr><td colSpan={12} className="p-10 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-[#8CD955]" /></td></tr>
+                      <tr><td colSpan={13} className="p-10 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-[#8CD955]" /></td></tr>
                     ) : !managementLoaded && !loadingLogs ? (
-                      <tr><td colSpan={12} className="p-8 text-center text-gray-500 dark:text-white">Selecione a banca (ou &quot;Todas as Bancas&quot;) e clique em Aplicar filtros para carregar o histórico.</td></tr>
+                      <tr><td colSpan={13} className="p-8 text-center text-gray-500 dark:text-white">Selecione a banca (ou &quot;Todas as Bancas&quot;) e clique em Aplicar filtros para carregar o histórico.</td></tr>
                     ) : transferLogs.length === 0 ? (
-                      <tr><td colSpan={12} className="p-8 text-center text-gray-500 dark:text-white">Nenhuma transferência nos filtros. Ajuste data/tipo ou faça uma nova transferência.</td></tr>
+                      <tr><td colSpan={13} className="p-8 text-center text-gray-500 dark:text-white">Nenhuma transferência nos filtros. Ajuste data/tipo ou faça uma nova transferência.</td></tr>
                     ) : transferLogsFiltered.length === 0 ? (
-                      <tr><td colSpan={12} className="p-8 text-center text-gray-500 dark:text-white">Nenhuma transferência corresponde ao filtro de prazo. Ajuste &quot;Prazo&quot; ou aplique &quot;Todos&quot;.</td></tr>
+                      <tr><td colSpan={13} className="p-8 text-center text-gray-500 dark:text-white">Nenhuma transferência corresponde ao filtro de prazo. Ajuste &quot;Prazo&quot; ou aplique &quot;Todos&quot;.</td></tr>
                     ) : (
                       <>
                       {transferLogsPaginated.map((log) => {
@@ -2545,6 +2700,13 @@ export default function AdminLeadTransferPage() {
                         const bancaLabel = historyBancaFilter === ''
                           ? (logBancaId ? (bancas.find((b) => b.id === logBancaId)?.name || bancas.find((b) => b.id === logBancaId)?.url || logBancaId) : '-')
                           : (selectedBanca?.name || selectedBanca?.url || bancas.find((b) => b.id === historyBancaFilter)?.name || bancas.find((b) => b.id === historyBancaFilter)?.url || bancaName || '-');
+                        const filtersSnapshot = (log as { filters_snapshot?: Record<string, unknown> | null }).filters_snapshot;
+                        const minInactiveDays = filtersSnapshot != null && typeof filtersSnapshot === 'object' && 'min_inactive_days' in filtersSnapshot
+                          ? filtersSnapshot.min_inactive_days
+                          : null;
+                        const inactiveDisplay = minInactiveDays != null && String(minInactiveDays).trim() !== ''
+                          ? `${minInactiveDays} dia(s)`
+                          : '—';
                         return (
                           <tr key={log.id} className="border-t border-gray-100 dark:border-[#404040] hover:bg-gray-50/80 dark:hover:bg-[#333] transition-colors">
                             <td className="py-3 px-4 text-gray-600 dark:text-white truncate max-w-[110px]" title={bancaLabel}>{bancaLabel}</td>
@@ -2554,27 +2716,46 @@ export default function AdminLeadTransferPage() {
                             <td className="py-3 px-4 text-gray-600 dark:text-white truncate max-w-[140px]" title={log.target_consultant_email ?? undefined}>{destinoNome}</td>
                             <td className="py-3 px-4 text-gray-700 dark:text-white truncate max-w-[80px]" title={quemFez}>{(quemFez as string) !== '-' ? quemFez : '-'}</td>
                             <td className="py-3 px-4 text-gray-600 dark:text-white tabular-nums">{log.count ?? ids.length}</td>
+                            <td className="py-3 px-4 text-gray-600 dark:text-white tabular-nums" title="Período de inatividade usado na busca">{inactiveDisplay}</td>
                             <td className="py-3 px-4 text-gray-600 dark:text-white tabular-nums">{fmtSaldo}</td>
                             <td className="py-3 px-4 text-gray-600 dark:text-white truncate max-w-[160px] font-mono text-xs" title={ids.join(', ')}>{ids.length ? ids.slice(0, 6).join(', ') + (ids.length > 6 ? ` +${ids.length - 6}` : '') : '-'}</td>
                             <td className="py-3 px-4 text-gray-600 dark:text-white">{reTransferidos > 0 ? <span className="text-amber-500 dark:text-amber-400 font-medium">{reTransferidos}</span> : '-'}</td>
-                            <td className="py-3 px-4" title="Prazo de 10 dias para conversão a partir da transferência. Após isso o lead pode ser repassado.">
-                              <span className="inline-flex items-center gap-1 text-sm">
-                                <Clock className="w-3.5 h-3.5 flex-shrink-0 text-gray-600 dark:text-white" />
-                                <span className="text-red-600 dark:text-red-400 font-medium">
-                                  {deadline.expired ? 'Expirado' : `${deadline.daysLeft} dia(s) restante(s)`}
+                            <td className="py-3 px-4" title={(log as { devolvido_at?: string }).devolvido_at ? 'Leads desta transferência foram devolvidos ao consultor de origem.' : 'Prazo de 10 dias para conversão a partir da transferência. Após isso o lead pode ser repassado.'}>
+                              {(log as { devolvido_at?: string }).devolvido_at ? (
+                                <span className="inline-flex items-center gap-1 text-sm text-amber-600 dark:text-amber-400 font-medium">
+                                  <RotateCcw className="w-3.5 h-3.5 flex-shrink-0" />
+                                  Devolvido
                                 </span>
-                              </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-sm">
+                                  <Clock className="w-3.5 h-3.5 flex-shrink-0 text-gray-600 dark:text-white" />
+                                  <span className="text-red-600 dark:text-red-400 font-medium">
+                                    {deadline.expired ? 'Expirado' : `${deadline.daysLeft} dia(s) restante(s)`}
+                                  </span>
+                                </span>
+                              )}
                             </td>
-                            <td className="py-3 px-4 text-center">
-                              <button
-                                type="button"
-                                onClick={() => { setSelectedLogForModal(log); setShowExtendDeadlineModal(false); }}
-                                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-[#8CD955]/15 text-[#6B8E3F] hover:bg-[#8CD955]/25 border border-[#8CD955]/40 transition-colors"
-                                title="Ver detalhes dos leads transferidos"
-                              >
-                                <Eye className="w-3.5 h-3.5" />
-                                Ver leads
-                              </button>
+                            <td className="py-3 px-4">
+                              <div className="flex flex-wrap items-center justify-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => { setSelectedLogForModal(log); setShowExtendDeadlineModal(false); }}
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-[#8CD955]/15 text-[#6B8E3F] hover:bg-[#8CD955]/25 border border-[#8CD955]/40 transition-colors"
+                                  title="Ver detalhes dos leads transferidos"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                  Ver leads
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => { setLogSelectedForDevolver(log); setShowDevolverModal(true); }}
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-amber-500/15 text-amber-700 dark:text-amber-400 hover:bg-amber-500/25 border border-amber-500/40 transition-colors"
+                                  title="Devolver os leads do destino para a origem"
+                                >
+                                  <RotateCcw className="w-3.5 h-3.5" />
+                                  Devolver
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         );
@@ -2711,6 +2892,24 @@ export default function AdminLeadTransferPage() {
                           <X className="w-5 h-5" />
                         </button>
                       </div>
+                      {(() => {
+                        const snapshot = (selectedLogForModal as { filters_snapshot?: Record<string, unknown> | null })?.filters_snapshot;
+                        const filterItems = formatFiltersSnapshotForDisplay(snapshot ?? null);
+                        if (filterItems.length === 0) return null;
+                        return (
+                          <div className="rounded-xl bg-gray-50 dark:bg-[#333] border border-gray-200 dark:border-[#555] p-3 mt-2">
+                            <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Filtros utilizados na busca</div>
+                            <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-700 dark:text-gray-300">
+                              {filterItems.map((item, idx) => (
+                                <span key={idx} className="inline-flex gap-1.5">
+                                  <span className="text-gray-500 dark:text-gray-400">{item.label}:</span>
+                                  <span className="font-medium">{item.value}</span>
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })()}
                       <div className="relative">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
                         <input
@@ -4139,16 +4338,50 @@ export default function AdminLeadTransferPage() {
                     Carregando consultores da banca da solicitação...
                   </div>
                 ) : (
-                  <select
-                    value={approveFormSourceConsultantId}
-                    onChange={(e) => setApproveFormSourceConsultantId(e.target.value)}
-                    className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#8CD955]"
-                  >
-                    <option value="">Selecionar consultor doador</option>
-                    {approveModalConsultants.map((c) => (
-                      <option key={c.id} value={c.id}>{c.full_name ?? c.email ?? c.id}</option>
-                    ))}
-                  </select>
+                  <>
+                    <div className="relative mb-2">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-gray-400 pointer-events-none" />
+                      <input
+                        type="text"
+                        value={approveModalConsultantSearch}
+                        onChange={(e) => setApproveModalConsultantSearch(e.target.value)}
+                        placeholder="Buscar por nome ou e-mail..."
+                        className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white dark:placeholder:text-gray-400 rounded-lg text-sm placeholder:text-gray-500 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                      />
+                    </div>
+                    <div className="border border-gray-200 dark:border-[#404040] rounded-lg overflow-y-auto" style={{ maxHeight: '220px' }}>
+                      {approveModalConsultantsSortedAndFiltered.length === 0 ? (
+                        <div className="p-4 text-center text-sm text-gray-500 dark:text-gray-400">Nenhum consultor encontrado.</div>
+                      ) : (
+                        <ul className="divide-y divide-gray-100 dark:divide-[#404040]">
+                          {approveModalConsultantsSortedAndFiltered.map((c) => {
+                            const isSelected = approveFormSourceConsultantId === c.id;
+                            const displayName = c.full_name ?? c.email ?? c.id;
+                            const initial = displayName.charAt(0).toUpperCase();
+                            return (
+                              <li key={c.id}>
+                                <button
+                                  type="button"
+                                  onClick={() => setApproveFormSourceConsultantId(c.id)}
+                                  className={`w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-gray-50 dark:hover:bg-[#333] transition-colors ${isSelected ? 'bg-[#8CD955]/15 dark:bg-[#8CD955]/20 ring-1 ring-[#8CD955]/40' : ''}`}
+                                >
+                                  <span className="flex-shrink-0 w-8 h-8 rounded-full bg-gray-200 dark:bg-[#404040] text-gray-700 dark:text-gray-300 flex items-center justify-center text-sm font-semibold">
+                                    {initial}
+                                  </span>
+                                  <div className="flex-1 min-w-0 text-left">
+                                    <p className="font-medium text-gray-900 dark:text-white truncate">{displayName}</p>
+                                    {c.email && c.full_name && (
+                                      <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{c.email}</p>
+                                    )}
+                                  </div>
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </div>
+                  </>
                 )}
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1.5">Consultores da banca da solicitação. Ao clicar em &quot;Ir para transferir&quot;, a aba Transferir abrirá com esta banca e o doador já preenchidos no passo Buscar.</p>
               </div>
@@ -4170,6 +4403,59 @@ export default function AdminLeadTransferPage() {
               >
                 Ir para transferir
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Devolver: confirmação para devolver leads do destino para a origem */}
+      {showDevolverModal && logSelectedForDevolver && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="modal-devolver-title">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl max-w-md w-full border border-gray-200 dark:border-[#404040] overflow-hidden">
+            <div className="p-4 border-b border-gray-100 dark:border-[#404040] flex items-center justify-between bg-amber-500/10 dark:bg-amber-500/20">
+              <div className="flex items-center gap-2">
+                <RotateCcw className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0" />
+                <h2 id="modal-devolver-title" className="text-lg font-bold text-gray-900 dark:text-white">Devolver leads</h2>
+              </div>
+              {!devolverLoading && (
+                <button type="button" onClick={() => { setShowDevolverModal(false); setLogSelectedForDevolver(null); }} className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-200 dark:hover:bg-[#404040] transition-colors" aria-label="Fechar">
+                  <X className="w-5 h-5" />
+                </button>
+              )}
+            </div>
+            <div className="p-4">
+              {devolverLoading ? (
+                <div className="flex flex-col items-center justify-center py-8 gap-4">
+                  <Loader2 className="w-10 h-10 animate-spin text-amber-500" />
+                  <p className="text-sm font-medium text-gray-700 dark:text-gray-200">Devolvendo leads… Aguarde a conclusão.</p>
+                </div>
+              ) : (
+                <>
+                  <p className="text-sm text-gray-700 dark:text-gray-200 mb-3">
+                    Os <strong>{Array.isArray((logSelectedForDevolver as { leads_ids?: unknown[] }).leads_ids) ? (logSelectedForDevolver as { leads_ids: unknown[] }).leads_ids.length : 0} lead(s)</strong> que estão atualmente com o consultor <strong>destino</strong> serão devolvidos para o consultor <strong>origem</strong> na banca <strong>{logSelectedForDevolver.banca_id ? (bancas.find((b) => b.id === (logSelectedForDevolver as { banca_id?: string }).banca_id)?.name || bancas.find((b) => b.id === (logSelectedForDevolver as { banca_id?: string }).banca_id)?.url || (logSelectedForDevolver as { banca_id?: string }).banca_id) : '—'}</strong>.
+                  </p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+                    A devolução será registrada no histórico de transferências como uma nova transação.
+                  </p>
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => { setShowDevolverModal(false); setLogSelectedForDevolver(null); }}
+                      className="flex-1 px-4 py-2.5 rounded-xl border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] font-medium transition-colors"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={confirmDevolver}
+                      className="flex-1 px-4 py-2.5 rounded-xl bg-amber-500 text-white hover:bg-amber-600 font-medium transition-colors inline-flex items-center justify-center gap-2"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                      Confirmar devolução
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>

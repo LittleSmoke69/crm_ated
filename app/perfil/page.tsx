@@ -4,6 +4,8 @@ import React, { useEffect, useState } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import Layout from '@/components/Layout';
 import { useTheme } from '@/contexts/ThemeContext';
+import { useToast } from '@/hooks/useToast';
+import ToastContainer from '@/components/Toast/ToastContainer';
 import { User, Mail, Phone, Building2, Shield, Loader2, Edit2, Save, X, Search, UserCircle, Sun, Moon, RefreshCw } from 'lucide-react';
 
 interface BancaItem {
@@ -52,6 +54,8 @@ const PerfilPage = () => {
   const [modalBancasOpen, setModalBancasOpen] = useState(false);
   const [bancaSearchTerm, setBancaSearchTerm] = useState('');
   const [loadingLoadBancas, setLoadingLoadBancas] = useState(false);
+  const [confirmLoadBancasOpen, setConfirmLoadBancasOpen] = useState(false);
+  const { toasts, showToast, removeToast } = useToast();
 
   useEffect(() => {
     if (checking || !userId) return;
@@ -273,9 +277,12 @@ const PerfilPage = () => {
           return Array.from(byId.values());
         });
         setBancasLoaded(true);
+        setConfirmLoadBancasOpen(false);
+        showToast('Atualização completa das suas bancas', 'success');
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Erro ao carregar bancas');
+      setConfirmLoadBancasOpen(false);
     } finally {
       setLoadingLoadBancas(false);
     }
@@ -485,7 +492,7 @@ const PerfilPage = () => {
                       {ROLES_CARREGAR_BANCAS_POR_EMAIL.includes(profile.status as any) && (
                         <button
                           type="button"
-                          onClick={handleLoadBancas}
+                          onClick={() => setConfirmLoadBancasOpen(true)}
                           disabled={loadingLoadBancas}
                           className="flex items-center gap-2 px-3 py-2 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors font-medium disabled:opacity-50"
                           title="Buscar e salvar bancas em que você atua (por email)"
@@ -498,15 +505,6 @@ const PerfilPage = () => {
                           Carregar bancas
                         </button>
                       )}
-                      <button
-                        type="button"
-                        onClick={openModalBancas}
-                        className="flex items-center gap-2 px-3 py-2 text-[#8CD955] dark:text-[#00ff00] hover:bg-green-50 dark:hover:bg-[#00ff0015] rounded-lg transition-colors font-medium shrink-0"
-                        title="Escolher bancas"
-                      >
-                        <Edit2 className="w-4 h-4" />
-                        Escolher bancas
-                      </button>
                     </div>
                     {error && !editingTelefone && (
                       <p className="text-sm text-red-600 dark:text-red-400 mt-2 w-full">{error}</p>
@@ -539,6 +537,53 @@ const PerfilPage = () => {
                 )}
               </div>
             </div>
+            )}
+
+            {/* Modal de confirmação — Carregar bancas */}
+            {confirmLoadBancasOpen && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => !loadingLoadBancas && setConfirmLoadBancasOpen(false)}>
+                <div
+                  className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-xl max-w-md w-full border border-gray-200 dark:border-[#404040] p-6"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {loadingLoadBancas ? (
+                    <div className="flex flex-col items-center justify-center py-8 gap-4">
+                      <Loader2 className="w-12 h-12 animate-spin text-[#8CD955] dark:text-[#00ff00]" />
+                      <p className="text-gray-700 dark:text-gray-300 font-medium text-center">Estamos realizando a atualização das suas bancas.</p>
+                      <p className="text-gray-500 dark:text-[#888] text-sm text-center">Isso pode levar alguns segundos. Aguarde...</p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-3 mb-4">
+                        <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-xl">
+                          <RefreshCw className="w-6 h-6 text-blue-600 dark:text-blue-400" />
+                        </div>
+                        <h3 className="text-lg font-bold text-gray-900 dark:text-white">Atualizar bancas em que atuo</h3>
+                      </div>
+                      <p className="text-gray-600 dark:text-[#aaa] text-sm mb-6">
+                        Será feita uma busca em todas as bancas cadastradas usando seu e-mail. As bancas em que você estiver cadastrado serão atualizadas e salvas no seu perfil, substituindo a lista atual. Isso pode levar alguns segundos.
+                      </p>
+                      <p className="text-gray-700 dark:text-gray-300 font-medium mb-6">Deseja realmente realizar a atualização das bancas em que você atua?</p>
+                      <div className="flex gap-3 justify-end">
+                        <button
+                          type="button"
+                          onClick={() => setConfirmLoadBancasOpen(false)}
+                          className="px-4 py-2.5 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-[#404040] hover:bg-gray-200 dark:hover:bg-[#4a4a4a] rounded-xl font-medium transition-colors"
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleLoadBancas()}
+                          className="flex items-center gap-2 px-4 py-2.5 bg-[#8CD955] dark:bg-[#00ff00] text-white hover:bg-[#7BC844] dark:hover:bg-[#00e600] rounded-xl font-medium transition-colors"
+                        >
+                          Sim, atualizar
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
             )}
 
             {/* Modal de seleção de bancas */}
@@ -700,6 +745,7 @@ const PerfilPage = () => {
           </div>
         </div>
       </div>
+      <ToastContainer toasts={toasts} onClose={removeToast} />
     </Layout>
   );
 };
