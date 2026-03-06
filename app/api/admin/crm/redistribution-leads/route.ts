@@ -50,7 +50,7 @@ const DETAIL_PAGE_SIZE = 1500;
 /** Máximo de páginas de detalhes para manter a função dentro do timeout típico do Netlify (~26s). */
 const MAX_DETAIL_PAGES = 12;
 /** Acima deste número de leads, retornamos a lista imediatamente e o detalhamento é feito em background pelo front. */
-const ENRICHMENT_DEFERRED_THRESHOLD = 5000;
+const ENRICHMENT_DEFERRED_THRESHOLD = 1000;
 
 /**
  * GET /api/admin/crm/redistribution-leads

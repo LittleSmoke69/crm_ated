@@ -33,7 +33,7 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { DateInputDDMMYYYY, getTodaySãoPaulo, getLast30DaysRangeSãoPaulo } from '@/components/Admin/CRMSection';
-import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
+import { ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 
 const MAX_LEADS_SELECT = 200;
 /** Quantidade de itens visíveis no dropdown de bancas (o restante aparece no scroll) */
@@ -950,11 +950,18 @@ export default function AdminLeadTransferPage() {
         return;
       }
       const list = json.data?.leads ?? [];
-      setLeads(Array.isArray(list) ? list : []);
+      const leadsArray = Array.isArray(list) ? list : [];
+      setLeads(leadsArray);
+      setLoadingLeads(false);
+      setHasSearchedLeads(true);
       const enrichmentDeferred = json.data?.enrichmentDeferred === true;
       const totalEnrichmentPages = Number(json.data?.totalEnrichmentPages) || 0;
 
       if (enrichmentDeferred && totalEnrichmentPages > 0 && currentLoadId === loadLeadsIdRef.current) {
+        showToast(
+          `${leadsArray.length.toLocaleString('pt-BR')} lead(s) carregados. Detalhes (saldo, totais) estão sendo carregados em segundo plano.`,
+          'info'
+        );
         setEnrichmentLoading(true);
         (async () => {
           for (let page = 1; page <= totalEnrichmentPages; page++) {
@@ -2547,48 +2554,7 @@ export default function AdminLeadTransferPage() {
                   )}
                   {/* Gráficos baseados apenas em transferências já expiradas (prazo 10d) */}
                   <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Baseado apenas em transferências já expiradas (prazo 10 dias). Conversão = leads que realizaram depósito após a transferência.</p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-                    {/* Pizza: Todas as Bancas = por banca (convertidos); Uma banca = % convertidos vs sem depósito */}
-                    <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-2xl p-5 shadow-sm">
-                      <h3 className="text-sm font-bold text-gray-800 dark:text-white mb-3">
-                        {historyBancaFilter === '' ? 'Depósitos após transferência por banca' : 'Conversão (convertidos vs sem depósito)'}
-                      </h3>
-                      <div className="h-64">
-                        {loadingExpiredConversion ? (
-                          <div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" /></div>
-                        ) : historyBancaFilter === '' ? (() => {
-                          const data = expiredConversionByBanca
-                            .filter((b) => b.convertidos > 0)
-                            .map((b) => ({ name: b.banca_name, value: b.convertidos }));
-                          if (data.length === 0) {
-                            return <div className="flex flex-col items-center justify-center h-full text-gray-500 text-sm gap-1"><span>Nenhum depósito após transferência (expiradas) no período.</span></div>;
-                          }
-                          const COLORS = ['#8CD955', '#22c55e', '#16a34a', '#15803d', '#14532d', '#166534'];
-                          return (
-                            <ResponsiveContainer width="100%" height="100%">
-                              <PieChart><Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, percent }) => `${name}: ${((percent || 0) * 100).toFixed(0)}%`}>{data.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}</Pie><Tooltip formatter={(value: number) => [value, 'Convertidos']} /><Legend /></PieChart>
-                            </ResponsiveContainer>
-                          );
-                        })() : (() => {
-                          const list = expiredConversionByConsultant;
-                          const totalTransferidos = list.reduce((s, r) => s + r.total_transferidos, 0);
-                          const totalConvertidos = list.reduce((s, r) => s + r.convertidos, 0);
-                          const semDeposito = Math.max(0, totalTransferidos - totalConvertidos);
-                          const data = [
-                            { name: 'Convertidos (depósito após transferência)', value: totalConvertidos, color: '#8CD955' },
-                            { name: 'Sem depósito', value: semDeposito, color: '#94a3b8' },
-                          ].filter((d) => d.value > 0);
-                          if (data.length === 0) {
-                            return <div className="flex flex-col items-center justify-center h-full text-gray-500 text-sm gap-1"><span>Nenhuma transferência expirada no período para esta banca.</span></div>;
-                          }
-                          return (
-                            <ResponsiveContainer width="100%" height="100%">
-                              <PieChart><Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, value }) => `${name}: ${value} (${totalTransferidos > 0 ? ((value / totalTransferidos) * 100).toFixed(0) : 0}%)`}>{data.map((entry, i) => <Cell key={i} fill={entry.color} />)}</Pie><Tooltip formatter={(value: number) => [value, totalTransferidos > 0 ? `${((value / totalTransferidos) * 100).toFixed(1)}%` : '-']} /><Legend /></PieChart>
-                            </ResponsiveContainer>
-                          );
-                        })()}
-                      </div>
-                    </div>
+                  <div className="grid grid-cols-1 gap-6 mb-6">
                     {/* Barras: Todas as Bancas = conversão por banca (ordem maior → menor); Uma banca = conversão por consultor (ordem maior → menor) */}
                     <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-2xl p-5 shadow-sm">
                       <h3 className="text-sm font-bold text-gray-800 dark:text-white mb-3">
