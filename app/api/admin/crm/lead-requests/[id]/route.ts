@@ -33,18 +33,22 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
     const { data: existing, error: fetchError } = await supabaseServiceRole
       .from('gerente_lead_requests')
-      .select('id, status')
+      .select('id, status, consultores, approval_snapshot')
       .eq('id', id)
       .single();
 
     if (fetchError || !existing) {
       return errorResponse('Solicitação não encontrada.', 404);
     }
-    if (existing.status !== 'pending') {
-      return errorResponse('Esta solicitação já foi processada.', 400);
+    const canUpdate = existing.status === 'pending' || existing.status === 'partial';
+    if (!canUpdate) {
+      return errorResponse('Esta solicitação já foi finalizada (aprovada ou rejeitada).', 400);
     }
 
     if (status === 'rejected') {
+      if (existing.status !== 'pending') {
+        return errorResponse('Só é possível rejeitar solicitações pendentes.', 400);
+      }
       const { error: updateError } = await supabaseServiceRole
         .from('gerente_lead_requests')
         .update({
@@ -111,6 +115,15 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       const hasTransferMetadata =
         (typeof leadsTransferredCount === 'number' && Number.isInteger(leadsTransferredCount) && leadsTransferredCount >= 0) ||
         (transferFiltersSnapshot != null && typeof transferFiltersSnapshot === 'object');
+      const totalRequested = Array.isArray(consultores)
+        ? consultores.reduce((s: number, c: { quantity?: number }) => s + ((c as { quantity: number }).quantity ?? 0), 0)
+        : (existing.consultores ?? []).reduce((s: number, c: { quantity?: number }) => s + ((c as { quantity: number }).quantity ?? 0), 0);
+      const snap = (existing.approval_snapshot ?? {}) as { total_leads_transferred?: number; leads_transferred_count?: number };
+      const existingTransferred = snap.total_leads_transferred ?? snap.leads_transferred_count ?? 0;
+      const newBatch = typeof leadsTransferredCount === 'number' && Number.isInteger(leadsTransferredCount) && leadsTransferredCount >= 0 ? leadsTransferredCount : 0;
+      const cumulativeTransferred = existingTransferred + newBatch;
+      const isComplete = cumulativeTransferred >= totalRequested;
+      updatePayload.status = isComplete ? 'approved' : 'partial';
       if (hasTransferMetadata) {
         updatePayload.approval_snapshot = {
           approved_at_iso: approvedAtIso,
@@ -118,7 +131,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
           source_consultant_id: sourceConsultantId.trim(),
           source_consultant_email: sourceConsultantEmail != null ? String(sourceConsultantEmail).trim() || null : null,
           banca_id: bancaId != null ? (bancaId === '' ? null : bancaId) : null,
-          leads_transferred_count: typeof leadsTransferredCount === 'number' && Number.isInteger(leadsTransferredCount) && leadsTransferredCount >= 0 ? leadsTransferredCount : null,
+          leads_transferred_count: cumulativeTransferred,
           transfer_filters_snapshot: transferFiltersSnapshot != null && typeof transferFiltersSnapshot === 'object' ? transferFiltersSnapshot : null,
         };
       }

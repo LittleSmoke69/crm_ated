@@ -9,7 +9,7 @@ import { isTransferExpired } from '@/lib/server/crm/resolveTransferLog';
 
 const LOG_PREFIX = '[admin][transfer-logs]';
 
-const DEFAULT_LIMIT = 100;
+const DEFAULT_LIMIT = 50000;
 
 /** Tipo da linha retornada pelo select em admin_lead_transfer_logs (evita GenericStringError do Supabase). */
 type TransferLogRow = {
@@ -27,12 +27,12 @@ type TransferLogRow = {
   crm_response?: unknown;
   created_at?: string | null;
 };
-const MAX_LIMIT = 200;
+const MAX_LIMIT = 50000;
 
 /**
  * GET /api/admin/crm/transfer-logs
  * Lista logs de transferência de leads (auditoria).
- * Query: banca_id? (opcional), from, to, transfer_type?, target_consultant_email?, offset? (default 0), limit? (default 100, max 200) para carregamento em pacotes.
+ * Query: banca_id? (opcional), from, to, transfer_type?, target_consultant_email?, offset? (default 0), limit? (default 50000, max 50000) para trazer todas.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -111,20 +111,24 @@ export async function GET(req: NextRequest) {
     const list = rawList as unknown as TransferLogRow[];
 
     const logIds = list.map((r) => r.id);
+    const MAX_ENTRIES = 500000;
     const { data: entries } = await supabaseServiceRole
       .from('admin_lead_transfer_entries')
       .select('transfer_log_id, saldo_snapshot, resolution_status')
-      .in('transfer_log_id', logIds);
+      .in('transfer_log_id', logIds)
+      .limit(MAX_ENTRIES);
 
     const totalBalanceByLogId = new Map<string, number>();
-    const resolutionByLogId = new Map<string, { hasPending: boolean; total: number }>();
+    const resolutionByLogId = new Map<string, { hasPending: boolean; total: number; vinculado: number; disponivel: number }>();
     (entries ?? []).forEach((e: { transfer_log_id: string; saldo_snapshot?: number | null; resolution_status?: string | null }) => {
       const current = totalBalanceByLogId.get(e.transfer_log_id) ?? 0;
       const saldo = e.saldo_snapshot != null ? Number(e.saldo_snapshot) : 0;
       totalBalanceByLogId.set(e.transfer_log_id, current + saldo);
-      const res = resolutionByLogId.get(e.transfer_log_id) ?? { hasPending: false, total: 0 };
+      const res = resolutionByLogId.get(e.transfer_log_id) ?? { hasPending: false, total: 0, vinculado: 0, disponivel: 0 };
       res.total += 1;
       if (e.resolution_status === 'pending') res.hasPending = true;
+      else if (e.resolution_status === 'vinculado') res.vinculado += 1;
+      else if (e.resolution_status === 'disponivel_retransferencia') res.disponivel += 1;
       resolutionByLogId.set(e.transfer_log_id, res);
     });
 
@@ -196,6 +200,7 @@ export async function GET(req: NextRequest) {
       if (expired) {
         resolution_status_log = resInfo?.hasPending ? 'expirada' : 'resolvida';
       }
+      const resInfoFull = resolutionByLogId.get(log.id);
       return {
         ...log,
         deadline_days: deadlineDays,
@@ -204,6 +209,8 @@ export async function GET(req: NextRequest) {
         target_consultant_name: targetEmail ? (emailToName.get(targetEmail) || log.target_consultant_email) : (log.target_consultant_email ?? '-'),
         performed_by_name: performedBy ? (performedByName.get(performedBy) || '-') : '-',
         resolution_status_log,
+        vinculado_count: resInfoFull?.vinculado ?? 0,
+        disponivel_count: resInfoFull?.disponivel ?? 0,
       };
     });
 

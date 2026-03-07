@@ -246,7 +246,7 @@ export default function GerentePage() {
   const [consultorRequestSuccess, setConsultorRequestSuccess] = useState('');
 
   // Histórico de solicitações de leads (abaixo da tabela Sua equipe)
-  type LeadRequestStatus = 'pending' | 'approved' | 'rejected';
+  type LeadRequestStatus = 'pending' | 'approved' | 'rejected' | 'partial';
   type LeadRequestItem = {
     id: string;
     lead_type: string;
@@ -2480,11 +2480,13 @@ export default function GerentePage() {
                                 ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300'
                                 : req.status === 'approved'
                                   ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300'
-                                  : 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300'
+                                  : req.status === 'partial'
+                                    ? 'bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300'
+                                    : 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300'
                             }`}>
-                              {req.status === 'pending' ? 'Pendente' : req.status === 'approved' ? 'Aprovada' : 'Rejeitada'}
+                              {req.status === 'pending' ? 'Pendente' : req.status === 'approved' ? 'Aprovada' : req.status === 'partial' ? 'Faltam leads' : 'Rejeitada'}
                             </span>
-                            {req.status === 'approved' && req.approved_at && (
+                            {(req.status === 'approved' || req.status === 'partial') && req.approved_at && (
                               <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">
                                 {new Date(req.approved_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
                               </p>
@@ -2507,9 +2509,11 @@ export default function GerentePage() {
                             ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300'
                             : req.status === 'approved'
                               ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300'
-                              : 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300'
+                              : req.status === 'partial'
+                                ? 'bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300'
+                                : 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300'
                         }`}>
-                          {req.status === 'pending' ? 'Pendente' : req.status === 'approved' ? 'Aprovada' : 'Rejeitada'}
+                          {req.status === 'pending' ? 'Pendente' : req.status === 'approved' ? 'Aprovada' : req.status === 'partial' ? 'Faltam leads' : 'Rejeitada'}
                         </span>
                       </div>
                       <p className="text-sm font-medium text-gray-800 dark:text-gray-200">{req.banca_name ?? req.banca_id ?? '—'}</p>
@@ -2518,7 +2522,7 @@ export default function GerentePage() {
                         {(req.consultores ?? []).map((c) => `${c.consultor_name ?? c.consultor_id}: ${c.quantity}`).join('; ') || '—'}
                       </p>
                       {req.deadline_days != null && <p className="text-xs text-gray-500 dark:text-gray-400">Prazo: {req.deadline_days} dias</p>}
-                      {req.status === 'approved' && req.approved_at && (
+                      {(req.status === 'approved' || req.status === 'partial') && req.approved_at && (
                         <p className="text-[10px] text-gray-400 dark:text-gray-500">Aprovada em {new Date(req.approved_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</p>
                       )}
                     </div>

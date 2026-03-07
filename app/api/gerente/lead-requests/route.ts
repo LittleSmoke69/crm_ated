@@ -73,9 +73,11 @@ export async function GET(req: NextRequest) {
       };
     });
 
+    const statusOrder: Record<string, number> = { pending: 0, partial: 1, approved: 2, rejected: 3 };
     const sorted = withLabels.sort((a, b) => {
-      if (a.status === 'pending' && b.status !== 'pending') return -1;
-      if (a.status !== 'pending' && b.status === 'pending') return 1;
+      const orderA = statusOrder[a.status] ?? 4;
+      const orderB = statusOrder[b.status] ?? 4;
+      if (orderA !== orderB) return orderA - orderB;
       return 0;
     });
 

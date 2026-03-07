@@ -31,6 +31,7 @@ import {
   ChevronUp,
   CalendarPlus,
   RotateCcw,
+  Unlink,
 } from 'lucide-react';
 import { DateInputDDMMYYYY, getTodaySãoPaulo, getLast30DaysRangeSãoPaulo } from '@/components/Admin/CRMSection';
 import { ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
@@ -40,8 +41,8 @@ const MAX_LEADS_SELECT = 200;
 const BANCAS_DROPDOWN_VISIBLE = 4;
 /** Itens por página na tabela de histórico de transferências */
 const LOGS_PAGE_SIZE = 10;
-/** Tamanho do pacote ao carregar logs em segundo plano (deve ser igual ao limit da API). */
-const LOGS_CHUNK_SIZE = 100;
+/** Tamanho do pacote ao carregar logs (sem limite — trazer todas). */
+const LOGS_CHUNK_SIZE = 50000;
 /** Leads por página no modal "Leads da transferência" */
 const MODAL_LEADS_PAGE_SIZE = 10;
 /** Solicitações de leads: itens por página na aba Solicitações */
@@ -233,7 +234,7 @@ interface GerenteLeadRequest {
   lead_type: string;
   lead_type_label: string;
   consultores: { consultor_id: string; quantity: number; consultor_name?: string }[];
-  status: 'pending' | 'approved' | 'rejected';
+  status: 'pending' | 'approved' | 'rejected' | 'partial';
   banca_id?: string | null;
   banca_name?: string;
   /** Prazo em dias solicitado pelo gerente para o pacote (conversão dos leads) */
@@ -245,6 +246,14 @@ interface GerenteLeadRequest {
   created_at: string;
   /** Preenchido após aprovação com transferência; usado para análise posterior */
   approval_snapshot?: ApprovalSnapshot | null;
+  /** Leads já enviados (para status partial) */
+  leads_transferred?: number;
+  /** Faltam X para completar a solicitação */
+  leads_still_needed?: number;
+  /** Leads disponíveis no pool expirado (resolvidas) para esta banca */
+  expired_available?: number;
+  /** Faltam X no expirado para completar os leads solicitados */
+  leads_still_needed_from_expired?: number;
 }
 
 export default function AdminLeadTransferPage() {
@@ -375,7 +384,8 @@ export default function AdminLeadTransferPage() {
   const [modalSearch, setModalSearch] = useState('');
   const [modalSortField, setModalSortField] = useState<keyof ModalEntry | null>(null);
   const [modalSortOrder, setModalSortOrder] = useState<'asc' | 'desc'>('asc');
-  const [resolvingTransfer, setResolvingTransfer] = useState(false);
+  /** ID do log cuja transferência está sendo resolvida em segundo plano (null = nenhuma). Permite abrir outro modal sem travar. */
+  const [resolvingLogId, setResolvingLogId] = useState<string | null>(null);
   const [extendingDeadline, setExtendingDeadline] = useState(false);
   const [showExtendDeadlineModal, setShowExtendDeadlineModal] = useState(false);
   const [extendDeadlineDays, setExtendDeadlineDays] = useState(10);
@@ -397,8 +407,12 @@ export default function AdminLeadTransferPage() {
   const [resolveBatchDetailEntries, setResolveBatchDetailEntries] = useState<Array<{ lead_id: string; name?: string | null; phone?: string | null; resolution_status?: string | null }>>([]);
   const [loadingResolveBatchDetail, setLoadingResolveBatchDetail] = useState(false);
   const [updatingEntryResolution, setUpdatingEntryResolution] = useState<string | null>(null);
+  /** Lead em processo de desvincular no modal "Leads da transferência" (vinculado sem dados anteriores) */
+  const [desvincularLeadIdModal, setDesvincularLeadIdModal] = useState<string | null>(null);
+  /** ID do log em que desvincular em massa está em andamento (null = nenhum). Assim outro modal não fica travado. */
+  const [desvincularEmMassaLogId, setDesvincularEmMassaLogId] = useState<string | null>(null);
   /** Transferências já resolvidas no banco (card verde persistente) */
-  const [resolvedStats, setResolvedStats] = useState<{ total_resolved_logs: number; total_disponivel: number; total_vinculado: number; by_type: Record<string, number> }>({ total_resolved_logs: 0, total_disponivel: 0, total_vinculado: 0, by_type: { TF: 0, TF1: 0, TF2: 0, TF3: 0 } });
+  const [resolvedStats, setResolvedStats] = useState<{ total_resolved_logs: number; total_disponivel: number; total_vinculado: number; total_lucro_realizado: number; total_aposta_realizado: number; by_type: Record<string, number> }>({ total_resolved_logs: 0, total_disponivel: 0, total_vinculado: 0, total_lucro_realizado: 0, total_aposta_realizado: 0, by_type: { TF: 0, TF1: 0, TF2: 0, TF3: 0 } });
   const [loadingResolvedStats, setLoadingResolvedStats] = useState(false);
   /** Modal "Mover leads": lista de transferências resolvidas com leads disponíveis */
   const [moveLeadsModalOpen, setMoveLeadsModalOpen] = useState(false);
@@ -485,6 +499,8 @@ export default function AdminLeadTransferPage() {
   const approveModalLoadingRequestIdRef = useRef<string | null>(null);
   /** Paginação da aba Solicitações */
   const [solicitationPage, setSolicitationPage] = useState(1);
+  /** Filtro de status na aba Solicitações: all | pending | approved | partial | rejected */
+  const [solicitationStatusFilter, setSolicitationStatusFilter] = useState<string>('all');
 
   const selectedBanca = bancas.find((b) => b.id === bancaId);
   const filteredBancas = bancaSearchQuery.trim()
@@ -631,7 +647,9 @@ export default function AdminLeadTransferPage() {
     if (!userId) return;
     setLoadingLeadRequests(true);
     try {
-      const res = await fetch('/api/admin/crm/lead-requests', { headers: headers() });
+      const params = new URLSearchParams();
+      if (solicitationStatusFilter && solicitationStatusFilter !== 'all') params.set('status', solicitationStatusFilter);
+      const res = await fetch(`/api/admin/crm/lead-requests?${params.toString()}`, { headers: headers() });
       const json = await res.json();
       if (res.ok && json.success && Array.isArray(json.data)) {
         setLeadRequests(json.data as GerenteLeadRequest[]);
@@ -643,7 +661,7 @@ export default function AdminLeadTransferPage() {
     } finally {
       setLoadingLeadRequests(false);
     }
-  }, [userId]);
+  }, [userId, solicitationStatusFilter]);
 
   useEffect(() => {
     if (activeTab === 'solicitations') {
@@ -1747,25 +1765,24 @@ export default function AdminLeadTransferPage() {
       if (!confirmed) return;
     }
 
+    const logId = selectedLogForModal!.id;
     const doResolve = () => {
+      setResolvingLogId(logId);
       if (runInBackground) {
-        showToast(`Resolução em andamento em segundo plano (${count} leads). Reabra o modal em alguns minutos para ver o resultado.`, 'info');
-        setResolvingTransfer(false);
-      } else {
-        setResolvingTransfer(true);
+        showToast(`Resolução em andamento em segundo plano (${count} leads). Pode demorar alguns minutos.`, 'info');
       }
 
       fetch('/api/admin/crm/transfer-logs/resolve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...headers() },
-        body: JSON.stringify({ log_id: selectedLogForModal!.id, banca_id: effectiveBancaId }),
+        body: JSON.stringify({ log_id: logId, banca_id: effectiveBancaId }),
       })
         .then((res) => res.json())
         .then(async (json) => {
           if (json.success) {
             const msg = json.data?.message ?? 'Resolução concluída.';
             showToast(msg, 'success');
-            await loadModalEntries();
+            if (selectedLogForModal?.id === logId) await loadModalEntries();
             await loadTransferLogs(historyBancaFilter);
             await loadTransferStats(historyBancaFilter);
             loadExpiredLogs();
@@ -1777,7 +1794,7 @@ export default function AdminLeadTransferPage() {
           showToast('Erro ao resolver transferência.', 'error');
         })
         .finally(() => {
-          setResolvingTransfer(false);
+          setResolvingLogId((prev) => (prev === logId ? null : prev));
         });
     };
 
@@ -2022,19 +2039,22 @@ export default function AdminLeadTransferPage() {
     }
   };
 
-  /** Aplica filtros da aba Histórico; carrega dados em segundo plano, pacote por pacote. */
+  /** Aplica filtros da aba Histórico; carrega dados em segundo plano, pacote por pacote. Com "Todas as Bancas" agrega resolvidos, expirados, lucro, apostas e leads vinculados. */
   const applyHistoryFilters = () => {
     const isAllBancas = historyBancaFilter === '';
     setManagementLoaded(true);
     showToast(
       isAllBancas
-        ? 'Carregando dados em segundo plano (pacote por pacote). A tabela e os gráficos serão atualizados conforme os dados chegarem.'
+        ? 'Carregando dados de todas as bancas (pacote por pacote). Resolvidos, expirados, lucro, apostas e leads vinculados serão somados.'
         : 'Carregando dados em segundo plano. A tabela e os gráficos serão atualizados em instantes.',
       'info'
     );
     void loadTransferLogs(historyBancaFilter);
     void loadTransferStats(historyBancaFilter);
     void loadExpiredConversionStats();
+    loadExpiredLogs();
+    loadResolvedStats();
+    loadResolvedList();
   };
 
   useEffect(() => {
@@ -2081,13 +2101,15 @@ export default function AdminLeadTransferPage() {
           total_resolved_logs: Number(d.total_resolved_logs) || 0,
           total_disponivel: Number(d.total_disponivel) || 0,
           total_vinculado: Number(d.total_vinculado) || 0,
+          total_lucro_realizado: Number(d.total_lucro_realizado) || 0,
+          total_aposta_realizado: Number(d.total_aposta_realizado) || 0,
           by_type: (d.by_type && typeof d.by_type === 'object') ? { TF: d.by_type.TF ?? 0, TF1: d.by_type.TF1 ?? 0, TF2: d.by_type.TF2 ?? 0, TF3: d.by_type.TF3 ?? 0 } : { TF: 0, TF1: 0, TF2: 0, TF3: 0 },
         });
       } else {
-        setResolvedStats({ total_resolved_logs: 0, total_disponivel: 0, total_vinculado: 0, by_type: { TF: 0, TF1: 0, TF2: 0, TF3: 0 } });
+        setResolvedStats({ total_resolved_logs: 0, total_disponivel: 0, total_vinculado: 0, total_lucro_realizado: 0, total_aposta_realizado: 0, by_type: { TF: 0, TF1: 0, TF2: 0, TF3: 0 } });
       }
     } catch {
-      setResolvedStats({ total_resolved_logs: 0, total_disponivel: 0, total_vinculado: 0, by_type: { TF: 0, TF1: 0, TF2: 0, TF3: 0 } });
+      setResolvedStats({ total_resolved_logs: 0, total_disponivel: 0, total_vinculado: 0, total_lucro_realizado: 0, total_aposta_realizado: 0, by_type: { TF: 0, TF1: 0, TF2: 0, TF3: 0 } });
     } finally {
       setLoadingResolvedStats(false);
     }
@@ -2115,6 +2137,128 @@ export default function AdminLeadTransferPage() {
       setLoadingResolvedList(false);
     }
   }, [userId, historyBancaFilter]);
+
+  /** Desvincula um lead (vinculado sem dados anteriores): altera para disponivel_retransferencia. */
+  const desvincularLeadModal = useCallback(
+    async (leadId: string) => {
+      const effectiveBancaId = bancaId || selectedLogForModal?.banca_id || '';
+      if (!effectiveBancaId || !userId || !selectedLogForModal?.id) return;
+      setDesvincularLeadIdModal(leadId);
+      try {
+        const res = await fetch('/api/admin/crm/transfer-logs/update-entry-resolution', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...headers() },
+          body: JSON.stringify({
+            log_id: selectedLogForModal.id,
+            banca_id: effectiveBancaId,
+            lead_id: leadId,
+            new_status: 'disponivel_retransferencia',
+          }),
+        });
+        const json = await res.json();
+        if (res.ok && json.success) {
+          const logId = selectedLogForModal.id;
+          setTransferLogs((prev) =>
+            prev.map((log) =>
+              log.id === logId
+                ? {
+                    ...log,
+                    vinculado_count: Math.max(0, ((log as { vinculado_count?: number }).vinculado_count ?? 0) - 1),
+                    disponivel_count: ((log as { disponivel_count?: number }).disponivel_count ?? 0) + 1,
+                  }
+                : log
+            )
+          );
+          setResolvedStats((prev) => ({
+            ...prev,
+            total_vinculado: Math.max(0, prev.total_vinculado - 1),
+            total_disponivel: prev.total_disponivel + 1,
+          }));
+          showToast('Lead desvinculado. Agora está disponível para repasse.', 'success');
+          await loadModalEntries();
+          loadResolvedStats();
+        } else {
+          showToast(json?.error ?? 'Erro ao desvincular lead.', 'error');
+        }
+      } catch {
+        showToast('Erro ao desvincular lead.', 'error');
+      } finally {
+        setDesvincularLeadIdModal(null);
+      }
+    },
+    [bancaId, userId, selectedLogForModal?.id, selectedLogForModal?.banca_id, loadModalEntries, loadResolvedStats]
+  );
+
+  /** Desvincula em massa todos os vinculados sem dados anteriores; roda em segundo plano para não travar o modal de outra transferência. */
+  const desvincularEmMassa = useCallback(async () => {
+    const effectiveBancaId = bancaId || selectedLogForModal?.banca_id || '';
+    if (!effectiveBancaId || !userId || !selectedLogForModal?.id) return;
+    const toUnlink = modalEntries.filter(
+      (e) =>
+        e.resolution_status === 'vinculado' &&
+        (e.total_depositado_snapshot == null || e.total_apostado_snapshot == null)
+    );
+    if (toUnlink.length === 0) {
+      showToast('Nenhum lead vinculado sem dados anteriores para desvincular.', 'info');
+      return;
+    }
+    const logId = selectedLogForModal.id;
+    setDesvincularEmMassaLogId(logId);
+    if (toUnlink.length > 5) {
+      showToast(`Desvinculando ${toUnlink.length} leads em segundo plano. Pode continuar vendo os dados.`, 'info');
+    }
+    (async () => {
+      try {
+        let ok = 0;
+        let err = 0;
+        for (const e of toUnlink) {
+          const leadId = String(e.lead_id);
+          const res = await fetch('/api/admin/crm/transfer-logs/update-entry-resolution', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...headers() },
+            body: JSON.stringify({
+              log_id: logId,
+              banca_id: effectiveBancaId,
+              lead_id: leadId,
+              new_status: 'disponivel_retransferencia',
+            }),
+          });
+          const json = await res.json();
+          if (res.ok && json.success) ok++;
+          else err++;
+        }
+        if (selectedLogForModal?.id === logId) await loadModalEntries();
+        if (ok > 0) {
+          setTransferLogs((prev) =>
+            prev.map((log) =>
+              log.id === logId
+                ? {
+                    ...log,
+                    vinculado_count: Math.max(0, ((log as { vinculado_count?: number }).vinculado_count ?? 0) - ok),
+                    disponivel_count: ((log as { disponivel_count?: number }).disponivel_count ?? 0) + ok,
+                  }
+                : log
+            )
+          );
+          setResolvedStats((prev) => ({
+            ...prev,
+            total_vinculado: Math.max(0, prev.total_vinculado - ok),
+            total_disponivel: prev.total_disponivel + ok,
+          }));
+        }
+        loadResolvedStats();
+        if (err === 0) {
+          showToast(`${ok} lead(s) desvinculado(s). Agora disponíveis para repasse.`, 'success');
+        } else {
+          showToast(`${ok} desvinculado(s), ${err} falha(s).`, err === toUnlink.length ? 'error' : 'info');
+        }
+      } catch {
+        showToast('Erro ao desvincular em massa.', 'error');
+      } finally {
+        setDesvincularEmMassaLogId((prev) => (prev === logId ? null : prev));
+      }
+    })();
+  }, [bancaId, userId, selectedLogForModal?.id, selectedLogForModal?.banca_id, modalEntries, loadModalEntries, loadResolvedStats]);
 
   const loadResolveBatchDetailEntries = useCallback(async (log: { log_id: string; banca_id: string }) => {
     setLoadingResolveBatchDetail(true);
@@ -2686,6 +2830,22 @@ export default function AdminLeadTransferPage() {
                   Solicitações de leads
                 </h2>
                 <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">Solicitações feitas por gerentes. Aprove e defina o consultor doador (origem dos leads).</p>
+                {leadRequests.length > 0 && (
+                  <div className="mt-3 flex items-center gap-2">
+                    <label className="text-xs font-semibold text-gray-600 dark:text-gray-400">Filtrar:</label>
+                    <select
+                      value={solicitationStatusFilter}
+                      onChange={(e) => { setSolicitationStatusFilter(e.target.value); setSolicitationPage(1); }}
+                      className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                    >
+                      <option value="all">Todos</option>
+                      <option value="pending">Pendente</option>
+                      <option value="approved">Aprovados</option>
+                      <option value="partial">Faltam leads</option>
+                      <option value="rejected">Rejeitado</option>
+                    </select>
+                  </div>
+                )}
               </div>
               {loadingLeadRequests ? (
                 <div className="flex items-center justify-center py-12">
@@ -2722,23 +2882,40 @@ export default function AdminLeadTransferPage() {
                             <td className="px-4 py-3 text-gray-900 dark:text-white font-medium">{req.gerente_name}</td>
                             <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{consultorNome}</td>
                             <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{req.banca_name ?? (req.banca_id ? req.banca_id : '-')}</td>
-                            <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{totalLeads} lead(s)</td>
+                            <td className="px-4 py-3 text-gray-700 dark:text-gray-300">
+                              {totalLeads} lead(s)
+                              {(req.status === 'partial' && (req.leads_transferred ?? 0) > 0) && (
+                                <span className="block text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                                  {req.leads_transferred} enviados, faltam {req.leads_still_needed ?? 0}
+                                </span>
+                              )}
+                              {(req.status === 'pending' || req.status === 'partial') && (req.expired_available ?? 0) > 0 && (req.leads_still_needed ?? 0) > 0 && (
+                                <span className="block text-xs text-emerald-600 dark:text-emerald-400 mt-0.5">
+                                  {req.expired_available} no expirado, faltam {req.leads_still_needed} para completar
+                                </span>
+                              )}
+                            </td>
                             <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{req.deadline_days != null ? `${req.deadline_days} dias` : '—'}</td>
                             <td className="px-4 py-3">
-                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${req.status === 'pending' ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200' : req.status === 'approved' ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-200' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'}`}>
-                                {req.status === 'pending' ? 'Pendente' : req.status === 'approved' ? 'Aprovada' : 'Rejeitada'}
+                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                                req.status === 'pending' ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200' :
+                                req.status === 'approved' ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-200' :
+                                req.status === 'partial' ? 'bg-orange-100 dark:bg-orange-900/40 text-orange-800 dark:text-orange-200' :
+                                'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
+                              }`}>
+                                {req.status === 'pending' ? 'Pendente' : req.status === 'approved' ? 'Aprovada' : req.status === 'partial' ? 'Faltam leads' : 'Rejeitada'}
                               </span>
                             </td>
                             <td className="px-4 py-3 text-gray-500 dark:text-gray-400">{formatDatePtBR(req.created_at)}</td>
                             <td className="px-4 py-3">
-                              {req.status === 'pending' && (
+                              {(req.status === 'pending' || req.status === 'partial') && (
                                 <button
                                   type="button"
                                   onClick={() => openApproveModal(req)}
                                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-[#8CD955] text-white hover:bg-[#7BC84A] transition-colors"
                                 >
                                   <CheckCircle2 className="w-4 h-4" />
-                                  Aprovar
+                                  {req.status === 'partial' ? 'Completar' : 'Aprovar'}
                                 </button>
                               )}
                             </td>
@@ -3001,9 +3178,9 @@ export default function AdminLeadTransferPage() {
                           <p className="text-xs font-semibold text-emerald-700 dark:text-emerald-300 uppercase tracking-wide">Leads disponíveis para mover</p>
                           <p className="text-2xl font-bold text-emerald-800 dark:text-emerald-200">{loadingResolvedStats ? '…' : resolvedStats.total_disponivel}</p>
                         </div>
-                        {/* Detalhamento por TF: origem → próximo slot */}
+                        {/* Detalhamento por TF: origem → próximo slot (TF → TF1 → TF2 → TF3 → repassar) */}
                         {(() => {
-                          const nextSlot: Record<string, string> = { TF: 'TF2', TF1: 'TF2', TF2: 'TF3', TF3: 'repassar' };
+                          const nextSlot: Record<string, string> = { TF: 'TF1', TF1: 'TF2', TF2: 'TF3', TF3: 'repassar' };
                           const entries = (['TF', 'TF1', 'TF2', 'TF3'] as const).filter((t) => (resolvedStats.by_type[t] ?? 0) > 0);
                           if (entries.length === 0) return null;
                           return (
@@ -3027,6 +3204,22 @@ export default function AdminLeadTransferPage() {
                         >
                           Mover leads
                         </button>
+                      </div>
+                      <div className="mt-4 pt-4 border-t border-emerald-200/50 dark:border-emerald-700/30 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                          <p className="text-xs font-semibold text-amber-700 dark:text-amber-300 uppercase tracking-wide">Total lucro realizado (resolvidas)</p>
+                          <p className="text-sm text-gray-600 dark:text-gray-400 mt-0.5">Só vinculados com dados anteriores. Sem snapshot = não entra.</p>
+                          <p className={`text-2xl font-bold tabular-nums mt-1 ${(resolvedStats.total_lucro_realizado ?? 0) > 0 ? 'text-amber-700 dark:text-amber-300' : 'text-gray-500 dark:text-gray-400'}`}>
+                            {loadingResolvedStats ? '…' : `R$ ${(resolvedStats.total_lucro_realizado ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold text-blue-700 dark:text-blue-300 uppercase tracking-wide">Total apostas (resolvidas)</p>
+                          <p className="text-sm text-gray-600 dark:text-gray-400 mt-0.5">Mesma regra: só vinculados com dados anteriores. Sem snapshot = não entra.</p>
+                          <p className={`text-2xl font-bold tabular-nums mt-1 ${(resolvedStats.total_aposta_realizado ?? 0) > 0 ? 'text-blue-700 dark:text-blue-300' : 'text-gray-500 dark:text-gray-400'}`}>
+                            {loadingResolvedStats ? '…' : `R$ ${(resolvedStats.total_aposta_realizado ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                          </p>
+                        </div>
                       </div>
                     </div>
                   )}
@@ -3198,13 +3391,25 @@ export default function AdminLeadTransferPage() {
                             {loadingLeadRequests ? (
                               <div className="flex items-center gap-2 py-4 text-sm text-gray-500"><Loader2 className="w-4 h-4 animate-spin" /> Carregando…</div>
                             ) : (() => {
-                              const pendingForBanca = leadRequests.filter((r) => r.status === 'pending' && r.banca_id === moveLeadsSelectedLog?.banca_id);
-                              if (pendingForBanca.length === 0) return <p className="text-sm text-gray-500 py-3">Nenhuma solicitação pendente para esta banca.</p>;
+                              const pendingForBanca = leadRequests
+                                .filter((r) => (r.status === 'pending' || r.status === 'partial') && r.banca_id === moveLeadsSelectedLog?.banca_id)
+                                .sort((a, b) => {
+                                  const aHasTransferido = (a.leads_transferred ?? 0) > 0;
+                                  const bHasTransferido = (b.leads_transferred ?? 0) > 0;
+                                  if (aHasTransferido && !bHasTransferido) return -1;
+                                  if (!aHasTransferido && bHasTransferido) return 1;
+                                  return 0;
+                                });
+                              if (pendingForBanca.length === 0) return <p className="text-sm text-gray-500 py-3">Nenhuma solicitação pendente ou faltando leads para esta banca.</p>;
                               return (
-                                <div className="rounded-xl border-2 border-emerald-500/30 bg-emerald-50/30 dark:bg-emerald-950/20 dark:border-emerald-500/20 overflow-y-auto max-h-[160px] divide-y divide-emerald-200/50 dark:divide-emerald-800/30">
+                                <div className="rounded-xl border-2 border-emerald-500/30 bg-emerald-50/30 dark:bg-emerald-950/20 dark:border-emerald-500/20 overflow-y-auto max-h-[200px] divide-y divide-emerald-200/50 dark:divide-emerald-800/30">
                                   {pendingForBanca.map((req) => {
                                     const isSelected = moveLeadsSelectedRequest?.id === req.id;
                                     const firstConsultor = req.consultores?.[0];
+                                    const totalRequested = (req.consultores ?? []).reduce((s, c) => s + c.quantity, 0);
+                                    const enviados = req.leads_transferred ?? 0;
+                                    const faltam = req.leads_still_needed ?? totalRequested;
+                                    const hasProgresso = enviados > 0;
                                     const targetEmail = firstConsultor ? moveLeadsConsultants.find((c) => c.id === firstConsultor.consultor_id)?.email?.trim() : '';
                                     return (
                                       <button
@@ -3217,7 +3422,14 @@ export default function AdminLeadTransferPage() {
                                         className={`w-full flex flex-col items-start px-4 py-3 text-left hover:bg-emerald-100/50 dark:hover:bg-emerald-900/30 transition-colors rounded-lg ${isSelected ? 'bg-emerald-100/70 dark:bg-emerald-900/40 ring-2 ring-emerald-500/60' : 'hover:ring-1 hover:ring-emerald-500/30'}`}
                                       >
                                         <span className="text-sm font-semibold text-gray-900 dark:text-white">{req.gerente_name} • {req.banca_name || req.banca_id || '-'}</span>
-                                        <span className="text-xs text-gray-600 dark:text-gray-400 mt-0.5">Destino: {firstConsultor?.consultor_name ?? '-'} ({firstConsultor?.quantity ?? 0} lead(s))</span>
+                                        <span className="text-xs text-gray-600 dark:text-gray-400 mt-0.5">
+                                          Destino: {firstConsultor?.consultor_name ?? '-'} ({totalRequested} lead(s))
+                                          {hasProgresso && (
+                                            <span className="block mt-1 font-medium text-emerald-700 dark:text-emerald-400">
+                                              {enviados}/{totalRequested} enviados, faltam {faltam}
+                                            </span>
+                                          )}
+                                        </span>
                                       </button>
                                     );
                                   })}
@@ -3498,18 +3710,19 @@ export default function AdminLeadTransferPage() {
                       <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white min-w-[140px]">Leads (IDs)</th>
                       <ThSort field="re_transfer" label="Re-transfer." className="w-[90px]" />
                       <ThSort field="prazo" label="Prazo" className="w-[130px]" title="Dias restantes para conversão (prazo definido na transferência)" />
+                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[140px]" title="Leads que converteram (depositaram/apostaram após a transferência) vs disponíveis para repasse">Conversão</th>
                       <th className="text-center py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[100px]">Ações</th>
                     </tr>
                   </thead>
                   <tbody>
                     {loadingLogs ? (
-                      <tr><td colSpan={13} className="p-10 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-[#8CD955]" /></td></tr>
+                      <tr><td colSpan={14} className="p-10 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-[#8CD955]" /></td></tr>
                     ) : !managementLoaded && !loadingLogs ? (
-                      <tr><td colSpan={13} className="p-8 text-center text-gray-500 dark:text-white">Selecione a banca (ou &quot;Todas as Bancas&quot;) e clique em Aplicar filtros para carregar o histórico.</td></tr>
+                      <tr><td colSpan={14} className="p-8 text-center text-gray-500 dark:text-white">Selecione a banca (ou &quot;Todas as Bancas&quot;) e clique em Aplicar filtros para carregar o histórico.</td></tr>
                     ) : transferLogs.length === 0 ? (
-                      <tr><td colSpan={13} className="p-8 text-center text-gray-500 dark:text-white">Nenhuma transferência nos filtros. Ajuste data/tipo ou faça uma nova transferência.</td></tr>
+                      <tr><td colSpan={14} className="p-8 text-center text-gray-500 dark:text-white">Nenhuma transferência nos filtros. Ajuste data/tipo ou faça uma nova transferência.</td></tr>
                     ) : transferLogsFiltered.length === 0 ? (
-                      <tr><td colSpan={13} className="p-8 text-center text-gray-500 dark:text-white">Nenhuma transferência corresponde aos filtros. Ajuste &quot;Status&quot; ou &quot;Prazo&quot;.</td></tr>
+                      <tr><td colSpan={14} className="p-8 text-center text-gray-500 dark:text-white">Nenhuma transferência corresponde aos filtros. Ajuste &quot;Status&quot; ou &quot;Prazo&quot;.</td></tr>
                     ) : (
                       <>
                       {transferLogsPaginated.map((log) => {
@@ -3564,6 +3777,34 @@ export default function AdminLeadTransferPage() {
                                   </span>
                                 </span>
                               )}
+                            </td>
+                            <td className="py-3 px-4">
+                              {(() => {
+                                const vinculos = (log as { vinculado_count?: number }).vinculado_count ?? 0;
+                                const disponiveis = (log as { disponivel_count?: number }).disponivel_count ?? 0;
+                                const isResolvida = (log as { resolution_status_log?: string }).resolution_status_log === 'resolvida';
+                                const isExpirada = (log as { resolution_status_log?: string }).resolution_status_log === 'expirada';
+                                if ((log as { devolvido_at?: string }).devolvido_at) return <span className="text-gray-400 dark:text-gray-500">—</span>;
+                                if (isResolvida && (vinculos > 0 || disponiveis > 0)) {
+                                  return (
+                                    <span className="inline-flex flex-col gap-0.5" title={`${vinculos} converteram (depositaram/apostaram); ${disponiveis} disponíveis para repasse`}>
+                                      {vinculos > 0 && (
+                                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                                          <CheckCircle2 className="w-3 h-3 flex-shrink-0" />
+                                          {vinculos} conversão(ões)
+                                        </span>
+                                      )}
+                                      {disponiveis > 0 && (
+                                        <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium">
+                                          {disponiveis} disp. repasse
+                                        </span>
+                                      )}
+                                    </span>
+                                  );
+                                }
+                                if (isExpirada) return <span className="text-gray-400 dark:text-gray-500 text-xs">Pendente resolver</span>;
+                                return <span className="text-gray-400 dark:text-gray-500">—</span>;
+                              })()}
                             </td>
                             <td className="py-3 px-4">
                               <div className="flex flex-wrap items-center justify-center gap-1.5">
@@ -3637,6 +3878,18 @@ export default function AdminLeadTransferPage() {
               {selectedLogForModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={() => setSelectedLogForModal(null)} role="dialog" aria-modal="true" aria-labelledby="modal-leads-title">
                   <div className="relative bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl max-w-5xl w-full max-h-[90vh] flex flex-col border border-gray-200 dark:border-[#404040] overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                    {resolvingLogId === selectedLogForModal?.id && (
+                      <div className="mx-4 mt-3 flex items-center gap-2 rounded-xl bg-amber-500/15 border border-amber-500/30 px-4 py-2.5 text-sm text-amber-800 dark:text-amber-200" aria-live="polite">
+                        <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
+                        <span>Resolução em andamento em segundo plano. Você pode fechar este modal e abrir outra transferência ou continuar vendo os dados abaixo.</span>
+                      </div>
+                    )}
+                    {resolvingLogId !== null && resolvingLogId !== selectedLogForModal?.id && (
+                      <div className="mx-4 mt-3 flex items-center gap-2 rounded-xl bg-gray-100 dark:bg-[#404040] border border-gray-200 dark:border-[#555] px-4 py-2 text-sm text-gray-600 dark:text-gray-400">
+                        <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
+                        <span>Outra transferência está sendo resolvida em segundo plano.</span>
+                      </div>
+                    )}
                     {showExtendDeadlineModal && (
                       <div className="absolute inset-0 z-[100] flex items-center justify-center rounded-3xl bg-white dark:bg-[#2a2a2a] p-4" onClick={(e) => e.stopPropagation()}>
                         <div className="relative z-[101] bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-2xl border border-violet-200 dark:border-violet-500/30 max-w-md w-full overflow-hidden ring-2 ring-black/5 dark:ring-white/5">
@@ -3779,8 +4032,25 @@ export default function AdminLeadTransferPage() {
                         {(() => {
                           const modalDeadline = getTransferDeadlineInfo(selectedLogForModal?.created_at, (selectedLogForModal as { deadline_days?: number })?.deadline_days);
                           const disponivelCount = modalEntries.filter((e) => e.resolution_status === 'disponivel_retransferencia').length;
+                          const vinculadosSemDadosCount = modalEntries.filter(
+                            (e) =>
+                              e.resolution_status === 'vinculado' &&
+                              (e.total_depositado_snapshot == null || e.total_apostado_snapshot == null)
+                          ).length;
                           return (
                             <>
+                              {vinculadosSemDadosCount > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={desvincularEmMassa}
+                                  disabled={desvincularEmMassaLogId === selectedLogForModal?.id}
+                                  title="Desvincular todos os leads vinculados sem dados anteriores (depósito/aposta). Eles ficarão disponíveis para repasse."
+                                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-400 hover:bg-amber-500/20 border border-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95"
+                                >
+                                  {desvincularEmMassaLogId === selectedLogForModal?.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Unlink className="w-4 h-4" />}
+                                  {desvincularEmMassaLogId === selectedLogForModal?.id ? 'Desvinculando…' : `Desvincular em massa (${vinculadosSemDadosCount})`}
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 onClick={runRecalcBalanceForLog}
@@ -3807,11 +4077,11 @@ export default function AdminLeadTransferPage() {
                                   <button
                                     type="button"
                                     onClick={runResolveTransfer}
-                                    disabled={resolvingTransfer}
+                                    disabled={resolvingLogId === selectedLogForModal?.id}
                                     className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-400 hover:bg-amber-500/20 border border-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95"
                                   >
-                                    {resolvingTransfer ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                                    {resolvingTransfer ? 'Resolvendo…' : 'Resolver transferência'}
+                                    {resolvingLogId === selectedLogForModal?.id ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                                    {resolvingLogId === selectedLogForModal?.id ? 'Resolvendo…' : 'Resolver transferência'}
                                   </button>
                                 </>
                               )}
@@ -3863,8 +4133,28 @@ export default function AdminLeadTransferPage() {
                             const diffDep = sumDepDepois - sumDepAntes;
                             const diffAposta = sumApostaDepois - sumApostaAntes;
 
+                            // Lucro realizado: só leads vinculados E com total_depositado_snapshot (dados anteriores). Sem snapshot = não conta
+                            const lucroRealizado = modalEntriesFiltered.reduce((s, e) => {
+                              if (e.resolution_status !== 'vinculado') return s;
+                              if (e.total_depositado_snapshot == null) return s; // Sem dados anteriores — não entra no lucro
+                              const depAntes = Number(e.total_depositado_snapshot);
+                              const depDepois = e.current_total_depositado_at_resolution != null ? Number(e.current_total_depositado_at_resolution) : (e.total_depositado != null ? Number(e.total_depositado) : 0);
+                              if (depAntes === 0) return s + depDepois;
+                              return s + Math.max(0, depDepois - depAntes);
+                            }, 0);
+                            // Total apostas realizado: só vinculados E com total_apostado_snapshot (dados anteriores). Sem snapshot = não conta
+                            const apostaRealizado = modalEntriesFiltered.reduce((s, e) => {
+                              if (e.resolution_status !== 'vinculado') return s;
+                              if (e.total_apostado_snapshot == null) return s; // Sem dados anteriores — não entra no total apostas
+                              const apAntes = Number(e.total_apostado_snapshot);
+                              const apDepois = e.current_total_apostado_at_resolution != null ? Number(e.current_total_apostado_at_resolution) : (e.total_apostado != null ? Number(e.total_apostado) : 0);
+                              if (apAntes === 0) return s + apDepois;
+                              return s + Math.max(0, apDepois - apAntes);
+                            }, 0);
+
                             return (
-                              <div className="mb-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                              <div className="mb-6 space-y-4">
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                 <div className="p-4 rounded-2xl bg-emerald-50/50 dark:bg-emerald-500/5 border border-emerald-100 dark:border-emerald-500/20">
                                   <div className="flex items-center justify-between mb-2">
                                     <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider">Depósitos no Período</span>
@@ -3900,6 +4190,41 @@ export default function AdminLeadTransferPage() {
                                     </div>
                                   </div>
                                 </div>
+                              </div>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div className="p-4 rounded-2xl bg-amber-50/50 dark:bg-amber-500/5 border border-amber-100 dark:border-amber-500/20">
+                                  <div className="flex items-center justify-between mb-1">
+                                    <span className="text-xs font-bold text-amber-700 dark:text-amber-400 uppercase tracking-wider">Lucro realizado</span>
+                                    {lucroRealizado > 0 && (
+                                      <span className="text-sm font-bold text-amber-700 dark:text-amber-300 tabular-nums">{fmtR(lucroRealizado)}</span>
+                                    )}
+                                  </div>
+                                  <p className="text-[11px] text-gray-600 dark:text-gray-400 mt-1">
+                                    Só vinculados com dados anteriores. Sem snapshot = não entra.
+                                  </p>
+                                  <div className="mt-2">
+                                    <span className={`text-xl font-bold tabular-nums ${lucroRealizado > 0 ? 'text-amber-700 dark:text-amber-300' : 'text-gray-500 dark:text-gray-400'}`}>
+                                      {fmtR(lucroRealizado)}
+                                    </span>
+                                  </div>
+                                </div>
+                                <div className="p-4 rounded-2xl bg-blue-50/50 dark:bg-blue-500/5 border border-blue-100 dark:border-blue-500/20">
+                                  <div className="flex items-center justify-between mb-1">
+                                    <span className="text-xs font-bold text-blue-700 dark:text-blue-400 uppercase tracking-wider">Total apostas realizado</span>
+                                    {apostaRealizado > 0 && (
+                                      <span className="text-sm font-bold text-blue-700 dark:text-blue-300 tabular-nums">{fmtR(apostaRealizado)}</span>
+                                    )}
+                                  </div>
+                                  <p className="text-[11px] text-gray-600 dark:text-gray-400 mt-1">
+                                    Mesma regra: só vinculados com dados anteriores. Sem snapshot = não entra.
+                                  </p>
+                                  <div className="mt-2">
+                                    <span className={`text-xl font-bold tabular-nums ${apostaRealizado > 0 ? 'text-blue-700 dark:text-blue-300' : 'text-gray-500 dark:text-gray-400'}`}>
+                                      {fmtR(apostaRealizado)}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
                               </div>
                             );
                           })()}
@@ -3945,6 +4270,7 @@ export default function AdminLeadTransferPage() {
                                   </th>
                                   <th className="text-right font-bold text-[11px] uppercase tracking-wider py-3 px-4 text-gray-500 dark:text-gray-400">Depósitos antes→depois</th>
                                   <th className="text-right font-bold text-[11px] uppercase tracking-wider py-3 px-4 text-gray-500 dark:text-gray-400">Apostas antes→depois</th>
+                                  <th className="text-center font-bold text-[11px] uppercase tracking-wider py-3 px-4 text-gray-500 dark:text-gray-400 w-[100px]">Ações</th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -3961,6 +4287,8 @@ export default function AdminLeadTransferPage() {
                                   const apostaDepois = entry.current_total_apostado_at_resolution != null ? Number(entry.current_total_apostado_at_resolution) : (entry.total_apostado != null ? Number(entry.total_apostado) : null);
                                   const evoluiuDep = depDepois != null && depAntes != null && depDepois > depAntes;
                                   const evoluiuAposta = apostaDepois != null && apostaAntes != null && apostaDepois > apostaAntes;
+                                  const semDadosAntesDep = depAntes == null;
+                                  const semDadosAntesAposta = apostaAntes == null;
 
                                   return (
                                     <tr key={`${entry.lead_id}-${globalIdx}`} className="border-t border-gray-100 dark:border-[#404040] hover:bg-gray-50/80 dark:hover:bg-[#333] transition-all group">
@@ -4007,31 +4335,67 @@ export default function AdminLeadTransferPage() {
                                       <td className="py-3 px-4 text-right tabular-nums text-sm font-bold text-[#8CD955]">{entry.saldo_snapshot != null ? fmt(entry.saldo_snapshot) : <span className="text-gray-500 dark:text-gray-400 font-normal">Sem saldo</span>}</td>
                                       <td className="py-3 px-4 text-right">
                                         <div className="flex flex-col items-end">
-                                          <div className="flex items-center gap-1.5">
-                                            <span className="text-[11px] text-gray-400 dark:text-gray-500 tabular-nums">{fmt(depAntes)}</span>
-                                            <ArrowRightLeft className="w-3 h-3 text-gray-300 dark:text-gray-600" />
-                                            <span className={`text-sm tabular-nums font-bold ${evoluiuDep ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-700 dark:text-gray-200'}`}>
-                                              {fmt(depDepois)}
+                                          {semDadosAntesDep ? (
+                                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/30" title="Sem dados anteriores — não entra no lucro">
+                                              Sem dados anteriores
                                             </span>
-                                          </div>
-                                          {evoluiuDep && (
-                                            <span className="text-[9px] font-bold text-emerald-500">+{fmt(depDepois! - depAntes!)}</span>
+                                          ) : (
+                                            <>
+                                              <div className="flex items-center gap-1.5">
+                                                <span className="text-[11px] text-gray-400 dark:text-gray-500 tabular-nums">{fmt(depAntes)}</span>
+                                                <ArrowRightLeft className="w-3 h-3 text-gray-300 dark:text-gray-600" />
+                                                <span className={`text-sm tabular-nums font-bold ${evoluiuDep ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-700 dark:text-gray-200'}`}>
+                                                  {fmt(depDepois)}
+                                                </span>
+                                              </div>
+                                              {evoluiuDep && (
+                                                <span className="text-[9px] font-bold text-emerald-500">+{fmt(depDepois! - depAntes!)}</span>
+                                              )}
+                                            </>
                                           )}
                                         </div>
                                       </td>
                                       <td className="py-3 px-4 text-right">
                                         <div className="flex flex-col items-end">
-                                          <div className="flex items-center gap-1.5">
-                                            <span className="text-[11px] text-gray-400 dark:text-gray-500 tabular-nums">{fmt(apostaAntes)}</span>
-                                            <ArrowRightLeft className="w-3 h-3 text-gray-300 dark:text-gray-600" />
-                                            <span className={`text-sm tabular-nums font-bold ${evoluiuAposta ? 'text-blue-600 dark:text-blue-400' : 'text-gray-700 dark:text-gray-200'}`}>
-                                              {fmt(apostaDepois)}
+                                          {semDadosAntesAposta ? (
+                                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/30" title="Sem dados anteriores — não entra no total apostas">
+                                              Sem dados anteriores
                                             </span>
-                                          </div>
-                                          {evoluiuAposta && (
-                                            <span className="text-[9px] font-bold text-blue-500">+{fmt(apostaDepois! - apostaAntes!)}</span>
+                                          ) : (
+                                            <>
+                                              <div className="flex items-center gap-1.5">
+                                                <span className="text-[11px] text-gray-400 dark:text-gray-500 tabular-nums">{fmt(apostaAntes)}</span>
+                                                <ArrowRightLeft className="w-3 h-3 text-gray-300 dark:text-gray-600" />
+                                                <span className={`text-sm tabular-nums font-bold ${evoluiuAposta ? 'text-blue-600 dark:text-blue-400' : 'text-gray-700 dark:text-gray-200'}`}>
+                                                  {fmt(apostaDepois)}
+                                                </span>
+                                              </div>
+                                              {evoluiuAposta && (
+                                                <span className="text-[9px] font-bold text-blue-500">+{fmt(apostaDepois! - apostaAntes!)}</span>
+                                              )}
+                                            </>
                                           )}
                                         </div>
+                                      </td>
+                                      <td className="py-3 px-4 text-center">
+                                        {entry.resolution_status === 'vinculado' && (semDadosAntesDep || semDadosAntesAposta) ? (
+                                          <button
+                                            type="button"
+                                            onClick={() => desvincularLeadModal(String(entry.lead_id))}
+                                            disabled={desvincularLeadIdModal === String(entry.lead_id)}
+                                            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-amber-500/15 text-amber-700 dark:text-amber-400 hover:bg-amber-500/25 border border-amber-500/40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                            title="Desvincular lead (sem dados anteriores — não entra no lucro/apostas). Fica disponível para repasse."
+                                          >
+                                            {desvincularLeadIdModal === String(entry.lead_id) ? (
+                                              <Loader2 className="w-3.5 h-3.5 animate-spin flex-shrink-0" />
+                                            ) : (
+                                              <Unlink className="w-3.5 h-3.5 flex-shrink-0" />
+                                            )}
+                                            Desvincular
+                                          </button>
+                                        ) : (
+                                          <span className="text-gray-400 dark:text-gray-500">—</span>
+                                        )}
                                       </td>
                                     </tr>
                                   );
