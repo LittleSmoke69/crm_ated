@@ -149,9 +149,12 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const consultants = [...consultantsFromList, ...consultantsDosGerentes];
+    const allowedIds = new Set<string>(userIds);
+    consultoresPorGerente.forEach((subs) => subs.forEach((s) => allowedIds.add(s.id)));
+    const consultantsRaw = [...consultantsFromList, ...consultantsDosGerentes];
+    const consultants = consultantsRaw.filter((c): c is NonNullable<typeof c> => c != null && allowedIds.has(c.id));
 
-    console.log(`${LOG_PREFIX} GET success: ${consultants.length} consultant(s) (${consultantsFromList.length} diretos + ${consultantsDosGerentes.length} consultores de gerentes)`);
+    console.log(`${LOG_PREFIX} GET success: ${consultants.length} consultant(s) (banca ${ctx.bancaId}, ${consultantsFromList.length} diretos + ${consultantsDosGerentes.length} de gerentes)`);
     return successResponse({ consultants });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
