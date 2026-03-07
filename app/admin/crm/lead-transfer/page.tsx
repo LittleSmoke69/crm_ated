@@ -2081,7 +2081,7 @@ export default function AdminLeadTransferPage() {
     }
   }, [userId, historyBancaFilter]);
 
-  const openMoveLeadsForm = useCallback(async (log: { log_id: string; banca_id: string; target_consultant_email: string }) => {
+  const openMoveLeadsForm = useCallback(async (log: { log_id: string; banca_id: string; transfer_type: string; disponivel: number; source_consultant_email: string; target_consultant_email: string }) => {
     setMoveLeadsSelectedLog(log);
     setMoveLeadsTargetEmail('');
     setMoveLeadsTransferType('TF');

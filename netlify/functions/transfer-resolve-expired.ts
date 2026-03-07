@@ -10,7 +10,7 @@
  *
  * Adicione em netlify.toml:
  *   [functions."transfer-resolve-expired"]
- *     schedule = "*/30 * * * *"
+ *     schedule = "*\/30 * * * *"
  */
 
 const CRON_SECRET = process.env.TRANSFER_RESOLVE_CRON_SECRET?.trim();
