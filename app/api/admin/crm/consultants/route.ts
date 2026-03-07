@@ -7,8 +7,8 @@ const LOG_PREFIX = '[lead-transfer][consultants]';
 
 /**
  * GET /api/admin/crm/consultants
- * Lista consultores da banca (user_bancas + profiles) para autocomplete origem/destino.
- * Query: banca_id (obrigatório)
+ * Lista consultores da hierarquia da banca (apenas user_bancas + subordinados vinculados à banca).
+ * Query: banca_id (obrigatório), hierarchy_only=0 (opcional) — se omitido, retorna apenas usuários da hierarquia (user_bancas). hierarchy_only=0 desativa o filtro.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -70,13 +70,25 @@ export async function GET(req: NextRequest) {
 
     const gerenteIds = list.filter((p: { status?: string | null }) => String(p.status ?? '').toLowerCase() === 'gerente').map((p: { id: string }) => p.id);
     const consultoresPorGerente = new Map<string, { id: string; full_name: string; email: string }[]>();
+    const hierarchyOnly = searchParams.get('hierarchy_only') !== '0';
     if (gerenteIds.length > 0) {
       const { data: subordinados } = await supabaseServiceRole
         .from('profiles')
         .select('id, email, full_name, enroller')
         .in('enroller', gerenteIds)
         .not('email', 'is', null);
+      const subordinadoIds = (subordinados ?? []).map((s: { id: string }) => s.id);
+      let idsPermitidos = new Set(subordinadoIds);
+      if (hierarchyOnly && subordinadoIds.length > 0) {
+        const { data: subUb } = await supabaseServiceRole
+          .from('user_bancas')
+          .select('user_id')
+          .filter('banca_ids', 'cs', JSON.stringify([ctx.bancaId]));
+        const idsNaBanca = new Set((subUb ?? []).map((u: { user_id: string }) => u.user_id));
+        idsPermitidos = new Set(subordinadoIds.filter((id: string) => idsNaBanca.has(id)));
+      }
       (subordinados ?? []).forEach((s: { id: string; email: string | null; full_name: string | null; enroller: string | null }) => {
+        if (!idsPermitidos.has(s.id)) return;
         const gerenteId = (s.enroller ?? '').trim();
         if (!gerenteId) return;
         const arr = consultoresPorGerente.get(gerenteId) ?? [];

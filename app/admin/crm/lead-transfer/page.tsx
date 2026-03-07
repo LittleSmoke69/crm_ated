@@ -44,6 +44,10 @@ const LOGS_PAGE_SIZE = 10;
 const LOGS_CHUNK_SIZE = 100;
 /** Leads por página no modal "Leads da transferência" */
 const MODAL_LEADS_PAGE_SIZE = 10;
+/** Solicitações de leads: itens por página na aba Solicitações */
+const SOLICITATION_PAGE_SIZE = 10;
+/** Quantidade de transferências por chamada ao resolve-batch (evita timeout em muitas expiradas) */
+const RESOLVE_BATCH_CHUNK_SIZE = 5;
 /** Valor de leadsPageSize quando o usuário escolhe "Personalizado" (input livre). */
 const PAGE_SIZE_CUSTOM = -1;
 /** Limite máximo para o valor personalizado de itens por página. */
@@ -336,6 +340,9 @@ export default function AdminLeadTransferPage() {
     lead_id: string | number;
     had_balance: boolean;
     saldo_snapshot: number | null;
+    source_consultant_email?: string | null;
+    target_consultant_email?: string | null;
+    transfer_type?: string | null;
     total_depositado_snapshot?: number | null;
     total_apostado_snapshot?: number | null;
     total_ganho_snapshot?: number | null;
@@ -368,7 +375,32 @@ export default function AdminLeadTransferPage() {
   const [extendDeadlineDays, setExtendDeadlineDays] = useState(10);
   const [moveToNextOpen, setMoveToNextOpen] = useState(false);
   const [moveTargetEmail, setMoveTargetEmail] = useState('');
+  const [moveToNextTransferType, setMoveToNextTransferType] = useState<'TF' | 'TF1' | 'TF2' | 'TF3'>('TF');
   const [movingLeads, setMovingLeads] = useState(false);
+  /** Consultores da banca da transferência (para o dropdown do modal "Mover para próximo") */
+  const [moveModalConsultants, setMoveModalConsultants] = useState<Consultant[]>([]);
+  const [loadingMoveModalConsultants, setLoadingMoveModalConsultants] = useState(false);
+  /** Lista de transferências expiradas com pendentes (para botão "Resolver expiradas") */
+  const [expiredLogsList, setExpiredLogsList] = useState<{ id: string; banca_id: string; to_resolve: number }[]>([]);
+  const [loadingExpiredLogs, setLoadingExpiredLogs] = useState(false);
+  const [resolveBatchLoading, setResolveBatchLoading] = useState(false);
+  /** Resultado do resolve-batch para exibir relatório em azul + card verde de resolvidas */
+  const [resolveBatchResult, setResolveBatchResult] = useState<{ results: Array<{ log_id: string; banca_id: string; transfer_type?: string; resolved: number; vinculado: number; disponivel_retransferencia: number; message: string }>; total_resolved: number; total_vinculado: number; total_disponivel: number; message: string } | null>(null);
+  /** Transferências já resolvidas no banco (card verde persistente) */
+  const [resolvedStats, setResolvedStats] = useState<{ total_resolved_logs: number; total_disponivel: number; total_vinculado: number; by_type: Record<string, number> }>({ total_resolved_logs: 0, total_disponivel: 0, total_vinculado: 0, by_type: { TF: 0, TF1: 0, TF2: 0, TF3: 0 } });
+  const [loadingResolvedStats, setLoadingResolvedStats] = useState(false);
+  /** Modal "Mover leads": lista de transferências resolvidas com leads disponíveis */
+  const [moveLeadsModalOpen, setMoveLeadsModalOpen] = useState(false);
+  const [resolvedList, setResolvedList] = useState<Array<{ log_id: string; banca_id: string; transfer_type: string; disponivel: number; source_consultant_email: string; target_consultant_email: string }>>([]);
+  const [loadingResolvedList, setLoadingResolvedList] = useState(false);
+  const [moveLeadsSelectedLog, setMoveLeadsSelectedLog] = useState<{ log_id: string; banca_id: string; transfer_type: string; disponivel: number; source_consultant_email: string; target_consultant_email: string } | null>(null);
+  const [moveLeadsEntries, setMoveLeadsEntries] = useState<Array<{ lead_id: string; resolution_status?: string }>>([]);
+  const [loadingMoveLeadsEntries, setLoadingMoveLeadsEntries] = useState(false);
+  const [moveLeadsTargetEmail, setMoveLeadsTargetEmail] = useState('');
+  const [moveLeadsTransferType, setMoveLeadsTransferType] = useState<'TF' | 'TF1' | 'TF2' | 'TF3'>('TF');
+  const [moveLeadsMoving, setMoveLeadsMoving] = useState(false);
+  const [moveLeadsConsultants, setMoveLeadsConsultants] = useState<Array<{ email?: string; full_name?: string }>>([]);
+  const [loadingMoveLeadsConsultants, setLoadingMoveLeadsConsultants] = useState(false);
   /** Valor mínimo em reais: mostra apenas leads cuja soma dos saldos atinge esse valor (ordem: maior saldo primeiro) */
   const [minSumBalance, setMinSumBalance] = useState<string>('');
   /** Atualizando saldos das transferências (backfill) */
@@ -434,6 +466,8 @@ export default function AdminLeadTransferPage() {
   const transferFromSolicitationBancaIdRef = useRef<string | null>(null);
   /** ID da solicitação quando veio de "Ir para transferir" — ao confirmar a transferência, aprovar esta solicitação também */
   const transferFromSolicitationRequestIdRef = useRef<string | null>(null);
+  /** Paginação da aba Solicitações */
+  const [solicitationPage, setSolicitationPage] = useState(1);
 
   const selectedBanca = bancas.find((b) => b.id === bancaId);
   const filteredBancas = bancaSearchQuery.trim()
@@ -1700,6 +1734,9 @@ export default function AdminLeadTransferPage() {
             const msg = json.data?.message ?? 'Resolução concluída.';
             showToast(msg, 'success');
             await loadModalEntries();
+            await loadTransferLogs(historyBancaFilter);
+            await loadTransferStats(historyBancaFilter);
+            loadExpiredLogs();
           } else {
             showToast(json?.error ?? 'Erro ao resolver transferência.', 'error');
           }
@@ -1757,9 +1794,31 @@ export default function AdminLeadTransferPage() {
     }
   };
 
+  /** Carrega consultores da banca da transferência para o modal "Mover para próximo" (usa banca do log, não a do passo 1). */
+  const loadMoveModalConsultants = useCallback(async (logBancaId: string) => {
+    if (!userId || !logBancaId) return;
+    setLoadingMoveModalConsultants(true);
+    setMoveModalConsultants([]);
+    try {
+      const res = await fetch(`/api/admin/crm/consultants?banca_id=${encodeURIComponent(logBancaId)}&hierarchy_only=1`, { headers: headers() });
+      const json = await res.json();
+      if (res.ok && json.success && Array.isArray(json.data?.consultants)) {
+        setMoveModalConsultants(json.data.consultants);
+      } else {
+        showToast(json?.error ?? 'Erro ao carregar consultores da banca.', 'error');
+      }
+    } catch (e) {
+      showToast('Erro ao carregar consultores.', 'error');
+    } finally {
+      setLoadingMoveModalConsultants(false);
+    }
+  }, [userId]);
+
   const runMoveToNext = async () => {
+    const logBancaId = (selectedLogForModal as { banca_id?: string })?.banca_id?.trim();
+    const effectiveBancaId = logBancaId || bancaId;
     const sourceEmail = (selectedLogForModal as { target_consultant_email?: string })?.target_consultant_email?.trim();
-    if (!bancaId || !userId || !sourceEmail || !moveTargetEmail?.trim()) {
+    if (!effectiveBancaId || !userId || !sourceEmail || !moveTargetEmail?.trim()) {
       showToast('Selecione o consultor destino para repassar os leads.', 'info');
       return;
     }
@@ -1775,11 +1834,11 @@ export default function AdminLeadTransferPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...headers() },
         body: JSON.stringify({
-          banca_id: bancaId,
+          banca_id: effectiveBancaId,
           source_consultant_email: sourceEmail,
           target_consultant_email: moveTargetEmail.trim(),
           leads_ids: leadIds,
-          transfer_type: 'TF',
+          transfer_type: moveToNextTransferType,
         }),
       });
       const json = await res.json();
@@ -1787,6 +1846,7 @@ export default function AdminLeadTransferPage() {
         showToast(json?.data?.message ?? `${leadIds.length} lead(s) repassado(s).`, 'success');
         setMoveToNextOpen(false);
         setMoveTargetEmail('');
+        setMoveModalConsultants([]);
         await loadTransferLogs();
         await loadTransferStats();
         await loadModalEntries();
@@ -1951,13 +2011,215 @@ export default function AdminLeadTransferPage() {
     loadTransferStatsByBanca();
   }, [activeTab, managementFrom, managementTo]);
 
+  const loadExpiredLogs = useCallback(async () => {
+    if (!userId) return;
+    setLoadingExpiredLogs(true);
+    try {
+      const params = new URLSearchParams();
+      if (historyBancaFilter) params.set('banca_id', historyBancaFilter);
+      const res = await fetch(`/api/admin/crm/transfer-logs/expired?${params.toString()}`, { headers: headers() });
+      const json = await res.json();
+      if (res.ok && json.success && Array.isArray(json.data)) {
+        setExpiredLogsList(json.data);
+      } else {
+        setExpiredLogsList([]);
+      }
+    } catch {
+      setExpiredLogsList([]);
+    } finally {
+      setLoadingExpiredLogs(false);
+    }
+  }, [userId, historyBancaFilter]);
+
+  const loadResolvedStats = useCallback(async () => {
+    if (!userId) return;
+    setLoadingResolvedStats(true);
+    try {
+      const params = new URLSearchParams();
+      if (historyBancaFilter) params.set('banca_id', historyBancaFilter);
+      const from = toYYYYMMDD(managementFrom);
+      const to = toYYYYMMDD(managementTo);
+      if (from) params.set('from', from);
+      if (to) params.set('to', to);
+      const res = await fetch(`/api/admin/crm/transfer-logs/resolved-stats?${params.toString()}`, { headers: headers() });
+      const json = await res.json();
+      if (res.ok && json.success && json.data) {
+        const d = json.data;
+        setResolvedStats({
+          total_resolved_logs: Number(d.total_resolved_logs) || 0,
+          total_disponivel: Number(d.total_disponivel) || 0,
+          total_vinculado: Number(d.total_vinculado) || 0,
+          by_type: (d.by_type && typeof d.by_type === 'object') ? { TF: d.by_type.TF ?? 0, TF1: d.by_type.TF1 ?? 0, TF2: d.by_type.TF2 ?? 0, TF3: d.by_type.TF3 ?? 0 } : { TF: 0, TF1: 0, TF2: 0, TF3: 0 },
+        });
+      } else {
+        setResolvedStats({ total_resolved_logs: 0, total_disponivel: 0, total_vinculado: 0, by_type: { TF: 0, TF1: 0, TF2: 0, TF3: 0 } });
+      }
+    } catch {
+      setResolvedStats({ total_resolved_logs: 0, total_disponivel: 0, total_vinculado: 0, by_type: { TF: 0, TF1: 0, TF2: 0, TF3: 0 } });
+    } finally {
+      setLoadingResolvedStats(false);
+    }
+  }, [userId, historyBancaFilter, managementFrom, managementTo]);
+
+  const loadResolvedList = useCallback(async () => {
+    if (!userId) return;
+    setLoadingResolvedList(true);
+    try {
+      const params = new URLSearchParams();
+      if (historyBancaFilter) params.set('banca_id', historyBancaFilter);
+      const res = await fetch(`/api/admin/crm/transfer-logs/resolved-list?${params.toString()}`, { headers: headers() });
+      const json = await res.json();
+      if (res.ok && json.success && Array.isArray(json.data)) {
+        setResolvedList(json.data);
+      } else {
+        setResolvedList([]);
+      }
+    } catch {
+      setResolvedList([]);
+    } finally {
+      setLoadingResolvedList(false);
+    }
+  }, [userId, historyBancaFilter]);
+
+  const openMoveLeadsForm = useCallback(async (log: { log_id: string; banca_id: string; target_consultant_email: string }) => {
+    setMoveLeadsSelectedLog(log);
+    setMoveLeadsTargetEmail('');
+    setMoveLeadsTransferType('TF');
+    setMoveLeadsEntries([]);
+    setMoveLeadsConsultants([]);
+    setLoadingMoveLeadsEntries(true);
+    setLoadingMoveLeadsConsultants(true);
+    try {
+      const [entriesRes, consultantsRes] = await Promise.all([
+        fetch(`/api/admin/crm/transfer-logs/entries?log_id=${encodeURIComponent(log.log_id)}&banca_id=${encodeURIComponent(log.banca_id)}`, { headers: headers() }),
+        fetch(`/api/admin/crm/consultants?banca_id=${encodeURIComponent(log.banca_id)}&hierarchy_only=1`, { headers: headers() }),
+      ]);
+      const entriesJson = await entriesRes.json();
+      const consultantsJson = await consultantsRes.json();
+      const entries = (entriesRes.ok && entriesJson.success && Array.isArray(entriesJson.data))
+        ? entriesJson.data.filter((e: { resolution_status?: string }) => e.resolution_status === 'disponivel_retransferencia')
+        : [];
+      setMoveLeadsEntries(entries);
+      if (consultantsRes.ok && consultantsJson.success && Array.isArray(consultantsJson.data?.consultants)) {
+        setMoveLeadsConsultants(consultantsJson.data.consultants.filter((c: { email?: string }) => c.email?.toLowerCase() !== log.target_consultant_email?.toLowerCase()));
+      }
+    } catch {
+      showToast('Erro ao carregar dados.', 'error');
+    } finally {
+      setLoadingMoveLeadsEntries(false);
+      setLoadingMoveLeadsConsultants(false);
+    }
+  }, []);
+
+  const runMoveLeads = useCallback(async () => {
+    if (!moveLeadsSelectedLog || !moveLeadsTargetEmail?.trim() || !userId) {
+      showToast('Selecione o consultor destino.', 'info');
+      return;
+    }
+    const leadIds = moveLeadsEntries.map((e) => e.lead_id).filter(Boolean);
+    if (leadIds.length === 0) {
+      showToast('Nenhum lead disponível para repasse.', 'info');
+      return;
+    }
+    setMoveLeadsMoving(true);
+    try {
+      const res = await fetch('/api/admin/crm/redistribute-leads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers() },
+        body: JSON.stringify({
+          banca_id: moveLeadsSelectedLog.banca_id,
+          source_consultant_email: moveLeadsSelectedLog.target_consultant_email,
+          target_consultant_email: moveLeadsTargetEmail.trim(),
+          leads_ids: leadIds,
+          transfer_type: moveLeadsTransferType,
+        }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        showToast(json?.data?.message ?? `${leadIds.length} lead(s) repassado(s).`, 'success');
+        setMoveLeadsSelectedLog(null);
+        setMoveLeadsTargetEmail('');
+        setMoveLeadsEntries([]);
+        loadResolvedList();
+        loadResolvedStats();
+        loadTransferLogs(historyBancaFilter);
+        loadTransferStats(historyBancaFilter);
+      } else {
+        showToast(json?.error ?? 'Erro ao repassar leads.', 'error');
+      }
+    } catch {
+      showToast('Erro ao repassar leads.', 'error');
+    } finally {
+      setMoveLeadsMoving(false);
+    }
+  }, [moveLeadsSelectedLog, moveLeadsTargetEmail, moveLeadsEntries, moveLeadsTransferType, userId, loadResolvedList, loadResolvedStats, historyBancaFilter]);
+
+  const runResolveBatch = useCallback(async () => {
+    if (!userId) return;
+    setResolveBatchLoading(true);
+    setResolveBatchResult(null);
+    try {
+      const params = new URLSearchParams();
+      if (historyBancaFilter) params.set('banca_id', historyBancaFilter);
+      const listRes = await fetch(`/api/admin/crm/transfer-logs/expired?${params.toString()}`, { headers: headers() });
+      const listJson = await listRes.json();
+      const list: { id: string; banca_id: string; to_resolve: number }[] = (listRes.ok && listJson.success && Array.isArray(listJson.data)) ? listJson.data : [];
+      if (list.length === 0) {
+        showToast('Nenhuma transferência expirada pendente para resolver.', 'info');
+        return;
+      }
+      const allResults: Array<{ log_id: string; banca_id: string; resolved: number; vinculado: number; disponivel_retransferencia: number; message: string }> = [];
+      let total_resolved = 0;
+      let total_vinculado = 0;
+      let total_disponivel = 0;
+      for (let i = 0; i < list.length; i += RESOLVE_BATCH_CHUNK_SIZE) {
+        const chunk = list.slice(i, i + RESOLVE_BATCH_CHUNK_SIZE);
+        const body: { banca_id?: string; log_ids: string[] } = { log_ids: chunk.map((l) => l.id) };
+        if (historyBancaFilter) body.banca_id = historyBancaFilter;
+        const res = await fetch('/api/admin/crm/transfer-logs/resolve-batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...headers() },
+          body: JSON.stringify(body),
+        });
+        const json = await res.json();
+        if (res.ok && json.success && json.data) {
+          allResults.push(...(json.data.results ?? []));
+          total_resolved += json.data.total_resolved ?? 0;
+          total_vinculado += json.data.total_vinculado ?? 0;
+          total_disponivel += json.data.total_disponivel ?? 0;
+        } else {
+          showToast(json?.error ?? `Erro no lote ${Math.floor(i / RESOLVE_BATCH_CHUNK_SIZE) + 1}.`, 'error');
+        }
+      }
+      setResolveBatchResult({
+        results: allResults,
+        total_resolved,
+        total_vinculado,
+        total_disponivel,
+        message: `Resolvidas ${allResults.length} transferência(s): ${total_vinculado} vinculado(s), ${total_disponivel} disponível(is) para repasse.`,
+      });
+      showToast('Resolução em lote concluída. Todas as transferências expiradas foram atualizadas.', 'success');
+      await loadTransferLogs(historyBancaFilter);
+      await loadTransferStats(historyBancaFilter);
+      await loadExpiredConversionStats();
+      loadExpiredLogs();
+      loadResolvedStats();
+    } catch {
+      showToast('Erro ao resolver transferências expiradas.', 'error');
+    } finally {
+      setResolveBatchLoading(false);
+    }
+  }, [userId, historyBancaFilter, loadExpiredLogs, loadResolvedStats]);
+
   useEffect(() => {
     if (activeTab !== 'history') return;
     setManagementLoaded(true);
     loadTransferLogs(historyBancaFilter);
     loadTransferStats(historyBancaFilter);
     void loadExpiredConversionStats();
-  }, [activeTab, historyBancaFilter, managementFrom, managementTo, managementTransferType, conversionConsultant]);
+    loadExpiredLogs();
+    loadResolvedStats();
+  }, [activeTab, historyBancaFilter, managementFrom, managementTo, managementTransferType, conversionConsultant, loadResolvedStats]);
 
   // Leads transferidos mais de uma vez: contar por lead_id nos logs
   const leadTransferCountMap = React.useMemo(() => {
@@ -2288,22 +2550,25 @@ export default function AdminLeadTransferPage() {
               ) : leadRequests.length === 0 ? (
                 <div className="py-12 text-center text-gray-500 dark:text-gray-400 text-sm">Nenhuma solicitação no momento.</div>
               ) : (
-                <div className="overflow-x-auto border border-gray-200 dark:border-[#404040] rounded-xl">
-                  <table className="w-full text-sm">
-                    <thead className="bg-gray-50 dark:bg-[#333] text-left">
-                      <tr>
-                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Gerente</th>
-                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Consultor (receberá)</th>
-                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Banca</th>
-                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Quantidade</th>
-                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Período (dias)</th>
-                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Status</th>
-                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Data</th>
-                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Ação</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-200 dark:divide-[#404040]">
-                      {leadRequests.map((req) => {
+                <>
+                  <div className="overflow-x-auto border border-gray-200 dark:border-[#404040] rounded-xl">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50 dark:bg-[#333] text-left">
+                        <tr>
+                          <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Gerente</th>
+                          <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Consultor (receberá)</th>
+                          <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Banca</th>
+                          <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Quantidade</th>
+                          <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Período (dias)</th>
+                          <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Status</th>
+                          <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Data</th>
+                          <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Ação</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200 dark:divide-[#404040]">
+                        {leadRequests
+                          .slice((solicitationPage - 1) * SOLICITATION_PAGE_SIZE, solicitationPage * SOLICITATION_PAGE_SIZE)
+                          .map((req) => {
                         const consultoresPendentes = req.consultores ?? [];
                         const primeiro = consultoresPendentes[0];
                         const totalLeads = consultoresPendentes.reduce((s, c) => s + c.quantity, 0);
@@ -2336,9 +2601,40 @@ export default function AdminLeadTransferPage() {
                           </tr>
                         );
                       })}
-                    </tbody>
-                  </table>
-                </div>
+                      </tbody>
+                    </table>
+                  </div>
+                  {leadRequests.length > SOLICITATION_PAGE_SIZE && (
+                    <div className="flex flex-wrap items-center justify-between gap-2 mt-3 pt-3 border-t border-gray-200 dark:border-[#404040]">
+                      <p className="text-sm text-gray-600 dark:text-gray-400">
+                        Exibindo {(solicitationPage - 1) * SOLICITATION_PAGE_SIZE + 1} a {Math.min(solicitationPage * SOLICITATION_PAGE_SIZE, leadRequests.length)} de {leadRequests.length} solicitações
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setSolicitationPage((p) => Math.max(1, p - 1))}
+                          disabled={solicitationPage <= 1}
+                          className="p-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50 disabled:cursor-not-allowed"
+                          aria-label="Página anterior"
+                        >
+                          <ChevronLeft className="w-5 h-5" />
+                        </button>
+                        <span className="text-sm font-medium text-gray-700 dark:text-gray-200 min-w-[100px] text-center">
+                          Página {solicitationPage} de {Math.ceil(leadRequests.length / SOLICITATION_PAGE_SIZE)}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setSolicitationPage((p) => Math.min(Math.ceil(leadRequests.length / SOLICITATION_PAGE_SIZE), p + 1))}
+                          disabled={solicitationPage >= Math.ceil(leadRequests.length / SOLICITATION_PAGE_SIZE)}
+                          className="p-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50 disabled:cursor-not-allowed"
+                          aria-label="Próxima página"
+                        >
+                          <ChevronRight className="w-5 h-5" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           ) : activeTab === 'history' ? (
@@ -2482,6 +2778,229 @@ export default function AdminLeadTransferPage() {
                 </div>
               </div>
               <p className="text-xs text-gray-500 dark:text-gray-400 mb-4 -mt-2">Os cards e a tabela usam o período selecionado. O filtro &quot;Prazo&quot; mostra itens por dias restantes (1, 5, 10 ou personalizado) ou apenas expirados.</p>
+              {/* Resolver transferências expiradas + card verde persistente (resolvidas no banco) + relatório em azul */}
+              {(expiredLogsList.length > 0 || resolveBatchResult || resolveBatchLoading || resolvedStats.total_disponivel > 0 || resolvedStats.total_resolved_logs > 0) && (
+                <div className="mb-4 space-y-3">
+                  {/* Loading em segundo plano: continua visível até todas as transferências serem processadas */}
+                  {resolveBatchLoading && (
+                    <div className="flex items-center gap-3 rounded-xl border-2 border-amber-500/40 bg-amber-50/80 dark:bg-amber-950/30 dark:border-amber-500/30 px-4 py-3">
+                      <Loader2 className="w-6 h-6 animate-spin text-amber-600 dark:text-amber-400 flex-shrink-0" />
+                      <div>
+                        <p className="text-sm font-semibold text-amber-800 dark:text-amber-200">Carregando mais registros em segundo plano</p>
+                        <p className="text-xs text-amber-700 dark:text-amber-300 mt-0.5">Todas as transferências expiradas serão atualizadas automaticamente para serem resolvidas. Aguarde até concluir.</p>
+                      </div>
+                    </div>
+                  )}
+                  {expiredLogsList.length > 0 && !resolveBatchLoading && (
+                    <div className="rounded-xl border border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20 dark:border-amber-500/20 p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-4">
+                        <div className="flex flex-wrap items-center gap-4">
+                          <div>
+                            <p className="text-xs font-semibold text-amber-700 dark:text-amber-300 uppercase tracking-wide">Transferências expiradas</p>
+                            <p className="text-2xl font-bold text-amber-800 dark:text-amber-200">{expiredLogsList.length}</p>
+                          </div>
+                          <div className="w-px h-10 bg-amber-300/50 dark:bg-amber-600/30" />
+                          <div>
+                            <p className="text-xs font-semibold text-amber-700 dark:text-amber-300 uppercase tracking-wide">Leads pendentes de resolução</p>
+                            <p className="text-2xl font-bold text-amber-800 dark:text-amber-200">
+                              {expiredLogsList.reduce((s, l) => s + (l.to_resolve ?? 0), 0)}
+                            </p>
+                            <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-0.5">Após resolver, parte ficará vinculada e parte disponível para mover</p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => runResolveBatch()}
+                          disabled={loadingExpiredLogs}
+                          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold bg-amber-500 text-amber-950 hover:bg-amber-400 border border-amber-600/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+                        >
+                          <RotateCcw className="w-4 h-4" />
+                          Resolver transferências expiradas
+                        </button>
+                      </div>
+                      {loadingExpiredLogs && <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">Carregando lista de expiradas…</p>}
+                    </div>
+                  )}
+                  {/* Card verde persistente: transferências já resolvidas no banco (com leads disponíveis para mover) */}
+                  {(resolvedStats.total_disponivel > 0 || resolvedStats.total_resolved_logs > 0) && (
+                    <div className="rounded-xl border border-emerald-500/30 bg-emerald-50/50 dark:bg-emerald-950/20 dark:border-emerald-500/20 p-4">
+                      <div className="flex flex-wrap items-center gap-4">
+                        <div>
+                          <p className="text-xs font-semibold text-emerald-700 dark:text-emerald-300 uppercase tracking-wide">Transferências resolvidas</p>
+                          <p className="text-2xl font-bold text-emerald-800 dark:text-emerald-200">{loadingResolvedStats ? '…' : resolvedStats.total_resolved_logs}</p>
+                        </div>
+                        <div className="w-px h-10 bg-emerald-300/50 dark:bg-emerald-600/30" />
+                        <div>
+                          <p className="text-xs font-semibold text-emerald-700 dark:text-emerald-300 uppercase tracking-wide">Leads disponíveis para mover</p>
+                          <p className="text-2xl font-bold text-emerald-800 dark:text-emerald-200">{loadingResolvedStats ? '…' : resolvedStats.total_disponivel}</p>
+                        </div>
+                        {/* Detalhamento por TF: origem → próximo slot */}
+                        {(() => {
+                          const nextSlot: Record<string, string> = { TF: 'TF2', TF1: 'TF2', TF2: 'TF3', TF3: 'repassar' };
+                          const entries = (['TF', 'TF1', 'TF2', 'TF3'] as const).filter((t) => (resolvedStats.by_type[t] ?? 0) > 0);
+                          if (entries.length === 0) return null;
+                          return (
+                            <div className="flex flex-wrap items-center gap-3 ml-2 pl-4 border-l border-emerald-300/50 dark:border-emerald-600/30">
+                              {entries.map((t) => (
+                                <div key={t} className="rounded-lg bg-emerald-500/15 dark:bg-emerald-500/10 px-3 py-2">
+                                  <p className="text-[10px] font-semibold text-emerald-700 dark:text-emerald-300 uppercase tracking-wide">{t} → {nextSlot[t]}</p>
+                                  <p className="text-lg font-bold text-emerald-800 dark:text-emerald-200 tabular-nums">{resolvedStats.by_type[t]} leads</p>
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                      <div className="flex flex-wrap items-center justify-between gap-2 mt-2">
+                        <p className="text-[10px] text-emerald-600 dark:text-emerald-400">Use &quot;Mover para próximo&quot; no modal de cada transferência ou use o botão abaixo.</p>
+                        <button
+                          type="button"
+                          onClick={() => { setMoveLeadsModalOpen(true); loadResolvedList(); }}
+                          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-emerald-500 text-emerald-950 hover:bg-emerald-400 border border-emerald-600/50 transition-colors shadow-sm"
+                        >
+                          Mover leads
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {resolveBatchResult && (
+                    <div className="rounded-2xl border-2 border-blue-500/40 bg-blue-50/80 dark:bg-blue-950/30 dark:border-blue-500/30 p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-4 mb-4">
+                          <div>
+                            <h4 className="text-sm font-bold text-blue-800 dark:text-blue-200 mb-1 flex items-center gap-2">
+                              <CheckCircle2 className="w-5 h-5" />
+                              Relatório detalhado
+                            </h4>
+                            <p className="text-sm text-blue-700 dark:text-blue-300">{resolveBatchResult.message}</p>
+                          </div>
+                          <div className="rounded-xl bg-blue-500/20 dark:bg-blue-500/10 border-2 border-blue-500/50 px-5 py-3 text-center min-w-[180px]">
+                            <p className="text-xs font-semibold text-blue-800 dark:text-blue-200 uppercase tracking-wide">Total disponível</p>
+                            <p className="text-3xl font-bold text-blue-700 dark:text-blue-100 mt-1">{resolveBatchResult.total_disponivel}</p>
+                          </div>
+                        </div>
+                        <p className="text-sm font-semibold text-blue-800 dark:text-blue-200 mb-2">
+                          Resultado: <strong>{resolveBatchResult.total_vinculado}</strong> vinculado(s) ao consultor, <strong>{resolveBatchResult.total_disponivel}</strong> disponível(is) para mover.
+                        </p>
+                        {resolveBatchResult.results.length > 0 && (
+                          <div className="overflow-x-auto border border-blue-200 dark:border-blue-800 rounded-xl">
+                            <table className="w-full text-sm">
+                              <thead className="bg-blue-100/80 dark:bg-blue-900/40">
+                                <tr>
+                                  <th className="text-left px-3 py-2 font-semibold text-blue-900 dark:text-blue-100">Transferência (ID)</th>
+                                  <th className="text-left px-3 py-2 font-semibold text-blue-900 dark:text-blue-100">Tipo</th>
+                                  <th className="text-left px-3 py-2 font-semibold text-blue-900 dark:text-blue-100">Resolvidos</th>
+                                  <th className="text-left px-3 py-2 font-semibold text-blue-900 dark:text-blue-100">Vinculados</th>
+                                  <th className="text-left px-3 py-2 font-semibold text-blue-900 dark:text-blue-100">Para mover</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-blue-200 dark:divide-blue-800">
+                                {resolveBatchResult.results.map((r) => (
+                                  <tr key={r.log_id} className="bg-white/50 dark:bg-[#1f1f1f]/50">
+                                    <td className="px-3 py-2 font-mono text-xs text-blue-800 dark:text-blue-200">{r.log_id.slice(0, 8)}…</td>
+                                    <td className="px-3 py-2 font-medium text-blue-800 dark:text-blue-200">{r.transfer_type ?? 'TF'}</td>
+                                    <td className="px-3 py-2 tabular-nums">{r.resolved}</td>
+                                    <td className="px-3 py-2 tabular-nums text-emerald-600 dark:text-emerald-400">{r.vinculado}</td>
+                                    <td className="px-3 py-2 tabular-nums text-amber-600 dark:text-amber-400">{r.disponivel_retransferencia}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                        <button type="button" onClick={() => setResolveBatchResult(null)} className="mt-3 text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline">Fechar relatório</button>
+                    </div>
+                  )}
+                </div>
+              )}
+              {/* Modal Mover leads: lista de transferências resolvidas */}
+              {moveLeadsModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60" onClick={() => { if (!moveLeadsSelectedLog) setMoveLeadsModalOpen(false); }}>
+                  <div className="bg-white dark:bg-[#1f1f1f] rounded-2xl border border-gray-200 dark:border-[#404040] shadow-xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-[#404040]">
+                      <h3 className="text-lg font-bold text-gray-900 dark:text-white">Mover leads</h3>
+                      <button type="button" onClick={() => { setMoveLeadsModalOpen(false); setMoveLeadsSelectedLog(null); }} className="p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-[#404040] text-gray-600 dark:text-gray-300"><X className="w-5 h-5" /></button>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-4">
+                      {moveLeadsSelectedLog ? (
+                        <div className="space-y-4">
+                          <div className="rounded-xl border border-emerald-500/30 bg-emerald-50/30 dark:bg-emerald-950/20 p-4">
+                            <p className="text-sm font-semibold text-emerald-800 dark:text-emerald-200 mb-1">Transferência {moveLeadsSelectedLog.log_id.slice(0, 8)}… • {moveLeadsSelectedLog.disponivel} lead(s) • TF {moveLeadsSelectedLog.transfer_type}</p>
+                            <p className="text-xs text-emerald-700 dark:text-emerald-300">Consultor de origem: {moveLeadsSelectedLog.target_consultant_email || '-'}</p>
+                          </div>
+                          <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Consultor destino</label>
+                          {loadingMoveLeadsConsultants ? (
+                            <div className="flex items-center gap-2 py-2 text-sm text-gray-500 dark:text-gray-400"><Loader2 className="w-4 h-4 animate-spin" /> Carregando consultores…</div>
+                          ) : (
+                            <select
+                              value={moveLeadsTargetEmail}
+                              onChange={(e) => setMoveLeadsTargetEmail(e.target.value)}
+                              className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm mb-3 focus:ring-2 focus:ring-emerald-500"
+                            >
+                              <option value="">Selecionar consultor</option>
+                              {moveLeadsConsultants.map((c) => (
+                                <option key={c.email} value={c.email ?? ''}>{c.full_name ?? c.email ?? ''}</option>
+                              ))}
+                            </select>
+                          )}
+                          <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Tipo de transferência</label>
+                          <select
+                            value={moveLeadsTransferType}
+                            onChange={(e) => setMoveLeadsTransferType(e.target.value as 'TF' | 'TF1' | 'TF2' | 'TF3')}
+                            className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm mb-4 focus:ring-2 focus:ring-emerald-500"
+                          >
+                            <option value="TF">TF</option>
+                            <option value="TF1">TF1</option>
+                            <option value="TF2">TF2</option>
+                            <option value="TF3">TF3</option>
+                          </select>
+                          <div className="flex justify-end gap-2">
+                            <button type="button" onClick={() => setMoveLeadsSelectedLog(null)} className="px-3 py-2 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#404040] transition-colors">Voltar</button>
+                            <button type="button" onClick={() => runMoveLeads()} disabled={!moveLeadsTargetEmail?.trim() || moveLeadsMoving} className="px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500 text-white hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+                              {moveLeadsMoving ? <><Loader2 className="w-4 h-4 animate-spin inline-block mr-1.5" /> Repassando…</> : 'Confirmar transferência'}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">Transferências resolvidas com leads disponíveis para mover. Clique em &quot;Mover&quot; para repassar ao próximo consultor.</p>
+                          {loadingResolvedList ? (
+                            <div className="flex items-center justify-center py-8"><Loader2 className="w-8 h-8 animate-spin text-emerald-500" /></div>
+                          ) : resolvedList.length === 0 ? (
+                            <p className="text-sm text-gray-500 dark:text-gray-400 py-4 text-center">Nenhuma transferência resolvida com leads disponíveis.</p>
+                          ) : (
+                            <div className="overflow-x-auto border border-gray-200 dark:border-[#404040] rounded-xl">
+                              <table className="w-full text-sm">
+                                <thead className="bg-gray-100 dark:bg-[#333]">
+                                  <tr>
+                                    <th className="text-left px-3 py-2 font-semibold text-gray-800 dark:text-gray-200">Transferência</th>
+                                    <th className="text-left px-3 py-2 font-semibold text-gray-800 dark:text-gray-200">Leads</th>
+                                    <th className="text-left px-3 py-2 font-semibold text-gray-800 dark:text-gray-200">Consultor origem</th>
+                                    <th className="text-left px-3 py-2 font-semibold text-gray-800 dark:text-gray-200">Tipo</th>
+                                    <th className="text-left px-3 py-2 font-semibold text-gray-800 dark:text-gray-200">Ação</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-200 dark:divide-[#404040]">
+                                  {resolvedList.map((r) => (
+                                    <tr key={r.log_id} className="bg-white dark:bg-[#2a2a2a]">
+                                      <td className="px-3 py-2 font-mono text-xs text-gray-800 dark:text-gray-200">{r.log_id.slice(0, 8)}…</td>
+                                      <td className="px-3 py-2 tabular-nums font-medium text-emerald-600 dark:text-emerald-400">{r.disponivel}</td>
+                                      <td className="px-3 py-2 text-gray-700 dark:text-gray-300 truncate max-w-[180px]" title={r.target_consultant_email}>{r.target_consultant_email || '-'}</td>
+                                      <td className="px-3 py-2 font-medium text-gray-800 dark:text-gray-200">{r.transfer_type}</td>
+                                      <td className="px-3 py-2">
+                                        <button type="button" onClick={() => openMoveLeadsForm(r)} className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500 text-white hover:bg-emerald-400 transition-colors">Mover</button>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
               {historyBancaFilter === '' && (loadingLogs || loadingStats) && (
                 <div className="mb-4 flex items-center gap-2 rounded-lg border border-[#8CD955]/40 bg-[#8CD955]/10 dark:bg-[#8CD955]/15 px-4 py-3 text-sm text-gray-700 dark:text-gray-200">
                   <Loader2 className="w-4 h-4 animate-spin text-[#8CD955] flex-shrink-0" />
@@ -2491,6 +3010,11 @@ export default function AdminLeadTransferPage() {
               {managementLoaded && (
                 <>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                    <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl p-4 shadow-sm">
+                      <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Leads vinculados (resolvidas)</p>
+                      <p className="text-2xl font-bold text-emerald-600 mt-1">{loadingResolvedStats ? '…' : resolvedStats.total_vinculado}</p>
+                      <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">Vinculados aos consultores nas transferências resolvidas</p>
+                    </div>
                     <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl p-4 shadow-sm">
                       <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Transferidos (total)</p>
                       <p className="text-2xl font-bold text-[#8CD955] mt-1">{transferStats?.totalTransferred ?? 0}</p>
@@ -2502,12 +3026,6 @@ export default function AdminLeadTransferPage() {
                     <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl p-4 shadow-sm">
                       <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Sem saldo</p>
                       <p className="text-2xl font-bold text-gray-600 mt-1">{transferStats?.transferidos_sem_saldo ?? 0}</p>
-                    </div>
-                    <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl p-4 shadow-sm">
-                      <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Convertidos (destino)</p>
-                      <p className="text-2xl font-bold text-[#8CD955] mt-1">
-                        {conversionConsultant ? `${transferStats?.convertedCount ?? 0} / ${transferStats?.receivedByTarget ?? 0}` : '-'}
-                      </p>
                     </div>
                   </div>
                   {SHOW_BAR_CHART_BY_BANCA && (
@@ -2686,17 +3204,22 @@ export default function AdminLeadTransferPage() {
                             <td className="py-3 px-4 text-gray-600 dark:text-white tabular-nums">{fmtSaldo}</td>
                             <td className="py-3 px-4 text-gray-600 dark:text-white truncate max-w-[160px] font-mono text-xs" title={ids.join(', ')}>{ids.length ? ids.slice(0, 6).join(', ') + (ids.length > 6 ? ` +${ids.length - 6}` : '') : '-'}</td>
                             <td className="py-3 px-4 text-gray-600 dark:text-white">{reTransferidos > 0 ? <span className="text-amber-500 dark:text-amber-400 font-medium">{reTransferidos}</span> : '-'}</td>
-                            <td className="py-3 px-4" title={(log as { devolvido_at?: string }).devolvido_at ? 'Leads desta transferência foram devolvidos ao consultor de origem.' : 'Prazo de 10 dias para conversão a partir da transferência. Após isso o lead pode ser repassado.'}>
+                            <td className="py-3 px-4" title={(log as { devolvido_at?: string }).devolvido_at ? 'Leads desta transferência foram devolvidos ao consultor de origem.' : (log as { resolution_status_log?: string }).resolution_status_log === 'resolvida' ? 'Transferência expirada e já resolvida (vinculados/disponíveis para repasse).' : 'Prazo de conversão a partir da transferência. Após expirar, resolver para vincular ou disponibilizar para repasse.'}>
                               {(log as { devolvido_at?: string }).devolvido_at ? (
                                 <span className="inline-flex items-center gap-1 text-sm text-amber-600 dark:text-amber-400 font-medium">
                                   <RotateCcw className="w-3.5 h-3.5 flex-shrink-0" />
                                   Devolvido
                                 </span>
+                              ) : (log as { resolution_status_log?: string }).resolution_status_log === 'resolvida' ? (
+                                <span className="inline-flex items-center gap-1 text-sm text-emerald-600 dark:text-emerald-400 font-medium">
+                                  <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />
+                                  Resolvido
+                                </span>
                               ) : (
                                 <span className="inline-flex items-center gap-1 text-sm">
                                   <Clock className="w-3.5 h-3.5 flex-shrink-0 text-gray-600 dark:text-white" />
-                                  <span className="text-red-600 dark:text-red-400 font-medium">
-                                    {deadline.expired ? 'Expirado' : `${deadline.daysLeft} dia(s) restante(s)`}
+                                  <span className={deadline.expired ? 'text-red-600 dark:text-red-400 font-medium' : 'text-gray-700 dark:text-gray-200 font-medium'}>
+                                    {deadline.expired ? 'Expirada' : `${deadline.daysLeft} dia(s) restante(s)`}
                                   </span>
                                 </span>
                               )}
@@ -2955,7 +3478,11 @@ export default function AdminLeadTransferPage() {
                               {disponivelCount > 0 && (
                                 <button
                                   type="button"
-                                  onClick={() => { if (consultants.length === 0 && bancaId) loadConsultants(); setMoveToNextOpen(true); }}
+                                  onClick={() => {
+                                    const logBancaId = (selectedLogForModal as { banca_id?: string })?.banca_id?.trim();
+                                    if (logBancaId) loadMoveModalConsultants(logBancaId);
+                                    setMoveToNextOpen(true);
+                                  }}
                                   className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold bg-blue-500/10 text-blue-700 dark:text-blue-400 hover:bg-blue-500/20 border border-blue-500/20 transition-all active:scale-95"
                                 >
                                   Mover para próximo ({disponivelCount})
@@ -3047,6 +3574,8 @@ export default function AdminLeadTransferPage() {
                                       ID {modalSortField === 'lead_id' && (modalSortOrder === 'asc' ? '↑' : '↓')}
                                     </div>
                                   </th>
+                                  <th className="text-left font-bold text-[11px] uppercase tracking-wider py-3 px-4 text-gray-500 dark:text-gray-400 w-16">Slot</th>
+                                  <th className="text-left font-bold text-[11px] uppercase tracking-wider py-3 px-4 text-gray-500 dark:text-gray-400 min-w-[120px]">Consultor doador</th>
                                   <th
                                     className="text-left font-bold text-[11px] uppercase tracking-wider py-3 px-4 text-gray-500 dark:text-gray-400 min-w-[150px] cursor-pointer hover:bg-gray-100 dark:hover:bg-[#404040] transition-colors"
                                     onClick={() => handleModalSort('name')}
@@ -3095,6 +3624,12 @@ export default function AdminLeadTransferPage() {
                                   return (
                                     <tr key={`${entry.lead_id}-${globalIdx}`} className="border-t border-gray-100 dark:border-[#404040] hover:bg-gray-50/80 dark:hover:bg-[#333] transition-all group">
                                       <td className="py-3 px-4 font-mono text-gray-400 dark:text-gray-500 text-[10px]">{String(entry.lead_id)}</td>
+                                      <td className="py-3 px-4">
+                                        <span className="inline-flex px-2 py-0.5 rounded text-[10px] font-bold bg-gray-100 dark:bg-[#404040] text-gray-700 dark:text-gray-300">
+                                          {entry.transfer_type ?? 'TF'}
+                                        </span>
+                                      </td>
+                                      <td className="py-3 px-4 text-xs text-gray-600 dark:text-gray-400 truncate max-w-[140px]" title={entry.source_consultant_email ?? ''}>{entry.source_consultant_email ?? '—'}</td>
                                       <td className="py-3 px-4">
                                         <div className="flex flex-col">
                                           <span className="text-sm font-semibold text-gray-800 dark:text-white truncate max-w-[180px]" title={fullName}>{fullName}</span>
@@ -3205,24 +3740,42 @@ export default function AdminLeadTransferPage() {
                             Leads marcados como &quot;Disponível para repasse&quot; serão transferidos do consultor atual para o consultor escolhido.
                           </p>
                           <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Consultor destino</label>
+                          {loadingMoveModalConsultants ? (
+                            <div className="flex items-center gap-2 py-2 text-sm text-gray-500 dark:text-gray-400 mb-3">
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                              Carregando consultores da banca…
+                            </div>
+                          ) : (
+                            <select
+                              value={moveTargetEmail}
+                              onChange={(e) => setMoveTargetEmail(e.target.value)}
+                              className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm mb-3 focus:ring-2 focus:ring-[#8CD955]"
+                            >
+                              <option value="">Selecionar consultor</option>
+                              {moveModalConsultants
+                                .filter((c) => c.email?.toLowerCase() !== (selectedLogForModal as { target_consultant_email?: string })?.target_consultant_email?.toLowerCase())
+                                .map((c) => (
+                                  <option key={c.email} value={c.email ?? ''}>
+                                    {c.full_name ?? c.email ?? ''}
+                                  </option>
+                                ))}
+                            </select>
+                          )}
+                          <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Tipo de transferência</label>
                           <select
-                            value={moveTargetEmail}
-                            onChange={(e) => setMoveTargetEmail(e.target.value)}
+                            value={moveToNextTransferType}
+                            onChange={(e) => setMoveToNextTransferType(e.target.value as 'TF' | 'TF1' | 'TF2' | 'TF3')}
                             className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm mb-4 focus:ring-2 focus:ring-[#8CD955]"
                           >
-                            <option value="">Selecionar consultor</option>
-                            {consultants
-                              .filter((c) => c.email?.toLowerCase() !== (selectedLogForModal as { target_consultant_email?: string })?.target_consultant_email?.toLowerCase())
-                              .map((c) => (
-                                <option key={c.email} value={c.email ?? ''}>
-                                  {c.full_name ?? c.email ?? ''}
-                                </option>
-                              ))}
+                            <option value="TF">TF</option>
+                            <option value="TF1">TF1</option>
+                            <option value="TF2">TF2</option>
+                            <option value="TF3">TF3</option>
                           </select>
                           <div className="flex justify-end gap-2">
                             <button
                               type="button"
-                              onClick={() => { setMoveToNextOpen(false); setMoveTargetEmail(''); }}
+                              onClick={() => { setMoveToNextOpen(false); setMoveTargetEmail(''); setMoveToNextTransferType('TF'); setMoveModalConsultants([]); }}
                               className="px-3 py-2 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#404040] transition-colors"
                             >
                               Cancelar
@@ -3239,7 +3792,7 @@ export default function AdminLeadTransferPage() {
                                   Repassando…
                                 </>
                               ) : (
-                                'Repassar leads'
+                                'Confirmar transferência'
                               )}
                             </button>
                           </div>

@@ -5,6 +5,7 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { getAdminBancaId, getAdminAllowedBancaIds } from '@/lib/server/crm/adminLeadTransferContext';
 import { getEffectiveZaplotoId } from '@/lib/tenant-context';
 import { normalizeDateParam, dateToStartOfDaySãoPauloISO, dateToEndOfDaySãoPauloISO } from '@/lib/server/crm/transfer-date-utils';
+import { isTransferExpired } from '@/lib/server/crm/resolveTransferLog';
 
 const LOG_PREFIX = '[admin][transfer-logs]';
 
@@ -112,14 +113,19 @@ export async function GET(req: NextRequest) {
     const logIds = list.map((r) => r.id);
     const { data: entries } = await supabaseServiceRole
       .from('admin_lead_transfer_entries')
-      .select('transfer_log_id, saldo_snapshot')
+      .select('transfer_log_id, saldo_snapshot, resolution_status')
       .in('transfer_log_id', logIds);
 
     const totalBalanceByLogId = new Map<string, number>();
-    (entries ?? []).forEach((e: { transfer_log_id: string; saldo_snapshot?: number | null }) => {
+    const resolutionByLogId = new Map<string, { hasPending: boolean; total: number }>();
+    (entries ?? []).forEach((e: { transfer_log_id: string; saldo_snapshot?: number | null; resolution_status?: string | null }) => {
       const current = totalBalanceByLogId.get(e.transfer_log_id) ?? 0;
       const saldo = e.saldo_snapshot != null ? Number(e.saldo_snapshot) : 0;
       totalBalanceByLogId.set(e.transfer_log_id, current + saldo);
+      const res = resolutionByLogId.get(e.transfer_log_id) ?? { hasPending: false, total: 0 };
+      res.total += 1;
+      if (e.resolution_status === 'pending') res.hasPending = true;
+      resolutionByLogId.set(e.transfer_log_id, res);
     });
 
     let storedTotalByLogId = new Map<string, number>();
@@ -176,19 +182,28 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    const DEFAULT_DEADLINE = 10;
     const enriched = list.map((log) => {
       const sourceEmail = (log.source_consultant_email ?? '').trim().toLowerCase();
       const targetEmail = (log.target_consultant_email ?? '').trim().toLowerCase();
       const storedTotal = storedTotalByLogId.get(log.id) ?? null;
       const totalBalance = storedTotal ?? totalBalanceByLogId.get(log.id) ?? 0;
       const performedBy = (log.performed_by_user_id ?? '').trim();
+      const deadlineDays = log.deadline_days != null ? log.deadline_days : DEFAULT_DEADLINE;
+      const expired = isTransferExpired(log.created_at, deadlineDays);
+      const resInfo = resolutionByLogId.get(log.id);
+      let resolution_status_log: 'no_prazo' | 'expirada' | 'resolvida' = 'no_prazo';
+      if (expired) {
+        resolution_status_log = resInfo?.hasPending ? 'expirada' : 'resolvida';
+      }
       return {
         ...log,
-        deadline_days: log.deadline_days != null ? log.deadline_days : 10,
+        deadline_days: deadlineDays,
         total_balance_snapshot: totalBalance,
         source_consultant_name: sourceEmail ? (emailToName.get(sourceEmail) || log.source_consultant_email) : (log.source_consultant_email ?? '-'),
         target_consultant_name: targetEmail ? (emailToName.get(targetEmail) || log.target_consultant_email) : (log.target_consultant_email ?? '-'),
         performed_by_name: performedBy ? (performedByName.get(performedBy) || '-') : '-',
+        resolution_status_log,
       };
     });
 

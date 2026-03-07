@@ -47,7 +47,7 @@ export async function GET(req: NextRequest) {
 
     let { data: entries, error } = await supabaseServiceRole
       .from('admin_lead_transfer_entries')
-      .select('lead_id, had_balance, saldo_snapshot, target_consultant_email, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, resolution_status, resolved_at, current_total_depositado_at_resolution, current_total_apostado_at_resolution')
+      .select('lead_id, had_balance, saldo_snapshot, source_consultant_email, target_consultant_email, transfer_type, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, resolution_status, resolved_at, current_total_depositado_at_resolution, current_total_apostado_at_resolution')
       .eq('banca_id', resolved.bancaId)
       .eq('transfer_log_id', logId)
       .order('lead_id', { ascending: true });
@@ -95,7 +95,7 @@ export async function GET(req: NextRequest) {
           } else {
             const { data: entriesAfter } = await supabaseServiceRole
               .from('admin_lead_transfer_entries')
-              .select('lead_id, had_balance, saldo_snapshot, target_consultant_email, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, resolution_status, resolved_at, current_total_depositado_at_resolution, current_total_apostado_at_resolution')
+              .select('lead_id, had_balance, saldo_snapshot, source_consultant_email, target_consultant_email, transfer_type, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, resolution_status, resolved_at, current_total_depositado_at_resolution, current_total_apostado_at_resolution')
               .eq('banca_id', resolved.bancaId)
               .eq('transfer_log_id', logId)
               .order('lead_id', { ascending: true });
@@ -142,6 +142,9 @@ export async function GET(req: NextRequest) {
       lead_id: string | number;
       had_balance?: boolean;
       saldo_snapshot?: number | null;
+      source_consultant_email?: string | null;
+      target_consultant_email?: string | null;
+      transfer_type?: string | null;
       total_depositado_snapshot?: number | null;
       total_apostado_snapshot?: number | null;
       total_ganho_snapshot?: number | null;
@@ -158,6 +161,9 @@ export async function GET(req: NextRequest) {
         lead_id: e.lead_id,
         had_balance: e.had_balance === true,
         saldo_snapshot: e.saldo_snapshot != null ? Number(e.saldo_snapshot) : null,
+        source_consultant_email: e.source_consultant_email ?? null,
+        target_consultant_email: e.target_consultant_email ?? null,
+        transfer_type: (e.transfer_type ?? 'TF').trim(),
         total_depositado_snapshot: e.total_depositado_snapshot != null ? Number(e.total_depositado_snapshot) : null,
         total_apostado_snapshot: e.total_apostado_snapshot != null ? Number(e.total_apostado_snapshot) : null,
         total_ganho_snapshot: e.total_ganho_snapshot != null ? Number(e.total_ganho_snapshot) : null,
