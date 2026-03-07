@@ -14,6 +14,7 @@ import { getAdminBancaId, getAdminAllowedBancaIds } from '@/lib/server/crm/admin
 import { getEffectiveZaplotoId } from '@/lib/tenant-context';
 import { normalizeDateParam, dateToStartOfDaySãoPauloISO, dateToEndOfDaySãoPauloISO } from '@/lib/server/crm/transfer-date-utils';
 import { isTransferExpired } from '@/lib/server/crm/resolveTransferLog';
+import { createCrmRedistributionClient } from '@/lib/server/crm/crmRedistributionClient';
 
 const DEFAULT_DEADLINE_DAYS = 10;
 
@@ -66,7 +67,7 @@ export async function GET(req: NextRequest) {
     const logIds = expiredLogs.map((l) => l.id);
     const { data: entries } = await supabaseServiceRole
       .from('admin_lead_transfer_entries')
-      .select('transfer_log_id, banca_id, resolution_status, total_depositado_snapshot, current_total_depositado_at_resolution, total_apostado_snapshot, current_total_apostado_at_resolution')
+      .select('transfer_log_id, banca_id, lead_id, target_consultant_email, resolution_status, total_depositado_snapshot, current_total_depositado_at_resolution, total_apostado_snapshot, current_total_apostado_at_resolution')
       .in('transfer_log_id', logIds)
       .in('banca_id', bancaIds)
       .limit(MAX_ROWS);
@@ -87,22 +88,75 @@ export async function GET(req: NextRequest) {
     });
 
     const resolvedLogIds = new Set(expiredLogs.filter((l) => !pendingByLogId.has(l.id)).map((l) => l.id));
+
+    type EntryRowFull = { transfer_log_id: string; banca_id: string; lead_id?: string | number; target_consultant_email?: string | null; resolution_status?: string | null; total_depositado_snapshot?: number | null; current_total_depositado_at_resolution?: number | null; total_apostado_snapshot?: number | null; current_total_apostado_at_resolution?: number | null };
+    const entriesFull = (entries ?? []) as EntryRowFull[];
+    const needFallback = entriesFull.filter(
+      (e) => resolvedLogIds.has(e.transfer_log_id) && e.resolution_status === 'vinculado'
+        && ((e.total_depositado_snapshot != null && e.current_total_depositado_at_resolution == null)
+          || (e.total_apostado_snapshot != null && e.current_total_apostado_at_resolution == null))
+    );
+    const crmDepositByKey = new Map<string, number>();
+    const crmApostaByKey = new Map<string, number>();
+    if (needFallback.length > 0 && bancaIds.length > 0) {
+      const byTarget = new Map<string, { bancaId: string; leadIds: string[] }>();
+      for (const e of needFallback) {
+        const target = (e.target_consultant_email ?? '').trim();
+        const leadId = e.lead_id != null ? String(e.lead_id) : '';
+        if (!target || !leadId) continue;
+        const key = `${e.banca_id}:${target}`;
+        if (!byTarget.has(key)) byTarget.set(key, { bancaId: e.banca_id, leadIds: [] });
+        if (!byTarget.get(key)!.leadIds.includes(leadId)) byTarget.get(key)!.leadIds.push(leadId);
+      }
+      for (const [key, { bancaId: bid }] of byTarget) {
+        const parts = key.split(':');
+        const target = parts.length > 1 ? parts.slice(1).join(':') : '';
+        if (!target) continue;
+        const resolved = await getAdminBancaId(userId, profile, bid);
+        if (!resolved?.crmBaseUrl) continue;
+        try {
+          const client = createCrmRedistributionClient(resolved.crmBaseUrl);
+          const result = await client.getIndicatedsByConsultant(target, 5000, 1, { transferredFilter: 'yes', sort: 'created_at', direction: 'desc' });
+          const details = Array.isArray(result.data) ? result.data : [];
+          for (const d of details) {
+            const id = d?.id != null ? String(d.id) : '';
+            if (!id) continue;
+            const dep = d.total_depositado != null ? Number(d.total_depositado) : 0;
+            const apost = d.total_apostado != null ? Number(d.total_apostado) : 0;
+            crmDepositByKey.set(`${bid}:${target}:${id}`, dep);
+            crmApostaByKey.set(`${bid}:${target}:${id}`, apost);
+          }
+        } catch {
+          // CRM falhou; usa 0 como fallback
+        }
+      }
+    }
+
     let total_lucro_realizado = 0;
     let total_aposta_realizado = 0;
-    for (const e of (entries ?? []) as EntryRow[]) {
+    for (const e of entriesFull) {
       if (!resolvedLogIds.has(e.transfer_log_id)) continue;
       if (e.resolution_status !== 'vinculado') continue;
+      const target = (e.target_consultant_email ?? '').trim();
+      const leadId = e.lead_id != null ? String(e.lead_id) : '';
+      const crmKey = target && leadId ? `${e.banca_id}:${target}:${leadId}` : '';
       // Só conta lucro quando há dados anteriores (snapshot) — sem antes não é possível calcular o ganho real
+      // Alinha com o modal: usa total_depositado do CRM como fallback quando current_total_depositado_at_resolution é null
       if (e.total_depositado_snapshot != null) {
         const depAntes = Number(e.total_depositado_snapshot);
-        const depDepois = e.current_total_depositado_at_resolution != null ? Number(e.current_total_depositado_at_resolution) : 0;
+        const depDepois = e.current_total_depositado_at_resolution != null
+          ? Number(e.current_total_depositado_at_resolution)
+          : (crmKey ? (crmDepositByKey.get(crmKey) ?? 0) : 0);
         if (depAntes === 0) total_lucro_realizado += depDepois;
         else total_lucro_realizado += Math.max(0, depDepois - depAntes);
       }
       // Só conta aposta quando há dados anteriores (snapshot) — sem antes não é possível calcular o total real
+      // Alinha com o modal: usa total_apostado do CRM como fallback quando current_total_apostado_at_resolution é null
       if (e.total_apostado_snapshot != null) {
         const apAntes = Number(e.total_apostado_snapshot);
-        const apDepois = e.current_total_apostado_at_resolution != null ? Number(e.current_total_apostado_at_resolution) : 0;
+        const apDepois = e.current_total_apostado_at_resolution != null
+          ? Number(e.current_total_apostado_at_resolution)
+          : (crmKey ? (crmApostaByKey.get(crmKey) ?? 0) : 0);
         if (apAntes === 0) total_aposta_realizado += apDepois;
         else total_aposta_realizado += Math.max(0, apDepois - apAntes);
       }

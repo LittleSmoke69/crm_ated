@@ -27,6 +27,8 @@ const bodySchema = z.object({
   transfer_deadline_days: z.number().int().min(1).max(365).optional().default(10),
   filters_snapshot: z.record(z.string(), z.unknown()).optional(),
   lead_snapshots: z.array(leadSnapshotSchema).optional(),
+  /** ID do log de origem (ao mover do modal Mover leads). Marca entries como repassado para removê-las da lista. */
+  source_transfer_log_id: z.string().uuid().optional(),
 }).refine(
   (data) => data.source_consultant_email.toLowerCase() !== data.target_consultant_email.toLowerCase(),
   { message: 'Consultor origem e destino devem ser diferentes.', path: ['target_consultant_email'] }
@@ -60,7 +62,7 @@ export async function POST(req: NextRequest) {
       return errorResponse(msg, 400);
     }
 
-    const { banca_id, source_consultant_email, target_consultant_email, leads_ids, transfer_type, transfer_deadline_days, filters_snapshot, lead_snapshots } = parsed.data;
+    const { banca_id, source_consultant_email, target_consultant_email, leads_ids, transfer_type, transfer_deadline_days, filters_snapshot, lead_snapshots, source_transfer_log_id } = parsed.data;
     const ctx = await requireAdminLeadTransferContext(req, banca_id);
     console.log(`${LOG_PREFIX} POST context: userId=${ctx.userId}, bancaId=${ctx.bancaId}, crmBaseUrl=${ctx.crmBaseUrl}, bancaName=${ctx.bancaName ?? 'n/a'}`);
 
@@ -168,6 +170,26 @@ export async function POST(req: NextRequest) {
           console.error(`${LOG_PREFIX} POST admin_lead_transfer_entries insert error:`, entriesError);
         } else {
           console.log(`${LOG_PREFIX} POST admin_lead_transfer_entries inserted: ${entries.length} row(s)`);
+        }
+      }
+
+      // Marca as entries da transferência de origem como 'repassado' (remove da lista Mover leads)
+      if (source_transfer_log_id && Array.isArray(leads_ids) && leads_ids.length > 0) {
+        const leadIdStrings = leads_ids.map((id) => String(id));
+        const { error: updateSourceError } = await supabaseServiceRole
+          .from('admin_lead_transfer_entries')
+          .update({
+            resolution_status: 'repassado',
+            resolved_at: new Date().toISOString(),
+          })
+          .eq('transfer_log_id', source_transfer_log_id)
+          .eq('banca_id', ctx.bancaId)
+          .in('lead_id', leadIdStrings)
+          .eq('resolution_status', 'disponivel_retransferencia');
+        if (updateSourceError) {
+          console.warn(`${LOG_PREFIX} POST update source entries to repassado (optional):`, updateSourceError);
+        } else {
+          console.log(`${LOG_PREFIX} POST source entries marked repassado: log=${source_transfer_log_id}, count=${leadIdStrings.length}`);
         }
       }
 

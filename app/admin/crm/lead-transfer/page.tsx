@@ -32,6 +32,7 @@ import {
   CalendarPlus,
   RotateCcw,
   Unlink,
+  Pencil,
 } from 'lucide-react';
 import { DateInputDDMMYYYY, getTodaySãoPaulo, getLast30DaysRangeSãoPaulo } from '@/components/Admin/CRMSection';
 import { ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
@@ -425,6 +426,7 @@ export default function AdminLeadTransferPage() {
   const [loadingMoveLeadsEntries, setLoadingMoveLeadsEntries] = useState(false);
   const [moveLeadsTargetEmail, setMoveLeadsTargetEmail] = useState('');
   const [moveLeadsTransferType, setMoveLeadsTransferType] = useState<'TF' | 'TF1' | 'TF2' | 'TF3'>('TF');
+  const [moveLeadsDeadlineDays, setMoveLeadsDeadlineDays] = useState<number>(10);
   const [moveLeadsMoving, setMoveLeadsMoving] = useState(false);
   const [moveLeadsConsultants, setMoveLeadsConsultants] = useState<Array<{ id?: string; email?: string; full_name?: string }>>([]);
   const [loadingMoveLeadsConsultants, setLoadingMoveLeadsConsultants] = useState(false);
@@ -467,6 +469,11 @@ export default function AdminLeadTransferPage() {
   const [showDevolverModal, setShowDevolverModal] = useState(false);
   const [logSelectedForDevolver, setLogSelectedForDevolver] = useState<typeof transferLogs[0] | null>(null);
   const [devolverLoading, setDevolverLoading] = useState(false);
+  /** Modal Editar tipo TF: alterar transfer_type da transferência */
+  const [showEditTransferTypeModal, setShowEditTransferTypeModal] = useState(false);
+  const [logSelectedForEditType, setLogSelectedForEditType] = useState<typeof transferLogs[0] | null>(null);
+  const [editTransferTypeValue, setEditTransferTypeValue] = useState<'TF' | 'TF1' | 'TF2' | 'TF3'>('TF');
+  const [editTransferTypeLoading, setEditTransferTypeLoading] = useState(false);
   /** Modal detalhe: leads que depositaram ou sacaram depois (por consultor) */
   const [showVerifierDetailsModal, setShowVerifierDetailsModal] = useState(false);
   const [verifierDetailsConsultant, setVerifierDetailsConsultant] = useState<{ email: string; name: string } | null>(null);
@@ -1576,6 +1583,43 @@ export default function AdminLeadTransferPage() {
     }
   };
 
+  /** Atualiza o transfer_type (TF, TF1, TF2, TF3) de uma transferência. */
+  const confirmEditTransferType = async () => {
+    const log = logSelectedForEditType;
+    if (!log || !userId) return;
+    const bancaIdLog = (log as { banca_id?: string }).banca_id;
+    if (!bancaIdLog) return;
+    setEditTransferTypeLoading(true);
+    try {
+      const res = await fetch('/api/admin/crm/transfer-logs/update-transfer-type', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers() },
+        body: JSON.stringify({
+          log_id: log.id,
+          banca_id: bancaIdLog,
+          transfer_type: editTransferTypeValue,
+        }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        setTransferLogs((prev) =>
+          prev.map((l) => (l.id === log.id ? { ...l, transfer_type: editTransferTypeValue } : l))
+        );
+        setShowEditTransferTypeModal(false);
+        setLogSelectedForEditType(null);
+        showToast(`Tipo atualizado para ${editTransferTypeValue}.`, 'success');
+        await loadTransferLogs(historyBancaFilter || undefined);
+        loadResolvedStats();
+      } else {
+        showToast(json?.error ?? 'Erro ao atualizar tipo.', 'error');
+      }
+    } catch {
+      showToast('Erro ao atualizar tipo.', 'error');
+    } finally {
+      setEditTransferTypeLoading(false);
+    }
+  };
+
   /** Busca saldo atual dos leads no CRM e grava no banco como snapshot. Resposta em stream: cada lead atualizado já aparece na tela ao receber. */
   const runRecalcBalanceForLog = async () => {
     const effectiveBancaId = bancaId || selectedLogForModal?.banca_id || '';
@@ -1888,14 +1932,19 @@ export default function AdminLeadTransferPage() {
           target_consultant_email: moveTargetEmail.trim(),
           leads_ids: leadIds,
           transfer_type: moveToNextTransferType,
+          source_transfer_log_id: (selectedLogForModal as { id?: string })?.id,
         }),
       });
       const json = await res.json();
       if (res.ok && json.success) {
         showToast(json?.data?.message ?? `${leadIds.length} lead(s) repassado(s).`, 'success');
+        const logId = (selectedLogForModal as { id?: string })?.id;
+        if (logId) setResolvedList((prev) => prev.filter((r) => r.log_id !== logId));
         setMoveToNextOpen(false);
         setMoveTargetEmail('');
         setMoveModalConsultants([]);
+        loadResolvedList();
+        loadResolvedStats();
         await loadTransferLogs();
         await loadTransferStats();
         await loadModalEntries();
@@ -2331,6 +2380,7 @@ export default function AdminLeadTransferPage() {
     setMoveLeadsSelectedLog(log);
     setMoveLeadsTargetEmail('');
     setMoveLeadsTransferType('TF');
+    setMoveLeadsDeadlineDays(10);
     setMoveLeadsEntries([]);
     setMoveLeadsConsultants([]);
     setLoadingMoveLeadsEntries(true);
@@ -2379,6 +2429,8 @@ export default function AdminLeadTransferPage() {
           target_consultant_email: moveLeadsTargetEmail.trim(),
           leads_ids: leadIds,
           transfer_type: moveLeadsTransferType,
+          transfer_deadline_days: moveLeadsDeadlineDays,
+          source_transfer_log_id: moveLeadsSelectedLog.log_id,
         }),
       });
       const json = await res.json();
@@ -2416,10 +2468,12 @@ export default function AdminLeadTransferPage() {
         } else {
           showToast(json?.data?.message ?? `${leadIds.length} lead(s) repassado(s).`, 'success');
         }
+        const movedLogId = moveLeadsSelectedLog.log_id;
         setMoveLeadsSelectedLog(null);
         setMoveLeadsTargetEmail('');
         setMoveLeadsEntries([]);
         setMoveLeadsSelectedRequest(null);
+        setResolvedList((prev) => prev.filter((r) => r.log_id !== movedLogId));
         loadResolvedList();
         loadResolvedStats();
         loadTransferLogs(historyBancaFilter);
@@ -2432,7 +2486,7 @@ export default function AdminLeadTransferPage() {
     } finally {
       setMoveLeadsMoving(false);
     }
-  }, [moveLeadsSelectedLog, moveLeadsTargetEmail, moveLeadsEntries, moveLeadsSelectedRequest, moveLeadsConsultants, moveLeadsTransferType, userId, loadResolvedList, loadResolvedStats, loadLeadRequests, historyBancaFilter]);
+  }, [moveLeadsSelectedLog, moveLeadsTargetEmail, moveLeadsEntries, moveLeadsSelectedRequest, moveLeadsConsultants, moveLeadsTransferType, moveLeadsDeadlineDays, userId, loadResolvedList, loadResolvedStats, loadLeadRequests, historyBancaFilter]);
 
   const runResolveBatch = useCallback(async () => {
     if (!userId) return;
@@ -3207,11 +3261,25 @@ export default function AdminLeadTransferPage() {
                       </div>
                       <div className="mt-4 pt-4 border-t border-emerald-200/50 dark:border-emerald-700/30 grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
-                          <p className="text-xs font-semibold text-amber-700 dark:text-amber-300 uppercase tracking-wide">Total lucro realizado (resolvidas)</p>
-                          <p className="text-sm text-gray-600 dark:text-gray-400 mt-0.5">Só vinculados com dados anteriores. Sem snapshot = não entra.</p>
-                          <p className={`text-2xl font-bold tabular-nums mt-1 ${(resolvedStats.total_lucro_realizado ?? 0) > 0 ? 'text-amber-700 dark:text-amber-300' : 'text-gray-500 dark:text-gray-400'}`}>
-                            {loadingResolvedStats ? '…' : `R$ ${(resolvedStats.total_lucro_realizado ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-                          </p>
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <p className="text-xs font-semibold text-amber-700 dark:text-amber-300 uppercase tracking-wide">Total lucro realizado (resolvidas)</p>
+                              <p className="text-sm text-gray-600 dark:text-gray-400 mt-0.5">Soma de todos os lucros das transferências resolvidas no período e banca selecionados.</p>
+                              <p className={`text-2xl font-bold tabular-nums mt-1 ${(resolvedStats.total_lucro_realizado ?? 0) > 0 ? 'text-amber-700 dark:text-amber-300' : 'text-gray-500 dark:text-gray-400'}`}>
+                                {loadingResolvedStats ? '…' : `R$ ${(resolvedStats.total_lucro_realizado ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => loadResolvedStats()}
+                              disabled={loadingResolvedStats}
+                              title="Recalcular o total de lucro somando todos os lucros das transferências resolvidas"
+                              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-amber-500/15 text-amber-700 dark:text-amber-400 hover:bg-amber-500/25 border border-amber-500/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+                            >
+                              {loadingResolvedStats ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                              Recalcular lucro
+                            </button>
+                          </div>
                         </div>
                         <div>
                           <p className="text-xs font-semibold text-blue-700 dark:text-blue-300 uppercase tracking-wide">Total apostas (resolvidas)</p>
@@ -3458,12 +3526,22 @@ export default function AdminLeadTransferPage() {
                           <select
                             value={moveLeadsTransferType}
                             onChange={(e) => setMoveLeadsTransferType(e.target.value as 'TF' | 'TF1' | 'TF2' | 'TF3')}
-                            className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm mb-4 focus:ring-2 focus:ring-emerald-500"
+                            className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm mb-3 focus:ring-2 focus:ring-emerald-500"
                           >
                             <option value="TF">TF</option>
                             <option value="TF1">TF1</option>
                             <option value="TF2">TF2</option>
                             <option value="TF3">TF3</option>
+                          </select>
+                          <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Prazo para expiração (dias)</label>
+                          <select
+                            value={moveLeadsDeadlineDays}
+                            onChange={(e) => setMoveLeadsDeadlineDays(Number(e.target.value))}
+                            className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm mb-4 focus:ring-2 focus:ring-emerald-500"
+                          >
+                            <option value={10}>10 dias</option>
+                            <option value={20}>20 dias</option>
+                            <option value={30}>30 dias</option>
                           </select>
                           <div className="flex justify-end gap-2">
                             <button type="button" onClick={() => { setMoveLeadsSelectedLog(null); setMoveLeadsSelectedRequest(null); }} className="px-3 py-2 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#404040] transition-colors">Voltar</button>
@@ -3816,6 +3894,19 @@ export default function AdminLeadTransferPage() {
                                 >
                                   <Eye className="w-3.5 h-3.5" />
                                   Ver leads
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setLogSelectedForEditType(log);
+                                    setEditTransferTypeValue(((log as { transfer_type?: string }).transfer_type ?? 'TF') as 'TF' | 'TF1' | 'TF2' | 'TF3');
+                                    setShowEditTransferTypeModal(true);
+                                  }}
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-blue-500/15 text-blue-700 dark:text-blue-400 hover:bg-blue-500/25 border border-blue-500/40 transition-colors"
+                                  title="Alterar o tipo da transferência (TF, TF1, TF2, TF3)"
+                                >
+                                  <Pencil className="w-3.5 h-3.5" />
+                                  Editar
                                 </button>
                                 <button
                                   type="button"
@@ -4863,19 +4954,17 @@ export default function AdminLeadTransferPage() {
                           </button>
                           <div className="flex items-center gap-2">
                             <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 whitespace-nowrap">Prazo (dias):</label>
-                            <input
-                              type="number"
-                              min={1}
-                              max={365}
+                            <select
                               value={transferDeadlineDays}
-                              onChange={(e) => {
-                                const v = parseInt(e.target.value.replace(/\D/g, ''), 10);
-                                if (!Number.isNaN(v)) setTransferDeadlineDays(Math.max(1, Math.min(365, v)));
-                              }}
-                              className="w-16 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-2 text-sm text-center tabular-nums focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
-                              title="Dias para expiração deste pacote (após esse prazo o lead pode ser repassado)"
-                            />
-                            <span className="text-xs text-gray-500 dark:text-gray-400">dias expiração</span>
+                              onChange={(e) => setTransferDeadlineDays(Number(e.target.value))}
+                              className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                              title="Número de dias até o lead expirar (após esse prazo pode ser repassado ao próximo consultor)"
+                            >
+                              <option value={10}>10 dias</option>
+                              <option value={20}>20 dias</option>
+                              <option value={30}>30 dias</option>
+                            </select>
+                            <span className="text-xs text-gray-500 dark:text-gray-400">lead expira em</span>
                           </div>
                         </div>
                         <button
@@ -5692,6 +5781,67 @@ export default function AdminLeadTransferPage() {
                     >
                       <RotateCcw className="w-4 h-4" />
                       Confirmar devolução
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Editar tipo TF: alterar transfer_type da transferência */}
+      {showEditTransferTypeModal && logSelectedForEditType && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="modal-edit-transfer-type-title">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl max-w-md w-full border border-gray-200 dark:border-[#404040] overflow-hidden">
+            <div className="p-4 border-b border-gray-100 dark:border-[#404040] flex items-center justify-between bg-blue-500/10 dark:bg-blue-500/20">
+              <div className="flex items-center gap-2">
+                <Pencil className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                <h2 id="modal-edit-transfer-type-title" className="text-lg font-bold text-gray-900 dark:text-white">Editar tipo da transferência</h2>
+              </div>
+              {!editTransferTypeLoading && (
+                <button type="button" onClick={() => { setShowEditTransferTypeModal(false); setLogSelectedForEditType(null); }} className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-200 dark:hover:bg-[#404040] transition-colors" aria-label="Fechar">
+                  <X className="w-5 h-5" />
+                </button>
+              )}
+            </div>
+            <div className="p-4">
+              {editTransferTypeLoading ? (
+                <div className="flex flex-col items-center justify-center py-8 gap-4">
+                  <Loader2 className="w-10 h-10 animate-spin text-blue-500" />
+                  <p className="text-sm font-medium text-gray-700 dark:text-gray-200">Atualizando tipo…</p>
+                </div>
+              ) : (
+                <>
+                  <p className="text-sm text-gray-700 dark:text-gray-200 mb-3">
+                    Selecione o novo tipo para a transferência (atual: <strong>{(logSelectedForEditType as { transfer_type?: string }).transfer_type || 'TF'}</strong>).
+                  </p>
+                  <select
+                    value={editTransferTypeValue}
+                    onChange={(e) => setEditTransferTypeValue(e.target.value as 'TF' | 'TF1' | 'TF2' | 'TF3')}
+                    className="w-full px-4 py-3 rounded-xl border border-gray-300 dark:border-[#555] bg-gray-50 dark:bg-[#333] text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 mb-4"
+                  >
+                    <option value="TF">TF</option>
+                    <option value="TF1">TF1</option>
+                    <option value="TF2">TF2</option>
+                    <option value="TF3">TF3</option>
+                  </select>
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => { setShowEditTransferTypeModal(false); setLogSelectedForEditType(null); }}
+                      className="flex-1 px-4 py-2.5 rounded-xl border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] font-medium transition-colors"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={confirmEditTransferType}
+                      disabled={editTransferTypeValue === ((logSelectedForEditType as { transfer_type?: string }).transfer_type || 'TF')}
+                      className="flex-1 px-4 py-2.5 rounded-xl bg-blue-500 text-white hover:bg-blue-600 font-medium transition-colors inline-flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <Pencil className="w-4 h-4" />
+                      Salvar
                     </button>
                   </div>
                 </>
