@@ -85,6 +85,8 @@ const InstancesPage = () => {
   const [newlyConnectedInstance, setNewlyConnectedInstance] = useState<string | null>(null);
   /** No modal de extrair grupos: true enquanto fetch+sync roda (mostra "Extraindo em segundo plano..."). */
   const [extractGroupsModalExtracting, setExtractGroupsModalExtracting] = useState(false);
+  /** Mostra o botão "Fechar e continuar em segundo plano" no modal de extração após alguns segundos. */
+  const [showCloseExtractModalButton, setShowCloseExtractModalButton] = useState(false);
   /** Instância cujo extração de grupos está rodando em segundo plano (null = nenhuma). */
   const [groupsProcessingForInstance, setGroupsProcessingForInstance] = useState<string | null>(null);
   /** Verificação de todas as instâncias em andamento. */
@@ -154,6 +156,16 @@ const InstancesPage = () => {
       setIsLoadingInstances(false);
     }
   }, [instances.length, isLoadingInstances]);
+
+  // Mostra botão "Fechar e continuar em segundo plano" no modal de extração após 6 segundos
+  useEffect(() => {
+    if (!extractGroupsModalExtracting) {
+      setShowCloseExtractModalButton(false);
+      return;
+    }
+    const t = setTimeout(() => setShowCloseExtractModalButton(true), 6000);
+    return () => clearTimeout(t);
+  }, [extractGroupsModalExtracting]);
 
   useEffect(() => {
     const checkRole = async () => {
@@ -379,13 +391,13 @@ const InstancesPage = () => {
             body: JSON.stringify({ instanceName }),
           });
           const fetchData = await fetchResponse.json();
-          if (!fetchResponse.ok || !fetchData.data) {
+          const groups = Array.isArray(fetchData.data) ? fetchData.data : fetchData.data ?? [];
+          if (!fetchResponse.ok) {
             setGroupsProcessingForInstance(null);
-            showToast('Erro ao buscar grupos da API', 'error');
+            showToast(fetchData.error || 'Erro ao buscar grupos da API', 'error');
             addLog(`Erro ao buscar grupos da instância ${instanceName}`, 'error');
             return;
           }
-          const groups = fetchData.data;
 
           const syncResponse = await fetch('/api/groups/sync', {
             method: 'POST',
@@ -425,14 +437,15 @@ const InstancesPage = () => {
           body: JSON.stringify({ instanceName }),
         });
         const fetchData = await fetchResponse.json();
-        if (!fetchResponse.ok || !fetchData.data) {
-          showToast('Erro ao buscar grupos da API', 'error');
+        // Aceita sucesso com array (vazio ou não) — a API /api/groups/fetch retorna { data: [] } quando não há grupos
+        const groups = Array.isArray(fetchData.data) ? fetchData.data : fetchData.data ?? [];
+        if (!fetchResponse.ok) {
+          showToast(fetchData.error || 'Erro ao buscar grupos da API', 'error');
           addLog(`Erro ao buscar grupos da instância ${instanceName}`, 'error');
           setExtractGroupsModalExtracting(false);
           setGroupsProcessingForInstance(null);
           return;
         }
-        const groups = fetchData.data;
         const syncResponse = await fetch('/api/groups/sync', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
@@ -1590,9 +1603,22 @@ const InstancesPage = () => {
                 <div className="text-center mb-6">
                   <Loader2 className="w-16 h-16 text-[#8CD955] dark:text-[#00ff00] mx-auto mb-4 animate-spin" />
                   <h2 className="text-xl font-semibold text-gray-800 dark:text-white mb-2">Extraindo grupos em segundo plano</h2>
-                  <p className="text-gray-600 dark:text-[#ccc]">
+                  <p className="text-gray-600 dark:text-[#ccc] mb-4">
                     Os grupos estão sendo puxados e salvos. Você pode continuar na página da instância; será avisado quando terminar.
                   </p>
+                  {showCloseExtractModalButton && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowExtractGroupsPrompt(false);
+                        setNewlyConnectedInstance(null);
+                        showToast('Modal fechado. A extração continua em segundo plano — acompanhe o aviso na página.', 'info');
+                      }}
+                      className="w-full py-2.5 rounded-lg border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] text-gray-700 dark:text-[#ccc] font-medium hover:bg-gray-50 dark:hover:bg-[#404040] transition text-sm"
+                    >
+                      Fechar e continuar em segundo plano
+                    </button>
+                  )}
                 </div>
               </>
             ) : (

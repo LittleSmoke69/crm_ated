@@ -119,15 +119,23 @@ export async function POST(req: NextRequest) {
 
           const json = await resp.json().catch((parseError) => {
             console.error(`❌ [GROUPS] Erro ao parsear JSON:`, parseError);
-            return [];
+            throw parseError;
           });
-          
+
+          // Log do retorno bruto quando em desenvolvimento (estrutura da resposta)
+          const jsonKeys = typeof json === 'object' && json !== null ? Object.keys(json) : [];
+          console.log(`📥 [GROUPS] Resposta recebida - tipo: ${Array.isArray(json) ? 'array' : typeof json}, keys: ${jsonKeys.join(', ') || '(nenhuma)'}, isArrayLength: ${Array.isArray(json) ? json.length : 'N/A'}`);
+
           let groupsList: any[] = [];
-          
+
           if (Array.isArray(json)) {
             groupsList = json;
           } else if (Array.isArray(json?.groups)) {
             groupsList = json.groups;
+          } else if (Array.isArray(json?.data)) {
+            groupsList = json.data;
+          } else if (Array.isArray(json?.result)) {
+            groupsList = json.result;
           } else if (json?.id && json?.subject) {
             groupsList = [json];
           }
@@ -135,9 +143,12 @@ export async function POST(req: NextRequest) {
           if (groupsList.length > 0) {
             console.log(`✅ [GROUPS] ${groupsList.length} grupo(s) encontrado(s) na tentativa ${attempt}`);
             return successResponse(groupsList, `${groupsList.length} grupo(s) encontrado(s)`);
-          } else {
-            console.warn(`⚠️ [GROUPS] Resposta OK mas nenhum grupo encontrado na tentativa ${attempt}`);
           }
+
+          // Resposta OK mas nenhum grupo: loga o retorno completo (truncado) para debug e retorna lista vazia (não entra em loop)
+          const sample = JSON.stringify(json).substring(0, 800);
+          console.warn(`⚠️ [GROUPS] Resposta OK mas nenhum grupo mapeado na tentativa ${attempt}. Amostra do retorno:`, sample);
+          return successResponse([], 'Nenhum grupo encontrado na instância.');
         } else {
           const errorText = await resp.text().catch(() => '');
           console.error(`❌ [GROUPS] Resposta não OK (${resp.status}): ${errorText.substring(0, 200)}`);
@@ -174,10 +185,14 @@ export async function POST(req: NextRequest) {
         }
       } catch (err: any) {
         lastError = err;
-        if (err.name === 'AbortError' || err.message?.includes('Timeout')) {
+        const msg = err?.message ?? '';
+        const isNetworkError = msg === 'fetch failed' || msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND') || msg.includes('network');
+        if (err.name === 'AbortError' || msg.includes('Timeout')) {
           console.warn(`⏱️ [GROUPS] Tentativa ${attempt}: timeout após ${PER_TRY_TIMEOUT}ms`);
+        } else if (isNetworkError) {
+          console.warn(`⚠️ [GROUPS] Tentativa ${attempt}: Evolution API inacessível (verifique URL e conectividade).`);
         } else {
-          console.error(`❌ [GROUPS] Tentativa ${attempt} falhou:`, err.message || err);
+          console.error(`❌ [GROUPS] Tentativa ${attempt} falhou:`, msg || err);
         }
         
         // Se já passou muito tempo, retorna erro imediatamente
@@ -193,7 +208,11 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const errorMsg = lastError?.message || 'Não foi possível obter os grupos após várias tentativas';
+    const rawMsg = lastError?.message || '';
+    const isNetworkFailure = rawMsg === 'fetch failed' || rawMsg.includes('ECONNREFUSED') || rawMsg.includes('ENOTFOUND');
+    const errorMsg = isNetworkFailure
+      ? 'Evolution API inacessível. Verifique a URL da API e a conectividade de rede.'
+      : (rawMsg || 'Não foi possível obter os grupos após várias tentativas');
     console.error(`❌ [GROUPS] Falha final após ${attempt} tentativa(s): ${errorMsg}`);
     return errorResponse(errorMsg, 408);
   } catch (err: any) {
