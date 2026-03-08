@@ -8,7 +8,9 @@
  * - Se nenhum: resolve todas as expiradas das bancas permitidas ao usuário.
  *
  * Retorno: { results: Array<{ log_id, banca_id, ... }>, total_resolved, total_vinculado, total_disponivel }
+ * maxDuration: 300s — cada log chama CRM externo + updates; muitos logs podem demorar.
  */
+export const maxDuration = 300;
 
 import { NextRequest } from 'next/server';
 import { requireAdmin } from '@/lib/middleware/permissions';

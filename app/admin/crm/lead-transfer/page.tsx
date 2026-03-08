@@ -50,8 +50,8 @@ const MODAL_LEADS_PAGE_SIZE = 10;
 const SOLICITATION_PAGE_SIZE = 10;
 /** Transferências na lista do modal Mover leads: itens por página */
 const MOVE_LEADS_LIST_PAGE_SIZE = 10;
-/** Quantidade de transferências por chamada ao resolve-batch (evita timeout em muitas expiradas) */
-const RESOLVE_BATCH_CHUNK_SIZE = 5;
+/** Quantidade de transferências por chamada ao resolve-batch (evita timeout — cada log chama CRM externo) */
+const RESOLVE_BATCH_CHUNK_SIZE = 3;
 /** Valor de leadsPageSize quando o usuário escolhe "Personalizado" (input livre). */
 const PAGE_SIZE_CUSTOM = -1;
 /** Limite máximo para o valor personalizado de itens por página. */
@@ -432,6 +432,8 @@ export default function AdminLeadTransferPage() {
   const [loadingMoveLeadsConsultants, setLoadingMoveLeadsConsultants] = useState(false);
   /** Solicitação de leads selecionada no modal Mover (ao confirmar, marcar como aprovada) */
   const [moveLeadsSelectedRequest, setMoveLeadsSelectedRequest] = useState<GerenteLeadRequest | null>(null);
+  /** Enviar apenas a quantidade necessária para completar a solicitação (resto fica para mover depois) */
+  const [moveLeadsOnlyQtyToComplete, setMoveLeadsOnlyQtyToComplete] = useState(true);
   /** Valor mínimo em reais: mostra apenas leads cuja soma dos saldos atinge esse valor (ordem: maior saldo primeiro) */
   const [minSumBalance, setMinSumBalance] = useState<string>('');
   /** Atualizando saldos das transferências (backfill) */
@@ -753,10 +755,10 @@ export default function AdminLeadTransferPage() {
     setCurrentStep(3);
     setHistoryBancaFromSolicitation({ id: requestBancaId, name: bancaDisplayName });
     setHistoryBancaFilter(requestBancaId);
-    setActiveTab('history');
+    setActiveTab('transfer');
     setManagementLoaded(true);
     closeApproveModal();
-    showToast(`Abrindo Histórico com banca da solicitação (${bancaDisplayName}). Transferências expiradas desta banca serão exibidas.`, 'success');
+    showToast(`Aba Transferir aberta no passo Buscar com banca e doador preenchidos.`, 'success');
   };
 
   const handleApproveRequest = async () => {
@@ -2164,12 +2166,13 @@ export default function AdminLeadTransferPage() {
     }
   }, [userId, historyBancaFilter, managementFrom, managementTo]);
 
-  const loadResolvedList = useCallback(async () => {
+  const loadResolvedList = useCallback(async (overrideBancaId?: string) => {
     if (!userId) return;
     setLoadingResolvedList(true);
     try {
       const params = new URLSearchParams();
-      if (historyBancaFilter) params.set('banca_id', historyBancaFilter);
+      const bancaParaFiltro = overrideBancaId ?? historyBancaFilter;
+      if (bancaParaFiltro) params.set('banca_id', bancaParaFiltro);
       const res = await fetch(`/api/admin/crm/transfer-logs/resolved-list?${params.toString()}`, { headers: headers() });
       const json = await res.json();
       if (res.ok && json.success && Array.isArray(json.data)) {
@@ -2413,11 +2416,15 @@ export default function AdminLeadTransferPage() {
       showToast('Selecione o consultor destino.', 'info');
       return;
     }
-    const leadIds = moveLeadsEntries.map((e) => e.lead_id).filter(Boolean);
-    if (leadIds.length === 0) {
+    const allLeadIds = moveLeadsEntries.map((e) => e.lead_id).filter(Boolean);
+    if (allLeadIds.length === 0) {
       showToast('Nenhum lead disponível para repasse.', 'info');
       return;
     }
+    const faltam = moveLeadsSelectedRequest ? (moveLeadsSelectedRequest.leads_still_needed ?? (moveLeadsSelectedRequest.consultores ?? []).reduce((s, c) => s + c.quantity, 0)) : 0;
+    const leadIds = (moveLeadsSelectedRequest && moveLeadsOnlyQtyToComplete && faltam > 0)
+      ? allLeadIds.slice(0, Math.min(faltam, allLeadIds.length))
+      : allLeadIds;
     setMoveLeadsMoving(true);
     try {
       const res = await fetch('/api/admin/crm/redistribute-leads', {
@@ -2469,11 +2476,16 @@ export default function AdminLeadTransferPage() {
           showToast(json?.data?.message ?? `${leadIds.length} lead(s) repassado(s).`, 'success');
         }
         const movedLogId = moveLeadsSelectedLog.log_id;
+        const enviadosTodos = leadIds.length === allLeadIds.length;
         setMoveLeadsSelectedLog(null);
         setMoveLeadsTargetEmail('');
         setMoveLeadsEntries([]);
         setMoveLeadsSelectedRequest(null);
-        setResolvedList((prev) => prev.filter((r) => r.log_id !== movedLogId));
+        if (enviadosTodos) {
+          setResolvedList((prev) => prev.filter((r) => r.log_id !== movedLogId));
+        } else {
+          setResolvedList((prev) => prev.map((r) => (r.log_id === movedLogId ? { ...r, disponivel: r.disponivel - leadIds.length } : r)));
+        }
         loadResolvedList();
         loadResolvedStats();
         loadTransferLogs(historyBancaFilter);
@@ -2486,12 +2498,14 @@ export default function AdminLeadTransferPage() {
     } finally {
       setMoveLeadsMoving(false);
     }
-  }, [moveLeadsSelectedLog, moveLeadsTargetEmail, moveLeadsEntries, moveLeadsSelectedRequest, moveLeadsConsultants, moveLeadsTransferType, moveLeadsDeadlineDays, userId, loadResolvedList, loadResolvedStats, loadLeadRequests, historyBancaFilter]);
+  }, [moveLeadsSelectedLog, moveLeadsTargetEmail, moveLeadsEntries, moveLeadsSelectedRequest, moveLeadsOnlyQtyToComplete, moveLeadsConsultants, moveLeadsTransferType, moveLeadsDeadlineDays, userId, loadResolvedList, loadResolvedStats, loadLeadRequests, historyBancaFilter]);
 
   const runResolveBatch = useCallback(async () => {
     if (!userId) return;
+    if (resolveBatchLoading) return;
     setResolveBatchLoading(true);
     setResolveBatchResult(null);
+    const FETCH_TIMEOUT_MS = 280_000;
     try {
       const params = new URLSearchParams();
       if (historyBancaFilter) params.set('banca_id', historyBancaFilter);
@@ -2510,11 +2524,15 @@ export default function AdminLeadTransferPage() {
         const chunk = list.slice(i, i + RESOLVE_BATCH_CHUNK_SIZE);
         const body: { banca_id?: string; log_ids: string[] } = { log_ids: chunk.map((l) => l.id) };
         if (historyBancaFilter) body.banca_id = historyBancaFilter;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
         const res = await fetch('/api/admin/crm/transfer-logs/resolve-batch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...headers() },
           body: JSON.stringify(body),
+          signal: controller.signal,
         });
+        clearTimeout(timeoutId);
         const json = await res.json();
         if (res.ok && json.success && json.data) {
           allResults.push(...(json.data.results ?? []));
@@ -2539,8 +2557,14 @@ export default function AdminLeadTransferPage() {
       loadExpiredLogs();
       loadResolvedStats();
       loadResolvedList();
-    } catch {
-      showToast('Erro ao resolver transferências expiradas.', 'error');
+    } catch (err) {
+      const isAbort = err instanceof Error && err.name === 'AbortError';
+      showToast(
+        isAbort
+          ? 'A operação demorou muito. Tente clicar novamente — na segunda vez costuma concluir.'
+          : 'Erro ao resolver transferências expiradas. Tente novamente.',
+        'error'
+      );
     } finally {
       setResolveBatchLoading(false);
     }
@@ -3478,14 +3502,14 @@ export default function AdminLeadTransferPage() {
                                     const enviados = req.leads_transferred ?? 0;
                                     const faltam = req.leads_still_needed ?? totalRequested;
                                     const hasProgresso = enviados > 0;
-                                    const targetEmail = firstConsultor ? moveLeadsConsultants.find((c) => c.id === firstConsultor.consultor_id)?.email?.trim() : '';
+                                    const targetEmail = firstConsultor ? moveLeadsConsultants.find((c) => String(c?.id) === String(firstConsultor.consultor_id))?.email?.trim() ?? '' : '';
                                     return (
                                       <button
                                         key={req.id}
                                         type="button"
                                         onClick={() => {
                                           setMoveLeadsSelectedRequest(req);
-                                          if (targetEmail) setMoveLeadsTargetEmail(targetEmail);
+                                          setMoveLeadsTargetEmail(targetEmail);
                                         }}
                                         className={`w-full flex flex-col items-start px-4 py-3 text-left hover:bg-emerald-100/50 dark:hover:bg-emerald-900/30 transition-colors rounded-lg ${isSelected ? 'bg-emerald-100/70 dark:bg-emerald-900/40 ring-2 ring-emerald-500/60' : 'hover:ring-1 hover:ring-emerald-500/30'}`}
                                       >
@@ -3518,10 +3542,40 @@ export default function AdminLeadTransferPage() {
                               {moveLeadsConsultants
                                 .filter((c) => c.email?.toLowerCase() !== moveLeadsSelectedLog?.target_consultant_email?.toLowerCase())
                                 .map((c) => (
-                                  <option key={c.email} value={c.email ?? ''}>{c.full_name ?? c.email ?? ''}</option>
+                                  <option key={c.email} value={c.email ?? ''}>{c.full_name ?? c.email ?? ''}                                </option>
                                 ))}
                             </select>
                           )}
+                          {moveLeadsSelectedRequest && (() => {
+                            const totalRequested = (moveLeadsSelectedRequest.consultores ?? []).reduce((s, c) => s + c.quantity, 0);
+                            const faltam = moveLeadsSelectedRequest.leads_still_needed ?? totalRequested;
+                            const disponiveis = moveLeadsEntries.length;
+                            const qtyToComplete = Math.min(faltam, disponiveis);
+                            const restantes = disponiveis - qtyToComplete;
+                            return (
+                              <div className="mb-4 p-3 rounded-lg border border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20 dark:border-amber-500/20">
+                                <p className="text-xs text-amber-800 dark:text-amber-200 mb-2">
+                                  Esta transferência tem <strong>{disponiveis}</strong> lead(s). A solicitação precisa de <strong>{faltam}</strong> para completar.
+                                </p>
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                  <input
+                                    type="checkbox"
+                                    checked={moveLeadsOnlyQtyToComplete}
+                                    onChange={(e) => setMoveLeadsOnlyQtyToComplete(e.target.checked)}
+                                    className="rounded border-gray-400 text-emerald-600 focus:ring-emerald-500"
+                                  />
+                                  <span className="text-sm font-medium text-gray-800 dark:text-gray-200">
+                                    Enviar apenas <strong>{qtyToComplete}</strong> para completar a solicitação
+                                    {restantes > 0 && (
+                                      <span className="block text-amber-700 dark:text-amber-300 mt-0.5 text-[11px] font-normal">
+                                        ({restantes} lead(s) restam para mover para outra pessoa depois)
+                                      </span>
+                                    )}
+                                  </span>
+                                </label>
+                              </div>
+                            );
+                          })()}
                           <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Tipo de transferência</label>
                           <select
                             value={moveLeadsTransferType}
@@ -5721,9 +5775,11 @@ export default function AdminLeadTransferPage() {
               <button
                 type="button"
                 onClick={() => {
+                  const bancaIdSolicitacao = selectedRequestForApprove?.banca_id?.trim() ?? '';
+                  if (bancaIdSolicitacao) setHistoryBancaFilter(bancaIdSolicitacao);
                   closeApproveModal();
                   setActiveTab('history');
-                  loadResolvedList();
+                  loadResolvedList(bancaIdSolicitacao || undefined);
                   loadLeadRequests();
                   setMoveLeadsModalOpen(true);
                 }}
