@@ -47,7 +47,7 @@ const LOGS_CHUNK_SIZE = 50000;
 /** Leads por página no modal "Leads da transferência" */
 const MODAL_LEADS_PAGE_SIZE = 10;
 /** Solicitações de leads: itens por página na aba Solicitações */
-const SOLICITATION_PAGE_SIZE = 10;
+const SOLICITATION_PAGE_SIZE_DEFAULT = 500;
 /** Transferências na lista do modal Mover leads: itens por página */
 const MOVE_LEADS_LIST_PAGE_SIZE = 10;
 /** Quantidade de transferências por chamada ao resolve-batch (evita timeout — cada log chama CRM externo) */
@@ -502,12 +502,15 @@ export default function AdminLeadTransferPage() {
   const [transferFromSolicitationTargetEmail, setTransferFromSolicitationTargetEmail] = useState<string | null>(null);
   /** Banca da solicitação ao redirecionar (para garantir seleção mesmo se lista de bancas carregar depois) */
   const transferFromSolicitationBancaIdRef = useRef<string | null>(null);
+  /** Evita que o useEffect(bancaId) apague o consultor destino ao vir da solicitação */
+  const preserveTargetEmailFromSolicitationRef = useRef(false);
   /** ID da solicitação quando veio de "Ir para transferir" — ao confirmar a transferência, aprovar esta solicitação também */
   const transferFromSolicitationRequestIdRef = useRef<string | null>(null);
   /** ID da solicitação para a qual estamos carregando consultores no modal Aprovar (evita race condition) */
   const approveModalLoadingRequestIdRef = useRef<string | null>(null);
   /** Paginação da aba Solicitações */
   const [solicitationPage, setSolicitationPage] = useState(1);
+  const [solicitationPageSize, setSolicitationPageSize] = useState(SOLICITATION_PAGE_SIZE_DEFAULT);
   /** Filtro de status na aba Solicitações: all | pending | approved | partial | rejected */
   const [solicitationStatusFilter, setSolicitationStatusFilter] = useState<string>('all');
 
@@ -598,7 +601,9 @@ export default function AdminLeadTransferPage() {
   useEffect(() => {
     if (bancaId) {
       setSourceEmail('');
-      setTargetEmail('');
+      const preserve = preserveTargetEmailFromSolicitationRef.current;
+      if (preserve) preserveTargetEmailFromSolicitationRef.current = false;
+      if (!preserve) setTargetEmail('');
       setTags([]);
       setSelectedTag('');
       setHasSearchedLeads(false);
@@ -628,26 +633,26 @@ export default function AdminLeadTransferPage() {
     transferFromSolicitationBancaIdRef.current = null;
   }, [activeTab, bancas, bancaId]);
 
-  /** Ao redirecionar da solicitação: preenche banca e doador, dispara busca de leads e mantém no step 3 (Filtros e buscar) com a busca já realizada */
+  /** Ao redirecionar da solicitação: preenche consultor origem (doador) e dispara busca de leads — só limpa quando aplicar, para permitir retry após consultants carregar */
   useEffect(() => {
     if (activeTab !== 'transfer' || !bancaId || !transferFromSolicitationSourceEmail || consultants.length === 0) return;
-    const found = consultants.some((c) => (c.email ?? '').trim() === transferFromSolicitationSourceEmail.trim());
+    const source = transferFromSolicitationSourceEmail.trim().toLowerCase();
+    const found = consultants.find((c) => (c.email ?? '').trim().toLowerCase() === source);
     if (found) {
-      const email = transferFromSolicitationSourceEmail.trim();
+      const email = (found.email ?? '').trim();
       setSourceEmail(email);
       setTransferFromSolicitationSourceEmail(null);
       loadLeads('90', email);
-    } else {
-      setTransferFromSolicitationSourceEmail(null);
     }
   }, [activeTab, bancaId, consultants, transferFromSolicitationSourceEmail]);
 
   /** Ao redirecionar da solicitação: preenche consultor destino (recebedor) quando a lista de consultores da banca carregar */
   useEffect(() => {
     if (activeTab !== 'transfer' || !transferFromSolicitationTargetEmail || consultants.length === 0) return;
-    const found = consultants.some((c) => (c.email ?? '').trim() === transferFromSolicitationTargetEmail.trim());
+    const target = transferFromSolicitationTargetEmail.trim().toLowerCase();
+    const found = consultants.find((c) => (c.email ?? '').trim().toLowerCase() === target);
     if (found) {
-      setTargetEmail(transferFromSolicitationTargetEmail.trim());
+      setTargetEmail((found.email ?? '').trim());
     }
     setTransferFromSolicitationTargetEmail(null);
   }, [activeTab, consultants, transferFromSolicitationTargetEmail]);
@@ -691,7 +696,7 @@ export default function AdminLeadTransferPage() {
     if (bancaIdDaSolicitacao && userId) {
       approveModalLoadingRequestIdRef.current = requestId;
       setLoadingApproveModalConsultants(true);
-      fetch(`/api/admin/crm/consultants?banca_id=${encodeURIComponent(bancaIdDaSolicitacao)}`, { headers: headers() })
+      fetch(`/api/admin/crm/consultants?banca_id=${encodeURIComponent(bancaIdDaSolicitacao)}&hierarchy_only=1`, { headers: headers() })
         .then(async (res) => {
           const json = await res.json();
           if (approveModalLoadingRequestIdRef.current !== requestId) return;
@@ -741,16 +746,25 @@ export default function AdminLeadTransferPage() {
     const bancaFromList = bancas.find((b) => b.id === requestBancaId);
     const bancaDisplayName = bancaFromList?.name || bancaFromList?.url || selectedRequestForApprove.banca_name || requestBancaId;
     const recebedor = selectedRequestForApprove.consultores?.[0];
-    const recebedorConsultant = recebedor ? approveModalConsultants.find((c) => c.id === recebedor.consultor_id) : null;
+    const recebedorConsultant = recebedor
+      ? approveModalConsultants.find((c) => String(c.id) === String(recebedor.consultor_id))
+      ?? (recebedor.consultor_name
+        ? approveModalConsultants.find((c) =>
+            (c.full_name ?? '').toLowerCase().includes((recebedor.consultor_name ?? '').toLowerCase().slice(0, 15))
+          )
+        : null)
+      : null;
     const recebedorEmail = (recebedorConsultant?.email ?? '').trim();
 
     transferFromSolicitationBancaIdRef.current = requestBancaId;
+    preserveTargetEmailFromSolicitationRef.current = true;
     transferFromSolicitationRequestIdRef.current = selectedRequestForApprove.id;
     setBancaId(requestBancaId);
     setBancaSearchQuery(bancaDisplayName);
     setDaysInactivePreset('90');
     setDaysInactive('90');
     setTransferFromSolicitationSourceEmail(doadorEmail);
+    setTargetEmail(recebedorEmail || '');
     if (recebedorEmail) setTransferFromSolicitationTargetEmail(recebedorEmail);
     setCurrentStep(3);
     setHistoryBancaFromSolicitation({ id: requestBancaId, name: bancaDisplayName });
@@ -2909,19 +2923,34 @@ export default function AdminLeadTransferPage() {
                 </h2>
                 <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">Solicitações feitas por gerentes. Aprove e defina o consultor doador (origem dos leads).</p>
                 {leadRequests.length > 0 && (
-                  <div className="mt-3 flex items-center gap-2">
-                    <label className="text-xs font-semibold text-gray-600 dark:text-gray-400">Filtrar:</label>
-                    <select
-                      value={solicitationStatusFilter}
-                      onChange={(e) => { setSolicitationStatusFilter(e.target.value); setSolicitationPage(1); }}
-                      className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
-                    >
-                      <option value="all">Todos</option>
-                      <option value="pending">Pendente</option>
-                      <option value="approved">Aprovados</option>
-                      <option value="partial">Faltam leads</option>
-                      <option value="rejected">Rejeitado</option>
-                    </select>
+                  <div className="mt-3 flex flex-wrap items-center gap-4">
+                    <div className="flex items-center gap-2">
+                      <label className="text-xs font-semibold text-gray-600 dark:text-gray-400">Status:</label>
+                      <select
+                        value={solicitationStatusFilter}
+                        onChange={(e) => { setSolicitationStatusFilter(e.target.value); setSolicitationPage(1); }}
+                        className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                      >
+                        <option value="all">Todos</option>
+                        <option value="pending">Pendente</option>
+                        <option value="approved">Aprovados</option>
+                        <option value="partial">Faltam leads</option>
+                        <option value="rejected">Rejeitado</option>
+                      </select>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <label className="text-xs font-semibold text-gray-600 dark:text-gray-400">Itens por página:</label>
+                      <select
+                        value={solicitationPageSize}
+                        onChange={(e) => { setSolicitationPageSize(Number(e.target.value)); setSolicitationPage(1); }}
+                        className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                      >
+                        <option value={50}>50</option>
+                        <option value={100}>100</option>
+                        <option value={250}>250</option>
+                        <option value={500}>500</option>
+                      </select>
+                    </div>
                   </div>
                 )}
               </div>
@@ -2949,7 +2978,7 @@ export default function AdminLeadTransferPage() {
                       </thead>
                       <tbody className="divide-y divide-gray-200 dark:divide-[#404040]">
                         {leadRequests
-                          .slice((solicitationPage - 1) * SOLICITATION_PAGE_SIZE, solicitationPage * SOLICITATION_PAGE_SIZE)
+                          .slice((solicitationPage - 1) * solicitationPageSize, solicitationPage * solicitationPageSize)
                           .map((req) => {
                         const consultoresPendentes = req.consultores ?? [];
                         const primeiro = consultoresPendentes[0];
@@ -3003,10 +3032,10 @@ export default function AdminLeadTransferPage() {
                       </tbody>
                     </table>
                   </div>
-                  {leadRequests.length > SOLICITATION_PAGE_SIZE && (
+                  {leadRequests.length > solicitationPageSize && (
                     <div className="flex flex-wrap items-center justify-between gap-2 mt-3 pt-3 border-t border-gray-200 dark:border-[#404040]">
                       <p className="text-sm text-gray-600 dark:text-gray-400">
-                        Exibindo {(solicitationPage - 1) * SOLICITATION_PAGE_SIZE + 1} a {Math.min(solicitationPage * SOLICITATION_PAGE_SIZE, leadRequests.length)} de {leadRequests.length} solicitações
+                        Exibindo {(solicitationPage - 1) * solicitationPageSize + 1} a {Math.min(solicitationPage * solicitationPageSize, leadRequests.length)} de {leadRequests.length} solicitações
                       </p>
                       <div className="flex items-center gap-2">
                         <button
@@ -3019,12 +3048,12 @@ export default function AdminLeadTransferPage() {
                           <ChevronLeft className="w-5 h-5" />
                         </button>
                         <span className="text-sm font-medium text-gray-700 dark:text-gray-200 min-w-[100px] text-center">
-                          Página {solicitationPage} de {Math.ceil(leadRequests.length / SOLICITATION_PAGE_SIZE)}
+                          Página {solicitationPage} de {Math.ceil(leadRequests.length / solicitationPageSize)}
                         </span>
                         <button
                           type="button"
-                          onClick={() => setSolicitationPage((p) => Math.min(Math.ceil(leadRequests.length / SOLICITATION_PAGE_SIZE), p + 1))}
-                          disabled={solicitationPage >= Math.ceil(leadRequests.length / SOLICITATION_PAGE_SIZE)}
+                          onClick={() => setSolicitationPage((p) => Math.min(Math.ceil(leadRequests.length / solicitationPageSize), p + 1))}
+                          disabled={solicitationPage >= Math.ceil(leadRequests.length / solicitationPageSize)}
                           className="p-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50 disabled:cursor-not-allowed"
                           aria-label="Próxima página"
                         >
@@ -4764,19 +4793,19 @@ export default function AdminLeadTransferPage() {
                       </span>
                       <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0 ml-auto" />
                     </button>
-                    <button type="button" onClick={loadTags} disabled={!sourceEmail?.trim() || loadingTags} className="px-3 py-2 rounded-xl border border-gray-300 text-gray-700 text-sm hover:bg-gray-50">Carregar tags</button>
+                    <button type="button" onClick={loadTags} disabled={!sourceEmail?.trim() || loadingTags} className="px-3 py-2 rounded-xl border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 text-sm hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors">Carregar tags</button>
                   </div>
                   {tags.length > 0 && (
                     <div>
-                      <span className="text-xs text-gray-600 mr-2">Filtrar por tag:</span>
-                      <select value={selectedTag} onChange={(e) => setSelectedTag(e.target.value)} className="border border-gray-300 rounded-lg px-2 py-1 text-sm text-gray-800">
+                      <span className="text-xs text-gray-600 dark:text-gray-400 mr-2">Filtrar por tag:</span>
+                      <select value={selectedTag} onChange={(e) => setSelectedTag(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1 text-sm text-gray-800">
                         <option value="">Todas</option>
                         {tags.map((t) => <option key={t} value={t}>{t}</option>)}
                       </select>
                     </div>
                   )}
                   <div className="flex gap-2 pt-2">
-                    <button type="button" onClick={() => setCurrentStep(1)} className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50">Anterior</button>
+                    <button type="button" onClick={() => setCurrentStep(1)} className="px-4 py-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors">Anterior</button>
                     <button type="button" onClick={() => { setDaysInactivePreset('90'); setDaysInactive('90'); setCurrentStep(3); loadLeads('90'); }} disabled={!sourceEmail?.trim()} className="px-4 py-2 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A] disabled:opacity-50">Próximo: filtros e buscar</button>
                   </div>
                 </div>
@@ -4788,53 +4817,53 @@ export default function AdminLeadTransferPage() {
                   <label className="text-sm font-bold text-gray-800 dark:text-white block">Filtros e buscar leads</label>
                   <div className="flex flex-wrap gap-4 items-end">
                     <div>
-                      <label className="text-xs font-semibold text-gray-600 block mb-1">Inatividade (dias)</label>
+                      <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Inatividade (dias)</label>
                       <div className="flex flex-wrap gap-2">
                         {INACTIVITY_PRESETS.map((d) => (
-                          <button key={d} type="button" onClick={() => { setDaysInactivePreset(String(d)); setDaysInactive(String(d)); loadLeads(String(d)); }} className={`px-3 py-1.5 rounded-lg text-sm font-medium ${daysInactivePreset === String(d) ? 'bg-[#8CD955] text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>{d}d</button>
+                          <button key={d} type="button" onClick={() => { setDaysInactivePreset(String(d)); setDaysInactive(String(d)); loadLeads(String(d)); }} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${daysInactivePreset === String(d) ? 'bg-[#8CD955] text-white' : 'bg-gray-100 dark:bg-[#333] text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-[#404040] border border-transparent dark:border-[#555]'}`}>{d}d</button>
                         ))}
-                        <button type="button" onClick={() => setDaysInactivePreset('other')} className={`px-3 py-1.5 rounded-lg text-sm font-medium ${daysInactivePreset === 'other' ? 'bg-[#8CD955] text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>Outro</button>
+                        <button type="button" onClick={() => setDaysInactivePreset('other')} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${daysInactivePreset === 'other' ? 'bg-[#8CD955] text-white' : 'bg-gray-100 dark:bg-[#333] text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-[#404040] border border-transparent dark:border-[#555]'}`}>Outro</button>
                       </div>
-                      {daysInactivePreset === 'other' && <input type="number" min={0} value={daysInactive} onChange={(e) => setDaysInactive(e.target.value)} placeholder="Ex: 45" className="mt-2 w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800" />}
+                      {daysInactivePreset === 'other' && <input type="number" min={0} value={daysInactive} onChange={(e) => setDaysInactive(e.target.value)} placeholder="Ex: 45" className="mt-2 w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />}
                     </div>
                     <div>
-                      <label className="text-xs font-semibold text-gray-600 block mb-1">Total na Carteira</label>
+                      <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Total na Carteira</label>
                       <div className="flex flex-wrap items-center gap-2">
-                        <select value={balanceFilter} onChange={(e) => setBalanceFilter(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[140px]">
+                        <select value={balanceFilter} onChange={(e) => setBalanceFilter(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[140px]">
                           {BALANCE_FILTER_OPTIONS.map((o) => (
                             <option key={o.value} value={o.value}>{o.label}</option>
                           ))}
                         </select>
                         {balanceFilter === 'range' && (
                           <>
-                            <input type="text" inputMode="decimal" value={leadFilterSaldoMin} onChange={(e) => setLeadFilterSaldoMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
-                            <span className="text-gray-500">–</span>
-                            <input type="text" inputMode="decimal" value={leadFilterSaldoMax} onChange={(e) => setLeadFilterSaldoMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterSaldoMin} onChange={(e) => setLeadFilterSaldoMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <span className="text-gray-500 dark:text-gray-400">–</span>
+                            <input type="text" inputMode="decimal" value={leadFilterSaldoMax} onChange={(e) => setLeadFilterSaldoMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
                           </>
                         )}
                       </div>
                     </div>
                     <div>
-                      <label className="text-xs font-semibold text-gray-600 block mb-1">Total Depositado</label>
+                      <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Total Depositado</label>
                       <div className="flex flex-wrap items-center gap-2">
-                        <select value={leadFilterTotalDepositado} onChange={(e) => setLeadFilterTotalDepositado(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[140px]">
+                        <select value={leadFilterTotalDepositado} onChange={(e) => setLeadFilterTotalDepositado(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[140px]">
                           {NUMERIC_FILTER_OPTIONS.map((o) => (
                             <option key={o.value} value={o.value}>{o.label}</option>
                           ))}
                         </select>
                         {leadFilterTotalDepositado === 'range' && (
                           <>
-                            <input type="text" inputMode="decimal" value={leadFilterTotalDepositadoMin} onChange={(e) => setLeadFilterTotalDepositadoMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
-                            <span className="text-gray-500">–</span>
-                            <input type="text" inputMode="decimal" value={leadFilterTotalDepositadoMax} onChange={(e) => setLeadFilterTotalDepositadoMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterTotalDepositadoMin} onChange={(e) => setLeadFilterTotalDepositadoMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <span className="text-gray-500 dark:text-gray-400">–</span>
+                            <input type="text" inputMode="decimal" value={leadFilterTotalDepositadoMax} onChange={(e) => setLeadFilterTotalDepositadoMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
                           </>
                         )}
                       </div>
                     </div>
                     <div>
-                      <label className="text-xs font-semibold text-gray-600 block mb-1">Total apostado</label>
+                      <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Total apostado</label>
                       <div className="flex flex-wrap items-center gap-2">
-                        <select value={leadFilterAposta} onChange={(e) => setLeadFilterAposta(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[140px]">
+                        <select value={leadFilterAposta} onChange={(e) => setLeadFilterAposta(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[140px]">
                           <option value="all">Todos</option>
                           <option value="with_bet">Com valor</option>
                           <option value="without_bet">Sem valor</option>
@@ -4842,75 +4871,75 @@ export default function AdminLeadTransferPage() {
                         </select>
                         {leadFilterAposta === 'range' && (
                           <>
-                            <input type="text" inputMode="decimal" value={leadFilterApostaMin} onChange={(e) => setLeadFilterApostaMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
-                            <span className="text-gray-500">–</span>
-                            <input type="text" inputMode="decimal" value={leadFilterApostaMax} onChange={(e) => setLeadFilterApostaMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterApostaMin} onChange={(e) => setLeadFilterApostaMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <span className="text-gray-500 dark:text-gray-400">–</span>
+                            <input type="text" inputMode="decimal" value={leadFilterApostaMax} onChange={(e) => setLeadFilterApostaMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
                           </>
                         )}
                       </div>
                     </div>
                     <div>
-                      <label className="text-xs font-semibold text-gray-600 block mb-1">Saque disponível</label>
+                      <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Saque disponível</label>
                       <div className="flex flex-wrap items-center gap-2">
-                        <select value={leadFilterSaqueDisponivel} onChange={(e) => setLeadFilterSaqueDisponivel(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[140px]">
+                        <select value={leadFilterSaqueDisponivel} onChange={(e) => setLeadFilterSaqueDisponivel(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[140px]">
                           {NUMERIC_FILTER_OPTIONS.map((o) => (
                             <option key={o.value} value={o.value}>{o.label}</option>
                           ))}
                         </select>
                         {leadFilterSaqueDisponivel === 'range' && (
                           <>
-                            <input type="text" inputMode="decimal" value={leadFilterSaqueDisponivelMin} onChange={(e) => setLeadFilterSaqueDisponivelMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
-                            <span className="text-gray-500">–</span>
-                            <input type="text" inputMode="decimal" value={leadFilterSaqueDisponivelMax} onChange={(e) => setLeadFilterSaqueDisponivelMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterSaqueDisponivelMin} onChange={(e) => setLeadFilterSaqueDisponivelMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <span className="text-gray-500 dark:text-gray-400">–</span>
+                            <input type="text" inputMode="decimal" value={leadFilterSaqueDisponivelMax} onChange={(e) => setLeadFilterSaqueDisponivelMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
                           </>
                         )}
                       </div>
                     </div>
                     <div>
-                      <label className="text-xs font-semibold text-gray-600 block mb-1">Total Prêmio</label>
+                      <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Total Prêmio</label>
                       <div className="flex flex-wrap items-center gap-2">
-                        <select value={leadFilterTotalPremio} onChange={(e) => setLeadFilterTotalPremio(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[140px]">
+                        <select value={leadFilterTotalPremio} onChange={(e) => setLeadFilterTotalPremio(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[140px]">
                           {NUMERIC_FILTER_OPTIONS.map((o) => (
                             <option key={o.value} value={o.value}>{o.label}</option>
                           ))}
                         </select>
                         {leadFilterTotalPremio === 'range' && (
                           <>
-                            <input type="text" inputMode="decimal" value={leadFilterTotalPremioMin} onChange={(e) => setLeadFilterTotalPremioMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
-                            <span className="text-gray-500">–</span>
-                            <input type="text" inputMode="decimal" value={leadFilterTotalPremioMax} onChange={(e) => setLeadFilterTotalPremioMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterTotalPremioMin} onChange={(e) => setLeadFilterTotalPremioMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <span className="text-gray-500 dark:text-gray-400">–</span>
+                            <input type="text" inputMode="decimal" value={leadFilterTotalPremioMax} onChange={(e) => setLeadFilterTotalPremioMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
                           </>
                         )}
                       </div>
                     </div>
                     <div>
-                      <label className="text-xs font-semibold text-gray-600 block mb-1">Valor mínimo (soma saldo) R$</label>
-                      <input type="text" inputMode="decimal" placeholder="Ex: 100" value={minSumBalance} onChange={(e) => setMinSumBalance(e.target.value)} className="w-28 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
-                      <p className="text-xs text-gray-500 mt-0.5">Leads até somar este valor</p>
+                      <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Valor mínimo (soma saldo) R$</label>
+                      <input type="text" inputMode="decimal" placeholder="Ex: 100" value={minSumBalance} onChange={(e) => setMinSumBalance(e.target.value)} className="w-28 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Leads até somar este valor</p>
                     </div>
                     <div>
-                      <label className="text-xs font-semibold text-gray-600 block mb-1">Auto-selecionar (N leads)</label>
-                      <input type="number" min={1} max={MAX_LEADS_SELECT} value={quantity} onChange={(e) => setQuantity(String(Math.min(MAX_LEADS_SELECT, Math.max(1, parseInt(e.target.value, 10) || 1))))} className="w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800" />
-                      <p className="text-xs text-gray-500 mt-0.5">Máx. {MAX_LEADS_SELECT}</p>
+                      <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Auto-selecionar (N leads)</label>
+                      <input type="number" min={1} max={MAX_LEADS_SELECT} value={quantity} onChange={(e) => setQuantity(String(Math.min(MAX_LEADS_SELECT, Math.max(1, parseInt(e.target.value, 10) || 1))))} className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Máx. {MAX_LEADS_SELECT}</p>
                     </div>
                   </div>
                   {loadingLeads && (
-                    <div className="flex flex-col items-center justify-center py-10 px-4 rounded-xl border border-gray-200 bg-gray-50">
+                    <div className="flex flex-col items-center justify-center py-10 px-4 rounded-xl border border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#1f1f1f]">
                       <Loader2 className="w-10 h-10 text-[#8CD955] animate-spin mb-3" aria-hidden />
-                      <p className="text-sm font-medium text-gray-700">Buscando leads...</p>
-                      <p className="text-xs text-gray-500 mt-1">Aguarde enquanto carregamos os resultados.</p>
+                      <p className="text-sm font-medium text-gray-700 dark:text-gray-200">Buscando leads...</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Aguarde enquanto carregamos os resultados.</p>
                     </div>
                   )}
                   {hasSearchedLeads && !loadingLeads && filteredLeads.length === 0 && (
-                    <div className="py-8 px-4 rounded-xl border border-gray-200 bg-gray-50 text-center">
-                      <Users className="w-10 h-10 text-gray-400 mx-auto mb-2" />
-                      <p className="text-gray-700 font-medium">Nenhum lead de acordo com os filtros solicitados</p>
-                      <p className="text-sm text-gray-500 mt-1">Tente alterar o período de inatividade, os filtros ou o consultor origem.</p>
+                    <div className="py-8 px-4 rounded-xl border border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#1f1f1f] text-center">
+                      <Users className="w-10 h-10 text-gray-400 dark:text-gray-500 mx-auto mb-2" />
+                      <p className="text-gray-700 dark:text-gray-200 font-medium">Nenhum lead de acordo com os filtros solicitados</p>
+                      <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Tente alterar o período de inatividade, os filtros ou o consultor origem.</p>
                     </div>
                   )}
                   {hasSearchedLeads && !loadingLeads && filteredLeads.length > 0 && (
                     <>
-                      <p className="text-sm text-gray-600">
+                      <p className="text-sm text-gray-600 dark:text-gray-300">
                         <strong>{filteredLeads.length}</strong> lead(s) {minSumBalance.trim() ? `(soma mín. R$ ${minSumBalance.trim()})` : ''}. Soma dos saldos: <strong>R$ {totalFilteredBalanceSum.toFixed(2).replace('.', ',')}</strong>. Até <strong>{Math.min(parseInt(quantity, 10) || 0, MAX_LEADS_SELECT, filteredLeads.length)}</strong> serão auto-selecionados no próximo passo.
                       </p>
                       {enrichmentLoading && (
@@ -4919,18 +4948,18 @@ export default function AdminLeadTransferPage() {
                           Carregando detalhes em segundo plano… (saldo, totais etc. serão atualizados em breve)
                         </p>
                       )}
-                      <div className="overflow-x-auto border border-gray-200 rounded-lg mt-3 max-h-[320px] overflow-y-auto">
+                      <div className="overflow-x-auto border border-gray-200 dark:border-[#404040] rounded-lg mt-3 max-h-[320px] overflow-y-auto">
                         <table className="w-full text-sm min-w-[520px]">
-                          <thead className="bg-gray-50 border-b border-gray-200 sticky top-0 z-10">
+                          <thead className="bg-gray-50 dark:bg-[#333] border-b border-gray-200 dark:border-[#404040] sticky top-0 z-10">
                             <tr>
-                              <th className="text-left p-2 font-semibold text-gray-700">ID</th>
-                              <th className="text-left p-2 font-semibold text-gray-700">Nome / Email</th>
-                              <th className="text-left p-2 font-semibold text-gray-700">Total Depositado</th>
-                              <th className="text-left p-2 font-semibold text-gray-700">Total na Carteira</th>
-                              <th className="text-left p-2 font-semibold text-gray-700">Total apostado</th>
-                              <th className="text-left p-2 font-semibold text-gray-700">Total Prêmio</th>
-                              <th className="text-left p-2 font-semibold text-gray-700">Saque disponível</th>
-                              <th className="text-left p-2 font-semibold text-gray-700">Status</th>
+                              <th className="text-left p-2 font-semibold text-gray-700 dark:text-gray-200">ID</th>
+                              <th className="text-left p-2 font-semibold text-gray-700 dark:text-gray-200">Nome / Email</th>
+                              <th className="text-left p-2 font-semibold text-gray-700 dark:text-gray-200">Total Depositado</th>
+                              <th className="text-left p-2 font-semibold text-gray-700 dark:text-gray-200">Total na Carteira</th>
+                              <th className="text-left p-2 font-semibold text-gray-700 dark:text-gray-200">Total apostado</th>
+                              <th className="text-left p-2 font-semibold text-gray-700 dark:text-gray-200">Total Prêmio</th>
+                              <th className="text-left p-2 font-semibold text-gray-700 dark:text-gray-200">Saque disponível</th>
+                              <th className="text-left p-2 font-semibold text-gray-700 dark:text-gray-200">Status</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -4944,32 +4973,32 @@ export default function AdminLeadTransferPage() {
                               const availableWithdraw = (lead as Record<string, unknown>).available_withdraw != null ? parseFloat(String((lead as Record<string, unknown>).available_withdraw)) : null;
                               const fmt = (v: number | null) => (v != null ? `R$ ${Number(v).toFixed(2).replace('.', ',')}` : '-');
                               return (
-                                <tr key={String(lead.id)} className="border-t border-gray-100">
-                                  <td className="p-2 font-mono text-gray-600 text-xs">{String(lead.id)}</td>
+                                <tr key={String(lead.id)} className="border-t border-gray-100 dark:border-[#404040]">
+                                  <td className="p-2 font-mono text-gray-600 dark:text-gray-400 text-xs">{String(lead.id)}</td>
                                   <td className="p-2 min-w-0 max-w-[200px]">
-                                    <span className="block font-medium text-gray-800 truncate" title={name}>{name}</span>
-                                    {email ? <span className="block text-xs text-gray-500 truncate" title={email}>{email}</span> : null}
+                                    <span className="block font-medium text-gray-800 dark:text-gray-200 truncate" title={name}>{name}</span>
+                                    {email ? <span className="block text-xs text-gray-500 dark:text-gray-400 truncate" title={email}>{email}</span> : null}
                                   </td>
-                                  <td className="p-2 text-gray-700">{fmt(totalDepositado)}</td>
-                                  <td className="p-2 text-gray-700">{fmt(balance)}</td>
-                                  <td className="p-2 text-gray-700">{fmt(totalApostado)}</td>
-                                  <td className="p-2 text-gray-700">{fmt(totalGanho)}</td>
-                                  <td className="p-2 text-gray-700">{fmt(availableWithdraw)}</td>
+                                  <td className="p-2 text-gray-700 dark:text-gray-300">{fmt(totalDepositado)}</td>
+                                  <td className="p-2 text-gray-700 dark:text-gray-300">{fmt(balance)}</td>
+                                  <td className="p-2 text-gray-700 dark:text-gray-300">{fmt(totalApostado)}</td>
+                                  <td className="p-2 text-gray-700 dark:text-gray-300">{fmt(totalGanho)}</td>
+                                  <td className="p-2 text-gray-700 dark:text-gray-300">{fmt(availableWithdraw)}</td>
                                   <td className="p-2">
-                                    <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">{getStatusLabel(lead.status as string)}</span>
+                                    <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 dark:bg-[#404040] text-gray-700 dark:text-gray-200">{getStatusLabel(lead.status as string)}</span>
                                   </td>
                                 </tr>
                               );
                             })}
                           </tbody>
                         </table>
-                        {filteredLeads.length > 100 && <p className="text-xs text-gray-500 p-2 border-t border-gray-100">Exibindo 100 de {filteredLeads.length} leads.</p>}
+                        {filteredLeads.length > 100 && <p className="text-xs text-gray-500 dark:text-gray-400 p-2 border-t border-gray-100 dark:border-[#404040]">Exibindo 100 de {filteredLeads.length} leads.</p>}
                       </div>
                     </>
                   )}
-                  <div className="flex gap-2 pt-2 border-t border-gray-100">
-                    <button type="button" onClick={() => setCurrentStep(2)} className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50">Anterior</button>
-                    <button type="button" onClick={() => setCurrentStep(4)} disabled={!hasSearchedLeads || filteredLeads.length === 0} className="px-4 py-2 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A] disabled:opacity-50">Ir para seleção de leads</button>
+                  <div className="flex gap-2 pt-2 border-t border-gray-100 dark:border-[#404040]">
+                    <button type="button" onClick={() => setCurrentStep(2)} className="px-4 py-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors">Anterior</button>
+                    <button type="button" onClick={() => setCurrentStep(4)} disabled={!hasSearchedLeads || filteredLeads.length === 0} className="px-4 py-2 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A] disabled:opacity-50 transition-colors">Ir para seleção de leads</button>
                   </div>
                 </div>
               )}
@@ -5038,8 +5067,8 @@ export default function AdminLeadTransferPage() {
                     <div className="mb-4 p-3 rounded-xl bg-[#8CD955]/10 border border-[#8CD955]/30 flex flex-wrap items-center justify-between gap-3">
                       <span className="font-semibold text-gray-800 dark:text-white">{selectedLeadIds.size} lead(s) selecionado(s)</span>
                       <div className="flex gap-2">
-                        <button type="button" onClick={() => setSelectedLeadIds(new Set())} className="px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 text-sm hover:bg-gray-50">Limpar</button>
-                        <button type="button" onClick={() => setShowSelectedModal(true)} className="px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 text-sm hover:bg-gray-50">Ver selecionados</button>
+                        <button type="button" onClick={() => setSelectedLeadIds(new Set())} className="px-3 py-1.5 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 text-sm hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors">Limpar</button>
+                        <button type="button" onClick={() => setShowSelectedModal(true)} className="px-3 py-1.5 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 text-sm hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors">Ver selecionados</button>
                         <button type="button" onClick={() => setCurrentStep(5)} disabled={!canExecuteTransfer} className="px-4 py-1.5 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A] disabled:opacity-50">Transferir {selectedLeadIds.size} lead(s)</button>
                       </div>
                     </div>
@@ -5048,53 +5077,53 @@ export default function AdminLeadTransferPage() {
                     <div className="flex flex-wrap items-center gap-3">
                       <div className="relative">
                         <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
-                        <input type="text" value={leadSearchQuery} onChange={(e) => setLeadSearchQuery(e.target.value)} placeholder="Buscar por nome ou e-mail..." className="pl-8 pr-3 py-1.5 w-56 bg-gray-100 border border-gray-200 rounded-lg text-sm text-gray-900 placeholder:text-gray-600 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]/40" />
+                        <input type="text" value={leadSearchQuery} onChange={(e) => setLeadSearchQuery(e.target.value)} placeholder="Buscar por nome ou e-mail..." className="pl-8 pr-3 py-1.5 w-56 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-white placeholder:text-gray-600 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]/40" />
                       </div>
-                      <select value={leadFilterStatus} onChange={(e) => setLeadFilterStatus(e.target.value)} className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[140px]">
+                      <select value={leadFilterStatus} onChange={(e) => setLeadFilterStatus(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[140px]">
                         <option value="">Status: Todos</option>
                         {uniqueStatuses.map((s) => (
                           <option key={s} value={s}>{getStatusLabel(s)}</option>
                         ))}
                       </select>
-                      <select value={leadFilterTemperature} onChange={(e) => setLeadFilterTemperature(e.target.value)} className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[140px]">
+                      <select value={leadFilterTemperature} onChange={(e) => setLeadFilterTemperature(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[140px]">
                         <option value="">Temperatura: Todas</option>
                         {uniqueTemperatures.map((t) => (
                           <option key={t} value={t}>{getTemperatureLabel(t)}</option>
                         ))}
                       </select>
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm text-gray-600 whitespace-nowrap">Total na Carteira:</span>
-                        <select value={balanceFilter} onChange={(e) => setBalanceFilter(e.target.value)} className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[120px]">
+                        <span className="text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">Total na Carteira:</span>
+                        <select value={balanceFilter} onChange={(e) => setBalanceFilter(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[120px]">
                           {BALANCE_FILTER_OPTIONS.map((o) => (
                             <option key={o.value} value={o.value}>{o.label}</option>
                           ))}
                         </select>
                         {balanceFilter === 'range' && (
                           <>
-                            <input type="text" inputMode="decimal" value={leadFilterSaldoMin} onChange={(e) => setLeadFilterSaldoMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
-                            <span className="text-gray-500">–</span>
-                            <input type="text" inputMode="decimal" value={leadFilterSaldoMax} onChange={(e) => setLeadFilterSaldoMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterSaldoMin} onChange={(e) => setLeadFilterSaldoMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <span className="text-gray-500 dark:text-gray-400">–</span>
+                            <input type="text" inputMode="decimal" value={leadFilterSaldoMax} onChange={(e) => setLeadFilterSaldoMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
                           </>
                         )}
                       </div>
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm text-gray-600 whitespace-nowrap">Total Depositado:</span>
-                        <select value={leadFilterTotalDepositado} onChange={(e) => setLeadFilterTotalDepositado(e.target.value)} className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[120px]">
+                        <span className="text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">Total Depositado:</span>
+                        <select value={leadFilterTotalDepositado} onChange={(e) => setLeadFilterTotalDepositado(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[120px]">
                           {NUMERIC_FILTER_OPTIONS.map((o) => (
                             <option key={o.value} value={o.value}>{o.label}</option>
                           ))}
                         </select>
                         {leadFilterTotalDepositado === 'range' && (
                           <>
-                            <input type="text" inputMode="decimal" value={leadFilterTotalDepositadoMin} onChange={(e) => setLeadFilterTotalDepositadoMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
-                            <span className="text-gray-500">–</span>
-                            <input type="text" inputMode="decimal" value={leadFilterTotalDepositadoMax} onChange={(e) => setLeadFilterTotalDepositadoMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterTotalDepositadoMin} onChange={(e) => setLeadFilterTotalDepositadoMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <span className="text-gray-500 dark:text-gray-400">–</span>
+                            <input type="text" inputMode="decimal" value={leadFilterTotalDepositadoMax} onChange={(e) => setLeadFilterTotalDepositadoMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
                           </>
                         )}
                       </div>
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm text-gray-600 whitespace-nowrap">Total apostado:</span>
-                        <select value={leadFilterAposta} onChange={(e) => setLeadFilterAposta(e.target.value)} className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[120px]">
+                        <span className="text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">Total apostado:</span>
+                        <select value={leadFilterAposta} onChange={(e) => setLeadFilterAposta(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[120px]">
                           <option value="all">Todos</option>
                           <option value="with_bet">Com valor</option>
                           <option value="without_bet">Sem valor</option>
@@ -5102,48 +5131,48 @@ export default function AdminLeadTransferPage() {
                         </select>
                         {leadFilterAposta === 'range' && (
                           <>
-                            <input type="text" inputMode="decimal" value={leadFilterApostaMin} onChange={(e) => setLeadFilterApostaMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
-                            <span className="text-gray-500">–</span>
-                            <input type="text" inputMode="decimal" value={leadFilterApostaMax} onChange={(e) => setLeadFilterApostaMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterApostaMin} onChange={(e) => setLeadFilterApostaMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <span className="text-gray-500 dark:text-gray-400">–</span>
+                            <input type="text" inputMode="decimal" value={leadFilterApostaMax} onChange={(e) => setLeadFilterApostaMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
                           </>
                         )}
                       </div>
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm text-gray-600 whitespace-nowrap">Saque disponível:</span>
-                        <select value={leadFilterSaqueDisponivel} onChange={(e) => setLeadFilterSaqueDisponivel(e.target.value)} className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[120px]">
+                        <span className="text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">Saque disponível:</span>
+                        <select value={leadFilterSaqueDisponivel} onChange={(e) => setLeadFilterSaqueDisponivel(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[120px]">
                           {NUMERIC_FILTER_OPTIONS.map((o) => (
                             <option key={o.value} value={o.value}>{o.label}</option>
                           ))}
                         </select>
                         {leadFilterSaqueDisponivel === 'range' && (
                           <>
-                            <input type="text" inputMode="decimal" value={leadFilterSaqueDisponivelMin} onChange={(e) => setLeadFilterSaqueDisponivelMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
-                            <span className="text-gray-500">–</span>
-                            <input type="text" inputMode="decimal" value={leadFilterSaqueDisponivelMax} onChange={(e) => setLeadFilterSaqueDisponivelMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterSaqueDisponivelMin} onChange={(e) => setLeadFilterSaqueDisponivelMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <span className="text-gray-500 dark:text-gray-400">–</span>
+                            <input type="text" inputMode="decimal" value={leadFilterSaqueDisponivelMax} onChange={(e) => setLeadFilterSaqueDisponivelMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
                           </>
                         )}
                       </div>
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm text-gray-600 whitespace-nowrap">Total Prêmio:</span>
-                        <select value={leadFilterTotalPremio} onChange={(e) => setLeadFilterTotalPremio(e.target.value)} className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[120px]">
+                        <span className="text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">Total Prêmio:</span>
+                        <select value={leadFilterTotalPremio} onChange={(e) => setLeadFilterTotalPremio(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[120px]">
                           {NUMERIC_FILTER_OPTIONS.map((o) => (
                             <option key={o.value} value={o.value}>{o.label}</option>
                           ))}
                         </select>
                         {leadFilterTotalPremio === 'range' && (
                           <>
-                            <input type="text" inputMode="decimal" value={leadFilterTotalPremioMin} onChange={(e) => setLeadFilterTotalPremioMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
-                            <span className="text-gray-500">–</span>
-                            <input type="text" inputMode="decimal" value={leadFilterTotalPremioMax} onChange={(e) => setLeadFilterTotalPremioMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterTotalPremioMin} onChange={(e) => setLeadFilterTotalPremioMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <span className="text-gray-500 dark:text-gray-400">–</span>
+                            <input type="text" inputMode="decimal" value={leadFilterTotalPremioMax} onChange={(e) => setLeadFilterTotalPremioMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
                           </>
                         )}
                       </div>
                       <div className="flex items-center gap-2">
-                        <label className="text-sm text-gray-600 whitespace-nowrap">Exibir:</label>
+                        <label className="text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">Exibir:</label>
                         <select
                           value={leadsPageSize}
                           onChange={(e) => setLeadsPageSize(Number(e.target.value))}
-                          className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]"
+                          className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]"
                         >
                           <option value={10}>10</option>
                           <option value={25}>25</option>
@@ -5163,49 +5192,49 @@ export default function AdminLeadTransferPage() {
                             value={customPageSizeInput}
                             onChange={(e) => setCustomPageSizeInput(e.target.value.replace(/\D/g, '').slice(0, 5) || '')}
                             placeholder="Qtd"
-                            className="w-20 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]"
+                            className="w-20 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]"
                           />
                         )}
                       </div>
-                      <span className="text-sm text-gray-600">
+                      <span className="text-sm text-gray-600 dark:text-gray-400">
                         {effectivePageSize >= totalToShow ? `${totalToShow} lead(s)` : `Exibindo ${(currentPage - 1) * effectivePageSize + 1}–${Math.min(currentPage * effectivePageSize, totalToShow)} de ${totalToShow}`}
                       </span>
                     </div>
                     <div className="flex gap-2">
-                      <button type="button" onClick={handleSelectFirstN} className="text-sm px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50">
+                      <button type="button" onClick={handleSelectFirstN} className="text-sm px-3 py-1.5 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors">
                         Auto-selecionar {Math.min(parseInt(quantity, 10) || 0, MAX_LEADS_SELECT, totalFiltered)} primeiros
                       </button>
-                      <span className="text-xs text-gray-500 self-center">ou</span>
-                      <button type="button" onClick={() => toggleAllOnPage(!allOnPageSelected)} className="text-sm px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50">
+                      <span className="text-xs text-gray-500 dark:text-gray-400 self-center">ou</span>
+                      <button type="button" onClick={() => toggleAllOnPage(!allOnPageSelected)} className="text-sm px-3 py-1.5 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors">
                         {allOnPageSelected ? 'Desmarcar esta página' : 'Selecionar esta página'}
                       </button>
-                      <button type="button" onClick={() => toggleAllLeads(selectedLeadIds.size < totalFiltered)} className="text-sm px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50">
+                      <button type="button" onClick={() => toggleAllLeads(selectedLeadIds.size < totalFiltered)} className="text-sm px-3 py-1.5 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors">
                         {selectedLeadIds.size === totalFiltered ? 'Desmarcar todos' : `Selecionar todos (${totalFiltered})`}
                       </button>
                     </div>
                   </div>
-                  <div className="overflow-x-auto border border-gray-200 rounded-lg">
+                  <div className="overflow-x-auto border border-gray-200 dark:border-[#404040] rounded-lg">
                     <table className="w-full text-sm min-w-[720px]">
-                      <thead className="bg-gray-100 border-b-2 border-gray-200">
+                      <thead className="bg-gray-100 dark:bg-[#333] border-b-2 border-gray-200 dark:border-[#404040]">
                         <tr>
-                          <th className="text-left p-3 w-10 align-middle sticky left-0 bg-gray-100 z-10">
-                            <input type="checkbox" checked={allOnPageSelected} onChange={(e) => toggleAllOnPage(e.target.checked)} className="rounded border-gray-400" />
+                          <th className="text-left p-3 w-10 align-middle sticky left-0 bg-gray-100 dark:bg-[#333] z-10">
+                            <input type="checkbox" checked={allOnPageSelected} onChange={(e) => toggleAllOnPage(e.target.checked)} className="rounded border-gray-400 dark:border-[#555]" />
                           </th>
-                          <th className="text-left p-3 font-semibold text-gray-700 whitespace-nowrap hidden sm:table-cell">ID</th>
-                          <th className="text-left p-3 font-semibold text-gray-700 whitespace-nowrap">Nome / Email</th>
-                          <th className="text-left p-3 font-semibold text-gray-700 whitespace-nowrap">Status</th>
-                          <th className="text-left p-3 font-semibold text-gray-700 whitespace-nowrap">Temperatura</th>
-                          <th className="text-left p-3 font-semibold text-gray-700 whitespace-nowrap hidden md:table-cell">Total Depositado</th>
-                          <th className="text-left p-3 font-semibold text-gray-700 whitespace-nowrap hidden md:table-cell">Total na Carteira</th>
-                          <th className="text-left p-3 font-semibold text-gray-700 whitespace-nowrap hidden md:table-cell">Total apostado</th>
-                          <th className="text-left p-3 font-semibold text-gray-700 whitespace-nowrap hidden md:table-cell">Total Prêmio</th>
-                          <th className="text-left p-3 font-semibold text-gray-700 whitespace-nowrap hidden md:table-cell">Saque disponível</th>
+                          <th className="text-left p-3 font-semibold text-gray-700 dark:text-gray-200 whitespace-nowrap hidden sm:table-cell">ID</th>
+                          <th className="text-left p-3 font-semibold text-gray-700 dark:text-gray-200 whitespace-nowrap">Nome / Email</th>
+                          <th className="text-left p-3 font-semibold text-gray-700 dark:text-gray-200 whitespace-nowrap">Status</th>
+                          <th className="text-left p-3 font-semibold text-gray-700 dark:text-gray-200 whitespace-nowrap">Temperatura</th>
+                          <th className="text-left p-3 font-semibold text-gray-700 dark:text-gray-200 whitespace-nowrap hidden md:table-cell">Total Depositado</th>
+                          <th className="text-left p-3 font-semibold text-gray-700 dark:text-gray-200 whitespace-nowrap hidden md:table-cell">Total na Carteira</th>
+                          <th className="text-left p-3 font-semibold text-gray-700 dark:text-gray-200 whitespace-nowrap hidden md:table-cell">Total apostado</th>
+                          <th className="text-left p-3 font-semibold text-gray-700 dark:text-gray-200 whitespace-nowrap hidden md:table-cell">Total Prêmio</th>
+                          <th className="text-left p-3 font-semibold text-gray-700 dark:text-gray-200 whitespace-nowrap hidden md:table-cell">Saque disponível</th>
                         </tr>
                       </thead>
                       <tbody>
                         {paginatedLeads.length === 0 ? (
                           <tr>
-                            <td colSpan={10} className="p-4 text-center text-gray-500">
+                            <td colSpan={10} className="p-4 text-center text-gray-500 dark:text-gray-400">
                               Nenhum lead corresponde à busca.
                             </td>
                           </tr>
@@ -5225,26 +5254,26 @@ export default function AdminLeadTransferPage() {
                             const availableWithdraw = (lead as Record<string, unknown>).available_withdraw as number | null | undefined;
                             const fmt = (v: number | null | undefined) => (v != null ? `R$ ${Number(v).toFixed(2).replace('.', ',')}` : '-');
                             return (
-                              <tr key={key} className={`border-t border-gray-100 ${checked ? 'bg-green-50' : ''}`}>
+                              <tr key={key} className={`border-t border-gray-100 dark:border-[#404040] ${checked ? 'bg-green-50 dark:bg-green-900/20' : ''}`}>
                                 <td className="p-2 sticky left-0 bg-inherit z-0">
-                                  <input type="checkbox" checked={checked} onChange={() => toggleLead(id)} className="rounded border-gray-300" />
+                                  <input type="checkbox" checked={checked} onChange={() => toggleLead(id)} className="rounded border-gray-300 dark:border-[#555]" />
                                 </td>
-                                <td className="p-2 font-mono text-gray-600 text-xs hidden sm:table-cell">{key}</td>
+                                <td className="p-2 font-mono text-gray-600 dark:text-gray-400 text-xs hidden sm:table-cell">{key}</td>
                                 <td className="p-2 min-w-0 max-w-[200px]">
-                                  <span className="block font-medium text-gray-800 truncate" title={name}>{name}</span>
-                                  {email ? <span className="block text-xs text-gray-500 truncate" title={email}>{email}</span> : null}
+                                  <span className="block font-medium text-gray-800 dark:text-gray-100 truncate" title={name}>{name}</span>
+                                  {email ? <span className="block text-xs text-gray-500 dark:text-gray-400 truncate" title={email}>{email}</span> : null}
                                 </td>
                                 <td className="p-2">
-                                  <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">{getStatusLabel(status)}</span>
+                                  <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 dark:bg-[#404040] text-gray-700 dark:text-gray-100">{getStatusLabel(status)}</span>
                                 </td>
                                 <td className="p-2">
-                                  <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700">{getTemperatureLabel(temperature)}</span>
+                                  <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 dark:bg-blue-900/50 text-blue-700 dark:text-blue-100">{getTemperatureLabel(temperature)}</span>
                                 </td>
-                                <td className="p-2 text-gray-600 hidden md:table-cell">{fmt(totalDepositado)}</td>
-                                <td className="p-2 text-gray-600 hidden md:table-cell">{fmt(balance)}</td>
-                                <td className="p-2 text-gray-600 hidden md:table-cell">{fmt(totalApostado)}</td>
-                                <td className="p-2 text-gray-600 hidden md:table-cell">{fmt(totalGanho)}</td>
-                                <td className="p-2 text-gray-600 hidden md:table-cell">{fmt(availableWithdraw)}</td>
+                                <td className="p-2 text-gray-600 dark:text-gray-300 hidden md:table-cell">{fmt(totalDepositado)}</td>
+                                <td className="p-2 text-gray-600 dark:text-gray-300 hidden md:table-cell">{fmt(balance)}</td>
+                                <td className="p-2 text-gray-600 dark:text-gray-300 hidden md:table-cell">{fmt(totalApostado)}</td>
+                                <td className="p-2 text-gray-600 dark:text-gray-300 hidden md:table-cell">{fmt(totalGanho)}</td>
+                                <td className="p-2 text-gray-600 dark:text-gray-300 hidden md:table-cell">{fmt(availableWithdraw)}</td>
                               </tr>
                             );
                           })
@@ -5262,7 +5291,7 @@ export default function AdminLeadTransferPage() {
                           type="button"
                           onClick={() => setLeadsPage((p) => Math.max(1, p - 1))}
                           disabled={currentPage <= 1}
-                          className="p-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="p-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                           aria-label="Página anterior"
                         >
                           <ChevronLeft className="w-4 h-4" />
@@ -5277,9 +5306,9 @@ export default function AdminLeadTransferPage() {
                               <button
                                 type="button"
                                 onClick={() => setLeadsPage(p)}
-                                className={`min-w-[2rem] px-2 py-1.5 rounded-lg text-sm font-medium ${p === currentPage
+                                className={`min-w-[2rem] px-2 py-1.5 rounded-lg text-sm font-medium transition-colors ${p === currentPage
                                   ? 'bg-[#8CD955] text-white'
-                                  : 'border border-gray-300 text-gray-700 hover:bg-gray-50'
+                                  : 'border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040]'
                                   }`}
                               >
                                 {p}
@@ -5290,7 +5319,7 @@ export default function AdminLeadTransferPage() {
                           type="button"
                           onClick={() => setLeadsPage((p) => Math.min(totalPages, p + 1))}
                           disabled={currentPage >= totalPages}
-                          className="p-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="p-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                           aria-label="Próxima página"
                         >
                           <ChevronRight className="w-4 h-4" />
@@ -5300,9 +5329,9 @@ export default function AdminLeadTransferPage() {
                   )}
                   <div className="mt-4 flex gap-2 pt-3 border-t border-gray-100">
                     {currentStep >= 5 ? (
-                      <button type="button" onClick={() => setCurrentStep(4)} className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50">Anterior</button>
+                      <button type="button" onClick={() => setCurrentStep(4)} className="px-4 py-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors">Anterior</button>
                     ) : (
-                      <button type="button" onClick={() => setCurrentStep(3)} className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50">Anterior</button>
+                      <button type="button" onClick={() => setCurrentStep(3)} className="px-4 py-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors">Anterior</button>
                     )}
                   </div>
                 </div>
