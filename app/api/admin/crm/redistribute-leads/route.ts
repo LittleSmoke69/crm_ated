@@ -174,6 +174,27 @@ export async function POST(req: NextRequest) {
           total_saque_snapshot: s.total_saque ?? null,
         });
       }
+    } else if (source_transfer_log_id && ctx.bancaId) {
+      const selectFullSnap = 'lead_id, lead_name, lead_phone, saldo_snapshot, last_interaction_snapshot, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, total_saque_snapshot';
+      const selectBasicSnap = 'lead_id, saldo_snapshot, last_interaction_snapshot, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, total_saque_snapshot';
+      let srcResult: { data: Record<string, unknown>[] | null; error: { code?: string; message?: string } | null } = await supabaseServiceRole
+        .from('admin_lead_transfer_entries')
+        .select(selectFullSnap)
+        .eq('transfer_log_id', source_transfer_log_id)
+        .eq('banca_id', ctx.bancaId);
+      if (srcResult.error?.code === 'PGRST204' || srcResult.error?.message?.includes('lead_name')) {
+        srcResult = await supabaseServiceRole
+          .from('admin_lead_transfer_entries')
+          .select(selectBasicSnap)
+          .eq('transfer_log_id', source_transfer_log_id)
+          .eq('banca_id', ctx.bancaId);
+      }
+      if (Array.isArray(srcResult.data)) {
+        for (const e of srcResult.data as unknown as SnapshotRow[]) {
+          snapshotByLeadId.set(String(e.lead_id), e);
+        }
+        console.log(`${LOG_PREFIX} POST snapshots copiados de entries originais (Mover leads): log=${source_transfer_log_id}, count=${srcResult.data.length}`);
+      }
     } else if (refLogId && ctx.bancaId && (isDevolucao || isReverse)) {
       const selectFullSnap = 'lead_id, lead_name, lead_phone, saldo_snapshot, last_interaction_snapshot, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, total_saque_snapshot';
       const selectBasicSnap = 'lead_id, saldo_snapshot, last_interaction_snapshot, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, total_saque_snapshot';

@@ -862,6 +862,29 @@ export default function AdminLeadTransferPage() {
     }
   };
 
+  const [reopeningRequestId, setReopeningRequestId] = useState<string | null>(null);
+  const handleReopenRequest = async (requestId: string) => {
+    setReopeningRequestId(requestId);
+    try {
+      const res = await fetch(`/api/admin/crm/lead-requests/${requestId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...headers() },
+        body: JSON.stringify({ status: 'reopen' }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        showToast('Solicitação reaberta com sucesso.', 'success');
+        loadLeadRequests();
+      } else {
+        showToast(json?.error ?? 'Erro ao reabrir solicitação.', 'error');
+      }
+    } catch {
+      showToast('Erro ao reabrir solicitação.', 'error');
+    } finally {
+      setReopeningRequestId(null);
+    }
+  };
+
   const LEAD_TYPE_OPTIONS = [
     { value: 'registered', label: 'Lead apenas cadastrado' },
     { value: 'with_balance', label: 'Lead que possui saldo na banca' },
@@ -1416,6 +1439,7 @@ export default function AdminLeadTransferPage() {
       const json = await res.json();
       if (res.ok && json.success) {
         const count = json?.data?.count ?? selectedLeadIds.size;
+        const newTransferLogId = json?.data?.transfer_log_id ?? null;
         const requestIdToApprove = transferFromSolicitationRequestIdRef.current;
         if (requestIdToApprove) {
           const sourceConsultant = consultants.find((c) => (c.email ?? '').trim().toLowerCase() === (sourceEmail ?? '').trim().toLowerCase());
@@ -1432,6 +1456,7 @@ export default function AdminLeadTransferPage() {
                 leads_transferred_count: count,
                 transfer_filters_snapshot: transferFiltersSnapshot,
                 deadline_days: transferDeadlineDays,
+                transfer_log_id: newTransferLogId,
               };
               if (targetConsultantId) {
                 approveBody.consultores = [{ consultor_id: targetConsultantId, quantity: count }];
@@ -2111,6 +2136,23 @@ export default function AdminLeadTransferPage() {
     }
     setMovingLeads(true);
     try {
+      const modalEntriesById = new Map(disponivelEntries.map((e: Record<string, unknown>) => [String(e.lead_id), e]));
+      const modalLeadSnapshots = leadIds.map((id) => {
+        const e = modalEntriesById.get(String(id)) ?? {} as Record<string, unknown>;
+        const leadName = [e.name, e.last_name].filter(Boolean).join(' ').trim() || null;
+        return {
+          lead_id: id,
+          name: leadName,
+          phone: (e.phone ?? null) as string | null,
+          balance: e.saldo_snapshot != null ? Number(e.saldo_snapshot) : (e.balance != null ? Number(e.balance) : null),
+          last_interaction: (e.last_interaction ?? e.created_at ?? null) as string | null,
+          total_depositado: e.total_depositado_snapshot != null ? Number(e.total_depositado_snapshot) : (e.total_depositado != null ? Number(e.total_depositado) : null),
+          total_apostado: e.total_apostado_snapshot != null ? Number(e.total_apostado_snapshot) : (e.total_apostado != null ? Number(e.total_apostado) : null),
+          total_ganho: e.total_ganho_snapshot != null ? Number(e.total_ganho_snapshot) : (e.total_ganho != null ? Number(e.total_ganho) : null),
+          available_withdraw: e.available_withdraw_snapshot != null ? Number(e.available_withdraw_snapshot) : null,
+          total_saque: e.total_saque_snapshot != null ? Number(e.total_saque_snapshot) : null,
+        };
+      });
       const res = await fetch('/api/admin/crm/redistribute-leads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...headers() },
@@ -2121,6 +2163,7 @@ export default function AdminLeadTransferPage() {
           leads_ids: leadIds,
           transfer_type: moveToNextTransferType,
           source_transfer_log_id: (selectedLogForModal as { id?: string })?.id,
+          lead_snapshots: modalLeadSnapshots,
         }),
       });
       const json = await res.json();
@@ -2623,6 +2666,23 @@ export default function AdminLeadTransferPage() {
       : allLeadIds;
     setMoveLeadsMoving(true);
     try {
+      const entriesById = new Map(moveLeadsEntries.map((e: Record<string, unknown>) => [String(e.lead_id), e]));
+      const leadSnapshots = leadIds.map((id) => {
+        const e = entriesById.get(String(id)) ?? {} as Record<string, unknown>;
+        const leadName = [e.name, e.last_name].filter(Boolean).join(' ').trim() || null;
+        return {
+          lead_id: id,
+          name: leadName,
+          phone: (e.phone ?? null) as string | null,
+          balance: e.saldo_snapshot != null ? Number(e.saldo_snapshot) : (e.balance != null ? Number(e.balance) : null),
+          last_interaction: (e.last_interaction ?? e.created_at ?? null) as string | null,
+          total_depositado: e.total_depositado_snapshot != null ? Number(e.total_depositado_snapshot) : (e.total_depositado != null ? Number(e.total_depositado) : null),
+          total_apostado: e.total_apostado_snapshot != null ? Number(e.total_apostado_snapshot) : (e.total_apostado != null ? Number(e.total_apostado) : null),
+          total_ganho: e.total_ganho_snapshot != null ? Number(e.total_ganho_snapshot) : (e.total_ganho != null ? Number(e.total_ganho) : null),
+          available_withdraw: e.available_withdraw_snapshot != null ? Number(e.available_withdraw_snapshot) : null,
+          total_saque: e.total_saque_snapshot != null ? Number(e.total_saque_snapshot) : null,
+        };
+      });
       const res = await fetch('/api/admin/crm/redistribute-leads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...headers() },
@@ -2634,10 +2694,12 @@ export default function AdminLeadTransferPage() {
           transfer_type: moveLeadsTransferType,
           transfer_deadline_days: moveLeadsDeadlineDays,
           source_transfer_log_id: moveLeadsSelectedLog.log_id,
+          lead_snapshots: leadSnapshots,
         }),
       });
       const json = await res.json();
       if (res.ok && json.success) {
+        const moveTransferLogId = json?.data?.transfer_log_id ?? null;
         if (moveLeadsSelectedRequest?.id && userId) {
           const sourceConsultant = moveLeadsConsultants.find((c) => c.email?.toLowerCase() === moveLeadsSelectedLog?.target_consultant_email?.toLowerCase());
           const sourceConsultantId = (sourceConsultant?.id ?? moveLeadsSelectedRequest.source_consultant_id ?? '').toString().trim();
@@ -2653,6 +2715,7 @@ export default function AdminLeadTransferPage() {
                 banca_id: moveLeadsSelectedLog?.banca_id ?? moveLeadsSelectedRequest.banca_id ?? null,
                 consultores: moveLeadsSelectedRequest.consultores?.map((c) => ({ consultor_id: c.consultor_id, quantity: c.quantity })) ?? [],
                 leads_transferred_count: leadIds.length,
+                transfer_log_id: moveTransferLogId,
               }),
             });
             const approveJson = await approveRes.json();
@@ -3245,16 +3308,33 @@ export default function AdminLeadTransferPage() {
                             </td>
                             <td className="px-4 py-3 text-gray-500 dark:text-gray-400">{formatDatePtBR(req.created_at)}</td>
                             <td className="px-4 py-3">
-                              {(req.status === 'pending' || req.status === 'partial') && (
-                                <button
-                                  type="button"
-                                  onClick={() => openApproveModal(req)}
-                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-[#8CD955] text-white hover:bg-[#7BC84A] transition-colors"
-                                >
-                                  <CheckCircle2 className="w-4 h-4" />
-                                  {req.status === 'partial' ? 'Completar' : 'Aprovar'}
-                                </button>
-                              )}
+                              <div className="flex items-center gap-2">
+                                {(req.status === 'pending' || req.status === 'partial') && (
+                                  <button
+                                    type="button"
+                                    onClick={() => openApproveModal(req)}
+                                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                                      req.status === 'partial'
+                                        ? 'bg-amber-500 text-white hover:bg-amber-600'
+                                        : 'bg-[#8CD955] text-white hover:bg-[#7BC84A]'
+                                    }`}
+                                  >
+                                    <CheckCircle2 className="w-4 h-4" />
+                                    {req.status === 'partial' ? 'Completar' : 'Aprovar'}
+                                  </button>
+                                )}
+                                {(req.status === 'approved' || req.status === 'partial') && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleReopenRequest(req.id)}
+                                    disabled={reopeningRequestId === req.id}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50 transition-colors"
+                                  >
+                                    {reopeningRequestId === req.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+                                    Reabrir
+                                  </button>
+                                )}
+                              </div>
                             </td>
                           </tr>
                         );

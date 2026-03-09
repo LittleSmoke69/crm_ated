@@ -8,6 +8,13 @@ import { createCrmRedistributionClient } from '@/lib/server/crm/crmRedistributio
 import { normalizeDateParam, dateToStartOfDaySãoPauloISO, dateToEndOfDaySãoPauloISO } from '@/lib/server/crm/transfer-date-utils';
 
 const LOG_PREFIX = '[admin][transfer-metrics]';
+const IN_BATCH_SIZE = 150;
+
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) chunks.push(arr.slice(i, i + size));
+  return chunks;
+}
 
 /**
  * GET /api/admin/crm/transfer-metrics
@@ -73,54 +80,61 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    let countQuery = supabaseServiceRole
-      .from('admin_lead_transfer_entries')
-      .select('id', { count: 'exact', head: true })
-      .in('banca_id', bancaIds)
-      .in('transfer_log_id', logIdsFilter);
-    if (targetConsultantEmail?.trim()) {
-      countQuery = countQuery.ilike('target_consultant_email', targetConsultantEmail.trim());
-    }
-    const { count: transferidos_totalCount } = await countQuery;
+    const logIdChunks = chunkArray(logIdsFilter, IN_BATCH_SIZE);
 
-    const entriesQuery = supabaseServiceRole
-      .from('admin_lead_transfer_entries')
-      .select('id, transfer_log_id, lead_id, had_balance, target_consultant_email')
-      .in('banca_id', bancaIds)
-      .in('transfer_log_id', logIdsFilter)
-      .limit(50000);
-    const { data: entries, error: entriesError } = await entriesQuery;
-
-    if (entriesError) {
-      console.error(`${LOG_PREFIX} entries error:`, entriesError);
-      return errorResponse('Erro ao buscar métricas de transferência.');
+    let transferidos_totalCount = 0;
+    for (const chunk of logIdChunks) {
+      let q = supabaseServiceRole
+        .from('admin_lead_transfer_entries')
+        .select('id', { count: 'exact', head: true })
+        .in('banca_id', bancaIds)
+        .in('transfer_log_id', chunk);
+      if (targetConsultantEmail?.trim()) q = q.ilike('target_consultant_email', targetConsultantEmail.trim());
+      const { count } = await q;
+      transferidos_totalCount += (typeof count === 'number' ? count : 0);
     }
 
-    const list = Array.isArray(entries) ? entries : [];
+    type EntryRow = { id: string; transfer_log_id: string; lead_id: string; had_balance?: boolean; target_consultant_email?: string };
+    const allEntries: EntryRow[] = [];
+    for (const chunk of logIdChunks) {
+      const { data, error } = await supabaseServiceRole
+        .from('admin_lead_transfer_entries')
+        .select('id, transfer_log_id, lead_id, had_balance, target_consultant_email')
+        .in('banca_id', bancaIds)
+        .in('transfer_log_id', chunk)
+        .limit(50000);
+      if (error) {
+        console.error(`${LOG_PREFIX} entries batch error:`, error);
+        continue;
+      }
+      if (Array.isArray(data)) allEntries.push(...(data as EntryRow[]));
+    }
+
     const emailNorm = targetConsultantEmail ? targetConsultantEmail.toLowerCase().trim() : null;
     const listToUse = emailNorm
-      ? list.filter((e: { target_consultant_email?: string }) => String(e.target_consultant_email ?? '').toLowerCase().trim() === emailNorm)
-      : list;
+      ? allEntries.filter((e) => String(e.target_consultant_email ?? '').toLowerCase().trim() === emailNorm)
+      : allEntries;
 
-    const transferidos_total = typeof transferidos_totalCount === 'number' ? transferidos_totalCount : listToUse.length;
-    const transferidos_com_saldo = listToUse.filter((e: { had_balance?: boolean }) => e.had_balance === true).length;
+    const transferidos_total = transferidos_totalCount > 0 ? transferidos_totalCount : listToUse.length;
+    const transferidos_com_saldo = listToUse.filter((e) => e.had_balance === true).length;
     const transferidos_sem_saldo = transferidos_total - transferidos_com_saldo;
 
-    // byType deve ser derivado das mesmas entries (listToUse) para bater com total e com/sem saldo
-    const logIdsFromList = [...new Set(listToUse.map((e: { transfer_log_id?: string }) => e.transfer_log_id).filter(Boolean))];
+    const logIdsFromList = [...new Set(listToUse.map((e) => e.transfer_log_id).filter(Boolean))];
     let byType: Record<string, number> = { TF: 0, TF1: 0, TF2: 0, TF3: 0 };
     if (logIdsFromList.length > 0) {
-      const { data: logsForType } = await supabaseServiceRole
-        .from('admin_lead_transfer_logs')
-        .select('id, transfer_type')
-        .in('banca_id', bancaIds)
-        .in('id', logIdsFromList);
       const logIdToType = new Map<string, string>();
-      for (const row of Array.isArray(logsForType) ? logsForType : []) {
-        const type = (row.transfer_type && ['TF', 'TF1', 'TF2', 'TF3'].includes(String(row.transfer_type)))
-          ? String(row.transfer_type)
-          : 'TF';
-        logIdToType.set(String(row.id), type);
+      for (const chunk of chunkArray(logIdsFromList, IN_BATCH_SIZE)) {
+        const { data: logsForType } = await supabaseServiceRole
+          .from('admin_lead_transfer_logs')
+          .select('id, transfer_type')
+          .in('banca_id', bancaIds)
+          .in('id', chunk);
+        for (const row of Array.isArray(logsForType) ? logsForType : []) {
+          const type = (row.transfer_type && ['TF', 'TF1', 'TF2', 'TF3'].includes(String(row.transfer_type)))
+            ? String(row.transfer_type)
+            : 'TF';
+          logIdToType.set(String(row.id), type);
+        }
       }
       for (const entry of listToUse) {
         const type = logIdToType.get(String(entry.transfer_log_id ?? '')) ?? 'TF';

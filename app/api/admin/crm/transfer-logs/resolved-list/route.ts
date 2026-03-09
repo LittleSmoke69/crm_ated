@@ -15,6 +15,13 @@ import { getEffectiveZaplotoId } from '@/lib/tenant-context';
 import { isTransferExpired } from '@/lib/server/crm/resolveTransferLog';
 
 const DEFAULT_DEADLINE_DAYS = 10;
+const IN_BATCH_SIZE = 150;
+
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) chunks.push(arr.slice(i, i + size));
+  return chunks;
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -50,14 +57,19 @@ export async function GET(req: NextRequest) {
     if (expiredLogs.length === 0) return successResponse([]);
 
     const logIds = expiredLogs.map((l) => l.id);
-    const { data: entries } = await supabaseServiceRole
-      .from('admin_lead_transfer_entries')
-      .select('transfer_log_id, resolution_status')
-      .in('transfer_log_id', logIds);
+    type EntryRow = { transfer_log_id: string; resolution_status?: string | null };
+    const allEntries: EntryRow[] = [];
+    for (const chunk of chunkArray(logIds, IN_BATCH_SIZE)) {
+      const { data } = await supabaseServiceRole
+        .from('admin_lead_transfer_entries')
+        .select('transfer_log_id, resolution_status')
+        .in('transfer_log_id', chunk);
+      if (Array.isArray(data)) allEntries.push(...(data as EntryRow[]));
+    }
 
     const pendingByLogId = new Map<string, boolean>();
     const disponivelByLogId = new Map<string, number>();
-    (entries ?? []).forEach((e: { transfer_log_id: string; resolution_status?: string | null }) => {
+    allEntries.forEach((e: EntryRow) => {
       const logId = e.transfer_log_id;
       if (e.resolution_status === 'pending') pendingByLogId.set(logId, true);
       if (e.resolution_status === 'disponivel_retransferencia') {

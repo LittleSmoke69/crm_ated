@@ -17,6 +17,13 @@ import { isTransferExpired } from '@/lib/server/crm/resolveTransferLog';
 import { createCrmRedistributionClient } from '@/lib/server/crm/crmRedistributionClient';
 
 const DEFAULT_DEADLINE_DAYS = 10;
+const IN_BATCH_SIZE = 150;
+
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) chunks.push(arr.slice(i, i + size));
+  return chunks;
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -65,18 +72,24 @@ export async function GET(req: NextRequest) {
     }
 
     const logIds = expiredLogs.map((l) => l.id);
-    const { data: entries } = await supabaseServiceRole
-      .from('admin_lead_transfer_entries')
-      .select('transfer_log_id, banca_id, lead_id, target_consultant_email, resolution_status, total_depositado_snapshot, current_total_depositado_at_resolution, total_apostado_snapshot, current_total_apostado_at_resolution')
-      .in('transfer_log_id', logIds)
-      .in('banca_id', bancaIds)
-      .limit(MAX_ROWS);
+    const logIdChunks = chunkArray(logIds, IN_BATCH_SIZE);
+    type EntryRowRaw = { transfer_log_id: string; banca_id: string; lead_id?: string | number; target_consultant_email?: string | null; resolution_status?: string | null; total_depositado_snapshot?: number | null; current_total_depositado_at_resolution?: number | null; total_apostado_snapshot?: number | null; current_total_apostado_at_resolution?: number | null };
+    const allEntries: EntryRowRaw[] = [];
+    for (const chunk of logIdChunks) {
+      const { data } = await supabaseServiceRole
+        .from('admin_lead_transfer_entries')
+        .select('transfer_log_id, banca_id, lead_id, target_consultant_email, resolution_status, total_depositado_snapshot, current_total_depositado_at_resolution, total_apostado_snapshot, current_total_apostado_at_resolution')
+        .in('transfer_log_id', chunk)
+        .in('banca_id', bancaIds)
+        .limit(MAX_ROWS);
+      if (Array.isArray(data)) allEntries.push(...(data as EntryRowRaw[]));
+    }
 
     const pendingByLogId = new Map<string, boolean>();
     const disponivelByLogId = new Map<string, number>();
     const vinculadoByLogId = new Map<string, number>();
     type EntryRow = { transfer_log_id: string; resolution_status?: string | null; total_depositado_snapshot?: number | null; current_total_depositado_at_resolution?: number | null; total_apostado_snapshot?: number | null; current_total_apostado_at_resolution?: number | null };
-    (entries ?? []).forEach((e: EntryRow) => {
+    allEntries.forEach((e: EntryRow) => {
       const logId = e.transfer_log_id;
       if (e.resolution_status === 'pending') pendingByLogId.set(logId, true);
       if (e.resolution_status === 'disponivel_retransferencia') {
@@ -89,8 +102,8 @@ export async function GET(req: NextRequest) {
 
     const resolvedLogIds = new Set(expiredLogs.filter((l) => !pendingByLogId.has(l.id)).map((l) => l.id));
 
-    type EntryRowFull = { transfer_log_id: string; banca_id: string; lead_id?: string | number; target_consultant_email?: string | null; resolution_status?: string | null; total_depositado_snapshot?: number | null; current_total_depositado_at_resolution?: number | null; total_apostado_snapshot?: number | null; current_total_apostado_at_resolution?: number | null };
-    const entriesFull = (entries ?? []) as EntryRowFull[];
+    type EntryRowFull = EntryRowRaw;
+    const entriesFull = allEntries;
     const needFallback = entriesFull.filter(
       (e) => resolvedLogIds.has(e.transfer_log_id) && e.resolution_status === 'vinculado'
         && ((e.total_depositado_snapshot != null && e.current_total_depositado_at_resolution == null)
@@ -169,11 +182,11 @@ export async function GET(req: NextRequest) {
 
     for (const log of expiredLogs) {
       if (pendingByLogId.has(log.id)) continue;
+      total_resolved_logs += 1;
       const disp = disponivelByLogId.get(log.id) ?? 0;
       const vinc = vinculadoByLogId.get(log.id) ?? 0;
       total_vinculado += vinc;
       if (disp > 0) {
-        total_resolved_logs += 1;
         total_disponivel += disp;
         const t = (log.transfer_type && ['TF', 'TF1', 'TF2', 'TF3'].includes(String(log.transfer_type))) ? String(log.transfer_type) : 'TF';
         byType[t] = (byType[t] ?? 0) + disp;

@@ -8,8 +8,14 @@ import { normalizeDateParam, dateToStartOfDaySãoPauloISO, dateToEndOfDaySãoPau
 import { isTransferExpired } from '@/lib/server/crm/resolveTransferLog';
 
 const LOG_PREFIX = '[admin][transfer-logs]';
-
 const DEFAULT_LIMIT = 50000;
+const IN_BATCH_SIZE = 150;
+
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) chunks.push(arr.slice(i, i + size));
+  return chunks;
+}
 
 /** Tipo da linha retornada pelo select em admin_lead_transfer_logs (evita GenericStringError do Supabase). */
 type TransferLogRow = {
@@ -112,15 +118,20 @@ export async function GET(req: NextRequest) {
 
     const logIds = list.map((r) => r.id);
     const MAX_ENTRIES = 500000;
-    const { data: entries } = await supabaseServiceRole
-      .from('admin_lead_transfer_entries')
-      .select('transfer_log_id, saldo_snapshot, resolution_status')
-      .in('transfer_log_id', logIds)
-      .limit(MAX_ENTRIES);
+    type EntryRow = { transfer_log_id: string; saldo_snapshot?: number | null; resolution_status?: string | null };
+    const allEntries: EntryRow[] = [];
+    for (const chunk of chunkArray(logIds, IN_BATCH_SIZE)) {
+      const { data } = await supabaseServiceRole
+        .from('admin_lead_transfer_entries')
+        .select('transfer_log_id, saldo_snapshot, resolution_status')
+        .in('transfer_log_id', chunk)
+        .limit(MAX_ENTRIES);
+      if (Array.isArray(data)) allEntries.push(...(data as EntryRow[]));
+    }
 
     const totalBalanceByLogId = new Map<string, number>();
     const resolutionByLogId = new Map<string, { hasPending: boolean; total: number; vinculado: number; disponivel: number }>();
-    (entries ?? []).forEach((e: { transfer_log_id: string; saldo_snapshot?: number | null; resolution_status?: string | null }) => {
+    allEntries.forEach((e: EntryRow) => {
       const current = totalBalanceByLogId.get(e.transfer_log_id) ?? 0;
       const saldo = e.saldo_snapshot != null ? Number(e.saldo_snapshot) : 0;
       totalBalanceByLogId.set(e.transfer_log_id, current + saldo);
