@@ -66,6 +66,7 @@ export async function GET(req: NextRequest) {
     });
     const ids = Array.from(consultorIds);
     const namesById = new Map<string, string>();
+    const emailsById = new Map<string, string>();
     if (ids.length > 0) {
       const { data: profiles } = await supabaseServiceRole
         .from('profiles')
@@ -74,6 +75,7 @@ export async function GET(req: NextRequest) {
       (profiles ?? []).forEach((p: { id: string; full_name: string | null; email: string | null }) => {
         const name = (p.full_name ?? p.email ?? '').trim() || (p.email ?? p.id);
         namesById.set(p.id, name);
+        if (p.email) emailsById.set(p.id, p.email.trim());
       });
     }
     const bancaIdsFromRequests = [...new Set(list.map((r: { banca_id?: string | null }) => r.banca_id).filter(Boolean))] as string[];
@@ -132,6 +134,7 @@ export async function GET(req: NextRequest) {
         consultores: (r.consultores ?? []).map((c: { consultor_id: string; quantity: number }) => ({
           ...c,
           consultor_name: namesById.get(c.consultor_id) ?? c.consultor_id,
+          consultor_email: emailsById.get(c.consultor_id) ?? '',
         })),
         leads_transferred: leadsTransferred,
         leads_still_needed: leadsStillNeededForRequest,

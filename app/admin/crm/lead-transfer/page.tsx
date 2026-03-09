@@ -235,7 +235,7 @@ interface GerenteLeadRequest {
   gerente_name: string;
   lead_type: string;
   lead_type_label: string;
-  consultores: { consultor_id: string; quantity: number; consultor_name?: string }[];
+  consultores: { consultor_id: string; quantity: number; consultor_name?: string; consultor_email?: string }[];
   status: 'pending' | 'approved' | 'rejected' | 'partial';
   banca_id?: string | null;
   banca_name?: string;
@@ -3794,7 +3794,11 @@ export default function AdminLeadTransferPage() {
                                     const enviados = req.leads_transferred ?? 0;
                                     const faltam = req.leads_still_needed ?? totalRequested;
                                     const hasProgresso = enviados > 0;
-                                    const targetEmail = firstConsultor ? moveLeadsConsultants.find((c) => String(c?.id) === String(firstConsultor.consultor_id))?.email?.trim() ?? '' : '';
+                                    const targetEmail = firstConsultor
+                                      ? (firstConsultor.consultor_email?.trim()
+                                        || moveLeadsConsultants.find((c) => String(c?.id) === String(firstConsultor.consultor_id))?.email?.trim()
+                                        || '')
+                                      : '';
                                     return (
                                       <button
                                         key={req.id}
@@ -3824,20 +3828,29 @@ export default function AdminLeadTransferPage() {
                           <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Consultor destino</label>
                           {loadingMoveLeadsConsultants ? (
                             <div className="flex items-center gap-2 py-2 text-sm text-gray-500 dark:text-gray-400"><Loader2 className="w-4 h-4 animate-spin" /> Carregando consultores…</div>
-                          ) : (
-                            <select
-                              value={moveLeadsTargetEmail}
-                              onChange={(e) => setMoveLeadsTargetEmail(e.target.value)}
-                              className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm mb-3 focus:ring-2 focus:ring-emerald-500"
-                            >
-                              <option value="">Selecionar consultor</option>
-                              {moveLeadsConsultants
-                                .filter((c) => c.email?.toLowerCase() !== moveLeadsSelectedLog?.target_consultant_email?.toLowerCase())
-                                .map((c) => (
-                                  <option key={c.email} value={c.email ?? ''}>{c.full_name ?? c.email ?? ''}                                </option>
-                                ))}
-                            </select>
-                          )}
+                          ) : (() => {
+                              const filteredConsultants = moveLeadsConsultants
+                                .filter((c) => c.email?.toLowerCase() !== moveLeadsSelectedLog?.target_consultant_email?.toLowerCase());
+                              const selectedReqConsultor = moveLeadsSelectedRequest?.consultores?.[0];
+                              const reqEmail = selectedReqConsultor?.consultor_email?.trim() ?? '';
+                              const reqName = selectedReqConsultor?.consultor_name?.trim() ?? '';
+                              const emailAlreadyInList = reqEmail && filteredConsultants.some((c) => c.email?.toLowerCase() === reqEmail.toLowerCase());
+                              return (
+                                <select
+                                  value={moveLeadsTargetEmail}
+                                  onChange={(e) => setMoveLeadsTargetEmail(e.target.value)}
+                                  className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm mb-3 focus:ring-2 focus:ring-emerald-500"
+                                >
+                                  <option value="">Selecionar consultor</option>
+                                  {reqEmail && !emailAlreadyInList && (
+                                    <option key={reqEmail} value={reqEmail}>{reqName || reqEmail} (da solicitação)</option>
+                                  )}
+                                  {filteredConsultants.map((c) => (
+                                    <option key={c.email} value={c.email ?? ''}>{c.full_name ?? c.email ?? ''}</option>
+                                  ))}
+                                </select>
+                              );
+                            })()}
                           {moveLeadsSelectedRequest && (() => {
                             const totalRequested = (moveLeadsSelectedRequest.consultores ?? []).reduce((s, c) => s + c.quantity, 0);
                             const faltam = moveLeadsSelectedRequest.leads_still_needed ?? totalRequested;
