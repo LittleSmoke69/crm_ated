@@ -183,6 +183,7 @@ const TransferidoContent = () => {
             original_consultant_id: l.original_consultant_id ?? null,
             original_consultant_name: l.original_consultant_name ?? null,
             original_consultant_email: l.original_consultant_email ?? null,
+            vinculado: l.vinculado ?? false,
             interactions: 0,
             lastInteractionAt: l.last_interaction || l.created_at,
             isFavorite: false,

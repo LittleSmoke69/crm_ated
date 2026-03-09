@@ -236,12 +236,12 @@ export class CrmRedistributionClient {
 
     if (status !== 200) {
       const msg = (data as RedistributeLeadsResponse).error ?? (data as RedistributeLeadsResponse).message ?? `HTTP ${status}`;
-      console.log(`${LOG_PREFIX} redistributeLeads failed: status=${status}, message=${msg}`, data);
+      console.log(`${LOG_PREFIX} redistributeLeads failed: status=${status}, message=${msg}`, JSON.stringify(data));
       return { success: false, error: msg, message: msg };
     }
 
     const count = (data as RedistributeLeadsResponse).count ?? (data as RedistributeLeadsResponse).data?.count;
-    console.log(`${LOG_PREFIX} redistributeLeads success: count=${count}, message=${(data as RedistributeLeadsResponse).message ?? 'n/a'}`);
+    console.log(`${LOG_PREFIX} redistributeLeads success: count=${count}, message=${(data as RedistributeLeadsResponse).message ?? 'n/a'}, fullResponse=${JSON.stringify(data)}`);
     return data as RedistributeLeadsResponse;
   }
 

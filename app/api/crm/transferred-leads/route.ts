@@ -12,7 +12,10 @@ const LOG_PREFIX = '[CRM Transferred Leads]';
 /**
  * GET /api/crm/transferred-leads
  * Busca leads da mesma forma que o CRM principal (mesma API, mesmas bancas).
- * Retorna apenas leads com transferred === true (visíveis só em /crm/transferido).
+ * Retorna todos os leads transferidos ao consultor e os vinculados à carteira dele:
+ * - Leads com transferred === true (CRM) e, como complemento, leads que constam em
+ *   admin_lead_transfer_entries para o consultor (pending, vinculado, disponivel_retransferencia).
+ * - Não filtra "clientes fantasma": exibe todos os transferidos/vinculados para o consultor ver a lista completa.
  * Suporta userId na query: quando informado (ex.: gerente vendo transferidos de um consultor), usa o email desse consultor.
  */
 export async function GET(req: NextRequest) {
@@ -202,23 +205,330 @@ export async function GET(req: NextRequest) {
       console.log(`${LOG_PREFIX} Banca ${bancaLabel} | carregada: ${bancaTotal} leads | total acumulado: ${allLeads.length}`);
     }
 
-    if (allLeads.length === 0) {
-      console.log(`${LOG_PREFIX} Nenhum lead retornado pela API externa (mesmos filtros do CRM principal).`);
-      return successResponse([]);
-    }
-
-    // Filtra apenas leads com transferred === true (mesmo critério que o CRM principal usa para excluir)
+    // Filtra apenas leads com transferred === true (retornados pelo CRM na listagem de transferidos)
     const isTransferred = (lead: any) =>
       lead.transferred === true || lead.transferred === 'true' || lead.transferred === 1;
-    const transferredOnly = allLeads.filter((lead: any) => isTransferred(lead));
-    if (transferredOnly.length === 0) {
-      console.log(`${LOG_PREFIX} Nenhum lead com transferred=true entre ${allLeads.length} retornados.`);
+    let transferredOnly = allLeads.filter((lead: any) => isTransferred(lead));
+    console.log(`${LOG_PREFIX} Após filtro transferred=true do CRM: ${transferredOnly.length} de ${allLeads.length}`);
+
+    // Enriquecimento: buscar dados completos do cliente (nome, telefone, depósitos, apostas, etc.) como na coluna "Com saldo disponível"
+    // O CRM pode retornar com transferred_filter=yes apenas id/transferred; busca sem o filtro traz o objeto completo.
+    const bancasComTransferidos = [...new Set(transferredOnly.map((l: any) => l._bancaKey).filter(Boolean))] as string[];
+    const fullDataByBanca: Record<string, Record<string, any>> = {};
+    if (bancasComTransferidos.length > 0) {
+      const queryParamsFull: string[] = [
+        `consultant=${encodeURIComponent(consultantEmail)}`,
+        `per_page=${perPage}`,
+        `sort=created_at`,
+        `direction=desc`,
+      ];
+      if (fromParam?.trim()) queryParamsFull.push(`from=${encodeURIComponent(fromParam.trim())}`);
+      if (toParam?.trim()) queryParamsFull.push(`to=${encodeURIComponent(toParam.trim())}`);
+
+      for (const banca of listBancas) {
+        if (!bancasComTransferidos.includes(banca.id)) continue;
+        const cleanBancaUrl = normalizeBancaUrl(banca.url);
+        const bancaLabel = `${banca.name ?? banca.id} (${banca.id})`;
+        if (!cleanBancaUrl) continue;
+
+        const baseUrlFull = `${cleanBancaUrl}/api/crm/get-indicateds-by-consultant`;
+        let currentPage = 1;
+        let hasMore = true;
+        fullDataByBanca[banca.id] = {};
+
+        while (hasMore && currentPage <= maxPages) {
+          const pageQueryParams = [...queryParamsFull, `page=${currentPage}`];
+          const externalApiUrl = `${baseUrlFull}?${pageQueryParams.join('&')}`;
+          let response: Response;
+          try {
+            response = await fetch(externalApiUrl, {
+              method: 'GET',
+              headers: { 'X-API-KEY': cleanApiKey, Accept: 'application/json' },
+              signal: AbortSignal.timeout(60000),
+            });
+          } catch (fetchErr: any) {
+            console.warn(`${LOG_PREFIX} Enriquecimento banca ${bancaLabel} | Erro:`, fetchErr?.message);
+            break;
+          }
+          if (!response.ok) break;
+          let result: any;
+          try {
+            result = await response.json();
+          } catch {
+            break;
+          }
+          if (!result.success || !Array.isArray(result.data)) break;
+          const pageLeads = result.data || [];
+          for (const lead of pageLeads) {
+            const lid = String(lead.id ?? '');
+            if (lid && !fullDataByBanca[banca.id][lid]) fullDataByBanca[banca.id][lid] = lead;
+          }
+          hasMore = pageLeads.length >= perPage && pageLeads.length > 0;
+          currentPage++;
+        }
+        const count = Object.keys(fullDataByBanca[banca.id]).length;
+        if (count > 0) {
+          console.log(`${LOG_PREFIX} Enriquecimento banca ${bancaLabel} | ${count} leads com dados completos`);
+        }
+      }
+
+      transferredOnly = transferredOnly.map((lead: any) => {
+        const bancaId = lead._bancaKey;
+        const leadIdStr = String(lead._originalId ?? lead.id ?? '');
+        const full = bancaId && leadIdStr && fullDataByBanca[bancaId]?.[leadIdStr];
+        if (full) {
+          return {
+            ...full,
+            transferred: true,
+            _originalId: full.id ?? lead._originalId,
+            _bancaKey: bancaId,
+          };
+        }
+        return lead;
+      });
+    }
+
+    // Complemento: leads que constam nos nossos logs de transferência mas o CRM não gravou em "transferidos"
+    const bancaIdsForLookup = listBancas.map((b) => b.id);
+    type EntryRow = { lead_id: string; banca_id: string; created_at: string; resolution_status?: string | null; source_consultant_email?: string | null; lead_name?: string | null; lead_phone?: string | null; saldo_snapshot?: number | null; total_depositado_snapshot?: number | null; total_apostado_snapshot?: number | null; total_ganho_snapshot?: number | null; available_withdraw_snapshot?: number | null; total_saque_snapshot?: number | null; last_interaction_snapshot?: string | null };
+    let transferDateByLeadIdFromDb: Record<string, string> = {};
+    const vinculadoLeadIdsFromDb = new Set<string>();
+    const selectFieldsFull = 'lead_id, banca_id, created_at, resolution_status, source_consultant_email, lead_name, lead_phone, saldo_snapshot, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, total_saque_snapshot, last_interaction_snapshot';
+    const selectFieldsBasic = 'lead_id, banca_id, created_at, resolution_status, source_consultant_email, saldo_snapshot, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, total_saque_snapshot, last_interaction_snapshot';
+    let dbEntriesResult = await supabaseServiceRole
+      .from('admin_lead_transfer_entries')
+      .select(selectFieldsFull)
+      .eq('target_consultant_email', consultantEmail)
+      .in('banca_id', bancaIdsForLookup)
+      .order('created_at', { ascending: false });
+    if (dbEntriesResult.error?.code === 'PGRST204' || dbEntriesResult.error?.message?.includes('lead_name')) {
+      dbEntriesResult = await supabaseServiceRole
+        .from('admin_lead_transfer_entries')
+        .select(selectFieldsBasic)
+        .eq('target_consultant_email', consultantEmail)
+        .in('banca_id', bancaIdsForLookup)
+        .order('created_at', { ascending: false }) as typeof dbEntriesResult;
+    }
+    const { data: dbEntries } = dbEntriesResult;
+
+    const entriesList: EntryRow[] = Array.isArray(dbEntries) ? dbEntries : [];
+    const excludedStatusesForDisplay = new Set(['repassado', 'devolvido', 'reversed']);
+    entriesList.forEach((row: EntryRow) => {
+      if (excludedStatusesForDisplay.has(row.resolution_status ?? '')) return;
+      const lid = String(row.lead_id);
+      if (!transferDateByLeadIdFromDb[lid]) transferDateByLeadIdFromDb[lid] = row.created_at;
+      if (row.resolution_status === 'vinculado') vinculadoLeadIdsFromDb.add(lid);
+    });
+
+    const fromCrmSet = new Set(
+      transferredOnly.map((l: any) => `${l._bancaKey}-${String(l._originalId ?? l.id)}`)
+    );
+    const excludedStatuses = new Set(['repassado', 'devolvido', 'reversed']);
+    const missingFromDb = entriesList.filter((row: EntryRow) => {
+      const key = `${row.banca_id}-${String(row.lead_id)}`;
+      return !fromCrmSet.has(key) && !excludedStatuses.has(row.resolution_status ?? '');
+    });
+
+    const missingByBanca: Record<string, { leadIds: string[]; createdByLead: Record<string, string>; sourceByLead: Record<string, string>; entryDataByLead: Record<string, EntryRow> }> = {};
+    missingFromDb.forEach((row: EntryRow) => {
+      const bid = row.banca_id;
+      const lid = String(row.lead_id);
+      if (!missingByBanca[bid]) missingByBanca[bid] = { leadIds: [], createdByLead: {}, sourceByLead: {}, entryDataByLead: {} };
+      if (!missingByBanca[bid].createdByLead[lid]) {
+        missingByBanca[bid].leadIds.push(lid);
+        missingByBanca[bid].createdByLead[lid] = row.created_at;
+        missingByBanca[bid].entryDataByLead[lid] = row;
+        if (row.source_consultant_email?.trim()) {
+          missingByBanca[bid].sourceByLead[lid] = row.source_consultant_email.trim();
+        }
+      }
+    });
+
+    const extraLeads: any[] = [];
+    if (Object.keys(missingByBanca).length > 0) {
+      // Cache de dados completos do CRM para o consultor DESTINO (sem filtros de data)
+      const destinationLeadDataByBanca: Record<string, Record<string, any>> = {};
+      for (const banca of listBancas) {
+        const missing = missingByBanca[banca.id];
+        if (!missing || missing.leadIds.length === 0) continue;
+        const cleanBancaUrl = normalizeBancaUrl(banca.url);
+        if (!cleanBancaUrl) continue;
+        const bancaLabel = `${banca.name ?? banca.id} (${banca.id})`;
+        destinationLeadDataByBanca[banca.id] = {};
+        const destQueryParams = [
+          `consultant=${encodeURIComponent(consultantEmail)}`,
+          `per_page=${perPage}`,
+          `sort=created_at`,
+          `direction=desc`,
+        ];
+        const baseUrl = `${cleanBancaUrl}/api/crm/get-indicateds-by-consultant`;
+        let currentPage = 1;
+        let hasMore = true;
+        while (hasMore && currentPage <= maxPages) {
+          const externalApiUrl = `${baseUrl}?${[...destQueryParams, `page=${currentPage}`].join('&')}`;
+          let response: Response;
+          try {
+            response = await fetch(externalApiUrl, {
+              method: 'GET',
+              headers: { 'X-API-KEY': cleanApiKey, Accept: 'application/json' },
+              signal: AbortSignal.timeout(60000),
+            });
+          } catch { break; }
+          if (!response.ok) break;
+          let result: any;
+          try { result = await response.json(); } catch { break; }
+          if (!result.success || !Array.isArray(result.data)) break;
+          for (const lead of result.data) {
+            const lid = String(lead.id ?? '');
+            if (lid) destinationLeadDataByBanca[banca.id][lid] = lead;
+          }
+          hasMore = result.data.length >= perPage && result.data.length > 0;
+          currentPage++;
+        }
+        const cachedCount = Object.keys(destinationLeadDataByBanca[banca.id]).length;
+        console.log(`${LOG_PREFIX} Cache CRM destino (${consultantEmail}): banca ${bancaLabel} | ${cachedCount} leads total (sem filtro de data)`);
+      }
+
+      // Match: associar entries (DB) com dados do CRM (destino)
+      const extraKeys = new Set<string>();
+      for (const banca of listBancas) {
+        const missing = missingByBanca[banca.id];
+        if (!missing || missing.leadIds.length === 0) continue;
+        const destData = destinationLeadDataByBanca[banca.id] ?? {};
+        let found = 0;
+        for (const leadIdStr of missing.leadIds) {
+          const key = `${banca.id}-${leadIdStr}`;
+          const crmLead = destData[leadIdStr];
+          if (crmLead) {
+            extraKeys.add(key);
+            extraLeads.push({
+              ...crmLead,
+              _originalId: crmLead.id,
+              _bancaKey: banca.id,
+              _transferDateFromDb: missing.createdByLead[leadIdStr] ?? null,
+            });
+            found++;
+          }
+        }
+        if (found > 0) {
+          const bancaLabel = `${banca.name ?? banca.id} (${banca.id})`;
+          console.log(`${LOG_PREFIX} Match CRM destino: banca ${bancaLabel} | +${found} leads com dados completos`);
+        }
+      }
+
+      // Buscar dados completos pelo consultor de ORIGEM (leads ficam no CRM do doador quando redistribution retorna count=0)
+      const sourceGroupsByBanca: Record<string, { sourceEmail: string; bancaId: string; leadIds: Set<string>; createdByLead: Record<string, string> }> = {};
+      let noSourceCount = 0;
+      for (const [bancaId, missing] of Object.entries(missingByBanca)) {
+        for (const leadIdStr of missing.leadIds) {
+          const key = `${bancaId}-${leadIdStr}`;
+          if (extraKeys.has(key)) continue;
+          const sourceEmail = missing.sourceByLead[leadIdStr];
+          if (!sourceEmail) { noSourceCount++; continue; }
+          const groupKey = `${bancaId}__${sourceEmail}`;
+          if (!sourceGroupsByBanca[groupKey]) {
+            sourceGroupsByBanca[groupKey] = { sourceEmail, bancaId, leadIds: new Set(), createdByLead: {} };
+          }
+          sourceGroupsByBanca[groupKey].leadIds.add(leadIdStr);
+          sourceGroupsByBanca[groupKey].createdByLead[leadIdStr] = missing.createdByLead[leadIdStr] ?? new Date().toISOString();
+        }
+      }
+
+      const sourceGroupCount = Object.keys(sourceGroupsByBanca).length;
+      const sourceLeadCount = Object.values(sourceGroupsByBanca).reduce((acc, g) => acc + g.leadIds.size, 0);
+      console.log(`${LOG_PREFIX} Busca via ORIGEM: ${sourceLeadCount} leads em ${sourceGroupCount} grupos de consultores | ${noSourceCount} leads sem source_email`);
+
+      for (const group of Object.values(sourceGroupsByBanca)) {
+        const banca = listBancas.find((b) => b.id === group.bancaId);
+        if (!banca) continue;
+        const cleanBancaUrl = normalizeBancaUrl(banca.url);
+        const bancaLabel = `${banca.name ?? banca.id} (${banca.id})`;
+        if (!cleanBancaUrl) continue;
+
+        const sourceQueryParams = [
+          `consultant=${encodeURIComponent(group.sourceEmail)}`,
+          `per_page=${perPage}`,
+          `sort=created_at`,
+          `direction=desc`,
+        ];
+
+        const baseUrl = `${cleanBancaUrl}/api/crm/get-indicateds-by-consultant`;
+        let currentPage = 1;
+        let hasMore = true;
+        let found = 0;
+        let crmTotal = 0;
+
+        while (hasMore && currentPage <= maxPages) {
+          const externalApiUrl = `${baseUrl}?${[...sourceQueryParams, `page=${currentPage}`].join('&')}`;
+          let response: Response;
+          try {
+            response = await fetch(externalApiUrl, {
+              method: 'GET',
+              headers: { 'X-API-KEY': cleanApiKey, Accept: 'application/json' },
+              signal: AbortSignal.timeout(60000),
+            });
+          } catch (fetchErr: any) {
+            console.warn(`${LOG_PREFIX} Busca ORIGEM ${group.sourceEmail} | Erro: ${fetchErr?.message}`);
+            break;
+          }
+          if (!response.ok) {
+            console.warn(`${LOG_PREFIX} Busca ORIGEM ${group.sourceEmail} | HTTP ${response.status} - banca ${bancaLabel}`);
+            break;
+          }
+          let result: any;
+          try { result = await response.json(); } catch { break; }
+          if (!result.success || !Array.isArray(result.data)) break;
+          crmTotal += result.data.length;
+          for (const lead of result.data) {
+            const leadIdStr = String(lead.id ?? '');
+            if (!group.leadIds.has(leadIdStr)) continue;
+            const ekey = `${group.bancaId}-${leadIdStr}`;
+            if (extraKeys.has(ekey)) continue;
+            extraKeys.add(ekey);
+            extraLeads.push({
+              ...lead,
+              _originalId: lead.id,
+              _bancaKey: group.bancaId,
+              _transferDateFromDb: group.createdByLead[leadIdStr] ?? null,
+            });
+            found++;
+          }
+          hasMore = result.data.length >= perPage && result.data.length > 0;
+          currentPage++;
+        }
+        console.log(`${LOG_PREFIX} Busca ORIGEM ${group.sourceEmail}: banca ${bancaLabel} | CRM retornou ${crmTotal} leads, match=${found}/${group.leadIds.size}`);
+      }
+
+      // Leads sem match no CRM são descartados (IDs não existem no CRM = dados inconsistentes)
+      let discardedCount = 0;
+      for (const [bancaId, missing] of Object.entries(missingByBanca)) {
+        for (const leadIdStr of missing.leadIds) {
+          const key = `${bancaId}-${leadIdStr}`;
+          if (!extraKeys.has(key)) discardedCount++;
+        }
+      }
+      if (discardedCount > 0) {
+        console.log(`${LOG_PREFIX} Descartados (IDs não encontrados no CRM): ${discardedCount} leads`);
+      }
+    }
+
+    const combinedRaw = [...transferredOnly, ...extraLeads];
+    const seenKeys = new Set<string>();
+    const combined = combinedRaw.filter((l: any) => {
+      const key = `${l._bancaKey}-${String(l._originalId ?? l.id)}`;
+      if (seenKeys.has(key)) return false;
+      seenKeys.add(key);
+      return true;
+    });
+
+    if (combined.length === 0) {
+      console.log(`${LOG_PREFIX} Nenhum lead transferido (nem do CRM nem do log Zaploto).`);
       return successResponse([]);
     }
-    console.log(`${LOG_PREFIX} Após filtro transferred=true: ${transferredOnly.length} de ${allLeads.length}`);
+    console.log(`${LOG_PREFIX} Total combinado: ${combined.length} (CRM transferidos: ${transferredOnly.length}, complemento log: ${extraLeads.length})`);
 
     // Filtro de data (São Paulo) - igual ao CRM principal
-    let filteredLeads = transferredOnly;
+    let filteredLeads = combined;
     if (fromParam || toParam) {
       const saoPauloTimeZone = 'America/Sao_Paulo';
       filteredLeads = filteredLeads.filter((lead: any) => {
@@ -232,15 +542,7 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // Filtra clientes fantasma (igual ao CRM principal)
-    filteredLeads = filteredLeads.filter((lead: any) => {
-      const totalDepositado = parseFloat(lead.total_depositado) || 0;
-      const totalApostado = parseFloat(lead.total_apostado) || 0;
-      const totalGanho = parseFloat(lead.total_ganho) || 0;
-      const totalDepositosCount = parseInt(lead.total_depositos_count) || 0;
-      const isGhost = totalDepositado === 0 && totalApostado === 0 && totalGanho === 0 && totalDepositosCount === 1;
-      return !isGhost;
-    });
+    // Não filtra clientes fantasma na tela CRM transferido: o consultor deve ver todos os leads transferidos e vinculados à carteira dele.
 
     // Busca tags (mesma lógica do /api/crm/leads: busca TODAS as associações do user, evita .in() e falhas de match)
     const toLeadExternalId = (l: any) =>
@@ -284,27 +586,13 @@ export async function GET(req: NextRequest) {
     const bancaNameById: Record<string, string> = {};
     listBancas.forEach(b => { bancaNameById[b.id] = b.name ?? b.url ?? b.id; });
 
-    // Fallback: se o CRM não retorna transferred_at, buscar data da última transferência em admin_lead_transfer_entries (para exibir timer 90d no consultor)
-    const leadIdsForLookup = filteredLeads.map((l: any) => String(l._originalId ?? l.id));
-    const bancaIdsForLookup = listBancas.map(b => b.id);
-    let transferDateByLeadId: Record<string, string> = {};
-    const vinculadoLeadIds = new Set<string>();
-    if (leadIdsForLookup.length > 0 && bancaIdsForLookup.length > 0) {
-      const { data: entries } = await supabaseServiceRole
-        .from('admin_lead_transfer_entries')
-        .select('lead_id, created_at, resolution_status')
-        .in('lead_id', leadIdsForLookup)
-        .eq('target_consultant_email', consultantEmail)
-        .in('banca_id', bancaIdsForLookup)
-        .order('created_at', { ascending: false });
-      if (entries?.length) {
-        entries.forEach((row: { lead_id: string; created_at: string; resolution_status?: string }) => {
-          const lid = String(row.lead_id);
-          if (!transferDateByLeadId[lid]) transferDateByLeadId[lid] = row.created_at;
-          if (row.resolution_status === 'vinculado') vinculadoLeadIds.add(lid);
-        });
-      }
-    }
+    // transferred_at e vinculado: usar dados já carregados de admin_lead_transfer_entries (inclui complemento do log)
+    const transferDateByLeadId = { ...transferDateByLeadIdFromDb };
+    const vinculadoLeadIds = new Set(vinculadoLeadIdsFromDb);
+    filteredLeads.forEach((l: any) => {
+      const lid = String(l._originalId ?? l.id);
+      if (l._transferDateFromDb && !transferDateByLeadId[lid]) transferDateByLeadId[lid] = l._transferDateFromDb;
+    });
 
     const formattedLeads = filteredLeads.map((l: any) => {
       const compositeId = toLeadExternalId(l);
