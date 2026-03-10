@@ -158,7 +158,8 @@ function formatFiltersSnapshotForDisplay(filters: Record<string, unknown> | null
     return Number.isFinite(n) ? n : null;
   };
 
-  add('Inatividade (dias)', v('min_inactive_days'));
+  const minInactive = v('min_inactive_days');
+  add('Inatividade (dias)', minInactive === '0' || minInactive === 0 ? 'Todos' : minInactive);
   const balanceFilter = v('balance_filter');
   if (balanceFilter) add('Saldo', BALANCE_FILTER_LABELS[balanceFilter] ?? balanceFilter);
   if (v('saldo_min') || v('saldo_max')) add('Saldo (min–máx)', [v('saldo_min'), v('saldo_max')].filter(Boolean).join(' – ') || '-');
@@ -1017,11 +1018,11 @@ export default function AdminLeadTransferPage() {
     setShowConversionConsultantModal(false);
   };
 
-  /** Ao alterar dias em "Outro" (passo 3), dispara nova busca após debounce. Só período dispara requisição. */
+  /** Ao alterar dias em "Outro" (passo 3), dispara nova busca após debounce. Aceita 0 (todos os leads). */
   useEffect(() => {
     if (currentStep !== 3 || daysInactivePreset !== 'other') return;
     const val = daysInactive.trim();
-    if (!val || val === '0') return;
+    if (val === '') return;
     if (debounceOutroPeriodRef.current) clearTimeout(debounceOutroPeriodRef.current);
     debounceOutroPeriodRef.current = setTimeout(() => {
       debounceOutroPeriodRef.current = null;
@@ -1084,7 +1085,7 @@ export default function AdminLeadTransferPage() {
       params.set('banca_id', bancaId);
       params.set('source_consultant_email', effectiveSourceEmail);
       const daysVal = (overrideDays ?? daysInactive).trim();
-      params.set('min_inactive_days', daysVal && daysVal !== '0' ? daysVal : '90');
+      params.set('min_inactive_days', daysVal === '' ? '90' : daysVal);
       if (selectedTag.trim()) params.set('tag', selectedTag.trim());
       const res = await fetch(`/api/admin/crm/redistribution-leads?${params.toString()}`, {
         headers: headers(),
@@ -4273,9 +4274,9 @@ export default function AdminLeadTransferPage() {
                         const minInactiveDays = filtersSnapshot != null && typeof filtersSnapshot === 'object' && 'min_inactive_days' in filtersSnapshot
                           ? filtersSnapshot.min_inactive_days
                           : null;
-                        const inactiveDisplay = minInactiveDays != null && String(minInactiveDays).trim() !== ''
+                        const inactiveDisplay = minInactiveDays != null && String(minInactiveDays).trim() !== '' && String(minInactiveDays).trim() !== '0'
                           ? `${minInactiveDays} dia(s)`
-                          : '—';
+                          : (minInactiveDays === 0 || (minInactiveDays != null && String(minInactiveDays).trim() === '0') ? 'Todos' : '—');
                         const alteracoesTooltip = hasAlteracoes
                           ? item.groupLogs.map((l: any) => `${formatDatePtBR(l.created_at)}${(l as { devolvido_at?: string }).devolvido_at ? ' (devolvido)' : (l?.filters_snapshot != null && typeof l.filters_snapshot === 'object' && (l.filters_snapshot as { devolucao?: boolean }).devolucao) ? ' (devolução)' : (l?.filters_snapshot != null && typeof l.filters_snapshot === 'object' && (l.filters_snapshot as { reverse_devolucao?: boolean }).reverse_devolucao) ? ' (reverse)' : ''}`).join('\n')
                           : '';
@@ -5249,12 +5250,13 @@ export default function AdminLeadTransferPage() {
                     <div>
                       <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Inatividade (dias)</label>
                       <div className="flex flex-wrap gap-2">
+                        <button type="button" onClick={() => { setDaysInactivePreset('all'); setDaysInactive('0'); loadLeads('0'); }} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${daysInactivePreset === 'all' ? 'bg-[#8CD955] text-white' : 'bg-gray-100 dark:bg-[#333] text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-[#404040] border border-transparent dark:border-[#555]'}`}>Todos os leads</button>
                         {INACTIVITY_PRESETS.map((d) => (
                           <button key={d} type="button" onClick={() => { setDaysInactivePreset(String(d)); setDaysInactive(String(d)); loadLeads(String(d)); }} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${daysInactivePreset === String(d) ? 'bg-[#8CD955] text-white' : 'bg-gray-100 dark:bg-[#333] text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-[#404040] border border-transparent dark:border-[#555]'}`}>{d}d</button>
                         ))}
                         <button type="button" onClick={() => setDaysInactivePreset('other')} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${daysInactivePreset === 'other' ? 'bg-[#8CD955] text-white' : 'bg-gray-100 dark:bg-[#333] text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-[#404040] border border-transparent dark:border-[#555]'}`}>Outro</button>
                       </div>
-                      {daysInactivePreset === 'other' && <input type="number" min={0} value={daysInactive} onChange={(e) => setDaysInactive(e.target.value)} placeholder="Ex: 45" className="mt-2 w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />}
+                      {daysInactivePreset === 'other' && <input type="number" min={0} value={daysInactive} onChange={(e) => setDaysInactive(e.target.value)} placeholder="Ex: 45 ou 0 (todos)" className="mt-2 w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />}
                     </div>
                     <div>
                       <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Total na Carteira</label>
