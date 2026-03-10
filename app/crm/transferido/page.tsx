@@ -1,9 +1,11 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useMemo, useCallback, Suspense } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback, Suspense, startTransition } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
+import { useToast } from '@/hooks/useToast';
+import ToastContainer from '@/components/Toast/ToastContainer';
 import { ArrowRightLeft, AlertCircle, Eye, RefreshCw, X, MessageSquare } from 'lucide-react';
 import FilterBar from '@/components/CRM/FilterBar';
 import KanbanColumn from '@/components/CRM/KanbanColumn';
@@ -54,10 +56,9 @@ const TransferidoContent = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [filters, setFilters] = useState<Record<string, any>>(() => {
-    const today = new Date().toISOString().split('T')[0];
-    return { date: { value: 'diario', label: 'Diário' } };
-  });
+  const [filters, setFilters] = useState<Record<string, any>>(() => ({
+    date: { value: 'todos', label: 'Todo o Período' },
+  }));
   const [filterLoading, setFilterLoading] = useState(false);
   const [exclusiveBancasList, setExclusiveBancasList] = useState<{ id: string; name: string; url: string }[]>([]);
   const [bancasReady, setBancasReady] = useState(false);
@@ -68,33 +69,49 @@ const TransferidoContent = () => {
   const [columnSorts, setColumnSorts] = useState<Record<string, { field: SortField; direction: SortDirection }>>({});
   const [leadsPerColumn, setLeadsPerColumn] = useState<Record<string, number>>({});
   const [showStatusModal, setShowStatusModal] = useState(false);
+  /** Carregamento em segundo plano do restante dos leads (após a primeira página da primeira banca). */
+  const [loadingFullInBackground, setLoadingFullInBackground] = useState(false);
+  /** Progresso único do carregamento: banca e página atuais. Usado para mensagem "Carregando banca X de Y, página Z". */
+  const [loadingProgress, setLoadingProgress] = useState<{ currentBanca: number; currentPage: number; totalBancas: number | null } | null>(null);
+  const { showToast, toasts, removeToast } = useToast();
 
   const isInitialLoadRef = useRef(true);
+  const fullRequestAbortRef = useRef<AbortController | null>(null);
+  /** Ref da lista de bancas para não re-executar loadLeads quando as bancas terminam de carregar (evita 2ª request). */
+  const exclusiveBancasListRef = useRef<{ id: string; name: string; url: string }[]>([]);
   const bancaKey = filters.banca ? (typeof filters.banca === 'object' ? filters.banca.value : filters.banca) : null;
   const dateKey = filters.date ? (typeof filters.date === 'object' ? filters.date.value : filters.date) : null;
 
+  useEffect(() => {
+    exclusiveBancasListRef.current = exclusiveBancasList;
+  }, [exclusiveBancasList]);
+
   const loadLeads = useCallback(async (isFilterChange = false) => {
     if (!userId) return;
+    fullRequestAbortRef.current?.abort();
+    setLoadingFullInBackground(false);
     if (isFilterChange) {
       setFilterLoading(true);
     } else {
       setLoading(true);
     }
     setError(null);
+    setLoadingProgress({ currentBanca: 1, currentPage: 1, totalBancas: null });
     try {
       const url = new URL('/api/crm/transferred-leads', window.location.origin);
       if (targetUserId) {
         url.searchParams.append('userId', targetUserId);
       }
+      const listBancas = exclusiveBancasListRef.current;
       const bancaValue = filters.banca ? (typeof filters.banca === 'object' ? filters.banca.value : filters.banca) : null;
       if (bancaValue && bancaValue !== 'all') {
         url.searchParams.append('banca_url', bancaValue);
         console.log('[Transferido] loadLeads | banca selecionada:', bancaValue);
-      } else if (exclusiveBancasList.length > 0) {
-        url.searchParams.append('banca_urls', exclusiveBancasList.map((b) => b.url).join(','));
-        console.log('[Transferido] loadLeads | Todas as Bancas, urls:', exclusiveBancasList.length);
+      } else if (listBancas.length > 0) {
+        url.searchParams.append('banca_urls', listBancas.map((b) => b.url).join(','));
+        console.log('[Transferido] loadLeads | Todas as Bancas, urls:', listBancas.length);
       } else {
-        console.warn('[Transferido] loadLeads | exclusiveBancasList vazio - API usará bancas do log de transferência');
+        console.log('[Transferido] loadLeads | Sem lista de bancas ainda - API usará bancas do servidor (getBancasVisiveis)');
       }
 
       const dateValue = filters.date ? (typeof filters.date === 'object' ? filters.date.value : filters.date) : 'diario';
@@ -133,13 +150,14 @@ const TransferidoContent = () => {
         }
       }
 
-      console.log('[Transferido] loadLeads | URL:', url.toString());
+      // Primeira busca: sem full=1 → API retorna só 1ª banca, 1ª página (rápido). Depois, full=1 em segundo plano.
+      console.log('[Transferido] loadLeads | URL (quick):', url.toString());
       const res = await fetch(url.toString(), { headers: { 'X-User-Id': userId } });
       const result = await res.json();
-      console.log('[Transferido] loadLeads | res.ok:', res.ok, 'result.success:', result.success, 'data length:', result.data?.length ?? 0, 'error:', result.error);
+      console.log('[Transferido] loadLeads | res.ok:', res.ok, 'result.success:', result.success, 'data length:', result.data?.length ?? 0, 'meta:', result.meta, 'error:', result.error);
       if (result.success) {
         const leads: any[] = result.data || [];
-        const formatted: Lead[] = leads.map((l: any) => {
+        const formatLead = (l: any): Lead => {
           const fullName = `${l.name || ''} ${(l.last_name && l.last_name !== 'null' ? l.last_name : '')}`.trim() || 'Sem nome';
           return {
             id: l.id,
@@ -189,29 +207,81 @@ const TransferidoContent = () => {
             isFavorite: false,
             alertStatus: 'idle',
           };
-        });
-        console.log('[Transferido] loadLeads | formatted:', formatted.length, 'amostra:', formatted.slice(0, 2).map((l) => ({ id: l.id, name: l.name, status: l.status, total_depositos_count: l.total_depositos_count, has_interaction: l.has_interaction })));
-        setRawLeads(formatted);
+        };
+        const formatted: Lead[] = leads.map(formatLead);
+        const totalBancas = Math.max(1, result.meta?.totalBancas ?? 1);
+        setLoadingProgress({ currentBanca: 1, currentPage: 1, totalBancas });
+
+        // Se há mais bancas/páginas: manter loading visível e buscar banca a banca; senão, encerrar loading.
+        if (result.meta?.partial && result.meta?.hasMore) {
+          startTransition(() => setRawLeads(formatted));
+          fullRequestAbortRef.current = new AbortController();
+          setLoadingFullInBackground(true);
+          const baseUrlFull = new URL(url.toString());
+          baseUrlFull.searchParams.set('full', '1');
+          const headers = { 'X-User-Id': userId };
+          const signal = fullRequestAbortRef.current.signal;
+          (async () => {
+            const accumulated = new Map<string, Lead>();
+            formatted.forEach((l) => accumulated.set(String(l.id), l));
+            for (let bancaIndex = 0; bancaIndex < totalBancas && !signal.aborted; bancaIndex++) {
+              setLoadingProgress({ currentBanca: bancaIndex + 1, currentPage: 1, totalBancas });
+              const chunkUrl = new URL(baseUrlFull.toString());
+              chunkUrl.searchParams.set('banca_index', String(bancaIndex));
+              try {
+                const resChunk = await fetch(chunkUrl.toString(), { headers, signal });
+                const chunkResult = await resChunk.json();
+                if (signal.aborted) break;
+                if (chunkResult.success && Array.isArray(chunkResult.data)) {
+                  const chunkFormatted = (chunkResult.data as any[]).map(formatLead);
+                  chunkFormatted.forEach((l) => accumulated.set(String(l.id), l));
+                  startTransition(() => setRawLeads(Array.from(accumulated.values())));
+                }
+              } catch (err: any) {
+                if (err?.name === 'AbortError') break;
+                console.warn('[Transferido] loadLeads | erro banca', bancaIndex, err);
+              }
+            }
+            if (!signal.aborted) {
+              showToast(`Lista completa carregada: ${accumulated.size} leads.`, 'success');
+            }
+            setRawLeads(Array.from(accumulated.values()));
+            setLoading(false);
+            setFilterLoading(false);
+            setLoadingFullInBackground(false);
+            setLoadingProgress(null);
+            fullRequestAbortRef.current = null;
+          })();
+        } else {
+          setRawLeads(formatted);
+          setLoading(false);
+          setFilterLoading(false);
+          setLoadingFullInBackground(false);
+          setLoadingProgress(null);
+        }
       } else {
         setError(result.error || 'Erro ao carregar leads transferidos');
+        setLoading(false);
+        setFilterLoading(false);
+        setLoadingProgress(null);
       }
     } catch (err) {
       console.error('[Transferido] loadLeads | Erro:', err);
       setError('Erro de conexão com o servidor');
-    } finally {
       setLoading(false);
       setFilterLoading(false);
+      setLoadingProgress(null);
     }
-  }, [userId, targetUserId, filters.banca, filters.date, exclusiveBancasList]);
+  }, [userId, targetUserId, filters.banca, filters.date]);
 
+  // Carrega leads assim que o userId estiver disponível, em paralelo ao carregamento das bancas do FilterBar.
+  // Não espera bancasReady: a API resolve bancas no servidor (getBancasVisiveis) quando banca_urls não é enviado.
   useEffect(() => {
-    console.log('[Transferido] useEffect load | userId:', !!userId, 'bancasReady:', bancasReady, 'bancaKey:', bancaKey, 'dateKey:', dateKey);
     if (!userId) return;
-    if (!bancasReady) return;
     const isInitialLoad = isInitialLoadRef.current;
     if (isInitialLoad) isInitialLoadRef.current = false;
     loadLeads(!isInitialLoad);
-  }, [userId, bancaKey, dateKey, bancasReady, loadLeads]);
+  }, [userId, bancaKey, dateKey, loadLeads]);
 
   const handleBancasLoaded = useCallback((bancas: { id: string; name: string; url: string }[]) => {
     console.log('[Transferido] handleBancasLoaded | bancas:', bancas.length, bancas.map((b) => b.name ?? b.id));
@@ -222,7 +292,7 @@ const TransferidoContent = () => {
   const handleFilterChange = (type: string, value: any) => {
     setLeadsPerColumn({});
     if (type === 'clear') {
-      setFilters({ date: { value: 'diario', label: 'Diário' } });
+      setFilters({ date: { value: 'todos', label: 'Todo o Período' } });
     } else if (type === 'date' && value === null) {
       setFilters((prev) => ({ ...prev, date: { value: 'all', label: 'Todos' } }));
     } else {
@@ -273,7 +343,6 @@ const TransferidoContent = () => {
 
   const { columns, metrics: derivedMetrics } = useMemo(() => {
     let formattedLeads: Lead[] = [...rawLeads];
-    console.log('[Transferido] useMemo | rawLeads:', rawLeads.length, 'início formattedLeads:', formattedLeads.length);
 
     // Banca e período são filtrados na API (igual ao Kanban)
 
@@ -466,82 +535,36 @@ const TransferidoContent = () => {
     const activeLeads = formattedLeads.filter((l) => l.status === 'ativo' || (l.total_depositos_count || 0) >= 2).length;
     const conversionRate = totalLeads > 0 ? (activeLeads / totalLeads) * 100 : 0;
 
+    // Uma única passagem para distribuir leads nas colunas (evita 9+ .filter() sobre a lista)
+    const colLeads: Record<string, Lead[]> = {
+      novo: [], contactados: [], deposito_sem_aposta: [], deposito_1x: [], deposito_2x: [],
+      deposito_3x: [], deposito_5x: [], deposito_10x: [], ativo: [],
+    };
+    for (const l of formattedLeads) {
+      const count = l.total_depositos_count || 0;
+      const depositado = l.total_depositado || 0;
+      const apostado = l.total_apostado || 0;
+      const ok = depositado <= apostado;
+      if (count === 0 && l.status !== 'ativo' && !(l.has_interaction === true)) colLeads.novo.push(l);
+      if (l.has_interaction === true && count === 0) colLeads.contactados.push(l);
+      if (depositado > apostado || (l.balance ?? 0) > 0) colLeads.deposito_sem_aposta.push(l);
+      if (count === 1 && ok) colLeads.deposito_1x.push(l);
+      if (count === 2 && ok) colLeads.deposito_2x.push(l);
+      if (count >= 3 && count < 5 && ok) colLeads.deposito_3x.push(l);
+      if (count >= 5 && count < 10 && ok) colLeads.deposito_5x.push(l);
+      if (count >= 10 && ok) colLeads.deposito_10x.push(l);
+      if (l.status === 'ativo') colLeads.ativo.push(l);
+    }
     const baseColumns: Column[] = [
-      {
-        id: 'novo',
-        title: '👥 Clientes cadastrados',
-        color: 'gray',
-        leads: formattedLeads.filter((l) => (l.total_depositos_count || 0) === 0 && l.status !== 'ativo' && !(l.has_interaction === true)),
-        totalLeads: formattedLeads.filter((l) => (l.total_depositos_count || 0) === 0 && l.status !== 'ativo' && !(l.has_interaction === true)).length,
-      },
-      {
-        id: 'contactados',
-        title: '📞 Clientes Contactados',
-        color: 'blue',
-        leads: formattedLeads.filter((l) => l.has_interaction === true && (l.total_depositos_count || 0) === 0),
-        totalLeads: formattedLeads.filter((l) => l.has_interaction === true && (l.total_depositos_count || 0) === 0).length,
-      },
-      {
-        id: 'deposito_sem_aposta',
-        title: '💰 Com Saldo Disponível',
-        color: 'red',
-        leads: formattedLeads.filter((l) => (l.total_depositado || 0) > (l.total_apostado || 0) || (l.balance ?? 0) > 0),
-        totalLeads: formattedLeads.filter((l) => (l.total_depositado || 0) > (l.total_apostado || 0) || (l.balance ?? 0) > 0).length,
-      },
-      {
-        id: 'deposito_1x',
-        title: '💰 1º Depósito',
-        color: 'emerald',
-        leads: formattedLeads.filter((l) => (l.total_depositos_count || 0) === 1 && (l.total_depositado || 0) <= (l.total_apostado || 0)),
-        totalLeads: formattedLeads.filter((l) => (l.total_depositos_count || 0) === 1 && (l.total_depositado || 0) <= (l.total_apostado || 0)).length,
-      },
-      {
-        id: 'deposito_2x',
-        title: '🔥 2º Depósito',
-        color: 'orange',
-        leads: formattedLeads.filter((l) => (l.total_depositos_count || 0) === 2 && (l.total_depositado || 0) <= (l.total_apostado || 0)),
-        totalLeads: formattedLeads.filter((l) => (l.total_depositos_count || 0) === 2 && (l.total_depositado || 0) <= (l.total_apostado || 0)).length,
-      },
-      {
-        id: 'deposito_3x',
-        title: '💎 DEPOSITOU 3X',
-        color: 'indigo',
-        leads: formattedLeads.filter((l) => {
-          const c = l.total_depositos_count || 0;
-          return c >= 3 && c < 5 && (l.total_depositado || 0) <= (l.total_apostado || 0);
-        }),
-        totalLeads: formattedLeads.filter((l) => {
-          const c = l.total_depositos_count || 0;
-          return c >= 3 && c < 5 && (l.total_depositado || 0) <= (l.total_apostado || 0);
-        }).length,
-      },
-      {
-        id: 'deposito_5x',
-        title: '⭐ DEPOSITOU 5X',
-        color: 'amber',
-        leads: formattedLeads.filter((l) => {
-          const c = l.total_depositos_count || 0;
-          return c >= 5 && c < 10 && (l.total_depositado || 0) <= (l.total_apostado || 0);
-        }),
-        totalLeads: formattedLeads.filter((l) => {
-          const c = l.total_depositos_count || 0;
-          return c >= 5 && c < 10 && (l.total_depositado || 0) <= (l.total_apostado || 0);
-        }).length,
-      },
-      {
-        id: 'deposito_10x',
-        title: '👑 DEPOSITOU 10X+',
-        color: 'rose',
-        leads: formattedLeads.filter((l) => (l.total_depositos_count || 0) >= 10 && (l.total_depositado || 0) <= (l.total_apostado || 0)),
-        totalLeads: formattedLeads.filter((l) => (l.total_depositos_count || 0) >= 10 && (l.total_depositado || 0) <= (l.total_apostado || 0)).length,
-      },
-      {
-        id: 'ativo',
-        title: '✅ CLIENTE ATIVO',
-        color: 'purple',
-        leads: formattedLeads.filter((l) => l.status === 'ativo'),
-        totalLeads: formattedLeads.filter((l) => l.status === 'ativo').length,
-      },
+      { id: 'novo', title: '👥 Clientes cadastrados', color: 'gray', leads: colLeads.novo, totalLeads: colLeads.novo.length },
+      { id: 'contactados', title: '📞 Clientes Contactados', color: 'blue', leads: colLeads.contactados, totalLeads: colLeads.contactados.length },
+      { id: 'deposito_sem_aposta', title: '💰 Com Saldo Disponível', color: 'red', leads: colLeads.deposito_sem_aposta, totalLeads: colLeads.deposito_sem_aposta.length },
+      { id: 'deposito_1x', title: '💰 1º Depósito', color: 'emerald', leads: colLeads.deposito_1x, totalLeads: colLeads.deposito_1x.length },
+      { id: 'deposito_2x', title: '🔥 2º Depósito', color: 'orange', leads: colLeads.deposito_2x, totalLeads: colLeads.deposito_2x.length },
+      { id: 'deposito_3x', title: '💎 DEPOSITOU 3X', color: 'indigo', leads: colLeads.deposito_3x, totalLeads: colLeads.deposito_3x.length },
+      { id: 'deposito_5x', title: '⭐ DEPOSITOU 5X', color: 'amber', leads: colLeads.deposito_5x, totalLeads: colLeads.deposito_5x.length },
+      { id: 'deposito_10x', title: '👑 DEPOSITOU 10X+', color: 'rose', leads: colLeads.deposito_10x, totalLeads: colLeads.deposito_10x.length },
+      { id: 'ativo', title: '✅ CLIENTE ATIVO', color: 'purple', leads: colLeads.ativo, totalLeads: colLeads.ativo.length },
     ];
 
     const sortedColumns = baseColumns.map((col) => {
@@ -554,16 +577,13 @@ const TransferidoContent = () => {
       };
     });
 
-    const colSummary = sortedColumns.map((c) => `${c.id}:${c.leads.length}`).join(', ');
-    console.log('[Transferido] useMemo | formattedLeads após filtros:', formattedLeads.length, '| colunas:', colSummary);
-
     return {
       columns: sortedColumns,
       metrics: { total_leads: totalLeads, total_deposited: totalDeposited, active_leads: activeLeads, conversion_rate: conversionRate },
     };
   }, [rawLeads, filters, searchTerm, leadsPerColumn, columnSorts]);
 
-  const metrics = loading && rawLeads.length === 0 ? null : derivedMetrics;
+  const metrics = derivedMetrics;
 
   const onDragStart = (e: React.DragEvent, leadId: string | number) => {
     e.dataTransfer.setData('leadId', leadId.toString());
@@ -643,15 +663,7 @@ const TransferidoContent = () => {
             </button>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6 relative">
-            {(loading || filterLoading) && (
-              <div className="absolute inset-0 bg-white/60 dark:bg-[#1a1a1a]/80 backdrop-blur-[2px] rounded-xl z-10 flex items-center justify-center">
-                <div className="flex items-center gap-2 text-[#8CD955]">
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                  <span className="text-xs font-semibold">Carregando...</span>
-                </div>
-              </div>
-            )}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
             <div className="bg-white dark:bg-[#2a2a2a] p-3 rounded-xl border border-gray-100 dark:border-[#404040] shadow-sm">
               <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Total Leads</p>
               <p className="text-lg font-bold text-gray-800 dark:text-white">{metrics?.total_leads ?? 0}</p>
@@ -676,7 +688,24 @@ const TransferidoContent = () => {
             </div>
           )}
 
-          {!loading && !filterLoading && !error && rawLeads.length === 0 && (
+          {/* Enquanto tiver 0 leads, o loading não termina: fica visível até os dados aparecerem na página */}
+          {rawLeads.length === 0 && (loading || filterLoading || loadingFullInBackground) && (
+            <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-200 mb-4">
+              <div className="animate-spin rounded-full h-5 w-5 border-2 border-blue-500 border-t-transparent shrink-0" />
+              <div>
+                <p className="font-medium text-sm">
+                  {loadingProgress?.totalBancas != null && loadingProgress.totalBancas > 0
+                    ? `Carregando banca ${loadingProgress.currentBanca} de ${loadingProgress.totalBancas}, página ${loadingProgress.currentPage}`
+                    : 'Carregando banca 1, página 1...'}
+                </p>
+                <p className="text-xs opacity-90 mt-0.5">
+                  Os leads aparecerão aqui quando o carregamento terminar.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {!error && rawLeads.length === 0 && !loading && !filterLoading && !loadingFullInBackground && (
             <div className="mb-4 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800/50 text-blue-700 dark:text-blue-200 rounded-xl flex items-center gap-3 text-sm">
               <AlertCircle className="w-5 h-5 flex-shrink-0" />
               <div>
@@ -699,14 +728,6 @@ const TransferidoContent = () => {
         </div>
 
         <div className="flex-1 overflow-x-auto overflow-y-auto pb-4 custom-scrollbar -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8 snap-x snap-mandatory relative min-h-[400px]">
-          {(loading || filterLoading) && (
-            <div className="absolute inset-0 bg-white/50 dark:bg-[#1a1a1a]/80 backdrop-blur-[1px] rounded-xl z-20 flex items-center justify-center">
-              <div className="flex flex-col items-center gap-2 text-[#8CD955]">
-                <RefreshCw className="w-5 h-5 animate-spin" />
-                <span className="text-xs font-semibold">Carregando leads...</span>
-              </div>
-            </div>
-          )}
           <div className="flex gap-4 md:gap-6 items-stretch h-full min-h-[500px]">
             {columns.map((column) => (
                 <div key={column.id} className="w-[calc(100vw-3.5rem)] sm:w-96 h-full min-h-[500px] flex-shrink-0 snap-center">
@@ -780,6 +801,7 @@ const TransferidoContent = () => {
           </div>
         </div>
       )}
+      <ToastContainer toasts={toasts} onClose={removeToast} />
     </Layout>
   );
 };

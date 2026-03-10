@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useMemo, useCallback, Suspense } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback, Suspense, startTransition } from 'react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { Kanban as KanbanIcon, Plus, Users, Target, CheckCircle2, MessageSquare, AlertCircle, Eye, RefreshCw, X, Gift, Loader2, Search } from 'lucide-react';
@@ -224,6 +224,7 @@ const KanbanContent = () => {
   const [loading, setLoading] = useState(false); // true apenas quando a requisição de leads estiver em andamento
   const [filterLoading, setFilterLoading] = useState(false); // Loading ao mudar banca/período
   const [backgroundLoading, setBackgroundLoading] = useState(false); // true quando o resto dos leads está carregando em segundo plano
+  const [backgroundProgress, setBackgroundProgress] = useState<{ currentBanca: number; totalBancas: number; currentPage: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filters, setFilters] = useState<Record<string, any>>(() => {
@@ -472,8 +473,7 @@ const KanbanContent = () => {
       if (result.success) {
         const leads: any[] = result.data || [];
         const formattedLeads = formatApiLeadsToLead(leads);
-        console.log('[Kanban] Primeira carga (já respondidos):', formattedLeads.length, 'leads');
-        setRawLeads(formattedLeads);
+        startTransition(() => setRawLeads(formattedLeads));
 
         if (targetUserId && targetUserId !== userId) {
           const profileRes = await fetch(`/api/admin/users/${targetUserId}`, {
@@ -491,12 +491,18 @@ const KanbanContent = () => {
         }
 
         const next = result.meta?.next;
+        const totalBancas = result.meta?.total_bancas ?? 0;
         if (next && typeof next.banca_index === 'number' && typeof next.page === 'number') {
           setBackgroundLoading(true);
+          setBackgroundProgress({ currentBanca: next.banca_index + 1, totalBancas: totalBancas || 1, currentPage: next.page });
           (async () => {
             let current: { banca_index: number; page: number } | null = { banca_index: next.banca_index, page: next.page };
             const headers = { 'X-User-Id': userId as string };
+            const totalBancasRef = totalBancas || 1;
             while (current && thisLoadId === loadIdRef.current) {
+              if (thisLoadId === loadIdRef.current) {
+                setBackgroundProgress({ currentBanca: current.banca_index + 1, totalBancas: totalBancasRef, currentPage: current.page });
+              }
               const chunkUrl = buildBaseUrl();
               chunkUrl.searchParams.set('banca_index', String(current.banca_index));
               chunkUrl.searchParams.set('page', String(current.page));
@@ -507,11 +513,17 @@ const KanbanContent = () => {
                 if (chunkResult.success && Array.isArray(chunkResult.data)) {
                   const newLeads = formatApiLeadsToLead(chunkResult.data);
                   if (newLeads.length > 0) {
-                    setRawLeads(prev => {
-                      const byId = new Map(prev.map(l => [l.id, l]));
-                      newLeads.forEach(l => byId.set(l.id, l));
-                      return Array.from(byId.values());
+                    startTransition(() => {
+                      setRawLeads(prev => {
+                        const byId = new Map(prev.map(l => [l.id, l]));
+                        newLeads.forEach(l => byId.set(l.id, l));
+                        return Array.from(byId.values());
+                      });
                     });
+                  }
+                  const meta = chunkResult.meta;
+                  if (meta?.current_banca_index != null && meta?.total_bancas != null && thisLoadId === loadIdRef.current) {
+                    setBackgroundProgress({ currentBanca: meta.current_banca_index + 1, totalBancas: meta.total_bancas, currentPage: meta.current_page ?? current.page });
                   }
                 }
                 current = chunkResult.meta?.next ?? null;
@@ -521,16 +533,16 @@ const KanbanContent = () => {
             }
             if (thisLoadId === loadIdRef.current) {
               setBackgroundLoading(false);
+              setBackgroundProgress(null);
               showToast('Todos os leads foram carregados.', 'success');
             }
           })();
         }
       } else {
         const errorMessage = result.error || 'Erro ao carregar leads';
-        console.error('[Kanban] Erro ao carregar leads:', errorMessage, result);
         if (errorMessage.includes('404') || errorMessage.includes('No indicateds found') || errorMessage.includes('Nenhum lead')) {
           setError(null);
-          setRawLeads([]);
+          startTransition(() => setRawLeads([]));
         } else {
           setError(errorMessage);
         }
@@ -1102,52 +1114,46 @@ const KanbanContent = () => {
     ).length;
     const conversionRate = totalLeads > 0 ? (activeLeads / totalLeads) * 100 : 0;
 
-    // Colunas com totalLeads = total que se encaixa no filtro; leads exibidos limitados a 100 (ou leadsPerColumn)
+    // Uma única passagem para distribuir leads nas colunas (evita 11+ .filter() sobre a lista)
+    const colLeads: Record<string, Lead[]> = {
+      novo: [], contactados: [], deposito_sem_aposta: [], saque_disponivel: [], deposito_1x: [],
+      deposito_2x: [], deposito_3x: [], deposito_5x: [], deposito_10x: [], ativo: [], possivel_transferencia: [],
+    };
+    for (const l of formattedLeads) {
+      const count = l.total_depositos_count || 0;
+      const depositado = l.total_depositado || 0;
+      const apostado = l.total_apostado || 0;
+      const ok = depositado <= apostado;
+      const availWithdraw = parseFloat(String(l.available_withdraw ?? 0)) || 0;
+      if (count === 0 && l.status !== 'ativo' && !(l.has_interaction === true)) colLeads.novo.push(l);
+      if (l.has_interaction === true && count === 0) colLeads.contactados.push(l);
+      if (depositado > apostado || (l.balance ?? 0) > 0) colLeads.deposito_sem_aposta.push(l);
+      if (availWithdraw > 0) colLeads.saque_disponivel.push(l);
+      if (count === 1 && ok) colLeads.deposito_1x.push(l);
+      if (count === 2 && ok) colLeads.deposito_2x.push(l);
+      if (count >= 3 && count < 5 && ok) colLeads.deposito_3x.push(l);
+      if (count >= 5 && count < 10 && ok) colLeads.deposito_5x.push(l);
+      if (count >= 10 && ok) colLeads.deposito_10x.push(l);
+      if (l.status === 'ativo') colLeads.ativo.push(l);
+      if (isLeadPast90DaysInactivity(l)) colLeads.possivel_transferencia.push(l);
+    }
+    colLeads.contactados.sort((a, b) => {
+      const tA = a.lastInteractionAt ? new Date(a.lastInteractionAt).getTime() : (a.last_interaction ? new Date(a.last_interaction).getTime() : 0);
+      const tB = b.lastInteractionAt ? new Date(b.lastInteractionAt).getTime() : (b.last_interaction ? new Date(b.last_interaction).getTime() : 0);
+      return tA - tB;
+    });
     const baseColumns: Column[] = [
-      (() => {
-        const filtered = formattedLeads.filter(l => (l.total_depositos_count || 0) === 0 && l.status !== 'ativo' && !(l.has_interaction === true));
-        return { id: 'novo', title: '👥 Clientes cadastrados', color: 'gray', leads: filtered, totalLeads: filtered.length };
-      })(),
-      (() => {
-        const filtered = formattedLeads.filter(l => l.has_interaction === true && (l.total_depositos_count || 0) === 0).sort((a, b) => { const tA = a.lastInteractionAt ? new Date(a.lastInteractionAt).getTime() : (a.last_interaction ? new Date(a.last_interaction).getTime() : 0); const tB = b.lastInteractionAt ? new Date(b.lastInteractionAt).getTime() : (b.last_interaction ? new Date(b.last_interaction).getTime() : 0); return tA - tB; });
-        return { id: 'contactados', title: '📞 Clientes Contactados', color: 'blue', leads: filtered, totalLeads: filtered.length };
-      })(),
-      (() => {
-        const filtered = formattedLeads.filter(l => (l.total_depositado || 0) > (l.total_apostado || 0) || (l.balance ?? 0) > 0);
-        return { id: 'deposito_sem_aposta', title: '💰 Com Saldo Disponível', color: 'red', leads: filtered, totalLeads: filtered.length };
-      })(),
-      (() => {
-        const filtered = formattedLeads.filter(l => (parseFloat(String(l.available_withdraw ?? 0)) || 0) > 0);
-        return { id: 'saque_disponivel', title: '💸 Saque Disponível', color: 'teal', leads: filtered, totalLeads: filtered.length };
-      })(),
-      (() => {
-        const filtered = formattedLeads.filter(l => (l.total_depositos_count || 0) === 1 && (l.total_depositado || 0) <= (l.total_apostado || 0));
-        return { id: 'deposito_1x', title: '💰 1º Depósito', color: 'emerald', leads: filtered, totalLeads: filtered.length };
-      })(),
-      (() => {
-        const filtered = formattedLeads.filter(l => (l.total_depositos_count || 0) === 2 && (l.total_depositado || 0) <= (l.total_apostado || 0));
-        return { id: 'deposito_2x', title: '🔥 2º Depósito', color: 'orange', leads: filtered, totalLeads: filtered.length };
-      })(),
-      (() => {
-        const filtered = formattedLeads.filter(l => { const c = l.total_depositos_count || 0; return c >= 3 && c < 5 && (l.total_depositado || 0) <= (l.total_apostado || 0); });
-        return { id: 'deposito_3x', title: '💎 DEPOSITOU 3X', color: 'indigo', leads: filtered, totalLeads: filtered.length };
-      })(),
-      (() => {
-        const filtered = formattedLeads.filter(l => { const c = l.total_depositos_count || 0; return c >= 5 && c < 10 && (l.total_depositado || 0) <= (l.total_apostado || 0); });
-        return { id: 'deposito_5x', title: '⭐ DEPOSITOU 5X', color: 'amber', leads: filtered, totalLeads: filtered.length };
-      })(),
-      (() => {
-        const filtered = formattedLeads.filter(l => (l.total_depositos_count || 0) >= 10 && (l.total_depositado || 0) <= (l.total_apostado || 0));
-        return { id: 'deposito_10x', title: '👑 DEPOSITOU 10X+', color: 'rose', leads: filtered, totalLeads: filtered.length };
-      })(),
-      (() => {
-        const filtered = formattedLeads.filter(l => l.status === 'ativo');
-        return { id: 'ativo', title: '✅ CLIENTE ATIVO', color: 'purple', leads: filtered, totalLeads: filtered.length };
-      })(),
-      (() => {
-        const filtered = formattedLeads.filter(l => isLeadPast90DaysInactivity(l));
-        return { id: 'possivel_transferencia', title: '🔄 Possível transferência', color: 'amber', leads: filtered, totalLeads: filtered.length };
-      })()
+      { id: 'novo', title: '👥 Clientes cadastrados', color: 'gray', leads: colLeads.novo, totalLeads: colLeads.novo.length },
+      { id: 'contactados', title: '📞 Clientes Contactados', color: 'blue', leads: colLeads.contactados, totalLeads: colLeads.contactados.length },
+      { id: 'deposito_sem_aposta', title: '💰 Com Saldo Disponível', color: 'red', leads: colLeads.deposito_sem_aposta, totalLeads: colLeads.deposito_sem_aposta.length },
+      { id: 'saque_disponivel', title: '💸 Saque Disponível', color: 'teal', leads: colLeads.saque_disponivel, totalLeads: colLeads.saque_disponivel.length },
+      { id: 'deposito_1x', title: '💰 1º Depósito', color: 'emerald', leads: colLeads.deposito_1x, totalLeads: colLeads.deposito_1x.length },
+      { id: 'deposito_2x', title: '🔥 2º Depósito', color: 'orange', leads: colLeads.deposito_2x, totalLeads: colLeads.deposito_2x.length },
+      { id: 'deposito_3x', title: '💎 DEPOSITOU 3X', color: 'indigo', leads: colLeads.deposito_3x, totalLeads: colLeads.deposito_3x.length },
+      { id: 'deposito_5x', title: '⭐ DEPOSITOU 5X', color: 'amber', leads: colLeads.deposito_5x, totalLeads: colLeads.deposito_5x.length },
+      { id: 'deposito_10x', title: '👑 DEPOSITOU 10X+', color: 'rose', leads: colLeads.deposito_10x, totalLeads: colLeads.deposito_10x.length },
+      { id: 'ativo', title: '✅ CLIENTE ATIVO', color: 'purple', leads: colLeads.ativo, totalLeads: colLeads.ativo.length },
+      { id: 'possivel_transferencia', title: '🔄 Possível transferência', color: 'amber', leads: colLeads.possivel_transferencia, totalLeads: colLeads.possivel_transferencia.length },
     ];
 
     // Aplica ordenação e limita leads exibidos (padrão 100); contador mostra exibidos/total (ex: 100/700)
@@ -1353,9 +1359,16 @@ const KanbanContent = () => {
           {backgroundLoading && (
             <div className="mb-4 py-3 px-4 bg-[#8CD955]/15 dark:bg-[#8CD955]/10 border-2 border-[#8CD955]/50 text-gray-800 dark:text-gray-200 rounded-xl flex items-center gap-3 text-sm font-medium animate-in fade-in shadow-sm">
               <RefreshCw className="w-5 h-5 animate-spin text-[#8CD955] flex-shrink-0" />
-              <div>
-                <p className="font-semibold">Carregando mais leads em segundo plano</p>
-                <p className="text-xs text-gray-600 dark:text-gray-400 font-normal mt-0.5">Você já pode usar o quadro; novos leads aparecerão automaticamente.</p>
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold">Carregando leads em segundo plano</p>
+                {backgroundProgress && backgroundProgress.totalBancas > 0 ? (
+                  <p className="text-xs text-gray-600 dark:text-gray-400 font-normal mt-0.5">
+                    Banca {backgroundProgress.currentBanca} de {backgroundProgress.totalBancas}
+                    {backgroundProgress.currentPage > 1 ? ` · Página ${backgroundProgress.currentPage}` : ''}
+                  </p>
+                ) : (
+                  <p className="text-xs text-gray-600 dark:text-gray-400 font-normal mt-0.5">Você já pode usar o quadro; novos leads aparecerão automaticamente.</p>
+                )}
               </div>
             </div>
           )}
