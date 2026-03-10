@@ -36,7 +36,7 @@ export async function GET(
         if (banca?.url) bancaUrl = banca.url;
       }
       if (!bancaUrl) {
-        bancaUrl = await getBancaUrl(requesterId);
+        bancaUrl = (await getBancaUrl(requesterId)) ?? undefined;
         if (!bancaUrl) {
           return errorResponse('Configuração de banca não encontrada.');
         }
