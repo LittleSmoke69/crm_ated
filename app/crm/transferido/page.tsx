@@ -150,120 +150,108 @@ const TransferidoContent = () => {
         }
       }
 
-      // Primeira busca: sem full=1 → API retorna só 1ª banca, 1ª página (rápido). Depois, full=1 em segundo plano.
-      console.log('[Transferido] loadLeads | URL (quick):', url.toString());
-      const res = await fetch(url.toString(), { headers: { 'X-User-Id': userId } });
-      const result = await res.json();
-      console.log('[Transferido] loadLeads | res.ok:', res.ok, 'result.success:', result.success, 'data length:', result.data?.length ?? 0, 'meta:', result.meta, 'error:', result.error);
-      if (result.success) {
-        const leads: any[] = result.data || [];
-        const formatLead = (l: any): Lead => {
-          const fullName = `${l.name || ''} ${(l.last_name && l.last_name !== 'null' ? l.last_name : '')}`.trim() || 'Sem nome';
-          return {
-            id: l.id,
-            name: fullName,
-            phone: l.phone || '',
-            email: l.email || '',
-            status: (l.status as Lead['status']) || 'novo',
-            thermalStatus: (l.temperature as ThermalStatus) || 'cold',
-            tags: l.tags || [],
-            createdAt: l.created_at,
-            total_depositado: l.total_depositado,
-            total_apostado: l.total_apostado,
-            total_ganho: l.total_ganho,
-            total_depositos_count: l.total_depositos_count,
-            stars: l.stars,
-            is_affiliate: l.is_affiliate,
-            affiliate_name: l.affiliate_name,
-            temperature: l.temperature,
-            has_interaction: l.has_interaction,
-            last_deposit_at: l.last_deposit_at,
-            last_deposit_value: l.last_deposit_value,
-            created_at: l.created_at,
-            last_interaction: l.last_interaction,
-            last_winner_value: l.last_winner_value,
-            last_winner_at: l.last_winner_at,
-            last_withdraw_at: l.last_withdraw_at,
-            last_withdraw_value: l.last_withdraw_value,
-            total_saque: l.total_saque,
-            balance: l.balance,
-            bonus: l.bonus,
-            convert: l.convert,
-            total_afiliate: l.total_afiliate,
-            aposta_estrelas: l.aposta_estrelas,
-            banca_id: l.banca_id,
-            banca_name: l.banca_name,
-            banca_url: l.banca_url,
-            original_id: l.original_id,
-            tag_de_redistribuicao: l.tag_de_redistribuicao ?? null,
-            transferred: l.transferred ?? false,
-            transferred_at: l.transferred_at ?? null,
-            original_consultant_id: l.original_consultant_id ?? null,
-            original_consultant_name: l.original_consultant_name ?? null,
-            original_consultant_email: l.original_consultant_email ?? null,
-            vinculado: l.vinculado ?? false,
-            interactions: 0,
-            lastInteractionAt: l.last_interaction || l.created_at,
-            isFavorite: false,
-            alertStatus: 'idle',
-          };
-        };
-        const formatted: Lead[] = leads.map(formatLead);
-        const totalBancas = Math.max(1, result.meta?.totalBancas ?? 1);
-        setLoadingProgress({ currentBanca: 1, currentPage: 1, totalBancas });
+      url.searchParams.set('full', '1');
+      const headers = { 'X-User-Id': userId };
+      fullRequestAbortRef.current = new AbortController();
+      const signal = fullRequestAbortRef.current.signal;
 
-        // Se há mais bancas/páginas: manter loading visível e buscar banca a banca; senão, encerrar loading.
-        if (result.meta?.partial && result.meta?.hasMore) {
-          startTransition(() => setRawLeads(formatted));
-          fullRequestAbortRef.current = new AbortController();
-          setLoadingFullInBackground(true);
-          const baseUrlFull = new URL(url.toString());
-          baseUrlFull.searchParams.set('full', '1');
-          const headers = { 'X-User-Id': userId };
-          const signal = fullRequestAbortRef.current.signal;
-          (async () => {
-            const accumulated = new Map<string, Lead>();
-            formatted.forEach((l) => accumulated.set(String(l.id), l));
-            for (let bancaIndex = 0; bancaIndex < totalBancas && !signal.aborted; bancaIndex++) {
-              setLoadingProgress({ currentBanca: bancaIndex + 1, currentPage: 1, totalBancas });
-              const chunkUrl = new URL(baseUrlFull.toString());
-              chunkUrl.searchParams.set('banca_index', String(bancaIndex));
-              try {
-                const resChunk = await fetch(chunkUrl.toString(), { headers, signal });
-                const chunkResult = await resChunk.json();
-                if (signal.aborted) break;
-                if (chunkResult.success && Array.isArray(chunkResult.data)) {
-                  const chunkFormatted = (chunkResult.data as any[]).map(formatLead);
-                  chunkFormatted.forEach((l) => accumulated.set(String(l.id), l));
-                  startTransition(() => setRawLeads(Array.from(accumulated.values())));
-                }
-              } catch (err: any) {
-                if (err?.name === 'AbortError') break;
-                console.warn('[Transferido] loadLeads | erro banca', bancaIndex, err);
-              }
-            }
-            if (!signal.aborted) {
-              showToast(`Lista completa carregada: ${accumulated.size} leads.`, 'success');
-            }
-            setRawLeads(Array.from(accumulated.values()));
-            setLoading(false);
-            setFilterLoading(false);
-            setLoadingFullInBackground(false);
-            setLoadingProgress(null);
-            fullRequestAbortRef.current = null;
-          })();
-        } else {
-          setRawLeads(formatted);
+      const formatLead = (l: any): Lead => {
+        const fullName = `${l.name || ''} ${(l.last_name && l.last_name !== 'null' ? l.last_name : '')}`.trim() || 'Sem nome';
+        return {
+          id: l.id,
+          name: fullName,
+          phone: l.phone || '',
+          email: l.email || '',
+          status: (l.status as Lead['status']) || 'novo',
+          thermalStatus: (l.temperature as ThermalStatus) || 'cold',
+          tags: l.tags || [],
+          createdAt: l.created_at,
+          total_depositado: l.total_depositado,
+          total_apostado: l.total_apostado,
+          total_ganho: l.total_ganho,
+          total_depositos_count: l.total_depositos_count,
+          stars: l.stars,
+          is_affiliate: l.is_affiliate,
+          affiliate_name: l.affiliate_name,
+          temperature: l.temperature,
+          has_interaction: l.has_interaction,
+          last_deposit_at: l.last_deposit_at,
+          last_deposit_value: l.last_deposit_value,
+          created_at: l.created_at,
+          last_interaction: l.last_interaction,
+          last_winner_value: l.last_winner_value,
+          last_winner_at: l.last_winner_at,
+          last_withdraw_at: l.last_withdraw_at,
+          last_withdraw_value: l.last_withdraw_value,
+          total_saque: l.total_saque,
+          balance: l.balance,
+          bonus: l.bonus,
+          convert: l.convert,
+          total_afiliate: l.total_afiliate,
+          aposta_estrelas: l.aposta_estrelas,
+          banca_id: l.banca_id,
+          banca_name: l.banca_name,
+          banca_url: l.banca_url,
+          original_id: l.original_id,
+          tag_de_redistribuicao: l.tag_de_redistribuicao ?? null,
+          transferred: l.transferred ?? false,
+          transferred_at: l.transferred_at ?? null,
+          original_consultant_id: l.original_consultant_id ?? null,
+          original_consultant_name: l.original_consultant_name ?? null,
+          original_consultant_email: l.original_consultant_email ?? null,
+          vinculado: l.vinculado ?? false,
+          interactions: 0,
+          lastInteractionAt: l.last_interaction || l.created_at,
+          isFavorite: false,
+          alertStatus: 'idle',
+        };
+      };
+
+      const accumulated = new Map<string, Lead>();
+      let totalBancas = 1;
+
+      for (let bancaIndex = 0; !signal.aborted; bancaIndex++) {
+        setLoadingProgress({ currentBanca: bancaIndex + 1, currentPage: 1, totalBancas: totalBancas > 0 ? totalBancas : null });
+        const bancaUrl = new URL(url.toString());
+        bancaUrl.searchParams.set('banca_index', String(bancaIndex));
+        console.log('[Transferido] loadLeads | banca', bancaIndex + 1, 'URL:', bancaUrl.toString());
+        let res: Response;
+        try {
+          res = await fetch(bancaUrl.toString(), { headers, signal });
+        } catch (err: any) {
+          if (err?.name === 'AbortError') break;
+          console.error('[Transferido] loadLeads | Erro de rede banca', bancaIndex, err);
+          setError('Erro de conexão com o servidor');
+          break;
+        }
+        const result = await res.json();
+        if (signal.aborted) break;
+        if (!result.success) {
+          setError(result.error || 'Erro ao carregar leads transferidos');
+          break;
+        }
+        const leads: any[] = Array.isArray(result.data) ? result.data : [];
+        const meta = result.meta ?? {};
+        const metaTotal = meta.total_bancas ?? result.meta?.totalBancas;
+        if (typeof metaTotal === 'number' && metaTotal > 0) totalBancas = metaTotal;
+        const chunkFormatted = leads.map(formatLead);
+        chunkFormatted.forEach((l) => accumulated.set(String(l.id), l));
+        startTransition(() => setRawLeads(Array.from(accumulated.values())));
+        if (bancaIndex === 0) {
           setLoading(false);
           setFilterLoading(false);
-          setLoadingFullInBackground(false);
-          setLoadingProgress(null);
         }
-      } else {
-        setError(result.error || 'Erro ao carregar leads transferidos');
-        setLoading(false);
-        setFilterLoading(false);
-        setLoadingProgress(null);
+        if (bancaIndex >= totalBancas - 1) break;
+        setLoadingFullInBackground(true);
+      }
+
+      setLoading(false);
+      setFilterLoading(false);
+      setLoadingFullInBackground(false);
+      setLoadingProgress(null);
+      fullRequestAbortRef.current = null;
+      if (accumulated.size > 0 && !signal.aborted) {
+        showToast(`Lista completa carregada: ${accumulated.size} leads.`, 'success');
       }
     } catch (err) {
       console.error('[Transferido] loadLeads | Erro:', err);
@@ -583,7 +571,7 @@ const TransferidoContent = () => {
     };
   }, [rawLeads, filters, searchTerm, leadsPerColumn, columnSorts]);
 
-  const metrics = derivedMetrics;
+  const metrics = loading && rawLeads.length === 0 ? null : derivedMetrics;
 
   const onDragStart = (e: React.DragEvent, leadId: string | number) => {
     e.dataTransfer.setData('leadId', leadId.toString());
@@ -663,7 +651,16 @@ const TransferidoContent = () => {
             </button>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+          {/* Quick Metrics - overlay quando requisição está em andamento (igual Kanban) */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6 animate-in fade-in slide-in-from-top-2 duration-500 relative">
+            {(loading || filterLoading) && (
+              <div className="absolute inset-0 bg-white/60 dark:bg-[#1a1a1a]/80 backdrop-blur-[2px] rounded-xl z-10 flex items-center justify-center">
+                <div className="flex items-center gap-2 text-[#8CD955]">
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span className="text-xs font-semibold">Carregando...</span>
+                </div>
+              </div>
+            )}
             <div className="bg-white dark:bg-[#2a2a2a] p-3 rounded-xl border border-gray-100 dark:border-[#404040] shadow-sm">
               <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Total Leads</p>
               <p className="text-lg font-bold text-gray-800 dark:text-white">{metrics?.total_leads ?? 0}</p>
@@ -683,30 +680,31 @@ const TransferidoContent = () => {
           </div>
 
           {error && (
-            <div className="mb-4 p-3 bg-red-50 border border-red-100 text-red-600 rounded-xl flex items-center gap-2 text-sm">
+            <div className="mb-4 p-3 bg-red-50 border border-red-100 text-red-600 rounded-xl flex items-center gap-2 text-sm animate-in fade-in slide-in-from-top-1">
               <AlertCircle className="w-4 h-4" /> {error}
             </div>
           )}
 
-          {/* Enquanto tiver 0 leads, o loading não termina: fica visível até os dados aparecerem na página */}
-          {rawLeads.length === 0 && (loading || filterLoading || loadingFullInBackground) && (
-            <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-200 mb-4">
-              <div className="animate-spin rounded-full h-5 w-5 border-2 border-blue-500 border-t-transparent shrink-0" />
-              <div>
-                <p className="font-medium text-sm">
-                  {loadingProgress?.totalBancas != null && loadingProgress.totalBancas > 0
-                    ? `Carregando banca ${loadingProgress.currentBanca} de ${loadingProgress.totalBancas}, página ${loadingProgress.currentPage}`
-                    : 'Carregando banca 1, página 1...'}
-                </p>
-                <p className="text-xs opacity-90 mt-0.5">
-                  Os leads aparecerão aqui quando o carregamento terminar.
-                </p>
+          {/* Banner de carregamento em segundo plano (igual Kanban: verde, Banca X de Y · Página N) */}
+          {loadingFullInBackground && (
+            <div className="mb-4 py-3 px-4 bg-[#8CD955]/15 dark:bg-[#8CD955]/10 border-2 border-[#8CD955]/50 text-gray-800 dark:text-gray-200 rounded-xl flex items-center gap-3 text-sm font-medium animate-in fade-in shadow-sm">
+              <RefreshCw className="w-5 h-5 animate-spin text-[#8CD955] flex-shrink-0" />
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold">Carregando leads em segundo plano</p>
+                {loadingProgress && loadingProgress.totalBancas != null && loadingProgress.totalBancas > 0 ? (
+                  <p className="text-xs text-gray-600 dark:text-gray-400 font-normal mt-0.5">
+                    Banca {loadingProgress.currentBanca} de {loadingProgress.totalBancas}
+                    {loadingProgress.currentPage > 1 ? ` · Página ${loadingProgress.currentPage}` : ''}
+                  </p>
+                ) : (
+                  <p className="text-xs text-gray-600 dark:text-gray-400 font-normal mt-0.5">Você já pode usar o quadro; novos leads aparecerão automaticamente.</p>
+                )}
               </div>
             </div>
           )}
 
-          {!error && rawLeads.length === 0 && !loading && !filterLoading && !loadingFullInBackground && (
-            <div className="mb-4 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800/50 text-blue-700 dark:text-blue-200 rounded-xl flex items-center gap-3 text-sm">
+          {!loading && !filterLoading && !error && rawLeads.length === 0 && !loadingFullInBackground && (
+            <div className="mb-4 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800/50 text-blue-700 dark:text-blue-200 rounded-xl flex items-center gap-3 text-sm animate-in fade-in slide-in-from-top-1">
               <AlertCircle className="w-5 h-5 flex-shrink-0" />
               <div>
                 <p className="font-semibold">Nenhum lead transferido</p>
@@ -728,6 +726,15 @@ const TransferidoContent = () => {
         </div>
 
         <div className="flex-1 overflow-x-auto overflow-y-auto pb-4 custom-scrollbar -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8 snap-x snap-mandatory relative min-h-[400px]">
+          {/* Overlay nas colunas quando requisição está em andamento (igual Kanban) */}
+          {(loading || filterLoading) && (
+            <div className="absolute inset-0 bg-white/50 dark:bg-[#1a1a1a]/80 backdrop-blur-[1px] rounded-xl z-20 flex items-center justify-center">
+              <div className="flex flex-col items-center gap-2 text-[#8CD955]">
+                <RefreshCw className="w-5 h-5 animate-spin" />
+                <span className="text-xs font-semibold">Carregando leads...</span>
+              </div>
+            </div>
+          )}
           <div className="flex gap-4 md:gap-6 items-stretch h-full min-h-[500px]">
             {columns.map((column) => (
                 <div key={column.id} className="w-[calc(100vw-3.5rem)] sm:w-96 h-full min-h-[500px] flex-shrink-0 snap-center">
