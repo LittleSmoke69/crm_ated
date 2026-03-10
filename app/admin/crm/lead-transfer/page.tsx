@@ -159,7 +159,7 @@ function formatFiltersSnapshotForDisplay(filters: Record<string, unknown> | null
   };
 
   const minInactive = v('min_inactive_days');
-  add('Inatividade (dias)', minInactive === '0' || minInactive === 0 ? 'Todos' : minInactive);
+  add('Inatividade (dias)', minInactive === '0' ? 'Todos' : minInactive);
   const balanceFilter = v('balance_filter');
   if (balanceFilter) add('Saldo', BALANCE_FILTER_LABELS[balanceFilter] ?? balanceFilter);
   if (v('saldo_min') || v('saldo_max')) add('Saldo (min–máx)', [v('saldo_min'), v('saldo_max')].filter(Boolean).join(' – ') || '-');
