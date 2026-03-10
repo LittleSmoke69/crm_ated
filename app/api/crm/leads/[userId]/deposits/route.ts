@@ -1,11 +1,13 @@
 import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
-import { canAccessUser, getUserProfile } from '@/lib/middleware/permissions';
+import { getUserProfile } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse } from '@/lib/utils/response';
 import { getBancaUrl } from '@/lib/utils/hierarchy';
+import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 /**
- * GET /api/crm/leads/[userId]/deposits - Busca histórico de depósitos de um cliente
+ * GET /api/crm/leads/[userId]/deposits - Busca histórico de depósitos de um cliente.
+ * Usa a banca em que o lead está cadastrado: banca_url ou banca_id (query) têm prioridade.
  */
 export async function GET(
   req: NextRequest,
@@ -16,18 +18,29 @@ export async function GET(
     const { searchParams } = req.nextUrl;
     const { userId: clientUserId } = await params;
 
-    // Verifica permissões
     const requesterProfile = await getUserProfile(requesterId);
     if (!requesterProfile) {
       return errorResponse('Perfil do usuário não encontrado.');
     }
 
-    // Busca a banca_url
-    let bancaUrl = searchParams.get('banca_url');
+    // Banca do lead: prioriza banca_url (ou banca_id) da query para usar a banca em que o lead está
+    let bancaUrl = searchParams.get('banca_url')?.trim();
     if (!bancaUrl || bancaUrl === 'all') {
-      bancaUrl = await getBancaUrl(requesterId);
+      const bancaId = searchParams.get('banca_id')?.trim();
+      if (bancaId) {
+        const { data: banca } = await supabaseServiceRole
+          .from('crm_bancas')
+          .select('url')
+          .eq('id', bancaId)
+          .maybeSingle();
+        if (banca?.url) bancaUrl = banca.url;
+      }
       if (!bancaUrl) {
-        return errorResponse('Configuração de banca não encontrada.');
+        bancaUrl = await getBancaUrl(requesterId);
+        if (!bancaUrl) {
+          return errorResponse('Configuração de banca não encontrada.');
+        }
+        console.log(`[CRM Deposits] banca_url não informada para lead ${clientUserId}, usando banca do consultor`);
       }
     }
 
@@ -52,7 +65,10 @@ export async function GET(
     // Constrói URL da API externa
     const externalApiUrl = `${cleanBancaUrl}/api/crm/get-user-deposit-history?user_id=${clientUserId}&per_page=${perPage}&page=${page}`;
 
-    console.log(`[CRM Deposits] Buscando histórico de depósitos para user_id: ${clientUserId}`);
+    console.log(`[CRM Deposits] GET API externa | user_id=${clientUserId} page=${page} per_page=${perPage}`);
+    console.log(`[CRM Deposits] URL: ${externalApiUrl}`);
+    console.log(`[CRM Deposits] Headers: X-API-KEY=<presente ${cleanApiKey.length} chars> Accept=application/json`);
+    console.log(`[CRM Deposits] curl: curl -X GET '${externalApiUrl}' -H 'X-API-KEY: ***' -H 'Accept: application/json'`);
 
     const response = await fetch(externalApiUrl, {
       method: 'GET',

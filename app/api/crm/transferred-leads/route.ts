@@ -45,7 +45,8 @@ export async function GET(req: NextRequest) {
     // E-mail usado em TODAS as pesquisas na API externa: sempre do consultor (target), nunca do requester
     const consultantEmail = targetProfile.email.trim();
 
-    console.log(`${LOG_PREFIX} Início | requesterId=${requesterId} targetUserId=${targetUserId} consultantEmail=${consultantEmail} (API externa usa este email) queryParams=${JSON.stringify(Object.fromEntries(searchParams.entries()))}`);
+    const queryParamsLog = Object.fromEntries(searchParams.entries());
+    console.log(`${LOG_PREFIX} Início | requesterId=${requesterId} targetUserId=${targetUserId} consultantEmail=${consultantEmail} queryParams=${JSON.stringify(queryParamsLog)}`);
 
     // Mesma lógica de bancas do CRM principal (/api/crm/leads)
     type BancaParaFetch = { id: string; url: string; name?: string };
@@ -105,15 +106,24 @@ export async function GET(req: NextRequest) {
       return successResponse([]);
     }
 
+    console.log(`${LOG_PREFIX} Bancas a consultar: ${listBancas.length} | ${listBancas.map((b) => `${b.name ?? b.id}=${b.url?.replace(/\/$/, '')}`).join(' ; ')}`);
+
     const apiKey = process.env.CRM_API_KEY;
     if (!apiKey) {
+      console.error(`${LOG_PREFIX} CRM_API_KEY não definida no servidor.`);
       return errorResponse('Chave de API do CRM não configurada no servidor.');
     }
     const cleanApiKey = apiKey.trim().replace(/\s+/g, '');
+    console.log(`${LOG_PREFIX} API key presente (${cleanApiKey.length} chars).`);
 
     const perPage = 2000;
     const fromParam = searchParams.get('from');
     const toParam = searchParams.get('to');
+    if (!fromParam?.trim() && !toParam?.trim()) {
+      console.log(`${LOG_PREFIX} Período: Todo o período (sem from/to).`);
+    } else {
+      console.log(`${LOG_PREFIX} Período: from=${fromParam ?? '(vazio)'} to=${toParam ?? '(vazio)'}.`);
+    }
     // Padrão de busca alinhado ao CRM: get-indicateds-by-consultant com transferred_filter=yes, sort e direction
     const queryParams: string[] = [
       `consultant=${encodeURIComponent(consultantEmail)}`,
@@ -130,10 +140,172 @@ export async function GET(req: NextRequest) {
       return u ? (u.startsWith('http') ? u : `https://${u}`) : '';
     }
 
+    const fullMode = searchParams.get('full') === '1';
+
+    // Modo rápido: apenas primeira banca, primeira página — retorna logo para a UI; o restante é carregado em segundo plano (front chama ?full=1).
+    if (!fullMode) {
+      const firstBanca = listBancas[0];
+      const cleanBancaUrl = normalizeBancaUrl(firstBanca.url);
+      const bancaLabel = `${firstBanca.name ?? firstBanca.id} (${firstBanca.id})`;
+      if (!cleanBancaUrl) {
+        console.log(`${LOG_PREFIX} Quick: primeira banca com URL vazia, retornando [].`);
+        return successResponse([], { meta: { partial: true, hasMore: false, totalBancas: listBancas.length } });
+      }
+      const baseUrl = `${cleanBancaUrl}/api/crm/get-indicateds-by-consultant`;
+      const pageQueryParams = [...queryParams, `page=1`];
+      const externalApiUrl = `${baseUrl}?${pageQueryParams.join('&')}`;
+      console.log(`${LOG_PREFIX} Quick | Aguardando apenas 1ª banca, 1ª página: ${bancaLabel}`);
+      let response: Response;
+      try {
+        response = await fetch(externalApiUrl, {
+          method: 'GET',
+          headers: { 'X-API-KEY': cleanApiKey, Accept: 'application/json' },
+          signal: AbortSignal.timeout(60000),
+        });
+      } catch (fetchErr: any) {
+        console.error(`${LOG_PREFIX} Quick | Erro de rede: ${fetchErr?.message}`);
+        return errorResponse('Erro ao buscar primeira página dos leads.');
+      }
+      if (!response.ok) {
+        const bodyPreview = await response.text().catch(() => '');
+        console.error(`${LOG_PREFIX} Quick | HTTP ${response.status} body=${bodyPreview.slice(0, 300)}`);
+        return errorResponse(`API da banca retornou ${response.status}.`);
+      }
+      let result: any;
+      try {
+        result = await response.json();
+      } catch {
+        return errorResponse('Resposta da API não é JSON válido.');
+      }
+      if (!result.success || !Array.isArray(result.data)) {
+        console.warn(`${LOG_PREFIX} Quick | success=${result?.success} error=${result?.error ?? ''}`);
+        return successResponse([], { meta: { partial: true, hasMore: false, totalBancas: listBancas.length } });
+      }
+      const pageLeads = result.data || [];
+      const pagination = result.pagination || {};
+      const currentPage = pagination.current_page ?? 1;
+      const lastPage = pagination.last_page ?? 1;
+      const hasMore = lastPage > currentPage || (pageLeads.length >= perPage && pageLeads.length > 0);
+
+      const isTransferred = (lead: any) =>
+        lead.transferred === true || lead.transferred === 'true' || lead.transferred === 1;
+      const rawFirstPage = pageLeads
+        .filter((l: any) => isTransferred(l))
+        .map((l: any) => ({ ...l, _originalId: l.id, _bancaKey: firstBanca.id }));
+
+      // Tags para formatação (uma única query)
+      let leadTagsMap: Record<string, any[]> = {};
+      const { data: leadTagAssociations } = await supabaseServiceRole
+        .from('crm_lead_tags')
+        .select('lead_external_id, tag_id')
+        .eq('user_id', targetUserId);
+      if (leadTagAssociations?.length) {
+        const tagIds = [...new Set(leadTagAssociations.map((lt: any) => lt.tag_id))];
+        const { data: tags } = await supabaseServiceRole
+          .from('crm_tags')
+          .select('id, label, color')
+          .in('id', tagIds);
+        if (tags?.length) {
+          const tagsById: Record<string, { id: string; label: string; color: string }> = {};
+          tags.forEach((tag: any) => {
+            tagsById[String(tag.id)] = { id: String(tag.id), label: tag.label ?? '', color: tag.color ?? '#6B7280' };
+          });
+          const pushTagToMap = (key: string, tagObj: { id: string; label: string; color: string }) => {
+            if (!key) return;
+            if (!leadTagsMap[key]) leadTagsMap[key] = [];
+            if (!leadTagsMap[key].some((t: any) => t.id === tagObj.id)) leadTagsMap[key].push(tagObj);
+          };
+          leadTagAssociations.forEach((lt: any) => {
+            const leadExternalId = lt.lead_external_id != null ? String(lt.lead_external_id).trim() : '';
+            const tag = tagsById[lt.tag_id];
+            if (tag) {
+              pushTagToMap(leadExternalId, tag);
+              const numericSuffix = leadExternalId.includes('-') ? leadExternalId.split('-').pop() : null;
+              if (numericSuffix && /^\d+$/.test(numericSuffix)) pushTagToMap(numericSuffix, tag);
+            }
+          });
+        }
+      }
+      const bancaNameById: Record<string, string> = { [firstBanca.id]: firstBanca.name ?? firstBanca.url ?? firstBanca.id };
+      const toLeadExternalId = (l: any) =>
+        l._bancaKey != null && l._originalId != null ? `${l._bancaKey}-${l._originalId}` : String(l._originalId ?? l.id);
+      const toOriginalId = (l: any) => String(l._originalId ?? l.id);
+
+      const formattedQuick = rawFirstPage.map((l: any) => {
+        const compositeId = toLeadExternalId(l);
+        const originalId = l._originalId ?? l.id;
+        const originalIdStr = toOriginalId(l);
+        const leadIdStr = String(originalId);
+        const temperature = calculateLeadTemperature({
+          created_at: l.created_at || new Date().toISOString(),
+          total_depositos_count: l.total_depositos_count || 0,
+          last_deposit_at: l.last_deposit_at || null,
+        });
+        return {
+          id: compositeId,
+          original_id: typeof originalId === 'number' ? originalId : parseInt(String(originalId), 10) || originalId,
+          name: l.name || '',
+          last_name: l.last_name || '',
+          phone: l.phone || '',
+          email: l.email || '',
+          status: l.status || 'novo',
+          temperature,
+          banca_id: l._bancaKey ?? undefined,
+          banca_name: l._bancaKey ? bancaNameById[l._bancaKey] : undefined,
+          banca_url: firstBanca.url ?? undefined,
+          total_depositado: Math.round((parseFloat(l.total_depositado) || 0) * 100) / 100,
+          total_apostado: Math.round((parseFloat(l.total_apostado) || 0) * 100) / 100,
+          total_ganho: parseFloat(l.total_ganho) || 0,
+          total_depositos_count: parseInt(l.total_depositos_count) || 0,
+          stars: l.user_level ? parseInt(l.user_level) || 0 : parseInt(l.stars) || 0,
+          is_affiliate: !!l.affiliate_name || l.is_affiliate === true || l.affiliate === 'yes' || l.affiliate_filter === 'yes',
+          affiliate_name: l.affiliate_name || null,
+          user_level: l.user_level || null,
+          last_interaction: l.last_interaction || l.created_at || new Date(0).toISOString(),
+          lastInteractionAt: l.last_interaction || l.created_at || new Date(0).toISOString(),
+          created_at: l.created_at || new Date().toISOString(),
+          last_deposit_at: l.last_deposit_at || null,
+          last_deposit_value: l.last_deposit_value ? Math.round((parseFloat(String(l.last_deposit_value)) || 0) * 100) / 100 : null,
+          last_winner_value: l.last_winner_value ? Math.round((parseFloat(String(l.last_winner_value)) || 0) * 100) / 100 : null,
+          last_winner_at: l.last_winner_at || null,
+          last_withdraw_at: l.last_withdraw_at || null,
+          last_withdraw_value: l.last_withdraw_value ? Math.round((parseFloat(String(l.last_withdraw_value)) || 0) * 100) / 100 : null,
+          total_saque: l.total_saque ? Math.round((parseFloat(String(l.total_saque)) || 0) * 100) / 100 : null,
+          balance: l.balance ? Math.round((parseFloat(String(l.balance)) || 0) * 100) / 100 : 0,
+          bonus: l.bonus ? Math.round((parseFloat(String(l.bonus)) || 0) * 100) / 100 : 0,
+          convert: l.convert ? Math.round((parseFloat(String(l.convert)) || 0) * 100) / 100 : 0,
+          total_afiliate: l.total_afiliate ? Math.round((parseFloat(String(l.total_afiliate)) || 0) * 100) / 100 : 0,
+          aposta_estrelas: l.aposta_estrelas ? parseInt(String(l.aposta_estrelas)) || 0 : 0,
+          tags: (leadTagsMap[compositeId] || leadTagsMap[originalIdStr] || []).map((t: any) => ({ id: t.id, label: t.label ?? '', color: t.color ?? '#6B7280' })),
+          has_interaction: l.has_interaction === true || l.has_interaction === 'true' || l.has_interaction === 1 || false,
+          tag_de_redistribuicao: l.tag_de_redistribuicao ?? null,
+          transferred: true,
+          transferred_at: l.transferred_at ?? null,
+          original_consultant_id: l.original_consultant_id ?? null,
+          original_consultant_name: l.original_consultant_name ?? null,
+          original_consultant_email: l.original_consultant_email ?? null,
+          vinculado: false,
+        };
+      });
+
+      console.log(`${LOG_PREFIX} Quick | Retornando ${formattedQuick.length} leads (1ª banca, 1ª página). hasMore=${hasMore} totalBancas=${listBancas.length}`);
+      return successResponse(formattedQuick, { meta: { partial: true, hasMore, totalBancas: listBancas.length } });
+    }
+
+    // Modo full: todas as bancas (ou uma só se banca_index for informado, para o front exibir progresso "Banca X de Y").
+    const bancaIndexParam = searchParams.get('banca_index');
+    const requestedBancaIndex = bancaIndexParam !== null && bancaIndexParam !== '' ? parseInt(bancaIndexParam, 10) : null;
+    const singleBancaIndex = requestedBancaIndex !== null && !Number.isNaN(requestedBancaIndex) && requestedBancaIndex >= 0 && requestedBancaIndex < listBancas.length
+      ? requestedBancaIndex
+      : null;
+    const listBancasToProcess = singleBancaIndex !== null ? [listBancas[singleBancaIndex]] : listBancas;
+    const totalBancasForMeta = listBancas.length;
+    const currentBancaIndexForMeta = singleBancaIndex !== null ? singleBancaIndex : null;
+
     const allLeads: any[] = [];
     const maxPages = 1000;
 
-    for (const banca of listBancas) {
+    for (const banca of listBancasToProcess) {
       const cleanBancaUrl = normalizeBancaUrl(banca.url);
       const bancaLabel = `${banca.name ?? banca.id} (${banca.id})`;
       if (!cleanBancaUrl) {
@@ -151,7 +323,7 @@ export async function GET(req: NextRequest) {
         const externalApiUrl = `${baseUrl}?${pageQueryParams.join('&')}`;
 
         if (currentPage === 1) {
-          console.log(`${LOG_PREFIX} Banca ${bancaLabel} | GET get-indicateds-by-consultant (mesmo endpoint do CRM principal)`);
+          console.log(`${LOG_PREFIX} Banca ${bancaLabel} | GET page=1 | URL (base): ${baseUrl} | consultant=${consultantEmail} transferred_filter=yes`);
         }
 
         let response: Response;
@@ -162,29 +334,45 @@ export async function GET(req: NextRequest) {
             signal: AbortSignal.timeout(60000),
           });
         } catch (fetchErr: any) {
-          console.error(`${LOG_PREFIX} Banca ${bancaLabel} | Erro de rede/timeout:`, fetchErr?.name, fetchErr?.message);
+          console.error(`${LOG_PREFIX} Banca ${bancaLabel} | Erro de rede/timeout: name=${fetchErr?.name} message=${fetchErr?.message} | URL=${externalApiUrl}`);
           break;
         }
 
+        const contentType = response.headers.get('content-type') ?? '';
+        if (currentPage === 1) {
+          console.log(`${LOG_PREFIX} Banca ${bancaLabel} | Resposta: status=${response.status} ${response.statusText} content-type=${contentType}`);
+        }
+
         if (!response.ok) {
+          let bodyPreview = '';
+          try {
+            const text = await response.text();
+            bodyPreview = text.length > 400 ? `${text.slice(0, 400)}...` : text;
+          } catch {
+            bodyPreview = '(não foi possível ler o body)';
+          }
           if (response.status === 404) {
-            console.warn(`${LOG_PREFIX} Banca ${bancaLabel} | 404 - ignorando banca.`);
+            console.warn(`${LOG_PREFIX} Banca ${bancaLabel} | 404 - ignorando banca. body=${bodyPreview}`);
             break;
           }
-          console.error(`${LOG_PREFIX} Banca ${bancaLabel} | HTTP ${response.status} ${response.statusText}`);
+          console.error(`${LOG_PREFIX} Banca ${bancaLabel} | HTTP ${response.status} ${response.statusText} | body (preview): ${bodyPreview}`);
           break;
         }
 
         let result: any;
+        let rawText = '';
         try {
-          result = await response.json();
-        } catch {
-          console.error(`${LOG_PREFIX} Banca ${bancaLabel} | Resposta não é JSON válido.`);
+          rawText = await response.text();
+          result = JSON.parse(rawText);
+        } catch (parseErr: any) {
+          const preview = rawText.length > 500 ? `${rawText.slice(0, 500)}...` : rawText;
+          console.error(`${LOG_PREFIX} Banca ${bancaLabel} | Resposta não é JSON válido. parseErr=${parseErr?.message} | body (preview): ${preview}`);
           break;
         }
 
         if (!result.success || !Array.isArray(result.data)) {
-          console.warn(`${LOG_PREFIX} Banca ${bancaLabel} | success=${result.success} ou data não é array.`);
+          const errMsg = result?.error ?? result?.message ?? '(nenhuma mensagem)';
+          console.warn(`${LOG_PREFIX} Banca ${bancaLabel} | API retornou success=${result.success} data é array=${Array.isArray(result?.data)} error=${errMsg} keys=${result ? Object.keys(result).join(',') : 'null'}`);
           break;
         }
 
@@ -198,7 +386,15 @@ export async function GET(req: NextRequest) {
           bancaTotal++;
         }
 
-        hasMore = pageLeads.length >= perPage && pageLeads.length > 0;
+        if (currentPage === 1 && pageLeads.length > 0) {
+          const sample = pageLeads[0];
+          console.log(`${LOG_PREFIX} Banca ${bancaLabel} | Primeira página: ${pageLeads.length} itens | amostra lead: id=${sample?.id} transferred=${sample?.transferred} name=${sample?.name ?? '(vazio)'}`);
+        }
+
+        const pagination = result.pagination || {};
+        const lastPage = pagination.last_page ?? 1;
+        const currentPageFromApi = pagination.current_page ?? currentPage;
+        hasMore = (lastPage > currentPageFromApi) || (pageLeads.length >= perPage && pageLeads.length > 0);
         currentPage++;
       }
 
@@ -247,23 +443,34 @@ export async function GET(req: NextRequest) {
               signal: AbortSignal.timeout(60000),
             });
           } catch (fetchErr: any) {
-            console.warn(`${LOG_PREFIX} Enriquecimento banca ${bancaLabel} | Erro:`, fetchErr?.message);
+            console.warn(`${LOG_PREFIX} Enriquecimento banca ${bancaLabel} | Erro de rede: ${fetchErr?.message} | URL=${externalApiUrl}`);
             break;
           }
-          if (!response.ok) break;
+          if (!response.ok) {
+            const errBody = await response.text().catch(() => '');
+            console.warn(`${LOG_PREFIX} Enriquecimento banca ${bancaLabel} | HTTP ${response.status} body=${errBody.slice(0, 300)}`);
+            break;
+          }
           let result: any;
           try {
             result = await response.json();
-          } catch {
+          } catch (parseErr: any) {
+            console.warn(`${LOG_PREFIX} Enriquecimento banca ${bancaLabel} | JSON inválido: ${parseErr?.message}`);
             break;
           }
-          if (!result.success || !Array.isArray(result.data)) break;
+          if (!result.success || !Array.isArray(result.data)) {
+            console.warn(`${LOG_PREFIX} Enriquecimento banca ${bancaLabel} | success=${result?.success} data array=${Array.isArray(result?.data)} error=${result?.error ?? ''}`);
+            break;
+          }
           const pageLeads = result.data || [];
           for (const lead of pageLeads) {
             const lid = String(lead.id ?? '');
             if (lid && !fullDataByBanca[banca.id][lid]) fullDataByBanca[banca.id][lid] = lead;
           }
-          hasMore = pageLeads.length >= perPage && pageLeads.length > 0;
+          const paginationEnrich = result.pagination || {};
+          const lastPageEnrich = paginationEnrich.last_page ?? 1;
+          const currentPageEnrich = paginationEnrich.current_page ?? currentPage;
+          hasMore = (lastPageEnrich > currentPageEnrich) || (pageLeads.length >= perPage && pageLeads.length > 0);
           currentPage++;
         }
         const count = Object.keys(fullDataByBanca[banca.id]).length;
@@ -309,9 +516,13 @@ export async function GET(req: NextRequest) {
         .in('banca_id', bancaIdsForLookup)
         .order('created_at', { ascending: false }) as typeof dbEntriesResult;
     }
-    const { data: dbEntries } = dbEntriesResult;
+    const { data: dbEntries, error: dbEntriesError } = dbEntriesResult;
 
+    if (dbEntriesError) {
+      console.warn(`${LOG_PREFIX} admin_lead_transfer_entries | erro: ${dbEntriesError?.code} ${dbEntriesError?.message}`);
+    }
     const entriesList: EntryRow[] = Array.isArray(dbEntries) ? dbEntries : [];
+    console.log(`${LOG_PREFIX} admin_lead_transfer_entries | target_consultant_email=${consultantEmail} banca_ids=${bancaIdsForLookup.length} | ${entriesList.length} entradas (excl. repassado/devolvido/reversed)`);
     const excludedStatusesForDisplay = new Set(['repassado', 'devolvido', 'reversed']);
     entriesList.forEach((row: EntryRow) => {
       if (excludedStatusesForDisplay.has(row.resolution_status ?? '')) return;
@@ -584,7 +795,11 @@ export async function GET(req: NextRequest) {
     }
 
     const bancaNameById: Record<string, string> = {};
-    listBancas.forEach(b => { bancaNameById[b.id] = b.name ?? b.url ?? b.id; });
+    const bancaUrlById: Record<string, string> = {};
+    listBancas.forEach(b => {
+      bancaNameById[b.id] = b.name ?? b.url ?? b.id;
+      bancaUrlById[b.id] = b.url ?? '';
+    });
 
     // transferred_at e vinculado: usar dados já carregados de admin_lead_transfer_entries (inclui complemento do log)
     const transferDateByLeadId = { ...transferDateByLeadIdFromDb };
@@ -616,6 +831,7 @@ export async function GET(req: NextRequest) {
         temperature,
         banca_id: l._bancaKey ?? undefined,
         banca_name: l._bancaKey ? bancaNameById[l._bancaKey] : undefined,
+        banca_url: l._bancaKey ? (bancaUrlById[l._bancaKey] ?? undefined) : undefined,
         total_depositado: Math.round((parseFloat(l.total_depositado) || 0) * 100) / 100,
         total_apostado: Math.round((parseFloat(l.total_apostado) || 0) * 100) / 100,
         total_ganho: parseFloat(l.total_ganho) || 0,
@@ -656,9 +872,12 @@ export async function GET(req: NextRequest) {
     });
 
     console.log(`${LOG_PREFIX} SUCESSO | Retornando ${formattedLeads.length} leads transferidos.`);
-    return successResponse(formattedLeads);
+    const fullMeta = currentBancaIndexForMeta !== null
+      ? { total_bancas: totalBancasForMeta, current_banca_index: currentBancaIndexForMeta }
+      : { total_bancas: totalBancasForMeta };
+    return successResponse(formattedLeads, { meta: fullMeta });
   } catch (err: any) {
-    console.error(`${LOG_PREFIX} Erro:`, err?.message, err);
+    console.error(`${LOG_PREFIX} Erro não tratado: message=${err?.message} stack=${err?.stack ?? '(sem stack)'}`, err);
     return serverErrorResponse(err);
   }
 }

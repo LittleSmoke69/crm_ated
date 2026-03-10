@@ -305,6 +305,8 @@ const LeadCard: React.FC<LeadCardProps> = ({
     const url = new URL(`/api/crm/leads/${leadIdUsed}/deposits`, window.location.origin);
     if (bancaUrlForHistory) {
       url.searchParams.append('banca_url', bancaUrlForHistory);
+    } else if (lead.banca_id) {
+      url.searchParams.append('banca_id', lead.banca_id);
     }
     url.searchParams.append('page', page.toString());
     url.searchParams.append('per_page', '15');
@@ -394,6 +396,8 @@ const LeadCard: React.FC<LeadCardProps> = ({
     const url = new URL(`/api/crm/leads/${leadIdUsed}/withdraws`, window.location.origin);
     if (bancaUrlForHistory) {
       url.searchParams.append('banca_url', bancaUrlForHistory);
+    } else if (lead.banca_id) {
+      url.searchParams.append('banca_id', lead.banca_id);
     }
     url.searchParams.append('page', page.toString());
     url.searchParams.append('per_page', '15');
@@ -483,6 +487,8 @@ const LeadCard: React.FC<LeadCardProps> = ({
     const url = new URL(`/api/crm/leads/${leadIdUsed}/bets`, window.location.origin);
     if (bancaUrlForHistory) {
       url.searchParams.append('banca_url', bancaUrlForHistory);
+    } else if (lead.banca_id) {
+      url.searchParams.append('banca_id', lead.banca_id);
     }
     url.searchParams.append('page', page.toString());
     url.searchParams.append('per_page', '15');
