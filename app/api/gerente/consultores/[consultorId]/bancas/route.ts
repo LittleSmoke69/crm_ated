@@ -15,8 +15,8 @@ function normalizarUrlBanca(raw: string): string {
 const LOG_PREFIX = '[Solicitação de leads - Verificação de bancas]';
 
 /**
- * Verifica na API externa da banca se o consultor está cadastrado (total-indicateds-by-consultant).
- * 200 = consultor cadastrado (listar no dropdown). 404 = não cadastrado (não listar).
+ * Verifica na API externa da banca se o consultor está cadastrado (user-consultant-info).
+ * 200 = consultor tem conta na banca (listar no dropdown). 404 = não tem conta (não listar).
  */
 async function consultorTemAcessoNaBanca(
   bancaUrl: string,
@@ -27,12 +27,11 @@ async function consultorTemAcessoNaBanca(
   const base = normalizarUrlBanca(bancaUrl);
   if (!base || !consultantEmail) return false;
   const label = bancaName || base;
-  const params = new URLSearchParams({ consultant: consultantEmail });
-  const url = `${base}/api/crm/total-indicateds-by-consultant?${params.toString()}`;
+  const url = `${base}/api/crm/user-consultant-info?email=${encodeURIComponent(consultantEmail)}`;
   const headers = { 'X-API-KEY': apiKey.trim(), Accept: 'application/json' };
 
-  const curlLog = `curl -X GET "${url}" -H "X-API-KEY: ${apiKey.trim().substring(0, 8)}..." -H "Accept: application/json"`;
-  console.log(`${LOG_PREFIX} [curl] ${curlLog}`);
+  const curlLog = `GET "${url}" -H "X-API-KEY: ..." -H "Accept: application/json"`;
+  console.log(`${LOG_PREFIX} [request] ${curlLog}`);
 
   try {
     const start = Date.now();
@@ -42,11 +41,11 @@ async function consultorTemAcessoNaBanca(
       signal: AbortSignal.timeout(15000),
     });
     const elapsed = Date.now() - start;
-    const cadastrado = res.status === 200;
-    console.log(`${LOG_PREFIX} GET ${url} → ${res.status} (${elapsed}ms) [consultor cadastrado na banca: ${cadastrado}]`);
-    return cadastrado;
+    const temContaNaBanca = res.status === 200;
+    console.log(`${LOG_PREFIX} GET ${url} → ${res.status} (${elapsed}ms) [consultor tem conta na banca: ${temContaNaBanca}]`);
+    return temContaNaBanca;
   } catch (err) {
-    console.log(`${LOG_PREFIX} GET ${label}/api/crm/total-indicateds-by-consultant → erro (consultor cadastrado: false)`);
+    console.log(`${LOG_PREFIX} GET ${label}/api/crm/user-consultant-info → erro (consultor tem conta na banca: false)`);
     return false;
   }
 }
