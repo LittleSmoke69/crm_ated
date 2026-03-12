@@ -10,7 +10,7 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { chatService } from '@/lib/services/chat-service';
 import * as whatsappOfficial from '@/lib/services/whatsapp-official-service';
 
-type SendType = 'text' | 'image' | 'audio';
+type SendType = 'text' | 'image' | 'audio' | 'video' | 'document';
 
 export async function POST(req: NextRequest) {
   try {
@@ -40,15 +40,15 @@ export async function POST(req: NextRequest) {
     }
 
     const sendType = type as SendType;
-    if (!['text', 'image', 'audio'].includes(sendType)) {
-      return errorResponse('type deve ser text, image ou audio', 400);
+    if (!['text', 'image', 'audio', 'video', 'document'].includes(sendType)) {
+      return errorResponse('type deve ser text, image, audio, video ou document', 400);
     }
 
     if (sendType === 'text' && (bodyText == null || String(bodyText).trim() === '')) {
       return errorResponse('text é obrigatório quando type=text', 400);
     }
-    if ((sendType === 'image' || sendType === 'audio') && (!media_url || typeof media_url !== 'string')) {
-      return errorResponse('media_url é obrigatório quando type=image ou type=audio', 400);
+    if ((sendType === 'image' || sendType === 'audio' || sendType === 'video' || sendType === 'document') && (!media_url || typeof media_url !== 'string')) {
+      return errorResponse('media_url é obrigatório para tipo de mídia', 400);
     }
 
     const { data: config, error: configError } = await supabaseServiceRole
@@ -117,15 +117,32 @@ export async function POST(req: NextRequest) {
         metaResponse = await whatsappOfficial.sendImage(
           configForApi,
           normalizedTo,
-          media_url!, // garantido pela validação quando type=image
+          media_url!,
           caption,
+          replyToMessageId
+        );
+      } else if (sendType === 'video') {
+        metaResponse = await whatsappOfficial.sendVideo(
+          configForApi,
+          normalizedTo,
+          media_url!,
+          caption,
+          replyToMessageId
+        );
+      } else if (sendType === 'document') {
+        metaResponse = await whatsappOfficial.sendDocument(
+          configForApi,
+          normalizedTo,
+          media_url!,
+          caption,
+          undefined,
           replyToMessageId
         );
       } else {
         metaResponse = await whatsappOfficial.sendAudio(
           configForApi,
           normalizedTo,
-          media_url!, // garantido pela validação quando type=audio
+          media_url!,
           replyToMessageId
         );
       }
@@ -148,7 +165,7 @@ export async function POST(req: NextRequest) {
       title: normalizedTo,
       is_group: false,
       last_message_at: new Date().toISOString(),
-      last_message_preview: sendType === 'text' ? (bodyText || '').slice(0, 100) : (sendType === 'image' ? `Imagem${caption ? `: ${caption}` : ''}` : 'Áudio'),
+      last_message_preview: sendType === 'text' ? (bodyText || '').slice(0, 100) : sendType === 'image' ? `Imagem${caption ? `: ${caption}` : ''}` : sendType === 'video' ? `Vídeo${caption ? `: ${caption}` : ''}` : sendType === 'document' ? `Documento${caption ? `: ${caption}` : ''}` : 'Áudio',
     };
 
     const conversation = await chatService.upsertConversation(conversationData);
@@ -166,7 +183,7 @@ export async function POST(req: NextRequest) {
       text: sendType === 'text' ? String(bodyText).trim() : '',
       media_type: sendType === 'text' ? 'text' : sendType,
       media_url: sendType !== 'text' ? media_url ?? undefined : undefined,
-      caption: sendType === 'image' ? caption || '' : '',
+      caption: (sendType === 'image' || sendType === 'video' || sendType === 'document') ? caption || '' : '',
       status: 'sent',
       timestamp: Math.floor(Date.now() / 1000),
       provider: 'whatsapp_official' as const,

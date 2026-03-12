@@ -101,6 +101,94 @@ export async function sendImage(
   return res.json();
 }
 
+export async function sendVideo(
+  config: WhatsAppOfficialConfig,
+  to: string,
+  mediaUrl: string,
+  caption?: string,
+  replyToMessageId?: string
+): Promise<{ messages: Array<{ id: string }> }> {
+  const body: Record<string, unknown> = {
+    messaging_product: 'whatsapp',
+    to: to.replace(/\D/g, ''),
+    type: 'video',
+    video: {
+      link: mediaUrl,
+      ...(caption ? { caption } : {}),
+    },
+  };
+  if (replyToMessageId) {
+    body.context = { message_id: replyToMessageId };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SEND_TIMEOUT_MS);
+
+  const res = await fetch(buildUrl(config, '/messages'), {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${config.access_token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+    signal: controller.signal,
+  });
+
+  clearTimeout(timeout);
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`WhatsApp API ${res.status}: ${errText}`);
+  }
+
+  return res.json();
+}
+
+export async function sendDocument(
+  config: WhatsAppOfficialConfig,
+  to: string,
+  mediaUrl: string,
+  caption?: string,
+  filename?: string,
+  replyToMessageId?: string
+): Promise<{ messages: Array<{ id: string }> }> {
+  const body: Record<string, unknown> = {
+    messaging_product: 'whatsapp',
+    to: to.replace(/\D/g, ''),
+    type: 'document',
+    document: {
+      link: mediaUrl,
+      ...(caption ? { caption } : {}),
+      ...(filename ? { filename } : {}),
+    },
+  };
+  if (replyToMessageId) {
+    body.context = { message_id: replyToMessageId };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SEND_TIMEOUT_MS);
+
+  const res = await fetch(buildUrl(config, '/messages'), {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${config.access_token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+    signal: controller.signal,
+  });
+
+  clearTimeout(timeout);
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`WhatsApp API ${res.status}: ${errText}`);
+  }
+
+  return res.json();
+}
+
 export async function sendAudio(
   config: WhatsAppOfficialConfig,
   to: string,

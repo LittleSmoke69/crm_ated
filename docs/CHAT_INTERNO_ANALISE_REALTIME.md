@@ -1,7 +1,7 @@
-# Análise do Chat Interno — Conversas não aparecem em tempo real
+# Análise do Chat Interno — Estrutura HTML, Realtime e Banco de Dados
 
-**Data:** 06/03/2025  
-**Objetivo:** Documentar a estrutura atual do chat interno e diagnosticar por que as conversas não são exibidas quando chega um evento de mensagem.
+**Data:** 06/03/2025 | **Atualizado:** 12/03/2026  
+**Objetivo:** Documentar a estrutura HTML/JSX completa do chat interno, diagnosticar por que as conversas não são exibidas em tempo real, registrar o schema do banco de dados e mapear melhorias estruturais.
 
 ---
 
@@ -97,7 +97,28 @@ No INSERT, o front faz `setMessages((prev) => [...prev, payload.new])`. Não há
 
 **Ação:** Opcional: checar se `payload.new.id` já existe antes de adicionar; manter ordenação por `created_at` ou `timestamp`.
 
-### 3.6 Webhook público (ambiente)
+### 3.6 WhatsApp Oficial: conversa não aparece na caixa de entrada
+
+Se o evento chega no webhook mas a conversa **não aparece** na lista (Todas/Minhas/Não atribuídas em 0):
+
+1. **Config não encontrada**  
+   O webhook busca a config por `phone_number_id` igual a `metadata.phone_number_id` do payload da Meta.  
+   Ex.: payload com `"phone_number_id": "869289969604374"` → deve existir em `whatsapp_official_configs` uma linha ativa com `phone_number_id = '869289969604374'`.  
+   **Ação:** Em Admin > WhatsApp Oficial, cadastrar ou editar a configuração e preencher o **Phone Number ID** exatamente como no App da Meta (Developer Console > WhatsApp > Configuração do número).  
+   Nos logs do servidor, se a config não for encontrada, aparece:  
+   `[Zaploto Chat] Config não encontrada para phone_number_id: 869289969604374 - Verifique se existe uma configuração ativa...`
+
+2. **Realtime não habilitado**  
+   Se `chat_conversations` não estiver na publication `supabase_realtime`, novas conversas só aparecem após **Atualizar** ou ao voltar à aba.  
+   **Ação:** Executar `migrations/fix_chat_realtime_and_indexes.sql` no SQL Editor do Supabase (bloco que adiciona `chat_conversations` e `chat_messages` à publication).
+
+3. **Canal selecionado diferente do número que recebeu**  
+   A lista é filtrada por `whatsapp_config_id` = ID do canal selecionado. Se você tem mais de uma config (vários números), precisa estar no canal cujo **Phone Number ID** é o que recebeu a mensagem.
+
+4. **Refetch ao voltar à aba**  
+   O frontend passou a recarregar a lista de conversas quando a aba do navegador fica visível de novo (`visibilitychange`). Assim, mesmo sem Realtime, ao trocar de aba e voltar (ou clicar em **Atualizar**), as novas conversas aparecem.
+
+### 3.7 Webhook público (ambiente)
 
 O `CHAT_STATUS.md` cita que o chat depende de ambiente público para receber webhooks. Em localhost, sem túnel (ngrok, etc.) ou deploy, os eventos não chegam, então nada é gravado em `chat_messages` e o Realtime nem entra em cena.
 
@@ -200,3 +221,376 @@ if (payload.eventType === 'INSERT') {
 
 - `CHAT_STATUS.md` — Status geral do chat e como reativar
 - `docs/` — Demais documentação do sistema
+
+---
+
+## 9. Estrutura HTML/JSX Completa — `app/chat/page.tsx`
+
+O arquivo possui **968 linhas** e é **completamente monolítico** (`use client`). Toda a UI, estado, lógica de negócio e assinaturas Realtime vivem em um único componente `ChatPage`.
+
+### 9.1 Hierarquia de componentes (árvore HTML)
+
+```
+<Layout>                                          ← wrapper global (nav + sidebar do app)
+  <div.flex.h-[calc(100vh-80px)]>               ← container principal 3 painéis
+
+    ├── PAINEL ESQUERDO (w-64)                   ← Navegação + seleção de canal
+    │   ├── <div.p-4>                            ← Cabeçalho "Zaploto Chat"
+    │   │   ├── <h2> "Zaploto Chat"
+    │   │   └── <div.space-y-2>                  ← Menu de navegação
+    │   │       ├── <button> Minha Caixa          (Inbox icon) — sem ação funcional
+    │   │       └── <div.space-y-1>              ← Grupo "Conversas"
+    │   │           ├── label "CONVERSAS"
+    │   │           ├── <button> Todas (ativo)    (MessageCircle icon) — sem ação funcional
+    │   │           ├── <button> Menções          (AlertCircle icon)   — sem ação funcional
+    │   │           └── <button> Por responder    (Clock icon)         — sem ação funcional
+    │   │
+    │   ├── [se canSelectChannel]                ← Seletor de canal (admin/super_admin/suporte)
+    │   │   └── <select>                         ← <optgroup> Evolution + WA Oficial
+    │   │
+    │   ├── [senão, se selectedChannel]          ← Label somente leitura do canal
+    │   │   └── <div> nome do canal
+    │   │
+    │   └── <div.flex-1.overflow-y-auto.p-4>    ← Área livre do painel esq. (vazia atualmente)
+
+    ├── PAINEL CENTRAL (w-80)                    ← Lista de conversas
+    │   ├── <div.p-4>                            ← Cabeçalho do painel
+    │   │   ├── <span> "Conversas do banco"       (Database icon)
+    │   │   ├── <button> Atualizar                (RefreshCw icon) → loadConversationsFromApi()
+    │   │   ├── <input type="text">              ← Busca (search)
+    │   │   └── <div.flex>                       ← Abas de filtro
+    │   │       ├── <button> Minhas (N)          → setConversationFilter('mine')
+    │   │       ├── <button> Não atribuídas (N)  → setConversationFilter('unassigned')
+    │   │       └── <button> Todas (N)           → setConversationFilter('all')
+    │   │
+    │   └── <div.flex-1.overflow-y-auto>        ← Scroll da lista
+    │       └── [map filteredConversations]
+    │           └── <div.p-3>                   ← Card de conversa (onClick → select)
+    │               ├── <div> avatar iniciais    (colorido por hash do título)
+    │               └── <div.flex-1>
+    │                   ├── <h3> título + badge 24h (WA Oficial)
+    │                   ├── <span> last_message_at formatado
+    │                   ├── <p> last_message_preview (truncado)
+    │                   └── <span> unread_count badge (se > 0)
+
+    └── PAINEL DIREITO (flex-1)                 ← Chat ativo
+        ├── [se selectedConversationId]
+        │   ├── HEADER DA CONVERSA
+        │   │   ├── avatar + título + remote_jid
+        │   │   ├── badge janela 24h (WA Oficial)
+        │   │   ├── <button> Resolver             (CheckCircle2) — abre showResolveMenu
+        │   │   └── <button> MoreVertical         — sem ação funcional
+        │   │
+        │   ├── ÁREA DE MENSAGENS (flex-1 overflow-y-auto)
+        │   │   └── [map messages]
+        │   │       ├── [separador de data se mudou o dia]
+        │   │       └── <div.flex justify-end | justify-start>
+        │   │           ├── avatar remetente (se from_me = false)
+        │   │           └── <div> balão da mensagem
+        │   │               ├── <p> msg.text
+        │   │               ├── <p> msg.caption (mídia)
+        │   │               └── <div> horário + status icon (from_me)
+        │   │       └── <div ref={messagesEndRef} />   ← âncora de scroll
+        │   │
+        │   └── INPUT DE MENSAGEM
+        │       ├── <button> Responder           — sem ação funcional
+        │       ├── <button> Nota Privada        — sem ação funcional
+        │       ├── <textarea ref={textareaRef}> ← auto-resize, Enter envia
+        │       └── <div.flex>                  ← Barra de ações
+        │           ├── <button> Smile           — sem ação funcional
+        │           ├── <button> Paperclip       — sem ação funcional
+        │           ├── <button> Mic             — sem ação funcional
+        │           ├── <button> FileText        — sem ação funcional
+        │           ├── <button> MessageSquare   — sem ação funcional
+        │           ├── <button> Assistente de IA — sem ação funcional
+        │           └── <button> Enviar          → handleSendMessage()
+        │
+        └── [senão] empty state                 ← "Selecione uma conversa"
+            └── MessageSquare icon + texto
+```
+
+### 9.2 Interfaces TypeScript (dentro de `page.tsx`)
+
+| Interface | Campos |
+|-----------|--------|
+| `Message` | `id`, `text`, `direction ('in'\|'out')`, `status`, `timestamp (number)`, `created_at`, `from_me`, `media_type?`, `media_url?`, `caption?`, `sender_jid?` |
+| `Conversation` | `id`, `remote_jid`, `title`, `last_message_preview`, `last_message_at`, `last_customer_message_at?`, `unread_count`, `is_group`, `user_id?`, `whatsapp_config_id?` |
+| `ChannelEvolution` | `type:'evolution'`, `id`, `instance_name`, `status` |
+| `ChannelWhatsAppOfficial` | `type:'whatsapp_official'`, `id`, `name`, `phone_number_id` |
+| `Channel` | union de `ChannelEvolution \| ChannelWhatsAppOfficial` |
+| `ConversationFilter` | `'all' \| 'mine' \| 'unassigned'` |
+| `UserStatus` | `'super_admin' \| 'admin' \| 'suporte' \| string \| null` |
+
+### 9.3 Estado (`useState`) em `page.tsx`
+
+| Estado | Tipo | Responsabilidade |
+|--------|------|-----------------|
+| `userStatus` | `UserStatus` | Controla permissões de seleção de canal e notificações |
+| `channels` | `{evolution[], whatsapp_official[]}` | Lista de canais disponíveis |
+| `selectedChannel` | `Channel \| null` | Canal ativo |
+| `conversations` | `Conversation[]` | Lista de conversas do banco |
+| `selectedConversationId` | `string` | ID da conversa aberta |
+| `messages` | `Message[]` | Mensagens da conversa ativa |
+| `messageText` | `string` | Texto do input de envio |
+| `loading` | `boolean` | Indicador de carregamento genérico |
+| `sending` | `boolean` | Indicador de envio de mensagem |
+| `searchTerm` | `string` | Filtro de busca na lista |
+| `conversationFilter` | `ConversationFilter` | Aba ativa (mine/unassigned/all) |
+| `showResolveMenu` | `boolean` | Controla menu "Resolver" |
+
+### 9.4 Problemas estruturais identificados na UI
+
+| # | Problema | Localização | Impacto |
+|---|----------|-------------|---------|
+| P1 | Arquivo monolítico com 968 linhas | `app/chat/page.tsx` | Difícil manutenção e testes |
+| P2 | Sem separação de responsabilidades | Toda lógica misturada na page | Impossível reusar lógica ou componentes |
+| P3 | `timestamp` tratado como `number * 1000` mas pode chegar como `string` do Realtime | Linhas 824–825, 831 | Datas incorretas em mensagens via Realtime |
+| P4 | Sem deduplicação no INSERT do Realtime | Linha 241 | Mensagem duplicada se evento Realtime chegar 2x |
+| P5 | Sem skeleton/loading state por conversa | Painel direito | UX ruim ao trocar de conversa |
+| P6 | Botões sem ação (Resolver, Notas, Emoji, Clip, Mic, FileText, IA) | Input + header | Funcionalidades prometidas na UI mas não implementadas |
+| P7 | `loading` é um estado único para tudo | — | Spinner aparece em locais errados simultaneamente |
+| P8 | Sem paginação de mensagens (limite fixo 100) | `loadMessages()` linha 203 | Conversas longas perdem histórico |
+| P9 | Sem scroll-to-bottom inteligente | `useEffect` linha 221 | Scroll força descida mesmo se usuário estiver lendo histórico |
+| P10 | `authHeaders()` recriado a cada render | Linha 99 | Pequena ineficiência, deveria ser `useMemo` |
+
+---
+
+## 10. Melhorias sugeridas para Realtime
+
+### 10.1 Deduplicação no INSERT
+
+```typescript
+// Substituir linha 241 por:
+if (payload.eventType === 'INSERT') {
+  const msg = payload.new as Message;
+  // Normalizar timestamp se vier como string do Realtime
+  if (typeof msg.timestamp === 'string') {
+    msg.timestamp = parseInt(msg.timestamp, 10);
+  }
+  setMessages((prev) => {
+    if (prev.some((m) => m.id === msg.id)) return prev; // deduplicação
+    return [...prev, msg];
+  });
+}
+```
+
+### 10.2 Canal de mensagens com status de conexão
+
+```typescript
+const channel = supabase
+  .channel(`chat_messages_${selectedConversationId}`)
+  .on('postgres_changes', { ... }, handler)
+  .subscribe((status) => {
+    if (status === 'SUBSCRIBED') console.log('[Realtime] conectado');
+    if (status === 'CHANNEL_ERROR') console.error('[Realtime] erro no canal');
+    if (status === 'TIMED_OUT') console.warn('[Realtime] timeout — reconectando');
+  });
+```
+
+### 10.3 Scroll inteligente
+
+```typescript
+// Só rolar para baixo se o usuário já estava no final
+const isAtBottom = messagesEndRef.current
+  ? messagesEndRef.current.getBoundingClientRect().bottom <= window.innerHeight + 50
+  : true;
+if (isAtBottom) {
+  messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+}
+```
+
+### 10.4 Refatoração de componentes sugerida
+
+```
+app/chat/
+  page.tsx                        ← orquestrador (< 150 linhas)
+  hooks/
+    useChatChannels.ts            ← carrega canais, selectedChannel
+    useChatConversations.ts       ← lista, filtros, realtime conversations
+    useChatMessages.ts            ← mensagens, realtime messages, send
+  components/
+    ChatSidebar.tsx               ← painel esquerdo
+    ConversationList.tsx          ← painel central (lista)
+    ConversationItem.tsx          ← card de conversa
+    ChatWindow.tsx                ← painel direito
+    MessageBubble.tsx             ← balão de mensagem
+    MessageInput.tsx              ← input de envio
+    ChatHeader.tsx                ← header da conversa ativa
+```
+
+---
+
+## 11. Schema do Banco de Dados
+
+### 11.1 Tabela `chat_conversations`
+
+Criada em `migrations/create_chat_tables.sql` + estendida por `add_whatsapp_official_chat_support.sql` e `add_chat_conversations_window_24h.sql`.
+
+```sql
+CREATE TABLE chat_conversations (
+    id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id              UUID,
+    user_id                   UUID REFERENCES profiles(id),
+    instance_id               UUID REFERENCES evolution_instances(id) ON DELETE CASCADE,
+    -- nullable após add_whatsapp_official_chat_support.sql
+    whatsapp_config_id        UUID REFERENCES whatsapp_official_configs(id) ON DELETE CASCADE,
+    -- adicionado em add_whatsapp_official_chat_support.sql
+    remote_jid                TEXT NOT NULL,
+    title                     TEXT,
+    is_group                  BOOLEAN DEFAULT FALSE,
+    last_message_at           TIMESTAMPTZ DEFAULT NOW(),
+    last_message_preview      TEXT,
+    unread_count              INTEGER DEFAULT 0,
+    last_customer_message_at  TIMESTAMPTZ,
+    -- adicionado em add_chat_conversations_window_24h.sql
+    -- usada para janela de 24h do WA Oficial
+    created_at                TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+**Constraints e Índices:**
+
+| Nome | Tipo | Definição |
+|------|------|-----------|
+| `chat_conversations_pkey` | PRIMARY KEY | `id` |
+| `idx_chat_conversations_instance_remote` | UNIQUE INDEX parcial | `(instance_id, remote_jid) WHERE instance_id IS NOT NULL` |
+| `idx_chat_conversations_whatsapp_config_remote` | UNIQUE INDEX parcial | `(whatsapp_config_id, remote_jid) WHERE whatsapp_config_id IS NOT NULL` |
+| `idx_chat_conversations_instance_id` | INDEX | `instance_id` |
+| `idx_chat_conversations_workspace_id` | INDEX | `workspace_id` |
+| `idx_chat_conversations_last_customer_message_at` | INDEX parcial | `last_customer_message_at DESC WHERE whatsapp_config_id IS NOT NULL` |
+
+**Regra de negócio:** Uma conversa por número de telefone (`remote_jid`) por canal. Novas mensagens do mesmo número são continuadas na mesma conversa.
+
+---
+
+### 11.2 Tabela `chat_messages`
+
+Criada em `migrations/create_chat_tables.sql` + estendida por `add_whatsapp_official_chat_support.sql`.
+
+```sql
+CREATE TABLE chat_messages (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id     UUID,
+    user_id          UUID REFERENCES profiles(id),
+    instance_id      UUID REFERENCES evolution_instances(id) ON DELETE CASCADE,
+    -- nullable após add_whatsapp_official_chat_support.sql
+    whatsapp_config_id UUID REFERENCES whatsapp_official_configs(id) ON DELETE SET NULL,
+    -- adicionado em add_whatsapp_official_chat_support.sql
+    conversation_id  UUID REFERENCES chat_conversations(id) ON DELETE CASCADE,
+    message_id       TEXT NOT NULL,
+    -- ID externo do WhatsApp (Evolution ou Meta)
+    provider         TEXT NOT NULL DEFAULT 'evolution',
+    -- 'evolution' | 'whatsapp_official' — adicionado em add_whatsapp_official_chat_support.sql
+    direction        TEXT CHECK (direction IN ('in', 'out')),
+    from_me          BOOLEAN DEFAULT FALSE,
+    sender_jid       TEXT,
+    text             TEXT,
+    media_type       TEXT,
+    -- 'text' | 'image' | 'video' | 'audio' | 'document'
+    media_url        TEXT,
+    caption          TEXT,
+    status           TEXT DEFAULT 'pending',
+    -- 'pending' | 'sent' | 'delivered' | 'read' | 'failed'
+    timestamp        BIGINT,
+    -- Unix timestamp em segundos (cuidado: pode chegar como string no Realtime)
+    created_at       TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+**Constraints e Índices:**
+
+| Nome | Tipo | Definição |
+|------|------|-----------|
+| `chat_messages_pkey` | PRIMARY KEY | `id` |
+| `idx_chat_messages_conversation_message` | UNIQUE INDEX | `(conversation_id, message_id)` |
+| `idx_chat_messages_conversation_id` | INDEX | `conversation_id` |
+| `idx_chat_messages_created_at` | INDEX | `created_at DESC` |
+| `idx_chat_messages_workspace_id` | INDEX | `workspace_id` |
+| `idx_chat_messages_instance_id_remote_jid` | INDEX | `(instance_id, sender_jid)` |
+| `idx_chat_messages_message_id_provider` | INDEX parcial | `(message_id, provider) WHERE provider = 'whatsapp_official'` |
+
+---
+
+### 11.3 Extensões em `evolution_instances`
+
+Adicionadas em `create_chat_tables.sql`:
+
+```sql
+ALTER TABLE evolution_instances
+    ADD COLUMN IF NOT EXISTS workspace_id         UUID,
+    ADD COLUMN IF NOT EXISTS webhook_configured   BOOLEAN DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS is_chat_instance     BOOLEAN DEFAULT FALSE;
+```
+
+`is_chat_instance = true` é o critério para a instância aparecer no seletor de canal do chat.
+
+---
+
+### 11.4 Função RPC
+
+```sql
+CREATE OR REPLACE FUNCTION increment_unread_count(conv_id UUID)
+RETURNS VOID AS $$
+BEGIN
+    UPDATE chat_conversations
+    SET unread_count = unread_count + 1
+    WHERE id = conv_id;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+Usada para incrementar `unread_count` de forma atômica, evitando race conditions.
+
+---
+
+### 11.5 Realtime (⚠️ pendente)
+
+As linhas que habilitam o Realtime estão **comentadas** na migration `create_chat_tables.sql` (linhas 61–62):
+
+```sql
+-- ALTER PUBLICATION supabase_realtime ADD TABLE chat_conversations;
+-- ALTER PUBLICATION supabase_realtime ADD TABLE chat_messages;
+```
+
+**Ação obrigatória:** Executar no SQL Editor do Supabase:
+
+```sql
+ALTER PUBLICATION supabase_realtime ADD TABLE chat_conversations;
+ALTER PUBLICATION supabase_realtime ADD TABLE chat_messages;
+```
+
+---
+
+### 11.6 Diagrama de relacionamentos
+
+```
+profiles (id)
+    ├──< chat_conversations.user_id
+    └──< chat_messages.user_id
+
+evolution_instances (id)
+    ├──< chat_conversations.instance_id  (CASCADE DELETE)
+    └──< chat_messages.instance_id       (SET NULL após migration oficial)
+
+whatsapp_official_configs (id)
+    ├──< chat_conversations.whatsapp_config_id  (CASCADE DELETE)
+    └──< chat_messages.whatsapp_config_id       (SET NULL)
+
+chat_conversations (id)
+    └──< chat_messages.conversation_id  (CASCADE DELETE)
+```
+
+---
+
+## 12. Checklist de diagnóstico atualizado
+
+- [ ] `chat_conversations` e `chat_messages` estão na publication `supabase_realtime`?
+- [ ] RLS em `chat_messages` / `chat_conversations` está bloqueando o anon?
+- [ ] Webhook está configurado e acessível publicamente?
+- [ ] Instâncias Evolution estão com `is_chat_instance = true`?
+- [ ] Logs `[Realtime chat_messages]` aparecem no console ao chegar mensagem?
+- [ ] A API `/api/chat/messages` retorna mensagens corretas ao abrir a conversa?
+- [ ] `timestamp` é normalizado (parseInt) antes de ser exibido no Realtime?
+- [ ] Deduplicação de mensagens por `msg.id` implementada no handler INSERT?
+- [ ] Canal Supabase tem log de status `SUBSCRIBED` no boot?
+- [ ] Arquivo `page.tsx` foi refatorado em componentes menores?

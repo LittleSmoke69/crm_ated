@@ -1,7 +1,9 @@
-/* 
- * CHAT SERVICE - REATIVADO
- * 
- * Serviço de gerenciamento de chat integrado com webhooks da Evolution API.
+/*
+ * CHAT SERVICE
+ *
+ * Serviço de gerenciamento de chat integrado com Evolution API e WhatsApp Oficial.
+ * saveMessage() é o ponto único de persistência: normaliza timestamp, deduplica
+ * via ignoreDuplicates e atualiza o resumo da conversa após cada inserção.
  */
 
 export interface ChatMessage {
@@ -43,6 +45,11 @@ export interface ChatConversation {
 
 import { supabaseServiceRole } from './supabase-service';
 
+function toTimestampNumber(ts: number | string | null | undefined): number {
+  if (!ts) return Math.floor(Date.now() / 1000);
+  return typeof ts === 'string' ? parseInt(ts, 10) : ts;
+}
+
 export class ChatService {
   async sendMessage(
     instance: { instance_name: string; apikey: string; base_url: string },
@@ -59,11 +66,9 @@ export class ChatService {
   ) {
     const { instance_name, apikey, base_url } = instance;
     const baseUrl = base_url.replace(/\/+$/, '');
-    
+
     let endpoint = '';
-    let body: any = {
-      number: payload.remoteJid,
-    };
+    let body: Record<string, unknown> = { number: payload.remoteJid };
 
     if (payload.type === 'text') {
       endpoint = `${baseUrl}/message/sendText/${instance_name}`;
@@ -82,10 +87,7 @@ export class ChatService {
 
     const response = await fetch(endpoint, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        apikey: apikey,
-      },
+      headers: { 'Content-Type': 'application/json', apikey },
       body: JSON.stringify(body),
     });
 
@@ -97,33 +99,54 @@ export class ChatService {
     return await response.json();
   }
 
-  normalizeEvolutionEvent(instance_id: string, workspace_id: string | null, event: string, payload: any) {
-    const data = payload.data || payload;
-    const message = data.message || data;
-    const key = message.key || {};
-    
-    const normalized = {
+  normalizeEvolutionEvent(
+    instance_id: string,
+    workspace_id: string | null,
+    event: string,
+    payload: Record<string, unknown>
+  ) {
+    const data = (payload.data as Record<string, unknown>) || payload;
+    const message = (data.message as Record<string, unknown>) || data;
+    const key = (message.key as Record<string, unknown>) || {};
+
+    return {
       instance_id,
       workspace_id,
-      message_id: key.id || data.id || data.messageId,
-      remote_jid: key.remoteJid || data.remoteJid,
-      from_me: key.fromMe || false,
-      sender_jid: key.participant || key.remoteJid || data.sender,
-      text: message.conversation || message.extendedTextMessage?.text || message.imageMessage?.caption || message.videoMessage?.caption || '',
-      media_type: message.imageMessage ? 'image' : message.videoMessage ? 'video' : message.audioMessage ? 'audio' : message.documentMessage ? 'document' : 'text',
+      message_id: (key.id as string) || (data.id as string) || (data.messageId as string),
+      remote_jid: (key.remoteJid as string) || (data.remoteJid as string),
+      from_me: (key.fromMe as boolean) || false,
+      sender_jid:
+        (key.participant as string) || (key.remoteJid as string) || (data.sender as string),
+      text:
+        (message.conversation as string) ||
+        ((message.extendedTextMessage as Record<string, unknown>)?.text as string) ||
+        ((message.imageMessage as Record<string, unknown>)?.caption as string) ||
+        ((message.videoMessage as Record<string, unknown>)?.caption as string) ||
+        '',
+      media_type: message.imageMessage
+        ? 'image'
+        : message.videoMessage
+        ? 'video'
+        : message.audioMessage
+        ? 'audio'
+        : message.documentMessage
+        ? 'document'
+        : 'text',
       media_url: null as string | null,
-      caption: message.imageMessage?.caption || message.videoMessage?.caption || '',
-      timestamp: data.messageTimestamp || Math.floor(Date.now() / 1000),
+      caption:
+        ((message.imageMessage as Record<string, unknown>)?.caption as string) ||
+        ((message.videoMessage as Record<string, unknown>)?.caption as string) ||
+        '',
+      timestamp: toTimestampNumber(data.messageTimestamp as number | string),
       status: 'received',
     };
-
-    return normalized;
   }
 
   async upsertConversation(conversation: ChatConversation) {
     const conflict = conversation.whatsapp_config_id
       ? 'whatsapp_config_id,remote_jid'
       : 'instance_id,remote_jid';
+
     const { data, error } = await supabaseServiceRole
       .from('chat_conversations')
       .upsert(conversation, { onConflict: conflict })
@@ -134,17 +157,61 @@ export class ChatService {
     return data;
   }
 
-  async saveMessage(message: ChatMessage) {
-    const { data, error } = await supabaseServiceRole
+  /**
+   * Persiste uma mensagem com deduplicação automática (ignoreDuplicates).
+   * Após inserção bem-sucedida, atualiza last_message_preview, last_message_at
+   * e, se direction='in', last_customer_message_at na conversa.
+   * Retorna null quando a mensagem já existia (duplicata ignorada).
+   */
+  async saveMessage(message: ChatMessage): Promise<ChatMessage | null> {
+    const normalized: ChatMessage = {
+      ...message,
+      timestamp: toTimestampNumber(message.timestamp as number | string),
+    };
+
+    const { data: msg, error } = await supabaseServiceRole
       .from('chat_messages')
-      .upsert(message, {
+      .upsert(normalized, {
         onConflict: 'conversation_id,message_id',
+        ignoreDuplicates: true,
       })
       .select()
       .single();
 
+    // PGRST116 = no rows returned (ignoreDuplicates suprimiu o INSERT)
+    // 23505 = unique_violation (fallback de segurança)
+    if (error?.code === 'PGRST116' || error?.code === '23505') {
+      console.log(`[Zaploto Chat] saveMessage: duplicata ignorada (${normalized.message_id})`);
+      return null;
+    }
     if (error) throw error;
-    return data;
+    if (!msg) return null;
+
+    // Atualizar campos de resumo na conversa pai
+    if (normalized.conversation_id) {
+      const tsMs = normalized.timestamp > 0 ? normalized.timestamp * 1000 : Date.now();
+      const lastMessageAt = new Date(tsMs).toISOString();
+      const lastPreview =
+        normalized.text?.slice(0, 100) ||
+        (normalized.media_type && normalized.media_type !== 'text' ? normalized.media_type : '') ||
+        '';
+
+      const updateFields: Record<string, unknown> = {
+        last_message_at: lastMessageAt,
+        last_message_preview: lastPreview,
+      };
+
+      if (normalized.direction === 'in') {
+        updateFields.last_customer_message_at = lastMessageAt;
+      }
+
+      await supabaseServiceRole
+        .from('chat_conversations')
+        .update(updateFields)
+        .eq('id', normalized.conversation_id);
+    }
+
+    return msg as ChatMessage;
   }
 }
 
