@@ -997,9 +997,21 @@ export default function GerentePage() {
 
       const result = await response.json();
       if (result.success) {
+        const deletedId = consultorToDelete.id;
         setDeleteModalOpen(false);
         setConsultorToDelete(null);
-        loadData();
+        setData((prev) => {
+          if (!prev) return prev;
+          const newMetrics = prev.consultorMetrics.filter((c) => c.id !== deletedId);
+          const { gerenteTotalKpis: newKpis, chartData: newChart } = aggregateKpisAndChartFromMetrics(newMetrics);
+          return {
+            ...prev,
+            consultorMetrics: newMetrics,
+            gerenteTotalKpis: newKpis,
+            chartData: newChart,
+          };
+        });
+        setAllConsultores((prev) => prev.filter((c) => c.id !== deletedId));
       } else {
         alert(result.error || 'Erro ao deletar consultor');
       }
@@ -1048,8 +1060,22 @@ export default function GerentePage() {
       });
       const result = await response.json();
       if (result.success) {
+        const editedId = consultorToEdit.id;
+        const newName = editFormData.fullName.trim() || editFormData.email.trim();
+        const newEmail = editFormData.email.trim();
         setEditFormSuccess('Consultor atualizado com sucesso!');
-        loadData();
+        setData((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            consultorMetrics: prev.consultorMetrics.map((c) =>
+              c.id === editedId ? { ...c, name: newName || c.name, email: newEmail || c.email } : c
+            ),
+          };
+        });
+        setAllConsultores((prev) =>
+          prev.map((c) => (c.id === editedId ? { ...c, name: newName || c.name, email: newEmail || c.email } : c))
+        );
         setTimeout(() => {
           setEditModalOpen(false);
           setConsultorToEdit(null);
