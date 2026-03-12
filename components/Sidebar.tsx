@@ -670,6 +670,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
                 <Link
                   key={item.href || item.label}
                   href={item.href || '#'}
+                  prefetch={item.href === '/admin' ? false : undefined}
                   onClick={(e) => {
                     if (window.innerWidth < 1024) {
                       setIsMobileOpen(false);

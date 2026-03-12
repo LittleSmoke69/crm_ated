@@ -78,6 +78,29 @@ export interface GetIndicatedsByConsultantResponse {
   error?: string;
 }
 
+/** Item do histórico de depósitos (get-user-deposit-history) */
+export interface DepositHistoryItem {
+  id: number;
+  value: number;
+  status: string;
+  status_code: number;
+  date: string;
+  created_at?: string;
+  updated_at?: string;
+  reference?: string | null;
+  txid?: string | null;
+  link?: string | null;
+}
+
+export interface GetUserDepositHistoryResponse {
+  success: boolean;
+  message?: string;
+  total_value?: number;
+  history?: DepositHistoryItem[];
+  pagination?: { current_page?: number; per_page?: string; total?: number; last_page?: number; from?: number; to?: number };
+  error?: string;
+}
+
 export interface CrmRedistributionClientOptions {
   crmBaseUrl: string;
   apiKey: string;
@@ -165,6 +188,8 @@ export class CrmRedistributionClient {
     source_consultant_email: string;
     days_inactive?: number;
     tag?: string;
+    /** yes = só transferidos, no = só não transferidos (padrão no para busca de origem) */
+    transferred_filter?: 'yes' | 'no';
     /** Filtros do modal de aprovação: registered | with_balance | has_won | has_withdrawn (enviados ao CRM se suportar) */
     lead_types?: string[];
   }): Promise<RedistributionLeadsResponse> {
@@ -172,6 +197,7 @@ export class CrmRedistributionClient {
     search.set('source_consultant_email', params.source_consultant_email.trim());
     if (params.days_inactive != null) search.set('days_inactive', String(params.days_inactive));
     if (params.tag != null && params.tag.trim()) search.set('tag', params.tag.trim());
+    if (params.transferred_filter) search.set('transferred_filter', params.transferred_filter);
     if (Array.isArray(params.lead_types) && params.lead_types.length > 0) {
       search.set('lead_types', params.lead_types.join(','));
     }
@@ -290,6 +316,44 @@ export class CrmRedistributionClient {
       success: raw.success,
       data: list,
       message: raw.message,
+      pagination: raw.pagination,
+      error: raw.error,
+    };
+  }
+
+  /**
+   * GET /api/crm/get-user-deposit-history
+   * Query: user_id (obrigatório), per_page, page.
+   * Usado na resolução de transferências expiradas: compara data de transferência com último depósito aprovado.
+   */
+  async getUserDepositHistory(
+    userId: string,
+    perPage: number = 100,
+    page: number = 1
+  ): Promise<GetUserDepositHistoryResponse> {
+    const search = new URLSearchParams();
+    search.set('user_id', String(userId).trim());
+    search.set('per_page', String(perPage));
+    search.set('page', String(page));
+
+    const { data, status } = await this.fetch<GetUserDepositHistoryResponse>(
+      `/get-user-deposit-history?${search.toString()}`
+    );
+
+    if (status !== 200) {
+      const msg = (data as GetUserDepositHistoryResponse).error ?? (data as GetUserDepositHistoryResponse).message ?? `HTTP ${status}`;
+      console.log(`${LOG_PREFIX} getUserDepositHistory failed: status=${status}, message=${msg}`, data);
+      return { success: false, error: msg, message: msg };
+    }
+
+    const raw = data as GetUserDepositHistoryResponse;
+    const history = Array.isArray(raw.history) ? raw.history : [];
+    console.log(`${LOG_PREFIX} getUserDepositHistory success: user_id=${userId}, ${history.length} item(s)`);
+    return {
+      success: raw.success,
+      message: raw.message,
+      total_value: raw.total_value,
+      history,
       pagination: raw.pagination,
       error: raw.error,
     };
