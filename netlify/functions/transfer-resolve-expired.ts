@@ -31,8 +31,10 @@ export const handler = async () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Cron-Secret': CRON_SECRET,
+        'Accept': 'application/json',
+        'x-cron-secret': CRON_SECRET,
       },
+      body: JSON.stringify({}),
     });
     const text = await res.text();
     let data: unknown;
