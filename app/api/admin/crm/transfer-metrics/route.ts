@@ -19,7 +19,7 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
 /**
  * GET /api/admin/crm/transfer-metrics
  * KPIs de transferência: total, com saldo, sem saldo; conversão por consultor destino.
- * Query: banca_id (opcional; omitir = Todas as Bancas), from, to, transfer_type?, target_consultant_email? (conversão só quando uma banca é selecionada)
+ * Query: banca_id (opcional; omitir = Todas as Bancas), from, to, transfer_type?, target_consultant_email?, source_consultant_email? (consultor doador)
  */
 export async function GET(req: NextRequest) {
   try {
@@ -27,6 +27,7 @@ export async function GET(req: NextRequest) {
     const { searchParams } = req.nextUrl;
 
     const bancaId = searchParams.get('banca_id')?.trim() || null;
+    const sourceConsultantEmail = searchParams.get('source_consultant_email')?.trim() || null;
     let bancaIds: string[];
     let singleResolved: { bancaId: string; crmBaseUrl: string } | null = null;
 
@@ -67,6 +68,7 @@ export async function GET(req: NextRequest) {
     if (transferType && ['TF', 'TF1', 'TF2', 'TF3'].includes(transferType)) {
       idsOnlyQuery = idsOnlyQuery.eq('transfer_type', transferType);
     }
+    if (sourceConsultantEmail) idsOnlyQuery = idsOnlyQuery.ilike('source_consultant_email', sourceConsultantEmail);
     const { data: logIds } = await idsOnlyQuery;
     const logIdsFilter = (logIds ?? []).map((r: { id: string }) => r.id);
     if (logIdsFilter.length === 0) {

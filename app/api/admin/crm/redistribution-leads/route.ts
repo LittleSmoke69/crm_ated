@@ -142,6 +142,7 @@ export async function GET(req: NextRequest) {
       source_consultant_email,
       days_inactive: effectiveDaysInactive === 0 ? undefined : effectiveDaysInactive,
       tag: tag ?? undefined,
+      transferred_filter: effectiveTransferredFilter,
     });
 
     if (!result.success) {

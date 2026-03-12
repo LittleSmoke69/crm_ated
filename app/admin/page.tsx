@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { useRouter } from 'next/navigation';
 import Layout from '@/components/Layout';
@@ -274,6 +274,9 @@ export default function AdminDashboard() {
   const [disparoUpcomingPage, setDisparoUpcomingPage] = useState(1);
   const DISPARO_UPCOMING_PAGE_SIZE = 10;
 
+  /** Evita múltiplas execuções de checkAdminAndLoad (reduz GET /admin e chamadas em duplicata). */
+  const adminCheckRunRef = useRef(false);
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const id =
@@ -296,7 +299,10 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     if (userId) {
-      checkAdminAndLoad();
+      if (!adminCheckRunRef.current) {
+        adminCheckRunRef.current = true;
+        checkAdminAndLoad();
+      }
     } else if (!checking) {
       router.push('/admin/login');
     }

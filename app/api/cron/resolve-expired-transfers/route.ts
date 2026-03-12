@@ -11,7 +11,7 @@
 import { NextRequest } from 'next/server';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { resolveOneTransferLog, isTransferExpired } from '@/lib/server/crm/resolveTransferLog';
+import { resolveOneTransferLog, isTransferExpired, type ConvertedLead } from '@/lib/server/crm/resolveTransferLog';
 
 const DEFAULT_DEADLINE_DAYS = 10;
 
@@ -71,6 +71,7 @@ export async function POST(req: NextRequest) {
     });
 
     const results: Array<{ log_id: string; banca_id: string; resolved: number; vinculado: number; disponivel_retransferencia: number; message: string }> = [];
+    const allConverted: ConvertedLead[] = [];
     let total_resolved = 0;
     let total_vinculado = 0;
     let total_disponivel = 0;
@@ -89,6 +90,21 @@ export async function POST(req: NextRequest) {
       total_resolved += result.resolved;
       total_vinculado += result.vinculado;
       total_disponivel += result.disponivel_retransferencia;
+      if (result.converted?.length) {
+        allConverted.push(...result.converted);
+      }
+    }
+
+    if (allConverted.length > 0) {
+      console.log('\n========== [resolve-expired-transfers] RELATÓRIO FINAL - CONVERTIDOS ==========');
+      console.log(`Total convertidos (vinculados): ${allConverted.length}`);
+      console.log('---');
+      allConverted.forEach((c, i) => {
+        console.log(`  ${i + 1}. Lead ${c.lead_id} | Consultor: ${c.consultant_email} | Banca: ${c.banca_id}`);
+      });
+      console.log('===============================================================================\n');
+    } else {
+      console.log('\n[resolve-expired-transfers] Nenhum lead convertido nesta execução.\n');
     }
 
     return successResponse({

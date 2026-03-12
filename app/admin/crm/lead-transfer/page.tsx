@@ -308,6 +308,8 @@ export default function AdminLeadTransferPage() {
   const [leadsPageSize, setLeadsPageSize] = useState<number>(10);
   const [customPageSizeInput, setCustomPageSizeInput] = useState<string>('100');
   const [leadsPage, setLeadsPage] = useState(1);
+  /** Mostrar apenas leads listados para redistribuição que ainda não foram transferidos (default true). */
+  const [showOnlyNotTransferred, setShowOnlyNotTransferred] = useState<boolean>(true);
   const [transferring, setTransferring] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [transferType, setTransferType] = useState<'TF' | 'TF1' | 'TF2' | 'TF3'>('TF');
@@ -340,6 +342,8 @@ export default function AdminLeadTransferPage() {
   const [loadingStats, setLoadingStats] = useState(false);
   const loadLogsRunIdRef = useRef(0);
   const [conversionConsultant, setConversionConsultant] = useState('');
+  /** Filtro por consultor doador na aba Histórico & Conversão: '' = não filtrar, ou email do consultor. */
+  const [historyDonorConsultantFilter, setHistoryDonorConsultantFilter] = useState('');
   const [managementLoaded, setManagementLoaded] = useState(false);
   const [statsByBanca, setStatsByBanca] = useState<{ banca_id: string; banca_name: string; total_leads: number }[]>([]);
   const [loadingStatsByBanca, setLoadingStatsByBanca] = useState(false);
@@ -414,6 +418,10 @@ export default function AdminLeadTransferPage() {
   const [desvincularLeadIdModal, setDesvincularLeadIdModal] = useState<string | null>(null);
   /** ID do log em que desvincular em massa está em andamento (null = nenhum). Assim outro modal não fica travado. */
   const [desvincularEmMassaLogId, setDesvincularEmMassaLogId] = useState<string | null>(null);
+  /** Desvincular todos os leads (aba Histórico): loading global */
+  const [desvincularTodosLoading, setDesvincularTodosLoading] = useState(false);
+  /** Reverter resolvidas para pendente (aba Histórico): loading */
+  const [revertResolvedLoading, setRevertResolvedLoading] = useState(false);
   /** Transferências já resolvidas no banco (card verde persistente) */
   const [resolvedStats, setResolvedStats] = useState<{ total_resolved_logs: number; total_disponivel: number; total_vinculado: number; total_lucro_realizado: number; total_aposta_realizado: number; by_type: Record<string, number> }>({ total_resolved_logs: 0, total_disponivel: 0, total_vinculado: 0, total_lucro_realizado: 0, total_aposta_realizado: 0, by_type: { TF: 0, TF1: 0, TF2: 0, TF3: 0 } });
   const [loadingResolvedStats, setLoadingResolvedStats] = useState(false);
@@ -446,7 +454,27 @@ export default function AdminLeadTransferPage() {
   const recalcPollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [currentStep, setCurrentStep] = useState(1);
-  const [activeTab, setActiveTab] = useState<'transfer' | 'history' | 'solicitations'>('transfer');
+  const [activeTab, setActiveTab] = useState<'transfer' | 'history' | 'solicitations' | 'analysis'>('transfer');
+  /** Bloqueio da aba Análise: false = tab oculta e conteúdo não exibido (reverter para true para reativar). */
+  const ANALYSIS_TAB_ENABLED = false;
+  /** Aba Análise: banca selecionada, período de inatividade (dias) e resultados por consultor */
+  const [analysisBancaId, setAnalysisBancaId] = useState('');
+  const [analysisDaysInactive, setAnalysisDaysInactive] = useState('90');
+  const [analysisResults, setAnalysisResults] = useState<Array<{
+    consultant_id: string;
+    consultant_name: string;
+    consultant_email: string;
+    /** Leads para redistribuir (redistribution-leads com days_inactive) */
+    leads_count: number;
+    /** Leads não transferidos (get-indicateds-by-consultant transferred_filter=no) */
+    not_transferred_count: number;
+    /** Entre os não transferidos, quantos se enquadram para redistribuir (interseção com redistribution-leads). Pode ser amostra (1ª página). */
+    qualifies_count: number;
+    status: 'pending' | 'loading' | 'done' | 'error' | 'not_registered';
+  }>>([]);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisDaysCustom, setAnalysisDaysCustom] = useState('90');
+  const analysisAbortRef = useRef(false);
   const [canExecuteTransfer, setCanExecuteTransfer] = useState(true);
   const [confirmAcknowledged, setConfirmAcknowledged] = useState(false);
   const [showSelectedOnly, setShowSelectedOnly] = useState(false);
@@ -468,6 +496,12 @@ export default function AdminLeadTransferPage() {
   /** Consultores que receberam transferência na banca escolhida (para o modal de conversão) */
   const [conversionTargetConsultants, setConversionTargetConsultants] = useState<Consultant[]>([]);
   const [loadingConversionTargetConsultants, setLoadingConversionTargetConsultants] = useState(false);
+  /** Modal Consultor Doador (aba Histórico): lista de consultores da banca para filtrar por origem da transferência */
+  const [showDonorConsultantModal, setShowDonorConsultantModal] = useState(false);
+  const [donorConsultantPendingEmail, setDonorConsultantPendingEmail] = useState<string | null>(null);
+  const [donorConsultantSearchQuery, setDonorConsultantSearchQuery] = useState('');
+  const [donorModalConsultants, setDonorModalConsultants] = useState<Consultant[]>([]);
+  const [loadingDonorModalConsultants, setLoadingDonorModalConsultants] = useState(false);
   /** Verificador de consultores: leads transferidos que depositaram/jogaram/sacaram depois */
   const [verifierResults, setVerifierResults] = useState<{ consultant_email: string; consultant_name: string; total_transferidos: number; depositaram_depois: number; jogaram_depois: number; sacaram_depois: number }[]>([]);
   const [loadingVerifier, setLoadingVerifier] = useState(false);
@@ -546,8 +580,12 @@ export default function AdminLeadTransferPage() {
     'X-User-Id': userId ?? '',
   });
 
+  /** Evita múltiplas chamadas a admin-step-permission no mesmo mount (reduz requisições repetidas). */
+  const permissionCheckRunRef = useRef(false);
   useEffect(() => {
     if (typeof window === 'undefined' || !userId) return;
+    if (permissionCheckRunRef.current) return;
+    permissionCheckRunRef.current = true;
     const loadPermission = async () => {
       try {
         const res = await fetch('/api/zaploto/admin-step-permission?step=lead_transfer', { headers: headers() });
@@ -598,7 +636,7 @@ export default function AdminLeadTransferPage() {
     if (!bancaId || !userId) return;
     setLoadingConsultants(true);
     try {
-      const res = await fetch(`/api/admin/crm/consultants?banca_id=${encodeURIComponent(bancaId)}`, {
+      const res = await fetch(`/api/admin/crm/consultants?banca_id=${encodeURIComponent(bancaId)}&verify_crm=1`, {
         headers: headers(),
       });
       const json = await res.json();
@@ -712,7 +750,7 @@ export default function AdminLeadTransferPage() {
     if (bancaIdDaSolicitacao && userId) {
       approveModalLoadingRequestIdRef.current = requestId;
       setLoadingApproveModalConsultants(true);
-      fetch(`/api/admin/crm/consultants?banca_id=${encodeURIComponent(bancaIdDaSolicitacao)}&hierarchy_only=1`, { headers: headers() })
+      fetch(`/api/admin/crm/consultants?banca_id=${encodeURIComponent(bancaIdDaSolicitacao)}&hierarchy_only=1&verify_crm=1`, { headers: headers() })
         .then(async (res) => {
           const json = await res.json();
           if (approveModalLoadingRequestIdRef.current !== requestId) return;
@@ -1018,6 +1056,165 @@ export default function AdminLeadTransferPage() {
     setShowConversionConsultantModal(false);
   };
 
+  /** Carrega consultores da banca para o modal Consultor Doador (aba Histórico). */
+  const loadDonorModalConsultants = useCallback(async () => {
+    const effectiveBancaId = historyBancaFilter || bancaId;
+    if (!effectiveBancaId || !userId) return;
+    setLoadingDonorModalConsultants(true);
+    setDonorModalConsultants([]);
+    try {
+      const res = await fetch(`/api/admin/crm/consultants?banca_id=${encodeURIComponent(effectiveBancaId)}&verify_crm=1`, { headers: headers() });
+      const json = await res.json();
+      if (res.ok && json.success && Array.isArray(json.data?.consultants)) {
+        setDonorModalConsultants(json.data.consultants);
+      } else {
+        showToast(json?.error ?? 'Erro ao carregar consultores.', 'error');
+      }
+    } catch {
+      showToast('Erro ao carregar consultores.', 'error');
+    } finally {
+      setLoadingDonorModalConsultants(false);
+    }
+  }, [historyBancaFilter, bancaId, userId]);
+
+  const openDonorConsultantModal = () => {
+    setDonorConsultantPendingEmail(historyDonorConsultantFilter?.trim() || null);
+    setDonorConsultantSearchQuery('');
+    setShowDonorConsultantModal(true);
+    void loadDonorModalConsultants();
+  };
+
+  const confirmDonorConsultant = () => {
+    setHistoryDonorConsultantFilter(donorConsultantPendingEmail ?? '');
+    setShowDonorConsultantModal(false);
+  };
+
+  /** Lista filtrada para o modal Consultor Doador (busca por nome ou email). */
+  const donorConsultantFilteredList = React.useMemo(() => {
+    const q = donorConsultantSearchQuery.trim().toLowerCase();
+    const list = !q ? donorModalConsultants : donorModalConsultants.filter((c) => {
+      const name = String(c.full_name ?? '').toLowerCase();
+      const email = String(c.email ?? '').toLowerCase();
+      return name.includes(q) || email.includes(q);
+    });
+    return [...list].sort((a, b) => (a.full_name || a.email || '').localeCompare(b.full_name || b.email || '', 'pt-BR'));
+  }, [donorModalConsultants, donorConsultantSearchQuery]);
+
+  /** Aba Análise: carrega consultores da banca e, para cada um, busca leads disponíveis que ainda não foram transferidos (período de inatividade). Ordena por quem tem mais. */
+  const runAnalysis = useCallback(async () => {
+    if (!analysisBancaId || !userId) {
+      showToast('Selecione a banca.', 'error');
+      return;
+    }
+    const daysVal = analysisDaysInactive === 'other' ? analysisDaysCustom.trim() : analysisDaysInactive;
+    const daysNum = parseInt(daysVal, 10);
+    if (!Number.isFinite(daysNum) || daysNum < 0) {
+      showToast('Informe um período de inatividade válido (dias).', 'error');
+      return;
+    }
+    analysisAbortRef.current = false;
+    setAnalysisLoading(true);
+    setAnalysisResults([]);
+    try {
+      const resConsultants = await fetch(`/api/admin/crm/consultants?banca_id=${encodeURIComponent(analysisBancaId)}`, { headers: headers() });
+      const jsonConsultants = await resConsultants.json();
+      if (!resConsultants.ok || !Array.isArray(jsonConsultants.data?.consultants)) {
+        showToast(jsonConsultants?.error ?? 'Erro ao carregar consultores da banca.', 'error');
+        setAnalysisLoading(false);
+        return;
+      }
+      const consultantsList = jsonConsultants.data.consultants as Consultant[];
+      const initial = consultantsList.map((c) => ({
+        consultant_id: String(c.id ?? c.email ?? ''),
+        consultant_name: (c.full_name ?? c.email ?? '').trim() || '—',
+        consultant_email: (c.email ?? '').trim(),
+        leads_count: 0,
+        not_transferred_count: 0,
+        qualifies_count: 0,
+        status: 'pending' as const,
+      }));
+      setAnalysisResults(initial);
+
+      for (let i = 0; i < initial.length; i++) {
+        if (analysisAbortRef.current) break;
+        const consultant = consultantsList[i];
+        const email = (consultant.email ?? '').trim();
+        if (!email) continue;
+
+        setAnalysisResults((prev) =>
+          prev.map((r, idx) => (idx === i ? { ...r, status: 'loading' as const } : r))
+        );
+        try {
+          const checkRes = await fetch(
+            `/api/admin/crm/consultant-registered?banca_id=${encodeURIComponent(analysisBancaId)}&email=${encodeURIComponent(email)}`,
+            { headers: headers() }
+          );
+          const checkJson = await checkRes.json();
+          const registered = checkRes.ok && checkJson?.data?.registered === true;
+          if (!registered) {
+            setAnalysisResults((prev) =>
+              prev.map((r, idx) => (idx === i ? { ...r, leads_count: 0, not_transferred_count: 0, qualifies_count: 0, status: 'not_registered' as const } : r))
+            );
+            continue;
+          }
+          const paramsRedist = new URLSearchParams();
+          paramsRedist.set('banca_id', analysisBancaId);
+          paramsRedist.set('source_consultant_email', email);
+          paramsRedist.set('days_inactive', String(daysNum));
+          paramsRedist.set('transferred_filter', 'no');
+          const resRedist = await fetch(`/api/admin/crm/redistribution-leads?${paramsRedist.toString()}`, { headers: headers() });
+          const jsonRedist = await resRedist.json();
+          const leadsParaRedistribuirList = Array.isArray(jsonRedist?.data?.leads) ? jsonRedist.data.leads as Array<{ id?: unknown }> : [];
+          const leadsParaRedistribuir = leadsParaRedistribuirList.length;
+          const redistIds = new Set(leadsParaRedistribuirList.map((l) => (l?.id != null ? String(l.id) : '')).filter(Boolean));
+
+          const paramsIndicateds = new URLSearchParams();
+          paramsIndicateds.set('banca_id', analysisBancaId);
+          paramsIndicateds.set('consultant', email);
+          paramsIndicateds.set('transferred_filter', 'no');
+          paramsIndicateds.set('per_page', '2000');
+          paramsIndicateds.set('page', '1');
+          let notTransferredCount = 0;
+          let qualifiesCount = 0;
+          try {
+            const resIndicateds = await fetch(`/api/admin/crm/consultant-indicateds?${paramsIndicateds.toString()}`, { headers: headers() });
+            const jsonIndicateds = await resIndicateds.json();
+            if (resIndicateds.ok && jsonIndicateds?.data) {
+              const payload = jsonIndicateds.data as { total?: number; count?: number; data?: Array<{ id?: unknown }> };
+              notTransferredCount = typeof payload.total === 'number' ? payload.total : (typeof payload.count === 'number' ? payload.count : (Array.isArray(payload.data) ? payload.data.length : 0));
+              const indicatedsPage = Array.isArray(payload.data) ? payload.data : [];
+              qualifiesCount = indicatedsPage.filter((l) => l?.id != null && redistIds.has(String(l.id))).length;
+            }
+          } catch {
+            /* mantém 0 */
+          }
+          setAnalysisResults((prev) =>
+            prev.map((r, idx) =>
+              idx === i ? { ...r, leads_count: leadsParaRedistribuir, not_transferred_count: notTransferredCount, qualifies_count: qualifiesCount, status: 'done' as const } : r
+            )
+          );
+        } catch {
+          setAnalysisResults((prev) =>
+            prev.map((r, idx) => (idx === i ? { ...r, status: 'error' as const } : r))
+          );
+        }
+      }
+
+      showToast(`Análise concluída: ${initial.length} consultor(es).`, 'success');
+    } catch (e) {
+      showToast('Erro ao executar análise.', 'error');
+    } finally {
+      setAnalysisLoading(false);
+    }
+  }, [analysisBancaId, analysisDaysInactive, analysisDaysCustom, userId, showToast]);
+
+  /** Aba Análise: resultados ordenados por leads disponíveis (maior primeiro). */
+  /** Aba Análise: ordenado por Qualificam para redistribuir (maior primeiro). */
+  const sortedAnalysisResults = React.useMemo(
+    () => [...analysisResults].sort((a, b) => (b.qualifies_count ?? 0) - (a.qualifies_count ?? 0)),
+    [analysisResults]
+  );
+
   /** Ao alterar dias em "Outro" (passo 3), dispara nova busca após debounce. Aceita 0 (todos os leads). */
   useEffect(() => {
     if (currentStep !== 3 || daysInactivePreset !== 'other') return;
@@ -1084,6 +1281,7 @@ export default function AdminLeadTransferPage() {
       const params = new URLSearchParams();
       params.set('banca_id', bancaId);
       params.set('source_consultant_email', effectiveSourceEmail);
+      params.set('transferred_filter', 'no');
       const daysVal = (overrideDays ?? daysInactive).trim();
       params.set('min_inactive_days', daysVal === '' ? '90' : daysVal);
       if (selectedTag.trim()) params.set('tag', selectedTag.trim());
@@ -1100,6 +1298,32 @@ export default function AdminLeadTransferPage() {
       setLeads(leadsArray);
       setLoadingLeads(false);
       setHasSearchedLeads(true);
+
+      (async () => {
+        const transferredIds = new Set<string>();
+        try {
+          const p = new URLSearchParams();
+          p.set('banca_id', bancaId);
+          p.set('consultant', effectiveSourceEmail);
+          p.set('transferred_filter', 'yes');
+          p.set('per_page', '5000');
+          p.set('page', '1');
+          const resT = await fetch(`/api/admin/crm/consultant-indicateds?${p.toString()}`, { headers: headers() });
+          const jT = await resT.json();
+          if (resT.ok && Array.isArray(jT?.data?.data)) {
+            (jT.data.data as Array<{ id?: unknown }>).forEach((row) => {
+              if (row?.id != null) transferredIds.add(String(row.id));
+            });
+          }
+        } catch {
+          /* ignora; leads ficam sem _transferred */
+        }
+        if (currentLoadId !== loadLeadsIdRef.current) return;
+        setLeads((prev) =>
+          prev.map((l) => ({ ...l, _transferred: transferredIds.has(String(l.id)) }))
+        );
+      })();
+
       const enrichmentDeferred = json.data?.enrichmentDeferred === true;
       const totalEnrichmentPages = Number(json.data?.totalEnrichmentPages) || 0;
 
@@ -1193,6 +1417,9 @@ export default function AdminLeadTransferPage() {
   }, [sortedLeads]);
   const filteredLeads = React.useMemo(() => {
     let list = sortedLeads;
+    if (showOnlyNotTransferred) {
+      list = list.filter((l) => (l as Record<string, unknown>)._transferred !== true);
+    }
     if (leadSearchLower) {
       list = list.filter((lead) => {
         const name = String((lead.name ?? lead.full_name ?? lead.email ?? '')).toLowerCase();
@@ -1283,7 +1510,7 @@ export default function AdminLeadTransferPage() {
       });
     }
     return list;
-  }, [sortedLeads, leadSearchLower, leadFilterStatus, leadFilterTemperature, balanceFilter, leadFilterSaldoMin, leadFilterSaldoMax, leadFilterAposta, leadFilterApostaMin, leadFilterApostaMax, leadFilterTotalDepositado, leadFilterTotalDepositadoMin, leadFilterTotalDepositadoMax, leadFilterSaqueDisponivel, leadFilterSaqueDisponivelMin, leadFilterSaqueDisponivelMax, leadFilterTotalPremio, leadFilterTotalPremioMin, leadFilterTotalPremioMax]);
+  }, [sortedLeads, showOnlyNotTransferred, leadSearchLower, leadFilterStatus, leadFilterTemperature, balanceFilter, leadFilterSaldoMin, leadFilterSaldoMax, leadFilterAposta, leadFilterApostaMin, leadFilterApostaMax, leadFilterTotalDepositado, leadFilterTotalDepositadoMin, leadFilterTotalDepositadoMax, leadFilterSaqueDisponivel, leadFilterSaqueDisponivelMin, leadFilterSaqueDisponivelMax, leadFilterTotalPremio, leadFilterTotalPremioMin, leadFilterTotalPremioMax]);
   /** Soma dos saldos dos leads já filtrados (usado no passo 3 para refletir filtros sem novo request). */
   const totalFilteredBalanceSum = React.useMemo(
     () => filteredLeads.reduce((acc, l) => acc + (parseFloat(String(l.balance ?? 0)) || 0), 0),
@@ -1539,6 +1766,7 @@ export default function AdminLeadTransferPage() {
       if (to) params.set('to', to);
       if (managementTransferType.trim()) params.set('transfer_type', managementTransferType.trim());
       if (conversionConsultant.trim()) params.set('target_consultant_email', conversionConsultant.trim());
+      if (historyDonorConsultantFilter.trim()) params.set('source_consultant_email', historyDonorConsultantFilter.trim());
       params.set('offset', String(offset));
       params.set('limit', String(limit));
       return params;
@@ -2107,7 +2335,7 @@ export default function AdminLeadTransferPage() {
     setLoadingMoveModalConsultants(true);
     setMoveModalConsultants([]);
     try {
-      const res = await fetch(`/api/admin/crm/consultants?banca_id=${encodeURIComponent(logBancaId)}&hierarchy_only=1`, { headers: headers() });
+      const res = await fetch(`/api/admin/crm/consultants?banca_id=${encodeURIComponent(logBancaId)}&hierarchy_only=1&verify_crm=1`, { headers: headers() });
       const json = await res.json();
       if (res.ok && json.success && Array.isArray(json.data?.consultants)) {
         setMoveModalConsultants(json.data.consultants);
@@ -2233,6 +2461,7 @@ export default function AdminLeadTransferPage() {
       if (to) params.set('to', to);
       if (managementTransferType.trim()) params.set('transfer_type', managementTransferType.trim());
       if (conversionConsultant.trim()) params.set('target_consultant_email', conversionConsultant.trim());
+      if (historyDonorConsultantFilter.trim()) params.set('source_consultant_email', historyDonorConsultantFilter.trim());
       const url = `/api/admin/crm/transfer-metrics?${params.toString()}`;
       const res = await fetch(url, { headers: headers() });
       const json = await res.json();
@@ -2271,6 +2500,7 @@ export default function AdminLeadTransferPage() {
     const baseParams = new URLSearchParams();
     if (from) baseParams.set('from', from);
     if (to) baseParams.set('to', to);
+    if (historyDonorConsultantFilter.trim()) baseParams.set('source_consultant_email', historyDonorConsultantFilter.trim());
 
     if (historyBancaFilter) {
       try {
@@ -2350,6 +2580,7 @@ export default function AdminLeadTransferPage() {
     try {
       const params = new URLSearchParams();
       if (historyBancaFilter) params.set('banca_id', historyBancaFilter);
+      if (historyDonorConsultantFilter.trim()) params.set('source_consultant_email', historyDonorConsultantFilter.trim());
       const res = await fetch(`/api/admin/crm/transfer-logs/expired?${params.toString()}`, { headers: headers() });
       const json = await res.json();
       if (res.ok && json.success && Array.isArray(json.data)) {
@@ -2362,7 +2593,7 @@ export default function AdminLeadTransferPage() {
     } finally {
       setLoadingExpiredLogs(false);
     }
-  }, [userId, historyBancaFilter]);
+  }, [userId, historyBancaFilter, historyDonorConsultantFilter]);
 
   const loadResolvedStats = useCallback(async () => {
     if (!userId) return;
@@ -2374,6 +2605,7 @@ export default function AdminLeadTransferPage() {
       const to = toYYYYMMDD(managementTo);
       if (from) params.set('from', from);
       if (to) params.set('to', to);
+      if (historyDonorConsultantFilter.trim()) params.set('source_consultant_email', historyDonorConsultantFilter.trim());
       const res = await fetch(`/api/admin/crm/transfer-logs/resolved-stats?${params.toString()}`, { headers: headers() });
       const json = await res.json();
       if (res.ok && json.success && json.data) {
@@ -2394,7 +2626,7 @@ export default function AdminLeadTransferPage() {
     } finally {
       setLoadingResolvedStats(false);
     }
-  }, [userId, historyBancaFilter, managementFrom, managementTo]);
+  }, [userId, historyBancaFilter, historyDonorConsultantFilter, managementFrom, managementTo]);
 
   const loadResolvedList = useCallback(async (overrideBancaId?: string) => {
     if (!userId) return;
@@ -2403,6 +2635,7 @@ export default function AdminLeadTransferPage() {
       const params = new URLSearchParams();
       const bancaParaFiltro = overrideBancaId ?? historyBancaFilter;
       if (bancaParaFiltro) params.set('banca_id', bancaParaFiltro);
+      if (historyDonorConsultantFilter.trim()) params.set('source_consultant_email', historyDonorConsultantFilter.trim());
       const res = await fetch(`/api/admin/crm/transfer-logs/resolved-list?${params.toString()}`, { headers: headers() });
       const json = await res.json();
       if (res.ok && json.success && Array.isArray(json.data)) {
@@ -2418,7 +2651,7 @@ export default function AdminLeadTransferPage() {
     } finally {
       setLoadingResolvedList(false);
     }
-  }, [userId, historyBancaFilter]);
+  }, [userId, historyBancaFilter, historyDonorConsultantFilter]);
 
   /** Ao abrir o modal Mover com log pré-selecionado (ex.: pelo botão Mover do relatório detalhado), seleciona a transferência quando resolvedList carregar. */
   useEffect(() => {
@@ -2552,6 +2785,73 @@ export default function AdminLeadTransferPage() {
     })();
   }, [bancaId, userId, selectedLogForModal?.id, selectedLogForModal?.banca_id, modalEntries, loadModalEntries, loadResolvedStats]);
 
+  /** Desvincula todos os leads vinculados aos consultores (aba Histórico). Escopo: banca do filtro ou todas as bancas. */
+  const desvincularTodosLeads = useCallback(async () => {
+    const scopeLabel = historyBancaFilter
+      ? (bancas.find((b) => b.id === historyBancaFilter)?.name || bancas.find((b) => b.id === historyBancaFilter)?.url || historyBancaFilter)
+      : 'Todas as bancas';
+    const msg = `Desvincular todos os leads vinculados aos consultores${historyBancaFilter ? ` na banca "${scopeLabel}"` : ` em ${scopeLabel}`}? Eles ficarão disponíveis para repasse.`;
+    if (!window.confirm(msg)) return;
+    setDesvincularTodosLoading(true);
+    try {
+      const body = historyBancaFilter ? { banca_id: historyBancaFilter } : {};
+      const res = await fetch('/api/admin/crm/transfer-logs/unlink-all-vinculados', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers() },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        const count = json.data?.count ?? 0;
+        showToast(json.data?.message ?? `${count} lead(s) desvinculado(s).`, 'success');
+        loadResolvedStats();
+        loadResolvedList();
+        loadTransferLogs(historyBancaFilter);
+      } else {
+        showToast(json?.error ?? 'Erro ao desvincular.', 'error');
+      }
+    } catch {
+      showToast('Erro ao desvincular todos os leads.', 'error');
+    } finally {
+      setDesvincularTodosLoading(false);
+    }
+  }, [historyBancaFilter, bancas, loadResolvedStats, loadResolvedList, loadTransferLogs]);
+
+  /** Reverte todas as entries resolvidas (vinculado/disponivel) para pending; transferências passam a aparecer como expiradas para nova análise. */
+  const revertResolvedToPending = useCallback(async () => {
+    const scopeLabel = historyBancaFilter
+      ? (bancas.find((b) => b.id === historyBancaFilter)?.name || bancas.find((b) => b.id === historyBancaFilter)?.url || historyBancaFilter)
+      : 'Todas as bancas';
+    const msg = `Reverter todas as transferências já resolvidas${historyBancaFilter ? ` na banca "${scopeLabel}"` : ` em ${scopeLabel}`} para situação de expirado? Os leads voltarão a "pendente", as transferências aparecerão como EXPIRADAS e poderão ser analisadas novamente (botão "Resolver transferências expiradas" ou cron).`;
+    if (!window.confirm(msg)) return;
+    setRevertResolvedLoading(true);
+    try {
+      const body = historyBancaFilter ? { banca_id: historyBancaFilter } : {};
+      const res = await fetch('/api/admin/crm/transfer-logs/revert-resolved-to-pending', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers() },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        const count = json.data?.count ?? 0;
+        showToast(`${json.data?.message ?? count + ' revertido(s).'} O filtro foi alterado para "Expiradas" para você visualizar.`, 'success');
+        setManagementStatusFilter('expiradas');
+        setTransferLogs([]);
+        loadResolvedStats();
+        loadResolvedList();
+        loadExpiredLogs();
+        await loadTransferLogs(historyBancaFilter);
+      } else {
+        showToast(json?.error ?? 'Erro ao reverter.', 'error');
+      }
+    } catch {
+      showToast('Erro ao reverter resolvidas para pendente.', 'error');
+    } finally {
+      setRevertResolvedLoading(false);
+    }
+  }, [historyBancaFilter, bancas, loadResolvedStats, loadResolvedList, loadExpiredLogs, loadTransferLogs]);
+
   const loadResolveBatchDetailEntries = useCallback(async (log: { log_id: string; banca_id: string }) => {
     setLoadingResolveBatchDetail(true);
     try {
@@ -2631,7 +2931,7 @@ export default function AdminLeadTransferPage() {
     try {
       const [entriesRes, consultantsRes] = await Promise.all([
         fetch(`/api/admin/crm/transfer-logs/entries?log_id=${encodeURIComponent(log.log_id)}&banca_id=${encodeURIComponent(log.banca_id)}`, { headers: headers() }),
-        fetch(`/api/admin/crm/consultants?banca_id=${encodeURIComponent(log.banca_id)}&hierarchy_only=1`, { headers: headers() }),
+        fetch(`/api/admin/crm/consultants?banca_id=${encodeURIComponent(log.banca_id)}&hierarchy_only=1&verify_crm=1`, { headers: headers() }),
       ]);
       const entriesJson = await entriesRes.json();
       const consultantsJson = await consultantsRes.json();
@@ -2839,7 +3139,7 @@ export default function AdminLeadTransferPage() {
     loadExpiredLogs();
     loadResolvedStats();
     if (historyBancaFilter === '') loadResolvedList();
-  }, [activeTab, historyBancaFilter, managementFrom, managementTo, managementTransferType, conversionConsultant, loadResolvedStats, loadResolvedList]);
+  }, [activeTab, historyBancaFilter, historyDonorConsultantFilter, managementFrom, managementTo, managementTransferType, conversionConsultant, loadResolvedStats, loadResolvedList]);
 
   // Leads transferidos mais de uma vez: contar por lead_id nos logs
   const leadTransferCountMap = React.useMemo(() => {
@@ -3182,7 +3482,7 @@ export default function AdminLeadTransferPage() {
             </div>
           </div>
 
-          {/* Abas: Transferir | Histórico | Solicitações */}
+          {/* Abas: Transferir | Histórico | Solicitações | Análise (bloqueável por flag) */}
           <div className="flex gap-1 p-1 bg-gray-100 dark:bg-[#333] rounded-xl w-fit">
             <button
               type="button"
@@ -3205,9 +3505,162 @@ export default function AdminLeadTransferPage() {
             >
               Solicitações
             </button>
+            {ANALYSIS_TAB_ENABLED && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('analysis')}
+                className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'analysis' ? 'bg-white dark:bg-[#2a2a2a] text-gray-900 dark:text-white shadow-sm' : 'text-gray-600 dark:text-[#aaa] hover:text-gray-900 dark:hover:text-white'}`}
+              >
+                Análise
+              </button>
+            )}
           </div>
 
-          {activeTab === 'solicitations' ? (
+          {activeTab === 'analysis' ? (
+            ANALYSIS_TAB_ENABLED ? (
+            /* Aba Análise: banca + período de inatividade → consultores com quantidade de leads transferidos disponíveis */
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl border border-gray-200 dark:border-[#404040] p-5 shadow-sm ring-1 ring-gray-100 dark:ring-transparent">
+              <div className="mb-4">
+                <h2 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                  <BarChart3 className="w-5 h-5 text-[#8CD955]" />
+                  Análise por consultor
+                </h2>
+                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                  Ordem das requisições (em segundo plano por consultor): (1) Verificar se o consultor existe na banca (total-indicateds-by-consultant — 200 = cadastrado, 404 = não segue). (2) Listar leads para redistribuição (redistribution-leads com período de inatividade). (3) Verificar leads não transferidos (get-indicateds-by-consultant com transferred_filter=no). Os resultados são exibidos na tabela à medida que cada consultor é processado.
+                </p>
+              </div>
+              <div className="p-4 rounded-xl border border-gray-200 dark:border-[#404040] mb-6 bg-gray-50/50 dark:bg-[#1f1f1f]/50">
+                <div className="flex flex-wrap items-end gap-4">
+                  <div>
+                    <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1.5">Banca</label>
+                    <select
+                      value={analysisBancaId}
+                      onChange={(e) => setAnalysisBancaId(e.target.value)}
+                      disabled={analysisLoading}
+                      className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm min-w-[200px] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                    >
+                      <option value="">Selecione a banca</option>
+                      {bancas.map((b) => (
+                        <option key={b.id} value={b.id}>{b.name || b.url || b.id}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1.5">Período de inatividade (dias)</label>
+                    <select
+                      value={analysisDaysInactive}
+                      onChange={(e) => setAnalysisDaysInactive(e.target.value)}
+                      disabled={analysisLoading}
+                      className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                    >
+                      {INACTIVITY_PRESETS.map((d) => (
+                        <option key={d} value={String(d)}>{d} dias</option>
+                      ))}
+                      <option value="other">Outro</option>
+                    </select>
+                  </div>
+                  {analysisDaysInactive === 'other' && (
+                    <div>
+                      <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1.5">Dias (valor)</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={365}
+                        value={analysisDaysCustom}
+                        onChange={(e) => setAnalysisDaysCustom(e.target.value.replace(/\D/g, '').slice(0, 3) || '90')}
+                        disabled={analysisLoading}
+                        className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm w-20 focus:ring-2 focus:ring-[#8CD955]"
+                        placeholder="90"
+                      />
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void runAnalysis()}
+                    disabled={analysisLoading || !analysisBancaId}
+                    className="px-4 py-2 rounded-lg text-sm font-medium bg-[#8CD955] text-white hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed focus:ring-2 focus:ring-[#8CD955]"
+                  >
+                    {analysisLoading ? (
+                      <span className="inline-flex items-center gap-2">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Analisando…
+                      </span>
+                    ) : (
+                      'Iniciar análise'
+                    )}
+                  </button>
+                  {analysisLoading && (
+                    <button
+                      type="button"
+                      onClick={() => { analysisAbortRef.current = true; }}
+                      className="px-4 py-2 rounded-lg text-sm font-medium border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040]"
+                    >
+                      Cancelar
+                    </button>
+                  )}
+                </div>
+              </div>
+              {analysisResults.length > 0 && (
+                <div className="overflow-x-auto border border-gray-200 dark:border-[#404040] rounded-xl">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 dark:bg-[#333] text-left">
+                      <tr>
+                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300 w-12">#</th>
+                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">Consultor</th>
+                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300">E-mail</th>
+                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300 text-right">Leads para redistribuir</th>
+                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300 text-right">Leads não transferidos</th>
+                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300 text-right" title="Entre os não transferidos, quantos também estão em leads para redistribuir (interseção; amostra da 1ª página).">Qualificam para redistribuir</th>
+                        <th className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300 w-24">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200 dark:divide-[#404040]">
+                      {sortedAnalysisResults.map((row, idx) => (
+                        <tr key={row.consultant_id} className="hover:bg-gray-50 dark:hover:bg-[#333]/50">
+                          <td className="px-4 py-3 text-gray-500 dark:text-gray-400 font-medium">{idx + 1}</td>
+                          <td className="px-4 py-3 text-gray-900 dark:text-white font-medium">{row.consultant_name || '—'}</td>
+                          <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{row.consultant_email}</td>
+                          <td className="px-4 py-3 text-right">
+                            <span className={`font-semibold ${row.leads_count > 0 ? 'text-[#8CD955]' : 'text-gray-500 dark:text-gray-400'}`}>
+                              {row.status === 'loading' ? '…' : (row.status === 'error' || row.status === 'not_registered') ? '—' : row.leads_count.toLocaleString('pt-BR')}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <span className={`font-semibold ${(row.not_transferred_count ?? 0) > 0 ? 'text-[#8CD955]' : 'text-gray-500 dark:text-gray-400'}`}>
+                              {row.status === 'loading' ? '…' : (row.status === 'error' || row.status === 'not_registered') ? '—' : (row.not_transferred_count ?? 0).toLocaleString('pt-BR')}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-right" title="Não transferidos que se enquadram nos critérios de redistribuição (1ª página).">
+                            <span className={`font-semibold ${(row.qualifies_count ?? 0) > 0 ? 'text-[#8CD955]' : 'text-gray-500 dark:text-gray-400'}`}>
+                              {row.status === 'loading' ? '…' : (row.status === 'error' || row.status === 'not_registered') ? '—' : (row.qualifies_count ?? 0).toLocaleString('pt-BR')}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">
+                            {row.status === 'loading' && <Loader2 className="w-4 h-4 animate-spin text-[#8CD955]" />}
+                            {row.status === 'error' && <span className="text-red-600 dark:text-red-400 text-xs">Erro</span>}
+                            {row.status === 'done' && <span className="text-emerald-600 dark:text-emerald-400 text-xs">OK</span>}
+                            {row.status === 'not_registered' && <span className="text-amber-600 dark:text-amber-400 text-xs">Não cadastrado</span>}
+                            {row.status === 'pending' && <span className="text-gray-400 text-xs">Aguardando</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {analysisResults.length === 0 && !analysisLoading && activeTab === 'analysis' && (
+                <p className="text-sm text-gray-500 dark:text-gray-400 py-8 text-center">
+                  Selecione a banca e clique em &quot;Iniciar análise&quot; para listar os consultores e a quantidade de leads disponíveis (ainda não transferidos) por período de inatividade.
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl border border-gray-200 dark:border-[#404040] p-8 shadow-sm ring-1 ring-gray-100 dark:ring-transparent text-center">
+              <p className="text-gray-600 dark:text-gray-400 font-medium">Aba Análise temporariamente indisponível.</p>
+              <button type="button" onClick={() => setActiveTab('transfer')} className="mt-3 px-4 py-2 rounded-lg bg-[#8CD955] text-white text-sm font-medium hover:bg-[#7BC84A]">Ir para Transferir</button>
+            </div>
+          )
+          ) : activeTab === 'solicitations' ? (
             /* Aba Solicitações de leads (gerentes) */
             <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl border border-gray-200 dark:border-[#404040] p-5 shadow-sm ring-1 ring-gray-100 dark:ring-transparent">
               <div className="mb-4">
@@ -3473,6 +3926,24 @@ export default function AdminLeadTransferPage() {
                       <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0 ml-auto" />
                     </button>
                     <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">Consultor destino para conversão</p>
+                  </div>
+                  {/* Consultor Doador — filtrar por origem da transferência */}
+                  <div className="lg:col-span-3">
+                    <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1.5 flex items-center gap-1">
+                      <User className="w-3.5 h-3.5" /> Consultor Doador
+                    </label>
+                    <button
+                      type="button"
+                      onClick={openDonorConsultantModal}
+                      disabled={!(historyBancaFilter || bancaId) || (showDonorConsultantModal && loadingDonorModalConsultants)}
+                      className="w-full flex items-center gap-2 border border-gray-300 dark:border-[#555] rounded-lg px-3 py-2 text-sm text-left bg-white dark:bg-[#333] dark:text-white hover:bg-gray-50 dark:hover:bg-[#404040] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <span className="truncate text-gray-800 dark:text-white">
+                        {!(historyBancaFilter || bancaId) ? 'Selecione a banca' : (showDonorConsultantModal && loadingDonorModalConsultants) ? 'Carregando...' : historyDonorConsultantFilter ? (donorModalConsultants.find((c) => c.email === historyDonorConsultantFilter)?.full_name || consultants.find((c) => c.email === historyDonorConsultantFilter)?.full_name || historyDonorConsultantFilter) : 'Selecionar consultor'}
+                      </span>
+                      <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0 ml-auto" />
+                    </button>
+                    <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">Consultor origem (quem doou os leads)</p>
                   </div>
                   {/* Status — normal, expiradas, resolvidas */}
                   <div className="lg:col-span-2">
@@ -4098,6 +4569,40 @@ export default function AdminLeadTransferPage() {
                       <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Sem saldo</p>
                       <p className="text-2xl font-bold text-gray-600 mt-1">{transferStats?.transferidos_sem_saldo ?? 0}</p>
                     </div>
+                  </div>
+                  {/* Botão desvincular todos os leads dos consultores (escopo: banca do filtro ou todas) */}
+                  <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-amber-200 dark:border-amber-800/50 bg-amber-50/30 dark:bg-amber-950/20 px-4 py-3">
+                    <p className="text-sm text-gray-700 dark:text-gray-300">
+                      Todos os leads atualmente vinculados aos consultores ficarão disponíveis para repasse.
+                      {historyBancaFilter ? ' Escopo: banca selecionada no filtro.' : ' Escopo: todas as bancas.'}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => void desvincularTodosLeads()}
+                      disabled={desvincularTodosLoading || loadingResolvedStats || (resolvedStats.total_vinculado ?? 0) === 0}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-amber-500 text-amber-950 hover:bg-amber-400 border border-amber-600/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      title="Desvincular todos os leads dos consultores (ficam disponíveis para repasse)"
+                    >
+                      {desvincularTodosLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Unlink className="w-4 h-4" />}
+                      {desvincularTodosLoading ? 'Desvinculando…' : 'Desvincular todos os leads dos consultores'}
+                    </button>
+                  </div>
+                  {/* Botão reverter resolvidas para expirado (nova análise) */}
+                  <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-blue-200 dark:border-blue-800/50 bg-blue-50/30 dark:bg-blue-950/20 px-4 py-3">
+                    <p className="text-sm text-gray-700 dark:text-gray-300">
+                      Todas as transferências já resolvidas (vinculados + disponíveis para repasse) voltarão a &quot;pendente&quot;. Use em seguida &quot;Resolver transferências expiradas&quot; ou aguarde o cron para rodar a análise novamente.
+                      {historyBancaFilter ? ' Escopo: banca selecionada no filtro.' : ' Escopo: todas as bancas.'}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => void revertResolvedToPending()}
+                      disabled={revertResolvedLoading || loadingResolvedStats || ((resolvedStats.total_vinculado ?? 0) + (resolvedStats.total_disponivel ?? 0)) === 0}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-blue-500 text-blue-950 hover:bg-blue-400 border border-blue-600/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      title="Reverter resolvidas para pendente e permitir nova análise"
+                    >
+                      {revertResolvedLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+                      {revertResolvedLoading ? 'Revertendo…' : 'Reverter resolvidas para expirado (nova análise)'}
+                    </button>
                   </div>
                   {SHOW_BAR_CHART_BY_BANCA && (
                     <div className="mb-6">
@@ -5349,6 +5854,18 @@ export default function AdminLeadTransferPage() {
                       <input type="text" inputMode="decimal" placeholder="Ex: 100" value={minSumBalance} onChange={(e) => setMinSumBalance(e.target.value)} className="w-28 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Leads até somar este valor</p>
                     </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="show-only-not-transferred"
+                        checked={showOnlyNotTransferred}
+                        onChange={(e) => setShowOnlyNotTransferred(e.target.checked)}
+                        className="rounded border-gray-300 dark:border-[#555] text-[#8CD955] focus:ring-[#8CD955]"
+                      />
+                      <label htmlFor="show-only-not-transferred" className="text-xs font-semibold text-gray-700 dark:text-gray-300 cursor-pointer">
+                        Mostrar apenas não transferidos
+                      </label>
+                    </div>
                     <div>
                       <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Auto-selecionar (N leads)</label>
                       <input type="number" min={1} max={MAX_LEADS_SELECT} value={quantity} onChange={(e) => setQuantity(String(Math.min(MAX_LEADS_SELECT, Math.max(1, parseInt(e.target.value, 10) || 1))))} className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
@@ -5392,6 +5909,7 @@ export default function AdminLeadTransferPage() {
                               <th className="text-left p-2 font-semibold text-gray-700 dark:text-gray-200">Total Prêmio</th>
                               <th className="text-left p-2 font-semibold text-gray-700 dark:text-gray-200">Saque disponível</th>
                               <th className="text-left p-2 font-semibold text-gray-700 dark:text-gray-200">Status</th>
+                              <th className="text-left p-2 font-semibold text-gray-700 dark:text-gray-200" title="Se o lead já foi transferido (CRM).">Transferido</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -5403,6 +5921,7 @@ export default function AdminLeadTransferPage() {
                               const totalApostado = lead.total_apostado != null ? parseFloat(String(lead.total_apostado)) : null;
                               const totalGanho = (lead as Record<string, unknown>).total_ganho != null ? parseFloat(String((lead as Record<string, unknown>).total_ganho)) : null;
                               const availableWithdraw = (lead as Record<string, unknown>).available_withdraw != null ? parseFloat(String((lead as Record<string, unknown>).available_withdraw)) : null;
+                              const transferred = (lead as Record<string, unknown>)._transferred;
                               const fmt = (v: number | null) => (v != null ? `R$ ${Number(v).toFixed(2).replace('.', ',')}` : '-');
                               return (
                                 <tr key={String(lead.id)} className="border-t border-gray-100 dark:border-[#404040]">
@@ -5418,6 +5937,11 @@ export default function AdminLeadTransferPage() {
                                   <td className="p-2 text-gray-700 dark:text-gray-300">{fmt(availableWithdraw)}</td>
                                   <td className="p-2">
                                     <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 dark:bg-[#404040] text-gray-700 dark:text-gray-200">{getStatusLabel(lead.status as string)}</span>
+                                  </td>
+                                  <td className="p-2">
+                                    {transferred === true && <span className="text-amber-600 dark:text-amber-400 text-xs font-medium">Sim</span>}
+                                    {transferred === false && <span className="text-emerald-600 dark:text-emerald-400 text-xs font-medium">Não</span>}
+                                    {transferred !== true && transferred !== false && <span className="text-gray-400 dark:text-gray-500 text-xs">—</span>}
                                   </td>
                                 </tr>
                               );
@@ -5523,6 +6047,10 @@ export default function AdminLeadTransferPage() {
                           <option key={t} value={t}>{getTemperatureLabel(t)}</option>
                         ))}
                       </select>
+                      <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer whitespace-nowrap">
+                        <input type="checkbox" checked={showOnlyNotTransferred} onChange={(e) => setShowOnlyNotTransferred(e.target.checked)} className="rounded border-gray-300 dark:border-[#555] text-[#8CD955] focus:ring-[#8CD955]" />
+                        Só não transferidos
+                      </label>
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">Total na Carteira:</span>
                         <select value={balanceFilter} onChange={(e) => setBalanceFilter(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[120px]">
@@ -5661,12 +6189,13 @@ export default function AdminLeadTransferPage() {
                           <th className="text-left p-3 font-semibold text-gray-700 dark:text-gray-200 whitespace-nowrap hidden md:table-cell">Total apostado</th>
                           <th className="text-left p-3 font-semibold text-gray-700 dark:text-gray-200 whitespace-nowrap hidden md:table-cell">Total Prêmio</th>
                           <th className="text-left p-3 font-semibold text-gray-700 dark:text-gray-200 whitespace-nowrap hidden md:table-cell">Saque disponível</th>
+                          <th className="text-left p-3 font-semibold text-gray-700 dark:text-gray-200 whitespace-nowrap" title="Se o lead já foi transferido (CRM).">Transferido</th>
                         </tr>
                       </thead>
                       <tbody>
                         {paginatedLeads.length === 0 ? (
                           <tr>
-                            <td colSpan={10} className="p-4 text-center text-gray-500 dark:text-gray-400">
+                            <td colSpan={11} className="p-4 text-center text-gray-500 dark:text-gray-400">
                               Nenhum lead corresponde à busca.
                             </td>
                           </tr>
@@ -5684,6 +6213,7 @@ export default function AdminLeadTransferPage() {
                             const totalApostado = lead.total_apostado as number | null | undefined;
                             const totalGanho = (lead as Record<string, unknown>).total_ganho as number | null | undefined;
                             const availableWithdraw = (lead as Record<string, unknown>).available_withdraw as number | null | undefined;
+                            const transferred = (lead as Record<string, unknown>)._transferred;
                             const fmt = (v: number | null | undefined) => (v != null ? `R$ ${Number(v).toFixed(2).replace('.', ',')}` : '-');
                             return (
                               <tr key={key} className={`border-t border-gray-100 dark:border-[#404040] ${checked ? 'bg-green-50 dark:bg-green-900/20' : ''}`}>
@@ -5706,6 +6236,11 @@ export default function AdminLeadTransferPage() {
                                 <td className="p-2 text-gray-600 dark:text-gray-300 hidden md:table-cell">{fmt(totalApostado)}</td>
                                 <td className="p-2 text-gray-600 dark:text-gray-300 hidden md:table-cell">{fmt(totalGanho)}</td>
                                 <td className="p-2 text-gray-600 dark:text-gray-300 hidden md:table-cell">{fmt(availableWithdraw)}</td>
+                                <td className="p-2">
+                                  {transferred === true && <span className="text-amber-600 dark:text-amber-400 text-xs font-medium">Sim</span>}
+                                  {transferred === false && <span className="text-emerald-600 dark:text-emerald-400 text-xs font-medium">Não</span>}
+                                  {transferred !== true && transferred !== false && <span className="text-gray-400 dark:text-gray-500 text-xs">—</span>}
+                                </td>
                               </tr>
                             );
                           })
@@ -6012,6 +6547,89 @@ export default function AdminLeadTransferPage() {
                 Cancelar
               </button>
               <button type="button" onClick={confirmConversionConsultant} className="px-4 py-2 rounded-lg bg-[#20c997] text-white font-medium hover:bg-[#0eb892]">
+                Selecionar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Selecionar consultor doador — aba Histórico & Conversão */}
+      {showDonorConsultantModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setShowDonorConsultantModal(false)} role="dialog" aria-modal="true" aria-labelledby="modal-donor-consultant-title">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-xl max-w-md w-full max-h-[85vh] overflow-hidden flex flex-col border border-gray-200 dark:border-[#404040]" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-3 bg-[#8CD955] text-white rounded-t-2xl">
+              <div className="flex items-center gap-2">
+                <User className="w-5 h-5 flex-shrink-0" />
+                <h2 id="modal-donor-consultant-title" className="font-bold text-lg">Consultor Doador</h2>
+              </div>
+              <button type="button" onClick={() => setShowDonorConsultantModal(false)} className="p-1.5 rounded-lg hover:bg-white/20 transition-colors" aria-label="Fechar">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 flex flex-col flex-1 min-h-0">
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+                Filtre o histórico por consultor de origem (quem doou os leads). Escolha um ou &quot;Nenhum&quot; para listar todos.
+              </p>
+              <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 block mb-1.5">Buscar consultor</label>
+              <div className="relative mb-3">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-gray-400 pointer-events-none" />
+                <input
+                  type="text"
+                  value={donorConsultantSearchQuery}
+                  onChange={(e) => setDonorConsultantSearchQuery(e.target.value)}
+                  placeholder="Nome ou email..."
+                  className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white dark:placeholder:text-gray-400 rounded-lg text-sm text-gray-800 placeholder:text-gray-500 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] shadow-sm"
+                />
+              </div>
+              <div className="border border-gray-200 dark:border-[#404040] rounded-lg overflow-y-auto flex-1 min-h-[200px]" style={{ maxHeight: '320px' }}>
+                {loadingDonorModalConsultants ? (
+                  <div className="p-6 text-center text-sm text-gray-500">Carregando consultores da banca...</div>
+                ) : (
+                  <ul className="divide-y divide-gray-100 dark:divide-[#404040]">
+                    <li>
+                      <button
+                        type="button"
+                        onClick={() => setDonorConsultantPendingEmail(null)}
+                        className={`w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-gray-50 dark:hover:bg-[#333] transition-colors ${donorConsultantPendingEmail === null ? 'bg-[#8CD955]/10 dark:bg-[#8CD955]/20 ring-1 ring-[#8CD955]/30' : ''}`}
+                      >
+                        <span className="flex-shrink-0 w-9 h-9 rounded-full bg-gray-100 dark:bg-[#404040] text-gray-500 dark:text-gray-400 flex items-center justify-center text-sm font-semibold">—</span>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-semibold text-gray-700 dark:text-gray-300">Nenhum</p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">Não filtrar por consultor doador</p>
+                        </div>
+                      </button>
+                    </li>
+                    {donorConsultantFilteredList.map((c) => {
+                      const isSelected = donorConsultantPendingEmail?.toLowerCase() === c.email?.toLowerCase();
+                      const initial = (c.full_name || c.email || '?').charAt(0).toUpperCase();
+                      return (
+                        <li key={c.id}>
+                          <button
+                            type="button"
+                            onClick={() => setDonorConsultantPendingEmail(c.email ?? '')}
+                            className={`w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-gray-50 dark:hover:bg-[#333] transition-colors ${isSelected ? 'bg-[#8CD955]/10 dark:bg-[#8CD955]/20 ring-1 ring-[#8CD955]/30' : ''}`}
+                          >
+                            <span className="flex-shrink-0 w-9 h-9 rounded-full bg-gray-200 dark:bg-[#404040] text-gray-700 dark:text-gray-300 flex items-center justify-center text-sm font-semibold">
+                              {initial}
+                            </span>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-semibold text-gray-900 dark:text-white truncate">{c.full_name || c.email || '-'}</p>
+                              <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{c.email}</p>
+                            </div>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            </div>
+            <div className="flex gap-2 justify-end p-4 border-t border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#333] rounded-b-2xl">
+              <button type="button" onClick={() => setShowDonorConsultantModal(false)} className="px-4 py-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 bg-white dark:bg-[#333] hover:bg-gray-50 dark:hover:bg-[#404040] font-medium">
+                Cancelar
+              </button>
+              <button type="button" onClick={confirmDonorConsultant} className="px-4 py-2 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A]">
                 Selecionar
               </button>
             </div>

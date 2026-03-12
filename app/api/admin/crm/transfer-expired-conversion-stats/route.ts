@@ -118,7 +118,7 @@ async function getConversionByConsultant(
 /**
  * GET /api/admin/crm/transfer-expired-conversion-stats
  * Estatísticas de conversão (depósito após transferência) apenas para transferências já expiradas (prazo 10d).
- * Query: banca_id (opcional), from (YYYY-MM-DD), to (YYYY-MM-DD)
+ * Query: banca_id (opcional), from (YYYY-MM-DD), to (YYYY-MM-DD), source_consultant_email? (consultor doador)
  * - Sem banca_id: retorna by_banca (total_transferidos e convertidos por banca).
  * - Com banca_id: retorna by_consultant (total_transferidos e convertidos por consultor destino).
  */
@@ -130,6 +130,7 @@ export async function GET(req: NextRequest) {
     const bancaId = searchParams.get('banca_id')?.trim() || null;
     const fromParam = normalizeDateParam(searchParams.get('from'));
     const toParam = normalizeDateParam(searchParams.get('to'));
+    const sourceConsultantEmail = searchParams.get('source_consultant_email')?.trim() || null;
     const expiredCutoff = getExpiredCutoffISO();
 
     if (bancaId) {
@@ -143,6 +144,7 @@ export async function GET(req: NextRequest) {
         .lte('created_at', expiredCutoff);
       if (fromParam) logsQuery = logsQuery.gte('created_at', dateToStartOfDaySãoPauloISO(fromParam));
       if (toParam) logsQuery = logsQuery.lte('created_at', dateToEndOfDaySãoPauloISO(toParam));
+      if (sourceConsultantEmail) logsQuery = logsQuery.ilike('source_consultant_email', sourceConsultantEmail);
       const { data: logs } = await logsQuery.order('created_at', { ascending: false }).limit(5000);
       const logIds = (logs ?? []).map((r: { id: string }) => r.id);
       const byConsultant = await getConversionByConsultant(resolved.bancaId, resolved.crmBaseUrl, logIds);
@@ -174,6 +176,7 @@ export async function GET(req: NextRequest) {
         .lte('created_at', expiredCutoff);
       if (fromParam) logsQuery = logsQuery.gte('created_at', dateToStartOfDaySãoPauloISO(fromParam));
       if (toParam) logsQuery = logsQuery.lte('created_at', dateToEndOfDaySãoPauloISO(toParam));
+      if (sourceConsultantEmail) logsQuery = logsQuery.ilike('source_consultant_email', sourceConsultantEmail);
       const { data: logs } = await logsQuery.order('created_at', { ascending: false }).limit(5000);
       const logIds = (logs ?? []).map((r: { id: string }) => r.id);
       const byConsultant = await getConversionByConsultant(resolved.bancaId, resolved.crmBaseUrl, logIds);
