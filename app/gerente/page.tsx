@@ -284,6 +284,15 @@ export default function GerentePage() {
   const { toasts, showToast, removeToast } = useToast();
   const [backgroundBancasLoading, setBackgroundBancasLoading] = useState(false);
   const [backgroundBancasProgress, setBackgroundBancasProgress] = useState({ current: 0, total: 0 });
+  /** Progresso da busca de consultores em lotes de 5: exibe "Buscando consultores X-Y de N" (e banca quando "Todas as bancas"). */
+  const [loadingConsultoresProgress, setLoadingConsultoresProgress] = useState<{
+    from: number;
+    to: number;
+    total: number;
+    bancaCurrent?: number;
+    bancaTotal?: number;
+    bancaName?: string;
+  } | null>(null);
 
   // Filtros e paginação da tabela "Sua equipe"
   const [tableSearchTerm, setTableSearchTerm] = useState('');
@@ -292,6 +301,68 @@ export default function GerentePage() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [teamTablePageSize, setTeamTablePageSize] = useState(10);
   const [teamTablePage, setTeamTablePage] = useState(1);
+
+  /** Agrega gerenteTotalKpis e chartData a partir da lista completa de consultorMetrics (usado ao finalizar busca em lotes). */
+  const aggregateKpisAndChartFromMetrics = useCallback((consultorMetrics: ConsultorMetric[]) => {
+    let totalLeadsForLtv = 0;
+    let sumLtvWeighted = 0;
+    const gerenteTotalKpis = consultorMetrics.reduce(
+      (acc, consultor) => {
+        if (consultor.externalKpis && !consultor.externalKpisError) {
+          const k = consultor.externalKpis;
+          acc.total_leads += k.total_leads || 0;
+          acc.total_deposited += k.total_deposited || 0;
+          acc.total_bets += k.total_bets || 0;
+          acc.total_prizes += k.total_prizes || 0;
+          acc.awarded_clients_count += k.awarded_clients_count || 0;
+          acc.active_leads += k.active_leads || 0;
+          acc.net_profit += k.net_profit || 0;
+          if (k.ltv_avg && k.total_leads > 0) {
+            sumLtvWeighted += k.ltv_avg * k.total_leads;
+            totalLeadsForLtv += k.total_leads;
+          }
+        }
+        return acc;
+      },
+      {
+        total_leads: 0,
+        total_deposited: 0,
+        total_bets: 0,
+        total_prizes: 0,
+        awarded_clients_count: 0,
+        active_leads: 0,
+        net_profit: 0,
+        ltv_avg: 0,
+        conversion_rate: 0,
+      } as {
+        total_leads: number;
+        total_deposited: number;
+        total_bets: number;
+        total_prizes: number;
+        awarded_clients_count: number;
+        active_leads: number;
+        net_profit: number;
+        ltv_avg: number;
+        conversion_rate: number;
+      }
+    );
+    gerenteTotalKpis.ltv_avg = totalLeadsForLtv > 0 ? sumLtvWeighted / totalLeadsForLtv : 0;
+    gerenteTotalKpis.conversion_rate =
+      gerenteTotalKpis.total_leads > 0 ? (gerenteTotalKpis.active_leads / gerenteTotalKpis.total_leads) * 100 : 0;
+    const chartData = {
+      status_distribution: {
+        Ativo: gerenteTotalKpis.active_leads,
+        Novo: Math.max(0, gerenteTotalKpis.total_leads - gerenteTotalKpis.active_leads),
+      },
+      financial_metrics: {
+        total_deposited: gerenteTotalKpis.total_deposited,
+        total_bets: gerenteTotalKpis.total_bets,
+        total_prizes: gerenteTotalKpis.total_prizes,
+        net_profit: gerenteTotalKpis.net_profit,
+      },
+    };
+    return { gerenteTotalKpis, chartData };
+  }, []);
 
   // Calcula as datas baseado no filtro selecionado
   const getDateRange = () => {
@@ -633,94 +704,162 @@ export default function GerentePage() {
 
       const { dateFrom, dateTo } = getDateRange();
 
-      // "Todas as bancas": primeira banca na view imediatamente, demais em segundo plano
+      // "Todas as bancas": busca em lotes de 5 consultores por banca, acumulando na tela a cada lote
       if (selectedBanca === BANCA_ALL && bancas.length > 0) {
         setBackgroundBancasLoading(false);
-        const buildParams = (bancaUrl?: string) => {
-          const params = new URLSearchParams();
-          if (dateFrom) params.append('date_from', dateFrom);
-          if (dateTo) params.append('date_to', dateTo);
-          if (bancaUrl) params.append('banca_url', bancaUrl);
-          if (selectedConsultor && selectedConsultor !== 'all') params.append('consultor_id', selectedConsultor);
-          if (isAdminOrSuperAdmin && selectedGerente) params.append('gerente_id', selectedGerente);
-          return params;
-        };
+        const BATCH_SIZE_ALL = 5;
+        const baseParams = new URLSearchParams();
+        if (dateFrom) baseParams.append('date_from', dateFrom);
+        if (dateTo) baseParams.append('date_to', dateTo);
+        if (selectedConsultor && selectedConsultor !== 'all') baseParams.append('consultor_id', selectedConsultor);
+        if (isAdminOrSuperAdmin && selectedGerente) baseParams.append('gerente_id', selectedGerente);
+        baseParams.append('limit', String(BATCH_SIZE_ALL));
 
-        const firstUrl = `/api/gerente/dashboard?${buildParams(bancas[0].url).toString()}`;
-        const firstRes = await fetch(firstUrl, { headers: { 'X-User-Id': userId as string } });
-        const firstResult = await firstRes.json();
+        let merged: GerenteDashboardData | null = null;
 
-        if (firstResult.success) {
-          setData(firstResult.data);
-          if (selectedConsultor === 'all' && firstResult.data.consultorMetrics) {
-            setAllConsultores(firstResult.data.consultorMetrics);
-          }
-        }
+        for (let bancaIndex = 0; bancaIndex < bancas.length; bancaIndex++) {
+          const banca = bancas[bancaIndex];
+          const bancaName = banca.name || banca.url || `Banca ${bancaIndex + 1}`;
+          let offset = 0;
 
-        if (isInitial) setInitialLoading(false);
-        else setDataLoading(false);
-        loadTagsReport();
+          for (;;) {
+            const params = new URLSearchParams(baseParams);
+            params.append('banca_url', banca.url);
+            params.set('offset', String(offset));
+            const url = `/api/gerente/dashboard?${params.toString()}`;
 
-        if (bancas.length <= 1) return;
+            setLoadingConsultoresProgress({
+              from: offset + 1,
+              to: offset + BATCH_SIZE_ALL,
+              total: 0,
+              bancaCurrent: bancaIndex + 1,
+              bancaTotal: bancas.length,
+              bancaName,
+            });
 
-        setBackgroundBancasLoading(true);
-        setBackgroundBancasProgress({ current: 1, total: bancas.length });
-
-        let merged: GerenteDashboardData | null = firstResult.success ? firstResult.data : null;
-
-        for (let i = 1; i < bancas.length; i++) {
-          const url = `/api/gerente/dashboard?${buildParams(bancas[i].url).toString()}`;
-          try {
             const res = await fetch(url, { headers: { 'X-User-Id': userId as string } });
             const json = await res.json();
-            if (json.success && json.data) {
-              merged = mergeDashboardData(merged, json.data);
-              setData(merged);
-              if (selectedConsultor === 'all' && merged?.consultorMetrics) {
-                setAllConsultores(merged.consultorMetrics);
-              }
+
+            if (!json.success || !json.data) break;
+
+            const batch = json.data.consultorMetrics as ConsultorMetric[] | undefined;
+            const totalConsultores = json.data.totalConsultores as number | undefined;
+            const hasMore = json.data.hasMore === true;
+
+            const batchData: GerenteDashboardData = {
+              gerenteInfo: json.data.gerenteInfo ?? merged?.gerenteInfo ?? { id: '', email: '', name: '' },
+              consultorMetrics: batch ?? [],
+            };
+            merged = mergeDashboardData(merged, batchData);
+
+            setLoadingConsultoresProgress({
+              from: offset + 1,
+              to: Math.min(offset + (batch?.length ?? 0), totalConsultores ?? offset + (batch?.length ?? 0)),
+              total: totalConsultores ?? merged.consultorMetrics.length,
+              bancaCurrent: bancaIndex + 1,
+              bancaTotal: bancas.length,
+              bancaName,
+            });
+
+            setData(merged);
+            if (selectedConsultor === 'all' && merged.consultorMetrics.length > 0) {
+              setAllConsultores(merged.consultorMetrics);
             }
-          } catch {
-            // ignora erro de uma banca e segue
+
+            if (!hasMore || !batch?.length) break;
+            offset += BATCH_SIZE_ALL;
           }
-          setBackgroundBancasProgress((p) => ({ ...p, current: i + 1 }));
         }
 
-        setBackgroundBancasLoading(false);
-        setBackgroundBancasProgress({ current: 0, total: 0 });
-        showToast('Todas as bancas foram carregadas.', 'success');
+        if (merged && merged.consultorMetrics.length > 0) {
+          const { gerenteTotalKpis, chartData } = aggregateKpisAndChartFromMetrics(merged.consultorMetrics);
+          setData((prev) => (prev ? { ...prev, gerenteTotalKpis, chartData } : prev));
+        }
+        setLoadingConsultoresProgress(null);
+        loadTagsReport();
+        if (isInitial) setInitialLoading(false);
+        else setDataLoading(false);
+        showToast('Equipe e todas as bancas carregadas.', 'success');
         return;
       }
 
-      let url = '/api/gerente/dashboard';
-      const params = new URLSearchParams();
-      if (dateFrom) params.append('date_from', dateFrom);
-      if (dateTo) params.append('date_to', dateTo);
+      const BATCH_SIZE = 5;
+      const baseParams = new URLSearchParams();
+      if (dateFrom) baseParams.append('date_from', dateFrom);
+      if (dateTo) baseParams.append('date_to', dateTo);
       if (selectedBanca && selectedBanca !== BANCA_ALL) {
-        params.append('banca_url', selectedBanca);
+        baseParams.append('banca_url', selectedBanca);
       }
       if (selectedConsultor && selectedConsultor !== 'all') {
-        params.append('consultor_id', selectedConsultor);
+        baseParams.append('consultor_id', selectedConsultor);
       }
       if (isAdminOrSuperAdmin && selectedGerente) {
-        params.append('gerente_id', selectedGerente);
+        baseParams.append('gerente_id', selectedGerente);
       }
-      if (params.toString()) {
-        url += `?${params.toString()}`;
-      }
+      baseParams.append('limit', String(BATCH_SIZE));
 
-      const response = await fetch(url, {
-        headers: { 'X-User-Id': userId as string }
-      });
-      const result = await response.json();
+      let offset = 0;
+      let accumulatedMetrics: ConsultorMetric[] = [];
+      let gerenteInfo: GerenteDashboardData['gerenteInfo'] | null = null;
 
-      if (result.success) {
-        setData(result.data);
-        if (!selectedBanca && selectedConsultor === 'all' && result.data.consultorMetrics) {
-          setAllConsultores(result.data.consultorMetrics);
+      for (;;) {
+        const params = new URLSearchParams(baseParams);
+        params.set('offset', String(offset));
+        const url = `/api/gerente/dashboard?${params.toString()}`;
+
+        setLoadingConsultoresProgress((prev) => {
+          const total = prev?.total ?? 0;
+          return { from: offset + 1, to: Math.min(offset + BATCH_SIZE, total || offset + BATCH_SIZE), total: total || 0 };
+        });
+
+        const response = await fetch(url, {
+          headers: { 'X-User-Id': userId as string },
+        });
+        const result = await response.json();
+
+        if (!result.success || !result.data) break;
+
+        const batch = result.data.consultorMetrics as ConsultorMetric[];
+        const totalConsultores = result.data.totalConsultores as number | undefined;
+        const hasMore = result.data.hasMore === true;
+
+        if (batch?.length) {
+          accumulatedMetrics = [...accumulatedMetrics, ...batch];
         }
+        if (result.data.gerenteInfo) {
+          gerenteInfo = result.data.gerenteInfo;
+        }
+
+        setLoadingConsultoresProgress({
+          from: offset + 1,
+          to: Math.min(offset + batch.length, totalConsultores ?? offset + batch.length),
+          total: totalConsultores ?? accumulatedMetrics.length,
+        });
+
+        setData((prev) => {
+          const next: GerenteDashboardData = {
+            gerenteInfo: gerenteInfo ?? prev?.gerenteInfo ?? { id: '', email: '', name: '' },
+            consultorMetrics: accumulatedMetrics,
+          };
+          if (!hasMore && accumulatedMetrics.length > 0) {
+            const { gerenteTotalKpis, chartData } = aggregateKpisAndChartFromMetrics(accumulatedMetrics);
+            next.gerenteTotalKpis = gerenteTotalKpis;
+            next.chartData = chartData;
+          } else if (prev?.gerenteTotalKpis) {
+            next.gerenteTotalKpis = prev.gerenteTotalKpis;
+            next.chartData = prev.chartData;
+          }
+          return next;
+        });
+        if (selectedConsultor === 'all' && accumulatedMetrics.length > 0) {
+          setAllConsultores(accumulatedMetrics);
+        }
+
+        if (!hasMore) break;
+        offset += BATCH_SIZE;
       }
 
+      setLoadingConsultoresProgress(null);
       loadTagsReport();
 
     } catch (error) {
@@ -1027,6 +1166,24 @@ export default function GerentePage() {
     }
   };
 
+  /** Durante a busca em lotes, exibe KPIs e gráficos parciais com o que já foi carregado; ao terminar usa os totais finais. (Hooks devem vir antes de qualquer return.) */
+  const consultorMetricsForKpis = data?.consultorMetrics ?? [];
+  const gerenteTotalKpis = React.useMemo(() => {
+    if (loadingConsultoresProgress && consultorMetricsForKpis.length > 0) {
+      const { gerenteTotalKpis: partial } = aggregateKpisAndChartFromMetrics(consultorMetricsForKpis);
+      return partial;
+    }
+    return data?.gerenteTotalKpis ?? null;
+  }, [data?.gerenteTotalKpis, data?.consultorMetrics, loadingConsultoresProgress, aggregateKpisAndChartFromMetrics]);
+
+  const chartData = React.useMemo(() => {
+    if (loadingConsultoresProgress && consultorMetricsForKpis.length > 0) {
+      const { chartData: partial } = aggregateKpisAndChartFromMetrics(consultorMetricsForKpis);
+      return partial;
+    }
+    return data?.chartData ?? null;
+  }, [data?.chartData, data?.consultorMetrics, loadingConsultoresProgress, aggregateKpisAndChartFromMetrics]);
+
   if (checking) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-[#1a1a1a]">
@@ -1051,8 +1208,6 @@ export default function GerentePage() {
 
   const gerenteInfo = data?.gerenteInfo || { id: '', email: '', name: '' };
   const consultorMetrics = data?.consultorMetrics || [];
-  const gerenteTotalKpis = data?.gerenteTotalKpis || null;
-  const chartData = data?.chartData || null;
 
   // Calcula Top 5 Consultores por Vendas (total_deposited)
   const top5Consultants = [...consultorMetrics]
@@ -1684,9 +1839,25 @@ export default function GerentePage() {
           </div>
         )}
 
+        {/* Loading da busca de consultores em lotes — fixo no topo do dashboard para ficar sempre visível */}
+        {loadingConsultoresProgress && (
+          <div className="flex flex-wrap items-center gap-2 text-sm text-[#8CD955] bg-[#8CD95510] dark:bg-[#8CD95515] border border-[#8CD95530] dark:border-[#8CD95540] rounded-xl px-4 py-3 shadow-sm">
+            <div className="animate-spin rounded-full h-5 w-5 border-2 border-[#8CD955] border-t-transparent shrink-0" />
+            <span className="font-medium">
+              Buscando consultores {loadingConsultoresProgress.from}-{loadingConsultoresProgress.to} de {loadingConsultoresProgress.total || '…'}
+              {loadingConsultoresProgress.bancaTotal != null && loadingConsultoresProgress.bancaTotal > 0 && (
+                <> · Banca {loadingConsultoresProgress.bancaCurrent}/{loadingConsultoresProgress.bancaTotal}{loadingConsultoresProgress.bancaName ? ` (${loadingConsultoresProgress.bancaName})` : ''}</>
+              )}
+            </span>
+            <span className="text-gray-500 dark:text-gray-400">
+              — O dashboard e a tabela abaixo são atualizados com os dados à medida que são carregados.
+            </span>
+          </div>
+        )}
+
         {/* Resumo Geral do Gerente */}
         <div className="relative">
-          {dataLoading && (
+          {(dataLoading || initialLoading) && !gerenteTotalKpis && consultorMetrics.length === 0 && (
             <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
             </div>
@@ -1798,7 +1969,7 @@ export default function GerentePage() {
 
         {/* Gráficos */}
         <div className="relative">
-          {dataLoading && (
+          {(dataLoading || initialLoading) && !chartData && consultorMetrics.length === 0 && (
             <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
             </div>
@@ -2151,19 +2322,20 @@ export default function GerentePage() {
 
         {/* Consultores List */}
         <div className="relative">
-          {dataLoading && (
+          {dataLoading && !loadingConsultoresProgress && consultorMetrics.length === 0 && (
             <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
             </div>
           )}
           <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
-            <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/50 flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <h2 className="text-sm font-bold text-gray-600 dark:text-gray-400 uppercase tracking-wider flex items-center gap-2">
-                <Users className="w-4 h-4" />
-                Sua equipe
-              </h2>
+            <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/50 flex flex-col gap-3">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <h2 className="text-sm font-bold text-gray-600 dark:text-gray-400 uppercase tracking-wider flex items-center gap-2">
+                  <Users className="w-4 h-4" />
+                  Sua equipe
+                </h2>
 
-              <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full md:w-auto">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full md:w-auto">
                 <div className="relative w-full sm:flex-1 md:w-64">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-gray-400" />
                   <input
@@ -2186,6 +2358,7 @@ export default function GerentePage() {
                   <UserPlus className="w-4 h-4" />
                   Novo Consultor
                 </button>
+              </div>
               </div>
             </div>
 

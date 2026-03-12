@@ -273,6 +273,11 @@ export async function GET(req: NextRequest) {
     const dateTo = searchParams.get('date_to');
     const bancaUrlFilter = searchParams.get('banca_url'); // Filtro de banca
     const consultorIdFilter = searchParams.get('consultor_id'); // Filtro de consultor
+    const offsetParam = searchParams.get('offset');
+    const limitParam = searchParams.get('limit');
+    const usePagination = limitParam != null && limitParam !== '';
+    const offset = usePagination ? Math.max(0, parseInt(offsetParam || '0', 10)) : 0;
+    const limit = usePagination ? Math.max(1, Math.min(100, parseInt(limitParam || '10', 10))) : 0;
 
     console.log('[Gerente Dashboard API] 🚀 Iniciando busca de métricas');
     console.log('[Gerente Dashboard API] 📅 Filtros recebidos:', { 
@@ -367,142 +372,155 @@ export async function GET(req: NextRequest) {
     if (consultorIdFilter) {
       consultores = consultores.filter(c => c.id === consultorIdFilter);
     }
-    
-    console.log('[Gerente Dashboard API] 👥 Total de consultores encontrados:', consultores.length);
 
-    // 4. Métricas por consultor com KPIs externos
-    // Removidos agregadores de gráficos que dependem de dados individuais dos leads
-    // Os gráficos agora serão baseados apenas nos dados do resumo geral
+    const totalConsultores = consultores.length;
+    if (usePagination) {
+      consultores = consultores.slice(offset, offset + limit);
+      console.log(`[Gerente Dashboard API] 👥 Paginação: processando consultores ${offset + 1}-${offset + consultores.length} de ${totalConsultores} (offset=${offset}, limit=${limit})`);
+    } else {
+      console.log('[Gerente Dashboard API] 👥 Total de consultores encontrados:', totalConsultores);
+    }
 
-    const consultorMetrics = await Promise.all(
-      consultores.map(async (c) => {
-        const { data: cCampaigns } = await supabaseServiceRole
-          .from('campaigns')
-          .select('processed_contacts, failed_contacts')
-          .eq('user_id', c.id);
+    // 4. Métricas por consultor com KPIs externos — processa em lotes de 10 para evitar rate limit e sobrecarga
+    const CONSULTORES_BATCH_SIZE = 5;
+    const consultorMetrics: Awaited<ReturnType<typeof buildConsultorMetric>>[] = [];
 
-        const processed = cCampaigns?.reduce((s, camp) => s + (camp.processed_contacts || 0), 0) || 0;
-        const failed = cCampaigns?.reduce((s, camp) => s + (camp.failed_contacts || 0), 0) || 0;
+    async function buildConsultorMetric(c: (typeof consultores)[0]) {
+      const { data: cCampaigns } = await supabaseServiceRole
+        .from('campaigns')
+        .select('processed_contacts, failed_contacts')
+        .eq('user_id', c.id);
 
-        let externalKpis: {
-          total_leads: number;
-          total_deposited: number;
-          total_bets: number;
-          total_prizes: number;
-          awarded_clients_count: number;
-          active_leads: number;
-          conversion_rate: number;
-          ltv_avg: number;
-          net_profit: number;
-        } | null = null;
-        let externalKpisError: string | null = null;
-        let statusCode: number | null = null;
-        let totalLeadsForLtv = 0;
-        let sumLtvWeighted = 0;
-        const bancaNames: string[] = [];
+      const processed = cCampaigns?.reduce((s, camp) => s + (camp.processed_contacts || 0), 0) || 0;
+      const failed = cCampaigns?.reduce((s, camp) => s + (camp.failed_contacts || 0), 0) || 0;
 
-        if (bancaUrls.length > 0 && c.email) {
-          for (const bancaUrlItem of bancaUrls) {
-            let cleanBancaUrl = bancaUrlItem.trim();
-            if (!cleanBancaUrl.startsWith('http://') && !cleanBancaUrl.startsWith('https://')) {
-              cleanBancaUrl = `https://${cleanBancaUrl}`;
-            }
-            cleanBancaUrl = cleanBancaUrl.replace(/\/+$/, '');
+      let externalKpis: {
+        total_leads: number;
+        total_deposited: number;
+        total_bets: number;
+        total_prizes: number;
+        awarded_clients_count: number;
+        active_leads: number;
+        conversion_rate: number;
+        ltv_avg: number;
+        net_profit: number;
+      } | null = null;
+      let externalKpisError: string | null = null;
+      let statusCode: number | null = null;
+      let totalLeadsForLtv = 0;
+      let sumLtvWeighted = 0;
+      const bancaNames: string[] = [];
 
-            const result = await fetchConsultorMetrics(
-              cleanBancaUrl,
-              c.email,
-              dateFrom,
-              dateTo,
-              apiKey,
-              apiKeyPreview,
-              2,
-              2000
-            );
+      if (bancaUrls.length > 0 && c.email) {
+        for (const bancaUrlItem of bancaUrls) {
+          let cleanBancaUrl = bancaUrlItem.trim();
+          if (!cleanBancaUrl.startsWith('http://') && !cleanBancaUrl.startsWith('https://')) {
+            cleanBancaUrl = `https://${cleanBancaUrl}`;
+          }
+          cleanBancaUrl = cleanBancaUrl.replace(/\/+$/, '');
 
-            statusCode = result.status;
+          const result = await fetchConsultorMetrics(
+            cleanBancaUrl,
+            c.email,
+            dateFrom,
+            dateTo,
+            apiKey,
+            apiKeyPreview,
+            2,
+            2000
+          );
 
-            if (result.success && result.data) {
-              const slug = urlToSlug(cleanBancaUrl);
-              const label = slug ? (bancaSlugToLabel[slug] || slug) : '';
-              if (label && !bancaNames.includes(label)) bancaNames.push(label);
-              const m = result.data;
-              const totalLeads = Number(m.total_leads) || 0;
-              const totalDeposited = Number(m.total_deposited) || 0;
-              const totalBets = Number(m.total_bets) || 0;
-              const totalPrizes = Number(m.total_prizes) || 0;
-              const awardedClientsCount = Number(m.awarded_clients_count) || 0;
-              const activeLeads = Number(m.active_leads) || 0;
-              const conversionRate = Number(m.conversion_rate) || 0;
-              const ltvAvg = Number(m.ltv_avg) || 0;
-              const netProfit = Number(m.net_profit) || 0;
+          statusCode = result.status;
 
-              if (!externalKpis) {
-                externalKpis = {
-                  total_leads: totalLeads,
-                  total_deposited: totalDeposited,
-                  total_bets: totalBets,
-                  total_prizes: totalPrizes,
-                  awarded_clients_count: awardedClientsCount,
-                  active_leads: activeLeads,
-                  conversion_rate: conversionRate,
-                  ltv_avg: ltvAvg,
-                  net_profit: netProfit,
-                };
-                if (totalLeads > 0) {
-                  sumLtvWeighted = ltvAvg * totalLeads;
-                  totalLeadsForLtv = totalLeads;
-                }
-              } else {
-                externalKpis.total_leads += totalLeads;
-                externalKpis.total_deposited += totalDeposited;
-                externalKpis.total_bets += totalBets;
-                externalKpis.total_prizes += totalPrizes;
-                externalKpis.awarded_clients_count += awardedClientsCount;
-                externalKpis.active_leads += activeLeads;
-                externalKpis.net_profit += netProfit;
-                if (totalLeads > 0) {
-                  sumLtvWeighted += ltvAvg * totalLeads;
-                  totalLeadsForLtv += totalLeads;
-                }
+          if (result.success && result.data) {
+            const slug = urlToSlug(cleanBancaUrl);
+            const label = slug ? (bancaSlugToLabel[slug] || slug) : '';
+            if (label && !bancaNames.includes(label)) bancaNames.push(label);
+            const m = result.data;
+            const totalLeads = Number(m.total_leads) || 0;
+            const totalDeposited = Number(m.total_deposited) || 0;
+            const totalBets = Number(m.total_bets) || 0;
+            const totalPrizes = Number(m.total_prizes) || 0;
+            const awardedClientsCount = Number(m.awarded_clients_count) || 0;
+            const activeLeads = Number(m.active_leads) || 0;
+            const conversionRate = Number(m.conversion_rate) || 0;
+            const ltvAvg = Number(m.ltv_avg) || 0;
+            const netProfit = Number(m.net_profit) || 0;
+
+            if (!externalKpis) {
+              externalKpis = {
+                total_leads: totalLeads,
+                total_deposited: totalDeposited,
+                total_bets: totalBets,
+                total_prizes: totalPrizes,
+                awarded_clients_count: awardedClientsCount,
+                active_leads: activeLeads,
+                conversion_rate: conversionRate,
+                ltv_avg: ltvAvg,
+                net_profit: netProfit,
+              };
+              if (totalLeads > 0) {
+                sumLtvWeighted = ltvAvg * totalLeads;
+                totalLeadsForLtv = totalLeads;
               }
-              console.log('[Gerente Dashboard API] ✅ Consultor', c.email, `(${cleanBancaUrl}): ${totalLeads} leads, R$ ${(totalDeposited / 1000).toFixed(1)}k depositado`);
             } else {
-              externalKpisError = result.error ?? externalKpisError;
-              if (result.status === 429) {
-                console.log('[Gerente Dashboard API] ⚠️ Consultor', c.email, 'marcado para retry (429)');
+              externalKpis.total_leads += totalLeads;
+              externalKpis.total_deposited += totalDeposited;
+              externalKpis.total_bets += totalBets;
+              externalKpis.total_prizes += totalPrizes;
+              externalKpis.awarded_clients_count += awardedClientsCount;
+              externalKpis.active_leads += activeLeads;
+              externalKpis.net_profit += netProfit;
+              if (totalLeads > 0) {
+                sumLtvWeighted += ltvAvg * totalLeads;
+                totalLeadsForLtv += totalLeads;
               }
             }
-          }
-
-          if (externalKpis && totalLeadsForLtv > 0) {
-            externalKpis.ltv_avg = sumLtvWeighted / totalLeadsForLtv;
-          }
-          if (externalKpis && externalKpis.total_leads > 0) {
-            externalKpis.conversion_rate = (externalKpis.active_leads / externalKpis.total_leads) * 100;
+            console.log('[Gerente Dashboard API] ✅ Consultor', c.email, `(${cleanBancaUrl}): ${totalLeads} leads, R$ ${(totalDeposited / 1000).toFixed(1)}k depositado`);
+          } else {
+            externalKpisError = result.error ?? externalKpisError;
+            if (result.status === 429) {
+              console.log('[Gerente Dashboard API] ⚠️ Consultor', c.email, 'marcado para retry (429)');
+            }
           }
         }
 
-        return {
-          id: c.id,
-          email: c.email,
-          name: c.full_name || c.email,
-          campaignsCount: cCampaigns?.length || 0,
-          processed,
-          failed,
-          successRate: processed > 0 
-            ? ((processed - failed) / processed * 100).toFixed(2)
-            : '0.00',
-          externalKpis,
-          externalKpisError,
-          statusCode,
-          lastSeenAt: (c as { last_seen_at?: string | null }).last_seen_at ?? null,
-          totalOnlineTime: (c as { total_online_time?: number | null }).total_online_time ?? 0,
-          totalCrmTime: (c as { total_crm_time?: number | null }).total_crm_time ?? 0,
-          ...(bancaNames.length > 0 && { banca_names: bancaNames }),
-        };
-      })
-    );
+        if (externalKpis && totalLeadsForLtv > 0) {
+          externalKpis.ltv_avg = sumLtvWeighted / totalLeadsForLtv;
+        }
+        if (externalKpis && externalKpis.total_leads > 0) {
+          externalKpis.conversion_rate = (externalKpis.active_leads / externalKpis.total_leads) * 100;
+        }
+      }
+
+      return {
+        id: c.id,
+        email: c.email,
+        name: c.full_name || c.email,
+        campaignsCount: cCampaigns?.length || 0,
+        processed,
+        failed,
+        successRate: processed > 0
+          ? ((processed - failed) / processed * 100).toFixed(2)
+          : '0.00',
+        externalKpis,
+        externalKpisError,
+        statusCode,
+        lastSeenAt: (c as { last_seen_at?: string | null }).last_seen_at ?? null,
+        totalOnlineTime: (c as { total_online_time?: number | null }).total_online_time ?? 0,
+        totalCrmTime: (c as { total_crm_time?: number | null }).total_crm_time ?? 0,
+        ...(bancaNames.length > 0 && { banca_names: bancaNames }),
+      };
+    }
+
+    for (let i = 0; i < consultores.length; i += CONSULTORES_BATCH_SIZE) {
+      const chunk = consultores.slice(i, i + CONSULTORES_BATCH_SIZE);
+      const batchNum = Math.floor(i / CONSULTORES_BATCH_SIZE) + 1;
+      const totalBatches = Math.ceil(consultores.length / CONSULTORES_BATCH_SIZE);
+      console.log(`[Gerente Dashboard API] 📦 Processando consultores ${i + 1}-${i + chunk.length} de ${consultores.length} (lote ${batchNum}/${totalBatches})`);
+      const batchResults = await Promise.all(chunk.map(buildConsultorMetric));
+      consultorMetrics.push(...batchResults);
+    }
 
     // 4.5. Retry para consultores que falharam com erro 429 (apenas quando uma única banca)
     const failedConsultors = consultorMetrics.filter(c => c.externalKpisError && c.statusCode === 429);
@@ -712,6 +730,22 @@ export async function GET(req: NextRequest) {
     });
     console.log('[Gerente Dashboard API]   ⏱️  Tempo total de processamento:', `${totalTime}ms`);
     console.log('[Gerente Dashboard API] 🎉 Processamento concluído!');
+
+    if (usePagination) {
+      const hasMore = offset + consultorMetrics.length < totalConsultores;
+      return successResponse({
+        gerenteInfo: {
+          id: effectiveUserId,
+          email: gerenteProfile?.email || '',
+          name: gerenteProfile?.full_name || '',
+        },
+        consultorMetrics,
+        totalConsultores,
+        offset,
+        limit,
+        hasMore,
+      });
+    }
 
     return successResponse({
       gerenteInfo: {
