@@ -2,7 +2,7 @@
  * GET /api/admin/crm/transfer-logs/resolved-stats
  *
  * Estatísticas de transferências já resolvidas no banco (com leads disponíveis para mover).
- * Query: banca_id?, from?, to? (mesmo período dos filtros do Histórico).
+ * Query: banca_id?, from?, to?, source_consultant_email? (consultor doador).
  * Retorno: total_resolved_logs, total_disponivel, by_type: { TF, TF1, TF2, TF3 }
  */
 
@@ -32,6 +32,7 @@ export async function GET(req: NextRequest) {
     const bancaId = searchParams.get('banca_id')?.trim() || null;
     const fromParam = normalizeDateParam(searchParams.get('from'));
     const toParam = normalizeDateParam(searchParams.get('to'));
+    const sourceConsultantEmail = searchParams.get('source_consultant_email')?.trim() || null;
 
     let bancaIds: string[];
     if (bancaId) {
@@ -55,6 +56,7 @@ export async function GET(req: NextRequest) {
 
     if (fromParam) q = q.gte('created_at', dateToStartOfDaySãoPauloISO(fromParam));
     if (toParam) q = q.lte('created_at', dateToEndOfDaySãoPauloISO(toParam));
+    if (sourceConsultantEmail) q = q.ilike('source_consultant_email', sourceConsultantEmail);
 
     const { data: logs, error: logsError } = await q;
 

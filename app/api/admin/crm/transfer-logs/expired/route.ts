@@ -2,7 +2,7 @@
  * GET /api/admin/crm/transfer-logs/expired
  *
  * Lista transferências expiradas (prazo decorrido) que ainda têm entries com resolution_status = 'pending'.
- * Query: banca_id? (opcional). Retorna logs com id, banca_id, created_at, deadline_days, source/target, count e to_resolve (qtd de entries pendentes).
+ * Query: banca_id? (opcional), source_consultant_email? (consultor doador). Retorna logs com id, banca_id, created_at, deadline_days, source/target, count e to_resolve.
  */
 
 import { NextRequest } from 'next/server';
@@ -34,7 +34,9 @@ function isTransferExpired(createdAt: string | null | undefined, deadlineDays?: 
 export async function GET(req: NextRequest) {
   try {
     const { userId, profile } = await requireAdmin(req);
-    const bancaId = req.nextUrl.searchParams.get('banca_id')?.trim() || null;
+    const searchParams = req.nextUrl.searchParams;
+    const bancaId = searchParams.get('banca_id')?.trim() || null;
+    const sourceConsultantEmail = searchParams.get('source_consultant_email')?.trim() || null;
 
     let bancaIds: string[];
     if (bancaId) {
@@ -48,11 +50,13 @@ export async function GET(req: NextRequest) {
       bancaIds = allowed;
     }
 
-    const { data: logs, error: logsError } = await supabaseServiceRole
+    let logsQuery = supabaseServiceRole
       .from('admin_lead_transfer_logs')
       .select('id, banca_id, created_at, deadline_days, source_consultant_email, target_consultant_email, count, transfer_type')
       .in('banca_id', bancaIds)
       .order('created_at', { ascending: false });
+    if (sourceConsultantEmail) logsQuery = logsQuery.ilike('source_consultant_email', sourceConsultantEmail);
+    const { data: logs, error: logsError } = await logsQuery;
 
     if (logsError || !logs?.length) return successResponse([]);
 

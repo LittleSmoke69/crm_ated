@@ -2,7 +2,7 @@
  * GET /api/admin/crm/transfer-logs/resolved-list
  *
  * Lista transferências já resolvidas no banco com leads disponíveis para mover (sem filtro de período).
- * Query: banca_id? (opcional). Retorna todas as transferências resolvidas das bancas permitidas.
+ * Query: banca_id? (opcional), source_consultant_email? (consultor doador). Retorna todas as transferências resolvidas das bancas permitidas.
  * Retorno: Array<{ log_id, banca_id, transfer_type, disponivel, source_consultant_email, target_consultant_email }>
  */
 
@@ -28,6 +28,7 @@ export async function GET(req: NextRequest) {
     const { userId, profile } = await requireAdmin(req);
     const searchParams = req.nextUrl.searchParams;
     const bancaId = searchParams.get('banca_id')?.trim() || null;
+    const sourceConsultantEmail = searchParams.get('source_consultant_email')?.trim() || null;
 
     let bancaIds: string[];
     if (bancaId) {
@@ -41,11 +42,13 @@ export async function GET(req: NextRequest) {
       bancaIds = allowed;
     }
 
-    const { data: logs, error: logsError } = await supabaseServiceRole
+    let logsQuery = supabaseServiceRole
       .from('admin_lead_transfer_logs')
       .select('id, banca_id, created_at, deadline_days, transfer_type, source_consultant_email, target_consultant_email')
       .in('banca_id', bancaIds)
       .order('created_at', { ascending: false });
+    if (sourceConsultantEmail) logsQuery = logsQuery.ilike('source_consultant_email', sourceConsultantEmail);
+    const { data: logs, error: logsError } = await logsQuery;
 
     if (logsError || !logs?.length) return successResponse([]);
 

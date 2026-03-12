@@ -38,7 +38,7 @@ const MAX_LIMIT = 50000;
 /**
  * GET /api/admin/crm/transfer-logs
  * Lista logs de transferência de leads (auditoria).
- * Query: banca_id? (opcional), from, to, transfer_type?, target_consultant_email?, offset? (default 0), limit? (default 50000, max 50000) para trazer todas.
+ * Query: banca_id? (opcional), from, to, transfer_type?, target_consultant_email?, source_consultant_email? (consultor doador), offset? (default 0), limit? (default 50000, max 50000) para trazer todas.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -67,6 +67,7 @@ export async function GET(req: NextRequest) {
     const toParam = normalizeDateParam(searchParams.get('to'));
     const transferType = searchParams.get('transfer_type')?.trim();
     const targetConsultantEmail = searchParams.get('target_consultant_email')?.trim() || null;
+    const sourceConsultantEmail = searchParams.get('source_consultant_email')?.trim() || null;
 
     const offset = Math.max(0, parseInt(searchParams.get('offset') ?? '0', 10) || 0);
     const limit = Math.min(MAX_LIMIT, Math.max(1, parseInt(searchParams.get('limit') ?? String(DEFAULT_LIMIT), 10) || DEFAULT_LIMIT));
@@ -85,6 +86,7 @@ export async function GET(req: NextRequest) {
       if (toParam) q = q.lte('created_at', dateToEndOfDaySãoPauloISO(toParam));
       if (transferType && ['TF', 'TF1', 'TF2', 'TF3'].includes(transferType)) q = q.eq('transfer_type', transferType);
       if (targetConsultantEmail) q = q.ilike('target_consultant_email', targetConsultantEmail);
+      if (sourceConsultantEmail) q = q.ilike('source_consultant_email', sourceConsultantEmail);
       return q.range(offset, offset + limit - 1);
     };
 

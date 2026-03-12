@@ -340,6 +340,8 @@ export default function AdminLeadTransferPage() {
   const [loadingStats, setLoadingStats] = useState(false);
   const loadLogsRunIdRef = useRef(0);
   const [conversionConsultant, setConversionConsultant] = useState('');
+  /** Filtro por consultor doador na aba Histórico & Conversão: '' = não filtrar, ou email do consultor. */
+  const [historyDonorConsultantFilter, setHistoryDonorConsultantFilter] = useState('');
   const [managementLoaded, setManagementLoaded] = useState(false);
   const [statsByBanca, setStatsByBanca] = useState<{ banca_id: string; banca_name: string; total_leads: number }[]>([]);
   const [loadingStatsByBanca, setLoadingStatsByBanca] = useState(false);
@@ -468,6 +470,12 @@ export default function AdminLeadTransferPage() {
   /** Consultores que receberam transferência na banca escolhida (para o modal de conversão) */
   const [conversionTargetConsultants, setConversionTargetConsultants] = useState<Consultant[]>([]);
   const [loadingConversionTargetConsultants, setLoadingConversionTargetConsultants] = useState(false);
+  /** Modal Consultor Doador (aba Histórico): lista de consultores da banca para filtrar por origem da transferência */
+  const [showDonorConsultantModal, setShowDonorConsultantModal] = useState(false);
+  const [donorConsultantPendingEmail, setDonorConsultantPendingEmail] = useState<string | null>(null);
+  const [donorConsultantSearchQuery, setDonorConsultantSearchQuery] = useState('');
+  const [donorModalConsultants, setDonorModalConsultants] = useState<Consultant[]>([]);
+  const [loadingDonorModalConsultants, setLoadingDonorModalConsultants] = useState(false);
   /** Verificador de consultores: leads transferidos que depositaram/jogaram/sacaram depois */
   const [verifierResults, setVerifierResults] = useState<{ consultant_email: string; consultant_name: string; total_transferidos: number; depositaram_depois: number; jogaram_depois: number; sacaram_depois: number }[]>([]);
   const [loadingVerifier, setLoadingVerifier] = useState(false);
@@ -1018,6 +1026,50 @@ export default function AdminLeadTransferPage() {
     setShowConversionConsultantModal(false);
   };
 
+  /** Carrega consultores da banca para o modal Consultor Doador (aba Histórico). */
+  const loadDonorModalConsultants = useCallback(async () => {
+    const effectiveBancaId = historyBancaFilter || bancaId;
+    if (!effectiveBancaId || !userId) return;
+    setLoadingDonorModalConsultants(true);
+    setDonorModalConsultants([]);
+    try {
+      const res = await fetch(`/api/admin/crm/consultants?banca_id=${encodeURIComponent(effectiveBancaId)}`, { headers: headers() });
+      const json = await res.json();
+      if (res.ok && json.success && Array.isArray(json.data?.consultants)) {
+        setDonorModalConsultants(json.data.consultants);
+      } else {
+        showToast(json?.error ?? 'Erro ao carregar consultores.', 'error');
+      }
+    } catch {
+      showToast('Erro ao carregar consultores.', 'error');
+    } finally {
+      setLoadingDonorModalConsultants(false);
+    }
+  }, [historyBancaFilter, bancaId, userId]);
+
+  const openDonorConsultantModal = () => {
+    setDonorConsultantPendingEmail(historyDonorConsultantFilter?.trim() || null);
+    setDonorConsultantSearchQuery('');
+    setShowDonorConsultantModal(true);
+    void loadDonorModalConsultants();
+  };
+
+  const confirmDonorConsultant = () => {
+    setHistoryDonorConsultantFilter(donorConsultantPendingEmail ?? '');
+    setShowDonorConsultantModal(false);
+  };
+
+  /** Lista filtrada para o modal Consultor Doador (busca por nome ou email). */
+  const donorConsultantFilteredList = React.useMemo(() => {
+    const q = donorConsultantSearchQuery.trim().toLowerCase();
+    const list = !q ? donorModalConsultants : donorModalConsultants.filter((c) => {
+      const name = String(c.full_name ?? '').toLowerCase();
+      const email = String(c.email ?? '').toLowerCase();
+      return name.includes(q) || email.includes(q);
+    });
+    return [...list].sort((a, b) => (a.full_name || a.email || '').localeCompare(b.full_name || b.email || '', 'pt-BR'));
+  }, [donorModalConsultants, donorConsultantSearchQuery]);
+
   /** Ao alterar dias em "Outro" (passo 3), dispara nova busca após debounce. Aceita 0 (todos os leads). */
   useEffect(() => {
     if (currentStep !== 3 || daysInactivePreset !== 'other') return;
@@ -1539,6 +1591,7 @@ export default function AdminLeadTransferPage() {
       if (to) params.set('to', to);
       if (managementTransferType.trim()) params.set('transfer_type', managementTransferType.trim());
       if (conversionConsultant.trim()) params.set('target_consultant_email', conversionConsultant.trim());
+      if (historyDonorConsultantFilter.trim()) params.set('source_consultant_email', historyDonorConsultantFilter.trim());
       params.set('offset', String(offset));
       params.set('limit', String(limit));
       return params;
@@ -2233,6 +2286,7 @@ export default function AdminLeadTransferPage() {
       if (to) params.set('to', to);
       if (managementTransferType.trim()) params.set('transfer_type', managementTransferType.trim());
       if (conversionConsultant.trim()) params.set('target_consultant_email', conversionConsultant.trim());
+      if (historyDonorConsultantFilter.trim()) params.set('source_consultant_email', historyDonorConsultantFilter.trim());
       const url = `/api/admin/crm/transfer-metrics?${params.toString()}`;
       const res = await fetch(url, { headers: headers() });
       const json = await res.json();
@@ -2271,6 +2325,7 @@ export default function AdminLeadTransferPage() {
     const baseParams = new URLSearchParams();
     if (from) baseParams.set('from', from);
     if (to) baseParams.set('to', to);
+    if (historyDonorConsultantFilter.trim()) baseParams.set('source_consultant_email', historyDonorConsultantFilter.trim());
 
     if (historyBancaFilter) {
       try {
@@ -2350,6 +2405,7 @@ export default function AdminLeadTransferPage() {
     try {
       const params = new URLSearchParams();
       if (historyBancaFilter) params.set('banca_id', historyBancaFilter);
+      if (historyDonorConsultantFilter.trim()) params.set('source_consultant_email', historyDonorConsultantFilter.trim());
       const res = await fetch(`/api/admin/crm/transfer-logs/expired?${params.toString()}`, { headers: headers() });
       const json = await res.json();
       if (res.ok && json.success && Array.isArray(json.data)) {
@@ -2362,7 +2418,7 @@ export default function AdminLeadTransferPage() {
     } finally {
       setLoadingExpiredLogs(false);
     }
-  }, [userId, historyBancaFilter]);
+  }, [userId, historyBancaFilter, historyDonorConsultantFilter]);
 
   const loadResolvedStats = useCallback(async () => {
     if (!userId) return;
@@ -2374,6 +2430,7 @@ export default function AdminLeadTransferPage() {
       const to = toYYYYMMDD(managementTo);
       if (from) params.set('from', from);
       if (to) params.set('to', to);
+      if (historyDonorConsultantFilter.trim()) params.set('source_consultant_email', historyDonorConsultantFilter.trim());
       const res = await fetch(`/api/admin/crm/transfer-logs/resolved-stats?${params.toString()}`, { headers: headers() });
       const json = await res.json();
       if (res.ok && json.success && json.data) {
@@ -2394,7 +2451,7 @@ export default function AdminLeadTransferPage() {
     } finally {
       setLoadingResolvedStats(false);
     }
-  }, [userId, historyBancaFilter, managementFrom, managementTo]);
+  }, [userId, historyBancaFilter, historyDonorConsultantFilter, managementFrom, managementTo]);
 
   const loadResolvedList = useCallback(async (overrideBancaId?: string) => {
     if (!userId) return;
@@ -2403,6 +2460,7 @@ export default function AdminLeadTransferPage() {
       const params = new URLSearchParams();
       const bancaParaFiltro = overrideBancaId ?? historyBancaFilter;
       if (bancaParaFiltro) params.set('banca_id', bancaParaFiltro);
+      if (historyDonorConsultantFilter.trim()) params.set('source_consultant_email', historyDonorConsultantFilter.trim());
       const res = await fetch(`/api/admin/crm/transfer-logs/resolved-list?${params.toString()}`, { headers: headers() });
       const json = await res.json();
       if (res.ok && json.success && Array.isArray(json.data)) {
@@ -2418,7 +2476,7 @@ export default function AdminLeadTransferPage() {
     } finally {
       setLoadingResolvedList(false);
     }
-  }, [userId, historyBancaFilter]);
+  }, [userId, historyBancaFilter, historyDonorConsultantFilter]);
 
   /** Ao abrir o modal Mover com log pré-selecionado (ex.: pelo botão Mover do relatório detalhado), seleciona a transferência quando resolvedList carregar. */
   useEffect(() => {
@@ -2839,7 +2897,7 @@ export default function AdminLeadTransferPage() {
     loadExpiredLogs();
     loadResolvedStats();
     if (historyBancaFilter === '') loadResolvedList();
-  }, [activeTab, historyBancaFilter, managementFrom, managementTo, managementTransferType, conversionConsultant, loadResolvedStats, loadResolvedList]);
+  }, [activeTab, historyBancaFilter, historyDonorConsultantFilter, managementFrom, managementTo, managementTransferType, conversionConsultant, loadResolvedStats, loadResolvedList]);
 
   // Leads transferidos mais de uma vez: contar por lead_id nos logs
   const leadTransferCountMap = React.useMemo(() => {
@@ -3473,6 +3531,24 @@ export default function AdminLeadTransferPage() {
                       <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0 ml-auto" />
                     </button>
                     <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">Consultor destino para conversão</p>
+                  </div>
+                  {/* Consultor Doador — filtrar por origem da transferência */}
+                  <div className="lg:col-span-3">
+                    <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1.5 flex items-center gap-1">
+                      <User className="w-3.5 h-3.5" /> Consultor Doador
+                    </label>
+                    <button
+                      type="button"
+                      onClick={openDonorConsultantModal}
+                      disabled={!(historyBancaFilter || bancaId) || (showDonorConsultantModal && loadingDonorModalConsultants)}
+                      className="w-full flex items-center gap-2 border border-gray-300 dark:border-[#555] rounded-lg px-3 py-2 text-sm text-left bg-white dark:bg-[#333] dark:text-white hover:bg-gray-50 dark:hover:bg-[#404040] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <span className="truncate text-gray-800 dark:text-white">
+                        {!(historyBancaFilter || bancaId) ? 'Selecione a banca' : (showDonorConsultantModal && loadingDonorModalConsultants) ? 'Carregando...' : historyDonorConsultantFilter ? (donorModalConsultants.find((c) => c.email === historyDonorConsultantFilter)?.full_name || consultants.find((c) => c.email === historyDonorConsultantFilter)?.full_name || historyDonorConsultantFilter) : 'Selecionar consultor'}
+                      </span>
+                      <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0 ml-auto" />
+                    </button>
+                    <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">Consultor origem (quem doou os leads)</p>
                   </div>
                   {/* Status — normal, expiradas, resolvidas */}
                   <div className="lg:col-span-2">
@@ -6012,6 +6088,89 @@ export default function AdminLeadTransferPage() {
                 Cancelar
               </button>
               <button type="button" onClick={confirmConversionConsultant} className="px-4 py-2 rounded-lg bg-[#20c997] text-white font-medium hover:bg-[#0eb892]">
+                Selecionar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Selecionar consultor doador — aba Histórico & Conversão */}
+      {showDonorConsultantModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setShowDonorConsultantModal(false)} role="dialog" aria-modal="true" aria-labelledby="modal-donor-consultant-title">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-xl max-w-md w-full max-h-[85vh] overflow-hidden flex flex-col border border-gray-200 dark:border-[#404040]" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-3 bg-[#8CD955] text-white rounded-t-2xl">
+              <div className="flex items-center gap-2">
+                <User className="w-5 h-5 flex-shrink-0" />
+                <h2 id="modal-donor-consultant-title" className="font-bold text-lg">Consultor Doador</h2>
+              </div>
+              <button type="button" onClick={() => setShowDonorConsultantModal(false)} className="p-1.5 rounded-lg hover:bg-white/20 transition-colors" aria-label="Fechar">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 flex flex-col flex-1 min-h-0">
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+                Filtre o histórico por consultor de origem (quem doou os leads). Escolha um ou &quot;Nenhum&quot; para listar todos.
+              </p>
+              <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 block mb-1.5">Buscar consultor</label>
+              <div className="relative mb-3">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-gray-400 pointer-events-none" />
+                <input
+                  type="text"
+                  value={donorConsultantSearchQuery}
+                  onChange={(e) => setDonorConsultantSearchQuery(e.target.value)}
+                  placeholder="Nome ou email..."
+                  className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white dark:placeholder:text-gray-400 rounded-lg text-sm text-gray-800 placeholder:text-gray-500 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] shadow-sm"
+                />
+              </div>
+              <div className="border border-gray-200 dark:border-[#404040] rounded-lg overflow-y-auto flex-1 min-h-[200px]" style={{ maxHeight: '320px' }}>
+                {loadingDonorModalConsultants ? (
+                  <div className="p-6 text-center text-sm text-gray-500">Carregando consultores da banca...</div>
+                ) : (
+                  <ul className="divide-y divide-gray-100 dark:divide-[#404040]">
+                    <li>
+                      <button
+                        type="button"
+                        onClick={() => setDonorConsultantPendingEmail(null)}
+                        className={`w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-gray-50 dark:hover:bg-[#333] transition-colors ${donorConsultantPendingEmail === null ? 'bg-[#8CD955]/10 dark:bg-[#8CD955]/20 ring-1 ring-[#8CD955]/30' : ''}`}
+                      >
+                        <span className="flex-shrink-0 w-9 h-9 rounded-full bg-gray-100 dark:bg-[#404040] text-gray-500 dark:text-gray-400 flex items-center justify-center text-sm font-semibold">—</span>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-semibold text-gray-700 dark:text-gray-300">Nenhum</p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">Não filtrar por consultor doador</p>
+                        </div>
+                      </button>
+                    </li>
+                    {donorConsultantFilteredList.map((c) => {
+                      const isSelected = donorConsultantPendingEmail?.toLowerCase() === c.email?.toLowerCase();
+                      const initial = (c.full_name || c.email || '?').charAt(0).toUpperCase();
+                      return (
+                        <li key={c.id}>
+                          <button
+                            type="button"
+                            onClick={() => setDonorConsultantPendingEmail(c.email ?? '')}
+                            className={`w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-gray-50 dark:hover:bg-[#333] transition-colors ${isSelected ? 'bg-[#8CD955]/10 dark:bg-[#8CD955]/20 ring-1 ring-[#8CD955]/30' : ''}`}
+                          >
+                            <span className="flex-shrink-0 w-9 h-9 rounded-full bg-gray-200 dark:bg-[#404040] text-gray-700 dark:text-gray-300 flex items-center justify-center text-sm font-semibold">
+                              {initial}
+                            </span>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-semibold text-gray-900 dark:text-white truncate">{c.full_name || c.email || '-'}</p>
+                              <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{c.email}</p>
+                            </div>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            </div>
+            <div className="flex gap-2 justify-end p-4 border-t border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#333] rounded-b-2xl">
+              <button type="button" onClick={() => setShowDonorConsultantModal(false)} className="px-4 py-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 bg-white dark:bg-[#333] hover:bg-gray-50 dark:hover:bg-[#404040] font-medium">
+                Cancelar
+              </button>
+              <button type="button" onClick={confirmDonorConsultant} className="px-4 py-2 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A]">
                 Selecionar
               </button>
             </div>
