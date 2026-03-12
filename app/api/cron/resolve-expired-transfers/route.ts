@@ -1,19 +1,23 @@
 /**
  * POST /api/cron/resolve-expired-transfers
  *
- * Formação automática: resolve todas as transferências expiradas (entries com resolution_status = 'pending').
+ * Formação automática: resolve transferências expiradas (entries com resolution_status = 'pending').
  * Deve ser chamado por um cron a cada 1 hora (ex.: Netlify scheduled function com schedule = "0 * * * *").
  *
+ * Para evitar timeout (ex.: 504 Inactivity no Netlify), processa no máximo max_logs por execução.
+ * Body opcional: { max_logs?: number } — default 5. Próximas execuções do cron processarão o restante.
+ *
  * Requer header: X-Cron-Secret = process.env.TRANSFER_RESOLVE_CRON_SECRET
- * Se TRANSFER_RESOLVE_CRON_SECRET não estiver definido, a rota retorna 501.
  */
 
 import { NextRequest } from 'next/server';
-import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
+import { successResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { resolveOneTransferLog, isTransferExpired, type ConvertedLead } from '@/lib/server/crm/resolveTransferLog';
 
 const DEFAULT_DEADLINE_DAYS = 10;
+/** Máximo de logs processados por execução para evitar timeout (504) em ambientes com limite de tempo (ex.: Netlify). */
+const DEFAULT_MAX_LOGS_PER_RUN = 5;
 
 export async function POST(req: NextRequest) {
   const secret = req.headers.get('x-cron-secret')?.trim() || '';
@@ -29,6 +33,18 @@ export async function POST(req: NextRequest) {
       status: 401,
       headers: { 'Content-Type': 'application/json' },
     });
+  }
+
+  let maxLogs = DEFAULT_MAX_LOGS_PER_RUN;
+  try {
+    const body = req.headers.get('content-type')?.toLowerCase().includes('application/json')
+      ? await req.json().catch(() => ({}))
+      : {};
+    if (typeof (body as { max_logs?: number }).max_logs === 'number' && (body as { max_logs: number }).max_logs >= 1) {
+      maxLogs = Math.min(100, Math.floor((body as { max_logs: number }).max_logs));
+    }
+  } catch {
+    // usa default
   }
 
   try {
@@ -57,10 +73,13 @@ export async function POST(req: NextRequest) {
 
     const logsWithPending = new Set<string>();
     (pendingRows ?? []).forEach((r: { transfer_log_id: string }) => logsWithPending.add(r.transfer_log_id));
-    const toResolve = expired.filter((log) => logsWithPending.has(log.id));
-    if (toResolve.length === 0) {
+    const toResolveFull = expired.filter((log) => logsWithPending.has(log.id));
+    if (toResolveFull.length === 0) {
       return successResponse({ results: [], total_resolved: 0, total_vinculado: 0, total_disponivel: 0, message: 'Nenhuma transferência expirada com leads pendentes.' });
     }
+
+    const toResolve = toResolveFull.slice(0, maxLogs);
+    const remainingCount = toResolveFull.length - toResolve.length;
 
     const bancaIds = [...new Set(toResolve.map((l) => l.banca_id))];
     const { data: bancas } = await supabaseServiceRole.from('crm_bancas').select('id, url').in('id', bancaIds);
@@ -107,12 +126,18 @@ export async function POST(req: NextRequest) {
       console.log('\n[resolve-expired-transfers] Nenhum lead convertido nesta execução.\n');
     }
 
+    const message =
+      remainingCount > 0
+        ? `Resolvidas ${results.length} transferência(s) nesta execução (${remainingCount} restante(s) na próxima). ${total_vinculado} vinculado(s), ${total_disponivel} disponível(is) para repasse.`
+        : `Resolvidas ${results.length} transferência(s): ${total_vinculado} vinculado(s), ${total_disponivel} disponível(is) para repasse.`;
+
     return successResponse({
       results,
       total_resolved,
       total_vinculado,
       total_disponivel,
-      message: `Resolvidas ${results.length} transferência(s): ${total_vinculado} vinculado(s), ${total_disponivel} disponível(is) para repasse.`,
+      remaining_logs: remainingCount,
+      message,
     });
   } catch (err: unknown) {
     console.error('[cron][resolve-expired-transfers] error:', err);
