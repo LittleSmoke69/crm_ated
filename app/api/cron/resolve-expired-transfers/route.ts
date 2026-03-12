@@ -2,7 +2,7 @@
  * POST /api/cron/resolve-expired-transfers
  *
  * Formação automática: resolve todas as transferências expiradas (entries com resolution_status = 'pending').
- * Deve ser chamado por um cron a cada 30 minutos (ex.: Netlify scheduled function).
+ * Deve ser chamado por um cron a cada 1 hora (ex.: Netlify scheduled function com schedule = "0 * * * *").
  *
  * Requer header: X-Cron-Secret = process.env.TRANSFER_RESOLVE_CRON_SECRET
  * Se TRANSFER_RESOLVE_CRON_SECRET não estiver definido, a rota retorna 501.
