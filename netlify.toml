@@ -28,7 +28,7 @@
   [functions."transfer-expired-notify"]
     schedule = "0 8 * * *"
   [functions."transfer-resolve-expired"]
-    schedule = "*/30 * * * *"
+    schedule = "0 * * * *"
   # [functions."maturation-tick"]
   #   schedule = "*/1 * * * *"
   # [functions."maturation-scheduler"]

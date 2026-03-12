@@ -1,16 +1,14 @@
 /**
  * Netlify Scheduled Function: transfer-resolve-expired
  *
- * Formação automática: a cada 30 minutos chama a API do app para resolver
+ * Formação automática: a cada 1 hora chama a API do app para resolver
  * transferências expiradas (vincular ou marcar como disponível para repasse).
  *
  * Configuração:
  * - TRANSFER_RESOLVE_CRON_SECRET: mesmo valor definido no app (Next.js) para autorizar a rota /api/cron/resolve-expired-transfers
  * - URL do site: Netlify injeta process.env.URL (ex.: https://seu-app.netlify.app)
  *
- * Adicione em netlify.toml:
- *   [functions."transfer-resolve-expired"]
- *     schedule = "*\/30 * * * *"
+ * Em netlify.toml: schedule = "0 * * * *" (a cada hora, no minuto 0).
  */
 
 const CRON_SECRET = process.env.TRANSFER_RESOLVE_CRON_SECRET?.trim();
