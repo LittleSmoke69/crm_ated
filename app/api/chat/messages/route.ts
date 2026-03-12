@@ -55,12 +55,12 @@ export async function GET(req: NextRequest) {
       return errorResponse('Acesso negado.', 403);
     }
 
-    // 2. Buscar mensagens
+    // 2. Buscar mensagens ordenadas cronologicamente por timestamp
     const { data: messages, error } = await supabaseServiceRole
       .from('chat_messages')
       .select('*')
       .eq('conversation_id', conversation_id)
-      .order('created_at', { ascending: false })
+      .order('timestamp', { ascending: true })
       .range(offset, offset + limit - 1);
 
     if (error) {
@@ -73,7 +73,7 @@ export async function GET(req: NextRequest) {
       .update({ unread_count: 0 })
       .eq('id', conversation_id);
 
-    return successResponse(messages.reverse());
+    return successResponse(messages);
   } catch (err: any) {
     return serverErrorResponse(err);
   }

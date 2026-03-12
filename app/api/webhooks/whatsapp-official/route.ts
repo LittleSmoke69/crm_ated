@@ -1,8 +1,11 @@
 /**
  * Webhook WhatsApp Cloud API (Oficial)
- * GET: verificação (hub.verify_token / hub.challenge)
- * POST: eventos (mensagens recebidas, status updates)
- * Eventos são filtrados por object === 'whatsapp_business_account' e registrados como source whatsapp_official.
+ *
+ * GET  — verificação (hub.verify_token / hub.challenge)
+ * POST — eventos (mensagens recebidas, status updates)
+ *
+ * Sempre retorna 200 para a Meta (exige resposta < 5 s).
+ * Registro do evento bruto em webhook_events é feito antes do processamento.
  */
 
 import { NextRequest } from 'next/server';
@@ -12,7 +15,57 @@ import { chatService } from '@/lib/services/chat-service';
 const SOURCE = 'whatsapp_official';
 const EVENT_NAME = 'whatsapp_official';
 
-function isWhatsAppOfficialPayload(payload: unknown): payload is { object: string; entry?: unknown[] } {
+// ---------------------------------------------------------------------------
+// Tipos
+// ---------------------------------------------------------------------------
+
+interface WaContact {
+  wa_id?: string;
+  profile?: { name?: string };
+}
+
+interface WaMessage {
+  id: string;
+  from: string;
+  timestamp: string;
+  type: string;
+  text?: { body?: string };
+  image?: { id?: string; caption?: string; mime_type?: string };
+  audio?: { id?: string; mime_type?: string };
+  video?: { id?: string; caption?: string; mime_type?: string };
+  document?: { id?: string; caption?: string; mime_type?: string };
+}
+
+interface WaMetadata {
+  phone_number_id?: string;
+  display_phone_number?: string;
+}
+
+interface WaValue {
+  metadata?: WaMetadata;
+  contacts?: WaContact[];
+  messages?: WaMessage[];
+  statuses?: Array<{ id: string; status?: string; recipient_id?: string }>;
+}
+
+interface ParsedMessage {
+  contactId: string;
+  contactName: string;
+  messageId: string;
+  messageBody: string | null;
+  messageType: string;
+  /** Unix em segundos, sempre como número */
+  timestamp: number;
+  phoneNumberId: string;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function isWhatsAppOfficialPayload(
+  payload: unknown
+): payload is { object: string; entry?: unknown[] } {
   return (
     typeof payload === 'object' &&
     payload !== null &&
@@ -21,8 +74,129 @@ function isWhatsAppOfficialPayload(payload: unknown): payload is { object: strin
 }
 
 /**
- * GET - Verificação do webhook (Meta)
+ * Extrai os campos relevantes de uma entrada de mensagem do payload Meta.
+ * timestamp é sempre convertido com parseInt para garantir número.
  */
+function parseWhatsAppPayload(value: WaValue): ParsedMessage | null {
+  const msg = value.messages?.[0];
+  const contact = value.contacts?.[0];
+  const metadata = value.metadata;
+
+  if (!msg || !metadata?.phone_number_id) return null;
+
+  return {
+    contactId: contact?.wa_id ?? msg.from,
+    contactName: contact?.profile?.name ?? msg.from,
+    messageId: msg.id,
+    messageBody: msg.text?.body ?? null,
+    messageType: msg.type,
+    timestamp: parseInt(msg.timestamp, 10),
+    phoneNumberId: metadata.phone_number_id,
+  };
+}
+
+function resolveMediaInfo(msg: WaMessage): { text: string; mediaType: string; caption: string } {
+  if (msg.type === 'text' && msg.text?.body) {
+    return { text: msg.text.body, mediaType: 'text', caption: '' };
+  }
+  if (msg.image) {
+    return { text: msg.image.caption || '', mediaType: 'image', caption: msg.image.caption || '' };
+  }
+  if (msg.audio) {
+    return { text: 'Áudio', mediaType: 'audio', caption: '' };
+  }
+  if (msg.video) {
+    return { text: msg.video.caption || 'Vídeo', mediaType: 'video', caption: msg.video.caption || '' };
+  }
+  if (msg.document) {
+    return {
+      text: msg.document.caption || 'Documento',
+      mediaType: 'document',
+      caption: msg.document.caption || '',
+    };
+  }
+  return { text: '', mediaType: msg.type, caption: '' };
+}
+
+const CHAT_MEDIA_BUCKET = 'chat-media';
+
+const MIME_TO_EXT: Record<string, string> = {
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/webp': '.webp',
+  'image/gif': '.gif',
+  'audio/ogg': '.ogg',
+  'audio/mpeg': '.mp3',
+  'audio/mp4': '.m4a',
+  'video/mp4': '.mp4',
+  'video/3gpp': '.3gp',
+  'application/pdf': '.pdf',
+};
+
+function getExtension(mimeType: string | undefined): string {
+  if (!mimeType) return '.bin';
+  const ext = MIME_TO_EXT[mimeType.toLowerCase()];
+  return ext || '.bin';
+}
+
+/**
+ * Obtém a mídia da Meta (URL temporária), baixa o binário e faz upload no Supabase Storage.
+ * Retorna a URL pública permanente. Não salva URL temporária no banco.
+ * Em falha, lança; o caller deve usar try/catch para não quebrar o webhook.
+ */
+async function resolveAndStoreMedia(
+  mediaId: string,
+  accessToken: string,
+  graphVersion: string,
+  mimeType: string | undefined,
+  configId: string
+): Promise<string> {
+  const version = graphVersion.replace(/^v/, '');
+  const mediaApiUrl = `https://graph.facebook.com/v${version}/${mediaId}`;
+
+  const metaRes = await fetch(mediaApiUrl, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!metaRes.ok) {
+    const errText = await metaRes.text();
+    throw new Error(`[Zaploto Chat] Meta Media API ${metaRes.status}: ${errText}`);
+  }
+  const metaJson = (await metaRes.json()) as { url?: string; mime_type?: string };
+  const tempUrl = metaJson?.url;
+  if (!tempUrl || typeof tempUrl !== 'string') {
+    throw new Error('[Zaploto Chat] Meta Media API não retornou url');
+  }
+
+  const downloadRes = await fetch(tempUrl, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!downloadRes.ok) {
+    throw new Error(`[Zaploto Chat] Falha ao baixar mídia: ${downloadRes.status}`);
+  }
+  const buffer = Buffer.from(await downloadRes.arrayBuffer());
+  const contentType = metaJson.mime_type || mimeType || 'application/octet-stream';
+  const ext = getExtension(metaJson.mime_type || mimeType);
+  const storagePath = `${configId}/${mediaId}${ext}`;
+
+  const { error: uploadError } = await supabaseServiceRole.storage
+    .from(CHAT_MEDIA_BUCKET)
+    .upload(storagePath, buffer, { contentType, upsert: true });
+
+  if (uploadError) {
+    console.error('[Zaploto Chat] Erro upload storage:', uploadError.message);
+    throw new Error(`[Zaploto Chat] Storage upload: ${uploadError.message}`);
+  }
+
+  const { data: urlData } = supabaseServiceRole.storage
+    .from(CHAT_MEDIA_BUCKET)
+    .getPublicUrl(storagePath);
+  return urlData.publicUrl;
+}
+
+// ---------------------------------------------------------------------------
+// GET — Verificação do webhook (Meta)
+// ---------------------------------------------------------------------------
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const mode = searchParams.get('hub.mode');
@@ -44,19 +218,16 @@ export async function GET(req: NextRequest) {
     return new Response('Forbidden', { status: 403 });
   }
 
-  return new Response(challenge, {
-    status: 200,
-    headers: { 'Content-Type': 'text/plain' },
-  });
+  return new Response(challenge, { status: 200, headers: { 'Content-Type': 'text/plain' } });
 }
 
-/**
- * POST - Eventos (mensagens, status)
- * Sempre persiste o evento primeiro; depois processa. Em falha de processamento
- * retorna 200 e loga o erro para depuração (evento fica visível em "Ver payload").
- */
+// ---------------------------------------------------------------------------
+// POST — Eventos de mensagens e status
+// ---------------------------------------------------------------------------
+
 export async function POST(req: NextRequest) {
   let payload: unknown;
+
   try {
     const rawBody = await req.text();
     try {
@@ -69,170 +240,158 @@ export async function POST(req: NextRequest) {
       return new Response('OK', { status: 200 });
     }
 
-    // 1) Sempre registrar o evento para aparecer na lista e permitir "Ver payload"
+    // Registrar evento bruto para auditoria / "Ver payload"
     const { error: insertError } = await supabaseServiceRole.from('webhook_events').insert({
       source: SOURCE,
       event_name: EVENT_NAME,
       raw_payload: payload as object,
     });
+
     if (insertError) {
-      console.error('[webhooks/whatsapp-official] Erro ao inserir evento:', insertError.message, insertError.details);
+      console.error(
+        '[Zaploto Chat] Erro ao inserir webhook_event:',
+        insertError.message,
+        insertError.details
+      );
       return new Response('OK', { status: 200 });
     }
 
-    // 2) Processar entradas (mensagens → chat; status updates)
+    // Processar entradas em paralelo (Meta pode enviar múltiplas)
     const entries = Array.isArray(payload.entry) ? payload.entry : [];
+
     for (const entry of entries) {
       const changes = Array.isArray((entry as { changes?: unknown[] }).changes)
         ? (entry as { changes: unknown[] }).changes
         : [];
+
       for (const change of changes) {
-        const value = (change as { value?: Record<string, unknown> })?.value;
+        const value = (change as { value?: WaValue })?.value;
         if (!value || typeof value !== 'object') continue;
 
         try {
           if (Array.isArray(value.messages)) {
-            await handleInboundMessages(value as InboundValue);
+            await handleInboundMessages(value);
           }
           if (Array.isArray(value.statuses)) {
-            await handleStatusUpdates(value as StatusValue);
+            await handleStatusUpdates(value);
           }
         } catch (err) {
-          console.error('[webhooks/whatsapp-official] Erro ao processar entrada (mensagens/status):', err);
+          console.error('[Zaploto Chat] Erro ao processar entrada:', err);
         }
       }
     }
 
     return new Response('OK', { status: 200 });
   } catch (err) {
-    console.error('[webhooks/whatsapp-official] Erro inesperado:', err);
+    console.error('[Zaploto Chat] Erro inesperado no webhook:', err);
     return new Response('OK', { status: 200 });
   }
 }
 
-interface InboundValue {
-  metadata?: { phone_number_id?: string };
-  contacts?: Array<{ profile?: { name?: string }; wa_id?: string }>;
-  messages?: Array<{
-    from: string;
-    id: string;
-    timestamp: string;
-    type: string;
-    text?: { body?: string };
-    image?: { id?: string; caption?: string };
-    audio?: { id?: string };
-    video?: { id?: string; caption?: string };
-    document?: { id?: string; caption?: string };
-  }>;
-}
+// ---------------------------------------------------------------------------
+// Processamento de mensagens recebidas
+// ---------------------------------------------------------------------------
 
-async function handleInboundMessages(value: InboundValue) {
-  const phoneNumberId = value.metadata?.phone_number_id;
-  if (!phoneNumberId) return;
+async function handleInboundMessages(value: WaValue) {
+  const messages = value.messages ?? [];
+  if (messages.length === 0) return;
 
+  // Extrair metadados do primeiro evento para resolver a config
+  const parsed = parseWhatsAppPayload(value);
+  if (!parsed) return;
+
+  // Resolver whatsapp_config_id via phone_number_id (access_token e graph_version para resolveAndStoreMedia)
   const { data: config } = await supabaseServiceRole
     .from('whatsapp_official_configs')
-    .select('id, zaploto_id')
-    .eq('phone_number_id', phoneNumberId)
+    .select('id, zaploto_id, access_token, graph_version')
+    .eq('phone_number_id', parsed.phoneNumberId)
     .eq('is_active', true)
     .single();
 
-  if (!config) return;
+  if (!config) {
+    console.warn('[Zaploto Chat] Config não encontrada para phone_number_id:', parsed.phoneNumberId);
+    return;
+  }
 
-  const messages = value.messages || [];
   const contact = value.contacts?.[0];
-  const remoteJid = `${(messages[0]?.from || contact?.wa_id || '').replace(/\D/g, '')}@s.whatsapp.net`;
-  const title = contact?.profile?.name || messages[0]?.from || remoteJid;
+  const remoteJid = `${parsed.contactId.replace(/\D/g, '')}@s.whatsapp.net`;
+  const title = parsed.contactName || remoteJid;
 
-  const conversationData = {
+  // UPSERT da conversa (campos mínimos; saveMessage atualiza o resumo depois)
+  const conversation = await chatService.upsertConversation({
     whatsapp_config_id: config.id,
     instance_id: null,
     workspace_id: config.zaploto_id,
-    user_id: undefined,
     remote_jid: remoteJid,
     title,
     is_group: false,
-    last_message_at: new Date().toISOString(),
-    last_message_preview: '',
-  };
+  });
 
-  const conversation = await chatService.upsertConversation(conversationData);
+  const graphVersion = (config as { graph_version?: string }).graph_version || 'v25.0';
+  const accessToken = (config as { access_token?: string }).access_token || '';
 
+  // Processar cada mensagem individualmente
   for (const msg of messages) {
     const from = String(msg.from || '').replace(/\D/g, '');
-    let text = '';
-    let mediaType = 'text';
-    let caption = '';
+    const { text, mediaType, caption } = resolveMediaInfo(msg);
 
-    if (msg.type === 'text' && msg.text?.body) {
-      text = msg.text.body;
-    } else if (msg.image) {
-      mediaType = 'image';
-      text = msg.image.caption || '';
-      caption = msg.image.caption || '';
-    } else if (msg.audio) {
-      mediaType = 'audio';
-      text = 'Áudio';
-    } else if (msg.video) {
-      mediaType = 'video';
-      text = msg.video.caption || 'Vídeo';
-      caption = msg.video.caption || '';
-    } else if (msg.document) {
-      mediaType = 'document';
-      text = msg.document.caption || 'Documento';
-      caption = msg.document.caption || '';
+    let mediaUrl: string | null = null;
+    if (['image', 'audio', 'video', 'document'].includes(msg.type)) {
+      const mediaObj = msg[msg.type as keyof WaMessage] as { id?: string; mime_type?: string } | undefined;
+      const mediaId = mediaObj?.id;
+      const mimeType = mediaObj?.mime_type;
+      if (mediaId && accessToken) {
+        try {
+          mediaUrl = await resolveAndStoreMedia(
+            mediaId,
+            accessToken,
+            graphVersion,
+            mimeType,
+            config.id
+          );
+        } catch (err) {
+          console.error('[Zaploto Chat] Falha ao resolver mídia:', mediaId, err);
+        }
+      }
     }
 
-    conversationData.last_message_preview = text.slice(0, 100) || (mediaType !== 'text' ? mediaType : '');
-
-    const messageData = {
+    // saveMessage: normaliza timestamp, deduplica e atualiza conversa
+    await chatService.saveMessage({
       instance_id: null,
       whatsapp_config_id: config.id,
       workspace_id: config.zaploto_id,
-      user_id: undefined,
       conversation_id: conversation.id,
       message_id: msg.id,
-      direction: 'in' as const,
+      direction: 'in',
       from_me: false,
       sender_jid: `${from}@s.whatsapp.net`,
       text,
       media_type: mediaType,
-      media_url: undefined,
+      media_url: mediaUrl ?? undefined,
       caption,
       status: 'received',
-      timestamp: parseInt(String(msg.timestamp), 10) || Math.floor(Date.now() / 1000),
-      provider: 'whatsapp_official' as const,
-    };
-
-    await chatService.saveMessage(messageData);
+      timestamp: parseInt(msg.timestamp, 10),
+      provider: 'whatsapp_official',
+    });
   }
 
-  await Promise.resolve(
-    supabaseServiceRole.rpc('increment_unread_count', { conv_id: conversation.id })
-  ).catch(() =>
-    supabaseServiceRole
+  // Incrementar contador de não lidas (atômico, evita race condition)
+  try {
+    const { error } = await supabaseServiceRole.rpc('increment_unread_count', {
+      conv_id: conversation.id,
+    });
+    if (error) throw error;
+  } catch {
+    await supabaseServiceRole
       .from('chat_conversations')
-      .update({ unread_count: (conversation.unread_count || 0) + 1 })
-      .eq('id', conversation.id)
-  );
-
-  // Janela de 24h: última mensagem do contato atualiza o marco para envio de mensagem livre
-  const lastMsgTs = messages.length
-    ? parseInt(String(messages[messages.length - 1].timestamp), 10) * 1000
-    : Date.now();
-  await supabaseServiceRole
-    .from('chat_conversations')
-    .update({ last_customer_message_at: new Date(lastMsgTs).toISOString() })
-    .eq('id', conversation.id);
+      .update({ unread_count: (conversation.unread_count || 0) + messages.length })
+      .eq('id', conversation.id);
+  }
 }
 
-interface StatusValue {
-  statuses?: Array<{
-    id: string;
-    status?: string;
-    recipient_id?: string;
-  }>;
-}
+// ---------------------------------------------------------------------------
+// Processamento de atualizações de status (sent/delivered/read/failed)
+// ---------------------------------------------------------------------------
 
 const STATUS_MAP: Record<string, string> = {
   sent: 'sent',
@@ -241,10 +400,10 @@ const STATUS_MAP: Record<string, string> = {
   failed: 'failed',
 };
 
-async function handleStatusUpdates(value: StatusValue) {
-  const statuses = value.statuses || [];
+async function handleStatusUpdates(value: WaValue) {
+  const statuses = value.statuses ?? [];
   for (const st of statuses) {
-    const newStatus = STATUS_MAP[st.status || ''] || st.status || 'updated';
+    const newStatus = STATUS_MAP[st.status ?? ''] ?? st.status ?? 'updated';
     await supabaseServiceRole
       .from('chat_messages')
       .update({ status: newStatus })

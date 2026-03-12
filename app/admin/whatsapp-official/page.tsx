@@ -121,11 +121,11 @@ export default function WhatsAppOfficialAdmin() {
     loadWebhookEvents();
   }, [webhookEventsPage]);
 
-  const webhookUrl = typeof window !== 'undefined' ? `${window.location.origin}/api/webhooks/whatsapp-official` : '';
+  const webhookPath = '/api/webhooks/whatsapp-official';
   const copyWebhookUrl = async () => {
-    if (!webhookUrl) return;
+    const fullUrl = typeof window !== 'undefined' ? `${window.location.origin}${webhookPath}` : webhookPath;
     try {
-      await navigator.clipboard.writeText(webhookUrl);
+      await navigator.clipboard.writeText(fullUrl);
       setWebhookUrlCopied(true);
       setTimeout(() => setWebhookUrlCopied(false), 2000);
     } catch (e) {
@@ -534,12 +534,12 @@ export default function WhatsAppOfficialAdmin() {
                 </p>
                 <div className="flex flex-wrap items-center gap-2">
                   <a
-                    href={webhookUrl}
+                    href={webhookPath}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1.5 text-sm text-[var(--zaploto-green)] hover:underline break-all font-mono"
                   >
-                    {webhookUrl || '/api/webhooks/whatsapp-official'}
+                    {webhookPath}
                     <ExternalLink className="w-4 h-4 shrink-0" />
                   </a>
                   <button

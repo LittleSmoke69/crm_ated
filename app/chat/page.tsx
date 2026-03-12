@@ -27,20 +27,22 @@ import {
   AlertCircle,
   RefreshCw,
   Database,
+  Loader2,
+  X,
 } from 'lucide-react';
 
 interface Message {
   id: string;
-  text: string;
+  text: string | null;
   direction: 'in' | 'out';
   status: string;
   timestamp: number;
   created_at: string;
   from_me: boolean;
-  media_type?: string;
-  media_url?: string;
-  caption?: string;
-  sender_jid?: string;
+  media_type?: 'text' | 'image' | 'audio' | 'video' | 'document' | null;
+  media_url?: string | null;
+  caption?: string | null;
+  sender_jid?: string | null;
 }
 
 interface Conversation {
@@ -74,6 +76,60 @@ type Channel = ChannelEvolution | ChannelWhatsAppOfficial;
 
 type ConversationFilter = 'all' | 'mine' | 'unassigned';
 
+function MessageContent({ msg, fromMe }: { msg: Message; fromMe: boolean }) {
+  const textClass = fromMe ? 'text-white/90' : 'text-gray-600 dark:text-gray-300';
+  return (
+    <div className="space-y-1">
+      {msg.media_type === 'image' && (
+        msg.media_url ? (
+          <img
+            src={msg.media_url}
+            alt={msg.caption ?? 'imagem'}
+            className="rounded-lg max-w-xs max-h-64 object-cover cursor-pointer"
+            onClick={() => window.open(msg.media_url!, '_blank')}
+          />
+        ) : (
+          <span className={`text-sm italic ${textClass}`}>📷 Imagem não disponível</span>
+        )
+      )}
+      {msg.media_type === 'audio' && (
+        msg.media_url ? (
+          <audio controls src={msg.media_url} className="max-w-xs w-full" />
+        ) : (
+          <span className={`text-sm italic ${textClass}`}>🎵 Áudio não disponível</span>
+        )
+      )}
+      {msg.media_type === 'video' && (
+        msg.media_url ? (
+          <video controls src={msg.media_url} className="rounded-lg max-w-xs max-h-64" />
+        ) : (
+          <span className={`text-sm italic ${textClass}`}>🎬 Vídeo não disponível</span>
+        )
+      )}
+      {msg.media_type === 'document' && (
+        msg.media_url ? (
+          <a
+            href={msg.media_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={`flex items-center gap-2 text-sm underline ${fromMe ? 'text-white/90' : 'text-blue-400'}`}
+          >
+            <FileText size={16} /> {msg.caption ?? 'Documento'}
+          </a>
+        ) : (
+          <span className={`text-sm italic ${textClass}`}>📄 Documento não disponível</span>
+        )
+      )}
+      {msg.caption && msg.media_type && msg.media_type !== 'text' && (
+        <p className={`text-sm mt-1 ${textClass}`}>{msg.caption}</p>
+      )}
+      {(!msg.media_type || msg.media_type === 'text') && msg.text != null && msg.text !== '' && (
+        <p className="text-sm whitespace-pre-wrap break-words">{msg.text}</p>
+      )}
+    </div>
+  );
+}
+
 type UserStatus = 'super_admin' | 'admin' | 'suporte' | string | null;
 
 export default function ChatPage() {
@@ -91,10 +147,19 @@ export default function ChatPage() {
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [conversationFilter, setConversationFilter] = useState<ConversationFilter>('all');
   const [showResolveMenu, setShowResolveMenu] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [attachedMedia, setAttachedMedia] = useState<{
+    url: string;
+    type: 'image' | 'audio' | 'video' | 'document';
+    name: string;
+    preview?: string;
+  } | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const authHeaders = (): Record<string, string> => (userId ? { 'X-User-Id': userId } : {});
   const canSelectChannel =
@@ -217,10 +282,14 @@ export default function ChatPage() {
     loadMessages();
   }, [selectedConversationId]);
 
-  // Scroll para última mensagem
+  // Scroll para o final ao abrir/trocar de conversa (carregamento inicial)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    if (!selectedConversationId) return;
+    const timeout = setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, 80);
+    return () => clearTimeout(timeout);
+  }, [selectedConversationId]);
 
   // Supabase Realtime para mensagens
   useEffect(() => {
@@ -238,17 +307,51 @@ export default function ChatPage() {
         },
         (payload) => {
           if (payload.eventType === 'INSERT') {
-            setMessages((prev) => [...prev, payload.new as Message]);
+            const raw = payload.new as Message;
+            // Normalizar timestamp: o Realtime pode enviar BIGINT como string
+            const msg: Message = {
+              ...raw,
+              timestamp:
+                typeof raw.timestamp === 'string'
+                  ? parseInt(raw.timestamp, 10)
+                  : raw.timestamp,
+            };
+
+            setMessages((prev) => {
+              // Deduplicação: ignorar se já existe pelo id
+              if (prev.some((m) => m.id === msg.id)) return prev;
+              return [...prev, msg];
+            });
+
+            // Scroll inteligente: só desce se o usuário já estava no final
+            const container = messagesContainerRef.current;
+            const isAtBottom = container
+              ? container.scrollHeight - container.scrollTop - container.clientHeight < 100
+              : true;
+            if (isAtBottom) {
+              setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+            }
           } else if (payload.eventType === 'UPDATE') {
-            setMessages((prev) =>
-              prev.map((msg) => (msg.id === payload.new.id ? (payload.new as Message) : msg))
-            );
+            const raw = payload.new as Message;
+            const msg: Message = {
+              ...raw,
+              timestamp:
+                typeof raw.timestamp === 'string'
+                  ? parseInt(raw.timestamp, 10)
+                  : raw.timestamp,
+            };
+            setMessages((prev) => prev.map((m) => (m.id === msg.id ? msg : m)));
           } else if (payload.eventType === 'DELETE') {
-            setMessages((prev) => prev.filter((msg) => msg.id !== payload.old.id));
+            setMessages((prev) => prev.filter((m) => m.id !== payload.old.id));
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('[Zaploto Chat] Realtime status:', status);
+        if (status === 'CHANNEL_ERROR') {
+          console.error('[Zaploto Chat] Realtime — verificar publication e RLS em chat_messages');
+        }
+      });
 
     return () => {
       supabase.removeChannel(channel);
@@ -324,8 +427,45 @@ export default function ChatPage() {
     };
   }, [selectedChannel, userStatus]);
 
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedChannel || selectedChannel.type !== 'whatsapp_official') return;
+    setUploading(true);
+    e.target.value = '';
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('config_id', selectedChannel.id);
+      const res = await fetch('/api/chat/whatsapp-official/upload-media', {
+        method: 'POST',
+        body: formData,
+        headers: authHeaders(),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        alert(data.error || data.message || 'Falha no upload');
+        return;
+      }
+      const preview = data.data.media_type === 'image' ? URL.createObjectURL(file) : undefined;
+      setAttachedMedia({
+        url: data.data.url,
+        type: data.data.media_type,
+        name: file.name,
+        preview,
+      });
+    } catch (err) {
+      console.error('[Zaploto Chat] Falha no upload:', err);
+      alert('Falha ao enviar arquivo');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+
   const handleSendMessage = async () => {
-    if (!messageText.trim() || !selectedConversationId || !selectedChannel || sending) return;
+    const hasText = messageText.trim().length > 0;
+    const hasMedia = !!attachedMedia;
+    if ((!hasText && !hasMedia) || !selectedConversationId || !selectedChannel || sending) return;
     if (selectedChannel.type === 'whatsapp_official' && !canSendFreeMessage) {
       alert('Fora da janela de 24h. Use mensagem template para iniciar ou reabrir a conversa.');
       return;
@@ -356,19 +496,30 @@ export default function ChatPage() {
         }
       } else {
         const to = (conversation.remote_jid || '').replace(/@s\.whatsapp\.net$/, '').replace(/\D/g, '') || conversation.remote_jid;
+        const body: Record<string, string | undefined> = hasMedia
+          ? {
+              config_id: selectedChannel.id,
+              to,
+              type: attachedMedia!.type,
+              media_url: attachedMedia!.url,
+              caption: hasText ? messageText.trim() : undefined,
+            }
+          : {
+              config_id: selectedChannel.id,
+              to,
+              type: 'text',
+              text: messageText.trim(),
+            };
         const response = await fetch('/api/chat/whatsapp-official/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...authHeaders() },
-          body: JSON.stringify({
-            config_id: selectedChannel.id,
-            to,
-            type: 'text',
-            text: messageText,
-          }),
+          body: JSON.stringify(body),
         });
         const result = await response.json();
         if (result.success) {
+          if (attachedMedia?.preview) URL.revokeObjectURL(attachedMedia.preview);
           setMessageText('');
+          setAttachedMedia(null);
           if (textareaRef.current) textareaRef.current.style.height = 'auto';
         } else {
           alert(result.error || result.message || 'Erro ao enviar mensagem');
@@ -812,7 +963,7 @@ export default function ChatPage() {
               </div>
 
               {/* Mensagens */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4 space-y-4">
                 {loading ? (
                   <div className="text-center text-gray-500 dark:text-gray-400 text-sm">Carregando mensagens...</div>
                 ) : messages.length === 0 ? (
@@ -852,14 +1003,7 @@ export default function ChatPage() {
                                 : 'bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 rounded-bl-none border border-gray-200 dark:border-[#404040]'
                             }`}
                           >
-                            {msg.text && (
-                              <p className="text-sm whitespace-pre-wrap break-words">{msg.text}</p>
-                            )}
-                            {msg.caption && (
-                              <p className={`text-sm mt-1 ${msg.from_me ? 'text-white/90' : 'text-gray-600 dark:text-gray-300'}`}>
-                                {msg.caption}
-                              </p>
-                            )}
+                            <MessageContent msg={msg} fromMe={msg.from_me} />
                             <div
                               className={`flex items-center justify-end gap-1 mt-1 ${
                                 msg.from_me ? 'text-white/80' : 'text-gray-500 dark:text-gray-400'
@@ -879,6 +1023,35 @@ export default function ChatPage() {
 
               {/* Input de Mensagem */}
               <div className="bg-white dark:bg-[#2a2a2a] border-t border-gray-200 dark:border-[#404040] p-4">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  accept="image/jpeg,image/png,image/webp,audio/ogg,audio/mpeg,video/mp4,application/pdf"
+                  onChange={handleFileSelect}
+                />
+                {attachedMedia && (
+                  <div className="mx-4 mb-2 p-2 bg-gray-800 rounded-lg flex items-center gap-3 border border-gray-600">
+                    {attachedMedia.type === 'image' && attachedMedia.preview && (
+                      <img src={attachedMedia.preview} alt="" className="w-12 h-12 rounded object-cover" />
+                    )}
+                    {attachedMedia.type === 'audio' && <Mic size={24} className="text-green-400" />}
+                    {attachedMedia.type === 'video' && <FileText size={24} className="text-blue-400" />}
+                    {attachedMedia.type === 'document' && <FileText size={24} className="text-amber-400" />}
+                    <span className="text-sm text-gray-300 flex-1 truncate">{attachedMedia.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (attachedMedia?.preview) URL.revokeObjectURL(attachedMedia.preview);
+                        setAttachedMedia(null);
+                      }}
+                      className="text-gray-400 hover:text-white p-1"
+                      aria-label="Remover anexo"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+                )}
                 <div className="mb-2 flex items-center gap-2">
                   <button className="px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg">
                     Responder
@@ -920,8 +1093,14 @@ export default function ChatPage() {
                     <button className="p-2 hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg text-gray-600 dark:text-gray-300">
                       <Smile className="w-5 h-5" />
                     </button>
-                    <button className="p-2 hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg text-gray-600 dark:text-gray-300">
-                      <Paperclip className="w-5 h-5" />
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploading || selectedChannel?.type !== 'whatsapp_official' || !canSendFreeMessage}
+                      className="p-2 hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg text-gray-600 dark:text-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                      title="Anexar imagem, áudio, vídeo ou PDF"
+                    >
+                      {uploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Paperclip className="w-5 h-5" />}
                     </button>
                     <button className="p-2 hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg text-gray-600 dark:text-gray-300">
                       <Mic className="w-5 h-5" />
@@ -941,7 +1120,7 @@ export default function ChatPage() {
                     </button>
                     <button
                       onClick={handleSendMessage}
-                      disabled={!messageText.trim() || sending || !canSendFreeMessage}
+                      disabled={(!messageText.trim() && !attachedMedia) || sending || !canSendFreeMessage}
                       title={!canSendFreeMessage ? 'Fora da janela de 24h. Use mensagem template.' : undefined}
                       className="px-4 py-2 text-sm font-medium text-white rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                       style={{ backgroundColor: '#8CD955' }}
