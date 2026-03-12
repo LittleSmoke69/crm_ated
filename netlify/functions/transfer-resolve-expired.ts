@@ -4,8 +4,9 @@
  * Formação automática: a cada 1 hora chama a API do app para resolver
  * transferências expiradas (vincular ou marcar como disponível para repasse).
  *
- * A API processa no máximo max_logs por execução (default 5) para evitar 504 Inactivity Timeout.
- * O cron roda a cada hora; se houver mais logs, as próximas execuções processam o restante.
+ * Por que 504 "Inactivity Timeout"? O 504 com HTML "Too much time..." vem do PROXY do Netlify:
+ * o proxy encerra a conexão se a API demorar para enviar a resposta (cada lead chama o CRM).
+ * Com max_logs=1 reduzimos o trabalho por request para caber no tempo do proxy.
  *
  * Configuração:
  * - TRANSFER_RESOLVE_CRON_SECRET: mesmo valor definido no app (Next.js)
@@ -16,9 +17,6 @@
 
 const CRON_SECRET = process.env.TRANSFER_RESOLVE_CRON_SECRET?.trim();
 const SITE_URL = process.env.URL || process.env.DEPLOY_PRIME_URL || '';
-
-/** Timeout do fetch (ms). A API limita a 5 logs por run para responder antes do timeout do proxy. */
-const FETCH_TIMEOUT_MS = 120_000;
 
 export const handler = async () => {
   if (!CRON_SECRET) {
@@ -32,8 +30,6 @@ export const handler = async () => {
   }
 
   const endpoint = `${SITE_URL.replace(/\/+$/, '')}/api/cron/resolve-expired-transfers`;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
   try {
     const res = await fetch(endpoint, {
@@ -43,10 +39,8 @@ export const handler = async () => {
         'Accept': 'application/json',
         'x-cron-secret': CRON_SECRET,
       },
-      body: JSON.stringify({ max_logs: 5 }),
-      signal: controller.signal,
+      body: JSON.stringify({ max_logs: 1 }),
     });
-    clearTimeout(timeoutId);
     const text = await res.text();
     let data: unknown;
     try {
@@ -61,13 +55,8 @@ export const handler = async () => {
     console.log('[transfer-resolve-expired] Sucesso:', data);
     return { statusCode: 200, body: JSON.stringify(data) };
   } catch (err: unknown) {
-    clearTimeout(timeoutId);
     const msg = err instanceof Error ? err.message : String(err);
-    const isTimeout = err instanceof Error && err.name === 'AbortError';
-    console.error('[transfer-resolve-expired] Erro ao chamar API:', msg, isTimeout ? '(timeout)' : '');
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ error: msg, timeout: isTimeout }),
-    };
+    console.error('[transfer-resolve-expired] Erro ao chamar API:', msg);
+    return { statusCode: 500, body: JSON.stringify({ error: msg }) };
   }
 };
