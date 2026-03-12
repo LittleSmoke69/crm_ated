@@ -97,7 +97,28 @@ No INSERT, o front faz `setMessages((prev) => [...prev, payload.new])`. Não há
 
 **Ação:** Opcional: checar se `payload.new.id` já existe antes de adicionar; manter ordenação por `created_at` ou `timestamp`.
 
-### 3.6 Webhook público (ambiente)
+### 3.6 WhatsApp Oficial: conversa não aparece na caixa de entrada
+
+Se o evento chega no webhook mas a conversa **não aparece** na lista (Todas/Minhas/Não atribuídas em 0):
+
+1. **Config não encontrada**  
+   O webhook busca a config por `phone_number_id` igual a `metadata.phone_number_id` do payload da Meta.  
+   Ex.: payload com `"phone_number_id": "869289969604374"` → deve existir em `whatsapp_official_configs` uma linha ativa com `phone_number_id = '869289969604374'`.  
+   **Ação:** Em Admin > WhatsApp Oficial, cadastrar ou editar a configuração e preencher o **Phone Number ID** exatamente como no App da Meta (Developer Console > WhatsApp > Configuração do número).  
+   Nos logs do servidor, se a config não for encontrada, aparece:  
+   `[Zaploto Chat] Config não encontrada para phone_number_id: 869289969604374 - Verifique se existe uma configuração ativa...`
+
+2. **Realtime não habilitado**  
+   Se `chat_conversations` não estiver na publication `supabase_realtime`, novas conversas só aparecem após **Atualizar** ou ao voltar à aba.  
+   **Ação:** Executar `migrations/fix_chat_realtime_and_indexes.sql` no SQL Editor do Supabase (bloco que adiciona `chat_conversations` e `chat_messages` à publication).
+
+3. **Canal selecionado diferente do número que recebeu**  
+   A lista é filtrada por `whatsapp_config_id` = ID do canal selecionado. Se você tem mais de uma config (vários números), precisa estar no canal cujo **Phone Number ID** é o que recebeu a mensagem.
+
+4. **Refetch ao voltar à aba**  
+   O frontend passou a recarregar a lista de conversas quando a aba do navegador fica visível de novo (`visibilitychange`). Assim, mesmo sem Realtime, ao trocar de aba e voltar (ou clicar em **Atualizar**), as novas conversas aparecem.
+
+### 3.7 Webhook público (ambiente)
 
 O `CHAT_STATUS.md` cita que o chat depende de ambiente público para receber webhooks. Em localhost, sem túnel (ngrok, etc.) ou deploy, os eventos não chegam, então nada é gravado em `chat_messages` e o Realtime nem entra em cena.
 

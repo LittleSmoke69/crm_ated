@@ -255,6 +255,18 @@ export default function ChatPage() {
     loadConversationsFromApi(false);
   }, [selectedChannel, loadConversationsFromApi]);
 
+  // Refetch de conversas ao voltar à aba (garante ver novas conversas mesmo se Realtime falhar ou não estiver habilitado)
+  useEffect(() => {
+    if (!selectedChannel) return;
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        loadConversationsFromApi(true);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [selectedChannel, loadConversationsFromApi]);
+
   // Carregar mensagens quando conversa mudar
   useEffect(() => {
     if (!selectedConversationId) {

@@ -75,6 +75,8 @@ function isWhatsAppOfficialPayload(
 
 /**
  * Extrai os campos relevantes de uma entrada de mensagem do payload Meta.
+ * Em todo payload a Meta envia value.metadata com phone_number_id (e opcionalmente display_phone_number).
+ * Usamos metadata.phone_number_id para localizar a config em whatsapp_official_configs.
  * timestamp é sempre convertido com parseInt para garantir número.
  */
 function parseWhatsAppPayload(value: WaValue): ParsedMessage | null {
@@ -300,16 +302,25 @@ async function handleInboundMessages(value: WaValue) {
   const parsed = parseWhatsAppPayload(value);
   if (!parsed) return;
 
-  // Resolver whatsapp_config_id via phone_number_id (access_token e graph_version para resolveAndStoreMedia)
-  const { data: config } = await supabaseServiceRole
+  // Resolver whatsapp_config_id via phone_number_id (normalizar para string: Meta pode enviar número ou string)
+  const phoneNumberIdStr = String(parsed.phoneNumberId ?? '').trim();
+  const { data: config, error: configError } = await supabaseServiceRole
     .from('whatsapp_official_configs')
     .select('id, zaploto_id, access_token, graph_version')
-    .eq('phone_number_id', parsed.phoneNumberId)
+    .eq('phone_number_id', phoneNumberIdStr)
     .eq('is_active', true)
-    .single();
+    .maybeSingle();
 
+  if (configError) {
+    console.error('[Zaploto Chat] Erro ao buscar config por phone_number_id:', configError.message);
+    return;
+  }
   if (!config) {
-    console.warn('[Zaploto Chat] Config não encontrada para phone_number_id:', parsed.phoneNumberId);
+    console.warn(
+      '[Zaploto Chat] Config não encontrada para phone_number_id:',
+      phoneNumberIdStr,
+      '- Verifique se existe uma configuração ativa em Admin > WhatsApp Oficial com esse Phone Number ID (Meta).'
+    );
     return;
   }
 

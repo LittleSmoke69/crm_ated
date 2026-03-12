@@ -67,6 +67,7 @@ Resumo: **texto, imagem e áudio estão implementados no backend; vídeo não.**
 
 **Arquivo:** `app/api/webhooks/whatsapp-official/route.ts`
 
+- **Metadata do payload:** Em todo evento a Meta envia `value.metadata` com `phone_number_id` (ex.: `"869289969604374"`) e opcionalmente `display_phone_number`. O webhook usa **apenas** `metadata.phone_number_id` para buscar a configuração ativa em `whatsapp_official_configs`. O cadastro em Admin > WhatsApp Oficial deve ter o **Phone Number ID** igual ao recebido no payload.
 - **Tipos tratados:** texto, imagem, áudio, vídeo, documento (via `resolveMediaInfo`).
 - Para cada mensagem recebida são persistidos: `message_id`, `text`, `media_type`, `caption`, `timestamp`, etc.
 - **Problema:** Não é persistido `media_url` para mensagens recebidas. Na API oficial, mídia vem como **ID** (ex.: `image.id`, `video.id`). Para obter URL é necessário chamar a Media API da Meta (`GET /vXX.0/{media-id}` com token). Como isso não é feito, mensagens de imagem/áudio/vídeo/documento ficam no banco **sem URL**, apenas com `media_type` e texto/legenda.
