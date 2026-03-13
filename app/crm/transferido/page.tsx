@@ -69,10 +69,19 @@ const TransferidoContent = () => {
   const [columnSorts, setColumnSorts] = useState<Record<string, { field: SortField; direction: SortDirection }>>({});
   const [leadsPerColumn, setLeadsPerColumn] = useState<Record<string, number>>({});
   const [showStatusModal, setShowStatusModal] = useState(false);
-  /** Carregamento em segundo plano do restante dos leads (após a primeira página da primeira banca). */
+  /** Carregamento em segundo plano do restante dos leads (após o primeiro lote de 500). */
   const [loadingFullInBackground, setLoadingFullInBackground] = useState(false);
-  /** Progresso único do carregamento: banca e página atuais. Usado para mensagem "Carregando banca X de Y, página Z". */
-  const [loadingProgress, setLoadingProgress] = useState<{ currentBanca: number; currentPage: number; totalBancas: number | null } | null>(null);
+  /** Progresso do carregamento em lotes: totais carregados, banca e lote atuais. */
+  const [loadingProgress, setLoadingProgress] = useState<{
+    totalLoaded: number;
+    currentBanca: number;
+    currentPage: number;
+    totalBancas: number | null;
+  } | null>(null);
+  /** True do início ao fim do ciclo de lotes; bloco de comunicação fica visível até terminar todos os lotes. */
+  const [batchLoadInProgress, setBatchLoadInProgress] = useState(false);
+  /** Sinaliza que o carregamento terminou; usado para esconder o banner só após os leads aparecerem na página. */
+  const [batchLoadFinished, setBatchLoadFinished] = useState(false);
   const { showToast, toasts, removeToast } = useToast();
 
   const isInitialLoadRef = useRef(true);
@@ -86,6 +95,15 @@ const TransferidoContent = () => {
     exclusiveBancasListRef.current = exclusiveBancasList;
   }, [exclusiveBancasList]);
 
+  // Só libera o banner verde após todos os leads aparecerem na página (commit + paint)
+  useEffect(() => {
+    if (!batchLoadFinished) return;
+    setBatchLoadFinished(false);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => setBatchLoadInProgress(false));
+    });
+  }, [batchLoadFinished]);
+
   const loadLeads = useCallback(async (isFilterChange = false) => {
     if (!userId) return;
     fullRequestAbortRef.current?.abort();
@@ -96,19 +114,21 @@ const TransferidoContent = () => {
       setLoading(true);
     }
     setError(null);
-    setLoadingProgress({ currentBanca: 1, currentPage: 1, totalBancas: null });
+    setBatchLoadInProgress(true);
+    setBatchLoadFinished(false);
+    setLoadingProgress({ totalLoaded: 0, currentBanca: 1, currentPage: 1, totalBancas: null });
     try {
-      const url = new URL('/api/crm/transferred-leads', window.location.origin);
+      const baseUrl = new URL('/api/crm/transferred-leads', window.location.origin);
       if (targetUserId) {
-        url.searchParams.append('userId', targetUserId);
+        baseUrl.searchParams.append('userId', targetUserId);
       }
       const listBancas = exclusiveBancasListRef.current;
       const bancaValue = filters.banca ? (typeof filters.banca === 'object' ? filters.banca.value : filters.banca) : null;
       if (bancaValue && bancaValue !== 'all') {
-        url.searchParams.append('banca_url', bancaValue);
+        baseUrl.searchParams.append('banca_url', bancaValue);
         console.log('[Transferido] loadLeads | banca selecionada:', bancaValue);
       } else if (listBancas.length > 0) {
-        url.searchParams.append('banca_urls', listBancas.map((b) => b.url).join(','));
+        baseUrl.searchParams.append('banca_urls', listBancas.map((b) => b.url).join(','));
         console.log('[Transferido] loadLeads | Todas as Bancas, urls:', listBancas.length);
       } else {
         console.log('[Transferido] loadLeads | Sem lista de bancas ainda - API usará bancas do servidor (getBancasVisiveis)');
@@ -119,38 +139,39 @@ const TransferidoContent = () => {
       const today = nowSP.toISOString().split('T')[0];
 
       if (dateValue === 'diario') {
-        url.searchParams.append('from', today);
-        url.searchParams.append('to', today);
+        baseUrl.searchParams.append('from', today);
+        baseUrl.searchParams.append('to', today);
       } else if (dateValue === 'ontem') {
         const yesterday = new Date(nowSP);
         yesterday.setDate(yesterday.getDate() - 1);
         const yesterdayStr = yesterday.toISOString().split('T')[0];
-        url.searchParams.append('from', yesterdayStr);
-        url.searchParams.append('to', yesterdayStr);
+        baseUrl.searchParams.append('from', yesterdayStr);
+        baseUrl.searchParams.append('to', yesterdayStr);
       } else if (dateValue === '7dias') {
         const sevenDaysAgo = new Date(nowSP);
         sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
-        url.searchParams.append('from', sevenDaysAgo.toISOString().split('T')[0]);
-        url.searchParams.append('to', today);
+        baseUrl.searchParams.append('from', sevenDaysAgo.toISOString().split('T')[0]);
+        baseUrl.searchParams.append('to', today);
       } else if (dateValue === '15dias') {
         const fifteenDaysAgo = new Date(nowSP);
         fifteenDaysAgo.setDate(fifteenDaysAgo.getDate() - 14);
-        url.searchParams.append('from', fifteenDaysAgo.toISOString().split('T')[0]);
-        url.searchParams.append('to', today);
+        baseUrl.searchParams.append('from', fifteenDaysAgo.toISOString().split('T')[0]);
+        baseUrl.searchParams.append('to', today);
       } else if (dateValue === '30dias') {
         const thirtyDaysAgo = new Date(nowSP);
         thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 29);
-        url.searchParams.append('from', thirtyDaysAgo.toISOString().split('T')[0]);
-        url.searchParams.append('to', today);
+        baseUrl.searchParams.append('from', thirtyDaysAgo.toISOString().split('T')[0]);
+        baseUrl.searchParams.append('to', today);
       } else if (dateValue?.startsWith?.('custom_')) {
         const parts = dateValue.split('_');
         if (parts.length === 3) {
-          url.searchParams.append('from', parts[1]);
-          url.searchParams.append('to', parts[2]);
+          baseUrl.searchParams.append('from', parts[1]);
+          baseUrl.searchParams.append('to', parts[2]);
         }
       }
 
-      url.searchParams.set('full', '1');
+      baseUrl.searchParams.set('full', '1');
+      baseUrl.searchParams.set('per_page', '500');
       const headers = { 'X-User-Id': userId };
       fullRequestAbortRef.current = new AbortController();
       const signal = fullRequestAbortRef.current.signal;
@@ -207,42 +228,68 @@ const TransferidoContent = () => {
         };
       };
 
+      const BATCH_SIZE = 500;
       const accumulated = new Map<string, Lead>();
-      let totalBancas = 1;
+      let totalBancas: number | null = 1;
+      let totalLoaded = 0;
 
-      for (let bancaIndex = 0; !signal.aborted; bancaIndex++) {
-        setLoadingProgress({ currentBanca: bancaIndex + 1, currentPage: 1, totalBancas: totalBancas > 0 ? totalBancas : null });
-        const bancaUrl = new URL(url.toString());
-        bancaUrl.searchParams.set('banca_index', String(bancaIndex));
-        console.log('[Transferido] loadLeads | banca', bancaIndex + 1, 'URL:', bancaUrl.toString());
-        let res: Response;
-        try {
-          res = await fetch(bancaUrl.toString(), { headers, signal });
-        } catch (err: any) {
-          if (err?.name === 'AbortError') break;
-          console.error('[Transferido] loadLeads | Erro de rede banca', bancaIndex, err);
-          setError('Erro de conexão com o servidor');
-          break;
+      for (let bancaIndex = 0; !signal.aborted; ) {
+        let page = 1;
+        let hasMorePagesInBanca = true;
+        while (hasMorePagesInBanca && !signal.aborted) {
+          const batchUrl = new URL(baseUrl.toString());
+          batchUrl.searchParams.set('banca_index', String(bancaIndex));
+          batchUrl.searchParams.set('page', String(page));
+          setLoadingProgress({
+            totalLoaded,
+            currentBanca: bancaIndex + 1,
+            currentPage: page,
+            totalBancas: totalBancas ?? null,
+          });
+          console.log('[Transferido] loadLeads | lote banca', bancaIndex + 1, 'página', page, '|', totalLoaded, 'leads acumulados');
+          let res: Response;
+          try {
+            res = await fetch(batchUrl.toString(), { headers, signal });
+          } catch (err: any) {
+            if (err?.name === 'AbortError') break;
+            console.error('[Transferido] loadLeads | Erro de rede banca', bancaIndex, 'page', page, err);
+            setError('Erro de conexão com o servidor');
+            break;
+          }
+          const result = await res.json();
+          if (signal.aborted) break;
+          if (!result.success) {
+            setError(result.error || 'Erro ao carregar leads transferidos');
+            break;
+          }
+          const leads: any[] = Array.isArray(result.data) ? result.data : [];
+          const meta = result.meta ?? {};
+          const metaTotal = meta.total_bancas ?? result.meta?.totalBancas;
+          if (typeof metaTotal === 'number' && metaTotal > 0) totalBancas = metaTotal;
+          hasMorePagesInBanca = !!meta.has_more_pages_in_banca;
+          const chunkFormatted = leads.map(formatLead);
+          chunkFormatted.forEach((l) => accumulated.set(String(l.id), l));
+          totalLoaded += chunkFormatted.length;
+          setLoadingProgress((prev) => prev ? { ...prev, totalLoaded } : null);
+          // Só libera o loading quando o front for preenchido com alguma resposta (mesmo ciclo de atualização)
+          const hasData = accumulated.size > 0;
+          startTransition(() => {
+            setRawLeads(Array.from(accumulated.values()));
+            if (hasData) {
+              setLoading(false);
+              setFilterLoading(false);
+            }
+          });
+          if (hasData && (bancaIndex > 0 || page > 1)) {
+            setLoadingFullInBackground(true);
+          }
+          if (!hasMorePagesInBanca) break;
+          page++;
         }
-        const result = await res.json();
         if (signal.aborted) break;
-        if (!result.success) {
-          setError(result.error || 'Erro ao carregar leads transferidos');
-          break;
-        }
-        const leads: any[] = Array.isArray(result.data) ? result.data : [];
-        const meta = result.meta ?? {};
-        const metaTotal = meta.total_bancas ?? result.meta?.totalBancas;
-        if (typeof metaTotal === 'number' && metaTotal > 0) totalBancas = metaTotal;
-        const chunkFormatted = leads.map(formatLead);
-        chunkFormatted.forEach((l) => accumulated.set(String(l.id), l));
-        startTransition(() => setRawLeads(Array.from(accumulated.values())));
-        if (bancaIndex === 0) {
-          setLoading(false);
-          setFilterLoading(false);
-        }
-        if (bancaIndex >= totalBancas - 1) break;
-        setLoadingFullInBackground(true);
+        const totalB = totalBancas ?? 1;
+        if (bancaIndex >= totalB - 1) break;
+        bancaIndex++;
       }
 
       setLoading(false);
@@ -253,12 +300,18 @@ const TransferidoContent = () => {
       if (accumulated.size > 0 && !signal.aborted) {
         showToast(`Lista completa carregada: ${accumulated.size} leads.`, 'success');
       }
+      // Atualiza a lista final e sinaliza fim no mesmo commit; o banner só sai no useEffect após os leads aparecerem
+      startTransition(() => {
+        setRawLeads(Array.from(accumulated.values()));
+        setBatchLoadFinished(true);
+      });
     } catch (err) {
       console.error('[Transferido] loadLeads | Erro:', err);
       setError('Erro de conexão com o servidor');
       setLoading(false);
       setFilterLoading(false);
       setLoadingProgress(null);
+      setBatchLoadInProgress(false);
     }
   }, [userId, targetUserId, filters.banca, filters.date]);
 
@@ -685,19 +738,29 @@ const TransferidoContent = () => {
             </div>
           )}
 
-          {/* Banner de carregamento em segundo plano (igual Kanban: verde, Banca X de Y · Página N) */}
-          {loadingFullInBackground && (
-            <div className="mb-4 py-3 px-4 bg-[#8CD955]/15 dark:bg-[#8CD955]/10 border-2 border-[#8CD955]/50 text-gray-800 dark:text-gray-200 rounded-xl flex items-center gap-3 text-sm font-medium animate-in fade-in shadow-sm">
-              <RefreshCw className="w-5 h-5 animate-spin text-[#8CD955] flex-shrink-0" />
+          {/* Bloco: mantém o usuário informado até terminar todos os lotes */}
+          {batchLoadInProgress && (
+            <div className="mb-4 py-4 px-4 bg-[#8CD955]/15 dark:bg-[#8CD955]/10 border-2 border-[#8CD955]/50 text-gray-800 dark:text-gray-200 rounded-xl flex items-center gap-3 text-sm font-medium animate-in fade-in shadow-sm">
+              <RefreshCw className="w-6 h-6 animate-spin text-[#8CD955] flex-shrink-0" />
               <div className="min-w-0 flex-1">
-                <p className="font-semibold">Carregando leads em segundo plano</p>
-                {loadingProgress && loadingProgress.totalBancas != null && loadingProgress.totalBancas > 0 ? (
-                  <p className="text-xs text-gray-600 dark:text-gray-400 font-normal mt-0.5">
-                    Banca {loadingProgress.currentBanca} de {loadingProgress.totalBancas}
-                    {loadingProgress.currentPage > 1 ? ` · Página ${loadingProgress.currentPage}` : ''}
+                <p className="font-semibold">
+                  {loading || filterLoading
+                    ? 'Estamos carregando os lotes de leads. Aguarde a primeira resposta.'
+                    : 'Ainda estamos carregando mais lotes de leads.'}
+                </p>
+                {loadingProgress && (loadingFullInBackground || loading || filterLoading) && (
+                  <p className="text-xs text-gray-600 dark:text-gray-400 font-normal mt-1">
+                    <span className="font-medium text-[#8CD955]">{loadingProgress.totalLoaded.toLocaleString('pt-BR')} leads</span> carregados
+                    {loadingProgress.totalBancas != null && loadingProgress.totalBancas > 0 && (
+                      <> · Banca {loadingProgress.currentBanca} de {loadingProgress.totalBancas}</>
+                    )}
+                    {loadingProgress.currentPage > 1 && (
+                      <> · Lote {loadingProgress.currentPage}</>
+                    )}
                   </p>
-                ) : (
-                  <p className="text-xs text-gray-600 dark:text-gray-400 font-normal mt-0.5">Você já pode usar o quadro; novos leads aparecerão automaticamente.</p>
+                )}
+                {loadingFullInBackground && (
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Você já pode usar o quadro; novos leads aparecerão automaticamente.</p>
                 )}
               </div>
             </div>
