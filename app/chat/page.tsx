@@ -1086,13 +1086,14 @@ export default function ChatPage() {
     if (!messageText.trim() || spellChecking) return;
     setSpellChecking(true);
     setSpellCheckBadge(null);
+    setSendError(null);
     try {
       const res = await fetch('/api/ai/spell-check', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ text: messageText }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({ success: false, error: 'Resposta inválida' }));
       if (data.success) {
         setMessageText(data.data.corrected);
         setSpellCheckBadge(data.data.changed ? 'fixed' : 'ok');
@@ -1103,8 +1104,9 @@ export default function ChatPage() {
           }
         }, 0);
         setTimeout(() => setSpellCheckBadge(null), 3000);
-      } else if (res.status === 503) {
-        setSendError('Corretor IA indisponível: adicione ANTHROPIC_API_KEY ou GEMINI_API_KEY no .env do servidor.');
+      } else {
+        const msg = data.error || (res.status === 503 ? 'Corretor IA indisponível.' : 'Erro ao verificar ortografia.');
+        setSendError(msg);
       }
     } catch {
       setSendError('Não foi possível conectar ao corretor. Tente novamente.');

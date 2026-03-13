@@ -7,6 +7,10 @@
 import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
+
+const MSG_SERVICE_UNAVAILABLE =
+  'Corretor IA temporariamente indisponível. Verifique se GEMINI_API_KEY está configurada no servidor (ex.: Netlify) e tente novamente.';
+
 export async function POST(req: NextRequest) {
   try {
     await requireAuth(req);
@@ -16,12 +20,12 @@ export async function POST(req: NextRequest) {
       return errorResponse('text é obrigatório', 400);
     }
 
-    const anthropicKey = process.env.ANTHROPIC_API_KEY;
-    const geminiKey = process.env.GEMINI_API_KEY;
+    const anthropicKey = (process.env.ANTHROPIC_API_KEY || '').trim();
+    const geminiKey = (process.env.GEMINI_API_KEY || '').trim();
 
     if (!anthropicKey && !geminiKey) {
       return errorResponse(
-        'Nenhuma chave de IA configurada. Adicione ANTHROPIC_API_KEY ou GEMINI_API_KEY no .env',
+        'Nenhuma chave de IA configurada. Adicione ANTHROPIC_API_KEY ou GEMINI_API_KEY nas variáveis de ambiente (ex.: Netlify).',
         503
       );
     }
@@ -38,26 +42,37 @@ ${text.trim()}`;
     let corrected = text.trim();
 
     if (anthropicKey) {
-      // Claude (Anthropic)
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'x-api-key': anthropicKey,
-          'anthropic-version': '2023-06-01',
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 2048,
-          messages: [{ role: 'user', content: prompt }],
-        }),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json?.error?.message || `Anthropic ${res.status}`);
-      corrected = json?.content?.[0]?.text?.trim() ?? text.trim();
+      try {
+        const res = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'x-api-key': anthropicKey,
+            'anthropic-version': '2023-06-01',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 2048,
+            messages: [{ role: 'user', content: prompt }],
+          }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json?.error?.message || `Anthropic ${res.status}`);
+        corrected = json?.content?.[0]?.text?.trim() ?? text.trim();
+      } catch (e) {
+        console.error('[spell-check] Anthropic:', e instanceof Error ? e.message : e);
+        return errorResponse(MSG_SERVICE_UNAVAILABLE, 503);
+      }
     } else {
-      // Gemini — tenta modelos atuais (2.5 pode ter cota separada do 2.0)
-      const { geminiPost } = await import('@/lib/geminiRest');
+      let geminiPost: (path: string, body: unknown) => Promise<any>;
+      try {
+        const mod = await import('@/lib/geminiRest');
+        geminiPost = mod.geminiPost;
+      } catch (e) {
+        console.error('[spell-check] Falha ao carregar módulo Gemini:', e instanceof Error ? e.message : e);
+        return errorResponse(MSG_SERVICE_UNAVAILABLE, 503);
+      }
+
       const modelsToTry = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'];
       let lastError: Error | null = null;
       for (const model of modelsToTry) {
@@ -77,13 +92,21 @@ ${text.trim()}`;
       if (lastError && corrected === text.trim()) {
         const msg = lastError.message;
         const isQuota = /quota|limit|exceeded|retry in/i.test(msg);
+        const isKeyMissing = /não configurada|not configured|invalid.*key|api key/i.test(msg);
         if (isQuota) {
           return errorResponse(
-            'Cota do Gemini esgotada. Verifique uso e billing em https://ai.google.dev/gemini-api/docs/rate-limits ou tente novamente em alguns minutos.',
+            'Cota do Gemini esgotada. Tente novamente em alguns minutos ou verifique o billing em ai.google.dev.',
             503
           );
         }
-        throw lastError;
+        if (isKeyMissing) {
+          return errorResponse(
+            'GEMINI_API_KEY não configurada ou inválida. Configure nas variáveis de ambiente do deploy (ex.: Netlify).',
+            503
+          );
+        }
+        console.error('[spell-check] Gemini:', msg);
+        return errorResponse(MSG_SERVICE_UNAVAILABLE, 503);
       }
     }
 
