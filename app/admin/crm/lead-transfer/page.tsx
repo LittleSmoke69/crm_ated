@@ -36,7 +36,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { DateInputDDMMYYYY, getTodaySãoPaulo, getLast30DaysRangeSãoPaulo } from '@/components/Admin/CRMSection';
-import { ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
+import { ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, LabelList } from 'recharts';
 
 const MAX_LEADS_SELECT = 200;
 /** Quantidade de itens visíveis no dropdown de bancas (o restante aparece no scroll) */
@@ -350,6 +350,8 @@ export default function AdminLeadTransferPage() {
   /** Estatísticas de conversão apenas para transferências expiradas (prazo 10d): por banca ou por consultor */
   const [expiredConversionByBanca, setExpiredConversionByBanca] = useState<{ banca_id: string; banca_name: string; total_transferidos: number; convertidos: number }[]>([]);
   const [expiredConversionByConsultant, setExpiredConversionByConsultant] = useState<{ consultant_email: string; consultant_name: string; total_transferidos: number; convertidos: number }[]>([]);
+  /** Consultores com mais conversões somando todas as bancas (usado no gráfico ao lado do "por banca" quando filtro = Todas as Bancas) */
+  const [expiredConversionByConsultantAllBancas, setExpiredConversionByConsultantAllBancas] = useState<{ consultant_email: string; consultant_name: string; total_transferidos: number; convertidos: number }[]>([]);
   const [loadingExpiredConversion, setLoadingExpiredConversion] = useState(false);
   /** Paginação da tabela de histórico */
   const [logsPage, setLogsPage] = useState(1);
@@ -2517,6 +2519,7 @@ export default function AdminLeadTransferPage() {
     if (historyDonorConsultantFilter.trim()) baseParams.set('source_consultant_email', historyDonorConsultantFilter.trim());
 
     if (historyBancaFilter) {
+      setExpiredConversionByConsultantAllBancas([]);
       try {
         baseParams.set('banca_id', historyBancaFilter);
         const res = await fetch(`/api/admin/crm/transfer-expired-conversion-stats?${baseParams.toString()}`, { headers: headers() });
@@ -2538,6 +2541,8 @@ export default function AdminLeadTransferPage() {
     }
 
     setExpiredConversionByBanca([]);
+    setExpiredConversionByConsultantAllBancas([]);
+    const consultantMerge = new Map<string, { consultant_name: string; total_transferidos: number; convertidos: number }>();
     let completed = 0;
     const totalBancas = bancas.length;
     for (const b of bancas) {
@@ -2547,19 +2552,38 @@ export default function AdminLeadTransferPage() {
         const res = await fetch(`/api/admin/crm/transfer-expired-conversion-stats?${params.toString()}`, { headers: headers() });
         const json = await res.json();
         if (res.ok && json.success && json.data && Array.isArray(json.data.by_consultant)) {
-          const list = json.data.by_consultant as { total_transferidos: number; convertidos: number }[];
+          const list = json.data.by_consultant as { consultant_email?: string; consultant_name?: string; total_transferidos: number; convertidos: number }[];
           const total_transferidos = list.reduce((s, r) => s + r.total_transferidos, 0);
           const convertidos = list.reduce((s, r) => s + r.convertidos, 0);
           setExpiredConversionByBanca((prev) => [
             ...prev,
             { banca_id: b.id, banca_name: b.name || b.url || b.id, total_transferidos, convertidos },
           ]);
+          for (const r of list) {
+            const email = (r.consultant_email ?? '').trim().toLowerCase();
+            if (!email) continue;
+            const cur = consultantMerge.get(email) ?? { consultant_name: r.consultant_name ?? email, total_transferidos: 0, convertidos: 0 };
+            cur.total_transferidos += r.total_transferidos;
+            cur.convertidos += r.convertidos;
+            consultantMerge.set(email, cur);
+          }
         }
       } catch {
         // ignora erro de uma banca e segue
       } finally {
         completed++;
-        if (completed >= totalBancas) setLoadingExpiredConversion(false);
+        if (completed >= totalBancas) {
+          setLoadingExpiredConversion(false);
+          if (consultantMerge.size > 0) {
+            const merged = Array.from(consultantMerge.entries()).map(([consultant_email, cur]) => ({
+              consultant_email,
+              consultant_name: cur.consultant_name || consultant_email,
+              total_transferidos: cur.total_transferidos,
+              convertidos: cur.convertidos,
+            }));
+            setExpiredConversionByConsultantAllBancas(merged);
+          }
+        }
       }
     }
   };
@@ -4661,13 +4685,26 @@ export default function AdminLeadTransferPage() {
                     </div>
                   )}
                   {/* Gráficos baseados apenas em transferências já expiradas (prazo 10d) */}
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Baseado apenas em transferências já expiradas (prazo 10 dias). Conversão = leads que realizaram depósito após a transferência.</p>
-                  <div className="grid grid-cols-1 gap-6 mb-6">
-                    {/* Barras: Todas as Bancas = conversão por banca (ordem maior → menor); Uma banca = conversão por consultor (ordem maior → menor) */}
-                    <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-2xl p-5 shadow-sm">
-                      <h3 className="text-sm font-bold text-gray-800 dark:text-white mb-3">
-                        {historyBancaFilter === '' ? 'Conversão por banca (maior → menor)' : 'Conversão por consultor (maior → menor)'}
-                      </h3>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+                    Baseado apenas em transferências já expiradas (prazo 10 dias). Convertidos = leads vinculados a um consultor (que realmente converteram).
+                    {historyBancaFilter !== '' && ' Ao selecionar uma banca, a busca traz os leads vinculados dessa banca e o gráfico exibe por consultor.'}
+                  </p>
+                  <div className={`grid gap-6 mb-6 ${historyBancaFilter === '' ? 'lg:grid-cols-2' : 'grid-cols-1'}`}>
+                    {/* Card 1: Conversão por banca ou por consultor (quando uma banca selecionada) */}
+                    <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-2xl p-5 shadow-sm min-w-0">
+                      <div className="flex flex-wrap items-baseline justify-between gap-2 mb-1">
+                        <h3 className="text-sm font-bold text-gray-800 dark:text-white">
+                          {historyBancaFilter === '' ? 'Conversão por banca (maior → menor)' : 'Leads vinculados por consultor (nesta banca)'}
+                        </h3>
+                        {(managementFrom || managementTo) && (
+                          <p className="text-xs text-gray-500 dark:text-gray-400 tabular-nums">
+                            Período: {managementFrom || '—'} a {managementTo || '—'}
+                          </p>
+                        )}
+                      </div>
+                      {historyBancaFilter !== '' && (
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Busca dos leads com vínculo (resolution_status = vinculado) na banca selecionada.</p>
+                      )}
                       <div className="h-64 min-h-[240px]">
                         {loadingExpiredConversion ? (
                           <div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" /></div>
@@ -4676,58 +4713,163 @@ export default function AdminLeadTransferPage() {
                           if (sorted.length === 0) {
                             return <div className="flex flex-col items-center justify-center h-full text-gray-500 text-sm gap-1"><span>Nenhuma transferência expirada no período.</span></div>;
                           }
-                          const chartData = sorted.map((b) => ({ name: b.banca_name, convertidos: b.convertidos, total: b.total_transferidos }));
+                          const chartData = sorted.map((b) => ({
+                            name: b.banca_name,
+                            convertidos: b.convertidos,
+                            total: b.total_transferidos,
+                            taxa: b.total_transferidos > 0 ? Math.round((b.convertidos / b.total_transferidos) * 100) : 0,
+                          }));
                           return (
                             <ResponsiveContainer width="100%" height="100%">
-                              <BarChart data={chartData} layout="vertical" margin={{ top: 4, right: 24, left: 4, bottom: 4 }}>
-                                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" horizontal={false} />
-                                <XAxis type="number" allowDecimals={false} stroke="#6b7280" style={{ fontSize: '12px' }} />
-                                <YAxis type="category" dataKey="name" width={120} stroke="#6b7280" style={{ fontSize: '11px' }} tick={{ fill: '#ffffff' }} />
-                                <Tooltip content={({ active, payload }) => {
-                                  if (!active || !payload?.length) return null;
-                                  const p = payload[0]?.payload;
-                                  return (
-                                    <div className="bg-white dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg shadow-lg px-3 py-2 text-sm">
-                                      <p className="font-semibold text-gray-800 dark:text-white">{p?.name}</p>
-                                      <p className="text-[#8CD955] font-bold tabular-nums">{p?.convertidos ?? 0} convertidos</p>
-                                      <p className="text-gray-500 dark:text-gray-400 text-xs">{p?.total ?? 0} transferidos (expirados)</p>
-                                    </div>
-                                  );
-                                }} />
-                                <Bar dataKey="convertidos" name="Convertidos" fill="#8CD955" radius={[0, 4, 4, 0]} />
+                              <BarChart data={chartData} layout="vertical" margin={{ top: 8, right: 48, left: 4, bottom: 8 }}>
+                                <CartesianGrid strokeDasharray="3 3" className="stroke-gray-200 dark:stroke-gray-600" horizontal={false} />
+                                <XAxis type="number" allowDecimals={false} className="text-gray-500" stroke="#6b7280" style={{ fontSize: '12px' }} tick={{ fill: 'currentColor' }} />
+                                <YAxis type="category" dataKey="name" width={140} stroke="#6b7280" style={{ fontSize: '11px' }} tick={{ fill: 'currentColor' }} />
+                                <Tooltip
+                                  cursor={{ fill: 'rgba(0,0,0,0.06)' }}
+                                  content={({ active, payload }) => {
+                                    if (!active || !payload?.length) return null;
+                                    const p = payload[0]?.payload;
+                                    const conv = p?.convertidos ?? 0;
+                                    const tot = p?.total ?? 0;
+                                    const taxa = p?.taxa ?? (tot > 0 ? Math.round((conv / tot) * 100) : 0);
+                                    return (
+                                      <div className="bg-white dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg shadow-lg px-4 py-3 text-sm min-w-[180px]">
+                                        <p className="font-semibold text-gray-800 dark:text-white border-b border-gray-200 dark:border-gray-600 pb-1.5 mb-2">{p?.name}</p>
+                                        <p className="text-[#8CD955] font-bold tabular-nums text-base">{conv} convertidos</p>
+                                        <p className="text-gray-500 dark:text-gray-400 text-xs mt-0.5">{tot} transferidos (expirados)</p>
+                                        {tot > 0 && <p className="text-gray-500 dark:text-gray-400 text-xs mt-1">Taxa: {taxa}%</p>}
+                                      </div>
+                                    );
+                                  }}
+                                />
+                                <Bar dataKey="convertidos" name="Convertidos" fill="#8CD955" radius={[0, 4, 4, 0]}>
+                                  <LabelList dataKey="convertidos" position="right" className="fill-gray-700 dark:fill-gray-200" style={{ fontSize: '12px', fontWeight: 600 }} />
+                                </Bar>
                               </BarChart>
                             </ResponsiveContainer>
                           );
                         })() : (() => {
-                          const sorted = [...expiredConversionByConsultant].sort((a, b) => b.convertidos - a.convertidos).filter((c) => c.total_transferidos > 0);
+                          const sorted = [...expiredConversionByConsultant].sort((a, b) => b.convertidos - a.convertidos).filter((c) => c.total_transferidos > 0 || c.convertidos > 0);
                           if (sorted.length === 0) {
-                            return <div className="flex flex-col items-center justify-center h-full text-gray-500 text-sm gap-1"><span>Nenhum consultor com transferências expiradas no período.</span></div>;
+                            return (
+                              <div className="flex flex-col items-center justify-center h-full text-gray-500 text-sm gap-1 text-center px-4">
+                                <span>Nenhum lead vinculado nesta banca no período selecionado.</span>
+                                <span className="text-xs">Aplique os filtros para buscar leads com vínculo (convertidos) na banca escolhida.</span>
+                              </div>
+                            );
                           }
-                          const chartData = sorted.map((c) => ({ name: c.consultant_name || c.consultant_email, convertidos: c.convertidos, total: c.total_transferidos }));
+                          const chartData = sorted.map((c) => ({
+                            name: c.consultant_name || c.consultant_email,
+                            convertidos: c.convertidos,
+                            total: c.total_transferidos,
+                            taxa: c.total_transferidos > 0 ? Math.round((c.convertidos / c.total_transferidos) * 100) : 0,
+                          }));
                           return (
                             <ResponsiveContainer width="100%" height="100%">
-                              <BarChart data={chartData} layout="vertical" margin={{ top: 4, right: 24, left: 4, bottom: 4 }}>
-                                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" horizontal={false} />
-                                <XAxis type="number" allowDecimals={false} stroke="#6b7280" style={{ fontSize: '12px' }} />
-                                <YAxis type="category" dataKey="name" width={120} stroke="#6b7280" style={{ fontSize: '11px' }} tick={{ fill: '#374151' }} />
-                                <Tooltip content={({ active, payload }) => {
-                                  if (!active || !payload?.length) return null;
-                                  const p = payload[0]?.payload;
-                                  return (
-                                    <div className="bg-white dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg shadow-lg px-3 py-2 text-sm">
-                                      <p className="font-semibold text-gray-800 dark:text-white">{p?.name}</p>
-                                      <p className="text-[#8CD955] font-bold tabular-nums">{p?.convertidos ?? 0} convertidos</p>
-                                      <p className="text-gray-500 dark:text-gray-400 text-xs">{p?.total ?? 0} transferidos (expirados)</p>
-                                    </div>
-                                  );
-                                }} />
-                                <Bar dataKey="convertidos" name="Convertidos" fill="#8CD955" radius={[0, 4, 4, 0]} />
+                              <BarChart data={chartData} layout="vertical" margin={{ top: 8, right: 48, left: 4, bottom: 8 }}>
+                                <CartesianGrid strokeDasharray="3 3" className="stroke-gray-200 dark:stroke-gray-600" horizontal={false} />
+                                <XAxis type="number" allowDecimals={false} className="text-gray-500" stroke="#6b7280" style={{ fontSize: '12px' }} tick={{ fill: 'currentColor' }} />
+                                <YAxis type="category" dataKey="name" width={140} stroke="#6b7280" style={{ fontSize: '11px' }} tick={{ fill: 'currentColor' }} />
+                                <Tooltip
+                                  cursor={{ fill: 'rgba(0,0,0,0.06)' }}
+                                  content={({ active, payload }) => {
+                                    if (!active || !payload?.length) return null;
+                                    const p = payload[0]?.payload;
+                                    const conv = p?.convertidos ?? 0;
+                                    const tot = p?.total ?? 0;
+                                    const taxa = p?.taxa ?? (tot > 0 ? Math.round((conv / tot) * 100) : 0);
+                                    return (
+                                      <div className="bg-white dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg shadow-lg px-4 py-3 text-sm min-w-[200px]">
+                                        <p className="font-semibold text-gray-800 dark:text-white border-b border-gray-200 dark:border-gray-600 pb-1.5 mb-2">{p?.name}</p>
+                                        <p className="text-[#8CD955] font-bold tabular-nums text-base">{conv} convertidos</p>
+                                        <p className="text-gray-500 dark:text-gray-400 text-xs mt-0.5">{tot} transferidos (expirados)</p>
+                                        {tot > 0 && <p className="text-gray-500 dark:text-gray-400 text-xs mt-1">Taxa: {taxa}%</p>}
+                                        <p className="text-gray-400 dark:text-gray-500 text-[10px] mt-2 pt-1.5 border-t border-gray-200 dark:border-gray-600">Consultor que realizou a conversão</p>
+                                      </div>
+                                    );
+                                  }}
+                                />
+                                <Bar dataKey="convertidos" name="Convertidos" fill="#8CD955" radius={[0, 4, 4, 0]}>
+                                  <LabelList dataKey="convertidos" position="right" className="fill-gray-700 dark:fill-gray-200" style={{ fontSize: '12px', fontWeight: 600 }} />
+                                </Bar>
                               </BarChart>
                             </ResponsiveContainer>
                           );
                         })()}
                       </div>
                     </div>
+                    {/* Card 2: Consultores com mais conversões em todas as bancas (só quando "Todas as Bancas") */}
+                    {historyBancaFilter === '' && (
+                      <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-2xl p-5 shadow-sm min-w-0">
+                        <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
+                          <h3 className="text-sm font-bold text-gray-800 dark:text-white">
+                            Consultores com mais conversões (todas as bancas)
+                          </h3>
+                          {(managementFrom || managementTo) && (
+                            <p className="text-xs text-gray-500 dark:text-gray-400 tabular-nums">
+                              Período: {managementFrom || '—'} a {managementTo || '—'}
+                            </p>
+                          )}
+                        </div>
+                        <div className="h-64 min-h-[240px]">
+                          {loadingExpiredConversion ? (
+                            <div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" /></div>
+                          ) : (() => {
+                            const TOP_CONSULTANTS = 10;
+                            const sorted = [...expiredConversionByConsultantAllBancas]
+                              .sort((a, b) => b.convertidos - a.convertidos)
+                              .filter((c) => c.convertidos > 0)
+                              .slice(0, TOP_CONSULTANTS);
+                            if (sorted.length === 0) {
+                              return (
+                                <div className="flex flex-col items-center justify-center h-full text-gray-500 text-sm gap-1">
+                                  <span>Nenhum consultor com conversões no período.</span>
+                                  <span className="text-xs">Selecione &quot;Todas as Bancas&quot; e aplique os filtros.</span>
+                                </div>
+                              );
+                            }
+                            const chartData = sorted.map((c) => ({
+                              name: c.consultant_name || c.consultant_email,
+                              convertidos: c.convertidos,
+                              total: c.total_transferidos,
+                              taxa: c.total_transferidos > 0 ? Math.round((c.convertidos / c.total_transferidos) * 100) : 0,
+                            }));
+                            return (
+                              <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={chartData} layout="vertical" margin={{ top: 8, right: 48, left: 4, bottom: 8 }}>
+                                  <CartesianGrid strokeDasharray="3 3" className="stroke-gray-200 dark:stroke-gray-600" horizontal={false} />
+                                  <XAxis type="number" allowDecimals={false} className="text-gray-500" stroke="#6b7280" style={{ fontSize: '12px' }} tick={{ fill: 'currentColor' }} />
+                                  <YAxis type="category" dataKey="name" width={140} stroke="#6b7280" style={{ fontSize: '11px' }} tick={{ fill: 'currentColor' }} />
+                                  <Tooltip
+                                    cursor={{ fill: 'rgba(0,0,0,0.06)' }}
+                                    content={({ active, payload }) => {
+                                      if (!active || !payload?.length) return null;
+                                      const p = payload[0]?.payload;
+                                      const conv = p?.convertidos ?? 0;
+                                      const tot = p?.total ?? 0;
+                                      const taxa = p?.taxa ?? (tot > 0 ? Math.round((conv / tot) * 100) : 0);
+                                      return (
+                                        <div className="bg-white dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg shadow-lg px-4 py-3 text-sm min-w-[200px]">
+                                          <p className="font-semibold text-gray-800 dark:text-white border-b border-gray-200 dark:border-gray-600 pb-1.5 mb-2">{p?.name}</p>
+                                          <p className="text-[#8CD955] font-bold tabular-nums text-base">{conv} convertidos</p>
+                                          <p className="text-gray-500 dark:text-gray-400 text-xs mt-0.5">{tot} transferidos (expirados)</p>
+                                          {tot > 0 && <p className="text-gray-500 dark:text-gray-400 text-xs mt-1">Taxa: {taxa}%</p>}
+                                          <p className="text-gray-400 dark:text-gray-500 text-[10px] mt-2 pt-1.5 border-t border-gray-200 dark:border-gray-600">Soma de todas as bancas</p>
+                                        </div>
+                                      );
+                                    }}
+                                  />
+                                  <Bar dataKey="convertidos" name="Convertidos" fill="#8CD955" radius={[0, 4, 4, 0]}>
+                                    <LabelList dataKey="convertidos" position="right" className="fill-gray-700 dark:fill-gray-200" style={{ fontSize: '12px', fontWeight: 600 }} />
+                                  </Bar>
+                                </BarChart>
+                              </ResponsiveContainer>
+                            );
+                          })()}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </>
               )}
@@ -4747,7 +4889,7 @@ export default function AdminLeadTransferPage() {
                       <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white min-w-[140px]">Leads (IDs)</th>
                       <ThSort field="re_transfer" label="Re-transfer." className="w-[90px]" />
                       <ThSort field="prazo" label="Prazo" className="w-[130px]" title="Dias restantes para conversão (prazo definido na transferência)" />
-                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[140px]" title="Leads que converteram (depositaram/apostaram após a transferência) vs disponíveis para repasse">Conversão</th>
+                      <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[140px]" title="Leads vinculados a um consultor (que realmente converteram) vs disponíveis para repasse">Conversão</th>
                       <th className="text-center py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[100px]">Ações</th>
                     </tr>
                   </thead>

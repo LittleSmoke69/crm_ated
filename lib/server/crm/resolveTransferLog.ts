@@ -55,15 +55,22 @@ function getLastApprovedDepositDate(history: DepositHistoryItem[]): Date | null 
   return latest;
 }
 
-async function updateEntryResolution(entryId: string, resolutionStatus: 'vinculado' | 'disponivel_retransferencia'): Promise<void> {
+/** Ao vincular, opcionalmente persiste totais no momento da resolução para cálculo de lucro (diferença vs total_depositado_snapshot). */
+async function updateEntryResolution(
+  entryId: string,
+  resolutionStatus: 'vinculado' | 'disponivel_retransferencia',
+  currentTotalDepositado?: number | null,
+  currentTotalApostado?: number | null
+): Promise<void> {
+  const payload: Record<string, unknown> = {
+    resolution_status: resolutionStatus,
+    resolved_at: new Date().toISOString(),
+    current_total_depositado_at_resolution: resolutionStatus === 'vinculado' && (currentTotalDepositado != null) ? currentTotalDepositado : null,
+    current_total_apostado_at_resolution: resolutionStatus === 'vinculado' && (currentTotalApostado != null) ? currentTotalApostado : null,
+  };
   await supabaseServiceRole
     .from('admin_lead_transfer_entries')
-    .update({
-      resolution_status: resolutionStatus,
-      resolved_at: new Date().toISOString(),
-      current_total_depositado_at_resolution: null,
-      current_total_apostado_at_resolution: null,
-    })
+    .update(payload)
     .eq('id', entryId);
 }
 
@@ -134,6 +141,26 @@ export async function resolveOneTransferLog(
   const hasMorePendingInLog = maxEntries != null && entries.length > maxEntries;
 
   const client = createCrmRedistributionClient(crmBaseUrl);
+
+  /** Totais atuais (depósito/apostado) por lead_id no CRM — para persistir ao vincular e calcular lucro (diferença vs snapshot). */
+  const currentTotalsByLeadId = new Map<string, { total_depositado: number; total_apostado: number }>();
+  const uniqueConsultants = [...new Set(entriesToProcess.map((e) => (e.target_consultant_email ?? '').trim().toLowerCase()).filter(Boolean))];
+  for (const consultantEmail of uniqueConsultants) {
+    try {
+      const result = await client.getIndicatedsByConsultant(consultantEmail, 3000, 1, { transferredFilter: 'yes', sort: 'created_at', direction: 'desc' });
+      const list = result.success && Array.isArray(result.data) ? result.data : [];
+      for (const lead of list) {
+        const id = lead?.id != null ? String(lead.id) : '';
+        if (!id) continue;
+        const total_depositado = lead.total_depositado != null ? Number(lead.total_depositado) : 0;
+        const total_apostado = lead.total_apostado != null ? Number(lead.total_apostado) : 0;
+        currentTotalsByLeadId.set(id, { total_depositado, total_apostado });
+      }
+    } catch (err) {
+      console.warn(`${LOG_PREFIX} Falha ao buscar totais do CRM para consultor ${consultantEmail}:`, err);
+    }
+  }
+
   let vinculado = 0;
   let disponivel = 0;
   const converted: ConvertedLead[] = [];
@@ -178,7 +205,17 @@ export async function resolveOneTransferLog(
     if (isConverted) vinculado++;
     else disponivel++;
 
-    await updateEntryResolution(entry.id, resolution_status);
+    if (isConverted) {
+      const totals = currentTotalsByLeadId.get(leadId);
+      await updateEntryResolution(
+        entry.id,
+        'vinculado',
+        totals?.total_depositado ?? null,
+        totals?.total_apostado ?? null
+      );
+    } else {
+      await updateEntryResolution(entry.id, 'disponivel_retransferencia');
+    }
   }
 
   return {

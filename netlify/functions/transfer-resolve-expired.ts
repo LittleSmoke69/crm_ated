@@ -15,8 +15,12 @@
 const CRON_SECRET = process.env.TRANSFER_RESOLVE_CRON_SECRET?.trim();
 const SITE_URL = process.env.URL || process.env.DEPLOY_PRIME_URL || '';
 
-/** Entries (leads) processadas por requisição. 2–3 = poucas chamadas ao CRM por request, resposta em segundos. */
-const MAX_ENTRIES_PER_PACOTE = 200;
+/** Entries (leads) por requisição. Poucas = resposta em segundos (cada entry = 1 chamada ao CRM). Override: TRANSFER_RESOLVE_MAX_ENTRIES. */
+const DEFAULT_ENTRIES_PER_PACOTE = 3;
+const MAX_ENTRIES_PER_PACOTE =
+  typeof process.env.TRANSFER_RESOLVE_MAX_ENTRIES !== 'undefined'
+    ? Math.min(50, Math.max(1, parseInt(process.env.TRANSFER_RESOLVE_MAX_ENTRIES, 10) || DEFAULT_ENTRIES_PER_PACOTE))
+    : DEFAULT_ENTRIES_PER_PACOTE;
 /** Limite de pacotes por execução do cron (evita loop infinito). */
 const MAX_PACOTES = 100;
 
@@ -144,6 +148,21 @@ export const handler = async () => {
         message: data.message,
       });
       if (data.message) lastMessage = data.message;
+
+      // Log detalhado: quem foi vinculado a qual consultor e em qual banca (por nome)
+      if (resultsPacote.length > 0) {
+        console.log('[transfer-resolve-expired] --- Pacote', pacoteIndex + 1, '---');
+        for (const r of resultsPacote) {
+          console.log('[transfer-resolve-expired] Banca:', r.banca_name ?? r.banca_id);
+          if (r.vinculados?.length) {
+            for (const v of r.vinculados) {
+              console.log('[transfer-resolve-expired]   • Lead', v.lead_id, '→ Consultor:', v.consultant_email, '| Banca:', v.banca_name);
+            }
+          } else {
+            console.log('[transfer-resolve-expired]   (nenhum vinculado neste log;', r.disponivel_retransferencia, 'disponível(is) para repasse)');
+          }
+        }
+      }
 
       pacoteIndex++;
       const remaining = Number(data.remaining_logs) || 0;
