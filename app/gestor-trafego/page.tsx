@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation';
 import GestorTrafegoClient from './GestorTrafegoClient';
 import { getDonoBancaDashboardData } from '@/lib/services/dashboard/dono-banca';
 import { getEffectiveDonoIdForGestor } from '@/lib/middleware/gestor-owner';
-import { getUserProfile } from '@/lib/middleware/permissions';
+import { getUserProfile, hasSidebarPermission } from '@/lib/middleware/permissions';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 export default async function GestorTrafegoPage() {
@@ -16,7 +16,9 @@ export default async function GestorTrafegoPage() {
 
   const profile = await getUserProfile(userId);
   const allowedStatuses: string[] = ['gestor', 'admin', 'super_admin'];
-  if (!profile || profile.status == null || !allowedStatuses.includes(profile.status)) {
+  const hasStatusAccess = profile && profile.status != null && allowedStatuses.includes(profile.status);
+  const hasSidebarAccess = profile ? await hasSidebarPermission(profile, 'gestao_trafego') : false;
+  if (!profile || (!hasStatusAccess && !hasSidebarAccess)) {
     return (
       <GestorTrafegoClient
         initialData={null}
@@ -27,16 +29,17 @@ export default async function GestorTrafegoPage() {
     );
   }
 
-  type GestorPageStatus = 'gestor' | 'admin' | 'super_admin';
-  const userStatus: GestorPageStatus = profile.status as GestorPageStatus;
+  const userStatusForClient = (profile.status === 'gestor' || profile.status === 'admin' || profile.status === 'super_admin')
+    ? profile.status
+    : null;
 
-  // Admin e Super Admin não têm dono vinculado; carregam dados via seletor no client
-  if (profile.status === 'admin' || profile.status === 'super_admin') {
+  // Admin, Super Admin ou cargo personalizado com gestao_trafego: carregam dados via seletor no client
+  if (profile.status === 'admin' || profile.status === 'super_admin' || hasSidebarAccess) {
     return (
       <GestorTrafegoClient
         initialData={null}
         userId={userId}
-        userStatus={userStatus}
+        userStatus={userStatusForClient}
       />
     );
   }
@@ -86,7 +89,7 @@ export default async function GestorTrafegoPage() {
         <GestorTrafegoClient
           initialData={initialData}
           userId={userId}
-          userStatus={userStatus}
+          userStatus={userStatusForClient}
           canSelectDono={true}
         />
       );
@@ -95,7 +98,7 @@ export default async function GestorTrafegoPage() {
       <GestorTrafegoClient
         initialData={null}
         userId={userId}
-        userStatus={userStatus}
+        userStatus={userStatusForClient}
         authError="Você precisa estar vinculado a um Dono de Banca para acessar os dados."
       />
     );
@@ -113,16 +116,16 @@ export default async function GestorTrafegoPage() {
       dateTo: today,
     });
 
-    return <GestorTrafegoClient initialData={initialData} userId={userId} userStatus={userStatus} />;
+    return <GestorTrafegoClient initialData={initialData} userId={userId} userStatus={userStatusForClient} />;
   } catch (error: any) {
     console.error('[Gestor Trafego Server] Erro ao carregar dados:', error.message);
     if (error.message?.includes('Acesso negado')) {
       return (
-        <GestorTrafegoClient initialData={null} userId={userId} userStatus={userStatus} authError={error.message} />
+        <GestorTrafegoClient initialData={null} userId={userId} userStatus={userStatusForClient} authError={error.message} />
       );
     }
     return (
-      <GestorTrafegoClient initialData={null} userId={userId} userStatus={userStatus} serverError={error.message} />
+      <GestorTrafegoClient initialData={null} userId={userId} userStatus={userStatusForClient} serverError={error.message} />
     );
   }
 }

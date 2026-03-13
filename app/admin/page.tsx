@@ -224,7 +224,10 @@ export default function AdminDashboard() {
   const { checking } = useRequireAuth();
   const router = useRouter();
   const { isCollapsed, setIsCollapsed, isMobileOpen, setIsMobileOpen } = useSidebar();
-  const { getTenantHeader } = useAdminTenantSwitcher() || { getTenantHeader: () => ({}) };
+  const { getTenantHeader, selectedTenantId } = useAdminTenantSwitcher() || {
+    getTenantHeader: () => ({}),
+    selectedTenantId: null,
+  };
   const [userId, setUserId] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminStatus, setAdminStatus] = useState<string | null>(null);
@@ -232,6 +235,8 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [users, setUsers] = useState<User[]>([]);
+  const [zaplotoRoles, setZaplotoRoles] = useState<{ id: string; code: string; label: string }[]>([]);
+  const [loadingZaplotoRoles, setLoadingZaplotoRoles] = useState(false);
   const [usersLoadError, setUsersLoadError] = useState<string | null>(null);
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<'overview' | 'users' | 'campaigns' | 'settings' | 'proxys' | 'crm' | 'disparo' | 'maturador' | 'loto_assistencia'>('overview');
@@ -296,6 +301,48 @@ export default function AdminDashboard() {
       if (!allowed.includes(activeSection)) setActiveSection('overview');
     }
   }, [isSuperAdmin, adminStatus, activeSection]);
+
+  // Carregar cargos do White Label & Cargos para exibir na seção de usuários (super_admin)
+  useEffect(() => {
+    if (!isSuperAdmin || !userId || activeSection !== 'users') return;
+    let cancelled = false;
+    const loadRoles = async () => {
+      setLoadingZaplotoRoles(true);
+      try {
+        let zaplotoId = selectedTenantId;
+        if (!zaplotoId) {
+          const tenantsRes = await fetch('/api/admin/zaploto/tenants', {
+            headers: { 'X-User-Id': userId },
+            credentials: 'include',
+          });
+          const tenantsData = await tenantsRes.json();
+          const list = tenantsData?.data ?? [];
+          zaplotoId = list[0]?.id ?? null;
+        }
+        if (!zaplotoId) {
+          setZaplotoRoles([]);
+          return;
+        }
+        const rolesRes = await fetch(
+          `/api/admin/zaploto/roles?zaploto_id=${encodeURIComponent(zaplotoId)}`,
+          { headers: { 'X-User-Id': userId }, credentials: 'include' }
+        );
+        const rolesData = await rolesRes.json();
+        if (cancelled) return;
+        if (rolesData?.success && Array.isArray(rolesData.data)) {
+          setZaplotoRoles(rolesData.data);
+        } else {
+          setZaplotoRoles([]);
+        }
+      } catch {
+        if (!cancelled) setZaplotoRoles([]);
+      } finally {
+        if (!cancelled) setLoadingZaplotoRoles(false);
+      }
+    };
+    loadRoles();
+    return () => { cancelled = true; };
+  }, [isSuperAdmin, userId, activeSection, selectedTenantId]);
 
   useEffect(() => {
     if (userId) {
@@ -1411,6 +1458,7 @@ export default function AdminDashboard() {
               usersLoadError={usersLoadError}
               onRetryLoad={loadData}
               isSuperAdmin={isSuperAdmin}
+              zaplotoRoles={zaplotoRoles}
             />
           )}
 
@@ -2009,6 +2057,8 @@ const MetricCard = ({ title, value, icon, bgColor }: any) => {
   );
 };
 
+type ZaplotoRole = { id: string; code: string; label: string };
+
 const UsersSection = ({ 
   users, 
   onUserSelect, 
@@ -2016,7 +2066,8 @@ const UsersSection = ({
   onClearUserData,
   usersLoadError,
   onRetryLoad,
-  isSuperAdmin = false
+  isSuperAdmin = false,
+  zaplotoRoles
 }: { 
   users: User[]; 
   onUserSelect: (userId: string | null) => void; 
@@ -2025,7 +2076,9 @@ const UsersSection = ({
   usersLoadError?: string | null;
   onRetryLoad?: () => Promise<void>;
   isSuperAdmin?: boolean;
+  zaplotoRoles?: ZaplotoRole[];
 }) => {
+  const roleList: ZaplotoRole[] = Array.isArray(zaplotoRoles) ? zaplotoRoles : [];
   const [editingUser, setEditingUser] = useState<string | null>(null);
   const [editFormData, setEditFormData] = useState<any>(null);
   const [saving, setSaving] = useState(false);
@@ -2153,8 +2206,14 @@ const UsersSection = ({
         }),
       });
 
-      const data = await res.json();
-      
+      let data: { success?: boolean; error?: string; message?: string } = {};
+      try {
+        const text = await res.text();
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        data = { error: res.statusText || `Erro ${res.status}` };
+      }
+
       if (res.ok && data.success) {
         alert('Usuário atualizado com sucesso!');
         setEditingUser(null);
@@ -2162,8 +2221,9 @@ const UsersSection = ({
         // Refaz o carregamento dos usuários sem reload da página (evita erro removeChild no DOM)
         await onRetryLoad?.();
       } else {
-        console.error('Erro na resposta:', data);
-        alert(`Erro ao salvar: ${data.error || 'Erro desconhecido'}`);
+        const msg = data.error || data.message || res.statusText || `Erro ${res.status}`;
+        console.error('Erro ao salvar usuário:', res.status, data);
+        alert(`Erro ao salvar: ${msg}`);
       }
     } catch (error) {
       console.error('Erro ao salvar:', error);
@@ -2569,14 +2629,22 @@ const UsersSection = ({
                     value={createFormData.status}
                     onChange={e => setCreateCreateFormData({...createFormData, status: e.target.value, enroller: ''})}
                   >
-                    {isSuperAdmin && <option value="super_admin">Super Admin</option>}
-                    <option value="admin">Admin</option>
-                    <option value="dono_banca">Dono de Banca</option>
-                    <option value="gestor">Gestor de Tráfego</option>
-                    <option value="gerente">Gerente</option>
-                    <option value="consultor">Consultor</option>
-                    <option value="auditoria">Auditoria</option>
-                    <option value="suporte">Suporte</option>
+                    {roleList.length > 0
+                      ? roleList.map(r => (
+                          <option key={r.id} value={r.code}>{r.label}</option>
+                        ))
+                      : (
+                        <>
+                          {isSuperAdmin && <option value="super_admin">Super Admin</option>}
+                          <option value="admin">Admin</option>
+                          <option value="dono_banca">Dono de Banca</option>
+                          <option value="gestor">Gestor de Tráfego</option>
+                          <option value="gerente">Gerente</option>
+                          <option value="consultor">Consultor</option>
+                          <option value="auditoria">Auditoria</option>
+                          <option value="suporte">Suporte</option>
+                        </>
+                      )}
                   </select>
                 </div>
 
@@ -2802,18 +2870,26 @@ const UsersSection = ({
                         <div className="space-y-2">
                           <div className="flex items-center justify-between gap-2">
                           <select
-                            value={editFormData.status}
+                            value={editFormData.status ?? ''}
                             onChange={e => setEditFormData({...editFormData, status: e.target.value, enroller: null})}
                               className="flex-1 px-2 py-1 text-sm border rounded text-gray-700 font-bold"
                           >
-                            {isSuperAdmin && <option value="super_admin">Super Admin</option>}
-                            <option value="admin">Admin</option>
-                            <option value="dono_banca">Dono de Banca</option>
-                            <option value="gestor">Gestor de Tráfego</option>
-                            <option value="gerente">Gerente</option>
-                            <option value="consultor">Consultor</option>
-                            <option value="auditoria">Auditoria</option>
-                            <option value="suporte">Suporte</option>
+                            {roleList.length > 0
+                              ? roleList.map(r => (
+                                  <option key={r.id} value={r.code}>{r.label}</option>
+                                ))
+                              : (
+                                <>
+                                  {isSuperAdmin && <option value="super_admin">Super Admin</option>}
+                                  <option value="admin">Admin</option>
+                                  <option value="dono_banca">Dono de Banca</option>
+                                  <option value="gestor">Gestor de Tráfego</option>
+                                  <option value="gerente">Gerente</option>
+                                  <option value="consultor">Consultor</option>
+                                  <option value="auditoria">Auditoria</option>
+                                  <option value="suporte">Suporte</option>
+                                </>
+                              )}
                           </select>
                             <button
                               type="button"

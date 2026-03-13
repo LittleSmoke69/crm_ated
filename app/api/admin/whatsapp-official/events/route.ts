@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
 
     const { data: events, error, count } = await supabaseServiceRole
       .from('webhook_events')
-      .select('id, source, event_name, raw_payload, created_at', { count: 'exact' })
+      .select('id, source, event_name, raw_payload, created_at, processed_at', { count: 'exact' })
       .eq('source', SOURCE)
       .order('created_at', { ascending: false })
       .range(from, to);

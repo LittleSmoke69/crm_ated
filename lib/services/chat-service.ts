@@ -143,13 +143,10 @@ export class ChatService {
   }
 
   async upsertConversation(conversation: ChatConversation) {
-    const conflict = conversation.whatsapp_config_id
-      ? 'whatsapp_config_id,remote_jid'
-      : 'instance_id,remote_jid';
-
+    // conflict_key é coluna gerada (i-{instance_id} ou w-{whatsapp_config_id}); evita índices parciais no ON CONFLICT
     const { data, error } = await supabaseServiceRole
       .from('chat_conversations')
-      .upsert(conversation, { onConflict: conflict })
+      .upsert(conversation, { onConflict: 'conflict_key,remote_jid' })
       .select()
       .single();
 
@@ -181,7 +178,7 @@ export class ChatService {
     // PGRST116 = no rows returned (ignoreDuplicates suprimiu o INSERT)
     // 23505 = unique_violation (fallback de segurança)
     if (error?.code === 'PGRST116' || error?.code === '23505') {
-      console.log(`[Zaploto Chat] saveMessage: duplicata ignorada (${normalized.message_id})`);
+      console.debug(`[Zaploto Chat] saveMessage: duplicata ignorada (${normalized.message_id})`);
       return null;
     }
     if (error) throw error;

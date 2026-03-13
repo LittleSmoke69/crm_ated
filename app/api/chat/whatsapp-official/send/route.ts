@@ -23,6 +23,7 @@ export async function POST(req: NextRequest) {
       type,
       text: bodyText,
       media_url,
+      meta_id,
       caption,
       reply_to_message_id: replyToMessageId,
     } = body as {
@@ -31,6 +32,7 @@ export async function POST(req: NextRequest) {
       type?: string;
       text?: string;
       media_url?: string;
+      meta_id?: string;
       caption?: string;
       reply_to_message_id?: string;
     };
@@ -47,7 +49,11 @@ export async function POST(req: NextRequest) {
     if (sendType === 'text' && (bodyText == null || String(bodyText).trim() === '')) {
       return errorResponse('text é obrigatório quando type=text', 400);
     }
-    if ((sendType === 'image' || sendType === 'audio' || sendType === 'video' || sendType === 'document') && (!media_url || typeof media_url !== 'string')) {
+    // Para áudio: aceita meta_id (preferencial) ou media_url (fallback)
+    if (sendType === 'audio' && !meta_id && !media_url) {
+      return errorResponse('meta_id ou media_url é obrigatório para áudio', 400);
+    }
+    if ((sendType === 'image' || sendType === 'video' || sendType === 'document') && (!media_url || typeof media_url !== 'string')) {
       return errorResponse('media_url é obrigatório para tipo de mídia', 400);
     }
 
@@ -139,10 +145,15 @@ export async function POST(req: NextRequest) {
           replyToMessageId
         );
       } else {
+        // meta_id = upload direto nos servidores da Meta (preferencial, garante entrega)
+        // media_url = fallback via link público (pode falhar para audio/webm)
+        const audioMedia = meta_id
+          ? { id: meta_id }
+          : { link: media_url! };
         metaResponse = await whatsappOfficial.sendAudio(
           configForApi,
           normalizedTo,
-          media_url!,
+          audioMedia,
           replyToMessageId
         );
       }

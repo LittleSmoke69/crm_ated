@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { requireStatus, getUserProfile } from '@/lib/middleware/permissions';
+import { requireStatusOrSidebarPermission, getUserProfile } from '@/lib/middleware/permissions';
 import { getEffectiveDonoIdForGestor } from '@/lib/middleware/gestor-owner';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
@@ -199,7 +199,7 @@ async function getUserWithdrawals(bancaUrl: string, oddsUserId: number, apiKey: 
 export async function GET(req: NextRequest) {
   const startTime = Date.now();
   try {
-    const { userId, profile } = await requireStatus(req, ['gerente', 'gestor', 'super_admin', 'admin']);
+    const { userId, profile } = await requireStatusOrSidebarPermission(req, ['gerente', 'gestor', 'super_admin', 'admin'], 'gestao_consultores');
     let effectiveUserId = userId;
 
     const isAdminOrSuperAdmin = profile?.status === 'super_admin' || profile?.status === 'admin';

@@ -12,24 +12,30 @@ import {
   Clock,
   Search,
   Users,
-  Phone,
   MoreVertical,
   Smile,
   Paperclip,
   Mic,
   FileText,
+  Image as ImageIcon,
   Bot,
   CheckCircle2,
-  XCircle,
-  Filter,
-  Inbox,
   MessageCircle,
   AlertCircle,
-  RefreshCw,
-  Database,
   Loader2,
   X,
+  UserPlus,
+  UserCheck,
+  ChevronUp,
+  ChevronLeft,
+  PanelLeft,
+  BookUser,
+  Play,
+  Pause,
+  Square,
 } from 'lucide-react';
+
+// ─── Interfaces ───────────────────────────────────────────────────────────────
 
 interface Message {
   id: string;
@@ -56,6 +62,10 @@ interface Conversation {
   is_group: boolean;
   user_id?: string;
   whatsapp_config_id?: string | null;
+  attendance_status?: 'pendente' | 'resolvido' | null;
+  resolved_at?: string | null;
+  assigned_at?: string | null;
+  tags?: string[] | null;
 }
 
 interface ChannelEvolution {
@@ -73,10 +83,288 @@ interface ChannelWhatsAppOfficial {
 }
 
 type Channel = ChannelEvolution | ChannelWhatsAppOfficial;
-
 type ConversationFilter = 'all' | 'mine' | 'unassigned';
+type ActiveView = 'chat' | 'contacts';
 
-function MessageContent({ msg, fromMe }: { msg: Message; fromMe: boolean }) {
+interface ChatContact {
+  id: string;
+  name?: string | null;
+  telefone: string;
+  horario?: string | null;
+}
+
+// ─── EmojiPicker ───────────────────────────────────────────────────────────────
+
+const EMOJI_CATEGORIES = [
+  { label: '😀', emojis: ['😀','😂','🥰','😍','🤩','😎','🥳','😊','🙂','😉','😋','😜','🤣','😅','😆','🤔','😐','🙄','😏','😒','😳','🤯','😱','😨','😰','😥','😓','🤗','🤭','🫡','😇','🥺','😢','😭','😤','😠','😡','🤬','💀','💩','👻','👽','🤖','😺'] },
+  { label: '❤️', emojis: ['❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','❤️‍🔥','💕','💞','💓','💗','💖','💘','💝','👍','👎','👊','✊','🤞','🤟','🤘','🤙','👋','✋','💪','🙏','👏','🤲','✌️','🤝'] },
+  { label: '🎉', emojis: ['🎉','🎊','🎈','🎁','🎀','🏆','🥇','🎯','🎲','🎮','🎤','🎵','🎶','🔥','✨','⚡','💫','🌟','⭐','🌈','☀️','🌙','💥','🎆','🎇','✅','❌','⚠️','🔔','📢','📣','💬','📱','💻'] },
+  { label: '🐶', emojis: ['🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🙈','🙉','🙊','🐔','🐧','🦋','🦄','🌸','🌻','🌹','🍀','🌴','🌊'] },
+  { label: '🍕', emojis: ['🍕','🍔','🌮','🌯','🍣','🍜','🍦','🍰','🎂','🍩','🍪','🧁','🍫','🍬','🍭','☕','🧃','🍺','🥂','🍷','🍸','🍹','🥤','🧋'] },
+];
+
+function EmojiPicker({ onSelect, onClose }: { onSelect: (emoji: string) => void; onClose: () => void }) {
+  const [activeTab, setActiveTab] = useState(0);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [onClose]);
+
+  return (
+    <div
+      ref={ref}
+      className="absolute bottom-full left-0 mb-2 w-72 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-xl z-30 overflow-hidden"
+    >
+      <div className="flex border-b border-gray-200 dark:border-[#404040]">
+        {EMOJI_CATEGORIES.map((cat, i) => (
+          <button
+            key={i}
+            type="button"
+            onClick={() => setActiveTab(i)}
+            className={`flex-1 py-2 text-base hover:bg-gray-100 dark:hover:bg-[#333] transition-colors ${activeTab === i ? 'bg-gray-100 dark:bg-[#333]' : ''}`}
+          >
+            {cat.label}
+          </button>
+        ))}
+      </div>
+      <div className="p-2 grid grid-cols-8 gap-0.5 max-h-48 overflow-y-auto">
+        {EMOJI_CATEGORIES[activeTab].emojis.map((emoji, i) => (
+          <button
+            key={i}
+            type="button"
+            onClick={() => onSelect(emoji)}
+            className="text-xl p-1 rounded hover:bg-gray-100 dark:hover:bg-[#333] transition-colors"
+          >
+            {emoji}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── MediaModal ────────────────────────────────────────────────────────────────
+
+function MediaModal({
+  url,
+  type,
+  caption,
+  onClose,
+}: {
+  url: string;
+  type: 'image' | 'video';
+  caption?: string | null;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/90"
+      onClick={onClose}
+    >
+      <button
+        className="absolute top-4 right-4 text-white/80 hover:text-white bg-black/40 rounded-full p-1"
+        onClick={onClose}
+      >
+        <X size={28} />
+      </button>
+      <div
+        className="max-w-[90vw] max-h-[85vh] flex flex-col items-center gap-3"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {type === 'image' ? (
+          <img
+            src={url}
+            alt={caption ?? 'imagem'}
+            className="max-w-[90vw] max-h-[80vh] rounded-lg object-contain"
+          />
+        ) : (
+          <video
+            src={url}
+            controls
+            autoPlay
+            className="max-w-[90vw] max-h-[80vh] rounded-lg"
+          />
+        )}
+        {caption && (
+          <p className="text-white/80 text-sm text-center max-w-lg">{caption}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── AudioMessagePlayer (play, duração, waveform) ─────────────────────────────
+
+function AudioMessagePlayer({ src, fromMe }: { src: string; fromMe: boolean }) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [waveform, setWaveform] = useState<number[]>([]);
+  const [loading, setLoading] = useState(true);
+  const barCount = 36;
+
+  // Carregar duração e waveform ao montar
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !src) return;
+
+    const onLoadedMetadata = () => setDuration(audio.duration);
+    const onTimeUpdate = () => setCurrentTime(audio.currentTime);
+    const onEnded = () => setPlaying(false);
+
+    audio.addEventListener('loadedmetadata', onLoadedMetadata);
+    audio.addEventListener('timeupdate', onTimeUpdate);
+    audio.addEventListener('ended', onEnded);
+
+    (async () => {
+      try {
+        const res = await fetch(src, { mode: 'cors' });
+        const buf = await res.arrayBuffer();
+        const ctx = new AudioContext();
+        const decoded = await ctx.decodeAudioData(buf);
+        const channel = decoded.getChannelData(0);
+        const blockSize = Math.floor(channel.length / barCount);
+        const peaks: number[] = [];
+        for (let i = 0; i < barCount; i++) {
+          let sum = 0;
+          const start = i * blockSize;
+          for (let j = 0; j < blockSize && start + j < channel.length; j++) {
+            sum += Math.abs(channel[start + j]);
+          }
+          peaks.push(Math.min(1, (sum / blockSize) * 4));
+        }
+        const max = Math.max(...peaks, 0.1);
+        setWaveform(peaks.map((p) => p / max));
+      } catch {
+        setWaveform(Array(barCount).fill(0.4));
+      } finally {
+        setLoading(false);
+      }
+    })();
+
+    return () => {
+      audio.removeEventListener('loadedmetadata', onLoadedMetadata);
+      audio.removeEventListener('timeupdate', onTimeUpdate);
+      audio.removeEventListener('ended', onEnded);
+    };
+  }, [src]);
+
+  const togglePlay = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (playing) {
+      audio.pause();
+    } else {
+      audio.play().catch(() => {});
+    }
+    setPlaying(!playing);
+  };
+
+  const onWaveformClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const audio = audioRef.current;
+    const el = e.currentTarget;
+    if (!audio || !duration) return;
+    const x = e.clientX - el.getBoundingClientRect().left;
+    const pct = Math.max(0, Math.min(1, x / el.offsetWidth));
+    audio.currentTime = pct * duration;
+    setCurrentTime(audio.currentTime);
+  };
+
+  const formatT = (s: number) => {
+    if (!Number.isFinite(s) || s < 0) return '0:00';
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return `${m}:${String(sec).padStart(2, '0')}`;
+  };
+
+  const progress = duration > 0 ? currentTime / duration : 0;
+  const barBg = fromMe ? 'bg-white/30' : 'bg-gray-400/40';
+  const barFill = fromMe ? 'bg-white' : 'bg-gray-700';
+  const textColor = fromMe ? 'text-white/90' : 'text-gray-600 dark:text-gray-300';
+
+  return (
+    <div className="flex items-center gap-2 min-w-[200px] max-w-[280px]">
+      <audio ref={audioRef} src={src} preload="metadata" />
+      <button
+        type="button"
+        onClick={togglePlay}
+        className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center shadow-md ${fromMe ? 'bg-white/20 hover:bg-white/30 text-white' : 'bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500 text-gray-800 dark:text-gray-100'}`}
+        aria-label={playing ? 'Pausar' : 'Reproduzir'}
+      >
+        {playing ? <Pause className="w-5 h-5" fill="currentColor" /> : <Play className="w-5 h-5 ml-0.5" fill="currentColor" />}
+      </button>
+      <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+        <div
+          role="progressbar"
+          aria-valuenow={duration ? (currentTime / duration) * 100 : 0}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          tabIndex={0}
+          onClick={onWaveformClick}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              onWaveformClick(e as unknown as React.MouseEvent<HTMLDivElement>);
+            }
+          }}
+          className="flex items-stretch gap-[2px] h-8 cursor-pointer rounded overflow-hidden"
+        >
+          {loading ? (
+            <div className="flex items-stretch gap-[2px] h-8 w-full animate-pulse">
+              {Array(barCount).fill(0).map((_, i) => (
+                <div key={i} className={`flex-1 min-w-[2px] h-full flex flex-col justify-end rounded-sm`}>
+                  <div className={`w-full rounded-sm ${barBg}`} style={{ height: '60%' }} />
+                </div>
+              ))}
+            </div>
+          ) : (
+            waveform.length > 0 &&
+            waveform.map((h, i) => {
+              const barHeightPct = Math.max(12, Math.round(h * 100));
+              const isPlayed = (i + 1) / barCount <= progress;
+              return (
+                <div key={i} className="flex-1 min-w-[2px] h-full flex flex-col justify-end rounded-sm overflow-hidden" style={{ minWidth: 2 }}>
+                  <div
+                    className={`w-full rounded-sm transition-colors duration-100 flex-shrink-0 ${isPlayed ? barFill : barBg}`}
+                    style={{ height: `${barHeightPct}%` }}
+                  />
+                </div>
+              );
+            })
+          )}
+        </div>
+        <div className={`flex justify-between text-xs tabular-nums ${textColor}`}>
+          <span>{formatT(currentTime)}</span>
+          <span>{formatT(duration)}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── MessageContent ────────────────────────────────────────────────────────────
+
+function MessageContent({
+  msg,
+  fromMe,
+  onMediaClick,
+}: {
+  msg: Message;
+  fromMe: boolean;
+  onMediaClick: (url: string, type: 'image' | 'video', caption?: string | null) => void;
+}) {
   const textClass = fromMe ? 'text-white/90' : 'text-gray-600 dark:text-gray-300';
   return (
     <div className="space-y-1">
@@ -86,7 +374,7 @@ function MessageContent({ msg, fromMe }: { msg: Message; fromMe: boolean }) {
             src={msg.media_url}
             alt={msg.caption ?? 'imagem'}
             className="rounded-lg max-w-xs max-h-64 object-cover cursor-pointer"
-            onClick={() => window.open(msg.media_url!, '_blank')}
+            onClick={() => onMediaClick(msg.media_url!, 'image', msg.caption)}
           />
         ) : (
           <span className={`text-sm italic ${textClass}`}>📷 Imagem não disponível</span>
@@ -94,14 +382,23 @@ function MessageContent({ msg, fromMe }: { msg: Message; fromMe: boolean }) {
       )}
       {msg.media_type === 'audio' && (
         msg.media_url ? (
-          <audio controls src={msg.media_url} className="max-w-xs w-full" />
+          <AudioMessagePlayer src={msg.media_url} fromMe={fromMe} />
         ) : (
           <span className={`text-sm italic ${textClass}`}>🎵 Áudio não disponível</span>
         )
       )}
       {msg.media_type === 'video' && (
         msg.media_url ? (
-          <video controls src={msg.media_url} className="rounded-lg max-w-xs max-h-64" />
+          <div className="relative cursor-pointer group max-w-xs" onClick={() => onMediaClick(msg.media_url!, 'video', msg.caption)}>
+            <video src={msg.media_url} className="rounded-lg max-w-xs max-h-64 pointer-events-none" />
+            <div className="absolute inset-0 flex items-center justify-center bg-black/30 rounded-lg group-hover:bg-black/50 transition-colors">
+              <div className="w-12 h-12 bg-white/90 rounded-full flex items-center justify-center">
+                <svg className="w-5 h-5 text-gray-800 ml-1" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+              </div>
+            </div>
+          </div>
         ) : (
           <span className={`text-sm italic ${textClass}`}>🎬 Vídeo não disponível</span>
         )
@@ -120,7 +417,7 @@ function MessageContent({ msg, fromMe }: { msg: Message; fromMe: boolean }) {
           <span className={`text-sm italic ${textClass}`}>📄 Documento não disponível</span>
         )
       )}
-      {msg.caption && msg.media_type && msg.media_type !== 'text' && (
+      {msg.caption && msg.media_type && msg.media_type !== 'text' && msg.media_type !== 'video' && (
         <p className={`text-sm mt-1 ${textClass}`}>{msg.caption}</p>
       )}
       {(!msg.media_type || msg.media_type === 'text') && msg.text != null && msg.text !== '' && (
@@ -132,34 +429,93 @@ function MessageContent({ msg, fromMe }: { msg: Message; fromMe: boolean }) {
 
 type UserStatus = 'super_admin' | 'admin' | 'suporte' | string | null;
 
+const CONVERSATIONS_PAGE_SIZE = 10;
+const MESSAGES_PAGE_SIZE = 50;
+
+// ─── ChatPage ─────────────────────────────────────────────────────────────────
+
 export default function ChatPage() {
-  const { checking, userId } = useRequireAuth();
-  const [userStatus, setUserStatus] = useState<UserStatus>(null);
-  const [channels, setChannels] = useState<{ evolution: ChannelEvolution[]; whatsapp_official: ChannelWhatsAppOfficial[] }>({
-    evolution: [],
-    whatsapp_official: [],
-  });
+  const { checking, userId, userStatus: authUserStatus } = useRequireAuth();
+  const [userStatus, setUserStatus] = useState<UserStatus>((authUserStatus as UserStatus) ?? null);
+  const [mediaModal, setMediaModal] = useState<{ url: string; type: 'image' | 'video'; caption?: string | null } | null>(null);
+
+  // Canais
+  const [channels, setChannels] = useState<{
+    evolution: ChannelEvolution[];
+    whatsapp_official: ChannelWhatsAppOfficial[];
+  }>({ evolution: [], whatsapp_official: [] });
   const [selectedChannel, setSelectedChannel] = useState<Channel | null>(null);
+
+  // Conversas
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<string>('');
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [messageText, setMessageText] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [sending, setSending] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const [conversationsLoading, setConversationsLoading] = useState(false);
+  const [visibleConversationsCount, setVisibleConversationsCount] = useState(CONVERSATIONS_PAGE_SIZE);
   const [searchTerm, setSearchTerm] = useState('');
   const [conversationFilter, setConversationFilter] = useState<ConversationFilter>('all');
-  const [showResolveMenu, setShowResolveMenu] = useState(false);
+  const [tagFilter, setTagFilter] = useState<string>(''); // nome da etiqueta para filtrar (vazio = todas)
+  const [tagOptions, setTagOptions] = useState<{ id: string; name: string }[]>([]);
+  const conversationListScrollRef = useRef<HTMLDivElement>(null);
+
+  // Mensagens
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
+  const [hasOlderMessages, setHasOlderMessages] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+
+  // Envio
+  const [messageText, setMessageText] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [attachedMedia, setAttachedMedia] = useState<{
     url: string;
     type: 'image' | 'audio' | 'video' | 'document';
     name: string;
     preview?: string;
+    meta_id?: string; // ID do upload direto na Meta (para áudio gravado)
   } | null>(null);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Cache de conversas por canal — permite exibição imediata ao trocar de canal
+  const conversationsCacheRef = useRef<Record<string, Conversation[]>>({});
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const docInputRef = useRef<HTMLInputElement>(null);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [recordingLevels, setRecordingLevels] = useState<number[]>([0.2, 0.3, 0.4, 0.5, 0.4, 0.3, 0.2]);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const recordingAnimationRef = useRef<number | null>(null);
+
+  // Alertas
+  const [showTokenAlert, setShowTokenAlert] = useState(false);
+  const [tokenAlertMessage, setTokenAlertMessage] = useState('');
+  const [showResolveMenu, setShowResolveMenu] = useState(false);
+  const [resolvingConversation, setResolvingConversation] = useState(false);
+  const [showTagsPopover, setShowTagsPopover] = useState(false);
+  const tagsPopoverRef = useRef<HTMLDivElement>(null);
+  const [updatingTags, setUpdatingTags] = useState(false);
+  const [spellChecking, setSpellChecking] = useState(false);
+  const [spellCheckBadge, setSpellCheckBadge] = useState<'fixed' | 'ok' | null>(null);
+
+  // Navegação
+  const [activeView, setActiveView] = useState<ActiveView>('chat');
+  const [isMobile, setIsMobile] = useState(false);
+  const [chatSidebarOpen, setChatSidebarOpen] = useState(false);
+
+  // Contatos
+  // undefined = não verificado ainda; null = não existe; ChatContact = existe
+  const [convContact, setConvContact] = useState<ChatContact | null | undefined>(undefined);
+  const [showContactModal, setShowContactModal] = useState(false);
+  const [contactForm, setContactForm] = useState({ name: '', phone: '', horario: '' });
+  const [savingContact, setSavingContact] = useState(false);
+  const [contactSaveError, setContactSaveError] = useState<string | null>(null);
 
   const authHeaders = (): Record<string, string> => (userId ? { 'X-User-Id': userId } : {});
   const canSelectChannel =
@@ -175,135 +531,244 @@ export default function ChatPage() {
     window.location.href = '/login';
   };
 
-  // Carregar perfil (status) para controle de exibição do canal
+  // ── Perfil (sobrescreve status do auth; garante etiquetas mesmo antes do fetch) ──
+  useEffect(() => {
+    if (authUserStatus) setUserStatus(authUserStatus as UserStatus);
+  }, [authUserStatus]);
+
   useEffect(() => {
     if (!userId) return;
-    const loadProfile = async () => {
-      try {
-        const res = await fetch('/api/user/profile', { headers: authHeaders() });
-        const data = await res.json();
+    fetch('/api/user/profile', { headers: authHeaders() })
+      .then((r) => r.json())
+      .then((data) => {
         if (data.success && data.data?.status) setUserStatus(data.data.status);
-      } catch {
-        setUserStatus(null);
-      }
-    };
-    loadProfile();
+      })
+      .catch(() => {});
   }, [userId]);
 
-  // Carregar canais (Evolution + WhatsApp Oficial)
+  // ── Canais ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!userId) return;
-
-    const loadChannels = async () => {
-      try {
-        const response = await fetch('/api/chat/channels', { headers: authHeaders() });
-        const result = await response.json();
+    fetch('/api/chat/channels', { headers: authHeaders() })
+      .then((r) => r.json())
+      .then((result) => {
         if (result.success && result.data) {
-          setChannels({
-            evolution: result.data.evolution || [],
-            whatsapp_official: result.data.whatsapp_official || [],
-          });
-          const evo = result.data.evolution || [];
-          const wa = result.data.whatsapp_official || [];
-          if (!selectedChannel && (evo.length > 0 || wa.length > 0)) {
-            if (evo.length > 0) setSelectedChannel(evo[0]);
-            else setSelectedChannel(wa[0]);
+          const evo: ChannelEvolution[] = result.data.evolution || [];
+          const wa: ChannelWhatsAppOfficial[] = result.data.whatsapp_official || [];
+          setChannels({ evolution: evo, whatsapp_official: wa });
+          const firstChannel = evo.length > 0 ? evo[0] : wa.length > 0 ? wa[0] : null;
+          if (!selectedChannel && firstChannel) {
+            setSelectedChannel(firstChannel);
           }
+          // Pré-carrega conversas de TODOS os canais em paralelo
+          const allChannels: Array<{ id: string; type: 'evolution' | 'whatsapp_official' }> = [
+            ...evo.map((c) => ({ id: c.id, type: 'evolution' as const })),
+            ...wa.map((c) => ({ id: c.id, type: 'whatsapp_official' as const })),
+          ];
+          allChannels.forEach(({ id, type }) => {
+            const params = type === 'evolution' ? `instance_id=${id}` : `whatsapp_config_id=${id}`;
+            fetch(`/api/chat/conversations?${params}`, { headers: authHeaders() })
+              .then((r) => r.json())
+              .then((res) => {
+                if (res.success) {
+                  conversationsCacheRef.current[id] = res.data || [];
+                  // Se este canal já está selecionado, popula imediatamente
+                  setSelectedChannel((ch) => {
+                    if (ch?.id === id) setConversations(res.data || []);
+                    return ch;
+                  });
+                }
+              })
+              .catch(() => {});
+          });
         }
-      } catch (error) {
-        console.error('Erro ao carregar canais:', error);
-      }
-    };
-
-    loadChannels();
+      })
+      .catch((e) => console.error('[Chat] canais:', e));
   }, [userId]);
 
-  // Carrega conversas do banco (uma por número de telefone; conversas existentes são continuadas, não criadas novas)
+  // ── Carregar Conversas ─────────────────────────────────────────────────────
   const loadConversationsFromApi = useCallback(
     async (keepSelectionIfPresent = false) => {
       if (!selectedChannel) return;
-      setLoading(true);
+
+      // Exibe do cache imediatamente (sem spinner) se disponível
+      const cached = conversationsCacheRef.current[selectedChannel.id];
+      if (cached && cached.length > 0) {
+        setConversations(cached);
+      } else {
+        setConversationsLoading(true);
+      }
+
       try {
         const params =
           selectedChannel.type === 'evolution'
             ? `instance_id=${selectedChannel.id}`
             : `whatsapp_config_id=${selectedChannel.id}`;
+
         const response = await fetch(`/api/chat/conversations?${params}`, { headers: authHeaders() });
         const result = await response.json();
         if (result.success) {
-          const list = result.data || [];
+          const list: Conversation[] = result.data || [];
+          conversationsCacheRef.current[selectedChannel.id] = list;
           setConversations(list);
-          // Ao atualizar lista, manter conversa selecionada só se ainda existir no banco
           if (keepSelectionIfPresent) {
             setSelectedConversationId((prev) =>
-              prev && list.some((c: Conversation) => c.id === prev) ? prev : ''
+              prev && list.some((c) => c.id === prev) ? prev : ''
             );
           }
         }
       } catch (error) {
-        console.error('Erro ao carregar conversas:', error);
+        console.error('[Chat] carregar conversas:', error);
       } finally {
-        setLoading(false);
+        setConversationsLoading(false);
       }
     },
     [selectedChannel]
   );
 
-  // Carregar conversas do banco quando o canal mudar
   useEffect(() => {
     if (!selectedChannel) return;
     loadConversationsFromApi(false);
   }, [selectedChannel, loadConversationsFromApi]);
 
-  // Refetch de conversas ao voltar à aba (garante ver novas conversas mesmo se Realtime falhar ou não estiver habilitado)
+  // Etiquetas disponíveis (criadas pelo admin) para filtro e para marcar conversas
+  useEffect(() => {
+    if (!userId || !(userStatus === 'suporte' || userStatus === 'admin' || userStatus === 'super_admin')) return;
+    fetch('/api/chat/tags', { headers: authHeaders() })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.success && Array.isArray(data.data)) {
+          setTagOptions(data.data.map((t: { id: string; name: string }) => ({ id: t.id, name: t.name })));
+        }
+      })
+      .catch(() => {});
+  }, [userId, userStatus]);
+
+  // Refetch ao voltar à aba (conversas e etiquetas)
   useEffect(() => {
     if (!selectedChannel) return;
     const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        loadConversationsFromApi(true);
+      if (document.visibilityState !== 'visible') return;
+      loadConversationsFromApi(true);
+      if (userStatus === 'suporte' || userStatus === 'admin' || userStatus === 'super_admin') {
+        fetch('/api/chat/tags', { headers: authHeaders() })
+          .then((r) => r.json())
+          .then((data) => {
+            if (data.success && Array.isArray(data.data)) {
+              setTagOptions(data.data.map((t: { id: string; name: string }) => ({ id: t.id, name: t.name })));
+            }
+          })
+          .catch(() => {});
       }
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => document.removeEventListener('visibilitychange', onVisibilityChange);
-  }, [selectedChannel, loadConversationsFromApi]);
+  }, [selectedChannel, loadConversationsFromApi, userStatus]);
 
-  // Carregar mensagens quando conversa mudar
+  // ── Carregar Mensagens (últimas 50 — mais recentes primeiro via DESC+reverse) ──
   useEffect(() => {
     if (!selectedConversationId) {
       setMessages([]);
+      setHasOlderMessages(false);
+      setConvContact(undefined);
       return;
     }
 
     const loadMessages = async () => {
-      setLoading(true);
+      setMessagesLoading(true);
       try {
-        const response = await fetch(`/api/chat/messages?conversation_id=${selectedConversationId}&limit=100`, {
-          headers: authHeaders(),
-        });
+        const response = await fetch(
+          `/api/chat/messages?conversation_id=${selectedConversationId}&limit=${MESSAGES_PAGE_SIZE}`,
+          { headers: authHeaders() }
+        );
         const result = await response.json();
         if (result.success) {
           setMessages(result.data || []);
+          setHasOlderMessages(result.meta?.has_more === true);
         }
       } catch (error) {
-        console.error('Erro ao carregar mensagens:', error);
+        console.error('[Chat] carregar mensagens:', error);
       } finally {
-        setLoading(false);
+        setMessagesLoading(false);
       }
     };
 
     loadMessages();
   }, [selectedConversationId]);
 
-  // Scroll para o final ao abrir/trocar de conversa (carregamento inicial)
+  // ── Scroll infinito para cima: carrega mensagens mais antigas ──────────────
+  const loadOlderMessages = useCallback(async () => {
+    if (!selectedConversationId || loadingOlderMessages || !hasOlderMessages) return;
+    const oldestTs = messages[0]?.timestamp;
+    if (!oldestTs) return;
+
+    setLoadingOlderMessages(true);
+    const container = messagesContainerRef.current;
+    const prevScrollHeight = container?.scrollHeight ?? 0;
+
+    try {
+      const response = await fetch(
+        `/api/chat/messages?conversation_id=${selectedConversationId}&limit=${MESSAGES_PAGE_SIZE}&before_timestamp=${oldestTs}`,
+        { headers: authHeaders() }
+      );
+      const result = await response.json();
+      if (result.success) {
+        const older: Message[] = result.data || [];
+        setHasOlderMessages(result.meta?.has_more === true);
+        if (older.length > 0) {
+          setMessages((prev) => [...older, ...prev]);
+          // Preserva a posição do scroll após inserir mensagens acima
+          requestAnimationFrame(() => {
+            if (container) container.scrollTop = container.scrollHeight - prevScrollHeight;
+          });
+        }
+      }
+    } catch (error) {
+      console.error('[Chat] carregar mensagens antigas:', error);
+    } finally {
+      setLoadingOlderMessages(false);
+    }
+  }, [selectedConversationId, loadingOlderMessages, hasOlderMessages, messages]);
+
+  // Scroll automático ao abrir conversa (vai para o final)
   useEffect(() => {
-    if (!selectedConversationId) return;
+    if (!selectedConversationId || messagesLoading) return;
     const timeout = setTimeout(() => {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, 80);
     return () => clearTimeout(timeout);
-  }, [selectedConversationId]);
+  }, [selectedConversationId, messagesLoading]);
 
-  // Supabase Realtime para mensagens
+  // Handler de scroll das mensagens: topo → carrega mais antigas
+  const handleMessagesScroll = useCallback(() => {
+    const container = messagesContainerRef.current;
+    if (!container || !hasOlderMessages || loadingOlderMessages) return;
+    if (container.scrollTop < 80) loadOlderMessages();
+  }, [hasOlderMessages, loadingOlderMessages, loadOlderMessages]);
+
+  // ── Lookup de contato ao selecionar conversa ───────────────────────────────
+  useEffect(() => {
+    if (!selectedConversationId || !userId) {
+      setConvContact(undefined);
+      return;
+    }
+    const conv = conversations.find((c) => c.id === selectedConversationId);
+    if (!conv) { setConvContact(undefined); return; }
+
+    const phone = conv.remote_jid.replace(/@s\.whatsapp\.net$/, '').replace(/\D/g, '');
+    if (!phone) {
+      setConvContact(null);
+      return;
+    }
+    setConvContact(undefined);
+
+    fetch(`/api/chat/contacts?phone=${phone}`, { headers: authHeaders() })
+      .then((r) => r.json())
+      .then((data) => setConvContact(data.success ? (data.data ?? null) : null))
+      .catch(() => setConvContact(null));
+  }, [selectedConversationId, userId]);
+
+  // ── Realtime: mensagens ────────────────────────────────────────────────────
   useEffect(() => {
     if (!selectedConversationId) return;
 
@@ -320,22 +785,15 @@ export default function ChatPage() {
         (payload) => {
           if (payload.eventType === 'INSERT') {
             const raw = payload.new as Message;
-            // Normalizar timestamp: o Realtime pode enviar BIGINT como string
             const msg: Message = {
               ...raw,
               timestamp:
-                typeof raw.timestamp === 'string'
-                  ? parseInt(raw.timestamp, 10)
-                  : raw.timestamp,
+                typeof raw.timestamp === 'string' ? parseInt(raw.timestamp, 10) : raw.timestamp,
             };
-
             setMessages((prev) => {
-              // Deduplicação: ignorar se já existe pelo id
               if (prev.some((m) => m.id === msg.id)) return prev;
               return [...prev, msg];
             });
-
-            // Scroll inteligente: só desce se o usuário já estava no final
             const container = messagesContainerRef.current;
             const isAtBottom = container
               ? container.scrollHeight - container.scrollTop - container.clientHeight < 100
@@ -348,9 +806,7 @@ export default function ChatPage() {
             const msg: Message = {
               ...raw,
               timestamp:
-                typeof raw.timestamp === 'string'
-                  ? parseInt(raw.timestamp, 10)
-                  : raw.timestamp,
+                typeof raw.timestamp === 'string' ? parseInt(raw.timestamp, 10) : raw.timestamp,
             };
             setMessages((prev) => prev.map((m) => (m.id === msg.id ? msg : m)));
           } else if (payload.eventType === 'DELETE') {
@@ -359,35 +815,45 @@ export default function ChatPage() {
         }
       )
       .subscribe((status) => {
-        console.log('[Zaploto Chat] Realtime status:', status);
         if (status === 'CHANNEL_ERROR') {
-          console.error('[Zaploto Chat] Realtime — verificar publication e RLS em chat_messages');
+          console.warn('[Chat] Realtime CHANNEL_ERROR — verifique migrations/fix_chat_realtime_publication_and_replica.sql');
         }
       });
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => { supabase.removeChannel(channel); };
   }, [selectedConversationId]);
 
-  // Pedir permissão de notificação para suporte/admin/super_admin (nova conversa)
+  // ── Realtime: webhook_events (WhatsApp Oficial) ────────────────────────────
   useEffect(() => {
-    const canNotify =
-      userStatus === 'super_admin' || userStatus === 'admin' || userStatus === 'suporte';
-    if (!canNotify || typeof window === 'undefined' || !('Notification' in window)) return;
-    if (Notification.permission === 'default') {
-      Notification.requestPermission().catch(() => {});
-    }
-  }, [userStatus]);
+    if (!selectedChannel || selectedChannel.type !== 'whatsapp_official' || !userId) return;
 
-  // Supabase Realtime para conversas (Evolution por instance_id, Oficial por whatsapp_config_id)
+    const channel = supabase
+      .channel('webhook_events_whatsapp_official')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'webhook_events', filter: 'source=eq.whatsapp_official' },
+        (payload) => {
+          const row = payload.new as { id?: string };
+          if (!row?.id) return;
+          fetch('/api/chat/webhook-events/process', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({ event_id: row.id }),
+          }).catch((e) => console.error('[Chat] webhook process:', e));
+        }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [selectedChannel, userId]);
+
+  // ── Realtime: conversas ────────────────────────────────────────────────────
   useEffect(() => {
     if (!selectedChannel) return;
 
     const filterCol = selectedChannel.type === 'evolution' ? 'instance_id' : 'whatsapp_config_id';
     const filterVal = selectedChannel.id;
-    const canNotify =
-      userStatus === 'super_admin' || userStatus === 'admin' || userStatus === 'suporte';
+    const canNotify = userStatus === 'super_admin' || userStatus === 'admin' || userStatus === 'suporte';
 
     const channel = supabase
       .channel(`chat_conversations_${selectedChannel.type}_${selectedChannel.id}`)
@@ -405,25 +871,32 @@ export default function ChatPage() {
             const isNew = payload.eventType === 'INSERT';
 
             setConversations((prev) => {
-              const existing = prev.findIndex((c) => c.id === newConv.id);
-              if (existing >= 0) {
-                const updated = [...prev];
-                updated[existing] = newConv;
-                return updated.sort((a, b) =>
-                  new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime()
-                );
-              }
-              return [newConv, ...prev];
+              const w24 = (c: Conversation) =>
+                !!c.whatsapp_config_id &&
+                !!c.last_customer_message_at &&
+                Date.now() - new Date(c.last_customer_message_at).getTime() < 86_400_000;
+              const sort24 = (arr: Conversation[]) =>
+                [...arr].sort((a, b) => {
+                  const a24 = w24(a), b24 = w24(b);
+                  if (a24 && !b24) return -1;
+                  if (!a24 && b24) return 1;
+                  return new Date(b.last_message_at || 0).getTime() - new Date(a.last_message_at || 0).getTime();
+                });
+              const updated = prev.findIndex((c) => c.id === newConv.id) >= 0
+                ? prev.map((c) => (c.id === newConv.id ? newConv : c))
+                : [newConv, ...prev];
+              return sort24(updated);
             });
 
-            // Notificar usuários de suporte quando chegar nova conversa (aba em segundo plano)
             if (isNew && canNotify && typeof window !== 'undefined' && 'Notification' in window) {
               const convTitle = newConv.title || 'Nova conversa';
               const preview = (newConv.last_message_preview || '').slice(0, 60);
               if (document.visibilityState === 'hidden' && Notification.permission === 'granted') {
                 try {
                   new Notification('Nova conversa no Chat — Zaploto', {
-                    body: preview ? `${convTitle}: ${preview}${preview.length >= 60 ? '...' : ''}` : convTitle,
+                    body: preview
+                      ? `${convTitle}: ${preview}${preview.length >= 60 ? '...' : ''}`
+                      : convTitle,
                     icon: '/favicon.ico',
                   });
                 } catch (_) {}
@@ -434,11 +907,17 @@ export default function ChatPage() {
       )
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => { supabase.removeChannel(channel); };
   }, [selectedChannel, userStatus]);
 
+  // ── Permissão de notificação ───────────────────────────────────────────────
+  useEffect(() => {
+    const canNotify = userStatus === 'super_admin' || userStatus === 'admin' || userStatus === 'suporte';
+    if (!canNotify || typeof window === 'undefined' || !('Notification' in window)) return;
+    if (Notification.permission === 'default') Notification.requestPermission().catch(() => {});
+  }, [userStatus]);
+
+  // ── Upload de arquivo ──────────────────────────────────────────────────────
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !selectedChannel || selectedChannel.type !== 'whatsapp_official') return;
@@ -454,38 +933,301 @@ export default function ChatPage() {
         headers: authHeaders(),
       });
       const data = await res.json();
-      if (!data.success) {
-        alert(data.error || data.message || 'Falha no upload');
-        return;
-      }
+      if (!data.success) { alert(data.error || data.message || 'Falha no upload'); return; }
       const preview = data.data.media_type === 'image' ? URL.createObjectURL(file) : undefined;
-      setAttachedMedia({
-        url: data.data.url,
-        type: data.data.media_type,
-        name: file.name,
-        preview,
-      });
+      setAttachedMedia({ url: data.data.url, type: data.data.media_type, name: file.name, preview });
     } catch (err) {
-      console.error('[Zaploto Chat] Falha no upload:', err);
+      console.error('[Chat] upload:', err);
       alert('Falha ao enviar arquivo');
     } finally {
       setUploading(false);
     }
   };
 
+  // ── Gravação de áudio (preferir MP4/M4A quando suportado) ──────────────────
+  const getPreferredAudioMimeType = (): string => {
+    const options = [
+      'audio/mp4;codecs=mp4a',
+      'audio/mp4',
+      'audio/m4a',
+      'audio/ogg;codecs=opus',
+      'audio/webm;codecs=opus',
+      'audio/webm',
+    ];
+    for (const m of options) {
+      if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(m)) return m;
+    }
+    return 'audio/webm;codecs=opus';
+  };
+
+  const startRecording = async () => {
+    if (!selectedChannel || selectedChannel.type !== 'whatsapp_official') {
+      alert('Gravação de áudio disponível apenas para WhatsApp Oficial');
+      return;
+    }
+    if (!userId) {
+      alert('Faça login para gravar áudio.');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = getPreferredAudioMimeType();
+      const recorder = new MediaRecorder(stream, { mimeType });
+      const chunks: BlobPart[] = [];
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(chunks, { type: mimeType });
+        await uploadRecordedAudio(blob, mimeType);
+      };
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      setIsRecording(true);
+      setRecordingSeconds(0);
+      recordingTimerRef.current = setInterval(() => setRecordingSeconds((s) => s + 1), 1000);
+
+      // Ondas visuais: AudioContext + AnalyserNode
+      const audioContext = new AudioContext();
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.7;
+      const source = audioContext.createMediaStreamSource(stream);
+      source.connect(analyser);
+      audioContextRef.current = audioContext;
+      analyserRef.current = analyser;
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+      const tick = () => {
+        if (!analyserRef.current) return;
+        analyserRef.current.getByteFrequencyData(dataArray);
+        const bars = 7;
+        const step = Math.floor(dataArray.length / bars);
+        const levels = Array.from({ length: bars }, (_, i) => {
+          const v = dataArray[i * step] ?? 0;
+          return Math.min(1, (v / 255) * 1.2 + 0.15);
+        });
+        setRecordingLevels(levels);
+        recordingAnimationRef.current = requestAnimationFrame(tick);
+      };
+      tick();
+    } catch {
+      alert('Não foi possível acessar o microfone. Verifique as permissões.');
+    }
+  };
+
+  const stopRecording = () => {
+    if (recordingAnimationRef.current != null) {
+      cancelAnimationFrame(recordingAnimationRef.current);
+      recordingAnimationRef.current = null;
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close().catch(() => {});
+      audioContextRef.current = null;
+    }
+    analyserRef.current = null;
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+    if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    setIsRecording(false);
+    setRecordingSeconds(0);
+    setRecordingLevels([0.2, 0.3, 0.4, 0.5, 0.4, 0.3, 0.2]);
+  };
+
+  const uploadRecordedAudio = async (blob: Blob, mimeType: string) => {
+    if (!selectedChannel || selectedChannel.type !== 'whatsapp_official' || !userId) return;
+    setUploading(true);
+    try {
+      const baseType = mimeType.split(';')[0].trim().toLowerCase();
+      const extMap: Record<string, string> = {
+        'audio/mp4': 'm4a', 'audio/m4a': 'm4a', 'audio/x-m4a': 'm4a',
+        'audio/ogg': 'ogg', 'audio/webm': 'webm', 'audio/mpeg': 'mp3',
+      };
+      const ext = extMap[baseType] ?? 'ogg';
+      const fileName = `audio_${Date.now()}.${ext}`;
+
+      // Dois uploads em paralelo:
+      // 1. Meta  → media_id para envio confiável (independe de URL pública)
+      // 2. Supabase → URL pública para exibição no chat interno
+      const makeFormData = () => {
+        const fd = new FormData();
+        fd.append('file', new File([blob], fileName, { type: baseType }));
+        fd.append('config_id', selectedChannel!.id);
+        return fd;
+      };
+
+      const [metaResult, supResult] = await Promise.allSettled([
+        fetch('/api/chat/whatsapp-official/upload-audio-meta', {
+          method: 'POST', body: makeFormData(), headers: authHeaders(),
+        }).then((r) => r.json()),
+        fetch('/api/chat/whatsapp-official/upload-media', {
+          method: 'POST', body: makeFormData(), headers: authHeaders(),
+        }).then((r) => r.json()),
+      ]);
+
+      const metaData = metaResult.status === 'fulfilled' ? metaResult.value : null;
+      const supData = supResult.status === 'fulfilled' ? supResult.value : null;
+
+      const meta_id: string | undefined = metaData?.success ? metaData.data?.media_id : undefined;
+      const url: string = supData?.success ? supData.data?.url : '';
+
+      if (!meta_id && !url) {
+        alert('Falha ao processar áudio. Tente novamente.');
+        return;
+      }
+
+      setAttachedMedia({ url, meta_id, type: 'audio', name: 'Áudio gravado' });
+    } catch (e) {
+      console.error('[Chat] upload áudio:', e);
+      alert('Falha ao enviar áudio gravado. Tente novamente.');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  // ── Corretor ortográfico ───────────────────────────────────────────────────
+  const handleSpellCheck = async () => {
+    if (!messageText.trim() || spellChecking) return;
+    setSpellChecking(true);
+    setSpellCheckBadge(null);
+    setSendError(null);
+    try {
+      const res = await fetch('/api/ai/spell-check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ text: messageText }),
+      });
+      const data = await res.json().catch(() => ({ success: false, error: 'Resposta inválida' }));
+      if (data.success) {
+        setMessageText(data.data.corrected);
+        setSpellCheckBadge(data.data.changed ? 'fixed' : 'ok');
+        setTimeout(() => {
+          if (textareaRef.current) {
+            textareaRef.current.style.height = 'auto';
+            textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
+          }
+        }, 0);
+        setTimeout(() => setSpellCheckBadge(null), 3000);
+      } else {
+        const msg = data.error || (res.status === 503 ? 'Corretor IA indisponível.' : 'Erro ao verificar ortografia.');
+        setSendError(msg);
+      }
+    } catch {
+      setSendError('Não foi possível conectar ao corretor. Tente novamente.');
+    } finally {
+      setSpellChecking(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!showTagsPopover) return;
+    const onOutside = (e: MouseEvent) => {
+      if (tagsPopoverRef.current && !tagsPopoverRef.current.contains(e.target as Node)) {
+        setShowTagsPopover(false);
+      }
+    };
+    document.addEventListener('mousedown', onOutside);
+    return () => document.removeEventListener('mousedown', onOutside);
+  }, [showTagsPopover]);
+
+  const applyTagsToConversation = async (next: string[], closePopover = false) => {
+    if (!selectedConversationId || updatingTags) return;
+    const conv = conversations.find((c) => c.id === selectedConversationId);
+    if (!conv) return;
+    setUpdatingTags(true);
+    if (closePopover) setShowTagsPopover(false);
+    try {
+      const res = await fetch('/api/chat/conversations', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ conversation_id: selectedConversationId, tags: next }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        setConversations((prev) =>
+          prev.map((c) => (c.id === selectedConversationId ? { ...c, tags: next } : c))
+        );
+      }
+    } catch (e) {
+      console.error('[Chat] Atualizar etiquetas:', e);
+    } finally {
+      setUpdatingTags(false);
+    }
+  };
+
+  const handleToggleTag = async (tag: string) => {
+    const conv = conversations.find((c) => c.id === selectedConversationId);
+    if (!conv) return;
+    const current = conv.tags || [];
+    const next = current.includes(tag) ? current.filter((t) => t !== tag) : [...current, tag].sort();
+    await applyTagsToConversation(next, false);
+  };
+
+  const handleRemoveAllTags = async () => {
+    await applyTagsToConversation([], true);
+  };
+
+  const handleResolveConversation = async () => {
+    if (!selectedConversationId || resolvingConversation) return;
+    const conv = conversations.find((c) => c.id === selectedConversationId);
+    if (!conv || conv.attendance_status === 'resolvido') return;
+    setResolvingConversation(true);
+    setShowResolveMenu(false);
+    try {
+      const res = await fetch('/api/chat/conversations', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          conversation_id: selectedConversationId,
+          attendance_status: 'resolvido',
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success && data.data) {
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id === selectedConversationId
+              ? { ...c, attendance_status: 'resolvido' as const, resolved_at: data.data.resolved_at }
+              : c
+          )
+        );
+      }
+    } catch (e) {
+      console.error('[Chat] Resolver conversa:', e);
+    } finally {
+      setResolvingConversation(false);
+    }
+  };
+
+  // ── Envio de mensagem ──────────────────────────────────────────────────────
+  const getSendErrorMessage = (status: number, bodyError?: string): string => {
+    if (bodyError && bodyError.trim()) return bodyError;
+    switch (status) {
+      case 502: return 'Serviço temporariamente indisponível. Tente novamente.';
+      case 503: return 'Serviço em manutenção. Tente novamente em instantes.';
+      case 504: return 'Tempo esgotado. A Meta pode estar lenta. Tente reenviar.';
+      case 401: return 'Token inválido ou expirado. Renove em Admin > WhatsApp Oficial.';
+      case 403: return 'Sem permissão para enviar. Verifique o canal e a janela de 24h.';
+      case 400: return 'Dados inválidos. Verifique o número e o conteúdo da mensagem.';
+      default:
+        if (status >= 500) return 'Erro no servidor. Tente novamente.';
+        return 'Não foi possível enviar. Tente novamente.';
+    }
+  };
 
   const handleSendMessage = async () => {
     const hasText = messageText.trim().length > 0;
     const hasMedia = !!attachedMedia;
     if ((!hasText && !hasMedia) || !selectedConversationId || !selectedChannel || sending) return;
     if (selectedChannel.type === 'whatsapp_official' && !canSendFreeMessage) {
-      alert('Fora da janela de 24h. Use mensagem template para iniciar ou reabrir a conversa.');
+      setSendError('Fora da janela de 24h. Use mensagem template para iniciar ou reabrir a conversa.');
       return;
     }
 
     const conversation = conversations.find((c) => c.id === selectedConversationId);
     if (!conversation) return;
 
+    setSendError(null);
     setSending(true);
     try {
       if (selectedChannel.type === 'evolution') {
@@ -499,60 +1241,110 @@ export default function ChatPage() {
             text: messageText,
           }),
         });
-        const result = await response.json();
-        if (result.success) {
+        let result: { success?: boolean; error?: string; message?: string } = {};
+        try { result = await response.json(); } catch { result = {}; }
+        if (response.ok && result.success) {
           setMessageText('');
           if (textareaRef.current) textareaRef.current.style.height = 'auto';
         } else {
-          alert(result.error || result.message || 'Erro ao enviar mensagem');
+          setSendError(getSendErrorMessage(response.status, result.error || result.message));
         }
       } else {
-        const to = (conversation.remote_jid || '').replace(/@s\.whatsapp\.net$/, '').replace(/\D/g, '') || conversation.remote_jid;
+        const to =
+          (conversation.remote_jid || '')
+            .replace(/@s\.whatsapp\.net$/, '')
+            .replace(/\D/g, '') || conversation.remote_jid;
         const body: Record<string, string | undefined> = hasMedia
           ? {
               config_id: selectedChannel.id,
               to,
               type: attachedMedia!.type,
-              media_url: attachedMedia!.url,
+              // Para áudio gravado: usa meta_id (upload direto na Meta) — garante entrega
+              // Para outros tipos ou fallback: usa media_url (URL pública Supabase)
+              ...(attachedMedia!.meta_id
+                ? { meta_id: attachedMedia!.meta_id }
+                : { media_url: attachedMedia!.url }),
               caption: hasText ? messageText.trim() : undefined,
             }
-          : {
-              config_id: selectedChannel.id,
-              to,
-              type: 'text',
-              text: messageText.trim(),
-            };
+          : { config_id: selectedChannel.id, to, type: 'text', text: messageText.trim() };
+
         const response = await fetch('/api/chat/whatsapp-official/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...authHeaders() },
           body: JSON.stringify(body),
         });
-        const result = await response.json();
-        if (result.success) {
+        let result: { success?: boolean; error?: string; message?: string } = {};
+        try { result = await response.json(); } catch { result = {}; }
+        if (response.ok && result.success) {
           if (attachedMedia?.preview) URL.revokeObjectURL(attachedMedia.preview);
           setMessageText('');
           setAttachedMedia(null);
           if (textareaRef.current) textareaRef.current.style.height = 'auto';
         } else {
-          alert(result.error || result.message || 'Erro ao enviar mensagem');
+          setSendError(getSendErrorMessage(response.status, result.error || result.message));
         }
       }
     } catch (error) {
-      console.error('Erro ao enviar mensagem:', error);
-      alert('Erro ao enviar mensagem');
+      const isNetwork =
+        error instanceof TypeError &&
+        (error.message === 'Failed to fetch' || error.message?.includes('network'));
+      setSendError(
+        isNetwork
+          ? 'Falha na conexão. Verifique sua internet e tente novamente.'
+          : 'Erro ao enviar mensagem. Tente novamente.'
+      );
     } finally {
       setSending(false);
     }
   };
 
+  // ── Contato: abrir modal ───────────────────────────────────────────────────
+  const openContactModal = () => {
+    const conv = conversations.find((c) => c.id === selectedConversationId);
+    const phone =
+      conv?.remote_jid.replace(/@s\.whatsapp\.net$/, '').replace(/\D/g, '') ?? '';
+    setContactForm({
+      name: convContact?.name ?? conv?.title ?? '',
+      phone,
+      horario: convContact?.horario ?? '',
+    });
+    setContactSaveError(null);
+    setShowContactModal(true);
+  };
+
+  const handleSaveContact = async () => {
+    if (!contactForm.phone) { setContactSaveError('Telefone é obrigatório'); return; }
+    setSavingContact(true);
+    setContactSaveError(null);
+    try {
+      const res = await fetch('/api/chat/contacts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(contactForm),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setConvContact(data.data);
+        setShowContactModal(false);
+      } else {
+        setContactSaveError(data.error || 'Erro ao salvar contato');
+      }
+    } catch {
+      setContactSaveError('Falha na conexão. Tente novamente.');
+    } finally {
+      setSavingContact(false);
+    }
+  };
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
   const formatTime = (timestamp: number | string) => {
-    const date = typeof timestamp === 'string' ? new Date(timestamp) : new Date(timestamp * 1000);
+    const date =
+      typeof timestamp === 'string' ? new Date(timestamp) : new Date(timestamp * 1000);
     const now = new Date();
     const diff = now.getTime() - date.getTime();
     const minutes = Math.floor(diff / 60000);
     const hours = Math.floor(minutes / 60);
     const days = Math.floor(hours / 24);
-
     if (minutes < 1) return 'Agora';
     if (minutes < 60) return `${minutes}m`;
     if (hours < 24) return `${hours}h`;
@@ -561,14 +1353,11 @@ export default function ChatPage() {
   };
 
   const formatMessageTime = (timestamp: number | string) => {
-    const date = typeof timestamp === 'string' ? new Date(timestamp) : new Date(timestamp * 1000);
+    const date =
+      typeof timestamp === 'string' ? new Date(timestamp) : new Date(timestamp * 1000);
     const now = new Date();
     const isToday = date.toDateString() === now.toDateString();
-    
-    if (isToday) {
-      return date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-    }
-    
+    if (isToday) return date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
     return date.toLocaleDateString('pt-BR', {
       month: 'short',
       day: 'numeric',
@@ -579,581 +1368,1090 @@ export default function ChatPage() {
 
   const getStatusIcon = (status: string) => {
     switch (status) {
-      case 'sent':
-        return <Check className="w-4 h-4" />;
-      case 'delivered':
-        return <CheckCheck className="w-4 h-4" />;
-      case 'read':
-        return <CheckCheck className="w-4 h-4" style={{ color: '#8CD955' }} />;
-      default:
-        return <Clock className="w-4 h-4" />;
+      case 'sent': return <Check className="w-4 h-4" />;
+      case 'delivered': return <CheckCheck className="w-4 h-4" />;
+      case 'read': return <CheckCheck className="w-4 h-4" style={{ color: '#8CD955' }} />;
+      default: return <Clock className="w-4 h-4" />;
     }
   };
 
-  const getInitials = (name: string) => {
-    return name
-      .split(' ')
-      .map((n) => n[0])
-      .join('')
-      .toUpperCase()
-      .slice(0, 2);
-  };
+  const getInitials = (name: string) =>
+    name.split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2);
 
-  /** Janela de 24h do WhatsApp Oficial: dentro = pode enviar texto livre; fora = só template */
   const isWithin24hWindow = (conv: Conversation): boolean => {
     if (!conv.whatsapp_config_id || !conv.last_customer_message_at) return false;
-    const last = new Date(conv.last_customer_message_at).getTime();
-    return Date.now() - last < 24 * 60 * 60 * 1000;
+    return Date.now() - new Date(conv.last_customer_message_at).getTime() < 24 * 60 * 60 * 1000;
   };
 
   const getConversationColor = (title: string) => {
-    const colors = [
-      '#8CD955',
-      '#7BC84A',
-      '#6AB83D',
-      '#A8E677',
-      '#5AA832',
-      '#4C9628',
-      '#3E841E',
-      '#2F7214',
-    ];
-    const index = title.charCodeAt(0) % colors.length;
-    return colors[index];
+    const colors = ['#8CD955', '#7BC84A', '#6AB83D', '#A8E677', '#5AA832', '#4C9628', '#3E841E', '#2F7214'];
+    return colors[(title.charCodeAt(0) || 0) % colors.length];
   };
 
-  // Filtrar conversas (null-safe: title e last_message_preview podem ser null)
+  // ── Filtros e ordenação ────────────────────────────────────────────────────
+  // Todos = apenas conversas com janela 24h ativa (pendentes, não resolvidas)
+  // Minhas = atribuídas a mim
+  // Histórico = fora da janela 24h (template) ou já resolvidas
   const filteredConversations = conversations.filter((conv) => {
     const term = (searchTerm || '').trim().toLowerCase();
     const matchesSearch =
       !term ||
       (conv.title || '').toLowerCase().includes(term) ||
-      (conv.last_message_preview || '').toLowerCase().includes(term);
-
+      (conv.last_message_preview || '').toLowerCase().includes(term) ||
+      (conv.tags || []).some((t) => t.toLowerCase().includes(term));
     if (!matchesSearch) return false;
-
+    if (tagFilter) {
+      const hasTag = (conv.tags || []).some((t) => t === tagFilter);
+      if (!hasTag) return false;
+    }
+    const in24h = isWithin24hWindow(conv);
+    const resolved = conv.attendance_status === 'resolvido';
     switch (conversationFilter) {
       case 'mine':
         return conv.user_id === userId;
       case 'unassigned':
-        return !conv.user_id || conv.user_id === null;
+        // Histórico: template (fora 24h) ou resolvidas
+        return !in24h || resolved;
       case 'all':
       default:
-        return true;
+        // Todos: só 24h ativas e não resolvidas (pendentes)
+        return in24h && !resolved;
     }
   });
 
-  const mineCount = conversations.filter((c) => c.user_id === userId).length;
-  const unassignedCount = conversations.filter((c) => !c.user_id || c.user_id === null).length;
-  const allCount = conversations.length;
-
-  if (checking) {
+  // Ordenação: 24h ativos primeiro, depois por última mensagem
+  const sortedConversations = [...filteredConversations].sort((a, b) => {
+    const a24 = isWithin24hWindow(a);
+    const b24 = isWithin24hWindow(b);
+    if (a24 && !b24) return -1;
+    if (!a24 && b24) return 1;
     return (
-      <Layout onSignOut={handleSignOut}>
-        <div className="flex items-center justify-center h-screen bg-[var(--background)]">
-          <div className="text-[var(--muted-foreground)]">Carregando...</div>
-        </div>
-      </Layout>
+      new Date(b.last_message_at || 0).getTime() - new Date(a.last_message_at || 0).getTime()
     );
-  }
+  });
+
+  const displayedConversations = sortedConversations.slice(0, visibleConversationsCount);
+  const hasMoreConversations = visibleConversationsCount < sortedConversations.length;
+
+  const allCount = conversations.filter(
+    (c) => isWithin24hWindow(c) && c.attendance_status !== 'resolvido'
+  ).length;
+  const mineCount = conversations.filter((c) => c.user_id === userId).length;
+  const historyCount = conversations.filter(
+    (c) => !isWithin24hWindow(c) || c.attendance_status === 'resolvido'
+  ).length;
+
+  useEffect(() => {
+    setVisibleConversationsCount(CONVERSATIONS_PAGE_SIZE);
+  }, [conversationFilter, searchTerm, tagFilter]);
+
+  // Detectar mobile para layout de conversa full-screen
+  useEffect(() => {
+    const check = () => setIsMobile(typeof window !== 'undefined' && window.innerWidth < 768);
+    check();
+    window.addEventListener('resize', check);
+    return () => window.removeEventListener('resize', check);
+  }, []);
 
   const selectedConversation = conversations.find((c) => c.id === selectedConversationId);
   const canSendFreeMessage =
     selectedChannel?.type !== 'whatsapp_official' ||
     (selectedConversation ? isWithin24hWindow(selectedConversation) : false);
 
+  if (checking) {
+    return (
+      <Layout onSignOut={handleSignOut}>
+        <div className="flex items-center justify-center h-full bg-[var(--background)]">
+          <div className="text-[var(--muted-foreground)]">Carregando...</div>
+        </div>
+      </Layout>
+    );
+  }
+
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <Layout onSignOut={handleSignOut}>
-      <div className="flex h-[calc(100vh-80px)] bg-gray-50 dark:bg-[#1e1e1e]">
-        {/* Painel Esquerdo - Navegação e Instâncias */}
-        <div className="w-64 bg-white dark:bg-[#2a2a2a] border-r border-gray-200 dark:border-[#404040] flex flex-col">
-          <div className="p-4 border-b border-gray-200 dark:border-[#404040]">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-3">Zaploto Chat</h2>
-            <div className="space-y-2">
-              <button className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-[#333] text-gray-700 dark:text-gray-200">
-                <Inbox className="w-5 h-5" />
-                <span className="text-sm font-medium">Minha Caixa</span>
-              </button>
-              <div className="space-y-1">
-                <div className="px-3 py-1 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Conversas</div>
-                <button
-                  className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-white"
-                  style={{ backgroundColor: '#8CD955' }}
-                >
-                  <MessageCircle className="w-5 h-5" />
-                  <span className="text-sm font-medium">Todas as conversas</span>
-                </button>
-                <button className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-[#333] text-gray-700 dark:text-gray-200">
-                  <AlertCircle className="w-5 h-5" />
-                  <span className="text-sm">Menções</span>
-                </button>
-                <button className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-[#333] text-gray-700 dark:text-gray-200">
-                  <Clock className="w-5 h-5" />
-                  <span className="text-sm">Por responder</span>
-                </button>
-              </div>
-            </div>
-          </div>
+      {mediaModal && (
+        <MediaModal
+          url={mediaModal.url}
+          type={mediaModal.type}
+          caption={mediaModal.caption}
+          onClose={() => setMediaModal(null)}
+        />
+      )}
+      <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
 
-          {/* Canal: apenas super_admin e admin podem trocar; suporte e outros só usam o canal atual */}
-          {canSelectChannel ? (
-            <div className="p-4 border-b border-gray-200 dark:border-[#404040]">
-              <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">
-                Canal
-              </label>
-              <select
-                value={selectedChannel ? `${selectedChannel.type}:${selectedChannel.id}` : ''}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (!v) {
-                    setSelectedChannel(null);
-                    setSelectedConversationId('');
-                    return;
-                  }
-                  const [type, id] = v.split(':');
-                  if (type === 'evolution') {
-                    const ch = channels.evolution.find((c) => c.id === id);
-                    if (ch) setSelectedChannel(ch);
-                  } else {
-                    const ch = channels.whatsapp_official.find((c) => c.id === id);
-                    if (ch) setSelectedChannel(ch);
-                  }
-                  setSelectedConversationId('');
-                }}
-                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100"
-                style={{ borderColor: '#8CD955' }}
-              >
-                <option value="">Selecione um canal</option>
-                {channels.evolution.length > 0 && (
-                  <optgroup label="Evolution">
-                    {channels.evolution.map((ch) => (
-                      <option key={ch.id} value={`evolution:${ch.id}`}>
-                        {ch.instance_name} ({ch.status})
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-                {channels.whatsapp_official.length > 0 && (
-                  <optgroup label="WhatsApp Oficial">
-                    {channels.whatsapp_official.map((ch) => (
-                      <option key={ch.id} value={`whatsapp_official:${ch.id}`}>
-                        {ch.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-              </select>
+        {/* Token Alert */}
+        {showTokenAlert && (
+          <div
+            className="flex-shrink-0 flex items-center justify-between gap-4 px-4 py-3 bg-amber-500/15 dark:bg-amber-500/20 border-b border-amber-500/40 text-amber-800 dark:text-amber-200"
+            role="alert"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <AlertCircle className="w-5 h-5 flex-shrink-0 text-amber-600 dark:text-amber-400" />
+              <p className="text-sm font-medium">{tokenAlertMessage}</p>
             </div>
-          ) : selectedChannel ? (
-            <div className="p-4 border-b border-gray-200 dark:border-[#404040]">
-              <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">Chat</div>
-              <div className="text-sm text-gray-700 dark:text-gray-200">
-                {selectedChannel.type === 'evolution' ? selectedChannel.instance_name : selectedChannel.name}
-              </div>
-            </div>
-          ) : null}
-
-          <div className="flex-1 overflow-y-auto p-4">
-            {!selectedChannel ? (
-              <div className="text-center text-gray-500 dark:text-gray-400 text-sm mt-8">
-                {canSelectChannel ? 'Selecione um canal' : 'Carregando...'}
-              </div>
-            ) : !canSelectChannel ? null : (
-              <div className="text-xs text-gray-500 dark:text-gray-400">
-                {selectedChannel.type === 'evolution'
-                  ? selectedChannel.instance_name
-                  : selectedChannel.name}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Painel Central - Lista de Conversas (sempre do banco; uma conversa por número, continuada) */}
-        <div className="w-80 bg-white dark:bg-[#2a2a2a] border-r border-gray-200 dark:border-[#404040] flex flex-col">
-          {/* Header: conversas do banco + atualizar */}
-          <div className="p-4 border-b border-gray-200 dark:border-[#404040]">
-            <div className="flex items-center justify-between gap-2 mb-3">
-              <span className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
-                <Database className="w-4 h-4 text-[#8CD955]" />
-                Conversas do banco
-              </span>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <a href="/admin/whatsapp-official" className="text-sm font-medium underline hover:no-underline">
+                Renovar token
+              </a>
               <button
                 type="button"
-                onClick={() => loadConversationsFromApi(true)}
-                disabled={!selectedChannel || loading}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-[#8CD955] hover:bg-[#8CD95515] dark:hover:bg-[#8CD95520] rounded-lg border border-[#8CD955] disabled:opacity-50 disabled:cursor-not-allowed"
-                title="Recarregar conversas salvas no banco (por número de telefone)"
+                onClick={() => setShowTokenAlert(false)}
+                className="p-1.5 rounded-lg hover:bg-amber-500/20 transition-colors"
+                aria-label="Fechar aviso"
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-                Atualizar
-              </button>
-            </div>
-            <div className="relative mb-4">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 dark:text-gray-400 w-4 h-4" />
-              <input
-                type="text"
-                placeholder="Search..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 text-sm bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400"
-              />
-            </div>
-
-            {/* Abas de Filtro */}
-            <div className="flex items-center gap-1 border-b border-gray-200 dark:border-[#404040] -mx-4 px-4">
-              <button
-                onClick={() => setConversationFilter('mine')}
-                className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
-                  conversationFilter === 'mine'
-                    ? 'border-[#8CD955] text-[#8CD955]'
-                    : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'
-                }`}
-              >
-                Minhas ({mineCount})
-              </button>
-              <button
-                onClick={() => setConversationFilter('unassigned')}
-                className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
-                  conversationFilter === 'unassigned'
-                    ? 'border-[#8CD955] text-[#8CD955]'
-                    : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'
-                }`}
-              >
-                Não atribuídas ({unassignedCount})
-              </button>
-              <button
-                onClick={() => setConversationFilter('all')}
-                className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
-                  conversationFilter === 'all'
-                    ? 'border-[#8CD955] text-[#8CD955]'
-                    : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'
-                }`}
-              >
-                Todas ({allCount})
+                <X className="w-4 h-4" />
               </button>
             </div>
           </div>
+        )}
 
-          {/* Lista de Conversas */}
-          <div className="flex-1 overflow-y-auto">
-            {loading && !selectedChannel ? (
-              <div className="p-4 text-center text-gray-500 dark:text-gray-400 text-sm">Carregando...</div>
-            ) : filteredConversations.length === 0 ? (
-              <div className="p-4 text-center text-gray-500 dark:text-gray-400 text-sm">
-                {selectedChannel ? (
-                  <>
-                    Nenhuma conversa no banco para este canal.
-                    <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                      Cada número tem uma única conversa; ao chegar nova mensagem ela é continuada, não criada outra.
-                    </p>
-                    {(userStatus === 'super_admin' || userStatus === 'admin' || userStatus === 'suporte') && (
-                      <p className="mt-1 text-xs">Novas mensagens no WhatsApp aparecerão aqui e você será notificado.</p>
-                    )}
-                  </>
+        {/* 3 Painéis — coluna Zaploto Chat oculta por padrão; botão abre/fecha */}
+        <div className="flex flex-1 min-h-0 overflow-hidden bg-gray-50 dark:bg-[#1e1e1e]">
+          {!(isMobile && selectedConversationId) && (
+          <>
+          {/* ── Painel Esquerdo (Zaploto Chat) — visível só quando chatSidebarOpen ── */}
+          {chatSidebarOpen && (
+          <div className="w-48 md:w-64 min-h-0 flex-shrink-0 overflow-hidden bg-white dark:bg-[#2a2a2a] border-r border-gray-200 dark:border-[#404040] flex flex-col relative">
+            <button
+              type="button"
+              onClick={() => setChatSidebarOpen(false)}
+              className="absolute top-3 right-3 z-10 p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] text-gray-500 dark:text-gray-400"
+              aria-label="Fechar menu"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <div className="p-4 border-b border-gray-200 dark:border-[#404040]">
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-3 pr-8">Zaploto Chat</h2>
+              <div className="space-y-1">
+                <button
+                  onClick={() => setActiveView('chat')}
+                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm font-medium ${
+                    activeView === 'chat'
+                      ? 'text-white'
+                      : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333]'
+                  }`}
+                  style={activeView === 'chat' ? { backgroundColor: '#8CD955' } : {}}
+                >
+                  <MessageCircle className="w-5 h-5" />
+                  Todas as conversas
+                </button>
+                <button
+                  onClick={() => setActiveView('contacts')}
+                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm font-medium ${
+                    activeView === 'contacts'
+                      ? 'text-white'
+                      : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333]'
+                  }`}
+                  style={activeView === 'contacts' ? { backgroundColor: '#8CD955' } : {}}
+                >
+                  <BookUser className="w-5 h-5" />
+                  Contatos
+                </button>
+              </div>
+            </div>
+
+            {/* Seletor de Canal */}
+            {canSelectChannel ? (
+              <div className="p-4 border-b border-gray-200 dark:border-[#404040]">
+                <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">
+                  Canal
+                </label>
+                <select
+                  value={selectedChannel ? `${selectedChannel.type}:${selectedChannel.id}` : ''}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (!v) { setSelectedChannel(null); setSelectedConversationId(''); return; }
+                    const [type, id] = v.split(':');
+                    if (type === 'evolution') {
+                      const ch = channels.evolution.find((c) => c.id === id);
+                      if (ch) setSelectedChannel(ch);
+                    } else {
+                      const ch = channels.whatsapp_official.find((c) => c.id === id);
+                      if (ch) setSelectedChannel(ch);
+                    }
+                    setSelectedConversationId('');
+                  }}
+                  className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040]"
+                  style={{ borderColor: '#8CD955' }}
+                >
+                  <option value="">Selecione um canal</option>
+                  {channels.evolution.length > 0 && (
+                    <optgroup label="Evolution">
+                      {channels.evolution.map((ch) => (
+                        <option key={ch.id} value={`evolution:${ch.id}`}>
+                          {ch.instance_name} ({ch.status})
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {channels.whatsapp_official.length > 0 && (
+                    <optgroup label="WhatsApp Oficial">
+                      {channels.whatsapp_official.map((ch) => (
+                        <option key={ch.id} value={`whatsapp_official:${ch.id}`}>
+                          {ch.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+              </div>
+            ) : selectedChannel ? (
+              <div className="p-4 border-b border-gray-200 dark:border-[#404040]">
+                <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">Chat</div>
+                <div className="text-sm text-gray-700 dark:text-gray-200">
+                  {selectedChannel.type === 'evolution' ? selectedChannel.instance_name : selectedChannel.name}
+                </div>
+              </div>
+            ) : null}
+
+            <div className="flex-1 overflow-y-auto p-4">
+              {!selectedChannel && (
+                <div className="text-center text-gray-500 dark:text-gray-400 text-sm mt-8">
+                  {canSelectChannel ? 'Selecione um canal' : 'Carregando...'}
+                </div>
+              )}
+            </div>
+          </div>
+          )}
+
+          {/* ── Painel Central (lista) — botão "Menu" quando coluna fechada ── */}
+          {activeView === 'contacts' ? (
+            /* Vista Contatos */
+            <div className="min-w-0 flex-1 md:w-80 md:flex-shrink-0 overflow-hidden bg-white dark:bg-[#2a2a2a] border-r border-gray-200 dark:border-[#404040] flex flex-col">
+              <div className="flex-shrink-0 p-3 border-b border-gray-200 dark:border-[#404040] flex items-center gap-2">
+                {!chatSidebarOpen && (
+                  <button
+                    type="button"
+                    onClick={() => setChatSidebarOpen(true)}
+                    className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] text-gray-600 dark:text-gray-300 flex-shrink-0"
+                    aria-label="Abrir menu Zaploto Chat"
+                    title="Abrir menu (canal, conversas/contatos)"
+                  >
+                    <PanelLeft className="w-5 h-5" />
+                  </button>
+                )}
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Contatos do Chat</h3>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                    Clique em um contato para abrir a conversa.
+                  </p>
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto">
+                {conversations.length === 0 ? (
+                  <div className="p-6 text-center text-gray-500 dark:text-gray-400 text-sm">
+                    Nenhuma conversa encontrada.
+                  </div>
                 ) : (
-                  'Selecione um canal'
+                  conversations
+                    .filter((c) => !c.is_group)
+                    .sort(
+                      (a, b) =>
+                        new Date(b.last_message_at || 0).getTime() -
+                        new Date(a.last_message_at || 0).getTime()
+                    )
+                    .map((conv) => {
+                      const phone = conv.remote_jid
+                        .replace(/@s\.whatsapp\.net$/, '')
+                        .replace(/\D/g, '');
+                      return (
+                        <div
+                          key={conv.id}
+                          onClick={() => {
+                            setActiveView('chat');
+                            setSelectedConversationId(conv.id);
+                          }}
+                          className="p-3 border-b border-gray-100 dark:border-[#404040] cursor-pointer hover:bg-gray-50 dark:hover:bg-[#333] transition-colors"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div
+                              className="w-9 h-9 rounded-full flex items-center justify-center text-white text-xs font-semibold flex-shrink-0"
+                              style={{ backgroundColor: getConversationColor(conv.title || '') }}
+                            >
+                              {getInitials(conv.title || phone)}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+                                {conv.title || 'Sem nome'}
+                              </p>
+                              <p className="text-xs text-gray-500 dark:text-gray-400">{phone}</p>
+                            </div>
+                            <span className="text-xs text-gray-400 flex-shrink-0">
+                              {formatTime(conv.last_message_at)}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })
                 )}
               </div>
-            ) : (
-              filteredConversations.map((conv) => {
-                const initials = getInitials(conv.title || '');
-                const bgColor = getConversationColor(conv.title || '');
-                const isSelected = selectedConversationId === conv.id;
-
-                return (
-                  <div
-                    key={conv.id}
-                    onClick={() => setSelectedConversationId(conv.id)}
-                    className={`p-3 border-b border-gray-100 dark:border-[#404040] cursor-pointer hover:bg-gray-50 dark:hover:bg-[#333] transition-colors ${
-                      isSelected ? 'bg-[#8CD95515] dark:bg-[#8CD95520] border-l-4 border-l-[#8CD955]' : ''
+            </div>
+          ) : (
+            /* Vista Chat — Lista de Conversas */
+            <div className="min-w-0 flex-1 md:w-80 md:flex-shrink-0 overflow-hidden bg-white dark:bg-[#2a2a2a] border-r border-gray-200 dark:border-[#404040] flex flex-col">
+              {/* Botão menu + Busca + Abas */}
+              <div className="flex-shrink-0 p-3 border-b border-gray-200 dark:border-[#404040]">
+                {!chatSidebarOpen && (
+                  <div className="mb-2">
+                    <button
+                      type="button"
+                      onClick={() => setChatSidebarOpen(true)}
+                      className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] text-gray-600 dark:text-gray-300 inline-flex items-center gap-2 text-sm font-medium"
+                      aria-label="Abrir menu Zaploto Chat"
+                      title="Abrir menu (canal, conversas/contatos)"
+                    >
+                      <PanelLeft className="w-5 h-5" />
+                      Menu
+                    </button>
+                  </div>
+                )}
+                <div className="relative mb-3">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 dark:text-gray-400 w-4 h-4" />
+                  <input
+                    type="text"
+                    placeholder="Buscar..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2 text-sm bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400"
+                  />
+                </div>
+                {tagOptions.length > 0 && (
+                  <div className="mb-3">
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Filtrar por etiqueta</label>
+                    <select
+                      value={tagFilter}
+                      onChange={(e) => setTagFilter(e.target.value)}
+                      className="w-full px-3 py-2 text-sm bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg text-gray-900 dark:text-gray-100"
+                    >
+                      <option value="">Todas</option>
+                      {tagOptions.map((t) => (
+                        <option key={t.id} value={t.name}>{t.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                <div className="flex items-center gap-1 border-b border-gray-200 dark:border-[#404040] -mx-4 px-4">
+                  {/* Todos = janela 24h ativa (prioridade máxima) */}
+                  <button
+                    onClick={() => setConversationFilter('all')}
+                    className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
+                      conversationFilter === 'all'
+                        ? 'border-[#8CD955] text-[#8CD955]'
+                        : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'
                     }`}
                   >
-                    <div className="flex items-start gap-3">
-                      <div
-                        className="w-10 h-10 rounded-full flex items-center justify-center text-white text-xs font-semibold flex-shrink-0"
-                        style={{ backgroundColor: bgColor }}
+                    Todos ({allCount})
+                  </button>
+                  <button
+                    onClick={() => setConversationFilter('mine')}
+                    className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
+                      conversationFilter === 'mine'
+                        ? 'border-[#8CD955] text-[#8CD955]'
+                        : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'
+                    }`}
+                  >
+                    Minhas ({mineCount})
+                  </button>
+                  <button
+                    onClick={() => setConversationFilter('unassigned')}
+                    className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
+                      conversationFilter === 'unassigned'
+                        ? 'border-[#8CD955] text-[#8CD955]'
+                        : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'
+                    }`}
+                  >
+                    Histórico ({historyCount})
+                  </button>
+                </div>
+              </div>
+
+              {/* Lista com scroll infinito */}
+              <div
+                ref={conversationListScrollRef}
+                className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain"
+                onScroll={() => {
+                  const el = conversationListScrollRef.current;
+                  if (!el || !hasMoreConversations) return;
+                  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 100) {
+                    setVisibleConversationsCount((prev) =>
+                      Math.min(prev + CONVERSATIONS_PAGE_SIZE, sortedConversations.length)
+                    );
+                  }
+                }}
+              >
+                {conversationsLoading && conversations.length === 0 ? (
+                  <div className="p-4 flex items-center justify-center gap-2 text-gray-500 dark:text-gray-400 text-sm">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Carregando conversas...
+                  </div>
+                ) : sortedConversations.length === 0 ? (
+                  <div className="p-4 text-center text-gray-500 dark:text-gray-400 text-sm">
+                    {selectedChannel ? (
+                      <>
+                        {conversationFilter === 'all'
+                          ? 'Nenhuma conversa com janela 24h ativa (pendente).'
+                          : conversationFilter === 'unassigned'
+                            ? 'Nenhuma conversa no histórico (template ou resolvidas).'
+                            : 'Nenhuma conversa encontrada.'}
+                        {(userStatus === 'super_admin' || userStatus === 'admin' || userStatus === 'suporte') && (
+                          <p className="mt-1 text-xs">
+                            Novas mensagens aparecerão aqui automaticamente.
+                          </p>
+                        )}
+                      </>
+                    ) : (
+                      'Selecione um canal'
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    {displayedConversations.map((conv) => {
+                      const isSelected = selectedConversationId === conv.id;
+                      return (
+                        <div
+                          key={conv.id}
+                          onClick={() => setSelectedConversationId(conv.id)}
+                          className={`p-3 border-b border-gray-100 dark:border-[#404040] cursor-pointer hover:bg-gray-50 dark:hover:bg-[#333] transition-colors ${
+                            isSelected
+                              ? 'bg-[#8CD95515] dark:bg-[#8CD95520] border-l-4 border-l-[#8CD955]'
+                              : ''
+                          }`}
+                        >
+                          <div className="flex items-start gap-3">
+                            <div
+                              className="w-10 h-10 rounded-full flex items-center justify-center text-white text-xs font-semibold flex-shrink-0"
+                              style={{ backgroundColor: getConversationColor(conv.title || '') }}
+                            >
+                              {conv.is_group ? (
+                                <Users className="w-5 h-5" />
+                              ) : (
+                                <span>{getInitials(conv.title || '')}</span>
+                              )}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between mb-1">
+                                <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate flex items-center gap-1.5 flex-wrap">
+                                  {conv.title || 'Sem nome'}
+                                  {selectedChannel?.type === 'whatsapp_official' &&
+                                    conv.whatsapp_config_id && (
+                                      <span
+                                        className={`flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded ${
+                                          conv.attendance_status === 'resolvido'
+                                            ? 'bg-slate-200 text-slate-700 dark:bg-slate-600 dark:text-slate-200'
+                                            : isWithin24hWindow(conv)
+                                              ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300'
+                                              : 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300'
+                                        }`}
+                                      >
+                                        {conv.attendance_status === 'resolvido'
+                                          ? 'resolvido'
+                                          : isWithin24hWindow(conv)
+                                            ? '24h'
+                                            : 'template'}
+                                      </span>
+                                    )}
+                                  {(conv.tags || []).length > 0 && (
+                                    <span className="flex-shrink-0 flex gap-0.5 flex-wrap">
+                                      {(conv.tags || []).map((tag) => (
+                                        <span
+                                          key={tag}
+                                          className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300"
+                                        >
+                                          {tag}
+                                        </span>
+                                      ))}
+                                    </span>
+                                  )}
+                                </h3>
+                                <span className="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0 ml-2">
+                                  {formatTime(conv.last_message_at)}
+                                </span>
+                              </div>
+                              <p className="text-xs text-gray-600 dark:text-gray-400 truncate mb-1">
+                                {conv.last_message_preview || '—'}
+                              </p>
+                              <div className="flex items-center justify-end">
+                                {conv.unread_count > 0 && (
+                                  <span
+                                    className="text-xs font-bold text-white rounded-full px-2 py-0.5"
+                                    style={{ backgroundColor: '#8CD955' }}
+                                  >
+                                    {conv.unread_count}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {hasMoreConversations && (
+                      <div className="p-3 text-center text-xs text-gray-400 dark:text-gray-500">
+                        Role para ver mais conversas...
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+          </>
+          )}
+
+          {/* ── Painel Direito — Mensagens (no mobile: só mostra quando conversa selecionada) ── */}
+          {(!isMobile || selectedConversationId) && (
+          <div className="flex-1 min-h-0 overflow-hidden flex flex-col bg-gray-50 dark:bg-[#1e1e1e] min-w-0">
+            {selectedConversationId && selectedConversation ? (
+              <>
+                {/* Header da conversa — compacto */}
+                <div className="flex-shrink-0 bg-white dark:bg-[#2a2a2a] border-b border-gray-200 dark:border-[#404040]">
+                  <div className="px-3 py-2 flex items-center gap-2 min-w-0">
+                    {isMobile && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedConversationId('')}
+                        className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] text-gray-700 dark:text-gray-200 flex-shrink-0"
+                        aria-label="Voltar para lista"
                       >
-                        {conv.is_group ? (
-                          <Users className="w-5 h-5" />
-                        ) : (
-                          <span>{initials}</span>
+                        <ChevronLeft className="w-5 h-5" />
+                      </button>
+                    )}
+                    <div
+                      className="w-9 h-9 rounded-full flex items-center justify-center text-white text-xs font-semibold flex-shrink-0"
+                      style={{ backgroundColor: getConversationColor(selectedConversation.title) }}
+                    >
+                      {selectedConversation.is_group ? (
+                        <Users className="w-4 h-4" />
+                      ) : (
+                        <span>{getInitials(selectedConversation.title)}</span>
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 flex-wrap gap-y-0.5">
+                        <h2 className="font-semibold text-sm text-gray-900 dark:text-gray-100 truncate">
+                          {selectedConversation.title}
+                        </h2>
+                        {selectedChannel?.type === 'whatsapp_official' && (
+                          <span
+                            className={`flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded ${
+                              isWithin24hWindow(selectedConversation)
+                                ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300'
+                                : 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300'
+                            }`}
+                          >
+                            {isWithin24hWindow(selectedConversation) ? '24h' : 'template'}
+                          </span>
                         )}
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between mb-1">
-                          <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate flex items-center gap-1.5">
-                            {conv.title || 'Sem nome'}
-                            {selectedChannel?.type === 'whatsapp_official' && conv.whatsapp_config_id && (
-                              <span
-                                className={`flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded ${
-                                  isWithin24hWindow(conv)
-                                    ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300'
-                                    : 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300'
-                                }`}
-                                title={isWithin24hWindow(conv) ? 'Janela 24h ativa' : 'Fora da janela'}
-                              >
-                                {isWithin24hWindow(conv) ? '24h' : 'template'}
-                              </span>
-                            )}
-                          </h3>
-                          <span className="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0 ml-2">
-                            {formatTime(conv.last_message_at)}
-                          </span>
-                        </div>
-                        <p className="text-xs text-gray-600 dark:text-gray-400 truncate mb-1">{conv.last_message_preview || '—'}</p>
-                        <div className="flex items-center justify-end">
-                          {conv.unread_count > 0 && (
-                            <span
-                              className="text-xs font-bold text-white rounded-full px-2 py-0.5 flex-shrink-0"
-                              style={{ backgroundColor: '#8CD955' }}
+                      <div className="flex items-center gap-2 mt-0.5">
+                        {convContact !== undefined && (
+                          convContact ? (
+                            <button
+                              onClick={openContactModal}
+                              className="text-[11px] text-emerald-600 dark:text-emerald-400 hover:underline truncate max-w-[120px]"
                             >
-                              {conv.unread_count}
-                            </span>
-                          )}
-                        </div>
+                              {convContact.name || 'Contato'}
+                            </button>
+                          ) : (
+                            <button
+                              onClick={openContactModal}
+                              className="text-[11px] text-amber-600 dark:text-amber-400 hover:underline flex items-center gap-0.5"
+                            >
+                              <UserPlus className="w-3 h-3" /> Salvar
+                            </button>
+                          )
+                        )}
+                        <span className="text-[11px] text-gray-400 dark:text-gray-500 truncate">
+                          {selectedConversation.remote_jid}
+                        </span>
                       </div>
                     </div>
                   </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-
-        {/* Painel Direito - Chat Ativo */}
-        <div className="flex-1 flex flex-col bg-gray-50 dark:bg-[#1e1e1e]">
-          {selectedConversationId && selectedConversation ? (
-            <>
-              {/* Header da Conversa */}
-              <div className="bg-white dark:bg-[#2a2a2a] border-b border-gray-200 dark:border-[#404040] px-4 py-3 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div
-                    className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-semibold"
-                    style={{ backgroundColor: getConversationColor(selectedConversation.title) }}
-                  >
-                    {selectedConversation.is_group ? (
-                      <Users className="w-5 h-5" />
-                    ) : (
-                      <span>{getInitials(selectedConversation.title)}</span>
-                    )}
-                  </div>
-                  <div>
-                    <h2 className="font-semibold text-gray-900 dark:text-gray-100">{selectedConversation.title}</h2>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">{selectedConversation.remote_jid}</p>
-                    {selectedChannel?.type === 'whatsapp_official' && (
-                      <span
-                        className={`inline-flex items-center gap-1 mt-1 text-xs font-medium px-2 py-0.5 rounded ${
-                          isWithin24hWindow(selectedConversation)
-                            ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300'
-                            : 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300'
-                        }`}
-                        title={
-                          isWithin24hWindow(selectedConversation)
-                            ? 'Dentro da janela de 24h: você pode enviar mensagem livre.'
-                            : 'Fora da janela de 24h: use mensagem template para iniciar/reabrir.'
-                        }
-                      >
-                        {isWithin24hWindow(selectedConversation) ? 'Janela 24h ativa' : 'Fora da janela (apenas template)'}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="relative">
-                    <button
-                      onClick={() => setShowResolveMenu(!showResolveMenu)}
-                      className="px-4 py-2 text-sm font-medium text-white rounded-lg flex items-center gap-2"
-                      style={{ backgroundColor: '#8CD955' }}
-                    >
-                      Resolver
-                      <CheckCircle2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                  <button className="p-2 hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg text-gray-600 dark:text-gray-300">
-                    <MoreVertical className="w-5 h-5" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Mensagens */}
-              <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4 space-y-4">
-                {loading ? (
-                  <div className="text-center text-gray-500 dark:text-gray-400 text-sm">Carregando mensagens...</div>
-                ) : messages.length === 0 ? (
-                  <div className="text-center text-gray-500 dark:text-gray-400 text-sm mt-8">Nenhuma mensagem ainda</div>
-                ) : (
-                  messages.map((msg, index) => {
-                    const showDate =
-                      index === 0 ||
-                      new Date(msg.timestamp * 1000).toDateString() !==
-                        new Date(messages[index - 1].timestamp * 1000).toDateString();
-
-                    return (
-                      <React.Fragment key={msg.id}>
-                        {showDate && (
-                          <div className="text-center text-xs text-gray-500 dark:text-gray-400 my-4">
-                            {new Date(msg.timestamp * 1000).toLocaleDateString('pt-BR', {
-                              day: 'numeric',
-                              month: 'short',
-                            })}
+                  <div className="px-3 pb-2 flex items-center gap-1.5 flex-wrap">
+                    {(userStatus === 'suporte' || userStatus === 'admin' || userStatus === 'super_admin') && (
+                      <div ref={tagsPopoverRef} className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setShowTagsPopover((v) => !v)}
+                          className="px-2 py-1 text-xs font-medium rounded-md border border-gray-300 dark:border-[#404040] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333] flex items-center gap-1"
+                        >
+                          Etiquetas
+                          {(selectedConversation.tags || []).length > 0 && (
+                            <span className="bg-[#8CD955] text-white rounded-full min-w-[14px] h-3.5 flex items-center justify-center text-[10px] px-1">
+                              {(selectedConversation.tags || []).length}
+                            </span>
+                          )}
+                        </button>
+                        {showTagsPopover && (
+                          <div className="absolute right-0 top-full mt-1 z-20 w-56 py-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-lg shadow-lg">
+                            <div className="px-3 py-1 text-xs text-gray-500 dark:text-gray-400 border-b border-gray-100 dark:border-[#404040]">
+                              Marcar conversa
+                            </div>
+                            <p className="px-3 py-1 text-[11px] text-gray-400 dark:text-gray-500">
+                              Clique para adicionar ou remover.
+                            </p>
+                            {tagOptions.length === 0 ? (
+                              <p className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">
+                                Nenhuma etiqueta. Admin pode criar em Etiquetas Chat.
+                              </p>
+                            ) : (
+                              <>
+                                {tagOptions.map((t) => (
+                                  <button
+                                    key={t.id}
+                                    type="button"
+                                    onClick={() => handleToggleTag(t.name)}
+                                    disabled={updatingTags}
+                                    className={`w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-[#333] ${
+                                      (selectedConversation.tags || []).includes(t.name)
+                                        ? 'text-[#8CD955] font-medium'
+                                        : 'text-gray-700 dark:text-gray-200'
+                                    }`}
+                                  >
+                                    <span className="w-4 h-4 rounded border flex items-center justify-center text-xs flex-shrink-0">
+                                      {(selectedConversation.tags || []).includes(t.name) ? '✓' : ''}
+                                    </span>
+                                    {t.name}
+                                  </button>
+                                ))}
+                                {(selectedConversation.tags || []).length > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={handleRemoveAllTags}
+                                    disabled={updatingTags}
+                                    className="w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 hover:bg-red-50 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400 border-t border-gray-100 dark:border-[#404040] mt-1 pt-2"
+                                  >
+                                    <X className="w-4 h-4 flex-shrink-0" />
+                                    Remover todas as etiquetas
+                                  </button>
+                                )}
+                              </>
+                            )}
                           </div>
                         )}
-                        <div className={`flex ${msg.from_me ? 'justify-end' : 'justify-start'}`}>
-                          {!msg.from_me && (
-                            <div
-                              className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-semibold mr-2 flex-shrink-0"
-                              style={{
-                                backgroundColor: getConversationColor(msg.sender_jid || selectedConversation.title),
-                              }}
-                            >
-                              {getInitials(msg.sender_jid || selectedConversation.title)}
+                      </div>
+                    )}
+                    {selectedConversation.attendance_status === 'resolvido' ? (
+                      <span className="text-[11px] font-medium px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-600 text-slate-700 dark:text-slate-200 flex items-center gap-1">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Resolvida
+                      </span>
+                    ) : isWithin24hWindow(selectedConversation) &&
+                      (userStatus === 'suporte' || userStatus === 'admin' || userStatus === 'super_admin') ? (
+                      <button
+                        onClick={handleResolveConversation}
+                        disabled={resolvingConversation}
+                        className="px-2.5 py-1 text-xs font-medium text-white rounded-md flex items-center gap-1.5 disabled:opacity-60"
+                        style={{ backgroundColor: '#8CD955' }}
+                      >
+                        {resolvingConversation ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                        )}
+                        Resolver
+                      </button>
+                    ) : null}
+                    <button className="p-1.5 hover:bg-gray-100 dark:hover:bg-[#333] rounded-md text-gray-500 dark:text-gray-400" aria-label="Mais opções">
+                      <MoreVertical className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Área de mensagens — scroll interno */}
+                <div
+                  ref={messagesContainerRef}
+                  className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-4 space-y-4"
+                  onScroll={handleMessagesScroll}
+                >
+                  {/* Botão / indicador de mensagens mais antigas */}
+                  {hasOlderMessages && (
+                    <div className="flex justify-center">
+                      <button
+                        onClick={loadOlderMessages}
+                        disabled={loadingOlderMessages}
+                        className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors px-3 py-1.5 rounded-full bg-white dark:bg-[#333] border border-gray-200 dark:border-[#404040] shadow-sm"
+                      >
+                        {loadingOlderMessages ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <ChevronUp className="w-3 h-3" />
+                        )}
+                        {loadingOlderMessages ? 'Carregando...' : 'Carregar mensagens anteriores'}
+                      </button>
+                    </div>
+                  )}
+
+                  {messagesLoading ? (
+                    <div className="flex items-center justify-center gap-2 text-gray-500 dark:text-gray-400 text-sm py-8">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Carregando mensagens...
+                    </div>
+                  ) : messages.length === 0 ? (
+                    <div className="text-center text-gray-500 dark:text-gray-400 text-sm mt-8">
+                      Nenhuma mensagem ainda
+                    </div>
+                  ) : (
+                    messages.map((msg, index) => {
+                      const showDate =
+                        index === 0 ||
+                        new Date(msg.timestamp * 1000).toDateString() !==
+                          new Date(messages[index - 1].timestamp * 1000).toDateString();
+
+                      return (
+                        <React.Fragment key={msg.id}>
+                          {showDate && (
+                            <div className="text-center text-xs text-gray-500 dark:text-gray-400 my-4">
+                              {new Date(msg.timestamp * 1000).toLocaleDateString('pt-BR', {
+                                day: 'numeric',
+                                month: 'short',
+                              })}
                             </div>
                           )}
-                          <div
-                            className={`max-w-md px-4 py-2 rounded-lg ${
-                              msg.from_me
-                                ? 'bg-[#8CD955] text-white rounded-br-none'
-                                : 'bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 rounded-bl-none border border-gray-200 dark:border-[#404040]'
-                            }`}
-                          >
-                            <MessageContent msg={msg} fromMe={msg.from_me} />
+                          <div className={`flex ${msg.from_me ? 'justify-end' : 'justify-start'}`}>
+                            {!msg.from_me && (
+                              <div
+                                className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-semibold mr-2 flex-shrink-0"
+                                style={{
+                                  backgroundColor: getConversationColor(
+                                    msg.sender_jid || selectedConversation.title
+                                  ),
+                                }}
+                              >
+                                {getInitials(msg.sender_jid || selectedConversation.title)}
+                              </div>
+                            )}
                             <div
-                              className={`flex items-center justify-end gap-1 mt-1 ${
-                                msg.from_me ? 'text-white/80' : 'text-gray-500 dark:text-gray-400'
+                              className={`max-w-md px-4 py-2 rounded-lg ${
+                                msg.from_me
+                                  ? 'bg-[#8CD955] text-white rounded-br-none'
+                                  : 'bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 rounded-bl-none border border-gray-200 dark:border-[#404040]'
                               }`}
                             >
-                              <span className="text-xs">{formatMessageTime(msg.timestamp)}</span>
-                              {msg.from_me && getStatusIcon(msg.status)}
+                              <MessageContent msg={msg} fromMe={msg.from_me} onMediaClick={(url, type, caption) => setMediaModal({ url, type, caption })} />
+                              <div
+                                className={`flex items-center justify-end gap-1 mt-1 ${
+                                  msg.from_me ? 'text-white/80' : 'text-gray-500 dark:text-gray-400'
+                                }`}
+                              >
+                                <span className="text-xs">{formatMessageTime(msg.timestamp)}</span>
+                                {msg.from_me && getStatusIcon(msg.status)}
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      </React.Fragment>
-                    );
-                  })
-                )}
-                <div ref={messagesEndRef} />
-              </div>
+                        </React.Fragment>
+                      );
+                    })
+                  )}
+                  <div ref={messagesEndRef} />
+                </div>
 
-              {/* Input de Mensagem */}
-              <div className="bg-white dark:bg-[#2a2a2a] border-t border-gray-200 dark:border-[#404040] p-4">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  className="hidden"
-                  accept="image/jpeg,image/png,image/webp,audio/ogg,audio/mpeg,video/mp4,application/pdf"
-                  onChange={handleFileSelect}
-                />
-                {attachedMedia && (
-                  <div className="mx-4 mb-2 p-2 bg-gray-800 rounded-lg flex items-center gap-3 border border-gray-600">
-                    {attachedMedia.type === 'image' && attachedMedia.preview && (
-                      <img src={attachedMedia.preview} alt="" className="w-12 h-12 rounded object-cover" />
-                    )}
-                    {attachedMedia.type === 'audio' && <Mic size={24} className="text-green-400" />}
-                    {attachedMedia.type === 'video' && <FileText size={24} className="text-blue-400" />}
-                    {attachedMedia.type === 'document' && <FileText size={24} className="text-amber-400" />}
-                    <span className="text-sm text-gray-300 flex-1 truncate">{attachedMedia.name}</span>
+                {/* Alerta de erro no envio */}
+                {sendError && (
+                  <div className="flex-shrink-0 flex items-start gap-3 px-4 py-3 bg-red-500/15 dark:bg-red-500/20 border-t border-red-500/40 text-red-800 dark:text-red-200">
+                    <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-red-600 dark:text-red-400" />
+                    <p className="text-sm flex-1 min-w-0">{sendError}</p>
                     <button
                       type="button"
-                      onClick={() => {
-                        if (attachedMedia?.preview) URL.revokeObjectURL(attachedMedia.preview);
-                        setAttachedMedia(null);
-                      }}
-                      className="text-gray-400 hover:text-white p-1"
-                      aria-label="Remover anexo"
+                      onClick={() => setSendError(null)}
+                      className="p-1.5 rounded-lg hover:bg-red-500/20 transition-colors flex-shrink-0"
+                      aria-label="Fechar"
                     >
-                      <X size={16} />
+                      <X className="w-4 h-4" />
                     </button>
                   </div>
                 )}
-                <div className="mb-2 flex items-center gap-2">
-                  <button className="px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg">
-                    Responder
-                  </button>
-                  <button className="px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg">
-                    Nota Privada
-                  </button>
-                </div>
-                <div className="flex items-end gap-2">
-                  <div className="flex-1 relative">
-                    <textarea
-                      ref={textareaRef}
-                      value={messageText}
-                      onChange={(e) => {
-                        setMessageText(e.target.value);
-                        if (textareaRef.current) {
-                          textareaRef.current.style.height = 'auto';
-                          textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`;
-                        }
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey) {
-                          e.preventDefault();
-                          handleSendMessage();
-                        }
-                      }}
-                      placeholder={
-                        !canSendFreeMessage
-                          ? 'Fora da janela de 24h. Use mensagem template para iniciar ou reabrir.'
-                          : "Shift + Enter para nova linha. Comece com '/' para selecionar uma resposta pronta."
-                      }
-                      rows={1}
-                      className="w-full px-4 py-2 text-sm border border-gray-300 dark:border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 resize-none overflow-y-auto"
-                      style={{ minHeight: '40px', maxHeight: '120px' }}
-                      disabled={sending || !canSendFreeMessage}
-                    />
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <button className="p-2 hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg text-gray-600 dark:text-gray-300">
-                      <Smile className="w-5 h-5" />
-                    </button>
+
+                {/* ── Barra de mensagem ────────────────────────────────── */}
+                <div className="flex-shrink-0 w-full bg-white dark:bg-[#2a2a2a] border-t border-gray-200 dark:border-[#404040] px-3 py-3">
+                  <input ref={fileInputRef} type="file" className="hidden" accept="image/jpeg,image/png,image/webp,audio/ogg,audio/mpeg,video/mp4,application/pdf" onChange={handleFileSelect} />
+                  <input ref={imageInputRef} type="file" className="hidden" accept="image/jpeg,image/png,image/webp" onChange={handleFileSelect} />
+                  <input ref={docInputRef} type="file" className="hidden" accept="application/pdf" onChange={handleFileSelect} />
+                  {attachedMedia && (
+                    <div className="mb-2 p-2 bg-gray-100 dark:bg-[#333] rounded-lg flex items-center gap-2 border border-gray-200 dark:border-[#404040]">
+                      {attachedMedia.type === 'image' && attachedMedia.preview && (
+                        <img src={attachedMedia.preview} alt="" className="w-10 h-10 rounded object-cover" />
+                      )}
+                      {attachedMedia.type === 'audio' && <Mic size={20} className="text-green-500" />}
+                      {(attachedMedia.type === 'video' || attachedMedia.type === 'document') && (
+                        <FileText size={20} className="text-blue-500" />
+                      )}
+                      <span className="text-xs text-gray-700 dark:text-gray-300 flex-1 truncate">{attachedMedia.name}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (attachedMedia?.preview) URL.revokeObjectURL(attachedMedia.preview);
+                          setAttachedMedia(null);
+                        }}
+                        className="p-1 rounded text-gray-500 hover:bg-gray-200 dark:hover:bg-[#404040]"
+                        aria-label="Remover anexo"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-0.5 mb-2">
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={() => setShowEmojiPicker((v) => !v)}
+                        className={`p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] transition-colors ${showEmojiPicker ? 'text-[#8CD955]' : 'text-gray-500 dark:text-gray-400'}`}
+                        title="Emoji"
+                      >
+                        <Smile className="w-4 h-4" />
+                      </button>
+                      {showEmojiPicker && (
+                        <EmojiPicker
+                          onSelect={(emoji) => {
+                            setMessageText((t) => t + emoji);
+                            textareaRef.current?.focus();
+                          }}
+                          onClose={() => setShowEmojiPicker(false)}
+                        />
+                      )}
+                    </div>
+
                     <button
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
                       disabled={uploading || selectedChannel?.type !== 'whatsapp_official' || !canSendFreeMessage}
-                      className="p-2 hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg text-gray-600 dark:text-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
-                      title="Anexar imagem, áudio, vídeo ou PDF"
+                      className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-50"
+                      title="Anexar"
                     >
-                      {uploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Paperclip className="w-5 h-5" />}
+                      {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Paperclip className="w-4 h-4" />}
                     </button>
-                    <button className="p-2 hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg text-gray-600 dark:text-gray-300">
-                      <Mic className="w-5 h-5" />
-                    </button>
-                    <button className="p-2 hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg text-gray-600 dark:text-gray-300">
-                      <FileText className="w-5 h-5" />
-                    </button>
-                    <button className="p-2 hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg text-gray-600 dark:text-gray-300">
-                      <MessageSquare className="w-5 h-5" />
+
+                    {/* Microfone / Parar gravação */}
+                    {isRecording ? (
+                      <>
+                        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/50">
+                          <div className="flex items-end gap-0.5 h-5" aria-hidden>
+                            {recordingLevels.map((level, i) => (
+                              <div
+                                key={i}
+                                className="w-1 min-h-[4px] rounded-full bg-red-500 dark:bg-red-400 transition-all duration-75"
+                                style={{ height: `${Math.max(4, level * 20)}px` }}
+                              />
+                            ))}
+                          </div>
+                          <span className="text-sm text-red-600 dark:text-red-400 font-medium tabular-nums">
+                            {String(Math.floor(recordingSeconds / 60)).padStart(2, '0')}:{String(recordingSeconds % 60).padStart(2, '0')}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={stopRecording}
+                          disabled={uploading}
+                          className="flex items-center gap-1 px-2 py-1.5 rounded-lg bg-red-500 hover:bg-red-600 text-white text-xs font-medium disabled:opacity-50"
+                          title="Parar gravação"
+                        >
+                          <Square className="w-3.5 h-3.5" fill="currentColor" />
+                          Parar
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={startRecording}
+                        disabled={uploading || selectedChannel?.type !== 'whatsapp_official' || !canSendFreeMessage}
+                        className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-50"
+                        title="Gravar áudio"
+                      >
+                        <Mic className="w-4 h-4" />
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => docInputRef.current?.click()}
+                      disabled={uploading || selectedChannel?.type !== 'whatsapp_official' || !canSendFreeMessage}
+                      className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-50"
+                      title="Documento (PDF)"
+                    >
+                      <FileText className="w-4 h-4" />
                     </button>
                     <button
-                      className="px-4 py-2 text-sm font-medium text-white rounded-lg flex items-center gap-2"
-                      style={{ backgroundColor: '#8CD955' }}
+                      type="button"
+                      onClick={() => imageInputRef.current?.click()}
+                      disabled={uploading || selectedChannel?.type !== 'whatsapp_official' || !canSendFreeMessage}
+                      className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-50"
+                      title="Imagem"
                     >
-                      <Bot className="w-4 h-4" />
-                      Assistente de IA
-                    </button>
-                    <button
-                      onClick={handleSendMessage}
-                      disabled={(!messageText.trim() && !attachedMedia) || sending || !canSendFreeMessage}
-                      title={!canSendFreeMessage ? 'Fora da janela de 24h. Use mensagem template.' : undefined}
-                      className="px-4 py-2 text-sm font-medium text-white rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                      style={{ backgroundColor: '#8CD955' }}
-                    >
-                      <Send className="w-4 h-4" />
-                      Enviar
+                      <ImageIcon className="w-4 h-4" />
                     </button>
                   </div>
+                  <div className="flex items-end gap-2">
+                    <div className="flex-1 min-w-0">
+                      <textarea
+                        ref={textareaRef}
+                        value={messageText}
+                        onChange={(e) => {
+                          setMessageText(e.target.value);
+                          if (textareaRef.current) {
+                            textareaRef.current.style.height = 'auto';
+                            textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 160)}px`;
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            handleSendMessage();
+                          }
+                        }}
+                        placeholder={
+                          !canSendFreeMessage
+                            ? 'Fora da janela 24h. Use template.'
+                            : "Digite a mensagem. Shift+Enter = nova linha. '/' = resposta pronta."
+                        }
+                        rows={2}
+                        className="w-full px-3 py-2.5 text-sm border border-gray-300 dark:border-[#404040] rounded-xl bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 resize-none overflow-y-auto focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] focus:outline-none"
+                        style={{ minHeight: '44px', maxHeight: '160px' }}
+                        disabled={sending || !canSendFreeMessage}
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1.5 flex-shrink-0">
+                      <button
+                        type="button"
+                        onClick={handleSpellCheck}
+                        disabled={spellChecking || !messageText.trim()}
+                        title="Corretor ortográfico"
+                        className="px-3 py-2 text-xs font-medium text-white rounded-lg flex items-center justify-center gap-1.5 disabled:opacity-50 min-w-[44px] h-[38px]"
+                        style={{ backgroundColor: '#8CD955' }}
+                      >
+                        {spellChecking ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bot className="w-4 h-4" />}
+                      </button>
+                      <button
+                        onClick={handleSendMessage}
+                        disabled={(!messageText.trim() && !attachedMedia) || sending || !canSendFreeMessage}
+                        title={!canSendFreeMessage ? 'Fora da janela 24h' : 'Enviar'}
+                        className="px-3 py-2 text-white rounded-lg flex items-center justify-center gap-1.5 disabled:opacity-50 min-w-[44px] h-[38px]"
+                        style={{ backgroundColor: '#8CD955' }}
+                      >
+                        {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+                  {spellCheckBadge && (
+                    <p className="mt-1.5 text-[11px] text-center text-gray-500 dark:text-gray-400">
+                      {spellCheckBadge === 'fixed' ? '✓ Texto corrigido' : '✓ Sem erros'}
+                    </p>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="flex-1 flex items-center justify-center">
+                <div className="text-center">
+                  <MessageSquare className="w-16 h-16 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
+                  <p className="text-gray-600 dark:text-gray-400">Selecione uma conversa para começar</p>
                 </div>
               </div>
-            </>
-          ) : (
-            <div className="flex-1 flex items-center justify-center">
-              <div className="text-center">
-                <MessageSquare className="w-16 h-16 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
-                <p className="text-gray-600 dark:text-gray-400">Selecione uma conversa para começar</p>
-              </div>
-            </div>
+            )}
+          </div>
           )}
         </div>
       </div>
+
+      {/* ── Modal Salvar / Editar Contato ──────────────────────────────────── */}
+      {showContactModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6">
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                {convContact ? 'Editar Contato' : 'Salvar Contato'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowContactModal(false)}
+                className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] text-gray-500"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Nome
+                </label>
+                <input
+                  type="text"
+                  value={contactForm.name}
+                  onChange={(e) => setContactForm((f) => ({ ...f, name: e.target.value }))}
+                  placeholder="Nome do contato"
+                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Telefone
+                </label>
+                <input
+                  type="text"
+                  value={contactForm.phone}
+                  onChange={(e) => setContactForm((f) => ({ ...f, phone: e.target.value }))}
+                  placeholder="5511999999999"
+                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Horário de Atendimento
+                </label>
+                <select
+                  value={contactForm.horario}
+                  onChange={(e) => setContactForm((f) => ({ ...f, horario: e.target.value }))}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] focus:outline-none"
+                >
+                  <option value="">Selecione um horário</option>
+                  <option value="Manhã (08h–12h)">Manhã (08h–12h)</option>
+                  <option value="Tarde (12h–18h)">Tarde (12h–18h)</option>
+                  <option value="Noite (18h–22h)">Noite (18h–22h)</option>
+                  <option value="Comercial (08h–18h)">Comercial (08h–18h)</option>
+                  <option value="Qualquer horário">Qualquer horário</option>
+                </select>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Melhor horário para entrar em contato com este número
+                </p>
+              </div>
+
+              {contactSaveError && (
+                <div className="flex items-center gap-2 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                  <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
+                  <p className="text-sm text-red-700 dark:text-red-300">{contactSaveError}</p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <button
+                type="button"
+                onClick={() => setShowContactModal(false)}
+                className="flex-1 px-4 py-2.5 text-sm font-medium border border-gray-300 dark:border-[#404040] rounded-lg text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333] transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveContact}
+                disabled={savingContact}
+                className="flex-1 px-4 py-2.5 text-sm font-medium text-white rounded-lg flex items-center justify-center gap-2 disabled:opacity-60 transition-colors"
+                style={{ backgroundColor: '#8CD955' }}
+              >
+                {savingContact ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <UserCheck className="w-4 h-4" />
+                )}
+                {savingContact ? 'Salvando...' : 'Salvar Contato'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </Layout>
   );
 }

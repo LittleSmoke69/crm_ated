@@ -37,17 +37,19 @@ const LoginPage = () => {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const setSessionArtifacts = (userId: string, userEmail: string) => {
+  const setSessionArtifacts = (userId: string, userEmail: string, status?: string | null) => {
     try {
       // Limpa possíveis restos de sessão anterior
       sessionStorage.removeItem('user_id');
       sessionStorage.removeItem('profile_id');
       sessionStorage.removeItem('profile_email');
+      sessionStorage.removeItem('profile_status');
 
       // Sessão (preferencial)
       sessionStorage.setItem('user_id', userId);
       sessionStorage.setItem('profile_id', userId);
       sessionStorage.setItem('profile_email', userEmail);
+      if (status != null && status !== '') sessionStorage.setItem('profile_status', status);
 
       // Compatibilidade (o dashboard ainda faz fallback para localStorage)
       localStorage.setItem('profile_id', userId);
@@ -98,7 +100,7 @@ const LoginPage = () => {
         return;
       }
 
-      setSessionArtifacts(userId, userEmail);
+      setSessionArtifacts(userId, userEmail, status);
 
       // Redireciona para a rota da role do usuário (conforme status no banco)
       const landingRoute = getLandingRouteByStatus(status);
