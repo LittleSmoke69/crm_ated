@@ -15,8 +15,8 @@
 const CRON_SECRET = process.env.TRANSFER_RESOLVE_CRON_SECRET?.trim();
 const SITE_URL = process.env.URL || process.env.DEPLOY_PRIME_URL || '';
 
-/** Logs processados por requisição (pacote). 1 = menor tempo por request, menos risco de 504. */
-const MAX_LOGS_PER_PACOTE = 1;
+/** Entries (leads) processadas por requisição. 2–3 = poucas chamadas ao CRM por request, resposta em segundos. */
+const MAX_ENTRIES_PER_PACOTE = 2;
 /** Limite de pacotes por execução do cron (evita loop infinito). */
 const MAX_PACOTES = 100;
 
@@ -59,7 +59,7 @@ export const handler = async () => {
       const res = await fetch(endpoint, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ max_logs: MAX_LOGS_PER_PACOTE }),
+        body: JSON.stringify({ max_entries: MAX_ENTRIES_PER_PACOTE }),
       });
       const text = await res.text();
       let json: { success?: boolean; data?: PacoteData; error?: string } = {};

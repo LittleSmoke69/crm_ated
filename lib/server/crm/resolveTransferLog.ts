@@ -80,13 +80,17 @@ export type ResolveResult = {
   message: string;
   /** Lista de leads convertidos (vinculados) com consultor e banca para relatório */
   converted: ConvertedLead[];
+  /** Quando maxEntries é usado: ainda há entries pendentes neste log */
+  hasMorePendingInLog?: boolean;
 };
 
 export async function resolveOneTransferLog(
   ctx: ResolveContext,
-  logId: string
+  logId: string,
+  options?: { maxEntries?: number }
 ): Promise<ResolveResult> {
   const { bancaId, crmBaseUrl } = ctx;
+  const maxEntries = options?.maxEntries != null && options.maxEntries >= 1 ? options.maxEntries : undefined;
 
   const { data: log, error: logError } = await supabaseServiceRole
     .from('admin_lead_transfer_logs')
@@ -108,10 +112,11 @@ export async function resolveOneTransferLog(
     .from('admin_lead_transfer_entries')
     .select('id, lead_id, target_consultant_email')
     .eq('transfer_log_id', logId)
-    .eq('banca_id', bancaId);
+    .eq('banca_id', bancaId)
+    .eq('resolution_status', 'pending');
 
   if (entriesError || !entries?.length) {
-    return { resolved: 0, vinculado: 0, disponivel_retransferencia: 0, message: 'Nenhum lead nesta transferência.', converted: [] };
+    return { resolved: 0, vinculado: 0, disponivel_retransferencia: 0, message: 'Nenhum lead pendente nesta transferência.', converted: [] };
   }
 
   if (!crmBaseUrl) {
@@ -123,12 +128,17 @@ export async function resolveOneTransferLog(
     return { resolved: 0, vinculado: 0, disponivel_retransferencia: 0, message: 'Data de transferência inválida.', converted: [] };
   }
 
+  const entriesToProcess = maxEntries != null
+    ? (entries as Array<{ id: string; lead_id: string | number; target_consultant_email?: string | null }>).slice(0, maxEntries)
+    : (entries as Array<{ id: string; lead_id: string | number; target_consultant_email?: string | null }>);
+  const hasMorePendingInLog = maxEntries != null && entries.length > maxEntries;
+
   const client = createCrmRedistributionClient(crmBaseUrl);
   let vinculado = 0;
   let disponivel = 0;
   const converted: ConvertedLead[] = [];
 
-  for (const entry of entries as Array<{ id: string; lead_id: string | number; target_consultant_email?: string | null }>) {
+  for (const entry of entriesToProcess) {
     const leadId = String(entry.lead_id ?? '');
     if (!leadId) {
       disponivel++;
@@ -172,10 +182,11 @@ export async function resolveOneTransferLog(
   }
 
   return {
-    resolved: entries.length,
+    resolved: entriesToProcess.length,
     vinculado,
     disponivel_retransferencia: disponivel,
     message: `${vinculado} vinculado(s), ${disponivel} disponível(is) para repasse.`,
     converted,
+    hasMorePendingInLog: maxEntries != null ? hasMorePendingInLog : undefined,
   };
 }
