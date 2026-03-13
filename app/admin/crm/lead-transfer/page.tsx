@@ -550,6 +550,8 @@ export default function AdminLeadTransferPage() {
   const [transferFromSolicitationSourceEmail, setTransferFromSolicitationSourceEmail] = useState<string | null>(null);
   /** E-mail do consultor destino (recebedor) ao redirecionar da solicitação — preenchido quando consultants carregar */
   const [transferFromSolicitationTargetEmail, setTransferFromSolicitationTargetEmail] = useState<string | null>(null);
+  /** Nome do destinatário vindo da solicitação (para exibir no passo quando não estiver na lista da banca) */
+  const transferFromSolicitationTargetNameRef = useRef<string | null>(null);
   /** Banca da solicitação ao redirecionar (para garantir seleção mesmo se lista de bancas carregar depois) */
   const transferFromSolicitationBancaIdRef = useRef<string | null>(null);
   /** Evita que o useEffect(bancaId) apague o consultor destino ao vir da solicitação */
@@ -636,7 +638,8 @@ export default function AdminLeadTransferPage() {
     if (!bancaId || !userId) return;
     setLoadingConsultants(true);
     try {
-      const res = await fetch(`/api/admin/crm/consultants?banca_id=${encodeURIComponent(bancaId)}&verify_crm=1`, {
+      // Sem verify_crm: lista todos os usuários da banca (consultor destino no step 5). A transferência é feita normalmente; se a API externa retornar erro, a mensagem é exibida na notificação.
+      const res = await fetch(`/api/admin/crm/consultants?banca_id=${encodeURIComponent(bancaId)}`, {
         headers: headers(),
       });
       const json = await res.json();
@@ -700,15 +703,20 @@ export default function AdminLeadTransferPage() {
     }
   }, [activeTab, bancaId, consultants, transferFromSolicitationSourceEmail]);
 
-  /** Ao redirecionar da solicitação: preenche consultor destino (recebedor) quando a lista de consultores da banca carregar */
+  /** Ao redirecionar da solicitação: mantém consultor destino (recebedor) selecionado no passo, mesmo que não esteja na lista da banca */
   useEffect(() => {
-    if (activeTab !== 'transfer' || !transferFromSolicitationTargetEmail || consultants.length === 0) return;
+    if (activeTab !== 'transfer' || !transferFromSolicitationTargetEmail) return;
     const target = transferFromSolicitationTargetEmail.trim().toLowerCase();
-    const found = consultants.find((c) => (c.email ?? '').trim().toLowerCase() === target);
-    if (found) {
-      setTargetEmail((found.email ?? '').trim());
+    if (!target) {
+      setTransferFromSolicitationTargetEmail(null);
+      transferFromSolicitationTargetNameRef.current = null;
+      return;
     }
+    const found = consultants.find((c) => (c.email ?? '').trim().toLowerCase() === target);
+    // Sempre definir targetEmail com o destinatário da solicitação para aparecer selecionado no passo (nome ou e-mail); não exige que esteja na lista
+    setTargetEmail(found ? (found.email ?? '').trim() : transferFromSolicitationTargetEmail.trim());
     setTransferFromSolicitationTargetEmail(null);
+    // Nome ref permanece para exibição no passo (só limpa ao sair do fluxo ou em nova solicitação)
   }, [activeTab, consultants, transferFromSolicitationTargetEmail]);
 
   const loadLeadRequests = useCallback(async () => {
@@ -808,7 +816,8 @@ export default function AdminLeadTransferPage() {
           )
         : null)
       : null;
-    const recebedorEmail = (recebedorConsultant?.email ?? '').trim();
+    // Nome/email do destinatário: da lista da banca se encontrado; senão do próprio pedido (consultor_email), para aparecer selecionado no passo mesmo fora da banca
+    const recebedorEmail = (recebedorConsultant?.email ?? recebedor?.consultor_email ?? '').trim();
 
     transferFromSolicitationBancaIdRef.current = requestBancaId;
     preserveTargetEmailFromSolicitationRef.current = true;
@@ -819,7 +828,12 @@ export default function AdminLeadTransferPage() {
     setDaysInactive('90');
     setTransferFromSolicitationSourceEmail(doadorEmail);
     setTargetEmail(recebedorEmail || '');
-    if (recebedorEmail) setTransferFromSolicitationTargetEmail(recebedorEmail);
+    if (recebedorEmail) {
+      setTransferFromSolicitationTargetEmail(recebedorEmail);
+      transferFromSolicitationTargetNameRef.current = (recebedor?.consultor_name ?? '').trim() || null;
+    } else {
+      transferFromSolicitationTargetNameRef.current = null;
+    }
     setCurrentStep(3);
     setHistoryBancaFromSolicitation({ id: requestBancaId, name: bancaDisplayName });
     setHistoryBancaFilter(requestBancaId);
@@ -5987,7 +6001,7 @@ export default function AdminLeadTransferPage() {
                           >
                             <User className="w-4 h-4 text-gray-500 flex-shrink-0" />
                             <span className="truncate text-gray-800 dark:text-white">
-                              {!bancaId ? 'Selecione a banca' : loadingConsultants ? 'Carregando...' : consultantsForDestino.length === 0 ? 'Nenhum consultor na banca' : targetEmail ? (consultants.find((c) => c.email === targetEmail)?.full_name || targetEmail) : 'Selecionar consultor destino'}
+                              {!bancaId ? 'Selecione a banca' : loadingConsultants ? 'Carregando...' : consultantsForDestino.length === 0 && !targetEmail ? 'Nenhum consultor na banca' : targetEmail ? (consultants.find((c) => c.email === targetEmail)?.full_name || transferFromSolicitationTargetNameRef.current || targetEmail) : 'Selecionar consultor destino'}
                             </span>
                             <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0 ml-auto" />
                           </button>
