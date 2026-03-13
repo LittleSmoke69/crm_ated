@@ -116,7 +116,8 @@ export async function GET(req: NextRequest) {
     const cleanApiKey = apiKey.trim().replace(/\s+/g, '');
     console.log(`${LOG_PREFIX} API key presente (${cleanApiKey.length} chars).`);
 
-    const perPage = 2000;
+    const perPageParam = searchParams.get('per_page');
+    const perPage = perPageParam ? Math.min(5000, Math.max(1, parseInt(perPageParam, 10) || 2000)) : 2000;
     const fromParam = searchParams.get('from');
     const toParam = searchParams.get('to');
     if (!fromParam?.trim() && !toParam?.trim()) {
@@ -293,17 +294,23 @@ export async function GET(req: NextRequest) {
     }
 
     // Modo full: todas as bancas (ou uma só se banca_index for informado, para o front exibir progresso "Banca X de Y").
+    // Com page=N: retorna apenas a página N dessa banca (lote de 500) para carregamento progressivo na tela transferido.
     const bancaIndexParam = searchParams.get('banca_index');
     const requestedBancaIndex = bancaIndexParam !== null && bancaIndexParam !== '' ? parseInt(bancaIndexParam, 10) : null;
     const singleBancaIndex = requestedBancaIndex !== null && !Number.isNaN(requestedBancaIndex) && requestedBancaIndex >= 0 && requestedBancaIndex < listBancas.length
       ? requestedBancaIndex
       : null;
+    const pageParam = searchParams.get('page');
+    const requestedPage = pageParam !== null && pageParam !== '' ? parseInt(pageParam, 10) : null;
+    const batchMode = singleBancaIndex !== null && requestedPage !== null && requestedPage >= 1;
     const listBancasToProcess = singleBancaIndex !== null ? [listBancas[singleBancaIndex]] : listBancas;
     const totalBancasForMeta = listBancas.length;
     const currentBancaIndexForMeta = singleBancaIndex !== null ? singleBancaIndex : null;
 
     const allLeads: any[] = [];
     const maxPages = 1000;
+    let hasMorePagesInBanca = false;
+    let currentPageReturned = 1;
 
     for (const banca of listBancasToProcess) {
       const cleanBancaUrl = normalizeBancaUrl(banca.url);
@@ -314,7 +321,7 @@ export async function GET(req: NextRequest) {
       }
 
       const baseUrl = `${cleanBancaUrl}/api/crm/get-indicateds-by-consultant`;
-      let currentPage = 1;
+      let currentPage = batchMode ? requestedPage! : 1;
       let hasMore = true;
       let bancaTotal = 0;
 
@@ -322,8 +329,8 @@ export async function GET(req: NextRequest) {
         const pageQueryParams = [...queryParams, `page=${currentPage}`];
         const externalApiUrl = `${baseUrl}?${pageQueryParams.join('&')}`;
 
-        if (currentPage === 1) {
-          console.log(`${LOG_PREFIX} Banca ${bancaLabel} | GET page=1 | URL (base): ${baseUrl} | consultant=${consultantEmail} transferred_filter=yes`);
+        if (currentPage === 1 || batchMode) {
+          console.log(`${LOG_PREFIX} Banca ${bancaLabel} | GET page=${currentPage} | URL (base): ${baseUrl} | consultant=${consultantEmail} transferred_filter=yes`);
         }
 
         let response: Response;
@@ -339,7 +346,7 @@ export async function GET(req: NextRequest) {
         }
 
         const contentType = response.headers.get('content-type') ?? '';
-        if (currentPage === 1) {
+        if (currentPage === 1 || batchMode) {
           console.log(`${LOG_PREFIX} Banca ${bancaLabel} | Resposta: status=${response.status} ${response.statusText} content-type=${contentType}`);
         }
 
@@ -386,15 +393,20 @@ export async function GET(req: NextRequest) {
           bancaTotal++;
         }
 
-        if (currentPage === 1 && pageLeads.length > 0) {
+        if ((currentPage === 1 || batchMode) && pageLeads.length > 0) {
           const sample = pageLeads[0];
-          console.log(`${LOG_PREFIX} Banca ${bancaLabel} | Primeira página: ${pageLeads.length} itens | amostra lead: id=${sample?.id} transferred=${sample?.transferred} name=${sample?.name ?? '(vazio)'}`);
+          console.log(`${LOG_PREFIX} Banca ${bancaLabel} | Página ${currentPage}: ${pageLeads.length} itens | amostra lead: id=${sample?.id} transferred=${sample?.transferred} name=${sample?.name ?? '(vazio)'}`);
         }
 
         const pagination = result.pagination || {};
         const lastPage = pagination.last_page ?? 1;
         const currentPageFromApi = pagination.current_page ?? currentPage;
         hasMore = (lastPage > currentPageFromApi) || (pageLeads.length >= perPage && pageLeads.length > 0);
+        if (batchMode) {
+          hasMorePagesInBanca = hasMore;
+          currentPageReturned = currentPage;
+          break;
+        }
         currentPage++;
       }
 
@@ -409,9 +421,10 @@ export async function GET(req: NextRequest) {
 
     // Enriquecimento: buscar dados completos do cliente (nome, telefone, depósitos, apostas, etc.) como na coluna "Com saldo disponível"
     // O CRM pode retornar com transferred_filter=yes apenas id/transferred; busca sem o filtro traz o objeto completo.
+    // Em batchMode (lote de 500) não fazemos esse enriquecimento para evitar múltiplas requisições pesadas; os dados da primeira chamada são suficientes.
     const bancasComTransferidos = [...new Set(transferredOnly.map((l: any) => l._bancaKey).filter(Boolean))] as string[];
     const fullDataByBanca: Record<string, Record<string, any>> = {};
-    if (bancasComTransferidos.length > 0) {
+    if (bancasComTransferidos.length > 0 && !batchMode) {
       const queryParamsFull: string[] = [
         `consultant=${encodeURIComponent(consultantEmail)}`,
         `per_page=${perPage}`,
@@ -556,7 +569,7 @@ export async function GET(req: NextRequest) {
     });
 
     const extraLeads: any[] = [];
-    if (Object.keys(missingByBanca).length > 0) {
+    if (!batchMode && Object.keys(missingByBanca).length > 0) {
       // Cache de dados completos do CRM para o consultor DESTINO (sem filtros de data)
       const destinationLeadDataByBanca: Record<string, Record<string, any>> = {};
       for (const banca of listBancas) {
@@ -872,9 +885,14 @@ export async function GET(req: NextRequest) {
     });
 
     console.log(`${LOG_PREFIX} SUCESSO | Retornando ${formattedLeads.length} leads transferidos.`);
-    const fullMeta = currentBancaIndexForMeta !== null
+    const fullMeta: Record<string, unknown> = currentBancaIndexForMeta !== null
       ? { total_bancas: totalBancasForMeta, current_banca_index: currentBancaIndexForMeta }
       : { total_bancas: totalBancasForMeta };
+    if (batchMode) {
+      fullMeta.has_more_pages_in_banca = hasMorePagesInBanca;
+      fullMeta.current_page = currentPageReturned;
+      fullMeta.batch_size = formattedLeads.length;
+    }
     return successResponse(formattedLeads, { meta: fullMeta });
   } catch (err: any) {
     console.error(`${LOG_PREFIX} Erro não tratado: message=${err?.message} stack=${err?.stack ?? '(sem stack)'}`, err);
