@@ -46,7 +46,7 @@ async function main() {
   }
 
   // Importa depois de setar env, para a function ler URL e CRON_SECRET corretamente
-  const mod = await import('../netlify/functions/transfer-resolve-expired.ts');
+  const mod = await import('../netlify/functions/transfer-resolve-expired');
   const handler = mod.handler;
   if (typeof handler !== 'function') {
     console.error('Erro: handler não encontrado na function.');
@@ -56,10 +56,10 @@ async function main() {
   console.log('Invocando transfer-resolve-expired (como no Netlify)...\n');
   const result = await handler();
   const statusCode = result?.statusCode ?? 500;
-  let body = result?.body;
+  let body: unknown = result?.body;
   if (typeof body === 'string') {
     try {
-      body = JSON.parse(body) as unknown;
+      body = JSON.parse(body);
     } catch {
       // mantém string
     }
