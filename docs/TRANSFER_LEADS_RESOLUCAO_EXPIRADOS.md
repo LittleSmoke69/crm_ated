@@ -69,6 +69,47 @@ curl -X POST "https://seu-dominio.com/api/cron/resolve-expired-transfers" \
 
 Use o mesmo valor definido em `TRANSFER_RESOLVE_CRON_SECRET`.
 
+### Testar com netlify dev
+
+Para rodar o ambiente igual ao da Netlify e disparar a function manualmente:
+
+1. **Variáveis de ambiente**  
+   No `.env` (ou no painel do Netlify se o site estiver linkado), defina:
+   ```env
+   TRANSFER_RESOLVE_CRON_SECRET=seu_segredo
+   ```
+   O `netlify dev` carrega o `.env` automaticamente.
+
+2. **Subir o ambiente**  
+   Em um terminal:
+   ```bash
+   netlify dev
+   ```
+   O site e as functions sobem juntos (ex.: `http://localhost:8888`). A variável `URL` é preenchida com essa base.
+
+3. **Disparar a function manualmente**  
+   Em **outro** terminal (com o `netlify dev` ainda rodando):
+   ```bash
+   netlify functions:invoke transfer-resolve-expired
+   ```
+   A saída mostra o mesmo retorno que a function teria no servidor (status, body com `resumo_por_pacote`, `vinculados`, `banca_name`, etc.).
+
+4. **Ver o log completo**  
+   O body vem em JSON; para formatar:
+   ```bash
+   netlify functions:invoke transfer-resolve-expired | jq .
+   ```
+   (Requer [jq](https://jq.sh/) instalado; sem `jq`, o JSON já vem no stdout.)
+
+5. **Timeout ao invocar**  
+   O `netlify functions:invoke` usa um timeout (ex.: 30s). Se aparecer *"Task timed out after 30.00 seconds"*, a function está processando muitos pacotes/leads. Cada pacote faz várias chamadas ao CRM (uma por lead). Para teste local rápido, use poucas entries por pacote:
+   ```bash
+   TRANSFER_RESOLVE_MAX_ENTRIES=2 netlify functions:invoke transfer-resolve-expired
+   ```
+   A function usa por padrão 3 entries por pacote; com `TRANSFER_RESOLVE_MAX_ENTRIES=2` cada requisição à API termina em segundos e o invoke tende a completar dentro do timeout.
+
+Assim você testa a function no mesmo contexto do Netlify (URL local, env e resposta iguais ao deploy).
+
 ## Fluxo na UI (Admin)
 
 1. **Histórico e conversão**  

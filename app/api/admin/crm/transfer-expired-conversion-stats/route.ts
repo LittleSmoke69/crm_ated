@@ -4,7 +4,6 @@ import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { getAdminBancaId, getAdminAllowedBancaIds } from '@/lib/server/crm/adminLeadTransferContext';
 import { getEffectiveZaplotoId } from '@/lib/tenant-context';
-import { createCrmRedistributionClient } from '@/lib/server/crm/crmRedistributionClient';
 import { normalizeDateParam, dateToStartOfDaySãoPauloISO, dateToEndOfDaySãoPauloISO } from '@/lib/server/crm/transfer-date-utils';
 
 const LOG_PREFIX = '[admin][transfer-expired-conversion-stats]';
@@ -17,84 +16,80 @@ function getExpiredCutoffISO(): string {
   return cutoff.toISOString();
 }
 
-type EntryRow = {
-  lead_id: string;
-  target_consultant_email?: string | null;
-  total_depositado_snapshot?: number | null;
-  total_apostado_snapshot?: number | null;
-  available_withdraw_snapshot?: number | null;
-};
+type EntryRow = { target_consultant_email?: string | null };
+type VinculadoRow = { target_consultant_email?: string | null; banca_id?: string | null };
 
 /**
- * Para uma banca: busca entries dos logs expirados, agrupa por consultor, chama CRM e retorna totais e convertidos por consultor.
+ * Busca em admin_lead_transfer_entries:
+ * - Total de entries por consultor destino (target_consultant_email) = total_transferidos na banca.
+ * - Convertidos = busca explícita com resolution_status = 'vinculado', agrupado por banca e por consultor que realizou a conversão (target_consultant_email).
+ * Retorna totais e convertidos por consultor na banca.
  */
 async function getConversionByConsultant(
   bancaId: string,
-  crmBaseUrl: string,
+  _crmBaseUrl: string,
   logIds: string[]
 ): Promise<{ consultant_email: string; consultant_name: string; total_transferidos: number; convertidos: number }[]> {
   if (logIds.length === 0) return [];
 
   const BATCH = 800;
-  const rawEntries: EntryRow[] = [];
+
+  // 1) Total de entries por consultor (todos os status) — para total_transferidos
+  const allEntries: EntryRow[] = [];
   for (let i = 0; i < logIds.length; i += BATCH) {
     const chunk = logIds.slice(i, i + BATCH);
     const { data: batch, error } = await supabaseServiceRole
       .from('admin_lead_transfer_entries')
-      .select('lead_id, target_consultant_email, total_depositado_snapshot, total_apostado_snapshot, available_withdraw_snapshot')
+      .select('target_consultant_email')
       .in('transfer_log_id', chunk)
       .eq('banca_id', bancaId)
       .limit(50000);
     if (error) return [];
-    rawEntries.push(...(Array.isArray(batch) ? batch : []));
+    allEntries.push(...(Array.isArray(batch) ? batch : []));
   }
 
-  const byConsultant = new Map<string, EntryRow[]>();
-  for (const e of rawEntries) {
+  // 2) Convertidos: busca explícita na tabela com resolution_status = 'vinculado' (quem realizou a conversão = target_consultant_email; banca = banca_id)
+  const vinculadoEntries: VinculadoRow[] = [];
+  for (let i = 0; i < logIds.length; i += BATCH) {
+    const chunk = logIds.slice(i, i + BATCH);
+    const { data: batch, error } = await supabaseServiceRole
+      .from('admin_lead_transfer_entries')
+      .select('target_consultant_email, banca_id')
+      .in('transfer_log_id', chunk)
+      .eq('banca_id', bancaId)
+      .eq('resolution_status', 'vinculado')
+      .limit(50000);
+    if (error) return [];
+    vinculadoEntries.push(...(Array.isArray(batch) ? batch : []));
+  }
+
+  const totalByConsultant = new Map<string, number>();
+  for (const e of allEntries) {
     const email = (e.target_consultant_email ?? '').trim().toLowerCase();
     if (!email) continue;
-    if (!byConsultant.has(email)) byConsultant.set(email, []);
-    byConsultant.get(email)!.push(e);
+    totalByConsultant.set(email, (totalByConsultant.get(email) ?? 0) + 1);
   }
 
-  const client = createCrmRedistributionClient(crmBaseUrl);
-  const results: { consultant_email: string; consultant_name: string; total_transferidos: number; convertidos: number }[] = [];
+  const convertidosByConsultant = new Map<string, number>();
+  for (const e of vinculadoEntries) {
+    const email = (e.target_consultant_email ?? '').trim().toLowerCase();
+    if (!email) continue;
+    convertidosByConsultant.set(email, (convertidosByConsultant.get(email) ?? 0) + 1);
+  }
 
-  for (const [consultantEmail, entries] of byConsultant.entries()) {
-    let convertidos = 0;
-    try {
-      const result = await client.getIndicatedsByConsultant(
-        consultantEmail,
-        3000,
-        1,
-        { transferredFilter: 'yes', sort: 'created_at', direction: 'desc' }
-      );
-      const leads = result.success && Array.isArray(result.data) ? result.data : [];
-      const currentByLeadId = new Map<string, number>();
-      for (const l of leads) {
-        const id = l?.id != null ? String(l.id) : '';
-        if (!id) continue;
-        currentByLeadId.set(id, Number(l.total_depositado ?? 0));
-      }
-      for (const entry of entries) {
-        const leadId = String(entry.lead_id ?? '');
-        const snapDep = entry.total_depositado_snapshot != null ? Number(entry.total_depositado_snapshot) : 0;
-        const curDep = currentByLeadId.get(leadId) ?? 0;
-        if (curDep > snapDep) convertidos++;
-      }
-    } catch (err) {
-      console.warn(`${LOG_PREFIX} CRM failed for ${consultantEmail}:`, err);
-    }
+  const consultantEmails = new Set([...totalByConsultant.keys(), ...convertidosByConsultant.keys()]);
+  const results: { consultant_email: string; consultant_name: string; total_transferidos: number; convertidos: number }[] = [];
+  for (const consultantEmail of consultantEmails) {
     results.push({
       consultant_email: consultantEmail,
       consultant_name: consultantEmail,
-      total_transferidos: entries.length,
-      convertidos,
+      total_transferidos: totalByConsultant.get(consultantEmail) ?? 0,
+      convertidos: convertidosByConsultant.get(consultantEmail) ?? 0,
     });
   }
 
   if (results.length > 0) {
-    const emails = results.map((r) => r.consultant_email);
+    const emails = Array.from(consultantEmails);
     const { data: profiles } = await supabaseServiceRole
       .from('profiles')
       .select('email, full_name')
@@ -117,7 +112,9 @@ async function getConversionByConsultant(
 
 /**
  * GET /api/admin/crm/transfer-expired-conversion-stats
- * Estatísticas de conversão (depósito após transferência) apenas para transferências já expiradas (prazo 10d).
+ * Estatísticas de conversão apenas para transferências já expiradas (prazo 10d).
+ * Fonte: tabela admin_lead_transfer_entries. Convertidos = busca com resolution_status = 'vinculado';
+ * computado por banca (banca_id) e por consultor que realizou a conversão (target_consultant_email).
  * Query: banca_id (opcional), from (YYYY-MM-DD), to (YYYY-MM-DD), source_consultant_email? (consultor doador)
  * - Sem banca_id: retorna by_banca (total_transferidos e convertidos por banca).
  * - Com banca_id: retorna by_consultant (total_transferidos e convertidos por consultor destino).

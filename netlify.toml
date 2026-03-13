@@ -28,9 +28,7 @@
   [functions."transfer-expired-notify"]
     schedule = "0 8 * * *"
   [functions."transfer-resolve-expired"]
-    schedule = "0 * * * *"
-    # Timeout em segundos (máx. 26 no Netlify). Permite esperar a resposta da API que processa até 5 logs por run.
-    timeout = 26
+    schedule = "*/10 * * * *" # A cada 10 minutos
   # [functions."maturation-tick"]
   #   schedule = "*/1 * * * *"
   # [functions."maturation-scheduler"]
