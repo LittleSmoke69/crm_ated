@@ -97,8 +97,9 @@ export async function POST(req: NextRequest) {
       .eq('id', userId)
       .single();
 
-    const isAdmin = profile?.status === 'super_admin' || profile?.status === 'admin';
-    if (!isAdmin && profile?.zaploto_id !== config.zaploto_id) {
+    const status = String(profile?.status || '').toLowerCase();
+    const isAdminOrSuporte = status === 'super_admin' || status === 'admin' || status === 'suporte';
+    if (!isAdminOrSuporte && profile?.zaploto_id !== config.zaploto_id) {
       return errorResponse('Acesso negado a esta configuração', 403);
     }
 

@@ -41,15 +41,15 @@ export async function POST(req: NextRequest) {
       return errorResponse('Instância não encontrada', 404);
     }
 
-    // Validação multi-tenant: o usuário deve ser o dono da instância ou ser admin
+    // Validação multi-tenant: dono da instância ou admin/super_admin/suporte
     const { data: profile } = await supabaseServiceRole
       .from('profiles')
       .select('status')
       .eq('id', userId)
       .single();
 
-    const isAdmin = profile?.status === 'admin';
-    if (!isAdmin && instance.user_id !== userId) {
+    const canSend = profile?.status === 'admin' || profile?.status === 'super_admin' || profile?.status === 'suporte';
+    if (!canSend && instance.user_id !== userId) {
       return errorResponse('Acesso negado a esta instância.', 403);
     }
 

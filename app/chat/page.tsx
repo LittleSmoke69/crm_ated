@@ -29,6 +29,8 @@ import {
   ChevronUp,
   ChevronLeft,
   PanelLeft,
+  PanelRightClose,
+  PanelRightOpen,
   BookUser,
   Play,
   Pause,
@@ -508,6 +510,7 @@ export default function ChatPage() {
   const [activeView, setActiveView] = useState<ActiveView>('chat');
   const [isMobile, setIsMobile] = useState(false);
   const [chatSidebarOpen, setChatSidebarOpen] = useState(false);
+  const [conversationsListHidden, setConversationsListHidden] = useState(false);
 
   // Contatos
   // undefined = não verificado ainda; null = não existe; ChatContact = existe
@@ -1616,8 +1619,8 @@ export default function ChatPage() {
           </div>
           )}
 
-          {/* ── Painel Central (lista) — botão "Menu" quando coluna fechada ── */}
-          {activeView === 'contacts' ? (
+          {/* ── Painel Central (lista) — ocultável com botão no header da conversa ── */}
+          {!(conversationsListHidden && selectedConversationId) && (activeView === 'contacts' ? (
             /* Vista Contatos */
             <div className="min-w-0 flex-1 md:w-80 md:flex-shrink-0 overflow-hidden bg-white dark:bg-[#2a2a2a] border-r border-gray-200 dark:border-[#404040] flex flex-col">
               <div className="flex-shrink-0 p-3 border-b border-gray-200 dark:border-[#404040] flex items-center gap-2">
@@ -1896,7 +1899,7 @@ export default function ChatPage() {
                 )}
               </div>
             </div>
-          )}
+          ))}
           </>
           )}
 
@@ -1905,9 +1908,9 @@ export default function ChatPage() {
           <div className="flex-1 min-h-0 overflow-hidden flex flex-col bg-gray-50 dark:bg-[#1e1e1e] min-w-0">
             {selectedConversationId && selectedConversation ? (
               <>
-                {/* Header da conversa — compacto */}
+                {/* Header da conversa — compacto; etiquetas e ações na mesma linha */}
                 <div className="flex-shrink-0 bg-white dark:bg-[#2a2a2a] border-b border-gray-200 dark:border-[#404040]">
-                  <div className="px-3 py-2 flex items-center gap-2 min-w-0">
+                  <div className="px-3 py-2 flex items-center gap-2 min-w-0 flex-wrap">
                     {isMobile && (
                       <button
                         type="button"
@@ -1916,6 +1919,22 @@ export default function ChatPage() {
                         aria-label="Voltar para lista"
                       >
                         <ChevronLeft className="w-5 h-5" />
+                      </button>
+                    )}
+                    {/* Botão ocultar/mostrar lista de conversas */}
+                    {!isMobile && (
+                      <button
+                        type="button"
+                        onClick={() => setConversationsListHidden((v) => !v)}
+                        className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] text-gray-600 dark:text-gray-400 flex-shrink-0"
+                        title={conversationsListHidden ? 'Mostrar lista de conversas' : 'Ocultar lista de conversas'}
+                        aria-label={conversationsListHidden ? 'Mostrar conversas' : 'Ocultar conversas'}
+                      >
+                        {conversationsListHidden ? (
+                          <PanelRightOpen className="w-5 h-5" />
+                        ) : (
+                          <PanelRightClose className="w-5 h-5" />
+                        )}
                       </button>
                     )}
                     <div
@@ -1968,8 +1987,6 @@ export default function ChatPage() {
                         </span>
                       </div>
                     </div>
-                  </div>
-                  <div className="px-3 pb-2 flex items-center gap-1.5 flex-wrap">
                     {(userStatus === 'suporte' || userStatus === 'admin' || userStatus === 'super_admin') && (
                       <div ref={tagsPopoverRef} className="relative">
                         <button
