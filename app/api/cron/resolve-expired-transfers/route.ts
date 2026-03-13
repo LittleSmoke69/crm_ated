@@ -4,8 +4,8 @@
  * Formação automática: resolve transferências expiradas (entries com resolution_status = 'pending').
  * Deve ser chamado por um cron a cada 1 hora (ex.: Netlify scheduled function com schedule = "0 * * * *").
  *
- * Para evitar timeout (ex.: 504 Inactivity no Netlify), processa no máximo max_logs por execução.
- * Body opcional: { max_logs?: number } — default 5. Próximas execuções do cron processarão o restante.
+ * Para evitar timeout (504), use max_entries (ex.: 2–3): processa poucas entries por request.
+ * Body: { max_entries?: number } (cron) ou { max_logs?: number }. Resposta inclui remaining_logs.
  *
  * Requer header: X-Cron-Secret = process.env.TRANSFER_RESOLVE_CRON_SECRET
  */
@@ -16,8 +16,9 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { resolveOneTransferLog, isTransferExpired, type ConvertedLead } from '@/lib/server/crm/resolveTransferLog';
 
 const DEFAULT_DEADLINE_DAYS = 10;
-/** Máximo de logs processados por execução para evitar timeout (504) em ambientes com limite de tempo (ex.: Netlify). */
 const DEFAULT_MAX_LOGS_PER_RUN = 5;
+/** Quando setado, processa no máximo N entries (do primeiro log pendente) por request — resposta rápida, evita 504. */
+const DEFAULT_MAX_ENTRIES_PER_RUN = 3;
 
 export async function POST(req: NextRequest) {
   const secret = req.headers.get('x-cron-secret')?.trim() || '';
@@ -36,12 +37,17 @@ export async function POST(req: NextRequest) {
   }
 
   let maxLogs = DEFAULT_MAX_LOGS_PER_RUN;
+  let maxEntries: number | undefined;
   try {
     const body = req.headers.get('content-type')?.toLowerCase().includes('application/json')
       ? await req.json().catch(() => ({}))
       : {};
-    if (typeof (body as { max_logs?: number }).max_logs === 'number' && (body as { max_logs: number }).max_logs >= 1) {
-      maxLogs = Math.min(100, Math.floor((body as { max_logs: number }).max_logs));
+    const b = body as { max_logs?: number; max_entries?: number };
+    if (typeof b.max_entries === 'number' && b.max_entries >= 1) {
+      maxEntries = Math.min(50, Math.floor(b.max_entries));
+    }
+    if (typeof b.max_logs === 'number' && b.max_logs >= 1 && maxEntries == null) {
+      maxLogs = Math.min(100, Math.floor(b.max_logs));
     }
   } catch {
     // usa default
@@ -54,14 +60,14 @@ export async function POST(req: NextRequest) {
       .order('created_at', { ascending: false });
 
     if (logsError || !logs?.length) {
-      return successResponse({ results: [], total_resolved: 0, total_vinculado: 0, total_disponivel: 0, message: 'Nenhum log.' });
+      return successResponse({ results: [], total_resolved: 0, total_vinculado: 0, total_disponivel: 0, remaining_logs: 0, message: 'Nenhum log.' });
     }
 
     const expired = (logs as { id: string; banca_id: string; created_at: string; deadline_days?: number | null }[]).filter((log) =>
       isTransferExpired(log.created_at, log.deadline_days ?? DEFAULT_DEADLINE_DAYS)
     );
     if (expired.length === 0) {
-      return successResponse({ results: [], total_resolved: 0, total_vinculado: 0, total_disponivel: 0, message: 'Nenhuma transferência expirada.' });
+      return successResponse({ results: [], total_resolved: 0, total_vinculado: 0, total_disponivel: 0, remaining_logs: 0, message: 'Nenhuma transferência expirada.' });
     }
 
     const expiredIds = expired.map((l) => l.id);
@@ -75,12 +81,11 @@ export async function POST(req: NextRequest) {
     (pendingRows ?? []).forEach((r: { transfer_log_id: string }) => logsWithPending.add(r.transfer_log_id));
     const toResolveFull = expired.filter((log) => logsWithPending.has(log.id));
     if (toResolveFull.length === 0) {
-      return successResponse({ results: [], total_resolved: 0, total_vinculado: 0, total_disponivel: 0, message: 'Nenhuma transferência expirada com leads pendentes.' });
+      return successResponse({ results: [], total_resolved: 0, total_vinculado: 0, total_disponivel: 0, remaining_logs: 0, message: 'Nenhuma transferência expirada com leads pendentes.' });
     }
 
-    const toResolve = toResolveFull.slice(0, maxLogs);
-    const remainingCount = toResolveFull.length - toResolve.length;
-
+    const useMaxEntries = maxEntries != null;
+    const toResolve = useMaxEntries ? toResolveFull.slice(0, 1) : toResolveFull.slice(0, maxLogs);
     const bancaIds = [...new Set(toResolve.map((l) => l.banca_id))];
     const { data: bancas } = await supabaseServiceRole.from('crm_bancas').select('id, url').in('id', bancaIds);
     const crmUrlByBancaId = new Map<string, string>();
@@ -94,10 +99,16 @@ export async function POST(req: NextRequest) {
     let total_resolved = 0;
     let total_vinculado = 0;
     let total_disponivel = 0;
+    let remainingCount: number;
 
-    for (const log of toResolve) {
+    if (useMaxEntries && toResolve.length > 0) {
+      const log = toResolve[0];
       const crmBaseUrl = crmUrlByBancaId.get(log.banca_id) ?? null;
-      const result = await resolveOneTransferLog({ bancaId: log.banca_id, crmBaseUrl }, log.id);
+      const result = await resolveOneTransferLog(
+        { bancaId: log.banca_id, crmBaseUrl },
+        log.id,
+        { maxEntries: maxEntries ?? DEFAULT_MAX_ENTRIES_PER_RUN }
+      );
       results.push({
         log_id: log.id,
         banca_id: log.banca_id,
@@ -106,12 +117,29 @@ export async function POST(req: NextRequest) {
         disponivel_retransferencia: result.disponivel_retransferencia,
         message: result.message,
       });
-      total_resolved += result.resolved;
-      total_vinculado += result.vinculado;
-      total_disponivel += result.disponivel_retransferencia;
-      if (result.converted?.length) {
-        allConverted.push(...result.converted);
+      total_resolved = result.resolved;
+      total_vinculado = result.vinculado;
+      total_disponivel = result.disponivel_retransferencia;
+      if (result.converted?.length) allConverted.push(...result.converted);
+      remainingCount = result.hasMorePendingInLog ? toResolveFull.length : Math.max(0, toResolveFull.length - 1);
+    } else {
+      for (const log of toResolve) {
+        const crmBaseUrl = crmUrlByBancaId.get(log.banca_id) ?? null;
+        const result = await resolveOneTransferLog({ bancaId: log.banca_id, crmBaseUrl }, log.id);
+        results.push({
+          log_id: log.id,
+          banca_id: log.banca_id,
+          resolved: result.resolved,
+          vinculado: result.vinculado,
+          disponivel_retransferencia: result.disponivel_retransferencia,
+          message: result.message,
+        });
+        total_resolved += result.resolved;
+        total_vinculado += result.vinculado;
+        total_disponivel += result.disponivel_retransferencia;
+        if (result.converted?.length) allConverted.push(...result.converted);
       }
+      remainingCount = toResolveFull.length - toResolve.length;
     }
 
     if (allConverted.length > 0) {
