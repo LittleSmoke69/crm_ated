@@ -12,7 +12,7 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 const CHAT_MEDIA_BUCKET = 'chat-media';
 
 const ALLOWED_IMAGE = ['image/jpeg', 'image/png', 'image/webp'] as const;
-const ALLOWED_AUDIO = ['audio/ogg', 'audio/mpeg'] as const;
+const ALLOWED_AUDIO = ['audio/ogg', 'audio/mpeg', 'audio/webm', 'audio/mp4', 'audio/m4a', 'audio/x-m4a'] as const;
 const ALLOWED_VIDEO = ['video/mp4'] as const;
 const ALLOWED_DOCUMENT = ['application/pdf'] as const;
 
@@ -41,9 +41,20 @@ function getMaxSize(mediaType: 'image' | 'audio' | 'video' | 'document'): number
 }
 
 export async function POST(req: NextRequest) {
+  let userId: string | undefined;
   try {
-    const { userId } = await requireAuth(req);
+    const auth = await requireAuth(req);
+    userId = auth.userId;
+  } catch (err: any) {
+    const msg = err?.message ?? 'Não autenticado';
+    if (msg.includes('autenticado') || msg.includes('inválido')) {
+      return errorResponse(msg, 401);
+    }
+    console.error('[upload-media] requireAuth:', msg);
+    return errorResponse('Não autenticado', 401);
+  }
 
+  try {
     const formData = await req.formData().catch(() => null);
     if (!formData) return errorResponse('FormData inválido', 400);
 
@@ -52,7 +63,8 @@ export async function POST(req: NextRequest) {
     if (!file || !file.size) return errorResponse('Arquivo obrigatório', 400);
     if (!config_id || typeof config_id !== 'string') return errorResponse('config_id obrigatório', 400);
 
-    const mimeType = file.type || 'application/octet-stream';
+    const rawType = file.type || 'application/octet-stream';
+    const mimeType = rawType.split(';')[0].trim().toLowerCase();
     const mediaType = inferMediaType(mimeType);
     const maxSize = getMaxSize(mediaType);
     if (file.size > maxSize) {
@@ -66,7 +78,7 @@ export async function POST(req: NextRequest) {
       document: ALLOWED_DOCUMENT,
     };
     const allowed = allowedByType[mediaType];
-    if (!allowed?.includes(mimeType.toLowerCase())) {
+    if (!allowed?.includes(mimeType)) {
       return errorResponse(`Tipo de arquivo não permitido para ${mediaType}: ${mimeType}`, 400);
     }
 
@@ -100,8 +112,8 @@ export async function POST(req: NextRequest) {
       .upload(storagePath, buffer, { contentType: mimeType, upsert: true });
 
     if (uploadError) {
-      console.error('[Zaploto Chat] upload-media storage error:', uploadError.message);
-      return errorResponse(`Falha no upload: ${uploadError.message}`, 500);
+      console.error('[Zaploto Chat] upload-media storage error:', uploadError.message, 'path:', storagePath);
+      return errorResponse(`Falha no upload. Verifique permissões do bucket e tamanho do arquivo.`, 500);
     }
 
     const { data: urlData } = supabaseServiceRole.storage
@@ -113,7 +125,8 @@ export async function POST(req: NextRequest) {
       media_type: mediaType,
       mime_type: mimeType,
     });
-  } catch (err) {
+  } catch (err: any) {
+    console.error('[Zaploto Chat] upload-media exception:', err?.message ?? err);
     return serverErrorResponse(err as Error);
   }
 }

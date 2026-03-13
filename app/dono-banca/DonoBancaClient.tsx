@@ -104,6 +104,10 @@ interface DonoBancaClientProps {
   serverError?: string;
   userStatus?: string | null;
   isAdminOrSuperAdmin?: boolean;
+  /** Cargo com status dono_banca, admin/super_admin ou permissão sidebar gestao_banca */
+  canAccessDonoBanca?: boolean;
+  /** Deve exibir seletor de banca (admin/super ou cargo custom com gestao_banca) */
+  canSelectBanca?: boolean;
 }
 
 export default function DonoBancaHierarquia({ 
@@ -112,14 +116,20 @@ export default function DonoBancaHierarquia({
   authError,
   serverError,
   userStatus: serverUserStatus,
-  isAdminOrSuperAdmin = false
+  isAdminOrSuperAdmin = false,
+  canAccessDonoBanca = false,
+  canSelectBanca = false
 }: DonoBancaClientProps) {
   const { checking: authChecking, userId: clientUserId } = useRequireAuth();
   const userId = serverUserId || clientUserId;
   const checking = serverUserId ? false : authChecking;
+
+  const showBancaSelector = isAdminOrSuperAdmin || canSelectBanca;
   
   const [loading, setLoading] = useState(false);
-  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(authError ? false : (initialData && !isAdminOrSuperAdmin ? true : null));
+  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(
+    authError ? false : !canAccessDonoBanca ? false : (initialData && !showBancaSelector ? true : null)
+  );
   const [gerentes, setGerentes] = useState<Gerente[]>(initialData?.gerentes || []);
   const [externalMetrics, setExternalMetrics] = useState<ExternalMetrics | null>(initialData?.externalMetrics || null);
   const [externalMetricsError, setExternalMetricsError] = useState<string | null>(initialData?.externalMetricsError || null);
@@ -161,9 +171,9 @@ export default function DonoBancaHierarquia({
 
   const [isFirstRender, setIsFirstRender] = useState(true);
 
-  // Carrega lista de bancas para super_admin/admin
+  // Carrega lista de bancas para super_admin/admin ou cargo com permissão sidebar gestao_banca
   useEffect(() => {
-    if (!userId || !isAdminOrSuperAdmin) return;
+    if (!userId || !showBancaSelector) return;
     let cancelled = false;
     setBancasLoading(true);
     fetch('/api/crm/bancas', { headers: { 'X-User-Id': userId } })
@@ -178,15 +188,15 @@ export default function DonoBancaHierarquia({
       })
       .finally(() => { if (!cancelled) setBancasLoading(false); });
     return () => { cancelled = true; };
-  }, [userId, isAdminOrSuperAdmin]);
+  }, [userId, showBancaSelector]);
 
   useEffect(() => {
     if (!userId) return;
     
-    // super_admin/admin: só busca quando tiver banca selecionada
-    if (isAdminOrSuperAdmin) {
+    // super_admin/admin ou cargo com gestao_banca: só busca quando tiver banca selecionada
+    if (showBancaSelector) {
       if (!selectedBancaId) {
-        setIsAuthorized(null);
+        setIsAuthorized(canAccessDonoBanca ? null : false);
         return;
       }
       setIsFirstRender(false);
@@ -215,7 +225,7 @@ export default function DonoBancaHierarquia({
         checkAuthorization();
       }
     }
-  }, [userId, dateFilter, appliedStartDate, appliedEndDate, selectedBancaId, isAdminOrSuperAdmin]);
+  }, [userId, dateFilter, appliedStartDate, appliedEndDate, selectedBancaId, showBancaSelector]);
 
   // Período considerado "longo" para aviso de consulta em segundo plano
   const isLongPeriod = (): boolean => {
@@ -300,7 +310,7 @@ export default function DonoBancaHierarquia({
       const params = new URLSearchParams();
       if (dateFrom) params.append('date_from', dateFrom);
       if (dateTo) params.append('date_to', dateTo);
-      if (isAdminOrSuperAdmin && selectedBancaId) params.append('banca_id', selectedBancaId);
+      if (showBancaSelector && selectedBancaId) params.append('banca_id', selectedBancaId);
       if (params.toString()) url += `?${params.toString()}`;
       
       const response = await fetch(url, {
@@ -449,8 +459,8 @@ export default function DonoBancaHierarquia({
     }
   }, [showDatePicker, showBancaFilter]);
 
-  // super_admin/admin sem banca selecionada: exibe seletor de banca
-  if (isAdminOrSuperAdmin && !selectedBancaId) {
+  // Quem precisa escolher banca (admin/super ou cargo com gestao_banca) sem banca selecionada
+  if (showBancaSelector && !selectedBancaId) {
     return (
       <Layout onSignOut={handleSignOut}>
         <div className="min-h-screen p-4 sm:p-6 space-y-6 max-w-7xl mx-auto bg-gray-50 dark:bg-[#1a1a1a]">
@@ -518,8 +528,8 @@ export default function DonoBancaHierarquia({
     );
   }
 
-  // Se não está autorizado (não é dono de banca), mostra mensagem de acesso negado
-  if (isAuthorized === false) {
+  // Se não tem permissão para a página (nem status fixo nem sidebar gestao_banca)
+  if (!canAccessDonoBanca) {
     return (
       <Layout onSignOut={handleSignOut}>
         <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-[#1a1a1a] p-6">
@@ -576,8 +586,8 @@ export default function DonoBancaHierarquia({
             </h2>
             
             <div className="flex items-center gap-2 flex-wrap min-w-0">
-            {/* Filtro de Banca (super_admin/admin) */}
-            {isAdminOrSuperAdmin && (
+            {/* Filtro de Banca (super_admin/admin ou cargo com gestao_banca) */}
+            {showBancaSelector && (
               <div className="relative banca-filter-container">
                 <button
                   onClick={() => {

@@ -192,14 +192,14 @@ export async function sendDocument(
 export async function sendAudio(
   config: WhatsAppOfficialConfig,
   to: string,
-  mediaUrl: string,
+  media: { link: string } | { id: string },
   replyToMessageId?: string
 ): Promise<{ messages: Array<{ id: string }> }> {
   const body: Record<string, unknown> = {
     messaging_product: 'whatsapp',
     to: to.replace(/\D/g, ''),
     type: 'audio',
-    audio: { link: mediaUrl },
+    audio: media,
   };
   if (replyToMessageId) {
     body.context = { message_id: replyToMessageId };

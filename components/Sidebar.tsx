@@ -35,6 +35,7 @@ import {
   ArrowRightLeft,
   BookOpen,
   Link2,
+  Headphones,
 } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import Logo from '@/components/Logo';
@@ -255,6 +256,8 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const itemAgentesIAAdmin: MenuItem = { href: '/admin/ai-agents', icon: Bot, label: 'Agentes IA' };
   const itemAgentesIA: MenuItem = { href: '/ai-agents', icon: Bot, label: 'Agentes IA' };
   const itemChatInterno: MenuItem = { href: '/chat', icon: MessageSquare, label: 'Chat Interno' };
+  const itemRelatorioChat: MenuItem = { href: '/admin/chat-report', icon: Headphones, label: 'Relatório Chat' };
+  const itemEtiquetasChat: MenuItem = { href: '/admin/chat-tags', icon: MessageSquare, label: 'Etiquetas Chat' };
   const itemCRM: MenuItem = {
     label: 'CRM',
     icon: Layout,
@@ -325,6 +328,8 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemFlows,
         itemAgentesIAAdmin,
         itemChatInterno,
+        itemRelatorioChat,
+        itemEtiquetasChat,
         itemCRM,
         itemCampanhas,
         itemContatosAtivos,
@@ -355,6 +360,8 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemZaplink,
         itemAcademy,
         itemAgentesIAAdmin,
+        itemRelatorioChat,
+        itemEtiquetasChat,
         itemCRM,
         itemCampanhas,
         itemContatosAtivos,

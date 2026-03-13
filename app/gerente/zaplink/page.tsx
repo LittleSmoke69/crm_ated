@@ -175,16 +175,29 @@ export default function GerenteZaplinkPage() {
           send_to: 'all_approved',
         }),
       });
-      const json = await res.json();
-      if (json.success) {
-        showToast('success', json.message || `Enviado para ${json.data?.sent ?? 0} contato(s).`);
+      let json: { success?: boolean; message?: string; error?: string; data?: { sent?: number } } = {};
+      try {
+        json = await res.json();
+      } catch {
+        json = {};
+      }
+      if (res.ok && json.success) {
+        const sent = json.data?.sent ?? 0;
+        showToast('success', json.message || (sent > 0 ? `Enviado para ${sent} contato(s).` : 'Nenhum contato para enviar.'));
         setBulkModalOpen(false);
         loadSubmissions();
       } else {
-        showToast('error', json.error || 'Erro ao enviar.');
+        const msg =
+          json.error ||
+          (res.status === 502 || res.status === 503
+            ? 'Serviço temporariamente indisponível. Verifique se a instância está conectada em Instâncias e tente novamente.'
+            : res.status === 504
+              ? 'Tempo esgotado. Muitos contatos ou instância lenta. Tente com menos contatos ou aumente o intervalo.'
+              : 'Erro ao enviar. Verifique se a instância mestre está conectada (QR lido) em Instâncias.');
+        showToast('error', msg);
       }
     } catch {
-      showToast('error', 'Erro ao enviar.');
+      showToast('error', 'Falha na conexão. Tente novamente e verifique se a instância está conectada em Instâncias.');
     } finally {
       setBulkSending(false);
     }

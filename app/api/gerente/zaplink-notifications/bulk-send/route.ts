@@ -22,6 +22,9 @@ function normalizePhone(input: string): string {
 
 type EvolutionConfig = { instance_name: string; apikey: string; base_url: string };
 
+/** Status considerados "conectados" para Evolution (valores podem vir em minúsculo da API). */
+const EVOLUTION_CONNECTED_STATUSES = ['ok', 'open', 'connected'];
+
 /** Retorna a instância mestre do gerente (conectada), para uso no disparo em massa. */
 async function getGerenteMasterInstance(gerenteUserId: string): Promise<EvolutionConfig | null> {
   const { data: instance, error } = await supabaseServiceRole
@@ -35,14 +38,24 @@ async function getGerenteMasterInstance(gerenteUserId: string): Promise<Evolutio
     .eq('user_id', gerenteUserId)
     .eq('is_master', true)
     .eq('is_active', true)
-    .in('status', ['ok', 'open', 'connected'])
+    .in('status', EVOLUTION_CONNECTED_STATUSES)
     .limit(1)
     .maybeSingle();
 
-  if (error || !instance) return null;
-  const apis = instance.evolution_apis as { base_url?: string } | { base_url?: string }[];
-  const baseUrl = Array.isArray(apis) ? apis[0]?.base_url : apis?.base_url;
-  if (!baseUrl || !instance.apikey) return null;
+  if (error) {
+    console.warn('[zaplink/bulk-send] getGerenteMasterInstance erro:', error.message, '| userId:', gerenteUserId);
+    return null;
+  }
+  if (!instance) {
+    console.warn('[zaplink/bulk-send] Nenhuma instância mestre encontrada para userId:', gerenteUserId);
+    return null;
+  }
+  const apis = instance.evolution_apis as { base_url?: string } | { base_url?: string }[] | null;
+  const baseUrl = apis ? (Array.isArray(apis) ? apis[0]?.base_url : apis?.base_url) : null;
+  if (!baseUrl || !instance.apikey) {
+    console.warn('[zaplink/bulk-send] Instância sem base_url ou apikey:', instance.instance_name);
+    return null;
+  }
   return {
     instance_name: instance.instance_name,
     apikey: instance.apikey,
@@ -64,7 +77,7 @@ async function getGerenteInstanceByName(gerenteUserId: string, instanceName: str
     .eq('instance_name', instanceName)
     .eq('is_master', true)
     .eq('is_active', true)
-    .in('status', ['ok', 'open', 'connected'])
+    .in('status', EVOLUTION_CONNECTED_STATUSES)
     .maybeSingle();
 
   if (error || !instance) return null;
@@ -103,9 +116,10 @@ export async function POST(req: NextRequest) {
         .from('zaplink_form_submissions')
         .select('full_name, phone')
         .eq('gerente_id', userId)
-        .eq('status', 'assigned')
+        .in('status', ['assigned', 'cadastrado'])
         .not('phone', 'is', null);
       if (subError) {
+        console.error('[zaplink/bulk-send] Erro ao buscar submissões:', subError.message);
         return errorResponse('Erro ao buscar submissões aprovadas.', 500);
       }
       recipients = (submissions ?? []).map((s: SubRow) => ({ full_name: s.full_name, phone: s.phone }));
@@ -162,7 +176,9 @@ export async function POST(req: NextRequest) {
     if (recipients.length === 0) {
       return successResponse(
         { sent: 0 },
-        sendTo === 'all_approved' ? 'Nenhuma submissão aprovada para disparar.' : 'Nenhuma notificação para disparar.'
+        sendTo === 'all_approved'
+          ? 'Nenhuma submissão aprovada com telefone para disparo. Atribua leads e confira se há número cadastrado.'
+          : 'Nenhuma notificação para disparar.'
       );
     }
 
@@ -170,12 +186,10 @@ export async function POST(req: NextRequest) {
       ? await getGerenteInstanceByName(userId, instanceName)
       : await getGerenteMasterInstance(userId);
     if (!evolution) {
-      return errorResponse(
-        instanceName
-          ? 'Instância mestre selecionada não encontrada ou desconectada.'
-          : 'Nenhuma instância mestre conectada encontrada para o seu usuário. Conecte uma instância mestre em Instâncias.',
-        503
-      );
+      const msg = instanceName
+        ? 'Instância mestre selecionada não encontrada ou desconectada. Verifique em Instâncias se está conectada (QR lido e status ok).'
+        : 'Nenhuma instância mestre conectada para seu usuário. Em Instâncias, marque uma instância como mestre e conecte (leia o QR).';
+      return errorResponse(msg, 503);
     }
 
     const delayMs = delaySeconds * 1000;

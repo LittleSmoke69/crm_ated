@@ -8,6 +8,7 @@ export function useRequireAuth() {
   const pathname = usePathname();
   const [checking, setChecking] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
+  const [userStatus, setUserStatus] = useState<string | null>(null);
 
   useEffect(() => {
     // Rotas públicas que não devem redirecionar (vitrine da Academy é pública)
@@ -25,10 +26,12 @@ export function useRequireAuth() {
     const id = sessionStorage.getItem('user_id')
       || sessionStorage.getItem('profile_id')
       || localStorage.getItem('profile_id');
+    const status = sessionStorage.getItem('profile_status');
 
     // Se estiver numa rota pública (incluindo vitrine da Academy), não redireciona para login
     if (publicPaths.includes(pathname) || isAcademyPublic) {
       if (id) setUserId(id);
+      setUserStatus(status);
       setChecking(false);
       return;
     }
@@ -39,8 +42,9 @@ export function useRequireAuth() {
     }
 
     setUserId(id);
+    setUserStatus(status);
     setChecking(false);
   }, [router, pathname]);
 
-  return { checking, userId };
+  return { checking, userId, userStatus };
 }

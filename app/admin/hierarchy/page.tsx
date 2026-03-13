@@ -13,21 +13,31 @@ export default function AdminHierarchyPage() {
   const [status, setStatus] = useState<string | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
 
+  const [hasHierarquiaSidebar, setHasHierarquiaSidebar] = useState(false);
+
   useEffect(() => {
     if (typeof window === 'undefined' || !userId) return;
     const loadProfile = async () => {
       try {
-        const res = await fetch('/api/user/profile', {
-          headers: { 'X-User-Id': userId ?? '' },
-        });
-        const json = await res.json();
-        if (res.ok && json.success && json.data?.status) {
-          setStatus(json.data.status);
+        const [profileRes, permRes] = await Promise.all([
+          fetch('/api/user/profile', { headers: { 'X-User-Id': userId ?? '' } }),
+          fetch('/api/user/has-sidebar-permission?code=hierarquia', { headers: { 'X-User-Id': userId ?? '' } }),
+        ]);
+        const profileJson = await profileRes.json();
+        const permJson = await permRes.json();
+        if (profileRes.ok && profileJson.success && profileJson.data?.status) {
+          setStatus(profileJson.data.status);
         } else {
           setStatus(null);
         }
+        if (permRes.ok && permJson.success && permJson.data?.hasPermission) {
+          setHasHierarquiaSidebar(true);
+        } else {
+          setHasHierarquiaSidebar(false);
+        }
       } catch {
         setStatus(null);
+        setHasHierarquiaSidebar(false);
       } finally {
         setLoadingStatus(false);
       }
@@ -35,7 +45,7 @@ export default function AdminHierarchyPage() {
     loadProfile();
   }, [userId]);
 
-  const canAccess = status === 'super_admin' || status === 'admin' || status === 'suporte';
+  const canAccess = status === 'super_admin' || status === 'admin' || status === 'suporte' || hasHierarquiaSidebar;
 
   if (checking || loadingStatus) {
     return (
