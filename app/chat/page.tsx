@@ -433,8 +433,8 @@ const MESSAGES_PAGE_SIZE = 50;
 // ─── ChatPage ─────────────────────────────────────────────────────────────────
 
 export default function ChatPage() {
-  const { checking, userId } = useRequireAuth();
-  const [userStatus, setUserStatus] = useState<UserStatus>(null);
+  const { checking, userId, userStatus: authUserStatus } = useRequireAuth();
+  const [userStatus, setUserStatus] = useState<UserStatus>((authUserStatus as UserStatus) ?? null);
   const [mediaModal, setMediaModal] = useState<{ url: string; type: 'image' | 'video'; caption?: string | null } | null>(null);
 
   // Canais
@@ -527,7 +527,11 @@ export default function ChatPage() {
     window.location.href = '/login';
   };
 
-  // ── Perfil ─────────────────────────────────────────────────────────────────
+  // ── Perfil (sobrescreve status do auth; garante etiquetas mesmo antes do fetch) ──
+  useEffect(() => {
+    if (authUserStatus) setUserStatus(authUserStatus as UserStatus);
+  }, [authUserStatus]);
+
   useEffect(() => {
     if (!userId) return;
     fetch('/api/user/profile', { headers: authHeaders() })
@@ -535,7 +539,7 @@ export default function ChatPage() {
       .then((data) => {
         if (data.success && data.data?.status) setUserStatus(data.data.status);
       })
-      .catch(() => setUserStatus(null));
+      .catch(() => {});
   }, [userId]);
 
   // ── Canais ─────────────────────────────────────────────────────────────────
@@ -636,15 +640,26 @@ export default function ChatPage() {
       .catch(() => {});
   }, [userId, userStatus]);
 
-  // Refetch ao voltar à aba (garante sync mesmo se Realtime falhar)
+  // Refetch ao voltar à aba (conversas e etiquetas)
   useEffect(() => {
     if (!selectedChannel) return;
     const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') loadConversationsFromApi(true);
+      if (document.visibilityState !== 'visible') return;
+      loadConversationsFromApi(true);
+      if (userStatus === 'suporte' || userStatus === 'admin' || userStatus === 'super_admin') {
+        fetch('/api/chat/tags', { headers: authHeaders() })
+          .then((r) => r.json())
+          .then((data) => {
+            if (data.success && Array.isArray(data.data)) {
+              setTagOptions(data.data.map((t: { id: string; name: string }) => ({ id: t.id, name: t.name })));
+            }
+          })
+          .catch(() => {});
+      }
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => document.removeEventListener('visibilitychange', onVisibilityChange);
-  }, [selectedChannel, loadConversationsFromApi]);
+  }, [selectedChannel, loadConversationsFromApi, userStatus]);
 
   // ── Carregar Mensagens (últimas 50 — mais recentes primeiro via DESC+reverse) ──
   useEffect(() => {
@@ -1109,14 +1124,12 @@ export default function ChatPage() {
     return () => document.removeEventListener('mousedown', onOutside);
   }, [showTagsPopover]);
 
-  const handleToggleTag = async (tag: string) => {
+  const applyTagsToConversation = async (next: string[], closePopover = false) => {
     if (!selectedConversationId || updatingTags) return;
     const conv = conversations.find((c) => c.id === selectedConversationId);
     if (!conv) return;
-    const current = conv.tags || [];
-    const next = current.includes(tag) ? current.filter((t) => t !== tag) : [...current, tag].sort();
     setUpdatingTags(true);
-    setShowTagsPopover(false);
+    if (closePopover) setShowTagsPopover(false);
     try {
       const res = await fetch('/api/chat/conversations', {
         method: 'PATCH',
@@ -1134,6 +1147,18 @@ export default function ChatPage() {
     } finally {
       setUpdatingTags(false);
     }
+  };
+
+  const handleToggleTag = async (tag: string) => {
+    const conv = conversations.find((c) => c.id === selectedConversationId);
+    if (!conv) return;
+    const current = conv.tags || [];
+    const next = current.includes(tag) ? current.filter((t) => t !== tag) : [...current, tag].sort();
+    await applyTagsToConversation(next, false);
+  };
+
+  const handleRemoveAllTags = async () => {
+    await applyTagsToConversation([], true);
   };
 
   const handleResolveConversation = async () => {
@@ -1903,33 +1928,49 @@ export default function ChatPage() {
                           )}
                         </button>
                         {showTagsPopover && (
-                          <div className="absolute right-0 top-full mt-1 z-20 w-48 py-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-lg shadow-lg">
+                          <div className="absolute right-0 top-full mt-1 z-20 w-56 py-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-lg shadow-lg">
                             <div className="px-3 py-1 text-xs text-gray-500 dark:text-gray-400 border-b border-gray-100 dark:border-[#404040]">
                               Marcar conversa
                             </div>
+                            <p className="px-3 py-1 text-[11px] text-gray-400 dark:text-gray-500">
+                              Clique para adicionar ou remover.
+                            </p>
                             {tagOptions.length === 0 ? (
                               <p className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">
                                 Nenhuma etiqueta. Admin pode criar em Etiquetas Chat.
                               </p>
                             ) : (
-                              tagOptions.map((t) => (
-                                <button
-                                  key={t.id}
-                                  type="button"
-                                  onClick={() => handleToggleTag(t.name)}
-                                  disabled={updatingTags}
-                                  className={`w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-[#333] ${
-                                    (selectedConversation.tags || []).includes(t.name)
-                                      ? 'text-[#8CD955] font-medium'
-                                      : 'text-gray-700 dark:text-gray-200'
-                                  }`}
-                                >
-                                  <span className="w-4 h-4 rounded border flex items-center justify-center text-xs">
-                                    {(selectedConversation.tags || []).includes(t.name) ? '✓' : ''}
-                                  </span>
-                                  {t.name}
-                                </button>
-                              ))
+                              <>
+                                {tagOptions.map((t) => (
+                                  <button
+                                    key={t.id}
+                                    type="button"
+                                    onClick={() => handleToggleTag(t.name)}
+                                    disabled={updatingTags}
+                                    className={`w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-[#333] ${
+                                      (selectedConversation.tags || []).includes(t.name)
+                                        ? 'text-[#8CD955] font-medium'
+                                        : 'text-gray-700 dark:text-gray-200'
+                                    }`}
+                                  >
+                                    <span className="w-4 h-4 rounded border flex items-center justify-center text-xs flex-shrink-0">
+                                      {(selectedConversation.tags || []).includes(t.name) ? '✓' : ''}
+                                    </span>
+                                    {t.name}
+                                  </button>
+                                ))}
+                                {(selectedConversation.tags || []).length > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={handleRemoveAllTags}
+                                    disabled={updatingTags}
+                                    className="w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 hover:bg-red-50 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400 border-t border-gray-100 dark:border-[#404040] mt-1 pt-2"
+                                  >
+                                    <X className="w-4 h-4 flex-shrink-0" />
+                                    Remover todas as etiquetas
+                                  </button>
+                                )}
+                              </>
                             )}
                           </div>
                         )}
