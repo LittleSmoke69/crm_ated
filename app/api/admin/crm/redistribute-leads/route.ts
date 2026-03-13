@@ -144,7 +144,11 @@ export async function POST(req: NextRequest) {
 
     if (!result.success) {
       console.log(`${LOG_PREFIX} POST CRM error (400):`, { error: result.error, message: result.message, fullResult: result });
-      return errorResponse(result.error ?? result.message ?? 'Erro ao redistribuir leads no CRM', 400);
+      const rawMessage = (result.error ?? result.message ?? 'Erro ao redistribuir leads no CRM').trim();
+      const userMessage = rawMessage.toLowerCase() === 'consultant not found'
+        ? 'Consultor Destino não cadastrado na banca'
+        : rawMessage;
+      return errorResponse(userMessage, 400);
     }
 
     let count = result.count ?? result.data?.count ?? normalizedLeadIds.length;
