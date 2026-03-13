@@ -4,8 +4,10 @@
  * Formação automática: resolve transferências expiradas (entries com resolution_status = 'pending').
  * Deve ser chamado por um cron a cada 1 hora (ex.: Netlify scheduled function com schedule = "0 * * * *").
  *
- * Para evitar timeout (ex.: 504 Inactivity no Netlify), processa no máximo max_logs por execução.
- * Body opcional: { max_logs?: number } — default 5. Próximas execuções do cron processarão o restante.
+ * Para evitar timeout (504), processa no máximo max_logs por requisição. O chamador (ex.: Netlify
+ * scheduled function) pode fazer várias requisições em pacotes: enquanto data.remaining_logs > 0,
+ * enviar novo POST com o mesmo body para processar o próximo pacote.
+ * Body opcional: { max_logs?: number } — default 5. Resposta inclui remaining_logs.
  *
  * Requer header: X-Cron-Secret = process.env.TRANSFER_RESOLVE_CRON_SECRET
  */
@@ -54,14 +56,14 @@ export async function POST(req: NextRequest) {
       .order('created_at', { ascending: false });
 
     if (logsError || !logs?.length) {
-      return successResponse({ results: [], total_resolved: 0, total_vinculado: 0, total_disponivel: 0, message: 'Nenhum log.' });
+      return successResponse({ results: [], total_resolved: 0, total_vinculado: 0, total_disponivel: 0, remaining_logs: 0, message: 'Nenhum log.' });
     }
 
     const expired = (logs as { id: string; banca_id: string; created_at: string; deadline_days?: number | null }[]).filter((log) =>
       isTransferExpired(log.created_at, log.deadline_days ?? DEFAULT_DEADLINE_DAYS)
     );
     if (expired.length === 0) {
-      return successResponse({ results: [], total_resolved: 0, total_vinculado: 0, total_disponivel: 0, message: 'Nenhuma transferência expirada.' });
+      return successResponse({ results: [], total_resolved: 0, total_vinculado: 0, total_disponivel: 0, remaining_logs: 0, message: 'Nenhuma transferência expirada.' });
     }
 
     const expiredIds = expired.map((l) => l.id);
@@ -75,7 +77,7 @@ export async function POST(req: NextRequest) {
     (pendingRows ?? []).forEach((r: { transfer_log_id: string }) => logsWithPending.add(r.transfer_log_id));
     const toResolveFull = expired.filter((log) => logsWithPending.has(log.id));
     if (toResolveFull.length === 0) {
-      return successResponse({ results: [], total_resolved: 0, total_vinculado: 0, total_disponivel: 0, message: 'Nenhuma transferência expirada com leads pendentes.' });
+      return successResponse({ results: [], total_resolved: 0, total_vinculado: 0, total_disponivel: 0, remaining_logs: 0, message: 'Nenhuma transferência expirada com leads pendentes.' });
     }
 
     const toResolve = toResolveFull.slice(0, maxLogs);

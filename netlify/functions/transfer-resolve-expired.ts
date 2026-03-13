@@ -1,12 +1,9 @@
 /**
  * Netlify Scheduled Function: transfer-resolve-expired
  *
- * Formação automática: a cada 1 hora chama a API do app para resolver
- * transferências expiradas (vincular ou marcar como disponível para repasse).
- *
- * Por que 504 "Inactivity Timeout"? O 504 com HTML "Too much time..." vem do PROXY do Netlify:
- * o proxy encerra a conexão se a API demorar para enviar a resposta (cada lead chama o CRM).
- * Com max_logs=1 reduzimos o trabalho por request para caber no tempo do proxy.
+ * Formação automática: a cada 1 hora chama a API do app em pacotes para resolver
+ * transferências expiradas. Cada requisição processa até max_logs (1) para evitar 504;
+ * se houver remaining_logs, faz nova requisição até acabar ou atingir o limite de pacotes.
  *
  * Configuração:
  * - TRANSFER_RESOLVE_CRON_SECRET: mesmo valor definido no app (Next.js)
@@ -17,6 +14,20 @@
 
 const CRON_SECRET = process.env.TRANSFER_RESOLVE_CRON_SECRET?.trim();
 const SITE_URL = process.env.URL || process.env.DEPLOY_PRIME_URL || '';
+
+/** Logs processados por requisição (pacote). 1 = menor tempo por request, menos risco de 504. */
+const MAX_LOGS_PER_PACOTE = 1;
+/** Limite de pacotes por execução do cron (evita loop infinito). */
+const MAX_PACOTES = 100;
+
+type PacoteData = {
+  results?: unknown[];
+  total_resolved?: number;
+  total_vinculado?: number;
+  total_disponivel?: number;
+  remaining_logs?: number;
+  message?: string;
+};
 
 export const handler = async () => {
   if (!CRON_SECRET) {
@@ -30,33 +41,95 @@ export const handler = async () => {
   }
 
   const endpoint = `${SITE_URL.replace(/\/+$/, '')}/api/cron/resolve-expired-transfers`;
+  const headers = {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+    'x-cron-secret': CRON_SECRET,
+  };
+
+  let pacoteIndex = 0;
+  let totalResolved = 0;
+  let totalVinculado = 0;
+  let totalDisponivel = 0;
+  const allResults: unknown[] = [];
+  let lastMessage = '';
 
   try {
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'x-cron-secret': CRON_SECRET,
-      },
-      body: JSON.stringify({ max_logs: 1 }),
-    });
-    const text = await res.text();
-    let data: unknown;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = { raw: text };
+    while (pacoteIndex < MAX_PACOTES) {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ max_logs: MAX_LOGS_PER_PACOTE }),
+      });
+      const text = await res.text();
+      let json: { success?: boolean; data?: PacoteData; error?: string } = {};
+      try {
+        json = JSON.parse(text) as typeof json;
+      } catch {
+        console.error('[transfer-resolve-expired] Pacote', pacoteIndex + 1, 'resposta inválida:', text.slice(0, 200));
+        return {
+          statusCode: res.ok ? 200 : res.status,
+          body: JSON.stringify({
+            error: 'Resposta inválida da API',
+            pacotes_ok: pacoteIndex,
+            total_resolved: totalResolved,
+            total_vinculado: totalVinculado,
+            total_disponivel: totalDisponivel,
+          }),
+        };
+      }
+
+      if (!res.ok) {
+        console.error('[transfer-resolve-expired] Pacote', pacoteIndex + 1, 'API retornou', res.status, json);
+        return {
+          statusCode: res.status,
+          body: JSON.stringify({
+            error: json?.error ?? 'API error',
+            pacotes_ok: pacoteIndex,
+            total_resolved: totalResolved,
+            total_vinculado: totalVinculado,
+            total_disponivel: totalDisponivel,
+          }),
+        };
+      }
+
+      const data = json.data ?? {};
+      totalResolved += Number(data.total_resolved) || 0;
+      totalVinculado += Number(data.total_vinculado) || 0;
+      totalDisponivel += Number(data.total_disponivel) || 0;
+      if (Array.isArray(data.results)) allResults.push(...data.results);
+      if (data.message) lastMessage = data.message;
+
+      pacoteIndex++;
+      const remaining = Number(data.remaining_logs) || 0;
+      console.log('[transfer-resolve-expired] Pacote', pacoteIndex, 'ok. remaining_logs=', remaining);
+
+      if (remaining <= 0) break;
     }
-    if (!res.ok) {
-      console.error('[transfer-resolve-expired] API retornou', res.status, data);
-      return { statusCode: res.status, body: JSON.stringify({ error: 'API error', status: res.status, data }) };
-    }
-    console.log('[transfer-resolve-expired] Sucesso:', data);
-    return { statusCode: 200, body: JSON.stringify(data) };
+
+    const body = {
+      success: true,
+      pacotes: pacoteIndex,
+      total_resolved: totalResolved,
+      total_vinculado: totalVinculado,
+      total_disponivel: totalDisponivel,
+      results: allResults,
+      message: lastMessage || `Processados ${pacoteIndex} pacote(s). ${totalVinculado} vinculado(s), ${totalDisponivel} disponível(is) para repasse.`,
+    };
+    console.log('[transfer-resolve-expired] Concluído:', body.message);
+    return { statusCode: 200, body: JSON.stringify(body) };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[transfer-resolve-expired] Erro ao chamar API:', msg);
-    return { statusCode: 500, body: JSON.stringify({ error: msg }) };
+    return {
+      statusCode: 500,
+      body: JSON.stringify({
+        error: msg,
+        pacotes_ok: pacoteIndex,
+        total_resolved: totalResolved,
+        total_vinculado: totalVinculado,
+        total_disponivel: totalDisponivel,
+      }),
+    };
   }
 };
