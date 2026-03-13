@@ -15,7 +15,6 @@ import { successResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { resolveOneTransferLog, isTransferExpired, type ConvertedLead } from '@/lib/server/crm/resolveTransferLog';
 
-const DEFAULT_DEADLINE_DAYS = 10;
 const DEFAULT_MAX_LOGS_PER_RUN = 5;
 /** Quando setado, processa no máximo N entries (do primeiro log pendente) por request — resposta rápida, evita 504. */
 const DEFAULT_MAX_ENTRIES_PER_RUN = 3;
@@ -63,9 +62,11 @@ export async function POST(req: NextRequest) {
       return successResponse({ results: [], total_resolved: 0, total_vinculado: 0, total_disponivel: 0, remaining_logs: 0, message: 'Nenhum log.' });
     }
 
-    const expired = (logs as { id: string; banca_id: string; created_at: string; deadline_days?: number | null }[]).filter((log) =>
-      isTransferExpired(log.created_at, log.deadline_days ?? DEFAULT_DEADLINE_DAYS)
-    );
+    const expired = (logs as { id: string; banca_id: string; created_at: string; deadline_days?: number | null }[]).filter((log) => {
+      const days = log.deadline_days;
+      if (typeof days !== 'number' || days < 1) return false;
+      return isTransferExpired(log.created_at, days);
+    });
     if (expired.length === 0) {
       return successResponse({ results: [], total_resolved: 0, total_vinculado: 0, total_disponivel: 0, remaining_logs: 0, message: 'Nenhuma transferência expirada.' });
     }
@@ -87,14 +88,29 @@ export async function POST(req: NextRequest) {
     const useMaxEntries = maxEntries != null;
     const toResolve = useMaxEntries ? toResolveFull.slice(0, 1) : toResolveFull.slice(0, maxLogs);
     const bancaIds = [...new Set(toResolve.map((l) => l.banca_id))];
-    const { data: bancas } = await supabaseServiceRole.from('crm_bancas').select('id, url').in('id', bancaIds);
+    const { data: bancas } = await supabaseServiceRole.from('crm_bancas').select('id, url, name').in('id', bancaIds);
     const crmUrlByBancaId = new Map<string, string>();
-    (bancas ?? []).forEach((b: { id: string; url?: string | null }) => {
+    const bancaNameById = new Map<string, string>();
+    (bancas ?? []).forEach((b: { id: string; url?: string | null; name?: string | null }) => {
       const url = (b.url ?? '').trim().replace(/\/+$/, '');
       if (url) crmUrlByBancaId.set(b.id, url);
+      const name = (b.name ?? b.url ?? b.id).trim() || b.id;
+      bancaNameById.set(b.id, name);
     });
 
-    const results: Array<{ log_id: string; banca_id: string; resolved: number; vinculado: number; disponivel_retransferencia: number; message: string }> = [];
+    type VinculadoItem = { lead_id: string; consultant_email: string; banca_id: string; banca_name: string };
+    type ResultItem = {
+      log_id: string;
+      banca_id: string;
+      banca_name: string;
+      resolved: number;
+      vinculado: number;
+      disponivel_retransferencia: number;
+      message: string;
+      /** Quem foi vinculado: lead → consultor e nome da banca */
+      vinculados: VinculadoItem[];
+    };
+    const results: ResultItem[] = [];
     const allConverted: ConvertedLead[] = [];
     let total_resolved = 0;
     let total_vinculado = 0;
@@ -109,13 +125,22 @@ export async function POST(req: NextRequest) {
         log.id,
         { maxEntries: maxEntries ?? DEFAULT_MAX_ENTRIES_PER_RUN }
       );
+      const bancaName = bancaNameById.get(log.banca_id) ?? log.banca_id;
+      const vinculados: VinculadoItem[] = (result.converted ?? []).map((c) => ({
+        lead_id: c.lead_id,
+        consultant_email: c.consultant_email,
+        banca_id: c.banca_id,
+        banca_name: bancaNameById.get(c.banca_id) ?? c.banca_id,
+      }));
       results.push({
         log_id: log.id,
         banca_id: log.banca_id,
+        banca_name: bancaName,
         resolved: result.resolved,
         vinculado: result.vinculado,
         disponivel_retransferencia: result.disponivel_retransferencia,
         message: result.message,
+        vinculados,
       });
       total_resolved = result.resolved;
       total_vinculado = result.vinculado;
@@ -126,13 +151,22 @@ export async function POST(req: NextRequest) {
       for (const log of toResolve) {
         const crmBaseUrl = crmUrlByBancaId.get(log.banca_id) ?? null;
         const result = await resolveOneTransferLog({ bancaId: log.banca_id, crmBaseUrl }, log.id);
+        const bancaName = bancaNameById.get(log.banca_id) ?? log.banca_id;
+        const vinculados: VinculadoItem[] = (result.converted ?? []).map((c) => ({
+          lead_id: c.lead_id,
+          consultant_email: c.consultant_email,
+          banca_id: c.banca_id,
+          banca_name: bancaNameById.get(c.banca_id) ?? c.banca_id,
+        }));
         results.push({
           log_id: log.id,
           banca_id: log.banca_id,
+          banca_name: bancaName,
           resolved: result.resolved,
           vinculado: result.vinculado,
           disponivel_retransferencia: result.disponivel_retransferencia,
           message: result.message,
+          vinculados,
         });
         total_resolved += result.resolved;
         total_vinculado += result.vinculado;
@@ -147,7 +181,8 @@ export async function POST(req: NextRequest) {
       console.log(`Total convertidos (vinculados): ${allConverted.length}`);
       console.log('---');
       allConverted.forEach((c, i) => {
-        console.log(`  ${i + 1}. Lead ${c.lead_id} | Consultor: ${c.consultant_email} | Banca: ${c.banca_id}`);
+        const bancaName = bancaNameById.get(c.banca_id) ?? c.banca_id;
+        console.log(`  ${i + 1}. Lead ${c.lead_id} | Consultor: ${c.consultant_email} | Banca: ${bancaName}`);
       });
       console.log('===============================================================================\n');
     } else {

@@ -12,7 +12,8 @@
     "dev:clean": "npm run clean:win && npm run dev",
     "setup:scheduled-function": "tsx scripts/setup-scheduled-function.ts",
     "anti-spam:worker": "tsx scripts/anti-spam-worker.ts",
-    "backfill:transfer-balances": "tsx scripts/backfill-transfer-balances.ts"
+    "backfill:transfer-balances": "tsx scripts/backfill-transfer-balances.ts",
+    "test:resolve-expired": "tsx scripts/test-resolve-expired.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.81.1",
