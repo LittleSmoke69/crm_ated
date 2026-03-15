@@ -2,14 +2,15 @@ import { NextRequest } from 'next/server';
 import { requireAdmin } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { getAdminBancaId, getAdminAllowedBancaIds } from '@/lib/server/crm/adminLeadTransferContext';
-import { getEffectiveZaplotoId } from '@/lib/tenant-context';
-import { normalizeDateParam, dateToStartOfDaySãoPauloISO, dateToEndOfDaySãoPauloISO } from '@/lib/server/crm/transfer-date-utils';
 import { isTransferExpired } from '@/lib/server/crm/resolveTransferLog';
 
 const LOG_PREFIX = '[admin][transfer-logs]';
-const DEFAULT_LIMIT = 50000;
+/** Tamanho da página por request (PostgREST costuma limitar ~1000). */
+const LOGS_PAGE_SIZE = 1000;
+/** Máximo de páginas para não travar (ex.: 100k logs). */
+const LOGS_MAX_PAGES = 100;
 const IN_BATCH_SIZE = 150;
+const ENTRIES_PAGE_SIZE = 10000;
 
 function chunkArray<T>(arr: T[], size: number): T[][] {
   const chunks: T[][] = [];
@@ -33,102 +34,67 @@ type TransferLogRow = {
   crm_response?: unknown;
   created_at?: string | null;
 };
-const MAX_LIMIT = 50000;
-
 /**
  * GET /api/admin/crm/transfer-logs
- * Lista logs de transferência de leads (auditoria).
- * Query: banca_id? (opcional), from, to, transfer_type?, target_consultant_email?, source_consultant_email? (consultor doador), offset? (default 0), limit? (default 50000, max 50000) para trazer todas.
+ * Retorna TODAS as transferências do banco (paginação interna até acabar).
  */
 export async function GET(req: NextRequest) {
   try {
-    const { userId, profile } = await requireAdmin(req);
+    await requireAdmin(req);
     const { searchParams } = req.nextUrl;
 
     const bancaId = searchParams.get('banca_id')?.trim() || null;
-    let bancaIds: string[];
+    const transferType = searchParams.get('transfer_type')?.trim() || null;
+    const targetConsultant = searchParams.get('target_consultant_email')?.trim() || null;
+    const sourceConsultant = searchParams.get('source_consultant_email')?.trim() || null;
+    // Período (from/to) não é aplicado aqui: a API retorna sempre todas as transferências do escopo.
+    // O frontend filtra por data em memória (managementFrom/managementTo).
 
-    if (bancaId) {
-      const resolved = await getAdminBancaId(userId, profile, bancaId);
-      if (!resolved) {
-        return errorResponse('Banca não encontrada ou sem permissão.');
-      }
-      bancaIds = [resolved.bancaId];
-    } else {
-      const zaplotoId = await getEffectiveZaplotoId(req, profile);
-      const allowed = await getAdminAllowedBancaIds(profile, zaplotoId);
-      if (!allowed || allowed.length === 0) {
-        return successResponse([]);
-      }
-      bancaIds = allowed;
-    }
-
-    const fromParam = normalizeDateParam(searchParams.get('from'));
-    const toParam = normalizeDateParam(searchParams.get('to'));
-    const transferType = searchParams.get('transfer_type')?.trim();
-    const targetConsultantEmail = searchParams.get('target_consultant_email')?.trim() || null;
-    const sourceConsultantEmail = searchParams.get('source_consultant_email')?.trim() || null;
-
-    const offset = Math.max(0, parseInt(searchParams.get('offset') ?? '0', 10) || 0);
-    const limit = Math.min(MAX_LIMIT, Math.max(1, parseInt(searchParams.get('limit') ?? String(DEFAULT_LIMIT), 10) || DEFAULT_LIMIT));
-
-    const selectWithDeadline = 'id, banca_id, performed_by_user_id, source_consultant_email, target_consultant_email, leads_ids, count, transfer_type, deadline_days, devolvido_at, filters_snapshot, crm_response, created_at';
-    const selectWithoutDeadline = 'id, banca_id, performed_by_user_id, source_consultant_email, target_consultant_email, leads_ids, count, transfer_type, filters_snapshot, crm_response, created_at';
-    const selectWithDeadlineNoDevolvido = 'id, banca_id, performed_by_user_id, source_consultant_email, target_consultant_email, leads_ids, count, transfer_type, deadline_days, filters_snapshot, crm_response, created_at';
-
-    const runQuery = async (selectColumns: string) => {
+    const allLogs: TransferLogRow[] = [];
+    let offset = 0;
+    for (let i = 0; i < LOGS_MAX_PAGES; i++) {
       let q = supabaseServiceRole
         .from('admin_lead_transfer_logs')
-        .select(selectColumns)
-        .in('banca_id', bancaIds)
-        .order('created_at', { ascending: false });
-      if (fromParam) q = q.gte('created_at', dateToStartOfDaySãoPauloISO(fromParam));
-      if (toParam) q = q.lte('created_at', dateToEndOfDaySãoPauloISO(toParam));
+        .select('*')
+        .order('created_at', { ascending: false })
+        .range(offset, offset + LOGS_PAGE_SIZE - 1);
+      if (bancaId) q = q.eq('banca_id', bancaId);
       if (transferType && ['TF', 'TF1', 'TF2', 'TF3'].includes(transferType)) q = q.eq('transfer_type', transferType);
-      if (targetConsultantEmail) q = q.ilike('target_consultant_email', targetConsultantEmail);
-      if (sourceConsultantEmail) q = q.ilike('source_consultant_email', sourceConsultantEmail);
-      return q.range(offset, offset + limit - 1);
-    };
-
-    let result = await runQuery(selectWithDeadline);
-    if (result.error) {
-      const msg = (result.error as { message?: string; code?: string }).message ?? '';
-      const code = (result.error as { code?: string }).code ?? '';
-      if (msg.includes('devolvido_at') || msg.includes('deadline_days') || code === 'PGRST204' || msg.includes('does not exist')) {
-        if (msg.includes('devolvido_at')) {
-          console.warn(`${LOG_PREFIX} Coluna devolvido_at ausente; buscando sem ela. Execute add_devolvido_at_to_admin_lead_transfer_logs.sql no Supabase.`);
-          result = await runQuery(selectWithDeadlineNoDevolvido);
-        }
-        if (result.error && ((result.error as { message?: string }).message ?? '').includes('deadline_days')) {
-          console.warn(`${LOG_PREFIX} Coluna deadline_days ausente; buscando sem ela.`);
-          result = await runQuery(selectWithoutDeadline);
-        }
+      if (targetConsultant) q = q.ilike('target_consultant_email', targetConsultant);
+      if (sourceConsultant) q = q.ilike('source_consultant_email', sourceConsultant);
+      const { data: logs, error } = await q;
+      if (error) {
+        console.error(`${LOG_PREFIX} GET error:`, error);
+        return errorResponse('Erro ao buscar logs de transferência.');
       }
+      const rows = (Array.isArray(logs) ? logs : []) as TransferLogRow[];
+      allLogs.push(...rows);
+      if (rows.length === 0) break;
+      // Próximo offset = onde paramos (Supabase pode devolver < 1000 por request)
+      offset += rows.length;
     }
-    const { data: logs, error } = result;
 
-    if (error) {
-      console.error(`${LOG_PREFIX} GET error:`, error);
-      return errorResponse('Erro ao buscar logs de transferência.');
-    }
-
-    const rawList = Array.isArray(logs) ? logs : [];
-    if (rawList.length === 0) {
+    const list = allLogs;
+    if (list.length === 0) {
       return successResponse([]);
     }
-    const list = rawList as unknown as TransferLogRow[];
 
     const logIds = list.map((r) => r.id);
-    const MAX_ENTRIES = 500000;
     type EntryRow = { transfer_log_id: string; saldo_snapshot?: number | null; resolution_status?: string | null };
     const allEntries: EntryRow[] = [];
     for (const chunk of chunkArray(logIds, IN_BATCH_SIZE)) {
-      const { data } = await supabaseServiceRole
-        .from('admin_lead_transfer_entries')
-        .select('transfer_log_id, saldo_snapshot, resolution_status')
-        .in('transfer_log_id', chunk)
-        .limit(MAX_ENTRIES);
-      if (Array.isArray(data)) allEntries.push(...(data as EntryRow[]));
+      let entOffset = 0;
+      while (true) {
+        const { data } = await supabaseServiceRole
+          .from('admin_lead_transfer_entries')
+          .select('transfer_log_id, saldo_snapshot, resolution_status')
+          .in('transfer_log_id', chunk)
+          .range(entOffset, entOffset + ENTRIES_PAGE_SIZE - 1);
+        const rows = Array.isArray(data) ? (data as EntryRow[]) : [];
+        allEntries.push(...rows);
+        if (rows.length < ENTRIES_PAGE_SIZE) break;
+        entOffset += ENTRIES_PAGE_SIZE;
+      }
     }
 
     const totalBalanceByLogId = new Map<string, number>();
@@ -145,20 +111,22 @@ export async function GET(req: NextRequest) {
       resolutionByLogId.set(e.transfer_log_id, res);
     });
 
-    let storedTotalByLogId = new Map<string, number>();
-    const { data: logsWithTotal, error: totalErr } = await supabaseServiceRole
-      .from('admin_lead_transfer_logs')
-      .select('id, total_balance_snapshot')
-      .in('id', logIds);
-    if (!totalErr && Array.isArray(logsWithTotal)) {
-      logsWithTotal.forEach((row: { id: string; total_balance_snapshot?: number | null }) => {
-        if (row.total_balance_snapshot != null) {
-          storedTotalByLogId.set(row.id, Number(row.total_balance_snapshot));
-        }
-      });
-    }
-    if (totalErr?.code === 'PGRST204') {
-      console.warn(`${LOG_PREFIX} Coluna total_balance_snapshot não existe. Use a soma das entries. Execute add_total_balance_snapshot_to_transfer_logs.sql no Supabase.`);
+    const storedTotalByLogId = new Map<string, number>();
+    for (const chunk of chunkArray(logIds, IN_BATCH_SIZE)) {
+      const { data: logsWithTotal, error: totalErr } = await supabaseServiceRole
+        .from('admin_lead_transfer_logs')
+        .select('id, total_balance_snapshot')
+        .in('id', chunk);
+      if (!totalErr && Array.isArray(logsWithTotal)) {
+        logsWithTotal.forEach((row: { id: string; total_balance_snapshot?: number | null }) => {
+          if (row.total_balance_snapshot != null) {
+            storedTotalByLogId.set(row.id, Number(row.total_balance_snapshot));
+          }
+        });
+      }
+      if (totalErr?.code === 'PGRST204') {
+        console.warn(`${LOG_PREFIX} Coluna total_balance_snapshot não existe. Use a soma das entries. Execute add_total_balance_snapshot_to_transfer_logs.sql no Supabase.`);
+      }
     }
 
     const emailsLower = new Set<string>();
@@ -176,8 +144,7 @@ export async function GET(req: NextRequest) {
       const { data: profiles } = await supabaseServiceRole
         .from('profiles')
         .select('email, full_name')
-        .not('email', 'is', null)
-        .limit(2000);
+        .not('email', 'is', null);
       (profiles ?? []).forEach((p: { email: string | null; full_name: string | null }) => {
         const email = (p.email ?? '').trim().toLowerCase();
         if (email && emailsLower.has(email)) {

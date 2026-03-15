@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
   try {
     const { userId: gerenteId } = await requireStatus(req, ['gerente']);
     const body = await req.json();
-    const { banca_id: bancaId, lead_type: leadTypeParam, consultores, deadline_days: deadlineDaysParam } = body;
+    const { banca_id: bancaId, lead_type: leadTypeParam, consultores } = body;
 
     if (!bancaId || typeof bancaId !== 'string' || !bancaId.trim()) {
       return errorResponse('Informe a banca para qual os leads serão transferidos (banca_id).', 400);
@@ -54,10 +54,6 @@ export async function POST(req: NextRequest) {
     const profile = await getUserProfile(gerenteId);
     const gerenteName = (profile?.full_name ?? profile?.email ?? '').trim() || (profile?.email ?? 'Gerente');
 
-    const deadlineDays = typeof deadlineDaysParam === 'number' && deadlineDaysParam >= 1 && deadlineDaysParam <= 365
-      ? deadlineDaysParam
-      : null;
-
     const { data: row, error } = await supabaseServiceRole
       .from('gerente_lead_requests')
       .insert({
@@ -67,7 +63,6 @@ export async function POST(req: NextRequest) {
         consultores: payload,
         status: 'pending',
         banca_id: bancaId.trim(),
-        ...(deadlineDays != null && { deadline_days: deadlineDays }),
       })
       .select('id, created_at')
       .single();
