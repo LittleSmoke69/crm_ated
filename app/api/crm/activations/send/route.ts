@@ -166,6 +166,7 @@ export async function POST(req: NextRequest) {
         )
       `)
       .eq('instance_name', instanceName)
+      .eq('user_id', userId)
       .eq('is_active', true)
       .single();
 

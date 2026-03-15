@@ -120,12 +120,17 @@ export async function POST(
     let consultorToUse: { id: string; user_id?: string; email: string; full_name: string | null; status: string; enroller: string | null };
 
     if (existing) {
-      // Usuário já cadastrado: ignora criação e vincula a submissão ao consultor existente (atualiza enroller e banca)
+      // Usuário já cadastrado: vincula a submissão ao consultor existente.
+      // Só atualiza enroller se ainda não tiver um (evita mover consultor de outra rede sem querer).
       consultorToUse = existing as typeof consultorToUse;
-      await supabaseServiceRole
-        .from('profiles')
-        .update({ enroller: gerenteId })
-        .eq('id', existing.id);
+      const enrollerUpdate: Record<string, string> = {};
+      if (!existing.enroller) enrollerUpdate.enroller = gerenteId;
+      if (Object.keys(enrollerUpdate).length > 0) {
+        await supabaseServiceRole
+          .from('profiles')
+          .update(enrollerUpdate)
+          .eq('id', existing.id);
+      }
       await supabaseServiceRole
         .from('user_bancas')
         .upsert(
@@ -143,6 +148,7 @@ export async function POST(
           user_id: newUserId,
           email: submission.email.trim().toLowerCase(),
           full_name: submission.full_name || null,
+          telefone: submission.phone ? submission.phone.trim() : null,
           password_hash: passwordHash,
           status: 'consultor',
           enroller: gerenteId,

@@ -6,7 +6,7 @@
   package = "@netlify/plugin-nextjs"
 
 # Scheduled Functions: process-campaign-queue, process-message-queue, check-instances-status
-# Maturador: maturation-tick e maturation-scheduler DESATIVADOS (não estamos usando por enquanto)
+# Maturador: maturation-tick roda a cada 1 minuto; maturation-scheduler desativado
 # process-campaign-queue e process-message-queue: rodam a cada 1 minuto para processar jobs das filas
 # process-activation-mass-send: processa campanhas de disparo em massa (evita timeout com muitos grupos)
 # check-instances-status: roda a cada 5 minutos para verificar status das instâncias
@@ -29,7 +29,9 @@
     schedule = "0 8 * * *"
   [functions."transfer-resolve-expired"]
     schedule = "*/10 * * * *" # A cada 10 minutos
-  # [functions."maturation-tick"]
-  #   schedule = "*/1 * * * *"
+    # Timeout em segundos (máx. 26 no Netlify). Permite esperar a resposta da API que processa até 5 logs por run.
+    timeout = 26
+  [functions."maturation-tick"]
+    schedule = "*/1 * * * *"
   # [functions."maturation-scheduler"]
   #   schedule = "*/10 * * * *"

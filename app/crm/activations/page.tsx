@@ -632,11 +632,19 @@ const ActivationsPage = () => {
           setUploadProgress(100);
         } catch (mediaError: any) {
           console.error('Erro ao fazer upload de mídia:', mediaError);
-          showToast(`Erro ao fazer upload de mídia: ${mediaError.message}`, 'error');
+          // Deleta a mensagem órfã criada no passo 1 para evitar lixo no banco
+          try {
+            await fetch(`/api/crm/messages/${messageId}`, {
+              method: 'DELETE',
+              headers: { 'X-User-Id': userId },
+            });
+          } catch (deleteErr) {
+            console.error('Erro ao deletar mensagem órfã:', deleteErr);
+          }
+          showToast(`Erro ao fazer upload de mídia: ${mediaError.message}. A mensagem não foi salva; tente novamente.`, 'error');
           setIsUploading(false);
           setUploadProgress(0);
           setUploadStatus('');
-          // Não retorna aqui - a mensagem já foi criada, apenas sem mídia
           return;
         }
       }
@@ -646,7 +654,7 @@ const ActivationsPage = () => {
         setUploadProgress(100);
         setUploadStatus('Concluído!');
       }
-      
+
       setShowCreateModal(false);
       setFormData({ 
         title: '', 
@@ -782,7 +790,16 @@ const ActivationsPage = () => {
               throw new Error(updateMediaData.error || 'Erro ao atualizar mídia do novo modelo');
             }
           } catch (mediaError: any) {
-            showToast(`Erro no upload de mídia: ${mediaError.message}`, 'error');
+            // Deleta a mensagem órfã criada para este grupo para evitar lixo no banco
+            try {
+              await fetch(`/api/crm/messages/${newMessageId}`, {
+                method: 'DELETE',
+                headers: { 'X-User-Id': userId },
+              });
+            } catch (deleteErr) {
+              console.error('Erro ao deletar mensagem órfã (edit-group):', deleteErr);
+            }
+            showToast(`Erro no upload de mídia: ${mediaError.message}. A mensagem não foi salva; tente novamente.`, 'error');
             setIsUploading(false);
             setUploadProgress(0);
             setUploadStatus('');
@@ -826,6 +843,9 @@ const ActivationsPage = () => {
       if (attachmentFile && mediaType) {
         setUploadProgress(10);
       }
+      // Normaliza 'video' → 'text_with_attachment' igual ao fluxo de criação
+      const normalizedEditMessageType =
+        formData.message_type === 'video' ? 'text_with_attachment' : formData.message_type;
       const updateResponse = await fetch(`/api/crm/messages/${editingMessage.id}`, {
         method: 'PATCH',
         headers: {
@@ -839,7 +859,7 @@ const ActivationsPage = () => {
           has_attachment: formData.has_attachment || !!attachmentFile,
           attachment_with_caption: formData.attachment_with_caption,
           mention_all: formData.mention_all,
-          message_type: formData.message_type,
+          message_type: normalizedEditMessageType,
           ptv_delay: formData.message_type === 'ptv' ? (formData.ptv_delay ?? 1200) : undefined,
         }),
       });

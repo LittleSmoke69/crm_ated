@@ -58,6 +58,7 @@ export async function POST(req: NextRequest) {
       .from('evolution_instances')
       .select('id, instance_name, is_active, status')
       .eq('instance_name', instanceName)
+      .eq('user_id', userId)
       .eq('is_active', true)
       .single();
 

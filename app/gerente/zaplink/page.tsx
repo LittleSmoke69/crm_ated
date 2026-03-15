@@ -175,7 +175,7 @@ export default function GerenteZaplinkPage() {
           send_to: 'all_approved',
         }),
       });
-      let json: { success?: boolean; message?: string; error?: string; data?: { sent?: number } } = {};
+      let json: { success?: boolean; message?: string; error?: string; data?: { sent?: number; background?: boolean } } = {};
       try {
         json = await res.json();
       } catch {

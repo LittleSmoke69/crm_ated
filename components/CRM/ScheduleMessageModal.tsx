@@ -69,18 +69,24 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
     { value: 'sunday', label: 'Domingo' },
   ];
 
-  // Carrega grupos do banco de dados
-  const fetchDbGroups = async () => {
+  // Carrega grupos do banco de dados filtrados pela instância selecionada
+  const fetchDbGroups = async (instanceName?: string) => {
+    const instance = instanceName ?? selectedInstance;
+    if (!instance) {
+      setGroups([]);
+      return;
+    }
     setLoading(true);
     try {
       const { data, error } = await supabase
         .from('whatsapp_groups')
         .select('group_id, group_subject')
         .eq('user_id', userId)
+        .eq('instance_name', instance)
         .order('group_subject', { ascending: true });
 
       if (error) throw error;
-      
+
       const formattedGroups = (data || []).map(g => ({
         id: g.group_id,
         subject: g.group_subject
@@ -150,7 +156,7 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
       if (r.ok && data.success) {
         const { inserted = 0, updated = 0 } = data.data || {};
         showToast(`${inserted + updated} grupo(s) salvos no banco (sem duplicar existentes)`, 'success');
-        await fetchDbGroups();
+        await fetchDbGroups(selectedInstance);
       } else {
         showToast(data.error || 'Erro ao salvar grupos', 'error');
       }
@@ -161,18 +167,16 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
     }
   };
 
-  // Inicialização
+  // Inicialização: busca instâncias ao abrir
   useEffect(() => {
     if (isOpen && userId) {
-      // Busca instâncias
       fetch('/api/instances', {
         headers: { 'X-User-Id': userId },
       })
         .then(res => res.json())
         .then(data => {
           if (data.success) {
-            // Filtra apenas instâncias mestres conectadas para ativações
-            const masterConnected = data.data.filter((i: any) => 
+            const masterConnected = data.data.filter((i: any) =>
               i.status === 'connected' && i.is_master === true
             );
             setInstances(masterConnected);
@@ -182,11 +186,17 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
           }
         })
         .catch(err => console.error('Erro ao buscar instâncias:', err));
-
-      // Busca grupos
-      fetchDbGroups();
     }
   }, [isOpen, userId]);
+
+  // Carrega grupos quando a instância selecionada muda (step 3)
+  useEffect(() => {
+    if (isOpen && selectedInstance) {
+      fetchDbGroups(selectedInstance);
+    } else if (isOpen && !selectedInstance) {
+      setGroups([]);
+    }
+  }, [isOpen, selectedInstance]);
 
   // Reset ao fechar
   useEffect(() => {

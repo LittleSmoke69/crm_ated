@@ -501,7 +501,7 @@ async function processMessageJob(job: any, workerId: string): Promise<{ success:
           recurring_days, // Passa o valor bruto, a função normaliza internamente
           recurring_time || '',
           logPrefix,
-          next_run_utc ?? undefined
+          new Date().toISOString() // Usa o momento real da execução, não o horário agendado
         );
         
         // Se não conseguiu calcular, usa fallback: amanhã no mesmo horário no timezone do agendamento (evita +7 dias)
@@ -676,6 +676,7 @@ export const handler: Handler = async (event, context) => {
     const { data: unlockedJobs } = await supabaseServiceRole
       .from('message_schedules')
       .update({
+        status: 'scheduled', // Reseta para scheduled para que o job possa ser reprocessado
         locked_at: null,
         locked_by: null,
         updated_at: new Date().toISOString(),
