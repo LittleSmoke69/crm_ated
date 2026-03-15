@@ -408,32 +408,6 @@ export default function DonoBancaHierarquia({
     (g.full_name?.toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
-  const [addingToBancaUserId, setAddingToBancaUserId] = useState<string | null>(null);
-
-  const handleAddConsultantToBanca = async (consultantId: string) => {
-    const id = bancaId;
-    if (!id) return;
-    setAddingToBancaUserId(consultantId);
-    try {
-      const res = await fetch(`/api/dono-banca/bancas/${id}/add-user`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: consultantId }),
-        credentials: 'include',
-      });
-      const result = await res.json();
-      if (result.success) {
-        await checkAuthorization();
-      } else {
-        console.error(result.error || 'Erro ao atribuir');
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setAddingToBancaUserId(null);
-    }
-  };
-
   const handleSignOut = () => {
     if (typeof window !== 'undefined') {
       sessionStorage.removeItem('user_id');
@@ -1246,37 +1220,6 @@ export default function DonoBancaHierarquia({
                         </a>
                       </td>
                     </tr>
-                    {gerente.consultoresEmOutrasBancas && gerente.consultoresEmOutrasBancas.length > 0 && (
-                      <tr className="bg-amber-50/60 dark:bg-amber-900/20 border-l-4 border-amber-300 dark:border-amber-600">
-                        <td colSpan={7} className="px-4 sm:px-6 py-3 text-sm">
-                          <p className="font-semibold text-amber-800 dark:text-amber-200 mb-2 flex items-center gap-1.5">
-                            <Users className="w-4 h-4 shrink-0" />
-                            Consultores deste gerente em outras bancas (ainda não atribuídos a {bancaName || 'esta banca'})
-                          </p>
-                          <ul className="space-y-1.5">
-                            {gerente.consultoresEmOutrasBancas.map((c) => (
-                              <li key={c.id} className="flex items-center justify-between gap-3 flex-wrap bg-white/80 dark:bg-gray-800/80 rounded-lg px-3 py-2 border border-amber-100 dark:border-amber-800">
-                                <span className="text-gray-700 dark:text-gray-200">{c.full_name || c.email}</span>
-                                <span className="text-gray-500 dark:text-gray-400 text-xs">{c.email}</span>
-                                <button
-                                  type="button"
-                                  onClick={() => handleAddConsultantToBanca(c.id)}
-                                  disabled={!!addingToBancaUserId || !bancaId}
-                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                                >
-                                  {addingToBancaUserId === c.id ? (
-                                    <Loader2 className="w-4 h-4 animate-spin" />
-                                  ) : (
-                                    <Plus className="w-4 h-4" />
-                                  )}
-                                  Atribuir à {bancaName || 'banca'}
-                                </button>
-                              </li>
-                            ))}
-                          </ul>
-                        </td>
-                      </tr>
-                    )}
                     </React.Fragment>
                   ))
                 )}
@@ -1337,30 +1280,6 @@ export default function DonoBancaHierarquia({
                       </p>
                     </div>
                   </div>
-                  {gerente.consultoresEmOutrasBancas && gerente.consultoresEmOutrasBancas.length > 0 && (
-                    <div className="mt-3 pt-3 border-t border-amber-200 dark:border-amber-700 bg-amber-50/60 dark:bg-amber-900/20 rounded-xl p-3">
-                      <p className="text-xs font-semibold text-amber-800 dark:text-amber-200 mb-2 flex items-center gap-1">
-                        <Users className="w-3.5 h-3.5 shrink-0" />
-                        Em outras bancas (atribuir a {bancaName || 'esta banca'})
-                      </p>
-                      <ul className="space-y-2">
-                        {gerente.consultoresEmOutrasBancas.map((c) => (
-                          <li key={c.id} className="flex items-center justify-between gap-2 flex-wrap bg-white/90 dark:bg-gray-800/80 rounded-lg px-2.5 py-2 border border-amber-100 dark:border-amber-800">
-                            <span className="text-gray-700 dark:text-gray-200 text-sm truncate">{c.full_name || c.email}</span>
-                            <button
-                              type="button"
-                              onClick={() => handleAddConsultantToBanca(c.id)}
-                              disabled={!!addingToBancaUserId || !bancaId}
-                              className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500 text-white text-xs font-medium hover:bg-amber-600 disabled:opacity-50"
-                            >
-                              {addingToBancaUserId === c.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
-                              Atribuir
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
                 </div>
               ))
             )}

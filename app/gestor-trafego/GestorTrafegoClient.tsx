@@ -140,12 +140,18 @@ export default function GestorTrafegoClient({
   canSelectDono?: boolean
 }) {
   const { checking: authChecking, userId: clientUserId } = useRequireAuth();
+
+  function formatMetaSpend(amount: number, currency?: string): string {
+    const symbol = currency === 'USD' ? '$ ' : currency === 'EUR' ? '€ ' : 'R$ ';
+    return `${symbol}${amount.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
   const userId = serverUserId || clientUserId;
   const checking = serverUserId ? false : authChecking;
   const isAdminOrSuperAdmin = serverUserStatus === 'admin' || serverUserStatus === 'super_admin';
   const showDonoSelector = isAdminOrSuperAdmin || canSelectDono;
   
   const [loading, setLoading] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(authError ? false : (initialData ? true : null));
   const [gerentes, setGerentes] = useState<Gerente[]>(initialData?.gerentes || []);
   const [externalMetrics, setExternalMetrics] = useState<ExternalMetrics | null>(initialData?.externalMetrics || null);
@@ -156,6 +162,7 @@ export default function GestorTrafegoClient({
     clicks: number;
     leads: number;
     spend: number;
+    currency?: string;
   } | null>(initialData?.metaFunnel || null);
   const [bancaName, setBancaName] = useState<string | null>(initialData?.bancaInfo?.name || null);
   const [bancaId, setBancaId] = useState<string | null>(initialData?.bancaId || null);
@@ -383,82 +390,82 @@ export default function GestorTrafegoClient({
 
   const checkAuthorization = async () => {
     if (!userId) return;
-    
-    try {
-      // Sempre usa loading específico (ofuscado) para não travar a página
-      setLoadingMetrics(true);
-      setExternalMetricsError(null);
-      
-      const { dateFrom, dateTo } = getDateRange();
-      
-      let url = '/api/gestor-trafego/dashboard';
-      const params = new URLSearchParams();
-      if (dateFrom) params.append('date_from', dateFrom);
-      if (dateTo) params.append('date_to', dateTo);
-      params.append('meta_active_only', metaActiveOnly ? '1' : '0');
-      if (params.toString()) url += `?${params.toString()}`;
-      
-      const headers: Record<string, string> = { 'X-User-Id': userId as string };
-      if (showDonoSelector && selectedDonoId) {
-        if (selectedDonoId.startsWith('dono:')) {
-          headers['X-Effective-Dono-Id'] = selectedDonoId.slice(5);
-        } else if (selectedDonoId.startsWith('banca:')) {
-          headers['X-Effective-Banca-Id'] = selectedDonoId.slice(6);
-        } else {
-          headers['X-Effective-Dono-Id'] = selectedDonoId;
-        }
-      }
-      
-      const response = await fetch(url, { headers, credentials: 'include' });
-      const result = await response.json();
-      
-      console.log('[Frontend] Response status:', response.status);
-      console.log('[Frontend] Result success:', result.success);
-      console.log('[Frontend] Result data:', result.data ? 'present' : 'missing');
-      console.log('[Frontend] Result error:', result.error);
-      
-      if (response.ok && result.success) {
-        console.log('[Frontend] Autorização OK');
-        setIsAuthorized(true);
-        if (showDonoSelector && selectedDonoId && typeof window !== 'undefined') {
-          sessionStorage.setItem('gestor_effective_dono_id', selectedDonoId);
-        }
-        
-        // SEMPRE atualiza os gerentes quando os dados são buscados
-        // As métricas dos gerentes mudam conforme o período de data selecionado
-        setGerentes(result.data?.gerentes || []);
-        
-        // Atualiza Top 5 Consultores
-        setTop5Consultants(result.data?.top5Consultants || []);
-        
-        // Define métricas externas e erro se houver
-        if (result.data?.externalMetrics) {
-          setExternalMetrics(result.data.externalMetrics);
-          setExternalMetricsError(null);
-        } else {
-          setExternalMetrics(null);
-          // Se tem banca_url mas não tem métricas, houve erro
-          if (result.data?.externalMetricsError) {
-            setExternalMetricsError(result.data.externalMetricsError);
-          }
-        }
 
-        // Meta Funnel (Meta Ads + Loteria)
-        setMetaFunnel(result.data?.metaFunnel || null);
+    const { dateFrom, dateTo } = getDateRange();
 
-        setBancaName(result.data?.bancaInfo?.name || null);
-        setBancaId(result.data?.bancaId || null);
-        setMetaCampaignsData(result.data?.metaCampaignsData || []);
+    const baseParams = new URLSearchParams();
+    if (dateFrom) baseParams.append('date_from', dateFrom);
+    if (dateTo) baseParams.append('date_to', dateTo);
+    baseParams.append('meta_active_only', metaActiveOnly ? '1' : '0');
+
+    const headers: Record<string, string> = { 'X-User-Id': userId as string };
+    if (showDonoSelector && selectedDonoId) {
+      if (selectedDonoId.startsWith('dono:')) {
+        headers['X-Effective-Dono-Id'] = selectedDonoId.slice(5);
+      } else if (selectedDonoId.startsWith('banca:')) {
+        headers['X-Effective-Banca-Id'] = selectedDonoId.slice(6);
       } else {
-        // Se a API retornou erro, o usuário não é dono de banca
-        console.error('[Frontend] Erro na autorização:', result.error || result.message);
-        console.error('[Frontend] Response status:', response.status);
-        console.error('[Frontend] Full result:', JSON.stringify(result, null, 2));
-        setIsAuthorized(false);
+        headers['X-Effective-Dono-Id'] = selectedDonoId;
       }
-    } catch (error) {
-      console.error('[Frontend] Erro ao verificar autorização:', error);
-      setIsAuthorized(false);
+    }
+
+    setLoadingMetrics(true);
+    setExternalMetricsError(null);
+
+    // --- Chamada 1: apenas Meta Ads (rápida — só Supabase, sem APIs externas) ---
+    const metaParams = new URLSearchParams(baseParams);
+    metaParams.set('only_meta', '1');
+    const metaUrl = `/api/gestor-trafego/dashboard?${metaParams.toString()}`;
+
+    // --- Chamada 2: dados de banca/gerentes (lenta — APIs externas do CRM) ---
+    const bancaUrl = `/api/gestor-trafego/dashboard?${baseParams.toString()}`;
+
+    // Dispara as duas em paralelo. Cada uma atualiza a UI quando resolver.
+    const metaPromise = fetch(metaUrl, { headers, credentials: 'include' })
+      .then((r) => r.json())
+      .then((result) => {
+        if (result?.success && result?.data) {
+          setMetaFunnel(result.data.metaFunnel || null);
+          setMetaCampaignsData(result.data.metaCampaignsData || []);
+          if (result.data.bancaId) setBancaId(result.data.bancaId);
+          if (result.data.bancaInfo?.name) setBancaName(result.data.bancaInfo.name);
+        }
+      })
+      .catch((err) => console.warn('[Frontend] Erro ao buscar Meta:', err));
+
+    const bancaPromise = fetch(bancaUrl, { headers, credentials: 'include' })
+      .then((r) => r.json())
+      .then((result) => {
+        if (result?.success && result?.data) {
+          setApiError(null);
+          setIsAuthorized(true);
+          if (showDonoSelector && selectedDonoId && typeof window !== 'undefined') {
+            sessionStorage.setItem('gestor_effective_dono_id', selectedDonoId);
+          }
+          setGerentes(result.data.gerentes || []);
+          setTop5Consultants(result.data.top5Consultants || []);
+          if (result.data.externalMetrics) {
+            setExternalMetrics(result.data.externalMetrics);
+            setExternalMetricsError(null);
+          } else {
+            setExternalMetrics(null);
+            if (result.data.externalMetricsError) setExternalMetricsError(result.data.externalMetricsError);
+          }
+          if (result.data.bancaId) setBancaId(result.data.bancaId);
+          if (result.data.bancaInfo?.name) setBancaName(result.data.bancaInfo.name);
+        } else {
+          const errMsg = result?.error || result?.message || (typeof result?.data === 'string' ? result.data : null);
+          setApiError(errMsg || null);
+          setIsAuthorized(false);
+        }
+      })
+      .catch((err) => {
+        console.error('[Frontend] Erro ao buscar dados da banca:', err);
+        setIsAuthorized(false);
+      });
+
+    try {
+      await Promise.allSettled([metaPromise, bancaPromise]);
     } finally {
       setLoading(false);
       setLoadingMetrics(false);
@@ -507,32 +514,6 @@ export default function GestorTrafegoClient({
     g.email.toLowerCase().includes(searchTerm.toLowerCase()) || 
     (g.full_name?.toLowerCase().includes(searchTerm.toLowerCase()))
   );
-
-  const [addingToBancaUserId, setAddingToBancaUserId] = useState<string | null>(null);
-
-  const handleAddConsultantToBanca = async (consultantId: string) => {
-    const id = bancaId;
-    if (!id) return;
-    setAddingToBancaUserId(consultantId);
-    try {
-      const res = await fetch(`/api/gestor-trafego/bancas/${id}/add-user`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: consultantId }),
-        credentials: 'include',
-      });
-      const result = await res.json();
-      if (result.success) {
-        await checkAuthorization();
-      } else {
-        console.error(result.error || 'Erro ao atribuir');
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setAddingToBancaUserId(null);
-    }
-  };
 
   const handleSyncMetaAds = async () => {
     const id = effectiveBancaId;
@@ -703,7 +684,7 @@ export default function GestorTrafegoClient({
             </div>
             <h2 className="text-2xl font-bold text-gray-800 dark:text-gray-100 mb-2">Acesso Negado</h2>
             <p className="text-gray-600 dark:text-gray-300 mb-6">
-              {authError || serverError || 'Esta página é exclusiva para Gestores de Tráfego. Você não tem permissão para acessar este conteúdo.'}
+              {authError || serverError || apiError || 'Esta página é exclusiva para Gestores de Tráfego. Você não tem permissão para acessar este conteúdo.'}
             </p>
             <button
               onClick={() => window.location.href = '/'}
@@ -1038,7 +1019,7 @@ export default function GestorTrafegoClient({
                     <p className="text-xs font-bold text-gray-600 dark:text-gray-400 uppercase">Gasto</p>
                   </div>
                   <p className="text-xl font-bold text-gray-800 dark:text-gray-100">
-                    R$ {(metaFunnel?.spend ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    {formatMetaSpend(metaFunnel?.spend ?? 0, metaFunnel?.currency)}
                   </p>
                 </div>
                 <div className="bg-gray-50/80 dark:bg-gray-800/60 p-4 rounded-xl border border-gray-100 dark:border-gray-600">
@@ -1077,7 +1058,7 @@ export default function GestorTrafegoClient({
                           <td className="px-4 py-3 text-right text-gray-800 dark:text-gray-200">{row.impressions.toLocaleString('pt-BR')}</td>
                           <td className="px-4 py-3 text-right text-gray-800 dark:text-gray-200">{row.reach.toLocaleString('pt-BR')}</td>
                           <td className="px-4 py-3 text-right text-gray-800 dark:text-gray-200">{row.clicks.toLocaleString('pt-BR')}</td>
-                          <td className="px-4 py-3 text-right text-gray-800 dark:text-gray-200">R$ {row.spend.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                          <td className="px-4 py-3 text-right text-gray-800 dark:text-gray-200">{formatMetaSpend(row.spend, metaFunnel?.currency)}</td>
                           <td className="px-4 py-3 text-right text-gray-800 dark:text-gray-200">{row.leads.toLocaleString('pt-BR')}</td>
                         </tr>
                       ))}
@@ -1421,7 +1402,7 @@ export default function GestorTrafegoClient({
           </div>
           {metaFunnel && metaFunnel.spend > 0 && (
             <p className="text-xs text-gray-500 mt-2">
-              Gasto Meta (período): R$ {metaFunnel.spend.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+              Gasto Meta (período): {formatMetaSpend(metaFunnel.spend, metaFunnel.currency)}
             </p>
           )}
           {!metaFunnel && !externalMetricsError && (
@@ -1708,37 +1689,6 @@ export default function GestorTrafegoClient({
                         </a>
                       </td>
                     </tr>
-                    {gerente.consultoresEmOutrasBancas && gerente.consultoresEmOutrasBancas.length > 0 && (
-                      <tr className="bg-amber-50/60 dark:bg-amber-900/20 border-l-4 border-amber-300 dark:border-amber-600">
-                        <td colSpan={7} className="px-6 py-3 text-sm">
-                          <p className="font-semibold text-amber-800 dark:text-amber-200 mb-2 flex items-center gap-1.5">
-                            <Users className="w-4 h-4" />
-                            Consultores deste gerente em outras bancas (ainda não atribuídos a {bancaName || 'esta banca'})
-                          </p>
-                          <ul className="space-y-1.5">
-                            {gerente.consultoresEmOutrasBancas.map((c) => (
-                              <li key={c.id} className="flex items-center justify-between gap-3 flex-wrap bg-white/80 dark:bg-gray-700/80 rounded-lg px-3 py-2 border border-amber-100 dark:border-amber-800">
-                                <span className="text-gray-700 dark:text-gray-200">{c.full_name || c.email}</span>
-                                <span className="text-gray-500 dark:text-gray-400 text-xs">{c.email}</span>
-                                <button
-                                  type="button"
-                                  onClick={() => handleAddConsultantToBanca(c.id)}
-                                  disabled={!!addingToBancaUserId || !bancaId}
-                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                                >
-                                  {addingToBancaUserId === c.id ? (
-                                    <Loader2 className="w-4 h-4 animate-spin" />
-                                  ) : (
-                                    <Plus className="w-4 h-4" />
-                                  )}
-                                  Atribuir à {bancaName || 'banca'}
-                                </button>
-                              </li>
-                            ))}
-                          </ul>
-                        </td>
-                      </tr>
-                    )}
                     </React.Fragment>
                   ))
                 )}
@@ -1799,30 +1749,6 @@ export default function GestorTrafegoClient({
                       </p>
                     </div>
                   </div>
-                  {gerente.consultoresEmOutrasBancas && gerente.consultoresEmOutrasBancas.length > 0 && (
-                    <div className="mt-3 pt-3 border-t border-amber-200 bg-amber-50/60 rounded-xl p-3">
-                      <p className="text-xs font-semibold text-amber-800 mb-2 flex items-center gap-1">
-                        <Users className="w-3.5 h-3.5" />
-                        Em outras bancas (atribuir a {bancaName || 'esta banca'})
-                      </p>
-                      <ul className="space-y-2">
-                        {gerente.consultoresEmOutrasBancas.map((c) => (
-                          <li key={c.id} className="flex items-center justify-between gap-2 flex-wrap bg-white/90 dark:bg-gray-700/90 rounded-lg px-2.5 py-2 border border-amber-100 dark:border-amber-800">
-                            <span className="text-gray-700 dark:text-gray-200 text-sm truncate">{c.full_name || c.email}</span>
-                            <button
-                              type="button"
-                              onClick={() => handleAddConsultantToBanca(c.id)}
-                              disabled={!!addingToBancaUserId || !bancaId}
-                              className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500 text-white text-xs font-medium hover:bg-amber-600 disabled:opacity-50"
-                            >
-                              {addingToBancaUserId === c.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
-                              Atribuir
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
                 </div>
               ))
             )}

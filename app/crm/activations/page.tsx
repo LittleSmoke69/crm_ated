@@ -2368,6 +2368,7 @@ const ActivationsPage = () => {
                       <th className="text-center p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Falhas</th>
                       <th className="text-center p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Total</th>
                       <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Criada em</th>
+                      <th className="text-center p-3 text-sm font-medium text-gray-700 dark:text-[#ccc] w-24">Ações</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2404,6 +2405,33 @@ const ActivationsPage = () => {
                           </td>
                           <td className="p-3 text-sm text-gray-500 dark:text-[#888]">
                             {job.created_at ? new Date(job.created_at).toLocaleString('pt-BR') : '—'}
+                          </td>
+                          <td className="p-3 text-center">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (!window.confirm('Excluir esta campanha? O envio será interrompido.')) return;
+                                try {
+                                  const res = await fetch(`/api/crm/activations/mass-send/jobs/${job.id}`, {
+                                    method: 'DELETE',
+                                    headers: { 'X-User-Id': userId ?? '' },
+                                  });
+                                  const data = await res.json();
+                                  if (res.ok && data.success) {
+                                    showToast('Campanha excluída.', 'success');
+                                    loadMassSendJobs();
+                                  } else {
+                                    showToast(data?.error || 'Erro ao excluir campanha.', 'error');
+                                  }
+                                } catch {
+                                  showToast('Erro ao excluir campanha.', 'error');
+                                }
+                              }}
+                              className="p-2 rounded-lg text-gray-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400 transition-colors"
+                              title="Excluir campanha"
+                            >
+                              <Trash className="w-4 h-4" />
+                            </button>
                           </td>
                         </tr>
                       );

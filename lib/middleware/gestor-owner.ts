@@ -7,7 +7,8 @@ import { getUserProfile } from '@/lib/middleware/permissions';
  */
 export async function getEffectiveDonoIdForGestor(gestorUserId: string): Promise<string | null> {
   const profile = await getUserProfile(gestorUserId);
-  if (!profile || profile.status !== 'gestor' || !profile.enroller) {
+  const statusNorm = profile?.status?.trim().toLowerCase();
+  if (!profile || statusNorm !== 'gestor' || !profile.enroller) {
     return null;
   }
   const enrollerProfile = await getUserProfile(profile.enroller);

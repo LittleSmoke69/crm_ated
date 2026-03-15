@@ -107,6 +107,29 @@ export async function POST(req: NextRequest) {
         return errorResponse('Erro ao criar campanha de disparo em massa. Tente novamente.', 500);
       }
       console.log(`📋 [ACTIVATION] Campanha de disparo em massa criada: job ${job.id}, ${groupIds.length} grupos`);
+
+      // Dispara o processamento imediato (em segundo plano) para a campanha começar a executar em segundos
+      const cronSecret = process.env.CRON_SECRET;
+      if (cronSecret) {
+        const base =
+          process.env.URL ||
+          process.env.NEXT_PUBLIC_SITE_URL ||
+          (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null);
+        const siteUrl = base ? base.replace(/\/$/, '') : null;
+        if (siteUrl) {
+          const processUrl = `${siteUrl}/api/crm/activations/mass-send/process`;
+          fetch(processUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-internal-cron-secret': cronSecret,
+            },
+          }).catch((err) => {
+            console.warn('[ACTIVATION] Trigger em background do processamento falhou (cron continuará):', err?.message);
+          });
+        }
+      }
+
       return new Response(
         JSON.stringify({
           success: true,

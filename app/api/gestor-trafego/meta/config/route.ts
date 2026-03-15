@@ -156,7 +156,7 @@ export async function PUT(req: NextRequest) {
     if (!canAccess) return errorResponse('Você não tem permissão para configurar Meta nesta banca.', 403);
 
     // Gestor: só pode alterar Ad Account, Pixel e Campanha padrão; URL e token ficam travados (apenas admin)
-    const isGestor = profile.status === 'gestor';
+    const isGestor = profile.status?.trim().toLowerCase() === 'gestor';
     const payload: Record<string, unknown> = {
       ad_account_id: body.ad_account_id,
       pixel_id: body.pixel_id,

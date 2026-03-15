@@ -22,7 +22,8 @@ export async function POST(
     if (!bancaId?.trim()) return errorResponse('banca_id é obrigatório', 400);
 
     const profile = await getUserProfile(userId);
-    if (!profile || profile.status !== 'gestor') {
+    const statusNorm = profile?.status?.trim().toLowerCase();
+    if (!profile || statusNorm !== 'gestor') {
       return errorResponse('Acesso negado. Apenas gestor pode adicionar usuário à banca.', 403);
     }
 

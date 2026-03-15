@@ -34,7 +34,8 @@ export async function GET(req: NextRequest) {
         .maybeSingle();
       if (profileByUserId) profile = profileByUserId as Awaited<ReturnType<typeof getUserProfile>>;
     }
-    if (!profile || profile.status !== 'gestor') {
+    const statusNorm = profile?.status?.trim().toLowerCase();
+    if (!profile || statusNorm !== 'gestor') {
       return errorResponse('Acesso negado', 403);
     }
     const profileId = profile.id;

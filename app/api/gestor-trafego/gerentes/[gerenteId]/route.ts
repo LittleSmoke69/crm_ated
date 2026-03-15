@@ -30,11 +30,12 @@ export async function GET(
     const { userId } = await requireStatus(req, ['gestor', 'admin', 'super_admin']);
     const profile = await getUserProfile(userId);
     if (!profile) return errorResponse('Perfil não encontrado', 403);
+    const statusNorm = profile.status?.trim().toLowerCase();
 
     let ownerId: string | null = null;
-    if (profile.status === 'gestor') {
+    if (statusNorm === 'gestor') {
       ownerId = await getEffectiveDonoIdForGestor(userId);
-    } else if (profile.status === 'admin' || profile.status === 'super_admin') {
+    } else if (statusNorm === 'admin' || statusNorm === 'super_admin') {
       ownerId = req.headers.get('X-Effective-Dono-Id');
     }
     if (!ownerId) {

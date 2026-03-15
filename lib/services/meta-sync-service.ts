@@ -12,6 +12,7 @@ import {
   listCampaigns,
   listAdSets,
   getInsightsDaily,
+  getAccountFinance,
   mapInsightToRow,
   normalizeBudget,
   formatMetaDate,
@@ -48,6 +49,7 @@ export interface MetaIntegrationRow {
   pixel_id: string | null;
   default_campaign_id: string | null;
   is_active: boolean;
+  currency: string | null;
   last_sync_at: string | null;
   last_sync_error: string | null;
   last_sync_date_preset: string | null;
@@ -56,7 +58,7 @@ export interface MetaIntegrationRow {
 export async function getMetaConfig(bancaId: string): Promise<MetaIntegrationRow | null> {
   const { data, error } = await supabaseServiceRole
     .from('meta_integrations')
-    .select('id, banca_id, base_url, token_last4, ad_account_id, pixel_id, default_campaign_id, is_active, last_sync_at, last_sync_error, last_sync_date_preset')
+    .select('id, banca_id, base_url, token_last4, ad_account_id, pixel_id, default_campaign_id, is_active, currency, last_sync_at, last_sync_error, last_sync_date_preset')
     .eq('banca_id', bancaId)
     .maybeSingle();
 
@@ -206,6 +208,7 @@ export interface MetaInsightsAggregated {
   clicks: number;
   leads: number;
   spend: number;
+  currency: string;
 }
 
 export async function getMetaInsightsAggregated(
@@ -214,16 +217,29 @@ export async function getMetaInsightsAggregated(
   dateTo?: string | null,
   activeOnly = true
 ): Promise<MetaInsightsAggregated | null> {
+  const [campaignsResult, integrationResult] = await Promise.all([
+    activeOnly
+      ? supabaseServiceRole
+          .from('meta_campaigns')
+          .select('campaign_id')
+          .eq('banca_id', bancaId)
+          .eq('status', 'ACTIVE')
+          .eq('effective_status', 'ACTIVE')
+      : Promise.resolve({ data: null }),
+    supabaseServiceRole
+      .from('meta_integrations')
+      .select('currency')
+      .eq('banca_id', bancaId)
+      .maybeSingle(),
+  ]);
+
+  const currency = (integrationResult as any).data?.currency || 'BRL';
+
   let campaignIds: string[] | null = null;
   if (activeOnly) {
-    const { data: campaigns } = await supabaseServiceRole
-      .from('meta_campaigns')
-      .select('campaign_id')
-      .eq('banca_id', bancaId)
-      .eq('status', 'ACTIVE')
-      .eq('effective_status', 'ACTIVE');
-    campaignIds = (campaigns || []).map((c: { campaign_id: string }) => c.campaign_id);
-    if (campaignIds.length === 0) return null;
+    const ids: string[] = ((campaignsResult as any).data || []).map((c: { campaign_id: string }) => c.campaign_id);
+    if (ids.length === 0) return null;
+    campaignIds = ids;
   }
 
   let query = supabaseServiceRole
@@ -233,7 +249,7 @@ export async function getMetaInsightsAggregated(
 
   if (dateFrom) query = query.gte('date', dateFrom);
   if (dateTo) query = query.lte('date', dateTo);
-  if (campaignIds?.length) query = query.in('campaign_id', campaignIds);
+  if (campaignIds && campaignIds.length > 0) query = query.in('campaign_id', campaignIds);
 
   const { data, error } = await query;
   if (error || !data?.length) return null;
@@ -249,7 +265,7 @@ export async function getMetaInsightsAggregated(
     { reach: 0, impressions: 0, clicks: 0, leads: 0, spend: 0 }
   );
 
-  return aggregated;
+  return { ...aggregated, currency };
 }
 
 export interface MetaCampaignWithMetrics {
@@ -374,11 +390,14 @@ export async function runSync(bancaId: string, datePreset = DEFAULT_DATE_PRESET)
   const timeRange = getTimeRangeSinceUntil(30);
 
   try {
-    const [campaigns, adsets, insights] = await Promise.all([
+    const [campaigns, adsets, insights, accountFinance] = await Promise.all([
       listCampaigns(baseUrl, token, adAccountId),
       listAdSets(baseUrl, token, adAccountId),
       getInsightsDaily(baseUrl, token, adAccountId, timeRange),
+      getAccountFinance(baseUrl, token, adAccountId).catch(() => null),
     ]);
+
+    const accountCurrency = accountFinance?.currency || 'BRL';
 
     const now = new Date().toISOString();
 
@@ -448,6 +467,7 @@ export async function runSync(bancaId: string, datePreset = DEFAULT_DATE_PRESET)
         last_sync_at: now,
         last_sync_error: null,
         last_sync_date_preset: `${timeRange.since}..${timeRange.until}`,
+        currency: accountCurrency,
         updated_at: now,
       })
       .eq('banca_id', bancaId);

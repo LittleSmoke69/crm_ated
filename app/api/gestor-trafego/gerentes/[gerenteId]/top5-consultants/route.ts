@@ -25,7 +25,8 @@ export async function GET(
     const { userId } = await requireStatus(req, ['gestor', 'admin', 'super_admin']);
     const profile = await getUserProfile(userId);
     if (!profile) return errorResponse('Perfil não encontrado', 403);
-    let ownerId: string | null = profile.status === 'gestor'
+    const statusNorm = profile.status?.trim().toLowerCase();
+    let ownerId: string | null = statusNorm === 'gestor'
       ? await getEffectiveDonoIdForGestor(userId)
       : req.headers.get('X-Effective-Dono-Id');
     if (!ownerId) return errorResponse('Gestor vinculado a um Dono ou informe X-Effective-Dono-Id.', 403);
