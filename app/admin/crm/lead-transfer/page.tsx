@@ -43,8 +43,8 @@ const MAX_LEADS_SELECT = 200;
 const BANCAS_DROPDOWN_VISIBLE = 4;
 /** Itens por página na tabela de histórico de transferências */
 const LOGS_PAGE_SIZE = 10;
-/** Tamanho do pacote ao carregar logs (sem limite — trazer todas). */
-const LOGS_CHUNK_SIZE = 50000;
+/** Limite único na requisição de logs: trazer tudo que a API retornar (sem limitador na aba Histórico). */
+const LOGS_REQUEST_LIMIT = 10_000_000;
 /** Leads por página no modal "Leads da transferência" */
 const MODAL_LEADS_PAGE_SIZE = 10;
 /** Solicitações de leads: itens por página na aba Solicitações */
@@ -314,8 +314,9 @@ export default function AdminLeadTransferPage() {
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [transferType, setTransferType] = useState<'TF' | 'TF1' | 'TF2' | 'TF3'>('TF');
 
-  const [managementFrom, setManagementFrom] = useState(() => getLast30DaysRangeSãoPaulo().from);
-  const [managementTo, setManagementTo] = useState(() => getLast30DaysRangeSãoPaulo().to);
+  /** Período vazio = todas as transferências do banco (ex.: 527). Preenchido = filtra por data. */
+  const [managementFrom, setManagementFrom] = useState('');
+  const [managementTo, setManagementTo] = useState('');
   const [managementTransferType, setManagementTransferType] = useState('');
   /** Filtro de prazo por dias: 'all' | '1' | '5' | '10' | 'custom' | 'expired'. Valores numéricos = faltando até N dias. */
   const [managementPrazoFilter, setManagementPrazoFilter] = useState<'all' | '1' | '5' | '10' | 'custom' | 'expired'>('all');
@@ -405,8 +406,10 @@ export default function AdminLeadTransferPage() {
   /** Consultores da banca da transferência (para o dropdown do modal "Mover para próximo") */
   const [moveModalConsultants, setMoveModalConsultants] = useState<Consultant[]>([]);
   const [loadingMoveModalConsultants, setLoadingMoveModalConsultants] = useState(false);
-  /** Lista de transferências expiradas com pendentes (para botão "Resolver expiradas") */
+  /** Lista de transferências expiradas (cada uma com to_resolve = leads pendentes nesse log) */
   const [expiredLogsList, setExpiredLogsList] = useState<{ id: string; banca_id: string; to_resolve: number }[]>([]);
+  /** Totais da API expired: count de transferências expiradas e de leads pendentes de resolução */
+  const [expiredTotals, setExpiredTotals] = useState<{ total_expired_logs: number; total_pending_entries: number }>({ total_expired_logs: 0, total_pending_entries: 0 });
   const [loadingExpiredLogs, setLoadingExpiredLogs] = useState(false);
   const [resolveBatchLoading, setResolveBatchLoading] = useState(false);
   /** Resultado do resolve-batch para exibir relatório em azul + card verde de resolvidas */
@@ -425,7 +428,7 @@ export default function AdminLeadTransferPage() {
   /** Reverter resolvidas para pendente (aba Histórico): loading */
   const [revertResolvedLoading, setRevertResolvedLoading] = useState(false);
   /** Transferências já resolvidas no banco (card verde persistente) */
-  const [resolvedStats, setResolvedStats] = useState<{ total_resolved_logs: number; total_disponivel: number; total_vinculado: number; total_lucro_realizado: number; total_aposta_realizado: number; by_type: Record<string, number> }>({ total_resolved_logs: 0, total_disponivel: 0, total_vinculado: 0, total_lucro_realizado: 0, total_aposta_realizado: 0, by_type: { TF: 0, TF1: 0, TF2: 0, TF3: 0 } });
+  const [resolvedStats, setResolvedStats] = useState<{ total_resolved_logs: number; total_disponivel: number; total_vinculado: number; total_lucro_realizado: number; total_aposta_realizado: number; total_depositado_antes: number; total_depositado_depois: number; by_type: Record<string, number> }>({ total_resolved_logs: 0, total_disponivel: 0, total_vinculado: 0, total_lucro_realizado: 0, total_aposta_realizado: 0, total_depositado_antes: 0, total_depositado_depois: 0, by_type: { TF: 0, TF1: 0, TF2: 0, TF3: 0 } });
   const [loadingResolvedStats, setLoadingResolvedStats] = useState(false);
   /** Modal "Mover leads": lista de transferências resolvidas com leads disponíveis */
   const [moveLeadsModalOpen, setMoveLeadsModalOpen] = useState(false);
@@ -1789,44 +1792,16 @@ export default function AdminLeadTransferPage() {
     };
 
     try {
-      const res = await fetch(`/api/admin/crm/transfer-logs?${buildParams(0, LOGS_CHUNK_SIZE).toString()}`, { headers: headers() });
+      const res = await fetch(`/api/admin/crm/transfer-logs?${buildParams(0, LOGS_REQUEST_LIMIT).toString()}`, { headers: headers() });
       const json = await res.json();
       if (runId !== loadLogsRunIdRef.current) return 0;
 
       if (res.ok && json.success && Array.isArray(json.data)) {
-        const firstChunk = json.data;
-        setTransferLogs(firstChunk);
+        const list = json.data;
+        setTransferLogs(list);
         setManagementLoaded(true);
         setLoadingLogs(false);
-
-        if (firstChunk.length >= LOGS_CHUNK_SIZE) {
-          setLoadingMoreLogs(true);
-          let offset = LOGS_CHUNK_SIZE;
-          let total = firstChunk.length;
-          const fetchNext = async () => {
-            const nextRes = await fetch(`/api/admin/crm/transfer-logs?${buildParams(offset, LOGS_CHUNK_SIZE).toString()}`, { headers: headers() });
-            const nextJson = await nextRes.json();
-            if (runId !== loadLogsRunIdRef.current) return;
-            if (nextRes.ok && nextJson.success && Array.isArray(nextJson.data)) {
-              const chunk = nextJson.data;
-              total += chunk.length;
-              setTransferLogs((prev) => [...prev, ...chunk]);
-              if (chunk.length >= LOGS_CHUNK_SIZE) {
-                offset += LOGS_CHUNK_SIZE;
-                void fetchNext();
-              } else {
-                setLoadingMoreLogs(false);
-              }
-            } else {
-              setLoadingMoreLogs(false);
-            }
-          };
-          void fetchNext().catch(() => {
-            if (runId === loadLogsRunIdRef.current) setLoadingMoreLogs(false);
-          });
-          return total;
-        }
-        return firstChunk.length;
+        return list.length;
       }
       setTransferLogs([]);
       setManagementLoaded(true);
@@ -2590,16 +2565,8 @@ export default function AdminLeadTransferPage() {
 
   /** Aplica filtros da aba Histórico; carrega dados em segundo plano, pacote por pacote. Com "Todas as Bancas" agrega resolvidos, expirados, lucro, apostas e leads vinculados. */
   const applyHistoryFilters = () => {
-    const isAllBancas = historyBancaFilter === '';
     setManagementLoaded(true);
-    showToast(
-      isAllBancas
-        ? 'Carregando dados de todas as bancas (pacote por pacote). Resolvidos, expirados, lucro, apostas e leads vinculados serão somados.'
-        : 'Carregando dados em segundo plano. A tabela e os gráficos serão atualizados em instantes.',
-      'info'
-    );
-    void loadTransferLogs(historyBancaFilter);
-    void loadTransferStats(historyBancaFilter);
+    showToast('Filtros aplicados. A tabela usa os dados já carregados (sem nova requisição de transferências).', 'info');
     void loadExpiredConversionStats();
     loadExpiredLogs();
     loadResolvedStats();
@@ -2621,13 +2588,16 @@ export default function AdminLeadTransferPage() {
       if (historyDonorConsultantFilter.trim()) params.set('source_consultant_email', historyDonorConsultantFilter.trim());
       const res = await fetch(`/api/admin/crm/transfer-logs/expired?${params.toString()}`, { headers: headers() });
       const json = await res.json();
-      if (res.ok && json.success && Array.isArray(json.data)) {
-        setExpiredLogsList(json.data);
+      if (res.ok && json.success && json.data && Array.isArray(json.data.list)) {
+        setExpiredLogsList(json.data.list);
+        setExpiredTotals({ total_expired_logs: Number(json.data.total_expired_logs) || 0, total_pending_entries: Number(json.data.total_pending_entries) || 0 });
       } else {
         setExpiredLogsList([]);
+        setExpiredTotals({ total_expired_logs: 0, total_pending_entries: 0 });
       }
     } catch {
       setExpiredLogsList([]);
+      setExpiredTotals({ total_expired_logs: 0, total_pending_entries: 0 });
     } finally {
       setLoadingExpiredLogs(false);
     }
@@ -2654,13 +2624,15 @@ export default function AdminLeadTransferPage() {
           total_vinculado: Number(d.total_vinculado) || 0,
           total_lucro_realizado: Number(d.total_lucro_realizado) || 0,
           total_aposta_realizado: Number(d.total_aposta_realizado) || 0,
+          total_depositado_antes: Number(d.total_depositado_antes) || 0,
+          total_depositado_depois: Number(d.total_depositado_depois) || 0,
           by_type: (d.by_type && typeof d.by_type === 'object') ? { TF: d.by_type.TF ?? 0, TF1: d.by_type.TF1 ?? 0, TF2: d.by_type.TF2 ?? 0, TF3: d.by_type.TF3 ?? 0 } : { TF: 0, TF1: 0, TF2: 0, TF3: 0 },
         });
       } else {
-        setResolvedStats({ total_resolved_logs: 0, total_disponivel: 0, total_vinculado: 0, total_lucro_realizado: 0, total_aposta_realizado: 0, by_type: { TF: 0, TF1: 0, TF2: 0, TF3: 0 } });
+        setResolvedStats({ total_resolved_logs: 0, total_disponivel: 0, total_vinculado: 0, total_lucro_realizado: 0, total_aposta_realizado: 0, total_depositado_antes: 0, total_depositado_depois: 0, by_type: { TF: 0, TF1: 0, TF2: 0, TF3: 0 } });
       }
     } catch {
-      setResolvedStats({ total_resolved_logs: 0, total_disponivel: 0, total_vinculado: 0, total_lucro_realizado: 0, total_aposta_realizado: 0, by_type: { TF: 0, TF1: 0, TF2: 0, TF3: 0 } });
+      setResolvedStats({ total_resolved_logs: 0, total_disponivel: 0, total_vinculado: 0, total_lucro_realizado: 0, total_aposta_realizado: 0, total_depositado_antes: 0, total_depositado_depois: 0, by_type: { TF: 0, TF1: 0, TF2: 0, TF3: 0 } });
     } finally {
       setLoadingResolvedStats(false);
     }
@@ -3109,7 +3081,7 @@ export default function AdminLeadTransferPage() {
       if (historyBancaFilter) params.set('banca_id', historyBancaFilter);
       const listRes = await fetch(`/api/admin/crm/transfer-logs/expired?${params.toString()}`, { headers: headers() });
       const listJson = await listRes.json();
-      const list: { id: string; banca_id: string; to_resolve: number }[] = (listRes.ok && listJson.success && Array.isArray(listJson.data)) ? listJson.data : [];
+      const list: { id: string; banca_id: string; to_resolve: number }[] = (listRes.ok && listJson.success && listJson.data && Array.isArray(listJson.data.list)) ? listJson.data.list : [];
       if (list.length === 0) {
         showToast('Nenhuma transferência expirada pendente para resolver.', 'info');
         return;
@@ -3177,7 +3149,7 @@ export default function AdminLeadTransferPage() {
     loadExpiredLogs();
     loadResolvedStats();
     if (historyBancaFilter === '') loadResolvedList();
-  }, [activeTab, historyBancaFilter, historyDonorConsultantFilter, managementFrom, managementTo, managementTransferType, conversionConsultant, loadResolvedStats, loadResolvedList]);
+  }, [activeTab, historyBancaFilter, loadResolvedStats, loadResolvedList]);
 
   // Leads transferidos mais de uma vez: contar por lead_id nos logs
   const leadTransferCountMap = React.useMemo(() => {
@@ -3213,9 +3185,46 @@ export default function AdminLeadTransferPage() {
     return map;
   }, [transferLogs]);
 
-  /** Lista de logs filtrada por prazo (dias restantes ou expirados) e por status (normal, expiradas, resolvidas). A paginação usa esta lista. */
+  /** Lista de logs filtrada em memória (dados já trazidos na requisição): banca, período, tipo, consultor, status e prazo. Sem nova requisição ao aplicar filtros. */
   const transferLogsFiltered = React.useMemo(() => {
     let list = transferLogs;
+
+    if (historyBancaFilter) {
+      list = list.filter((log) => (log as { banca_id?: string }).banca_id === historyBancaFilter);
+    }
+
+    const fromYmd = toYYYYMMDD(managementFrom);
+    const toYmd = toYYYYMMDD(managementTo);
+    if (fromYmd) {
+      list = list.filter((log) => {
+        const created = (log.created_at ?? '').toString().slice(0, 10);
+        return created >= fromYmd;
+      });
+    }
+    if (toYmd) {
+      list = list.filter((log) => {
+        const created = (log.created_at ?? '').toString().slice(0, 10);
+        return created <= toYmd;
+      });
+    }
+    if (managementTransferType.trim()) {
+      const type = managementTransferType.trim();
+      list = list.filter((log) => (log.transfer_type ?? 'TF') === type);
+    }
+    if (conversionConsultant.trim()) {
+      const target = conversionConsultant.trim().toLowerCase();
+      list = list.filter((log) => ((log as { target_consultant_email?: string }).target_consultant_email ?? '').toLowerCase().includes(target));
+    }
+    if (historyDonorConsultantFilter.trim()) {
+      const source = historyDonorConsultantFilter.trim().toLowerCase();
+      list = list.filter((log) => ((log as { source_consultant_email?: string }).source_consultant_email ?? '').toLowerCase().includes(source));
+    }
+
+    // Só restringir a "no prazo" quando o usuário escolher explicitamente status "Normal". Com status "Todos", mostrar todas as transferências carregadas (ex.: 527 iguais ao Supabase).
+    const showOnlyNoPrazoWhenAllBancas = historyBancaFilter === '' && managementStatusFilter === 'normal';
+    if (showOnlyNoPrazoWhenAllBancas) {
+      list = list.filter((log) => !getTransferDeadlineInfo(log.created_at, (log as { deadline_days?: number }).deadline_days).expired);
+    }
 
     if (managementStatusFilter !== 'all') {
       if (managementStatusFilter === 'devolvidos') {
@@ -3243,27 +3252,12 @@ export default function AdminLeadTransferPage() {
       const { daysLeft, expired } = getTransferDeadlineInfo(log.created_at, (log as { deadline_days?: number }).deadline_days);
       return !expired && daysLeft >= 1 && daysLeft <= maxDays;
     });
-  }, [transferLogs, managementPrazoFilter, managementPrazoCustomDays, managementStatusFilter]);
+  }, [transferLogs, managementPrazoFilter, managementPrazoCustomDays, managementStatusFilter, historyBancaFilter, managementFrom, managementTo, managementTransferType, conversionConsultant, historyDonorConsultantFilter]);
 
-  /** Agrupa por transferência lógica (original + devolução + reverse = uma única linha). Cada grupo vira uma linha com displayLog = original quando possível. */
-  const transferLogsGrouped = React.useMemo(() => {
-    const groups = new Map<string, any[]>();
-    for (const log of transferLogsFiltered) {
-      const rootId = rootTransferLogIdMap.get(log.id) ?? log.id;
-      if (!groups.has(rootId)) groups.set(rootId, []);
-      groups.get(rootId)!.push(log);
-    }
-    return Array.from(groups.entries()).map(([rootId, groupLogs]) => {
-      const original = groupLogs.find((l) => l.id === rootId);
-      const displayLog = original ?? groupLogs.slice().sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''))[0];
-      return { displayLog, groupLogs };
-    });
-  }, [transferLogsFiltered, rootTransferLogIdMap]);
-
-  /** Lista filtrada, agrupada e ordenada (para paginação). Uma linha por transferência lógica. */
+  /** Lista filtrada e ordenada (uma linha por registro, sem agrupamento). */
   const transferLogsSorted = React.useMemo(() => {
-    if (!logsSortField || !logsSortOrder) return transferLogsGrouped;
-    const list = [...transferLogsGrouped];
+    const list = [...transferLogsFiltered];
+    if (!logsSortField || !logsSortOrder) return list;
     const cmp = (a: number | string, b: number | string): number => {
       if (a === b) return 0;
       if (typeof a === 'number' && typeof b === 'number') return a - b;
@@ -3271,9 +3265,7 @@ export default function AdminLeadTransferPage() {
       const sb = String(b ?? '').toLowerCase();
       return sa.localeCompare(sb, 'pt-BR');
     };
-    list.sort((itemA, itemB) => {
-      const logA = itemA.displayLog;
-      const logB = itemB.displayLog;
+    list.sort((logA, logB) => {
       let valA: number | string;
       let valB: number | string;
       const idsA = Array.isArray(logA.leads_ids) ? logA.leads_ids : [];
@@ -3332,7 +3324,7 @@ export default function AdminLeadTransferPage() {
       return logsSortOrder === 'asc' ? r : -r;
     });
     return list;
-  }, [transferLogsGrouped, logsSortField, logsSortOrder, leadTransferCountMap]);
+  }, [transferLogsFiltered, logsSortField, logsSortOrder, leadTransferCountMap]);
 
   const totalLogsPages = Math.max(1, Math.ceil(transferLogsSorted.length / LOGS_PAGE_SIZE));
   const transferLogsPaginated = React.useMemo(
@@ -3875,7 +3867,7 @@ export default function AdminLeadTransferPage() {
                   <BarChart3 className="w-5 h-5 text-[#8CD955]" />
                   Histórico e conversão
                 </h2>
-                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">Dados carregados por padrão (últimos 30 dias). Use os filtros para refinar por período, tipo, consultor e prazo.</p>
+                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">Por padrão são carregadas todas as transferências. Use os filtros de período, tipo, consultor e prazo para refinar.</p>
               </div>
               {/* Filtros: mesmo layout para todos (label + controle + legenda) */}
               <div className="p-4 rounded-xl border border-gray-200 dark:border-[#404040] mb-6 bg-gray-50/50 dark:bg-[#1f1f1f]/50">
@@ -4041,12 +4033,11 @@ export default function AdminLeadTransferPage() {
                     <button
                       type="button"
                       onClick={() => void applyHistoryFilters()}
-                      disabled={loadingLogs || loadingStats}
                       className="w-full px-4 py-2 rounded-lg text-sm font-medium bg-[#8CD955] text-white hover:bg-[#7BC84A] border border-[#8CD955]/50 transition-colors shadow-sm focus:ring-2 focus:ring-[#8CD955] focus:ring-offset-1 dark:focus:ring-offset-[#2a2a2a] disabled:opacity-70 disabled:cursor-wait"
                     >
-                      {loadingLogs || loadingStats ? 'Buscando...' : 'Aplicar filtros'}
+                      Aplicar filtros
                     </button>
-                    <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">Atualiza dados e tabela</p>
+                    <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">Filtra a tabela em memória (sem nova requisição)</p>
                   </div>
                 </div>
               </div>
@@ -4078,13 +4069,13 @@ export default function AdminLeadTransferPage() {
                         <div className="flex flex-wrap items-center gap-4">
                           <div>
                             <p className="text-xs font-semibold text-amber-700 dark:text-amber-300 uppercase tracking-wide">Transferências expiradas</p>
-                            <p className="text-2xl font-bold text-amber-800 dark:text-amber-200">{expiredLogsList.length}</p>
+                            <p className="text-2xl font-bold text-amber-800 dark:text-amber-200">{expiredTotals.total_expired_logs}</p>
                           </div>
                           <div className="w-px h-10 bg-amber-300/50 dark:bg-amber-600/30" />
                           <div>
                             <p className="text-xs font-semibold text-amber-700 dark:text-amber-300 uppercase tracking-wide">Leads pendentes de resolução</p>
                             <p className="text-2xl font-bold text-amber-800 dark:text-amber-200">
-                              {expiredLogsList.reduce((s, l) => s + (l.to_resolve ?? 0), 0)}
+                              {expiredTotals.total_pending_entries}
                             </p>
                             <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-0.5">Após resolver, parte ficará vinculada e parte disponível para mover</p>
                           </div>
@@ -4154,10 +4145,17 @@ export default function AdminLeadTransferPage() {
                           <div className="flex items-start justify-between gap-2">
                             <div>
                               <p className="text-xs font-semibold text-amber-700 dark:text-amber-300 uppercase tracking-wide">Total lucro realizado (resolvidas)</p>
-                              <p className="text-sm text-gray-600 dark:text-gray-400 mt-0.5">Soma de todos os lucros das transferências resolvidas no período e banca selecionados.</p>
+                              <p className="text-sm text-gray-600 dark:text-gray-400 mt-0.5">
+                                Soma da diferença (depósito depois − depósito antes) de todos os leads vinculados nas transferências resolvidas no período e banca selecionados. Base do lucro.
+                              </p>
                               <p className={`text-2xl font-bold tabular-nums mt-1 ${(resolvedStats.total_lucro_realizado ?? 0) > 0 ? 'text-amber-700 dark:text-amber-300' : 'text-gray-500 dark:text-gray-400'}`}>
                                 {loadingResolvedStats ? '…' : `R$ ${(resolvedStats.total_lucro_realizado ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                               </p>
+                              {!loadingResolvedStats && ((resolvedStats.total_depositado_antes ?? 0) > 0 || (resolvedStats.total_depositado_depois ?? 0) > 0) && (
+                                <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
+                                  Base: depósito antes R$ {(resolvedStats.total_depositado_antes ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} → depois R$ {(resolvedStats.total_depositado_depois ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </p>
+                              )}
                             </div>
                             <button
                               type="button"
@@ -4709,11 +4707,26 @@ export default function AdminLeadTransferPage() {
                         {loadingExpiredConversion ? (
                           <div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" /></div>
                         ) : historyBancaFilter === '' ? (() => {
-                          const sorted = [...expiredConversionByBanca].sort((a, b) => b.convertidos - a.convertidos).filter((b) => b.total_transferidos > 0);
+                          const byBancaId = new Map<string, { banca_name: string; total_transferidos: number; convertidos: number }>();
+                          for (const row of expiredConversionByBanca) {
+                            const id = row.banca_id;
+                            const cur = byBancaId.get(id);
+                            if (!cur) {
+                              byBancaId.set(id, { banca_name: row.banca_name, total_transferidos: row.total_transferidos, convertidos: row.convertidos });
+                            } else {
+                              cur.total_transferidos += row.total_transferidos;
+                              cur.convertidos += row.convertidos;
+                            }
+                          }
+                          const sorted = Array.from(byBancaId.entries())
+                            .map(([banca_id, v]) => ({ banca_id, banca_name: v.banca_name, total_transferidos: v.total_transferidos, convertidos: v.convertidos }))
+                            .filter((b) => b.total_transferidos > 0)
+                            .sort((a, b) => b.convertidos - a.convertidos);
                           if (sorted.length === 0) {
                             return <div className="flex flex-col items-center justify-center h-full text-gray-500 text-sm gap-1"><span>Nenhuma transferência expirada no período.</span></div>;
                           }
-                          const chartData = sorted.map((b) => ({
+                          const chartData = sorted.map((b, i) => ({
+                            uniqueKey: `banca-${i}`,
                             name: b.banca_name,
                             convertidos: b.convertidos,
                             total: b.total_transferidos,
@@ -4721,10 +4734,10 @@ export default function AdminLeadTransferPage() {
                           }));
                           return (
                             <ResponsiveContainer width="100%" height="100%">
-                              <BarChart data={chartData} layout="vertical" margin={{ top: 8, right: 48, left: 4, bottom: 8 }}>
+                              <BarChart data={chartData} layout="vertical" margin={{ top: 8, right: 48, left: 8, bottom: 8 }}>
                                 <CartesianGrid strokeDasharray="3 3" className="stroke-gray-200 dark:stroke-gray-600" horizontal={false} />
                                 <XAxis type="number" allowDecimals={false} className="text-gray-500" stroke="#6b7280" style={{ fontSize: '12px' }} tick={{ fill: 'currentColor' }} />
-                                <YAxis type="category" dataKey="name" width={140} stroke="#6b7280" style={{ fontSize: '11px' }} tick={{ fill: 'currentColor' }} />
+                                <YAxis type="category" dataKey="uniqueKey" width={200} stroke="#6b7280" style={{ fontSize: '11px' }} tick={{ fill: 'currentColor' }} interval={0} tickCount={chartData.length} ticks={chartData.map((d) => d.uniqueKey)} tickFormatter={(value) => chartData.find((d) => d.uniqueKey === value)?.name ?? value} />
                                 <Tooltip
                                   cursor={{ fill: 'rgba(0,0,0,0.06)' }}
                                   content={({ active, payload }) => {
@@ -4744,7 +4757,7 @@ export default function AdminLeadTransferPage() {
                                   }}
                                 />
                                 <Bar dataKey="convertidos" name="Convertidos" fill="#8CD955" radius={[0, 4, 4, 0]}>
-                                  <LabelList dataKey="convertidos" position="right" className="fill-gray-700 dark:fill-gray-200" style={{ fontSize: '12px', fontWeight: 600 }} />
+                                  <LabelList dataKey="convertidos" position="insideStart" style={{ fontSize: '12px', fontWeight: 600, fill: '#fff' }} />
                                 </Bar>
                               </BarChart>
                             </ResponsiveContainer>
@@ -4759,7 +4772,8 @@ export default function AdminLeadTransferPage() {
                               </div>
                             );
                           }
-                          const chartData = sorted.map((c) => ({
+                          const chartData = sorted.map((c, i) => ({
+                            uniqueKey: `consultant-${i}`,
                             name: c.consultant_name || c.consultant_email,
                             convertidos: c.convertidos,
                             total: c.total_transferidos,
@@ -4767,10 +4781,10 @@ export default function AdminLeadTransferPage() {
                           }));
                           return (
                             <ResponsiveContainer width="100%" height="100%">
-                              <BarChart data={chartData} layout="vertical" margin={{ top: 8, right: 48, left: 4, bottom: 8 }}>
+                              <BarChart data={chartData} layout="vertical" margin={{ top: 8, right: 48, left: 8, bottom: 8 }}>
                                 <CartesianGrid strokeDasharray="3 3" className="stroke-gray-200 dark:stroke-gray-600" horizontal={false} />
                                 <XAxis type="number" allowDecimals={false} className="text-gray-500" stroke="#6b7280" style={{ fontSize: '12px' }} tick={{ fill: 'currentColor' }} />
-                                <YAxis type="category" dataKey="name" width={140} stroke="#6b7280" style={{ fontSize: '11px' }} tick={{ fill: 'currentColor' }} />
+                                <YAxis type="category" dataKey="uniqueKey" width={200} stroke="#6b7280" style={{ fontSize: '11px' }} tick={{ fill: 'currentColor' }} interval={0} tickCount={chartData.length} ticks={chartData.map((d) => d.uniqueKey)} tickFormatter={(value) => chartData.find((d) => d.uniqueKey === value)?.name ?? value} />
                                 <Tooltip
                                   cursor={{ fill: 'rgba(0,0,0,0.06)' }}
                                   content={({ active, payload }) => {
@@ -4791,7 +4805,7 @@ export default function AdminLeadTransferPage() {
                                   }}
                                 />
                                 <Bar dataKey="convertidos" name="Convertidos" fill="#8CD955" radius={[0, 4, 4, 0]}>
-                                  <LabelList dataKey="convertidos" position="right" className="fill-gray-700 dark:fill-gray-200" style={{ fontSize: '12px', fontWeight: 600 }} />
+                                  <LabelList dataKey="convertidos" position="insideStart" style={{ fontSize: '12px', fontWeight: 600, fill: '#fff' }} />
                                 </Bar>
                               </BarChart>
                             </ResponsiveContainer>
@@ -4829,7 +4843,8 @@ export default function AdminLeadTransferPage() {
                                 </div>
                               );
                             }
-                            const chartData = sorted.map((c) => ({
+                            const chartData = sorted.map((c, i) => ({
+                              uniqueKey: `consultant-all-${i}`,
                               name: c.consultant_name || c.consultant_email,
                               convertidos: c.convertidos,
                               total: c.total_transferidos,
@@ -4837,10 +4852,10 @@ export default function AdminLeadTransferPage() {
                             }));
                             return (
                               <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={chartData} layout="vertical" margin={{ top: 8, right: 48, left: 4, bottom: 8 }}>
+                                <BarChart data={chartData} layout="vertical" margin={{ top: 8, right: 48, left: 8, bottom: 8 }}>
                                   <CartesianGrid strokeDasharray="3 3" className="stroke-gray-200 dark:stroke-gray-600" horizontal={false} />
                                   <XAxis type="number" allowDecimals={false} className="text-gray-500" stroke="#6b7280" style={{ fontSize: '12px' }} tick={{ fill: 'currentColor' }} />
-                                  <YAxis type="category" dataKey="name" width={140} stroke="#6b7280" style={{ fontSize: '11px' }} tick={{ fill: 'currentColor' }} />
+                                  <YAxis type="category" dataKey="uniqueKey" width={200} stroke="#6b7280" style={{ fontSize: '11px' }} tick={{ fill: 'currentColor' }} interval={0} tickCount={chartData.length} ticks={chartData.map((d) => d.uniqueKey)} tickFormatter={(value) => chartData.find((d) => d.uniqueKey === value)?.name ?? value} />
                                   <Tooltip
                                     cursor={{ fill: 'rgba(0,0,0,0.06)' }}
                                     content={({ active, payload }) => {
@@ -4861,7 +4876,7 @@ export default function AdminLeadTransferPage() {
                                     }}
                                   />
                                   <Bar dataKey="convertidos" name="Convertidos" fill="#8CD955" radius={[0, 4, 4, 0]}>
-                                    <LabelList dataKey="convertidos" position="right" className="fill-gray-700 dark:fill-gray-200" style={{ fontSize: '12px', fontWeight: 600 }} />
+                                    <LabelList dataKey="convertidos" position="insideStart" style={{ fontSize: '12px', fontWeight: 600, fill: '#fff' }} />
                                   </Bar>
                                 </BarChart>
                               </ResponsiveContainer>
@@ -4872,6 +4887,11 @@ export default function AdminLeadTransferPage() {
                     )}
                   </div>
                 </>
+              )}
+              {managementStatusFilter === 'expiradas' && expiredTotals.total_expired_logs > 0 && transferLogsFiltered.length < expiredTotals.total_expired_logs && (
+                <p className="mb-3 text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2">
+                  O KPI &quot;Transferências expiradas&quot; mostra <strong>{expiredTotals.total_expired_logs}</strong> no total. A tabela abaixo exibe apenas as <strong>{transferLogsFiltered.length}</strong> que já estão no lote carregado do histórico. Para ver todas, selecione uma banca no filtro ou aguarde o carregamento em segundo plano.
+                </p>
               )}
               <div className="overflow-x-auto border border-gray-200 dark:border-[#404040] rounded-2xl shadow-sm bg-white dark:bg-[#2a2a2a]">
                 <table className="w-full text-sm min-w-[1000px]">
@@ -4904,9 +4924,7 @@ export default function AdminLeadTransferPage() {
                       <tr><td colSpan={14} className="p-8 text-center text-gray-500 dark:text-white">Nenhuma transferência corresponde aos filtros. Ajuste &quot;Status&quot; ou &quot;Prazo&quot;.</td></tr>
                     ) : (
                       <>
-                      {transferLogsPaginated.map((item) => {
-                        const log = item.displayLog;
-                        const hasAlteracoes = item.groupLogs.length > 1;
+                      {transferLogsPaginated.map((log) => {
                         const ids = Array.isArray(log.leads_ids) ? log.leads_ids : [];
                         const reTransferidos = ids.filter((id: string | number) => (leadTransferCountMap.get(String(id)) || 0) > 1).length;
                         const deadline = getTransferDeadlineInfo(log.created_at, (log as { deadline_days?: number }).deadline_days);
@@ -4918,39 +4936,22 @@ export default function AdminLeadTransferPage() {
                           ? (logBancaId ? (bancas.find((b) => b.id === logBancaId)?.name || bancas.find((b) => b.id === logBancaId)?.url || logBancaId) : '-')
                           : (selectedBanca?.name || selectedBanca?.url || bancas.find((b) => b.id === historyBancaFilter)?.name || bancas.find((b) => b.id === historyBancaFilter)?.url || bancaName || '-');
                         const filtersSnapshot = (log as { filters_snapshot?: Record<string, unknown> | null }).filters_snapshot;
-                        const hasReverseInGroup = item.groupLogs.some((l: any) => (l?.filters_snapshot != null && typeof l.filters_snapshot === 'object' && (l.filters_snapshot as { reverse_devolucao?: boolean }).reverse_devolucao === true));
-                        const reverseLogInGroup = hasReverseInGroup
-                          ? item.groupLogs.filter((l: any) => (l?.filters_snapshot != null && typeof l.filters_snapshot === 'object' && (l.filters_snapshot as { reverse_devolucao?: boolean }).reverse_devolucao === true))
-                              .sort((a: any, b: any) => (b.created_at || '').localeCompare(a.created_at || ''))[0]
-                          : null;
-                        /** Após reverse: leads estão com o ex-destino; exibimos Origem = quem tem os leads (ex-destino), Destino = doador (para poder fazer devolução). */
-                        const origemNome = (hasReverseInGroup && reverseLogInGroup)
-                          ? ((reverseLogInGroup as { target_consultant_name?: string | null }).target_consultant_name ?? reverseLogInGroup.target_consultant_email ?? '-')
-                          : ((log as { source_consultant_name?: string | null }).source_consultant_name ?? log.source_consultant_email ?? '-');
-                        const destinoNome = (hasReverseInGroup && reverseLogInGroup)
-                          ? ((reverseLogInGroup as { source_consultant_name?: string | null }).source_consultant_name ?? reverseLogInGroup.source_consultant_email ?? '-')
-                          : ((log as { target_consultant_name?: string | null }).target_consultant_name ?? log.target_consultant_email ?? '-');
-                        const origemEmail = (hasReverseInGroup && reverseLogInGroup) ? reverseLogInGroup.target_consultant_email : log.source_consultant_email;
-                        const destinoEmail = (hasReverseInGroup && reverseLogInGroup) ? reverseLogInGroup.source_consultant_email : log.target_consultant_email;
+                        const isReverse = filtersSnapshot != null && typeof filtersSnapshot === 'object' && (filtersSnapshot as { reverse_devolucao?: boolean }).reverse_devolucao === true;
+                        const origemNome = (log as { source_consultant_name?: string | null }).source_consultant_name ?? log.source_consultant_email ?? '-';
+                        const destinoNome = (log as { target_consultant_name?: string | null }).target_consultant_name ?? log.target_consultant_email ?? '-';
+                        const origemEmail = log.source_consultant_email;
+                        const destinoEmail = log.target_consultant_email;
                         const minInactiveDays = filtersSnapshot != null && typeof filtersSnapshot === 'object' && 'min_inactive_days' in filtersSnapshot
                           ? filtersSnapshot.min_inactive_days
                           : null;
                         const inactiveDisplay = minInactiveDays != null && String(minInactiveDays).trim() !== '' && String(minInactiveDays).trim() !== '0'
                           ? `${minInactiveDays} dia(s)`
                           : (minInactiveDays === 0 || (minInactiveDays != null && String(minInactiveDays).trim() === '0') ? 'Todos' : '—');
-                        const alteracoesTooltip = hasAlteracoes
-                          ? item.groupLogs.map((l: any) => `${formatDatePtBR(l.created_at)}${(l as { devolvido_at?: string }).devolvido_at ? ' (devolvido)' : (l?.filters_snapshot != null && typeof l.filters_snapshot === 'object' && (l.filters_snapshot as { devolucao?: boolean }).devolucao) ? ' (devolução)' : (l?.filters_snapshot != null && typeof l.filters_snapshot === 'object' && (l.filters_snapshot as { reverse_devolucao?: boolean }).reverse_devolucao) ? ' (reverse)' : ''}`).join('\n')
-                          : '';
                         return (
                           <tr key={log.id} className="border-t border-gray-100 dark:border-[#404040] hover:bg-gray-50/80 dark:hover:bg-[#333] transition-colors">
                             <td className="py-3 px-4 text-gray-600 dark:text-white truncate max-w-[110px]" title={bancaLabel}>{bancaLabel}</td>
                             <td className="py-3 px-4 text-gray-600 dark:text-white whitespace-nowrap">
                               {formatDatePtBR(log.created_at)}
-                              {hasAlteracoes && (
-                                <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-300" title={alteracoesTooltip}>
-                                  + alterações
-                                </span>
-                              )}
                             </td>
                             <td className="py-3 px-4 font-medium text-gray-800 dark:text-white">{log.transfer_type || 'TF'}</td>
                             <td className="py-3 px-4 text-gray-600 dark:text-white truncate max-w-[140px]" title={origemEmail ?? undefined}>{origemNome}</td>
@@ -4961,8 +4962,8 @@ export default function AdminLeadTransferPage() {
                             <td className="py-3 px-4 text-gray-600 dark:text-white tabular-nums">{fmtSaldo}</td>
                             <td className="py-3 px-4 text-gray-600 dark:text-white truncate max-w-[160px] font-mono text-xs" title={ids.join(', ')}>{ids.length ? ids.slice(0, 6).join(', ') + (ids.length > 6 ? ` +${ids.length - 6}` : '') : '-'}</td>
                             <td className="py-3 px-4 text-gray-600 dark:text-white">{reTransferidos > 0 ? <span className="text-amber-500 dark:text-amber-400 font-medium">{reTransferidos}</span> : '-'}</td>
-                            <td className="py-3 px-4" title={(log as { devolvido_at?: string }).devolvido_at ? 'Leads desta transferência foram devolvidos ao consultor de origem.' : (filtersSnapshot != null && typeof filtersSnapshot === 'object' && (filtersSnapshot as { reverse_devolucao?: boolean }).reverse_devolucao === true) ? 'Transferência reverse (re-envio após devolução).' : (log as { resolution_status_log?: string }).resolution_status_log === 'resolvida' ? 'Transferência expirada e já resolvida (vinculados/disponíveis para repasse).' : 'Prazo de conversão a partir da transferência. Após expirar, resolver para vincular ou disponibilizar para repasse.'}>
-                              {(filtersSnapshot != null && typeof filtersSnapshot === 'object' && (filtersSnapshot as { reverse_devolucao?: boolean }).reverse_devolucao === true) ? (
+                            <td className="py-3 px-4" title={(log as { devolvido_at?: string }).devolvido_at ? 'Leads desta transferência foram devolvidos ao consultor de origem.' : isReverse ? 'Transferência reverse (re-envio após devolução).' : (log as { resolution_status_log?: string }).resolution_status_log === 'resolvida' ? 'Transferência expirada e já resolvida (vinculados/disponíveis para repasse).' : 'Prazo de conversão a partir da transferência. Após expirar, resolver para vincular ou disponibilizar para repasse.'}>
+                              {isReverse ? (
                                 <span className="inline-flex items-center gap-1 text-sm text-violet-600 dark:text-violet-400 font-medium">
                                   <RotateCcw className="w-3.5 h-3.5 flex-shrink-0" />
                                   Reverse
@@ -5043,10 +5044,10 @@ export default function AdminLeadTransferPage() {
                                   Editar
                                 </button>
                                 {(() => {
-                                  const leadsComDestino = hasReverseInGroup || !(log as { devolvido_at?: string }).devolvido_at;
-                                  const leadsComOrigem = (filtersSnapshot != null && typeof filtersSnapshot === 'object' && (filtersSnapshot as { devolucao?: boolean }).devolucao === true) || ((log as { devolvido_at?: string }).devolvido_at && !hasReverseInGroup);
+                                  const leadsComDestino = isReverse || !(log as { devolvido_at?: string }).devolvido_at;
+                                  const leadsComOrigem = (filtersSnapshot != null && typeof filtersSnapshot === 'object' && (filtersSnapshot as { devolucao?: boolean }).devolucao === true) || ((log as { devolvido_at?: string }).devolvido_at && !isReverse);
                                   if (leadsComDestino && !leadsComOrigem) {
-                                    const logParaDevolver = reverseLogInGroup ?? log;
+                                    const logParaDevolver = log;
                                     return (
                                       <>
                                         <button
@@ -5105,11 +5106,11 @@ export default function AdminLeadTransferPage() {
                 <div className="flex flex-wrap items-center justify-between gap-3 mt-4 px-1">
                   <p className="text-sm text-gray-600 dark:text-white">
                     Exibindo <strong>{(logsPage - 1) * LOGS_PAGE_SIZE + 1}</strong> a <strong>{Math.min(logsPage * LOGS_PAGE_SIZE, transferLogsSorted.length)}</strong> de <strong>{transferLogsSorted.length}</strong> transferências
+                    {managementStatusFilter === 'expiradas' && expiredTotals.total_expired_logs > transferLogsFiltered.length && (
+                      <span className="text-amber-600 dark:text-amber-400" title="O KPI acima mostra o total real de expiradas; a tabela mostra apenas as que já estão no lote carregado do histórico."> (total de expiradas: <strong>{expiredTotals.total_expired_logs}</strong>)</span>
+                    )}
                     {transferLogsFiltered.length < transferLogs.length && (
                       <span className="text-gray-500 dark:text-gray-400"> (filtro aplicado)</span>
-                    )}
-                    {transferLogsGrouped.length < transferLogsFiltered.length && (
-                      <span className="text-gray-500 dark:text-gray-400" title="Devolução e reverse contam como uma única transferência"> (1 linha por transferência lógica)</span>
                     )}
                   </p>
                   <div className="flex items-center gap-2">

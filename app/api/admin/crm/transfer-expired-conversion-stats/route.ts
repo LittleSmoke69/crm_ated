@@ -42,8 +42,7 @@ async function getConversionByConsultant(
       .from('admin_lead_transfer_entries')
       .select('target_consultant_email')
       .in('transfer_log_id', chunk)
-      .eq('banca_id', bancaId)
-      .limit(50000);
+      .eq('banca_id', bancaId);
     if (error) return [];
     allEntries.push(...(Array.isArray(batch) ? batch : []));
   }
@@ -57,8 +56,7 @@ async function getConversionByConsultant(
       .select('target_consultant_email, banca_id')
       .in('transfer_log_id', chunk)
       .eq('banca_id', bancaId)
-      .eq('resolution_status', 'vinculado')
-      .limit(50000);
+      .eq('resolution_status', 'vinculado');
     if (error) return [];
     vinculadoEntries.push(...(Array.isArray(batch) ? batch : []));
   }
@@ -93,8 +91,7 @@ async function getConversionByConsultant(
     const { data: profiles } = await supabaseServiceRole
       .from('profiles')
       .select('email, full_name')
-      .not('email', 'is', null)
-      .limit(2000);
+      .not('email', 'is', null);
     const emailToName = new Map<string, string>();
     (profiles ?? []).forEach((p: { email: string | null; full_name: string | null }) => {
       const email = (p.email ?? '').trim().toLowerCase();
@@ -142,7 +139,7 @@ export async function GET(req: NextRequest) {
       if (fromParam) logsQuery = logsQuery.gte('created_at', dateToStartOfDaySãoPauloISO(fromParam));
       if (toParam) logsQuery = logsQuery.lte('created_at', dateToEndOfDaySãoPauloISO(toParam));
       if (sourceConsultantEmail) logsQuery = logsQuery.ilike('source_consultant_email', sourceConsultantEmail);
-      const { data: logs } = await logsQuery.order('created_at', { ascending: false }).limit(5000);
+      const { data: logs } = await logsQuery.order('created_at', { ascending: false });
       const logIds = (logs ?? []).map((r: { id: string }) => r.id);
       const byConsultant = await getConversionByConsultant(resolved.bancaId, resolved.crmBaseUrl, logIds);
       return successResponse({ by_banca: null, by_consultant: byConsultant });
@@ -174,7 +171,7 @@ export async function GET(req: NextRequest) {
       if (fromParam) logsQuery = logsQuery.gte('created_at', dateToStartOfDaySãoPauloISO(fromParam));
       if (toParam) logsQuery = logsQuery.lte('created_at', dateToEndOfDaySãoPauloISO(toParam));
       if (sourceConsultantEmail) logsQuery = logsQuery.ilike('source_consultant_email', sourceConsultantEmail);
-      const { data: logs } = await logsQuery.order('created_at', { ascending: false }).limit(5000);
+      const { data: logs } = await logsQuery.order('created_at', { ascending: false });
       const logIds = (logs ?? []).map((r: { id: string }) => r.id);
       const byConsultant = await getConversionByConsultant(resolved.bancaId, resolved.crmBaseUrl, logIds);
       const total_transferidos = byConsultant.reduce((s, r) => s + r.total_transferidos, 0);
