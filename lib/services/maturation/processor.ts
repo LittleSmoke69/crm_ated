@@ -5,9 +5,11 @@
 
 import { SupabaseClient } from '@supabase/supabase-js';
 
-const CLAIM_LIMIT = 10;
+const CLAIM_LIMIT = 5;
 const MAX_ATTEMPTS = 3;
 const FETCH_TIMEOUT_MS = 30000;
+/** Steps travados em 'processing' por mais de X ms são resetados para 'pending' */
+const STUCK_PROCESSING_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutos
 const DEFAULT_MEDIA_BUCKET = 'maturation-videos';
 const VIRGIN_MEDIA_BUCKET = 'virgin-maturation-media';
 const VIRGIN_CONFIG_KEY_MESSAGES = 'messages';
@@ -405,16 +407,49 @@ export async function runJobCatchUp(supabase: SupabaseClient, jobId: string): Pr
   return { sent, failed, results };
 }
 
+/**
+ * Reseta steps travados em 'processing' por mais de STUCK_PROCESSING_TIMEOUT_MS de volta para 'pending'.
+ * Isso ocorre quando o tick anterior reclamou os steps mas não terminou de processá-los (timeout).
+ */
+async function recoverStuckSteps(supabase: SupabaseClient): Promise<number> {
+  const cutoff = new Date(Date.now() - STUCK_PROCESSING_TIMEOUT_MS).toISOString();
+  const { data, error } = await supabase
+    .from('maturation_steps')
+    .update({ status: 'pending', locked_at: null, locked_by: null })
+    .eq('status', 'processing')
+    .lt('locked_at', cutoff)
+    .select('id');
+  if (error) {
+    console.log(`${LOG_MANUAL} Erro ao recuperar steps travados: ${error.message}`);
+    return 0;
+  }
+  const count = data?.length ?? 0;
+  if (count > 0) console.log(`${LOG_MANUAL} ${count} step(s) travados em 'processing' resetados para 'pending'`);
+  return count;
+}
+
 export async function runMaturationTick(supabase: SupabaseClient): Promise<any> {
   const startTime = Date.now();
   const MAX_RUNTIME_MS = 20000; // 20 segundos para evitar timeout de API
+  // Reserva margem de segurança: não inicia novo step se restar menos que este tempo
+  const STEP_TIME_BUDGET_MS = FETCH_TIMEOUT_MS + 2000; // 32s por step
   let totalProcessed = 0;
   const processedJobIds = new Set<string>();
 
   console.log(`${LOG_PREFIX} ========== Tick Maturador ==========`);
+
+  // Fase 0: Recuperar steps travados em 'processing' de ticks anteriores
+  await recoverStuckSteps(supabase);
+
   console.log(`${LOG_MANUAL} Fase 1: Maturador (manual) - jobs com steps agendados`);
 
-  while (Date.now() - startTime < MAX_RUNTIME_MS) {
+  while (true) {
+    const elapsed = Date.now() - startTime;
+    if (elapsed + STEP_TIME_BUDGET_MS > MAX_RUNTIME_MS) {
+      console.log(`${LOG_MANUAL} Orçamento de tempo esgotado (${elapsed}ms/${MAX_RUNTIME_MS}ms), encerrando tick`);
+      break;
+    }
+
     const { data: steps, error } = await supabase.rpc('claim_maturation_steps', { claim_limit: CLAIM_LIMIT });
     if (error) {
       console.log(`${LOG_MANUAL} Erro ao reivindicar steps: ${error.message}`);
@@ -427,6 +462,17 @@ export async function runMaturationTick(supabase: SupabaseClient): Promise<any> 
     console.log(`${LOG_MANUAL} ${steps.length} step(s) reivindicados para envio (Evolution API)`);
 
     for (const step of steps) {
+      const stepElapsed = Date.now() - startTime;
+      if (stepElapsed + FETCH_TIMEOUT_MS > MAX_RUNTIME_MS) {
+        // Sem tempo para este step — reseta para 'pending' para ser pego no próximo tick
+        console.log(`${LOG_MANUAL} Sem tempo para step job=${step.job_id} step_index=${step.step_index}, resetando para 'pending'`);
+        await supabase
+          .from('maturation_steps')
+          .update({ status: 'pending', locked_at: null, locked_by: null })
+          .eq('id', step.id)
+          .eq('status', 'processing');
+        continue;
+      }
       await processStep(supabase, step);
       processedJobIds.add(step.job_id);
       totalProcessed++;
@@ -436,7 +482,7 @@ export async function runMaturationTick(supabase: SupabaseClient): Promise<any> 
       await updateJobProgress(supabase, id);
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, 300));
   }
 
   console.log(`${LOG_AUTO} Fase 2: Auto maturador - instâncias virgem em maturação automática`);

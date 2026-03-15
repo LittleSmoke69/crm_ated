@@ -1,19 +1,20 @@
 /**
  * Netlify Scheduled Function: maturation-tick
+ *
+ * Roda a cada 1 minuto (configurado no netlify.toml).
+ * Chama a API do Next.js para processar um lote de steps de maturação,
+ * evitando timeout de conexão longa no processamento inline.
+ *
+ * Em desenvolvimento, pode ser chamado via HTTP diretamente.
  */
-
-import { createClient } from '@supabase/supabase-js';
-import { runMaturationTick } from '../../lib/services/maturation/processor';
 
 interface HandlerEvent {
   httpMethod?: string;
   headers?: Record<string, string>;
-  body?: string;
 }
 
 interface HandlerContext {
   functionName?: string;
-  requestId?: string;
 }
 
 interface HandlerResponse {
@@ -22,39 +23,55 @@ interface HandlerResponse {
   headers?: Record<string, string>;
 }
 
-type Handler = (event: HandlerEvent, context: HandlerContext) => Promise<HandlerResponse>;
+export const handler = async (_event: HandlerEvent, _context: HandlerContext): Promise<HandlerResponse> => {
+  const siteUrl = process.env.URL || process.env.SITE_URL;
+  const cronSecret = process.env.CRON_SECRET;
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '';
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-
-const supabaseServiceRole = createClient(supabaseUrl, supabaseServiceRoleKey, {
-  auth: { persistSession: false },
-});
-
-export const handler: Handler = async (event, context) => {
-  console.log('[maturation-tick] ========== Início ==========');
-  console.log('[maturation-tick] Processando: Maturador (manual) + Auto maturador (instâncias virgem)');
-  try {
-    const result = await runMaturationTick(supabaseServiceRole);
-    const virginCount = result.virginCount ?? 0;
-    const jobs = result.jobs || [];
-    console.log('[maturation-tick] ========== Fim ==========');
-    console.log(`[maturation-tick] Resumo: steps processados=${result.processed} jobs=${jobs.length} instâncias virgem em auto maturação=${virginCount}`);
+  if (!siteUrl || !cronSecret) {
+    console.warn('[maturation-tick] URL ou CRON_SECRET não configurados');
     return {
       statusCode: 200,
-      body: JSON.stringify({
-        success: true,
-        processed: result.processed,
-        virginCount,
-        jobs,
-      }),
+      body: JSON.stringify({ ok: false, message: 'Configuração ausente' }),
       headers: { 'Content-Type': 'application/json' },
     };
-  } catch (error: any) {
-    console.error('[maturation-tick] Erro inesperado:', error);
+  }
+
+  const tickUrl = `${siteUrl.replace(/\/$/, '')}/api/maturation/cron-tick`;
+  console.log('[maturation-tick] Chamando:', tickUrl);
+
+  try {
+    const res = await fetch(tickUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-internal-cron-secret': cronSecret,
+      },
+    });
+
+    const text = await res.text();
+    let body: unknown = text;
+    try { body = JSON.parse(text); } catch { /* mantém texto */ }
+
+    if (!res.ok) {
+      console.error('[maturation-tick] API retornou', res.status, text);
+      return {
+        statusCode: 200,
+        body: JSON.stringify({ ok: false, status: res.status, body }),
+        headers: { 'Content-Type': 'application/json' },
+      };
+    }
+
+    console.log('[maturation-tick] Tick concluído:', JSON.stringify(body).substring(0, 200));
     return {
-      statusCode: 500,
-      body: JSON.stringify({ error: 'Erro inesperado', details: error.message }),
+      statusCode: 200,
+      body: JSON.stringify({ ok: true, body }),
+      headers: { 'Content-Type': 'application/json' },
+    };
+  } catch (err: any) {
+    console.error('[maturation-tick] Erro ao chamar API:', err.message);
+    return {
+      statusCode: 200,
+      body: JSON.stringify({ ok: false, error: err.message }),
       headers: { 'Content-Type': 'application/json' },
     };
   }

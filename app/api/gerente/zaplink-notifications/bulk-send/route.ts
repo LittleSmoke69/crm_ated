@@ -1,16 +1,17 @@
 /**
  * POST /api/gerente/zaplink-notifications/bulk-send
- * Envia mensagem via Evolution sendText para os telefones dos leads das submissões atribuídas.
+ * Responde imediatamente ao cliente e processa os envios em segundo plano via after().
  * Usa a instância MESTRE do gerente (não Loto Assistência).
- * Loto Assistência é usada apenas para avisar quando um consultor é atribuído (banca e nome do gerente).
  */
 import { NextRequest } from 'next/server';
+import { after } from 'next/server';
 import { requireStatus } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { chatService } from '@/lib/services/chat-service';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 300;
 
 function normalizePhone(input: string): string {
   let num = input.replace(/\D/g, '');
@@ -22,10 +23,8 @@ function normalizePhone(input: string): string {
 
 type EvolutionConfig = { instance_name: string; apikey: string; base_url: string };
 
-/** Status considerados "conectados" para Evolution (valores podem vir em minúsculo da API). */
 const EVOLUTION_CONNECTED_STATUSES = ['ok', 'open', 'connected'];
 
-/** Retorna a instância mestre do gerente (conectada), para uso no disparo em massa. */
 async function getGerenteMasterInstance(gerenteUserId: string): Promise<EvolutionConfig | null> {
   const { data: instance, error } = await supabaseServiceRole
     .from('evolution_instances')
@@ -63,7 +62,6 @@ async function getGerenteMasterInstance(gerenteUserId: string): Promise<Evolutio
   };
 }
 
-/** Retorna config da instância por nome e user_id (gerente). */
 async function getGerenteInstanceByName(gerenteUserId: string, instanceName: string): Promise<EvolutionConfig | null> {
   const { data: instance, error } = await supabaseServiceRole
     .from('evolution_instances')
@@ -91,6 +89,128 @@ async function getGerenteInstanceByName(gerenteUserId: string, instanceName: str
   };
 }
 
+type Recipient = { full_name?: string; phone?: string };
+
+async function buildRecipients(userId: string, sendTo: string): Promise<Recipient[]> {
+  type SubRow = { full_name?: string; phone?: string };
+  let recipients: Recipient[] = [];
+
+  if (sendTo === 'all_approved') {
+    const { data: submissions, error: subError } = await supabaseServiceRole
+      .from('zaplink_form_submissions')
+      .select('full_name, phone')
+      .eq('gerente_id', userId)
+      .in('status', ['assigned', 'cadastrado'])
+      .not('phone', 'is', null);
+    if (subError) {
+      console.error('[zaplink/bulk-send] Erro ao buscar submissões:', subError.message);
+      return [];
+    }
+    recipients = (submissions ?? []).map((s: SubRow) => ({ full_name: s.full_name, phone: s.phone }));
+
+    const { data: requestIds } = await supabaseServiceRole
+      .from('zaplink_consultant_requests')
+      .select('id')
+      .eq('gerente_id', userId);
+    const ids = (requestIds ?? []).map((r: { id: string }) => r.id);
+    if (ids.length > 0) {
+      const { data: fulfillments } = await supabaseServiceRole
+        .from('zaplink_consultant_request_fulfillments')
+        .select('consultant_user_id')
+        .in('request_id', ids);
+      const consultantIds = [...new Set((fulfillments ?? []).map((f: { consultant_user_id: string }) => f.consultant_user_id))];
+      if (consultantIds.length > 0) {
+        const { data: profiles } = await supabaseServiceRole
+          .from('profiles')
+          .select('full_name, telefone')
+          .in('id', consultantIds)
+          .not('telefone', 'is', null);
+        const seenPhones = new Set(recipients.map((r) => normalizePhone(r.phone ?? '')));
+        for (const p of profiles ?? []) {
+          const row = p as { full_name: string | null; telefone: string };
+          const phoneNorm = normalizePhone(row.telefone ?? '');
+          if (phoneNorm.length >= 12 && !seenPhones.has(phoneNorm)) {
+            seenPhones.add(phoneNorm);
+            recipients.push({ full_name: row.full_name ?? undefined, phone: row.telefone });
+          }
+        }
+      }
+    }
+  } else {
+    const { data: notifications, error: notifError } = await supabaseServiceRole
+      .from('zaplink_gerente_notifications')
+      .select(`
+        id,
+        zaplink_submission_id,
+        zaplink_form_submissions ( full_name, phone )
+      `)
+      .eq('gerente_id', userId)
+      .is('seen_at', null);
+    if (notifError || !notifications || notifications.length === 0) return [];
+    recipients = (notifications as { zaplink_form_submissions: SubRow | SubRow[] | null }[])
+      .map((n) => {
+        const sub = n.zaplink_form_submissions;
+        return Array.isArray(sub) ? sub[0] : sub;
+      })
+      .filter(Boolean) as Recipient[];
+  }
+
+  return recipients;
+}
+
+async function sendMessages(
+  evolution: EvolutionConfig,
+  recipients: Recipient[],
+  message: string,
+  delaySeconds: number,
+  userId: string
+): Promise<void> {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const delayMs = delaySeconds * 1000;
+  let sent = 0;
+  let isFirst = true;
+
+  for (const sub of recipients) {
+    if (!sub?.phone) continue;
+    if (!isFirst && delayMs > 0) await sleep(delayMs);
+    isFirst = false;
+
+    const phoneNorm = normalizePhone(sub.phone);
+    if (phoneNorm.length < 12) continue;
+
+    const numberForApi = phoneNorm.includes('@') ? phoneNorm.replace(/@.*$/, '') : phoneNorm;
+    const personalizedMsg = message.replace(/\{\{nome\}\}/gi, sub.full_name || '');
+
+    try {
+      await chatService.sendMessage(
+        {
+          instance_name: evolution.instance_name,
+          apikey: evolution.apikey,
+          base_url: evolution.base_url,
+        },
+        { remoteJid: numberForApi, type: 'text', text: personalizedMsg }
+      );
+      sent++;
+    } catch (sendErr) {
+      console.error('[zaplink/bulk-send] Erro ao enviar para', numberForApi, sendErr);
+    }
+  }
+
+  try {
+    await supabaseServiceRole.from('zaplink_bulk_send_log').insert({
+      gerente_id: userId,
+      sent_count: sent,
+      message_preview: message.slice(0, 200),
+      delay_seconds: delaySeconds,
+      status: 'success',
+    });
+  } catch (logErr) {
+    console.error('[zaplink/bulk-send] Erro ao registrar log:', logErr);
+  }
+
+  console.info(`[zaplink/bulk-send] Concluído em segundo plano: ${sent} mensagem(s) enviada(s) para userId=${userId}`);
+}
+
 export async function POST(req: NextRequest) {
   let userId: string | undefined;
   try {
@@ -108,80 +228,7 @@ export async function POST(req: NextRequest) {
     const instanceName = typeof body.instance_name === 'string' ? body.instance_name.trim() : null;
     const sendTo = body.send_to === 'all_approved' ? 'all_approved' : 'unseen';
 
-    type SubRow = { full_name?: string; phone?: string };
-    let recipients: SubRow[] = [];
-
-    if (sendTo === 'all_approved') {
-      const { data: submissions, error: subError } = await supabaseServiceRole
-        .from('zaplink_form_submissions')
-        .select('full_name, phone')
-        .eq('gerente_id', userId)
-        .in('status', ['assigned', 'cadastrado'])
-        .not('phone', 'is', null);
-      if (subError) {
-        console.error('[zaplink/bulk-send] Erro ao buscar submissões:', subError.message);
-        return errorResponse('Erro ao buscar submissões aprovadas.', 500);
-      }
-      recipients = (submissions ?? []).map((s: SubRow) => ({ full_name: s.full_name, phone: s.phone }));
-
-      const { data: requestIds } = await supabaseServiceRole
-        .from('zaplink_consultant_requests')
-        .select('id')
-        .eq('gerente_id', userId);
-      const ids = (requestIds ?? []).map((r: { id: string }) => r.id);
-      if (ids.length > 0) {
-        const { data: fulfillments } = await supabaseServiceRole
-          .from('zaplink_consultant_request_fulfillments')
-          .select('consultant_user_id')
-          .in('request_id', ids);
-        const consultantIds = [...new Set((fulfillments ?? []).map((f: { consultant_user_id: string }) => f.consultant_user_id))];
-        if (consultantIds.length > 0) {
-          const { data: profiles } = await supabaseServiceRole
-            .from('profiles')
-            .select('full_name, telefone')
-            .in('id', consultantIds)
-            .not('telefone', 'is', null);
-          const seenPhones = new Set(recipients.map((r) => normalizePhone(r.phone ?? '')));
-          for (const p of profiles ?? []) {
-            const row = p as { full_name: string | null; telefone: string };
-            const phoneNorm = normalizePhone(row.telefone ?? '');
-            if (phoneNorm.length >= 12 && !seenPhones.has(phoneNorm)) {
-              seenPhones.add(phoneNorm);
-              recipients.push({ full_name: row.full_name ?? undefined, phone: row.telefone });
-            }
-          }
-        }
-      }
-    } else {
-      const { data: notifications, error: notifError } = await supabaseServiceRole
-        .from('zaplink_gerente_notifications')
-        .select(`
-          id,
-          zaplink_submission_id,
-          zaplink_form_submissions ( full_name, phone )
-        `)
-        .eq('gerente_id', userId)
-        .is('seen_at', null);
-      if (notifError || !notifications || notifications.length === 0) {
-        return successResponse({ sent: 0 }, 'Nenhuma notificação para disparar');
-      }
-      recipients = (notifications as { zaplink_form_submissions: SubRow | SubRow[] | null }[])
-        .map((n) => {
-          const sub = n.zaplink_form_submissions;
-          return Array.isArray(sub) ? sub[0] : sub;
-        })
-        .filter(Boolean) as SubRow[];
-    }
-
-    if (recipients.length === 0) {
-      return successResponse(
-        { sent: 0 },
-        sendTo === 'all_approved'
-          ? 'Nenhuma submissão aprovada com telefone para disparo. Atribua leads e confira se há número cadastrado.'
-          : 'Nenhuma notificação para disparar.'
-      );
-    }
-
+    // Valida instância antes de responder ao cliente
     const evolution = instanceName
       ? await getGerenteInstanceByName(userId, instanceName)
       : await getGerenteMasterInstance(userId);
@@ -192,52 +239,40 @@ export async function POST(req: NextRequest) {
       return errorResponse(msg, 503);
     }
 
-    const delayMs = delaySeconds * 1000;
-    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    // Coleta destinatários antes de responder ao cliente
+    const recipients = await buildRecipients(userId, sendTo);
+    if (recipients.length === 0) {
+      return successResponse(
+        { sent: 0, background: false },
+        sendTo === 'all_approved'
+          ? 'Nenhuma submissão aprovada com telefone para disparo. Atribua leads e confira se há número cadastrado.'
+          : 'Nenhuma notificação para disparar.'
+      );
+    }
 
-    let sent = 0;
-    let isFirst = true;
-    for (const sub of recipients) {
-      if (!sub?.phone) continue;
-      if (!isFirst && delayMs > 0) await sleep(delayMs);
-      isFirst = false;
-
-      const phoneNorm = normalizePhone(sub.phone);
-      if (phoneNorm.length < 12) continue;
-
-      // Evolution API sendText espera "number" apenas com dígitos (sem @s.whatsapp.net)
-      const numberForApi = phoneNorm.includes('@') ? phoneNorm.replace(/@.*$/, '') : phoneNorm;
-      const personalizedMsg = message.replace(/\{\{nome\}\}/gi, sub.full_name || '');
-
+    // Dispara em segundo plano e responde imediatamente
+    after(async () => {
       try {
-        await chatService.sendMessage(
-          {
-            instance_name: evolution.instance_name,
-            apikey: evolution.apikey,
-            base_url: evolution.base_url,
-          },
-          { remoteJid: numberForApi, type: 'text', text: personalizedMsg }
-        );
-        sent++;
-      } catch (sendErr) {
-        console.error('[zaplink/bulk-send] Erro ao enviar para', numberForApi, sendErr);
+        await sendMessages(evolution, recipients, message, delaySeconds, userId!);
+      } catch (bgErr) {
+        console.error('[zaplink/bulk-send] Erro no processamento em segundo plano:', bgErr);
+        try {
+          await supabaseServiceRole.from('zaplink_bulk_send_log').insert({
+            gerente_id: userId,
+            sent_count: 0,
+            message_preview: message.slice(0, 200),
+            delay_seconds: delaySeconds,
+            status: 'failed',
+            error_message: (bgErr instanceof Error ? bgErr.message : String(bgErr)).slice(0, 500),
+          });
+        } catch (_) { /* silencia erro de log */ }
       }
-    }
+    });
 
-    const messagePreview = message.slice(0, 200);
-    try {
-      await supabaseServiceRole.from('zaplink_bulk_send_log').insert({
-        gerente_id: userId,
-        sent_count: sent,
-        message_preview: messagePreview,
-        delay_seconds: delaySeconds,
-        status: 'success',
-      });
-    } catch (logErr) {
-      console.error('[zaplink/bulk-send] Erro ao registrar log (disparo concluído):', logErr);
-    }
-
-    return successResponse({ sent }, `Mensagem enviada para ${sent} contato(s)`);
+    return successResponse(
+      { sent: recipients.length, background: true },
+      `Disparo iniciado para ${recipients.length} contato(s). As mensagens serão enviadas em segundo plano.`
+    );
   } catch (e) {
     const errMsg = e instanceof Error ? e.message : String(e);
     if (userId) {
@@ -250,9 +285,7 @@ export async function POST(req: NextRequest) {
           status: 'failed',
           error_message: errMsg.slice(0, 500),
         });
-      } catch (_) {
-        console.error('[zaplink/bulk-send] Erro ao registrar log de falha:', _);
-      }
+      } catch (_) { /* silencia erro de log */ }
     }
     return serverErrorResponse(e);
   }

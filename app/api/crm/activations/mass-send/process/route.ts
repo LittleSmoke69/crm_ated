@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
 
     const { data: jobs } = await supabaseServiceRole
       .from('activation_mass_send_jobs')
-      .select('id, message_id, instance_name, group_ids, total_groups, processed_index, status')
+      .select('id, user_id, message_id, instance_name, group_ids, total_groups, processed_index, status')
       .in('status', ['pending', 'processing'])
       .or(`locked_at.is.null,locked_at.lt.${lockExpired}`)
       .order('created_at', { ascending: true })
@@ -77,6 +77,7 @@ export async function POST(req: NextRequest) {
       headers: {
         'Content-Type': 'application/json',
         'x-internal-cron-secret': process.env.CRON_SECRET!,
+        'x-user-id': job.user_id,
       },
       body: JSON.stringify({
         messageId: job.message_id,
