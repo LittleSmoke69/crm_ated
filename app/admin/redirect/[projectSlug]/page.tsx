@@ -25,6 +25,16 @@ interface UtmVisit {
   created_at: string;
 }
 
+interface UtmSummary {
+  total: number;
+  by_source: Record<string, number>;
+  by_medium: Record<string, number>;
+  by_campaign: Record<string, number>;
+  by_source_medium: Record<string, number>;
+  by_day: Record<string, number>;
+  sample_size: number;
+}
+
 export default function AdminRedirectPage() {
   const params = useParams();
   const projectSlug = params?.projectSlug as string;
@@ -49,6 +59,7 @@ export default function AdminRedirectPage() {
   const [copyDone, setCopyDone] = useState(false);
   const [pixelId, setPixelId] = useState('');
   const [utmVisits, setUtmVisits] = useState<UtmVisit[]>([]);
+  const [utmSummary, setUtmSummary] = useState<UtmSummary>({ total: 0, by_source: {}, by_medium: {}, by_campaign: {}, by_source_medium: {}, by_day: {}, sample_size: 0 });
 
   useEffect(() => {
     if (!userId) return;
@@ -73,6 +84,7 @@ export default function AdminRedirectPage() {
         if (json.data.project_id) setProjectId(json.data.project_id);
         setPixelId(json.data.pixel_id ?? '');
         setUtmVisits(json.data.utm_visits ?? []);
+        setUtmSummary(json.data.utm_summary ?? { total: 0, by_source: {}, by_medium: {}, by_campaign: {}, by_source_medium: {}, by_day: {}, sample_size: 0 });
         setLoading(false);
       })
       .catch(() => setLoading(false));
@@ -403,10 +415,165 @@ export default function AdminRedirectPage() {
             </div>
           </section>
 
+          {/* Dashboard Resumo UTM */}
+          <section className="lg:col-span-3 bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-100">
+              <h2 className="font-semibold text-gray-800">Resumo UTM (Dashboard)</h2>
+              <p className="text-xs text-gray-500 mt-0.5">Agrupamento dos acessos à página /r/{redirectSlug ?? ''} com parâmetros UTM na URL.</p>
+            </div>
+            <div className="p-4 space-y-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+                  <p className="text-xs text-gray-500">Total de acessos com UTM</p>
+                  <p className="text-xl font-bold text-gray-800">{utmSummary.total.toLocaleString('pt-BR')}</p>
+                </div>
+                <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+                  <p className="text-xs text-gray-500">Fontes (utm_source)</p>
+                  <p className="text-xl font-bold text-gray-800">{Object.keys(utmSummary.by_source).length}</p>
+                </div>
+                <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+                  <p className="text-xs text-gray-500">Meios (utm_medium)</p>
+                  <p className="text-xl font-bold text-gray-800">{Object.keys(utmSummary.by_medium).length}</p>
+                </div>
+                <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+                  <p className="text-xs text-gray-500">Campanhas (utm_campaign)</p>
+                  <p className="text-xl font-bold text-gray-800">{Object.keys(utmSummary.by_campaign).length}</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className="border border-gray-200 rounded-lg overflow-hidden">
+                  <div className="bg-gray-50 px-3 py-2 border-b border-gray-200">
+                    <p className="text-sm font-medium text-gray-700">Por utm_source</p>
+                  </div>
+                  <div className="overflow-auto max-h-48">
+                    {Object.entries(utmSummary.by_source).length === 0 ? (
+                      <p className="p-3 text-sm text-gray-500">Nenhum dado</p>
+                    ) : (
+                      <table className="w-full text-sm">
+                        <tbody>
+                          {Object.entries(utmSummary.by_source)
+                            .sort((a, b) => b[1] - a[1])
+                            .map(([name, count]) => (
+                              <tr key={name} className="border-t border-gray-100">
+                                <td className="p-2 font-mono text-gray-800 truncate max-w-[180px]" title={name}>{name}</td>
+                                <td className="p-2 text-right font-semibold text-gray-700">{count.toLocaleString('pt-BR')}</td>
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </div>
+                <div className="border border-gray-200 rounded-lg overflow-hidden">
+                  <div className="bg-gray-50 px-3 py-2 border-b border-gray-200">
+                    <p className="text-sm font-medium text-gray-700">Por utm_medium</p>
+                  </div>
+                  <div className="overflow-auto max-h-48">
+                    {Object.entries(utmSummary.by_medium).length === 0 ? (
+                      <p className="p-3 text-sm text-gray-500">Nenhum dado</p>
+                    ) : (
+                      <table className="w-full text-sm">
+                        <tbody>
+                          {Object.entries(utmSummary.by_medium)
+                            .sort((a, b) => b[1] - a[1])
+                            .map(([name, count]) => (
+                              <tr key={name} className="border-t border-gray-100">
+                                <td className="p-2 font-mono text-gray-800 truncate max-w-[180px]" title={name}>{name}</td>
+                                <td className="p-2 text-right font-semibold text-gray-700">{count.toLocaleString('pt-BR')}</td>
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div className="border border-gray-200 rounded-lg overflow-hidden">
+                <div className="bg-gray-50 px-3 py-2 border-b border-gray-200">
+                  <p className="text-sm font-medium text-gray-700">Top campanhas (utm_campaign)</p>
+                </div>
+                <div className="overflow-auto max-h-52">
+                  {Object.entries(utmSummary.by_campaign).length === 0 ? (
+                    <p className="p-3 text-sm text-gray-500">Nenhum dado</p>
+                  ) : (
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-gray-600 border-b border-gray-200">
+                          <th className="p-2">Campaign ID</th>
+                          <th className="p-2 text-right">Acessos</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Object.entries(utmSummary.by_campaign)
+                          .sort((a, b) => b[1] - a[1])
+                          .slice(0, 15)
+                          .map(([name, count]) => (
+                            <tr key={name} className="border-t border-gray-100">
+                              <td className="p-2 font-mono text-gray-800 truncate max-w-[220px]" title={name}>{name}</td>
+                              <td className="p-2 text-right font-semibold text-gray-700">{count.toLocaleString('pt-BR')}</td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+              <div className="border border-gray-200 rounded-lg overflow-hidden">
+                <div className="bg-gray-50 px-3 py-2 border-b border-gray-200">
+                  <p className="text-sm font-medium text-gray-700">Combinação source | medium</p>
+                </div>
+                <div className="overflow-auto max-h-48">
+                  {Object.entries(utmSummary.by_source_medium).length === 0 ? (
+                    <p className="p-3 text-sm text-gray-500">Nenhum dado</p>
+                  ) : (
+                    <table className="w-full text-sm">
+                      <tbody>
+                        {Object.entries(utmSummary.by_source_medium)
+                          .sort((a, b) => b[1] - a[1])
+                          .slice(0, 20)
+                          .map(([name, count]) => (
+                            <tr key={name} className="border-t border-gray-100">
+                              <td className="p-2 font-mono text-gray-800 truncate max-w-[280px]" title={name}>{name}</td>
+                              <td className="p-2 text-right font-semibold text-gray-700">{count.toLocaleString('pt-BR')}</td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+              {Object.keys(utmSummary.by_day).length > 0 && (
+                <div className="border border-gray-200 rounded-lg overflow-hidden">
+                  <div className="bg-gray-50 px-3 py-2 border-b border-gray-200">
+                    <p className="text-sm font-medium text-gray-700">Acessos por dia</p>
+                  </div>
+                  <div className="overflow-auto max-h-40">
+                    <table className="w-full text-sm">
+                      <tbody>
+                        {Object.entries(utmSummary.by_day)
+                          .sort((a, b) => b[0].localeCompare(a[0]))
+                          .slice(0, 14)
+                          .map(([day, count]) => (
+                            <tr key={day} className="border-t border-gray-100">
+                              <td className="p-2 text-gray-800">{new Date(day + 'T12:00:00').toLocaleDateString('pt-BR')}</td>
+                              <td className="p-2 text-right font-semibold text-gray-700">{count.toLocaleString('pt-BR')}</td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+              {utmSummary.sample_size > 0 && (
+                <p className="text-xs text-gray-500">Resumo com base em até {utmSummary.sample_size.toLocaleString('pt-BR')} visitas recentes. Total geral: {utmSummary.total.toLocaleString('pt-BR')}.</p>
+              )}
+            </div>
+          </section>
+
           {/* Acessos com UTM (página /r/[slug] com utm_* na URL) */}
           <section className="lg:col-span-3 bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
             <div className="px-4 py-3 border-b border-gray-100 shrink-0">
-              <h2 className="font-semibold text-gray-800">Acessos com UTM</h2>
+              <h2 className="font-semibold text-gray-800">Acessos com UTM (histórico)</h2>
               <p className="text-xs text-gray-500 mt-0.5">Visitas à página /r/{redirectSlug ?? ''} com utm_source, utm_medium, utm_campaign, utm_content ou utm_term na URL (últimas 100).</p>
             </div>
             <div className="overflow-auto max-h-[320px]">
