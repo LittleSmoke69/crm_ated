@@ -15,11 +15,13 @@ export default function RedirectPage() {
     project_name: string;
     click_id: string;
     pixel_id: string | null;
+    visit_id: string | null;
   } | null>(null);
   const [countdown, setCountdown] = useState<number>(REDIRECT_COUNTDOWN_SECONDS);
   const [error, setError] = useState<string | null>(null);
   const [sid, setSid] = useState<string | null>(null);
   const didRedirect = useRef(false);
+  const visitIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!slug) return;
@@ -48,9 +50,31 @@ export default function RedirectPage() {
           return;
         }
         setData(json.data);
+        visitIdRef.current = json.data?.visit_id ?? null;
       })
       .catch(() => setError('Erro ao carregar'));
   }, [slug, sid]);
+
+  // Ao sair sem concluir o redirect: marca visit como Incomplete e dispara evento no pixel
+  useEffect(() => {
+    const handleLeave = () => {
+      if (didRedirect.current) return;
+      const vid = visitIdRef.current;
+      if (!vid) return;
+
+      if (typeof window !== 'undefined' && (window as unknown as { fbq?: (...args: unknown[]) => void }).fbq) {
+        (window as unknown as { fbq: (...args: unknown[]) => void }).fbq('trackCustom', 'RedirectIncomplete');
+      }
+
+      navigator.sendBeacon(
+        '/api/redirect/visit-incomplete',
+        new Blob([JSON.stringify({ visit_id: vid })], { type: 'application/json' })
+      );
+    };
+
+    window.addEventListener('pagehide', handleLeave);
+    return () => window.removeEventListener('pagehide', handleLeave);
+  }, []);
 
   // Pixel Facebook no <head> da página /r/[slug] (rastreio PageView)
   useEffect(() => {
@@ -95,17 +119,24 @@ export default function RedirectPage() {
     return () => clearInterval(t);
   }, []);
 
-  // Quando o countdown chega a 0: redireciona assim que tiver data (ou quando a API responder)
+  // Quando o countdown chega a 0: marca complete, dispara evento no pixel e redireciona
   useEffect(() => {
     if (countdown > 0) return;
     if (didRedirect.current) return;
     if (!data?.invite_url) return;
     didRedirect.current = true;
+
+    const pixelId = data.pixel_id;
+    if (pixelId && typeof window !== 'undefined' && (window as unknown as { fbq?: (...args: unknown[]) => void }).fbq) {
+      (window as unknown as { fbq: (...args: unknown[]) => void }).fbq('trackCustom', 'RedirectComplete');
+    }
+
     fetch('/api/redirect/complete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ click_id: data.click_id, sid }),
+      body: JSON.stringify({ click_id: data.click_id, sid, visit_id: data.visit_id ?? undefined }),
     }).catch(() => {});
+
     window.location.href = data.invite_url;
   }, [countdown, data, sid]);
 

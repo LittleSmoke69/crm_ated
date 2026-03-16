@@ -22,6 +22,7 @@ interface UtmVisit {
   utm_campaign: string | null;
   utm_content: string | null;
   utm_term: string | null;
+  status: string | null;
   created_at: string;
 }
 
@@ -584,6 +585,7 @@ export default function AdminRedirectPage() {
                   <thead className="bg-gray-50 sticky top-0">
                     <tr className="text-left text-xs font-medium text-gray-700">
                       <th className="p-3">Data</th>
+                      <th className="p-3">Status</th>
                       <th className="p-3">utm_source</th>
                       <th className="p-3">utm_medium</th>
                       <th className="p-3">utm_campaign</th>
@@ -596,6 +598,15 @@ export default function AdminRedirectPage() {
                       <tr key={v.id} className="border-t border-gray-100 hover:bg-gray-50/50">
                         <td className="p-3 text-sm text-gray-700 whitespace-nowrap">
                           {new Date(v.created_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}
+                        </td>
+                        <td className="p-3 text-sm">
+                          <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${
+                            v.status === 'complete' ? 'bg-green-100 text-green-800' :
+                            v.status === 'incomplete' ? 'bg-amber-100 text-amber-800' :
+                            'bg-gray-100 text-gray-600'
+                          }`}>
+                            {v.status === 'complete' ? 'Complete' : v.status === 'incomplete' ? 'Incomplete' : 'Pending'}
+                          </span>
                         </td>
                         <td className="p-3 text-sm text-gray-800 font-mono max-w-[100px] truncate" title={v.utm_source ?? ''}>{v.utm_source ?? '—'}</td>
                         <td className="p-3 text-sm text-gray-800 font-mono max-w-[100px] truncate" title={v.utm_medium ?? ''}>{v.utm_medium ?? '—'}</td>

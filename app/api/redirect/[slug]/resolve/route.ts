@@ -96,17 +96,24 @@ export async function GET(
       return errorResponse('Projeto não encontrado', 404);
     }
 
+    let visit_id: string | null = null;
     const hasUtm = [utm_source, utm_medium, utm_campaign, utm_content, utm_term].some((v) => v && v.length > 0);
     if (hasUtm) {
-      await supabaseServiceRole.from('redirect_visits').insert({
-        project_id: redirectRow.project_id,
-        redirect_slug_id: redirectRow.id,
-        utm_source,
-        utm_medium,
-        utm_campaign,
-        utm_content,
-        utm_term,
-      });
+      const { data: visitRow } = await supabaseServiceRole
+        .from('redirect_visits')
+        .insert({
+          project_id: redirectRow.project_id,
+          redirect_slug_id: redirectRow.id,
+          utm_source,
+          utm_medium,
+          utm_campaign,
+          utm_content,
+          utm_term,
+          status: 'pending',
+        })
+        .select('id')
+        .single();
+      if (visitRow?.id) visit_id = visitRow.id;
     }
 
     const { data: linkRows } = await supabaseServiceRole
@@ -189,6 +196,7 @@ export async function GET(
       group_id: selected.id,
       click_id: clickRow.id,
       pixel_id: project.pixel_id ?? null,
+      visit_id,
     });
   } catch (e) {
     return serverErrorResponse(e);
