@@ -20,7 +20,7 @@ export async function GET(req: NextRequest) {
 
     const { data: rows, error } = await supabaseServiceRole
       .from('gerente_lead_requests')
-      .select('id, gerente_id, gerente_name, lead_type, consultores, status, banca_id, approved_at, created_at, deadline_days')
+      .select('id, gerente_id, gerente_name, lead_type, consultores, status, banca_id, approved_at, created_at, deadline_days, observations, rejection_observation')
       .eq('gerente_id', userId)
       .order('created_at', { ascending: false });
 

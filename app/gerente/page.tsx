@@ -232,6 +232,7 @@ export default function GerentePage() {
   const [solicitationBancasLoading, setSolicitationBancasLoading] = useState(false);
   const [solicitationQuantity, setSolicitationQuantity] = useState<number>(10);
   const [solicitationDeadlineDays, setSolicitationDeadlineDays] = useState<number>(10);
+  const [solicitationObservations, setSolicitationObservations] = useState<string>('');
   const [solicitationSubmitting, setSolicitationSubmitting] = useState(false);
   const [solicitationError, setSolicitationError] = useState('');
   const [solicitationSuccess, setSolicitationSuccess] = useState('');
@@ -258,9 +259,16 @@ export default function GerentePage() {
     created_at: string;
     approved_at?: string | null;
     deadline_days?: number | null;
+    /** Observação enviada pelo gerente na solicitação (opcional) */
+    observations?: string | null;
+    /** Observação do admin ao rejeitar (opcional) */
+    rejection_observation?: string | null;
   };
   const [leadRequestsHistory, setLeadRequestsHistory] = useState<LeadRequestItem[]>([]);
   const [leadRequestsHistoryLoading, setLeadRequestsHistoryLoading] = useState(false);
+  /** Filtros do Histórico de solicitações: consultor (id ou 'all') e status ('all' | pending | approved | partial | rejected) */
+  const [leadRequestHistoryConsultorFilter, setLeadRequestHistoryConsultorFilter] = useState<string>('all');
+  const [leadRequestHistoryStatusFilter, setLeadRequestHistoryStatusFilter] = useState<string>('all');
 
   // Filtros de banca e consultor
   const BANCA_ALL = '__all__'; // valor especial para "Todas as bancas" (apenas gerente)
@@ -592,6 +600,29 @@ export default function GerentePage() {
   useEffect(() => {
     if (userId) loadLeadRequests();
   }, [userId, loadLeadRequests]);
+
+  /** Consultores únicos do histórico (para filtro): id + nome */
+  const leadRequestHistoryConsultores = React.useMemo(() => {
+    const map = new Map<string, string>();
+    leadRequestsHistory.forEach((req) => {
+      (req.consultores ?? []).forEach((c) => {
+        const id = c.consultor_id;
+        const name = (c.consultor_name || id).trim();
+        if (id && !map.has(id)) map.set(id, name || id);
+      });
+    });
+    return Array.from(map.entries()).map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+  }, [leadRequestsHistory]);
+
+  /** Histórico de solicitações filtrado por consultor e status */
+  const leadRequestsHistoryFiltered = React.useMemo(() => {
+    return leadRequestsHistory.filter((req) => {
+      if (leadRequestHistoryStatusFilter !== 'all' && req.status !== leadRequestHistoryStatusFilter) return false;
+      if (leadRequestHistoryConsultorFilter === 'all') return true;
+      const hasConsultor = (req.consultores ?? []).some((c) => c.consultor_id === leadRequestHistoryConsultorFilter);
+      return hasConsultor;
+    });
+  }, [leadRequestsHistory, leadRequestHistoryStatusFilter, leadRequestHistoryConsultorFilter]);
 
   const loadBancas = async () => {
     setBancasLoading(true);
@@ -1163,11 +1194,13 @@ export default function GerentePage() {
           lead_type: ['registered'],
           consultores: [{ consultor_id: solicitationConsultorId.trim(), quantity: qty }],
           deadline_days: Math.max(1, Number(solicitationDeadlineDays) || 10),
+          observations: solicitationObservations?.trim() || undefined,
         }),
       });
       const result = await response.json();
       if (result.success) {
         setSolicitationSuccess('Solicitação enviada com sucesso.');
+        setSolicitationObservations('');
         loadLeadRequests();
         setTimeout(() => {
           setSolicitationModalOpen(false);
@@ -2649,6 +2682,50 @@ export default function GerentePage() {
               </p>
             ) : (
               <>
+                {/* Filtros: consultor e status */}
+                <div className="flex flex-wrap items-center gap-3 mb-4">
+                  <div className="flex items-center gap-2">
+                    <Filter className="w-4 h-4 text-gray-500 dark:text-gray-400" aria-hidden />
+                    <label htmlFor="hist-consultor" className="text-xs font-medium text-gray-600 dark:text-gray-400">Consultor</label>
+                    <select
+                      id="hist-consultor"
+                      value={leadRequestHistoryConsultorFilter}
+                      onChange={(e) => setLeadRequestHistoryConsultorFilter(e.target.value)}
+                      className="text-sm border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 focus:ring-2 focus:ring-[#8CD955]/50 focus:border-[#8CD955]"
+                    >
+                      <option value="all">Todos</option>
+                      {leadRequestHistoryConsultores.map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label htmlFor="hist-status" className="text-xs font-medium text-gray-600 dark:text-gray-400">Situação</label>
+                    <select
+                      id="hist-status"
+                      value={leadRequestHistoryStatusFilter}
+                      onChange={(e) => setLeadRequestHistoryStatusFilter(e.target.value)}
+                      className="text-sm border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 focus:ring-2 focus:ring-[#8CD955]/50 focus:border-[#8CD955]"
+                    >
+                      <option value="all">Todas</option>
+                      <option value="pending">Pendente</option>
+                      <option value="approved">Aprovada</option>
+                      <option value="partial">Faltam leads</option>
+                      <option value="rejected">Rejeitada</option>
+                    </select>
+                  </div>
+                  {(leadRequestHistoryConsultorFilter !== 'all' || leadRequestHistoryStatusFilter !== 'all') && (
+                    <span className="text-xs text-gray-500 dark:text-gray-400">
+                      {leadRequestsHistoryFiltered.length} de {leadRequestsHistory.length} solicitações
+                    </span>
+                  )}
+                </div>
+                {leadRequestsHistoryFiltered.length === 0 ? (
+                  <p className="text-center py-8 text-gray-500 dark:text-gray-400 text-sm">
+                    Nenhuma solicitação encontrada com os filtros selecionados.
+                  </p>
+                ) : (
+                <>
                 <div className="hidden md:block overflow-x-auto">
                   <table className="w-full text-left border-collapse min-w-full">
                     <thead>
@@ -2659,10 +2736,12 @@ export default function GerentePage() {
                         <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase">Consultores / Qtd</th>
                         <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-center">Prazo (dias)</th>
                         <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-center">Situação</th>
+                        <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase">Observação (solicitação)</th>
+                        <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase">Observação de rejeição</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-                      {leadRequestsHistory.map((req) => (
+                      {leadRequestsHistoryFiltered.map((req) => (
                         <tr key={req.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-800/50 transition-colors">
                           <td className="px-4 py-3 text-xs text-gray-700 dark:text-gray-300 whitespace-nowrap">
                             {new Date(req.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
@@ -2691,13 +2770,23 @@ export default function GerentePage() {
                               </p>
                             )}
                           </td>
+                          <td className="px-4 py-3 text-xs text-gray-700 dark:text-gray-300 max-w-[200px]">
+                            {req.observations?.trim() ? (
+                              <span className="whitespace-pre-wrap text-left block" title={req.observations.trim()}>{req.observations.trim()}</span>
+                            ) : '—'}
+                          </td>
+                          <td className="px-4 py-3 text-xs max-w-[200px]">
+                            {req.status === 'rejected' && req.rejection_observation?.trim() ? (
+                              <span className="whitespace-pre-wrap text-left block text-red-700 dark:text-red-300" title={req.rejection_observation.trim()}>{req.rejection_observation.trim()}</span>
+                            ) : '—'}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
                 <div className="md:hidden space-y-3">
-                  {leadRequestsHistory.map((req) => (
+                  {leadRequestsHistoryFiltered.map((req) => (
                     <div key={req.id} className="p-4 rounded-xl border border-gray-100 dark:border-gray-700 bg-gray-50/30 dark:bg-gray-800/30 space-y-2">
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-xs text-gray-500 dark:text-gray-400">
@@ -2715,6 +2804,18 @@ export default function GerentePage() {
                           {req.status === 'pending' ? 'Pendente' : req.status === 'approved' ? 'Aprovada' : req.status === 'partial' ? 'Faltam leads' : 'Rejeitada'}
                         </span>
                       </div>
+                      {req.observations?.trim() && (
+                        <div className="rounded-lg border border-gray-200 dark:border-gray-600 bg-gray-50/80 dark:bg-gray-800/50 p-3">
+                          <p className="text-[10px] font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide mb-1">Observação (solicitação)</p>
+                          <p className="text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap">{req.observations.trim()}</p>
+                        </div>
+                      )}
+                      {req.status === 'rejected' && req.rejection_observation?.trim() && (
+                        <div className="rounded-lg border border-red-200 dark:border-red-900/50 bg-red-50/80 dark:bg-red-900/20 p-3">
+                          <p className="text-[10px] font-semibold text-red-700 dark:text-red-300 uppercase tracking-wide mb-1">Observação de rejeição</p>
+                          <p className="text-sm text-red-800 dark:text-red-200 whitespace-pre-wrap">{req.rejection_observation.trim()}</p>
+                        </div>
+                      )}
                       <p className="text-sm font-medium text-gray-800 dark:text-gray-200">{req.banca_name ?? req.banca_id ?? '—'}</p>
                       <p className="text-xs text-gray-600 dark:text-gray-400">{req.lead_type_label ?? req.lead_type}</p>
                       <p className="text-xs text-gray-600 dark:text-gray-400">
@@ -2727,6 +2828,8 @@ export default function GerentePage() {
                     </div>
                   ))}
                 </div>
+                </>
+                )}
               </>
             )}
           </div>
@@ -2888,7 +2991,7 @@ export default function GerentePage() {
                   <ClipboardList className="w-6 h-6" />
                   Solicitação de leads
                 </h2>
-                <button onClick={() => setSolicitationModalOpen(false)} className="hover:bg-white/20 p-1.5 rounded-xl transition-colors">
+                <button onClick={() => { setSolicitationModalOpen(false); setSolicitationObservations(''); }} className="hover:bg-white/20 p-1.5 rounded-xl transition-colors">
                   <X className="w-6 h-6" />
                 </button>
               </div>
@@ -2970,10 +3073,23 @@ export default function GerentePage() {
                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 ml-1">Prazo para conversão dos leads</p>
                     </div>
                   </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-2 ml-1">Observação (opcional)</label>
+                    <textarea
+                      value={solicitationObservations}
+                      onChange={(e) => setSolicitationObservations(e.target.value)}
+                      placeholder="Ex.: priorizar leads com aposta recente..."
+                      rows={3}
+                      maxLength={1000}
+                      className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium placeholder:text-gray-400 resize-y"
+                    />
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 ml-1">Será enviada ao admin junto com a solicitação</p>
+                  </div>
                 </div>
 
                 <div className="p-6 pt-0 flex gap-3 shrink-0 border-t border-gray-100 dark:border-gray-700 justify-between">
-                  <button type="button" onClick={() => setSolicitationModalOpen(false)} className="bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 font-bold py-3 px-6 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors">Cancelar</button>
+                  <button type="button" onClick={() => { setSolicitationModalOpen(false); setSolicitationObservations(''); }} className="bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 font-bold py-3 px-6 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors">Cancelar</button>
                   <button
                     type="submit"
                     disabled={solicitationSubmitting || (!!solicitationConsultorId?.trim() && (solicitationBancasLoading || solicitationBancasForConsultant.length === 0)) || !solicitationBancaId?.trim()}

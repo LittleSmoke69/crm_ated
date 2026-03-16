@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
 
     let query = supabaseServiceRole
       .from('gerente_lead_requests')
-      .select('id, gerente_id, gerente_name, lead_type, consultores, status, banca_id, source_consultant_id, source_consultant_email, approved_by_user_id, approved_at, created_at, approval_snapshot, deadline_days')
+      .select('id, gerente_id, gerente_name, lead_type, consultores, status, banca_id, source_consultant_id, source_consultant_email, approved_by_user_id, approved_at, created_at, approval_snapshot, deadline_days, observations, rejection_observation')
       .order('created_at', { ascending: false });
 
     if (effectiveStatus !== 'all') {

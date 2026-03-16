@@ -259,6 +259,8 @@ const KanbanContent = () => {
   const [showSpinModal, setShowSpinModal] = useState(false);
   const [spinSelectedLeadIds, setSpinSelectedLeadIds] = useState<Set<string>>(new Set());
   const [spinSearchTerm, setSpinSearchTerm] = useState('');
+  /** Valor digitado na busca do modal de giros; o filtro só é aplicado no onBlur (clicar fora). */
+  const [spinSearchInputValue, setSpinSearchInputValue] = useState('');
   const [spinQuantity, setSpinQuantity] = useState<number>(5);
   const [spinHistory, setSpinHistory] = useState<{ quantity: number; date: string }[]>([]);
   const [spinHistoryLoading, setSpinHistoryLoading] = useState(false);
@@ -354,6 +356,11 @@ const KanbanContent = () => {
     const interval = setInterval(fetchViewers, 30000); // a cada 30s
     return () => clearInterval(interval);
   }, [userId, isConsultorViewingOwn]);
+
+  // Ao abrir o modal de giros, sincroniza o valor do input com o termo de filtro atual
+  useEffect(() => {
+    if (showSpinModal) setSpinSearchInputValue(spinSearchTerm);
+  }, [showSpinModal]);
 
   // Métricas são calculadas localmente baseadas nos leads filtrados
   // Não precisa mais da função loadMetrics da API
@@ -1907,9 +1914,10 @@ const KanbanContent = () => {
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                   <input
                     type="text"
-                    value={spinSearchTerm}
-                    onChange={(e) => setSpinSearchTerm(e.target.value)}
-                    placeholder="Nome ou e-mail..."
+                    value={spinSearchInputValue}
+                    onChange={(e) => setSpinSearchInputValue(e.target.value)}
+                    onBlur={() => setSpinSearchTerm(spinSearchInputValue)}
+                    placeholder="Nome ou e-mail... (clique fora para filtrar)"
                     className="w-full pl-9 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-amber-400/40"
                   />
                 </div>

@@ -242,6 +242,10 @@ interface GerenteLeadRequest {
   banca_name?: string;
   /** Prazo em dias solicitado pelo gerente para o pacote (conversão dos leads) */
   deadline_days?: number | null;
+  /** Observação opcional enviada pelo gerente na solicitação */
+  observations?: string | null;
+  /** Observação opcional do admin ao rejeitar a solicitação */
+  rejection_observation?: string | null;
   source_consultant_id?: string | null;
   source_consultant_email?: string | null;
   approved_by_user_id?: string | null;
@@ -551,6 +555,8 @@ export default function AdminLeadTransferPage() {
   const [loadingApproveModalConsultants, setLoadingApproveModalConsultants] = useState(false);
   /** Termo de busca no modal Aprovar (consultor doador: nome ou email) */
   const [approveModalConsultantSearch, setApproveModalConsultantSearch] = useState('');
+  /** Observação opcional ao rejeitar a solicitação (modal Aprovar) */
+  const [approveModalRejectObservation, setApproveModalRejectObservation] = useState('');
   /** E-mail do doador ao redirecionar da aprovação para a aba Transferir (preenchido após loadConsultants) */
   const [transferFromSolicitationSourceEmail, setTransferFromSolicitationSourceEmail] = useState<string | null>(null);
   /** E-mail do consultor destino (recebedor) ao redirecionar da solicitação — preenchido quando consultants carregar */
@@ -759,6 +765,7 @@ export default function AdminLeadTransferPage() {
     setApproveFormSourceConsultantId('');
     setApproveModalConsultants([]);
     setApproveModalConsultantSearch('');
+    setApproveModalRejectObservation('');
     setApproveModalOpen(true);
     if (bancaIdDaSolicitacao && userId) {
       approveModalLoadingRequestIdRef.current = requestId;
@@ -791,6 +798,7 @@ export default function AdminLeadTransferPage() {
     setApproveRejecting(false);
     setApproveModalConsultants([]);
     setApproveModalConsultantSearch('');
+    setApproveModalRejectObservation('');
   };
 
   /** Redireciona para a aba Transferir no step 3 (Filtros e buscar): banca e doador preenchidos e busca de leads disparada automaticamente (90 dias). */
@@ -903,7 +911,10 @@ export default function AdminLeadTransferPage() {
       const res = await fetch(`/api/admin/crm/lead-requests/${selectedRequestForApprove.id}`, {
         method: 'PATCH',
         headers: headers(),
-        body: JSON.stringify({ status: 'rejected' }),
+        body: JSON.stringify({
+        status: 'rejected',
+        rejection_observation: approveModalRejectObservation?.trim() || undefined,
+      }),
       });
       const json = await res.json();
       if (res.ok && json.success) {
@@ -6931,6 +6942,12 @@ export default function AdminLeadTransferPage() {
                   <strong>Banca para transferência:</strong> {selectedRequestForApprove.banca_name}
                 </p>
               )}
+              {selectedRequestForApprove.observations?.trim() && (
+                <div className="p-3 rounded-xl bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-600">
+                  <p className="text-xs font-bold text-gray-600 dark:text-gray-400 uppercase mb-1">Observação do gerente</p>
+                  <p className="text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap">{selectedRequestForApprove.observations.trim()}</p>
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-bold text-gray-600 dark:text-gray-400 uppercase mb-1">Consultor doador (origem dos leads) *</label>
                 {!selectedRequestForApprove.banca_id?.trim() ? (
@@ -6987,6 +7004,18 @@ export default function AdminLeadTransferPage() {
                   </>
                 )}
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1.5">Consultores da banca da solicitação. Ao clicar em &quot;Ir para transferir&quot;, a aba Transferir abrirá com esta banca e o doador já preenchidos no passo Buscar.</p>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-600 dark:text-gray-400 uppercase mb-1">Observação da rejeição (opcional)</label>
+                <textarea
+                  value={approveModalRejectObservation}
+                  onChange={(e) => setApproveModalRejectObservation(e.target.value)}
+                  placeholder="Ex.: leads insuficientes no momento..."
+                  rows={2}
+                  maxLength={1000}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-[#404040] dark:bg-[#333] dark:text-white rounded-lg text-sm placeholder:text-gray-500 focus:ring-2 focus:ring-red-500/50 focus:border-red-500"
+                />
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Será enviada ao gerente junto com o status de rejeitada.</p>
               </div>
             </div>
             <div className="p-4 border-t border-gray-100 dark:border-gray-700 space-y-3">
