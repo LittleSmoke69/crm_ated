@@ -36,6 +36,7 @@ import {
   BookOpen,
   Link2,
   Headphones,
+  UserPlus,
 } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import Logo from '@/components/Logo';
@@ -76,6 +77,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const shouldShowLogout = pathname === '/perfil' ||
                           pathname === '/list-cleaning' ||
                           pathname === '/crm/transferido' ||
+                          pathname === '/crm/avulsos' ||
                           pathname === '/anti-spam' ||
                           pathname?.startsWith('/admin/anti-spam') ||
                           pathname?.startsWith('/admin/webhooks') ||
@@ -140,7 +142,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const iconMap: Record<string, any> = {
     LayoutDashboard, MessageSquare, Rocket, Users, Plus, Shield, Webhook, Workflow, Bot, Layout,
     Kanban, Activity, BarChart3, Briefcase, Settings, FlaskConical, User, ListOrdered, ClipboardList,
-    ArrowLeftToLine, ExternalLink, ArrowRightLeft, BookOpen, Link2,
+    ArrowLeftToLine, ExternalLink, ArrowRightLeft, BookOpen, Link2, UserPlus,
   };
 
   useEffect(() => {
@@ -264,6 +266,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
     submenu: [
       { href: '/crm/kanban', icon: Kanban, label: 'Kanban' },
       { href: '/crm/transferido', icon: ArrowRightLeft, label: 'Transferido' },
+      { href: '/crm/avulsos', icon: UserPlus, label: 'Avulsos' },
     ],
   };
   const itemCampanhas: MenuItem = {

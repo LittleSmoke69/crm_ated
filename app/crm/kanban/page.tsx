@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback, Suspense, startTransition } from 'react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { Kanban as KanbanIcon, Plus, Users, Target, CheckCircle2, MessageSquare, AlertCircle, Eye, RefreshCw, X, Gift, Loader2, Search } from 'lucide-react';
+import { Kanban as KanbanIcon, Plus, Users, Target, CheckCircle2, MessageSquare, AlertCircle, Eye, RefreshCw, X, Gift, Loader2, Search, Ticket, Sparkles, Package } from 'lucide-react';
 import FilterBar from '@/components/CRM/FilterBar';
 import KanbanColumn from '@/components/CRM/KanbanColumn';
 import SortColumnModal from '@/components/CRM/SortColumnModal';
@@ -253,6 +253,8 @@ const KanbanContent = () => {
   
   // Estado para controlar o modal informativo de status
   const [showStatusModal, setShowStatusModal] = useState(false);
+  // Modal seleção tipo de bônus (abre antes do modal de Giros)
+  const [showBonusTypeModal, setShowBonusTypeModal] = useState(false);
   // Modal Enviar Giros (Roleta)
   const [showSpinModal, setShowSpinModal] = useState(false);
   const [spinSelectedLeadIds, setSpinSelectedLeadIds] = useState<Set<string>>(new Set());
@@ -262,6 +264,13 @@ const KanbanContent = () => {
   const [spinHistoryLoading, setSpinHistoryLoading] = useState(false);
   const [spinSending, setSpinSending] = useState(false);
   const [spinError, setSpinError] = useState<string | null>(null);
+  // Modal Enviar Rifas (bilhetes)
+  const [showTicketModal, setShowTicketModal] = useState(false);
+  const [ticketSelectedLeadIds, setTicketSelectedLeadIds] = useState<Set<string>>(new Set());
+  const [ticketSearchTerm, setTicketSearchTerm] = useState('');
+  const [ticketQuantity, setTicketQuantity] = useState<number>(1);
+  const [ticketSending, setTicketSending] = useState(false);
+  const [ticketError, setTicketError] = useState<string | null>(null);
 
   const isInitialLoadRef = useRef<boolean>(true);
   /** Cancela o carregamento em background quando uma nova busca é iniciada (ex.: mudança de filtro). */
@@ -619,6 +628,14 @@ const KanbanContent = () => {
       (l.name || '').toLowerCase().includes(term) || (l.email || '').toLowerCase().includes(term)
     );
   }, [spinEligibleLeads, spinSearchTerm]);
+  // Rifas: mesma base de leads, filtro por pesquisa
+  const ticketFilteredLeads = useMemo(() => {
+    const term = ticketSearchTerm.trim().toLowerCase();
+    if (!term) return spinEligibleLeads;
+    return spinEligibleLeads.filter(l =>
+      (l.name || '').toLowerCase().includes(term) || (l.email || '').toLowerCase().includes(term)
+    );
+  }, [spinEligibleLeads, ticketSearchTerm]);
   // Um único lead selecionado (para exibir histórico)
   const spinSelectedLead = useMemo(() => {
     if (spinSelectedLeadIds.size !== 1) return null;
@@ -816,6 +833,81 @@ const KanbanContent = () => {
     }
     setSpinSending(false);
   }, [spinEligibleLeads, spinSelectedLeadIds, spinQuantity, spinSelectedLead, targetUserId, userId, showToast, getLeadIdForApi]);
+
+  const handleSendTickets = useCallback(async () => {
+    const selectedLeads = spinEligibleLeads.filter(l => ticketSelectedLeadIds.has(String(l.id)));
+    if (selectedLeads.length === 0 || ticketQuantity < 1) return;
+    setTicketSending(true);
+    setTicketError(null);
+    const consultantIdByBanca = new Map<string, number>();
+    const getConsultantId = async (lead: Lead): Promise<number | null> => {
+      const bancaUrl = lead.banca_url;
+      if (!bancaUrl) return null;
+      if (lead.consultant_id != null) return Number(lead.consultant_id);
+      const cached = consultantIdByBanca.get(bancaUrl);
+      if (cached != null) return cached;
+      try {
+        const url = new URL('/api/crm/consultant-external-id', window.location.origin);
+        url.searchParams.set('userId', targetUserId || (userId as string));
+        url.searchParams.set('banca_url', bancaUrl);
+        const res = await fetch(url.toString(), { headers: { 'X-User-Id': userId as string } });
+        const data = await res.json();
+        if (data?.success && data?.data?.consultant_id != null) {
+          const cid = Number(data.data.consultant_id);
+          consultantIdByBanca.set(bancaUrl, cid);
+          return cid;
+        }
+      } catch {
+        // ignore
+      }
+      return null;
+    };
+    const successfulLeads: Lead[] = [];
+    let err = 0;
+    for (const lead of selectedLeads) {
+      const bancaUrl = lead.banca_url;
+      if (!bancaUrl) {
+        err++;
+        continue;
+      }
+      const consultantId = await getConsultantId(lead);
+      if (consultantId == null) {
+        err++;
+        continue;
+      }
+      try {
+        const res = await fetch('/api/crm/send-tickets-to-lead', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId as string },
+          body: JSON.stringify({
+            consultant_id: consultantId,
+            lead_id: getLeadIdForApi(lead),
+            quantity: Number(ticketQuantity),
+            banca_url: bancaUrl,
+            userId: targetUserId || userId,
+          }),
+        });
+        const data = await res.json();
+        if (data?.success) successfulLeads.push(lead);
+        else err++;
+      } catch {
+        err++;
+      }
+    }
+    const ok = successfulLeads.length;
+    if (ok > 0) {
+      showToast(
+        err > 0
+          ? `${ticketQuantity} bilhete(s) enviados para ${ok} lead(s). ${err} falha(s).`
+          : `${ticketQuantity} bilhete(s) enviado(s) para ${ok} lead(s).`,
+        'success'
+      );
+    }
+    if (err > 0) {
+      setTicketError(err === selectedLeads.length ? 'Falha ao enviar bilhetes.' : `Falha para ${err} de ${selectedLeads.length} lead(s).`);
+    }
+    setTicketSending(false);
+  }, [spinEligibleLeads, ticketSelectedLeadIds, ticketQuantity, targetUserId, userId, showToast, getLeadIdForApi]);
 
   // Função para carregar mais leads em uma coluna (apenas atualiza limite local, sem API)
   const handleLoadMore = (columnId: string) => {
@@ -1310,13 +1402,13 @@ const KanbanContent = () => {
                 <span>Informações <span className="hidden xs:inline">de Status</span></span>
               </button>
               <button
-                onClick={() => setShowSpinModal(true)}
+                onClick={() => setShowBonusTypeModal(true)}
                 disabled={loading || filterLoading}
                 className="whitespace-nowrap flex items-center gap-2 bg-orange-500 hover:bg-orange-600 border border-orange-600 px-3 py-2 rounded-xl text-[11px] md:text-sm font-bold text-white shadow-sm flex-shrink-0 transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-orange-500 disabled:hover:border-orange-600"
-                title={loading || filterLoading ? 'Aguarde o carregamento dos clientes' : 'Enviar giros (roleta) para leads'}
+                title={loading || filterLoading ? 'Aguarde o carregamento dos clientes' : 'Escolher tipo de bônus para enviar'}
               >
                 <Gift className="w-3.5 h-3.5" />
-                <span>Enviar Giros <span className="hidden xs:inline">(Roleta)</span></span>
+                <span>Enviar Bonus</span>
               </button>
             </div>
           </div>
@@ -1695,6 +1787,90 @@ const KanbanContent = () => {
           </div>
         )}
 
+      {/* Modal Seleção tipo de bônus */}
+      {showBonusTypeModal && (
+        <div
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => setShowBonusTypeModal(false)}
+        >
+          <div
+            className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-2xl max-w-sm w-full border border-gray-200 dark:border-[#404040]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 py-4 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between rounded-t-2xl">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
+                  <Gift className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                </div>
+                <h2 className="text-lg font-bold text-gray-800 dark:text-white">Enviar Bonus</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowBonusTypeModal(false)}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-[#404040] rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+            <p className="px-6 pt-3 text-xs text-gray-500 dark:text-gray-400">Selecione o tipo de bônus que deseja enviar:</p>
+            <div className="p-4 space-y-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowBonusTypeModal(false);
+                  setShowSpinModal(true);
+                }}
+                className="w-full flex items-center gap-3 p-4 rounded-xl border-2 border-gray-200 dark:border-[#404040] hover:border-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/10 transition-colors text-left"
+              >
+                <div className="p-2 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
+                  <Gift className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                </div>
+                <span className="font-semibold text-gray-800 dark:text-white">Giros</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowBonusTypeModal(false);
+                  setShowTicketModal(true);
+                }}
+                className="w-full flex items-center gap-3 p-4 rounded-xl border-2 border-gray-200 dark:border-[#404040] hover:border-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/10 transition-colors text-left"
+              >
+                <div className="p-2 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
+                  <Ticket className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                </div>
+                <span className="font-semibold text-gray-800 dark:text-white">Rifa</span>
+              </button>
+              <button
+                type="button"
+                disabled
+                className="w-full flex items-center gap-3 p-4 rounded-xl border-2 border-gray-100 dark:border-[#353535] bg-gray-50 dark:bg-[#252525] cursor-not-allowed opacity-75 text-left"
+              >
+                <div className="p-2 bg-gray-100 dark:bg-[#404040] rounded-lg">
+                  <Sparkles className="w-5 h-5 text-gray-400" />
+                </div>
+                <div className="flex-1">
+                  <span className="font-semibold text-gray-600 dark:text-gray-400">Raspadinha</span>
+                  <span className="ml-2 text-xs text-gray-500 dark:text-gray-500">(Em breve)</span>
+                </div>
+              </button>
+              <button
+                type="button"
+                disabled
+                className="w-full flex items-center gap-3 p-4 rounded-xl border-2 border-gray-100 dark:border-[#353535] bg-gray-50 dark:bg-[#252525] cursor-not-allowed opacity-75 text-left"
+              >
+                <div className="p-2 bg-gray-100 dark:bg-[#404040] rounded-lg">
+                  <Package className="w-5 h-5 text-gray-400" />
+                </div>
+                <div className="flex-1">
+                  <span className="font-semibold text-gray-600 dark:text-gray-400">Caixa Surpresa</span>
+                  <span className="ml-2 text-xs text-gray-500 dark:text-gray-500">(Em breve)</span>
+                </div>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Modal Enviar Giros (Roleta) */}
       {showSpinModal && (
         <div
@@ -1867,6 +2043,156 @@ const KanbanContent = () => {
               >
                 {spinSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Gift className="w-4 h-4" />}
                 {spinSending ? 'Enviando...' : `Enviar giros${spinSelectedLeadIds.size > 0 ? ` (${spinSelectedLeadIds.size})` : ''}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Enviar Rifas (bilhetes) */}
+      {showTicketModal && (
+        <div
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => !ticketSending && setShowTicketModal(false)}
+        >
+          <div
+            className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-2xl max-w-md w-full max-h-[90vh] overflow-y-auto border border-gray-200 dark:border-[#404040]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="sticky top-0 bg-white dark:bg-[#2a2a2a] border-b border-gray-200 dark:border-[#404040] px-6 py-4 flex items-center justify-between rounded-t-2xl">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
+                  <Ticket className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-gray-800 dark:text-white">Enviar Rifas</h2>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Selecione o lead e a quantidade de bilhetes</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => !ticketSending && setShowTicketModal(false)}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-[#404040] rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">Pesquisar lead</label>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <input
+                    type="text"
+                    value={ticketSearchTerm}
+                    onChange={(e) => setTicketSearchTerm(e.target.value)}
+                    placeholder="Nome ou e-mail..."
+                    className="w-full pl-9 pr-4 py-3 bg-gray-50 dark:bg-[#353535] border border-gray-200 dark:border-[#404040] rounded-xl text-sm text-gray-800 dark:text-white placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-amber-400/40"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider">Leads</label>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setTicketSelectedLeadIds(new Set(ticketFilteredLeads.map(l => String(l.id))))}
+                      className="text-[10px] font-bold text-amber-600 hover:text-amber-700"
+                    >
+                      Selecionar todos
+                    </button>
+                    <span className="text-gray-300">|</span>
+                    <button
+                      type="button"
+                      onClick={() => setTicketSelectedLeadIds(new Set())}
+                      className="text-[10px] font-bold text-gray-500 hover:text-gray-700"
+                    >
+                      Desmarcar
+                    </button>
+                  </div>
+                </div>
+                <div className="bg-gray-50 dark:bg-[#353535] border border-gray-200 dark:border-[#404040] rounded-xl max-h-44 overflow-y-auto">
+                  {ticketFilteredLeads.length === 0 ? (
+                    <p className="p-4 text-sm text-gray-500 text-center">Nenhum lead encontrado.</p>
+                  ) : (
+                    <ul className="divide-y divide-gray-100 dark:divide-[#404040] py-1">
+                      {ticketFilteredLeads.map((lead) => {
+                        const idStr = String(lead.id);
+                        const checked = ticketSelectedLeadIds.has(idStr);
+                        return (
+                          <li key={idStr}>
+                            <label className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-100 dark:hover:bg-[#404040] cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => {
+                                  setTicketSelectedLeadIds(prev => {
+                                    const next = new Set(prev);
+                                    if (next.has(idStr)) next.delete(idStr);
+                                    else next.add(idStr);
+                                    return next;
+                                  });
+                                }}
+                                className="w-4 h-4 rounded border-gray-300 text-amber-500 focus:ring-amber-400"
+                              />
+                              <span className="text-sm text-gray-800 dark:text-white truncate flex-1">
+                                {lead.name || 'Sem nome'}
+                                {lead.email ? (
+                                  <span className="text-gray-500 font-normal"> — {lead.email}</span>
+                                ) : null}
+                              </span>
+                            </label>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
+                {ticketSelectedLeadIds.size > 0 && (
+                  <p className="mt-1.5 text-xs text-gray-500">
+                    {ticketSelectedLeadIds.size} lead(s) selecionado(s)
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">Quantidade de bilhetes (por lead)</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={ticketQuantity}
+                  onChange={(e) => setTicketQuantity(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  className="w-full bg-gray-50 dark:bg-[#353535] border border-gray-200 dark:border-[#404040] rounded-xl px-4 py-3 text-sm text-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-400/40"
+                />
+              </div>
+
+              {ticketError && (
+                <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-800 text-red-600 dark:text-red-400 rounded-xl text-sm flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                  {ticketError}
+                </div>
+              )}
+            </div>
+
+            <div className="sticky bottom-0 bg-gray-50 dark:bg-[#252525] border-t border-gray-200 dark:border-[#404040] px-6 py-4 rounded-b-2xl flex gap-2">
+              <button
+                type="button"
+                onClick={() => !ticketSending && setShowTicketModal(false)}
+                className="flex-1 py-3 bg-gray-200 dark:bg-[#404040] hover:bg-gray-300 dark:hover:bg-[#505050] text-gray-800 dark:text-white font-bold rounded-xl transition-colors"
+              >
+                Fechar
+              </button>
+              <button
+                type="button"
+                onClick={handleSendTickets}
+                disabled={ticketSending || ticketSelectedLeadIds.size === 0 || ticketQuantity < 1}
+                className="flex-1 py-3 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white font-bold rounded-xl transition-colors flex items-center justify-center gap-2"
+              >
+                {ticketSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Ticket className="w-4 h-4" />}
+                {ticketSending ? 'Enviando...' : `Enviar bilhetes${ticketSelectedLeadIds.size > 0 ? ` (${ticketSelectedLeadIds.size})` : ''}`}
               </button>
             </div>
           </div>
