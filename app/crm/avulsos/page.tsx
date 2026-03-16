@@ -293,7 +293,7 @@ export default function AvulsosPage() {
           )}
         </div>
       </div>
-      <ToastContainer toasts={toasts} removeToast={removeToast} />
+      <ToastContainer toasts={toasts} onClose={removeToast} />
     </Layout>
   );
 }

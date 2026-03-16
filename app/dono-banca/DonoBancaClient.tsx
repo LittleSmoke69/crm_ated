@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   UserPlus, 
   Users, 
@@ -26,12 +26,14 @@ import {
   Wallet,
   Trophy,
   Loader2,
-  Filter
+  Filter,
+  Download
 } from 'lucide-react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import FinancialMetricsBarChart from '@/components/Charts/FinancialMetricsBarChart';
 import LeadsDistributionChart from '@/components/Charts/LeadsDistributionChart';
+import ExportCsvModal from '@/components/dono-banca/ExportCsvModal';
 
 interface ConsultorOutraBanca {
   id: string;
@@ -170,6 +172,9 @@ export default function DonoBancaHierarquia({
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [isFirstRender, setIsFirstRender] = useState(true);
+
+  // ── Export CSV (modal com filtros do CRM) ───────────────────────────────────
+  const [exportCsvModalOpen, setExportCsvModalOpen] = useState(false);
 
   // Carrega lista de bancas para super_admin/admin ou cargo com permissão sidebar gestao_banca
   useEffect(() => {
@@ -540,16 +545,38 @@ export default function DonoBancaHierarquia({
             <p className="text-gray-500 dark:text-gray-400 text-sm sm:text-base">Gerencie sua hierarquia de Gerentes e Consultores</p>
           </div>
           
-          {!isAdminOrSuperAdmin && (
-            <button 
-              onClick={() => setIsModalOpen(true)}
-              className="flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl font-bold transition-all shadow-md shadow-emerald-100 dark:shadow-none shrink-0"
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() => setExportCsvModalOpen(true)}
+              disabled={!userId}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold transition-all shadow-sm shrink-0 text-sm bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Exportar leads da banca em CSV (com filtros do CRM)"
             >
-              <UserPlus className="w-5 h-5" />
-              Cadastrar Usuário
+              <Download className="w-4 h-4" />
+              Exportar CSV
             </button>
-          )}
+
+            {!isAdminOrSuperAdmin && (
+              <button
+                onClick={() => setIsModalOpen(true)}
+                className="flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl font-bold transition-all shadow-md shadow-emerald-100 dark:shadow-none shrink-0"
+              >
+                <UserPlus className="w-5 h-5" />
+                Cadastrar Usuário
+              </button>
+            )}
+          </div>
         </div>
+
+        {/* Modal Export CSV (filtros iguais ao CRM) */}
+        <ExportCsvModal
+          open={exportCsvModalOpen}
+          onClose={() => setExportCsvModalOpen(false)}
+          userId={userId as string}
+          bancasFromParent={showBancaSelector ? bancas : []}
+          defaultBancaId={showBancaSelector ? null : bancaId}
+          showBancaSelector={showBancaSelector}
+        />
 
         {/* KPIs da API Externa */}
         <div className="mb-4 sm:mb-6">
