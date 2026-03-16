@@ -48,6 +48,7 @@ function normalizeBancaUrl(bancaUrl: string): string {
 
 /** Lead retornado por get-indicateds-by-consultant (campos usados na agregação) */
 export interface IndicatedLead {
+  id?: string | number;
   consultant_id?: number;
   consultant_name?: string;
   consultant_email?: string;
@@ -89,7 +90,8 @@ const EMPTY_CONSULTANT_METRICS: ConsultantAggregatedMetrics = {
 
 /**
  * Busca todos os indicados no período via uma única chamada get-indicateds-by-consultant (from/to).
- * Pagina automaticamente (per_page=2000) e retorna o array completo de leads.
+ * Não envia consultant — a API externa pode retornar vazio se exigir consultant.
+ * Prefira fetchIndicatedsByConsultants quando tiver a lista de emails (como o CRM).
  */
 export async function fetchIndicatedsByPeriod(
   cleanBancaUrl: string,
@@ -111,8 +113,6 @@ export async function fetchIndicatedsByPeriod(
     if (dateFrom) params.set('from', dateFrom);
     if (dateTo) params.set('to', dateTo);
     const url = `${baseUrl}?${params.toString()}`;
-    const curlCmd = `curl -X GET "${url}" -H "Accept: application/json" -H "X-API-KEY: ${apiKey ?? '<CRM_API_KEY>'}"`;
-    console.log(`[fetchIndicatedsByPeriod] GET get-indicateds-by-consultant | page=${page} | curl:\n${curlCmd}`);
     const res = await fetch(url, {
       method: 'GET',
       headers: { Accept: 'application/json', ...(apiKey && { 'X-API-KEY': apiKey }) },
@@ -123,11 +123,75 @@ export async function fetchIndicatedsByPeriod(
     const data = result?.data;
     if (!Array.isArray(data) || data.length === 0) break;
     allData.push(...(data as IndicatedLead[]));
-    const total = result?.pagination?.total ?? data.length;
     const lastPage = result?.pagination?.last_page ?? 1;
     if (page >= lastPage || data.length < perPage) hasMore = false;
     else page++;
   }
+  return allData;
+}
+
+/**
+ * Busca indicados da banca da mesma forma que o CRM: uma chamada get-indicateds-by-consultant
+ * por consultor/gerente (consultant=email). Agrega todos os resultados.
+ * Usar quando a API externa exigir o parâmetro consultant para retornar dados.
+ */
+export async function fetchIndicatedsByConsultants(
+  cleanBancaUrl: string,
+  dateFrom: string | null | undefined,
+  dateTo: string | null | undefined,
+  consultantEmails: string[]
+): Promise<IndicatedLead[]> {
+  if (!consultantEmails.length) return [];
+  const apiKey = process.env.CRM_API_KEY;
+  const baseUrl = `${cleanBancaUrl}/api/crm/get-indicateds-by-consultant`;
+  const perPage = 2000;
+  const maxPagesPerConsultant = 50;
+  const allData: IndicatedLead[] = [];
+  const seenIds = new Set<string>();
+
+  for (const email of consultantEmails) {
+    const trimmed = email?.trim?.();
+    if (!trimmed) continue;
+    let page = 1;
+    let hasMore = true;
+    while (hasMore && page <= maxPagesPerConsultant) {
+      const params = new URLSearchParams();
+      params.set('consultant', trimmed);
+      params.set('per_page', String(perPage));
+      params.set('page', String(page));
+      params.set('sort', 'created_at');
+      params.set('direction', 'desc');
+      if (dateFrom) params.set('from', dateFrom);
+      if (dateTo) params.set('to', dateTo);
+      const url = `${baseUrl}?${params.toString()}`;
+      try {
+        const res = await fetch(url, {
+          method: 'GET',
+          headers: { Accept: 'application/json', ...(apiKey && { 'X-API-KEY': apiKey }) },
+          signal: AbortSignal.timeout(60000),
+        });
+        if (!res.ok) break;
+        const result = await res.json();
+        const data = result?.data;
+        if (!Array.isArray(data) || data.length === 0) break;
+        for (const lead of data as IndicatedLead[]) {
+          const id = lead?.id ?? (lead as any)?._originalId;
+          if (id && !seenIds.has(String(id))) {
+            seenIds.add(String(id));
+            allData.push(lead);
+          } else if (!id) {
+            allData.push(lead);
+          }
+        }
+        if (data.length < perPage) hasMore = false;
+        else page++;
+      } catch (err: any) {
+        console.warn(`[fetchIndicatedsByConsultants] Erro consultant=${trimmed.slice(0, 5)}*** page=${page}:`, err?.message);
+        break;
+      }
+    }
+  }
+  console.log(`[fetchIndicatedsByConsultants] ${consultantEmails.length} consultores | ${allData.length} leads`);
   return allData;
 }
 
@@ -586,16 +650,10 @@ export async function getDonoBancaDashboardData({ userId, dateFrom, dateTo, meta
 
   const cleanBancaUrl = donoProfile.banca_url ? normalizeBancaUrl(donoProfile.banca_url) : null;
 
-  // Paraleliza: bancas lookup + dashboard-metrics + get-indicateds-by-consultant + gerentes
-  const [bancasDono, externalMetricsRaw, indicatedsRaw, gerentesResult] = await Promise.all([
+  // Bancas + métricas + gerentes em paralelo (sem indicados ainda)
+  const [bancasDono, externalMetricsRaw, gerentesResult] = await Promise.all([
     supabaseServiceRole.from('crm_bancas').select('id, url'),
     cleanBancaUrl ? fetchDashboardMetrics(cleanBancaUrl, dateFrom, dateTo) : Promise.resolve(null),
-    cleanBancaUrl
-      ? fetchIndicatedsByPeriod(cleanBancaUrl, dateFrom, dateTo).catch((err: any) => {
-          console.warn('[DonoBanca Service] Erro ao buscar indicados:', err?.message);
-          return [] as IndicatedLead[];
-        })
-      : Promise.resolve([] as IndicatedLead[]),
     supabaseServiceRole
       .from('profiles')
       .select('id, email, full_name')
@@ -603,12 +661,38 @@ export async function getDonoBancaDashboardData({ userId, dateFrom, dateTo, meta
       .eq('status', 'gerente'),
   ]);
 
+  const gerentes = gerentesResult.data || [];
+  // Mesma forma que o CRM: buscar indicados por consultant=email (um por consultor/gerente)
+  let indicatedsRaw: IndicatedLead[] = [];
+  if (cleanBancaUrl && gerentes.length > 0) {
+    const consultantEmails: string[] = [];
+    for (const g of gerentes) {
+      if (g.email?.trim()) consultantEmails.push(g.email.trim());
+    }
+    const gerenteIds = gerentes.map((g: { id: string }) => g.id);
+    const { data: consultores } = await supabaseServiceRole
+      .from('profiles')
+      .select('id, email, full_name')
+      .in('enroller', gerenteIds)
+      .eq('status', 'consultor');
+    if (consultores?.length) {
+      for (const c of consultores) {
+        if (c.email?.trim()) consultantEmails.push(c.email.trim());
+      }
+    }
+    if (consultantEmails.length > 0) {
+      indicatedsRaw = await fetchIndicatedsByConsultants(cleanBancaUrl, dateFrom, dateTo, consultantEmails).catch((err: any) => {
+        console.warn('[DonoBanca Service] Erro ao buscar indicados por consultor:', err?.message);
+        return [] as IndicatedLead[];
+      });
+    }
+  }
+
   const bancaMatchDono = (bancasDono.data || []).find(
     (b: { url: string }) => normalizeBancaUrl(b.url) === normalizeBancaUrl(donoProfile?.banca_url ?? '')
   );
   const bancaIdDono = bancaMatchDono?.id;
   let externalMetrics: ExternalMetricsShape | null = externalMetricsRaw;
-  const gerentes = gerentesResult.data;
 
   if (externalMetrics) {
     console.log('[DonoBanca Service] dashboard-metrics recebidas. total_leads:', externalMetrics.total_leads);
@@ -930,14 +1014,21 @@ export async function getDashboardDataByBancaId({ bancaId, dateFrom, dateTo, met
   const allConsultantsData: Array<{ id: string; email: string; name: string; total_deposited: number; total_leads: number; net_profit: number }> = [];
   const cleanBancaUrl = normalizeBancaUrl(bancaUrl);
 
-  // Uma única requisição get-indicateds-by-consultant (from/to) → agregado por consultant_email
+  // Mesma forma que o CRM: get-indicateds-by-consultant com consultant=email (um por consultor/gerente)
+  const consultantEmailsBanca: string[] = [];
+  for (const p of profilesInBanca || []) {
+    if (p.email?.trim()) consultantEmailsBanca.push(p.email.trim());
+  }
   let metricsByConsultantEmailBanca = new Map<string, ConsultantAggregatedMetrics>();
   try {
-    const indicateds = await fetchIndicatedsByPeriod(cleanBancaUrl, dateFrom, dateTo);
+    const indicateds =
+      consultantEmailsBanca.length > 0
+        ? await fetchIndicatedsByConsultants(cleanBancaUrl, dateFrom, dateTo, consultantEmailsBanca)
+        : await fetchIndicatedsByPeriod(cleanBancaUrl, dateFrom, dateTo);
     metricsByConsultantEmailBanca = aggregateIndicatedsByConsultant(indicateds);
     console.log('[DonoBanca Service] getDashboardDataByBancaId - Indicados agregados por consultor:', metricsByConsultantEmailBanca.size);
   } catch (err: any) {
-    console.warn('[DonoBanca Service] getDashboardDataByBancaId - Erro ao buscar indicados por período:', err?.message);
+    console.warn('[DonoBanca Service] getDashboardDataByBancaId - Erro ao buscar indicados:', err?.message);
   }
 
   // Para bancas sem dono: incluir gerentes que têm consultores na banca (mesmo se gerente não estiver na banca)
