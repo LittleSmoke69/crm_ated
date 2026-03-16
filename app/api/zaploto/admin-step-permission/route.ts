@@ -6,29 +6,30 @@ import { hasFullAdminAccess } from '@/lib/middleware/permissions';
 
 /**
  * GET /api/zaploto/admin-step-permission?step=lead_transfer
- * Retorna { visible, can_execute } para o step indicado (ex: lead_transfer, settings)
+ * Retorna { visible, can_execute } para o step indicado.
+ * Super_admin/admin/auditoria: acesso total. Cargos personalizados: permissão conforme atribuição do cargo (sem exceção).
  */
 export async function GET(req: NextRequest) {
   try {
     const { profile } = await requireAuthWithProfile(req);
 
-    if (!hasFullAdminAccess(profile)) {
-      return successResponse({ visible: false, can_execute: false });
-    }
-
     const step = req.nextUrl.searchParams.get('step');
     if (!step) return errorResponse('step é obrigatório', 400);
 
+    if (hasFullAdminAccess(profile)) {
+      return successResponse({ visible: true, can_execute: true });
+    }
+
     const hasTables = await hasZaplotoTables();
     if (!hasTables) {
-      return successResponse({ visible: true, can_execute: true });
+      return successResponse({ visible: false, can_execute: false });
     }
 
     const tenant = await getTenantForUser(profile.id);
     const zaplotoId = tenant?.id || '00000000-0000-0000-0000-000000000001';
-    const status = profile.status || 'admin';
+    const roleCode = profile.status?.trim() || '';
 
-    const perm = await getAdminStepPermission(zaplotoId, status, step);
+    const perm = await getAdminStepPermission(zaplotoId, roleCode, step);
     return successResponse(perm);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Erro ao buscar permissão';

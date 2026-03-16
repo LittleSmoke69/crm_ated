@@ -23,6 +23,9 @@
 # misc
 .DS_Store
 *.pem
+# Windows reserved device name (evita erro "unable to index file nul")
+/nul
+nul
 
 # debug
 npm-debug.log*

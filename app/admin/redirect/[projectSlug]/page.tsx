@@ -15,6 +15,16 @@ interface Group {
   clicks: number;
 }
 
+interface UtmVisit {
+  id: string;
+  utm_source: string | null;
+  utm_medium: string | null;
+  utm_campaign: string | null;
+  utm_content: string | null;
+  utm_term: string | null;
+  created_at: string;
+}
+
 export default function AdminRedirectPage() {
   const params = useParams();
   const projectSlug = params?.projectSlug as string;
@@ -34,8 +44,11 @@ export default function AdminRedirectPage() {
   const [editForm, setEditForm] = useState<{ id: string; name: string; invite_url: string } | null>(null);
   const [weights, setWeights] = useState<Record<string, number>>({});
   const [saving, setSaving] = useState(false);
+  const [savingPixel, setSavingPixel] = useState(false);
   const [togglingId, setTogglingId] = useState<string | null>(null);
   const [copyDone, setCopyDone] = useState(false);
+  const [pixelId, setPixelId] = useState('');
+  const [utmVisits, setUtmVisits] = useState<UtmVisit[]>([]);
 
   useEffect(() => {
     if (!userId) return;
@@ -58,6 +71,8 @@ export default function AdminRedirectPage() {
         setTotalGroups(json.data.total_groups ?? 0);
         setActiveGroups(json.data.active_groups ?? 0);
         if (json.data.project_id) setProjectId(json.data.project_id);
+        setPixelId(json.data.pixel_id ?? '');
+        setUtmVisits(json.data.utm_visits ?? []);
         setLoading(false);
       })
       .catch(() => setLoading(false));
@@ -201,6 +216,27 @@ export default function AdminRedirectPage() {
     });
   };
 
+  const savePixel = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userId || !projectId) return;
+    setSavingPixel(true);
+    try {
+      const res = await fetch(`/api/admin/vsl/projects/${projectId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({ pixel_id: pixelId.trim() || null }),
+      });
+      const json = await res.json();
+      if (json?.data) {
+        setPixelId(json.data.pixel_id ?? '');
+      } else {
+        alert(json?.error || 'Erro ao salvar pixel');
+      }
+    } finally {
+      setSavingPixel(false);
+    }
+  };
+
   if (checking || loading) {
     return (
       <Layout>
@@ -253,6 +289,27 @@ export default function AdminRedirectPage() {
                 </button>
               </div>
             </div>
+            <section className="bg-white border border-gray-200 rounded-xl shadow-sm p-4">
+              <h2 className="font-semibold text-gray-800 text-sm mb-3">Pixel (Facebook)</h2>
+              <p className="text-xs text-gray-500 mb-2">Usado na VSL deste projeto (redirect <span className="font-mono text-gray-700">/r/{redirectSlug ?? ''}</span>). fbq(&apos;init&apos;, &apos;[pixel salvo]&apos;).</p>
+              <form onSubmit={savePixel} className="space-y-2">
+                <input
+                  type="text"
+                  value={pixelId}
+                  onChange={(e) => setPixelId(e.target.value)}
+                  className={inputClass}
+                  placeholder="ID do pixel (ex: 123456789012345)"
+                />
+                <button
+                  type="submit"
+                  disabled={savingPixel}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-[#8CD955] text-white font-medium rounded-xl hover:opacity-90 transition disabled:opacity-50"
+                >
+                  {savingPixel ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                  Salvar pixel
+                </button>
+              </form>
+            </section>
             <section className="bg-white border border-gray-200 rounded-xl shadow-sm p-4">
               <h2 className="font-semibold text-gray-800 text-sm mb-3">Adicionar Novo Grupo</h2>
               <button
@@ -342,6 +399,46 @@ export default function AdminRedirectPage() {
               </table>
               {groups.length === 0 && (
                 <p className="py-6 px-4 text-gray-600 text-sm text-center">Nenhum grupo. Adicione um ao lado.</p>
+              )}
+            </div>
+          </section>
+
+          {/* Acessos com UTM (página /r/[slug] com utm_* na URL) */}
+          <section className="lg:col-span-3 bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
+            <div className="px-4 py-3 border-b border-gray-100 shrink-0">
+              <h2 className="font-semibold text-gray-800">Acessos com UTM</h2>
+              <p className="text-xs text-gray-500 mt-0.5">Visitas à página /r/{redirectSlug ?? ''} com utm_source, utm_medium, utm_campaign, utm_content ou utm_term na URL (últimas 100).</p>
+            </div>
+            <div className="overflow-auto max-h-[320px]">
+              {utmVisits.length === 0 ? (
+                <p className="py-6 px-4 text-gray-600 text-sm text-center">Nenhum acesso com UTM registrado ainda.</p>
+              ) : (
+                <table className="w-full">
+                  <thead className="bg-gray-50 sticky top-0">
+                    <tr className="text-left text-xs font-medium text-gray-700">
+                      <th className="p-3">Data</th>
+                      <th className="p-3">utm_source</th>
+                      <th className="p-3">utm_medium</th>
+                      <th className="p-3">utm_campaign</th>
+                      <th className="p-3 hidden xl:table-cell">utm_content</th>
+                      <th className="p-3 hidden xl:table-cell">utm_term</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {utmVisits.map((v) => (
+                      <tr key={v.id} className="border-t border-gray-100 hover:bg-gray-50/50">
+                        <td className="p-3 text-sm text-gray-700 whitespace-nowrap">
+                          {new Date(v.created_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}
+                        </td>
+                        <td className="p-3 text-sm text-gray-800 font-mono max-w-[100px] truncate" title={v.utm_source ?? ''}>{v.utm_source ?? '—'}</td>
+                        <td className="p-3 text-sm text-gray-800 font-mono max-w-[100px] truncate" title={v.utm_medium ?? ''}>{v.utm_medium ?? '—'}</td>
+                        <td className="p-3 text-sm text-gray-800 font-mono max-w-[120px] truncate" title={v.utm_campaign ?? ''}>{v.utm_campaign ?? '—'}</td>
+                        <td className="p-3 text-sm text-gray-800 font-mono max-w-[100px] truncate hidden xl:table-cell" title={v.utm_content ?? ''}>{v.utm_content ?? '—'}</td>
+                        <td className="p-3 text-sm text-gray-800 font-mono max-w-[100px] truncate hidden xl:table-cell" title={v.utm_term ?? ''}>{v.utm_term ?? '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               )}
             </div>
           </section>

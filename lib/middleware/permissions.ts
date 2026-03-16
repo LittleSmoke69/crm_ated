@@ -115,7 +115,8 @@ export async function hasStatus(userId: string, status: UserStatus): Promise<boo
 }
 
 /**
- * Requer que o usuário seja Admin ou Dono de Banca (pode acessar painel admin)
+ * Requer que o usuário seja Admin, Auditoria ou cargo com permissão painel_admin na sidebar.
+ * Garante que todos os cargos com permissão atribuída tenham acesso sem exceção.
  */
 export async function requireAdmin(req: NextRequest): Promise<{ userId: string; profile: UserProfile }> {
   const { userId } = await requireAuth(req);
@@ -128,15 +129,21 @@ export async function requireAdmin(req: NextRequest): Promise<{ userId: string; 
     throw new Error('Perfil não encontrado');
   }
 
-  if (!hasFullAdminAccess(profile)) {
-    throw new Error('Acesso negado. Apenas SuperAdmin ou Admin podem acessar o painel administrativo.');
+  if (hasFullAdminAccess(profile)) {
+    return { userId, profile };
   }
 
-  return { userId, profile };
+  const hasPanelPermission = await hasSidebarPermission(profile, 'painel_admin');
+  if (hasPanelPermission) {
+    return { userId, profile };
+  }
+
+  throw new Error('Acesso negado. Apenas SuperAdmin, Admin, Auditoria ou cargo com permissão de painel podem acessar.');
 }
 
 /**
- * Requer que o usuário seja SuperAdmin, Admin ou Suporte (acesso à Hierarquia e alterações na rede)
+ * Requer que o usuário seja SuperAdmin, Admin, Suporte ou cargo com permissão hierarquia na sidebar.
+ * Garante que cargos com permissão de hierarquia tenham acesso sem exceção.
  */
 export async function requireAdminOrSuporte(req: NextRequest): Promise<{ userId: string; profile: UserProfile }> {
   const { userId } = await requireAuth(req);
@@ -148,10 +155,14 @@ export async function requireAdminOrSuporte(req: NextRequest): Promise<{ userId:
   if (!profile) {
     throw new Error('Perfil não encontrado');
   }
-  if (!hasHierarchyAccess(profile)) {
-    throw new Error('Acesso negado. Apenas SuperAdmin, Admin ou Suporte podem acessar a Hierarquia.');
+  if (hasHierarchyAccess(profile)) {
+    return { userId, profile };
   }
-  return { userId, profile };
+  const hasHierarchyPermission = await hasSidebarPermission(profile, 'hierarquia');
+  if (hasHierarchyPermission) {
+    return { userId, profile };
+  }
+  throw new Error('Acesso negado. Apenas SuperAdmin, Admin, Suporte ou cargo com permissão de hierarquia podem acessar.');
 }
 
 /**

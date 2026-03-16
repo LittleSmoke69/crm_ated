@@ -14,6 +14,7 @@ export default function RedirectPage() {
     logo_url: string | null;
     project_name: string;
     click_id: string;
+    pixel_id: string | null;
   } | null>(null);
   const [countdown, setCountdown] = useState<number>(REDIRECT_COUNTDOWN_SECONDS);
   const [error, setError] = useState<string | null>(null);
@@ -27,10 +28,19 @@ export default function RedirectPage() {
     if (s) setSid(s);
   }, [slug]);
 
-  // Resolve redirect em paralelo (não bloqueia o countdown)
+  // Resolve redirect em paralelo (não bloqueia o countdown); envia UTM da URL para salvar
   useEffect(() => {
     if (!slug) return;
-    fetch(`/api/redirect/${encodeURIComponent(slug)}/resolve${sid ? `?sid=${encodeURIComponent(sid)}` : ''}`)
+    const search = typeof window !== 'undefined' ? window.location.search : '';
+    const params = new URLSearchParams(search);
+    const sidParam = sid ? `sid=${encodeURIComponent(sid)}` : '';
+    const utmParams = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term']
+      .filter((key) => params.get(key)?.trim())
+      .map((key) => `${key}=${encodeURIComponent(params.get(key)!.trim())}`)
+      .join('&');
+    const query = [sidParam, utmParams].filter(Boolean).join('&');
+    const url = `/api/redirect/${encodeURIComponent(slug)}/resolve${query ? `?${query}` : ''}`;
+    fetch(url)
       .then((r) => r.json())
       .then((json) => {
         if (!json.success || !json.data) {
@@ -41,6 +51,41 @@ export default function RedirectPage() {
       })
       .catch(() => setError('Erro ao carregar'));
   }, [slug, sid]);
+
+  // Pixel Facebook no <head> da página /r/[slug] (rastreio PageView)
+  useEffect(() => {
+    const pixelId = data?.pixel_id;
+    if (!pixelId || typeof document === 'undefined') return;
+    const escapedId = pixelId.replace(/'/g, "\\'");
+    // Script do pixel (padrão Meta: init + PageView)
+    const script = document.createElement('script');
+    script.innerHTML = `
+      !function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+      if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;
+      t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,document,'script',
+      'https://connect.facebook.net/en_US/fbevents.js');
+      fbq('init', '${escapedId}');
+      fbq('track', 'PageView');
+    `;
+    document.head.appendChild(script);
+    // Fallback noscript (recomendado pelo Facebook quando JS está desabilitado)
+    const noscript = document.createElement('noscript');
+    const img = document.createElement('img');
+    img.height = 1;
+    img.width = 1;
+    img.style.display = 'none';
+    img.src = `https://www.facebook.com/tr?id=${encodeURIComponent(pixelId)}&ev=PageView&noscript=1`;
+    noscript.appendChild(img);
+    document.head.appendChild(noscript);
+    return () => {
+      try {
+        if (script.parentNode) script.parentNode.removeChild(script);
+        if (noscript.parentNode) noscript.parentNode.removeChild(noscript);
+      } catch {
+        // ignore
+      }
+    };
+  }, [data?.pixel_id]);
 
   // Countdown começa imediatamente ao abrir a página (3, 2, 1) — não espera a API
   useEffect(() => {
