@@ -119,7 +119,7 @@ export default function RedirectPage() {
     return () => clearInterval(t);
   }, []);
 
-  // Quando o countdown chega a 0: marca complete, dispara evento no pixel e redireciona
+  // Quando o countdown chega a 0: marca complete, dispara Lead no pixel (BM) e redireciona
   useEffect(() => {
     if (countdown > 0) return;
     if (didRedirect.current) return;
@@ -128,7 +128,7 @@ export default function RedirectPage() {
 
     const pixelId = data.pixel_id;
     if (pixelId && typeof window !== 'undefined' && (window as unknown as { fbq?: (...args: unknown[]) => void }).fbq) {
-      (window as unknown as { fbq: (...args: unknown[]) => void }).fbq('trackCustom', 'RedirectComplete');
+      (window as unknown as { fbq: (...args: unknown[]) => void }).fbq('track', 'Lead');
     }
 
     fetch('/api/redirect/complete', {

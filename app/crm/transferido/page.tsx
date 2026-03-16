@@ -85,9 +85,14 @@ const TransferidoContent = () => {
   const { showToast, toasts, removeToast } = useToast();
 
   const isInitialLoadRef = useRef(true);
+  /** Cancela o carregamento em background quando uma nova busca é iniciada (evita duplicação e commits obsoletos). */
+  const loadIdRef = useRef(0);
   const fullRequestAbortRef = useRef<AbortController | null>(null);
   /** Ref da lista de bancas para não re-executar loadLeads quando as bancas terminam de carregar (evita 2ª request). */
   const exclusiveBancasListRef = useRef<{ id: string; name: string; url: string }[]>([]);
+  /** Throttle: última vez que setLoadingProgress foi chamado (evita re-renders excessivos em segundo plano). */
+  const lastProgressUpdateRef = useRef(0);
+  const PROGRESS_THROTTLE_MS = 200;
   const bancaKey = filters.banca ? (typeof filters.banca === 'object' ? filters.banca.value : filters.banca) : null;
   const dateKey = filters.date ? (typeof filters.date === 'object' ? filters.date.value : filters.date) : null;
 
@@ -107,6 +112,9 @@ const TransferidoContent = () => {
   const loadLeads = useCallback(async (isFilterChange = false) => {
     if (!userId) return;
     fullRequestAbortRef.current?.abort();
+    loadIdRef.current += 1;
+    const thisLoadId = loadIdRef.current;
+    lastProgressUpdateRef.current = 0;
     setLoadingFullInBackground(false);
     if (isFilterChange) {
       setFilterLoading(true);
@@ -240,24 +248,31 @@ const TransferidoContent = () => {
           const batchUrl = new URL(baseUrl.toString());
           batchUrl.searchParams.set('banca_index', String(bancaIndex));
           batchUrl.searchParams.set('page', String(page));
-          setLoadingProgress({
-            totalLoaded,
-            currentBanca: bancaIndex + 1,
-            currentPage: page,
-            totalBancas: totalBancas ?? null,
-          });
+          const now = Date.now();
+          if (now - lastProgressUpdateRef.current >= PROGRESS_THROTTLE_MS || totalLoaded === 0) {
+            lastProgressUpdateRef.current = now;
+            setLoadingProgress({
+              totalLoaded,
+              currentBanca: bancaIndex + 1,
+              currentPage: page,
+              totalBancas: totalBancas ?? null,
+            });
+          }
           console.log('[Transferido] loadLeads | lote banca', bancaIndex + 1, 'página', page, '|', totalLoaded, 'leads acumulados');
           let res: Response;
           try {
             res = await fetch(batchUrl.toString(), { headers, signal });
           } catch (err: any) {
             if (err?.name === 'AbortError') break;
+            if (thisLoadId !== loadIdRef.current) break;
             console.error('[Transferido] loadLeads | Erro de rede banca', bancaIndex, 'page', page, err);
             setError('Erro de conexão com o servidor');
             break;
           }
+          if (thisLoadId !== loadIdRef.current) break;
           const result = await res.json();
           if (signal.aborted) break;
+          if (thisLoadId !== loadIdRef.current) break;
           if (!result.success) {
             setError(result.error || 'Erro ao carregar leads transferidos');
             break;
@@ -270,10 +285,15 @@ const TransferidoContent = () => {
           const chunkFormatted = leads.map(formatLead);
           chunkFormatted.forEach((l) => accumulated.set(String(l.id), l));
           totalLoaded += chunkFormatted.length;
-          setLoadingProgress((prev) => prev ? { ...prev, totalLoaded } : null);
+          if (Date.now() - lastProgressUpdateRef.current >= PROGRESS_THROTTLE_MS) {
+            lastProgressUpdateRef.current = Date.now();
+            setLoadingProgress((prev) => prev ? { ...prev, totalLoaded } : null);
+          }
+          if (thisLoadId !== loadIdRef.current) break;
           // Só libera o loading quando o front for preenchido com alguma resposta (mesmo ciclo de atualização)
           const hasData = accumulated.size > 0;
           startTransition(() => {
+            if (thisLoadId !== loadIdRef.current) return;
             setRawLeads(Array.from(accumulated.values()));
             if (hasData) {
               setLoading(false);
@@ -292,6 +312,7 @@ const TransferidoContent = () => {
         bancaIndex++;
       }
 
+      if (thisLoadId !== loadIdRef.current) return;
       setLoading(false);
       setFilterLoading(false);
       setLoadingFullInBackground(false);
@@ -302,10 +323,12 @@ const TransferidoContent = () => {
       }
       // Atualiza a lista final e sinaliza fim no mesmo commit; o banner só sai no useEffect após os leads aparecerem
       startTransition(() => {
+        if (thisLoadId !== loadIdRef.current) return;
         setRawLeads(Array.from(accumulated.values()));
         setBatchLoadFinished(true);
       });
     } catch (err) {
+      if (thisLoadId !== loadIdRef.current) return;
       console.error('[Transferido] loadLeads | Erro:', err);
       setError('Erro de conexão com o servidor');
       setLoading(false);
@@ -316,12 +339,13 @@ const TransferidoContent = () => {
   }, [userId, targetUserId, filters.banca, filters.date]);
 
   // Espera as bancas do usuário carregarem (FilterBar → onBancasLoaded) antes de buscar os leads.
+  // loadLeads não está nas deps: usa exclusiveBancasListRef e evita dupla execução (ex.: Strict Mode).
   useEffect(() => {
     if (!userId || !bancasReady) return;
     const isInitialLoad = isInitialLoadRef.current;
     if (isInitialLoad) isInitialLoadRef.current = false;
     loadLeads(!isInitialLoad);
-  }, [userId, bancasReady, bancaKey, dateKey, loadLeads]);
+  }, [userId, bancasReady, bancaKey, dateKey]);
 
   const handleBancasLoaded = useCallback((bancas: { id: string; name: string; url: string }[]) => {
     console.log('[Transferido] handleBancasLoaded | bancas:', bancas.length, bancas.map((b) => b.name ?? b.id));
@@ -669,6 +693,13 @@ const TransferidoContent = () => {
 
   const formatCurrency = (val: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
 
+  /** Carregamento inicial: bancas ou leads ainda sem nenhum dado na tela. */
+  const isInitialLoading = !bancasReady || ((loading || filterLoading) && rawLeads.length === 0);
+  /** Mensagem do overlay: diferenciar "bancas" vs "leads". */
+  const loadingMessage = !bancasReady
+    ? 'Carregando bancas e preparando a lista...'
+    : 'Carregando leads transferidos...';
+
   if (checking) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-[#1a1a1a]">
@@ -682,7 +713,7 @@ const TransferidoContent = () => {
 
   return (
     <Layout>
-      <div className="min-h-[calc(100vh-30px)] lg:min-h-[calc(100vh-255px)] flex flex-col overflow-y-auto overflow-x-hidden max-w-full">
+      <div className="min-h-[calc(100vh-30px)] lg:min-h-[calc(100vh-255px)] flex flex-col overflow-y-auto overflow-x-hidden max-w-full relative">
         <div className="flex-none pb-4">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
             <div className="flex items-center gap-3">
@@ -690,7 +721,21 @@ const TransferidoContent = () => {
                 <ArrowRightLeft className="w-5 h-5 md:w-6 md:h-6 text-[#8CD955]" />
               </div>
               <div>
-                <h1 className="text-xl md:text-2xl font-bold text-gray-800 dark:text-white">Leads Transferidos</h1>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h1 className="text-xl md:text-2xl font-bold text-gray-800 dark:text-white">Leads Transferidos</h1>
+                  {isInitialLoading && (
+                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#8CD955]/20 text-[#8CD955] text-xs font-semibold">
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin flex-shrink-0" />
+                      Carregando...
+                    </span>
+                  )}
+                  {(loading || filterLoading || loadingFullInBackground) && rawLeads.length > 0 && !isInitialLoading && (
+                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-600 dark:text-amber-400 text-xs font-medium">
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin flex-shrink-0" />
+                      Atualizando...
+                    </span>
+                  )}
+                </div>
                 <p className="text-[11px] md:text-sm text-gray-500 dark:text-gray-400">CRM dos leads que foram transferidos para você</p>
               </div>
             </div>
@@ -703,16 +748,8 @@ const TransferidoContent = () => {
             </button>
           </div>
 
-          {/* Quick Metrics - overlay só quando ainda não há nenhum lead (assim que chegar o primeiro, métricas e colunas ficam visíveis) */}
+          {/* Quick Metrics */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6 animate-in fade-in slide-in-from-top-2 duration-500 relative">
-            {(loading || filterLoading) && rawLeads.length === 0 && (
-              <div className="absolute inset-0 bg-white/60 dark:bg-[#1a1a1a]/80 backdrop-blur-[2px] rounded-xl z-10 flex items-center justify-center">
-                <div className="flex items-center gap-2 text-[#8CD955]">
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                  <span className="text-xs font-semibold">Carregando...</span>
-                </div>
-              </div>
-            )}
             <div className="bg-white dark:bg-[#2a2a2a] p-3 rounded-xl border border-gray-100 dark:border-[#404040] shadow-sm">
               <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Total Leads</p>
               <p className="text-lg font-bold text-gray-800 dark:text-white">{metrics?.total_leads ?? 0}</p>
@@ -799,16 +836,7 @@ const TransferidoContent = () => {
         </div>
 
         <div className="flex-1 overflow-x-auto overflow-y-auto pb-4 custom-scrollbar -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8 snap-x snap-mandatory relative min-h-[400px]">
-          {/* Overlay só quando ainda não há nenhum lead — assim que o primeiro lote chega, as colunas mostram os leads sendo carregados */}
-          {(loading || filterLoading) && rawLeads.length === 0 && (
-            <div className="absolute inset-0 bg-white/50 dark:bg-[#1a1a1a]/80 backdrop-blur-[1px] rounded-xl z-20 flex items-center justify-center">
-              <div className="flex flex-col items-center gap-2 text-[#8CD955]">
-                <RefreshCw className="w-5 h-5 animate-spin" />
-                <span className="text-xs font-semibold">Carregando leads...</span>
-              </div>
-            </div>
-          )}
-          {/* Indicador discreto quando já há leads e ainda está carregando mais lotes */}
+          {/* Indicador quando já há leads e ainda está carregando mais lotes em segundo plano */}
           {(loading || filterLoading || loadingFullInBackground) && rawLeads.length > 0 && (
             <div className="absolute top-2 right-2 z-20 flex items-center gap-2 px-3 py-1.5 bg-[#8CD955]/20 dark:bg-[#8CD955]/15 border border-[#8CD955]/40 rounded-lg text-xs font-medium text-gray-700 dark:text-gray-200">
               <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#8CD955]" />
@@ -845,6 +873,21 @@ const TransferidoContent = () => {
             <div className="w-6 md:w-2 flex-shrink-0 snap-center" />
           </div>
         </div>
+
+        {/* Overlay unificado: enquanto bancas ou primeiros leads carregam, usuário vê claramente que está carregando */}
+        {isInitialLoading && (
+          <div className="absolute inset-0 z-40 flex items-center justify-center bg-white/85 dark:bg-[#1a1a1a]/92 backdrop-blur-sm rounded-2xl">
+            <div className="flex flex-col items-center gap-4 px-6 py-8 max-w-sm text-center">
+              <div className="p-4 rounded-full bg-[#8CD955]/20">
+                <RefreshCw className="w-10 h-10 text-[#8CD955] animate-spin" />
+              </div>
+              <div>
+                <p className="font-bold text-gray-800 dark:text-white text-lg">{loadingMessage}</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Aguarde enquanto buscamos as informações.</p>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {sortingColumnId && (

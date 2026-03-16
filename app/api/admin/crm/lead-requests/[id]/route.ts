@@ -30,6 +30,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       transfer_filters_snapshot: transferFiltersSnapshot,
       deadline_days: deadlineDays,
       transfer_log_id: transferLogId,
+      rejection_observation: rejectionObservation,
     } = body;
 
     const { data: existing, error: fetchError } = await supabaseServiceRole
@@ -225,12 +226,14 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       if (existing.status !== 'pending') {
         return errorResponse('Só é possível rejeitar solicitações pendentes.', 400);
       }
+      const rejectionObsTrimmed = typeof rejectionObservation === 'string' ? rejectionObservation.trim() : '';
       const { error: updateError } = await supabaseServiceRole
         .from('gerente_lead_requests')
         .update({
           status: 'rejected',
           approved_by_user_id: userId,
           approved_at: new Date().toISOString(),
+          ...(rejectionObsTrimmed ? { rejection_observation: rejectionObsTrimmed } : {}),
         })
         .eq('id', id);
       if (updateError) {
