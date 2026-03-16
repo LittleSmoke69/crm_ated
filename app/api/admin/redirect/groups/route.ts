@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
 
     const { data: project } = await supabaseServiceRole
       .from('vsl_projects')
-      .select('slug')
+      .select('slug, pixel_id')
       .eq('id', projectId)
       .single();
     if (!project) return errorResponse('Projeto não encontrado', 404);
@@ -41,7 +41,7 @@ export async function GET(req: NextRequest) {
       .eq('project_id', projectId)
       .eq('slug', project.slug)
       .single();
-    if (!redirectRow) return successResponse({ groups: [], redirect_slug_id: null, project_id: projectId, redirect_slug: project.slug, total_clicks: 0, total_groups: 0, active_groups: 0 });
+    if (!redirectRow) return successResponse({ groups: [], redirect_slug_id: null, project_id: projectId, redirect_slug: project.slug, pixel_id: project.pixel_id ?? null, total_clicks: 0, total_groups: 0, active_groups: 0, utm_visits: [] });
 
     const { data: groups } = await supabaseServiceRole
       .from('redirect_groups')
@@ -68,14 +68,24 @@ export async function GET(req: NextRequest) {
     }));
 
     const total_clicks = Object.values(counts).reduce((a, b) => a + b, 0);
+
+    const { data: utmVisits } = await supabaseServiceRole
+      .from('redirect_visits')
+      .select('id, utm_source, utm_medium, utm_campaign, utm_content, utm_term, created_at')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false })
+      .limit(100);
+
     return successResponse({
       groups: list,
       redirect_slug_id: redirectRow.id,
       redirect_slug: project.slug,
       project_id: projectId,
+      pixel_id: project.pixel_id ?? null,
       total_clicks,
       total_groups: list.length,
       active_groups: list.filter((g: { is_active: boolean }) => g.is_active).length,
+      utm_visits: utmVisits ?? [],
     });
   } catch (e: unknown) {
     if (e instanceof Error && e.message.includes('Acesso negado')) {

@@ -64,7 +64,7 @@ export default function AdminHierarchyPage() {
           <div className="text-center bg-white dark:bg-[#2a2a2a] p-8 rounded-xl shadow-lg border border-gray-200 dark:border-[#404040]">
             <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
             <h1 className="text-xl font-bold text-gray-800 dark:text-white mb-2">Acesso Negado</h1>
-            <p className="text-gray-600 dark:text-[#aaa] mb-4">Apenas SuperAdmin, Admin ou Suporte podem acessar a Hierarquia.</p>
+            <p className="text-gray-600 dark:text-[#aaa] mb-4">Acesso restrito a SuperAdmin, Admin, Suporte ou cargo com permissão de Hierarquia.</p>
             <button
               onClick={() => router.push('/')}
               className="px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] transition"
