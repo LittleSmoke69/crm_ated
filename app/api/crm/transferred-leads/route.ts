@@ -569,10 +569,21 @@ export async function GET(req: NextRequest) {
     });
 
     const extraLeads: any[] = [];
-    if (!batchMode && Object.keys(missingByBanca).length > 0) {
+    // Em batch mode: processar complemento do log apenas da banca atual. Caso contrário: todas as bancas com entradas.
+    const currentBancaIdBatch = batchMode && singleBancaIndex !== null ? listBancas[singleBancaIndex]?.id : null;
+    const bancasForExtra =
+      currentBancaIdBatch && missingByBanca[currentBancaIdBatch]?.leadIds?.length
+        ? [listBancas.find((b) => b.id === currentBancaIdBatch)!].filter(Boolean)
+        : !batchMode
+          ? listBancas.filter((b) => missingByBanca[b.id]?.leadIds?.length)
+          : [];
+
+    if (bancasForExtra.length > 0) {
       // Cache de dados completos do CRM para o consultor DESTINO (sem filtros de data)
       const destinationLeadDataByBanca: Record<string, Record<string, any>> = {};
-      for (const banca of listBancas) {
+      const extraKeys = new Set<string>();
+
+      for (const banca of bancasForExtra) {
         const missing = missingByBanca[banca.id];
         if (!missing || missing.leadIds.length === 0) continue;
         const cleanBancaUrl = normalizeBancaUrl(banca.url);
@@ -588,6 +599,7 @@ export async function GET(req: NextRequest) {
         const baseUrl = `${cleanBancaUrl}/api/crm/get-indicateds-by-consultant`;
         let currentPage = 1;
         let hasMore = true;
+        let crmReturned404 = false;
         while (hasMore && currentPage <= maxPages) {
           const externalApiUrl = `${baseUrl}?${[...destQueryParams, `page=${currentPage}`].join('&')}`;
           let response: Response;
@@ -598,7 +610,13 @@ export async function GET(req: NextRequest) {
               signal: AbortSignal.timeout(60000),
             });
           } catch { break; }
-          if (!response.ok) break;
+          if (!response.ok) {
+            if (response.status === 404) {
+              crmReturned404 = true;
+              console.log(`${LOG_PREFIX} CRM destino 404 para banca ${bancaLabel} — usando leads do log (snapshots).`);
+            }
+            break;
+          }
           let result: any;
           try { result = await response.json(); } catch { break; }
           if (!result.success || !Array.isArray(result.data)) break;
@@ -609,19 +627,49 @@ export async function GET(req: NextRequest) {
           hasMore = result.data.length >= perPage && result.data.length > 0;
           currentPage++;
         }
-        const cachedCount = Object.keys(destinationLeadDataByBanca[banca.id]).length;
-        console.log(`${LOG_PREFIX} Cache CRM destino (${consultantEmail}): banca ${bancaLabel} | ${cachedCount} leads total (sem filtro de data)`);
+
+        if (crmReturned404) {
+          for (const leadIdStr of missing.leadIds) {
+            const key = `${banca.id}-${leadIdStr}`;
+            const row = missing.entryDataByLead[leadIdStr];
+            if (!row) continue;
+            extraKeys.add(key);
+            const stub: any = {
+              id: row.lead_id,
+              _originalId: row.lead_id,
+              _bancaKey: banca.id,
+              _transferDateFromDb: row.created_at ?? null,
+              name: row.lead_name ?? '',
+              last_name: '',
+              phone: row.lead_phone ?? '',
+              email: '',
+              created_at: row.created_at ?? new Date().toISOString(),
+              total_depositado: row.total_depositado_snapshot ?? 0,
+              total_apostado: row.total_apostado_snapshot ?? 0,
+              total_ganho: row.total_ganho_snapshot ?? 0,
+              total_depositos_count: 0,
+              balance: row.saldo_snapshot ?? 0,
+              total_saque: row.total_saque_snapshot ?? null,
+              last_interaction: row.last_interaction_snapshot ?? row.created_at ?? null,
+            };
+            extraLeads.push(stub);
+          }
+          console.log(`${LOG_PREFIX} Banca ${bancaLabel} | +${missing.leadIds.length} leads a partir do log (CRM 404)`);
+        } else {
+          const cachedCount = Object.keys(destinationLeadDataByBanca[banca.id]).length;
+          console.log(`${LOG_PREFIX} Cache CRM destino (${consultantEmail}): banca ${bancaLabel} | ${cachedCount} leads total (sem filtro de data)`);
+        }
       }
 
-      // Match: associar entries (DB) com dados do CRM (destino)
-      const extraKeys = new Set<string>();
-      for (const banca of listBancas) {
+      // Match: associar entries (DB) com dados do CRM (destino) — só para bancas em bancasForExtra (extraKeys declarado no início do bloco)
+      for (const banca of bancasForExtra) {
         const missing = missingByBanca[banca.id];
         if (!missing || missing.leadIds.length === 0) continue;
         const destData = destinationLeadDataByBanca[banca.id] ?? {};
         let found = 0;
         for (const leadIdStr of missing.leadIds) {
           const key = `${banca.id}-${leadIdStr}`;
+          if (extraKeys.has(key)) continue;
           const crmLead = destData[leadIdStr];
           if (crmLead) {
             extraKeys.add(key);
@@ -641,9 +689,11 @@ export async function GET(req: NextRequest) {
       }
 
       // Buscar dados completos pelo consultor de ORIGEM (leads ficam no CRM do doador quando redistribution retorna count=0)
+      const bancaIdsForExtraSet = new Set(bancasForExtra.map((b) => b.id));
       const sourceGroupsByBanca: Record<string, { sourceEmail: string; bancaId: string; leadIds: Set<string>; createdByLead: Record<string, string> }> = {};
       let noSourceCount = 0;
       for (const [bancaId, missing] of Object.entries(missingByBanca)) {
+        if (!bancaIdsForExtraSet.has(bancaId)) continue;
         for (const leadIdStr of missing.leadIds) {
           const key = `${bancaId}-${leadIdStr}`;
           if (extraKeys.has(key)) continue;
@@ -723,9 +773,10 @@ export async function GET(req: NextRequest) {
         console.log(`${LOG_PREFIX} Busca ORIGEM ${group.sourceEmail}: banca ${bancaLabel} | CRM retornou ${crmTotal} leads, match=${found}/${group.leadIds.size}`);
       }
 
-      // Leads sem match no CRM são descartados (IDs não existem no CRM = dados inconsistentes)
+      // Leads sem match no CRM são descartados (IDs não existem no CRM = dados inconsistentes) — só contabilizar bancas em processamento
       let discardedCount = 0;
       for (const [bancaId, missing] of Object.entries(missingByBanca)) {
+        if (!bancaIdsForExtraSet.has(bancaId)) continue;
         for (const leadIdStr of missing.leadIds) {
           const key = `${bancaId}-${leadIdStr}`;
           if (!extraKeys.has(key)) discardedCount++;
