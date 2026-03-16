@@ -170,6 +170,11 @@ const LeadCard: React.FC<LeadCardProps> = ({
   const [bonusGirosHistory, setBonusGirosHistory] = useState<{ quantity: number; date: string }[]>([]);
   const [bonusGirosHistoryLoading, setBonusGirosHistoryLoading] = useState(false);
   const bonusDropdownRef = useRef<HTMLDivElement>(null);
+  // Rifa (bilhetes) no modal de detalhe
+  const [bonusRifaQuantity, setBonusRifaQuantity] = useState(1);
+  const [bonusRifaSending, setBonusRifaSending] = useState(false);
+  const [bonusRifaError, setBonusRifaError] = useState<string | null>(null);
+  const [bonusRifaSuccessMessage, setBonusRifaSuccessMessage] = useState<string | null>(null);
 
   /** Tick para contagem regressiva em tempo real (transferidos, 90d último depósito, 30d cadastro) */
   const [nowTick, setNowTick] = useState(0);
@@ -729,6 +734,52 @@ const LeadCard: React.FC<LeadCardProps> = ({
       setBonusGirosError('Erro ao enviar giros.');
     } finally {
       setBonusGirosSending(false);
+    }
+  };
+
+  const handleSendBonusTickets = async () => {
+    if (!consultorUserId || !bancaUrlForBonus || bonusRifaQuantity < 1) return;
+    setBonusRifaSending(true);
+    setBonusRifaError(null);
+    try {
+      let consultantId = lead.consultant_id != null ? Number(lead.consultant_id) : null;
+      if (consultantId == null) {
+        const res = await fetch(
+          `/api/crm/consultant-external-id?userId=${encodeURIComponent(targetUserId || consultorUserId)}&banca_url=${encodeURIComponent(bancaUrlForBonus)}`,
+          { headers: { 'X-User-Id': consultorUserId } }
+        );
+        const data = await res.json();
+        if (data?.success && data?.data?.consultant_id != null) consultantId = Number(data.data.consultant_id);
+      }
+      if (consultantId == null) {
+        setBonusRifaError('Não foi possível obter o id do consultor.');
+        setBonusRifaSending(false);
+        return;
+      }
+      const res = await fetch('/api/crm/send-tickets-to-lead', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': consultorUserId },
+        body: JSON.stringify({
+          consultant_id: consultantId,
+          lead_id: getLeadIdForApi(lead),
+          quantity: Number(bonusRifaQuantity),
+          banca_url: bancaUrlForBonus,
+          userId: targetUserId || consultorUserId,
+        }),
+      });
+      const data = await res.json();
+      if (!data?.success) {
+        setBonusRifaError(data?.error || 'Erro ao enviar bilhetes.');
+        setBonusRifaSending(false);
+        return;
+      }
+      setSelectedBonusType(null);
+      setBonusRifaError(null);
+      setBonusRifaSuccessMessage(`${bonusRifaQuantity} bilhete(s) enviado(s) com sucesso!`);
+    } catch {
+      setBonusRifaError('Erro ao enviar bilhetes.');
+    } finally {
+      setBonusRifaSending(false);
     }
   };
 
@@ -2147,6 +2198,8 @@ const LeadCard: React.FC<LeadCardProps> = ({
             setBonusGirosError(null);
             setBonusGirosSuccessMessage(null);
             setBonusGirosHistory([]);
+            setBonusRifaError(null);
+            setBonusRifaSuccessMessage(null);
             setShowAllDeposits(false);
             setSelectedBetForModal(null);
             setShowAllWithdraws(false);
@@ -2186,6 +2239,8 @@ const LeadCard: React.FC<LeadCardProps> = ({
                   setBonusDropdownOpen(false);
                   setBonusGirosSuccessMessage(null);
                   setBonusGirosHistory([]);
+                  setBonusRifaError(null);
+                  setBonusRifaSuccessMessage(null);
                   setShowAllDeposits(false);
                   setShowAllWithdraws(false);
                   setSelectedBetForModal(null);
@@ -2301,7 +2356,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
                       onClick={() => setBonusDropdownOpen((o) => !o)}
                       className="flex items-center justify-between gap-2 w-full sm:w-auto min-w-[200px] px-4 py-2.5 bg-amber-100 hover:bg-amber-200 text-amber-800 font-bold rounded-xl border border-amber-300 transition-colors"
                     >
-                      <span>{selectedBonusType === 'giros' ? 'Bonus de Roleta' : 'Escolher bônus'}</span>
+                      <span>{selectedBonusType === 'giros' ? 'Bonus de Roleta' : selectedBonusType === 'rifa' ? 'Bonus de Rifa' : 'Escolher bônus'}</span>
                       <ChevronDown className={`w-4 h-4 shrink-0 transition-transform ${bonusDropdownOpen ? 'rotate-180' : ''}`} />
                     </button>
                     {bonusDropdownOpen && (
@@ -2316,13 +2371,16 @@ const LeadCard: React.FC<LeadCardProps> = ({
                             Adicionar Giros (Roleta)
                           </span>
                         </button>
-                        <div className="w-full flex items-center justify-between gap-3 px-4 py-2.5 text-left text-sm text-gray-400 cursor-not-allowed border-t border-gray-100">
+                        <button
+                          type="button"
+                          onClick={() => { setSelectedBonusType('rifa'); setBonusDropdownOpen(false); }}
+                          className="w-full flex items-center justify-between gap-3 px-4 py-2.5 text-left text-sm font-medium text-gray-800 hover:bg-amber-50 transition-colors border-t border-gray-100"
+                        >
                           <span className="flex items-center gap-3">
-                            <Ticket className="w-4 h-4 text-gray-300 shrink-0" />
+                            <Ticket className="w-4 h-4 text-amber-600 shrink-0" />
                             Adicionar Rifa
                           </span>
-                          <span className="text-xs">Em breve</span>
-                        </div>
+                        </button>
                         <div className="w-full flex items-center justify-between gap-3 px-4 py-2.5 text-left text-sm text-gray-400 cursor-not-allowed">
                           <span className="flex items-center gap-3">
                             <Layers className="w-4 h-4 text-gray-300 shrink-0" />
@@ -2405,6 +2463,55 @@ const LeadCard: React.FC<LeadCardProps> = ({
                             ))}
                           </ul>
                         </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Formulário quando Rifa selecionado */}
+                  {selectedBonusType === 'rifa' && (
+                    <div className="space-y-3 pt-2 border-t border-amber-200/60" ref={bonusDropdownRef}>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <label className="flex flex-col gap-1">
+                          <span className="text-sm font-bold text-gray-800 dark:text-white">Quantidade (bilhetes)</span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={999}
+                            value={bonusRifaQuantity}
+                            onChange={(e) => setBonusRifaQuantity(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                            className="w-20 px-2 py-1.5 bg-gray-200 dark:bg-[#404040] border border-gray-500 dark:border-[#505050] rounded-lg text-sm font-bold text-gray-900 dark:text-white placeholder:text-gray-600"
+                          />
+                        </label>
+                        <div className="flex items-end gap-2">
+                          <button
+                            type="button"
+                            onClick={handleSendBonusTickets}
+                            disabled={bonusRifaSending || !bancaUrlForBonus}
+                            className="flex items-center gap-2 px-4 py-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-xl transition-colors"
+                          >
+                            {bonusRifaSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Ticket className="w-4 h-4" />}
+                            {bonusRifaSending ? 'Enviando...' : 'Enviar bilhetes'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setSelectedBonusType(null); setBonusRifaError(null); setBonusRifaSuccessMessage(null); setBonusDropdownOpen(false); }}
+                            className="px-3 py-2 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-[#404040] rounded-lg text-sm font-medium"
+                          >
+                            Limpar
+                          </button>
+                        </div>
+                      </div>
+                      {bonusRifaError && (
+                        <p className="text-sm text-red-600 dark:text-red-400 font-medium flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4 shrink-0" />
+                          {bonusRifaError}
+                        </p>
+                      )}
+                      {bonusRifaSuccessMessage && (
+                        <p className="text-sm text-[#8CD955] font-medium flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 shrink-0" />
+                          {bonusRifaSuccessMessage}
+                        </p>
                       )}
                     </div>
                   )}
