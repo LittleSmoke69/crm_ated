@@ -232,6 +232,7 @@ export default function AdminDashboard() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminStatus, setAdminStatus] = useState<string | null>(null);
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+  const [hasVslRedirect, setHasVslRedirect] = useState(false);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [users, setUsers] = useState<User[]>([]);
@@ -386,6 +387,7 @@ export default function AdminDashboard() {
       setIsAdmin(true);
       setAdminStatus(result.data?.status || null);
       setIsSuperAdmin(!!result.data?.isSuperAdmin);
+      setHasVslRedirect(!!result.data?.hasVslRedirect);
       await Promise.all([
         loadData(),
         loadFinishedCampaigns()
@@ -876,8 +878,8 @@ export default function AdminDashboard() {
             </button>
           )}
 
-          {/* VSL White Label + Redirect: super_admin e admin (gestor acessa direto /admin/vsl) */}
-          {(isSuperAdmin || adminStatus === 'admin') && (
+          {/* VSL White Label + Redirect: super_admin, admin ou cargo com permissão vsl_redirect */}
+          {(isSuperAdmin || adminStatus === 'admin' || hasVslRedirect) && (
             <button
               onClick={() => router.push('/admin/vsl')}
               className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]"

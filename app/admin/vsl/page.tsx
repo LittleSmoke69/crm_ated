@@ -30,7 +30,7 @@ export default function AdminVslPage() {
     fetch('/api/admin/vsl/projects', { headers: h })
       .then((r) => {
         if (r.status === 403) {
-          setError('Acesso negado. Apenas Gestor, Admin ou Super Admin.');
+          setError('Acesso negado. Você não tem permissão para acessar o módulo VSL & Redirect.');
           return [];
         }
         return r.json();

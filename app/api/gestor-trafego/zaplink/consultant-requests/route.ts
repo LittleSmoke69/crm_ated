@@ -3,7 +3,7 @@
  * Lista solicitações de consultor de gerentes que receberam leads dos formulários do gestor.
  */
 import { NextRequest } from 'next/server';
-import { requireStatus } from '@/lib/middleware/permissions';
+import { requireGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
 import { successResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   try {
-    const { userId } = await requireStatus(req, ['gestor']);
+    const { userId } = await requireGestorTrafego(req);
 
     const { data: formRows } = await supabaseServiceRole
       .from('zaplink_forms')

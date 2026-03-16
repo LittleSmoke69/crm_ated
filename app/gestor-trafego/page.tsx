@@ -24,7 +24,7 @@ export default async function GestorTrafegoPage() {
         initialData={null}
         userId={userId}
         userStatus={null}
-        authError="Esta página é exclusiva para Gestores de Tráfego, Admin ou Super Admin."
+        authError="Acesso negado. Você não tem permissão para acessar o módulo Gestão de Tráfego."
       />
     );
   }

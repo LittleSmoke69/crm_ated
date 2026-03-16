@@ -2265,11 +2265,11 @@ const LeadCard: React.FC<LeadCardProps> = ({
                     <User className="w-4 h-4 sm:w-5 sm:h-5 text-[#8CD955] shrink-0" />
                     <span>Informações Básicas</span>
                   </h3>
-                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2 shrink-0 w-full sm:w-auto">
                     <button
                       type="button"
                       onClick={() => setShowAddTagModal(true)}
-                      className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#8CD955]/20 text-[#8CD955] hover:bg-[#8CD955]/30 font-bold text-sm transition-colors"
+                      className="inline-flex items-center justify-center gap-2 px-3 py-2.5 sm:py-1.5 rounded-lg bg-[#8CD955]/20 text-[#8CD955] hover:bg-[#8CD955]/30 font-bold text-sm transition-colors w-full sm:w-auto min-h-[44px] sm:min-h-0"
                     >
                       <TagIcon className="w-4 h-4" />
                       Adicionar etiqueta
@@ -2278,7 +2278,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
                       <button
                         type="button"
                         onClick={() => { setEditingFeedback(null); setShowContactFeedbackModal(true); }}
-                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-500/20 text-blue-600 dark:text-blue-400 hover:bg-blue-500/30 font-bold text-sm transition-colors"
+                        className="inline-flex items-center justify-center gap-2 px-3 py-2.5 sm:py-1.5 rounded-lg bg-blue-500/20 text-blue-600 dark:text-blue-400 hover:bg-blue-500/30 font-bold text-sm transition-colors w-full sm:w-auto min-h-[44px] sm:min-h-0"
                       >
                         <MessageSquare className="w-4 h-4" />
                         Adicionar feedback
@@ -2295,7 +2295,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
                           href={`https://wa.me/${waNumber}`}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#25D366]/15 text-[#25D366] hover:bg-[#25D366]/25 font-medium text-sm transition-colors"
+                          className="inline-flex items-center justify-center gap-2 px-3 py-2.5 sm:py-1.5 rounded-lg bg-[#25D366]/15 text-[#25D366] hover:bg-[#25D366]/25 font-medium text-sm transition-colors w-full sm:w-auto min-h-[44px] sm:min-h-0"
                           title="Chamar no WhatsApp"
                         >
                           <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
