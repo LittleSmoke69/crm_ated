@@ -315,14 +315,13 @@ const TransferidoContent = () => {
     }
   }, [userId, targetUserId, filters.banca, filters.date]);
 
-  // Carrega leads assim que o userId estiver disponível, em paralelo ao carregamento das bancas do FilterBar.
-  // Não espera bancasReady: a API resolve bancas no servidor (getBancasVisiveis) quando banca_urls não é enviado.
+  // Espera as bancas do usuário carregarem (FilterBar → onBancasLoaded) antes de buscar os leads.
   useEffect(() => {
-    if (!userId) return;
+    if (!userId || !bancasReady) return;
     const isInitialLoad = isInitialLoadRef.current;
     if (isInitialLoad) isInitialLoadRef.current = false;
     loadLeads(!isInitialLoad);
-  }, [userId, bancaKey, dateKey, loadLeads]);
+  }, [userId, bancasReady, bancaKey, dateKey, loadLeads]);
 
   const handleBancasLoaded = useCallback((bancas: { id: string; name: string; url: string }[]) => {
     console.log('[Transferido] handleBancasLoaded | bancas:', bancas.length, bancas.map((b) => b.name ?? b.id));
@@ -704,9 +703,9 @@ const TransferidoContent = () => {
             </button>
           </div>
 
-          {/* Quick Metrics - overlay quando requisição está em andamento (igual Kanban) */}
+          {/* Quick Metrics - overlay só quando ainda não há nenhum lead (assim que chegar o primeiro, métricas e colunas ficam visíveis) */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6 animate-in fade-in slide-in-from-top-2 duration-500 relative">
-            {(loading || filterLoading) && (
+            {(loading || filterLoading) && rawLeads.length === 0 && (
               <div className="absolute inset-0 bg-white/60 dark:bg-[#1a1a1a]/80 backdrop-blur-[2px] rounded-xl z-10 flex items-center justify-center">
                 <div className="flex items-center gap-2 text-[#8CD955]">
                   <RefreshCw className="w-4 h-4 animate-spin" />
@@ -738,24 +737,26 @@ const TransferidoContent = () => {
             </div>
           )}
 
-          {/* Bloco: mantém o usuário informado até terminar todos os lotes */}
+          {/* Bloco: mantém o usuário informado até terminar todos os lotes; mostra total de leads já carregados */}
           {batchLoadInProgress && (
             <div className="mb-4 py-4 px-4 bg-[#8CD955]/15 dark:bg-[#8CD955]/10 border-2 border-[#8CD955]/50 text-gray-800 dark:text-gray-200 rounded-xl flex items-center gap-3 text-sm font-medium animate-in fade-in shadow-sm">
               <RefreshCw className="w-6 h-6 animate-spin text-[#8CD955] flex-shrink-0" />
               <div className="min-w-0 flex-1">
                 <p className="font-semibold">
-                  {loading || filterLoading
-                    ? 'Estamos carregando os lotes de leads. Aguarde a primeira resposta.'
-                    : 'Ainda estamos carregando mais lotes de leads.'}
+                  {rawLeads.length === 0
+                    ? 'Carregando leads...'
+                    : loadingProgress && loadingProgress.totalLoaded > 0
+                      ? `Carregando leads — ${loadingProgress.totalLoaded.toLocaleString('pt-BR')} já carregados`
+                      : 'Carregando mais lotes de leads.'}
                 </p>
                 {loadingProgress && (loadingFullInBackground || loading || filterLoading) && (
                   <p className="text-xs text-gray-600 dark:text-gray-400 font-normal mt-1">
-                    <span className="font-medium text-[#8CD955]">{loadingProgress.totalLoaded.toLocaleString('pt-BR')} leads</span> carregados
+                    <span className="font-medium text-[#8CD955]">{loadingProgress.totalLoaded.toLocaleString('pt-BR')} leads</span> no quadro
                     {loadingProgress.totalBancas != null && loadingProgress.totalBancas > 0 && (
                       <> · Banca {loadingProgress.currentBanca} de {loadingProgress.totalBancas}</>
                     )}
                     {loadingProgress.currentPage > 1 && (
-                      <> · Lote {loadingProgress.currentPage}</>
+                      <> · Página {loadingProgress.currentPage}</>
                     )}
                   </p>
                 )}
@@ -766,7 +767,16 @@ const TransferidoContent = () => {
             </div>
           )}
 
-          {!loading && !filterLoading && !error && rawLeads.length === 0 && !loadingFullInBackground && (
+          {userId && !bancasReady && (
+            <div className="mb-4 p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/50 text-amber-800 dark:text-amber-200 rounded-xl flex items-center gap-3 text-sm animate-in fade-in slide-in-from-top-1">
+              <RefreshCw className="w-5 h-5 flex-shrink-0 animate-spin" />
+              <div>
+                <p className="font-semibold">Carregando bancas do usuário</p>
+                <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">A busca de leads será feita assim que as bancas estiverem disponíveis.</p>
+              </div>
+            </div>
+          )}
+          {!loading && !filterLoading && !error && rawLeads.length === 0 && !loadingFullInBackground && bancasReady && (
             <div className="mb-4 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800/50 text-blue-700 dark:text-blue-200 rounded-xl flex items-center gap-3 text-sm animate-in fade-in slide-in-from-top-1">
               <AlertCircle className="w-5 h-5 flex-shrink-0" />
               <div>
@@ -789,13 +799,20 @@ const TransferidoContent = () => {
         </div>
 
         <div className="flex-1 overflow-x-auto overflow-y-auto pb-4 custom-scrollbar -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8 snap-x snap-mandatory relative min-h-[400px]">
-          {/* Overlay nas colunas quando requisição está em andamento (igual Kanban) */}
-          {(loading || filterLoading) && (
+          {/* Overlay só quando ainda não há nenhum lead — assim que o primeiro lote chega, as colunas mostram os leads sendo carregados */}
+          {(loading || filterLoading) && rawLeads.length === 0 && (
             <div className="absolute inset-0 bg-white/50 dark:bg-[#1a1a1a]/80 backdrop-blur-[1px] rounded-xl z-20 flex items-center justify-center">
               <div className="flex flex-col items-center gap-2 text-[#8CD955]">
                 <RefreshCw className="w-5 h-5 animate-spin" />
                 <span className="text-xs font-semibold">Carregando leads...</span>
               </div>
+            </div>
+          )}
+          {/* Indicador discreto quando já há leads e ainda está carregando mais lotes */}
+          {(loading || filterLoading || loadingFullInBackground) && rawLeads.length > 0 && (
+            <div className="absolute top-2 right-2 z-20 flex items-center gap-2 px-3 py-1.5 bg-[#8CD955]/20 dark:bg-[#8CD955]/15 border border-[#8CD955]/40 rounded-lg text-xs font-medium text-gray-700 dark:text-gray-200">
+              <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#8CD955]" />
+              <span>{loadingProgress?.totalLoaded?.toLocaleString('pt-BR') ?? 0} leads carregados</span>
             </div>
           )}
           <div className="flex gap-4 md:gap-6 items-stretch h-full min-h-[500px]">
