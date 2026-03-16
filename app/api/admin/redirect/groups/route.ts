@@ -72,7 +72,7 @@ export async function GET(req: NextRequest) {
 
     const { data: utmVisits } = await supabaseServiceRole
       .from('redirect_visits')
-      .select('id, utm_source, utm_medium, utm_campaign, utm_content, utm_term, created_at')
+      .select('id, utm_source, utm_medium, utm_campaign, utm_content, utm_term, status, created_at')
       .eq('project_id', projectId)
       .order('created_at', { ascending: false })
       .limit(100);
