@@ -154,7 +154,7 @@ const AddTagModal: React.FC<AddTagModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4"
       onClick={(e) => {
         if (e.target === e.currentTarget) {
           onClose();
@@ -164,14 +164,17 @@ const AddTagModal: React.FC<AddTagModalProps> = ({
       {/* Overlay */}
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
 
-      {/* Modal */}
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md z-10 animate-in fade-in zoom-in duration-200">
+      {/* Modal: no mobile ocupa a parte inferior da tela; no desktop centralizado */}
+      <div
+        className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full max-w-md max-h-[90dvh] sm:max-h-[85vh] flex flex-col z-10 animate-in fade-in zoom-in duration-200"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-gray-100">
-          <h2 className="text-xl font-bold text-gray-800">{addedTag ? 'Etiqueta adicionada' : 'Adicionar Etiqueta'}</h2>
+        <div className="flex items-center justify-between p-4 sm:p-6 border-b border-gray-100 shrink-0">
+          <h2 className="text-lg sm:text-xl font-bold text-gray-800">{addedTag ? 'Etiqueta adicionada' : 'Adicionar Etiqueta'}</h2>
           <button
             onClick={() => (addedTag ? handleCloseAfterSuccess() : onClose())}
-            className="p-2 hover:bg-gray-100 rounded-lg transition text-gray-500 hover:text-gray-700"
+            className="p-2.5 -mr-2 hover:bg-gray-100 rounded-lg transition text-gray-500 hover:text-gray-700 touch-manipulation min-h-[44px] min-w-[44px] flex items-center justify-center sm:min-h-0 sm:min-w-0"
             aria-label="Fechar"
           >
             <X className="w-5 h-5" />
@@ -179,15 +182,15 @@ const AddTagModal: React.FC<AddTagModalProps> = ({
         </div>
 
         {/* Content */}
-        <div className="p-6">
+        <div className="p-4 sm:p-6 flex flex-col min-h-0 overflow-y-auto flex-1">
           {error && (
-            <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-600 rounded-xl text-sm">
+            <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-600 rounded-xl text-sm shrink-0">
               {error}
             </div>
           )}
 
           {addedTag ? (
-            <div className="py-6 text-center">
+            <div className="py-6 text-center shrink-0">
               <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium mb-4" style={{ backgroundColor: `${addedTag.color}20`, color: addedTag.color, border: `1px solid ${addedTag.color}` }}>
                 <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: addedTag.color }} />
                 {addedTag.label}
@@ -197,29 +200,29 @@ const AddTagModal: React.FC<AddTagModalProps> = ({
               <button
                 type="button"
                 onClick={handleCloseAfterSuccess}
-                className="px-4 py-2 bg-[#8CD955] hover:bg-[#7bc74a] text-white font-medium rounded-xl transition"
+                className="px-4 py-3 sm:py-2 min-h-[44px] bg-[#8CD955] hover:bg-[#7bc74a] text-white font-medium rounded-xl transition touch-manipulation"
               >
                 Fechar
               </button>
             </div>
           ) : loading ? (
-            <div className="flex items-center justify-center py-8">
+            <div className="flex items-center justify-center py-8 shrink-0">
               <Loader2 className="w-6 h-6 animate-spin text-[#8CD955]" />
             </div>
           ) : availableTags.length === 0 ? (
-            <div className="text-center py-8 text-gray-500">
+            <div className="text-center py-8 text-gray-500 shrink-0">
               <TagIcon className="w-12 h-12 mx-auto mb-3 text-gray-300" />
               <p className="font-semibold">Todas as etiquetas já foram adicionadas</p>
               <p className="text-sm mt-1">Ou não há etiquetas disponíveis</p>
             </div>
           ) : (
-            <div className="space-y-2 max-h-[400px] overflow-y-auto custom-scrollbar">
+            <div className="space-y-2 min-h-0 overflow-y-auto custom-scrollbar -mx-4 sm:mx-0 px-4 sm:px-0">
               {availableTags.map((tag) => (
                 <button
                   key={tag.id}
                   onClick={() => handleAddTag(tag.id)}
                   disabled={adding === tag.id}
-                  className="w-full flex items-center gap-3 p-3 rounded-xl border border-gray-200 hover:border-[#8CD955] hover:bg-[#8CD955]/5 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full flex items-center gap-3 p-3 sm:p-3 py-3.5 rounded-xl border border-gray-200 hover:border-[#8CD955] hover:bg-[#8CD955]/5 active:bg-[#8CD955]/10 transition-all disabled:opacity-50 disabled:cursor-not-allowed min-h-[48px] touch-manipulation"
                 >
                   <div
                     className="w-4 h-4 rounded-full flex-shrink-0"

@@ -3,7 +3,7 @@
  * Move lead já atribuído para outra banca/gerente (apenas de formulário do gestor).
  */
 import { NextRequest } from 'next/server';
-import { requireStatus } from '@/lib/middleware/permissions';
+import { requireGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { evolutionService } from '@/lib/services/evolution-service';
@@ -47,7 +47,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { userId } = await requireStatus(req, ['gestor']);
+    const { userId } = await requireGestorTrafego(req);
     const { id: submissionId } = await params;
 
     const body = await req.json().catch(() => ({}));

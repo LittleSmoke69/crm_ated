@@ -3,7 +3,7 @@
  * Remove submissão pendente apenas se pertencer a formulário do gestor.
  */
 import { NextRequest } from 'next/server';
-import { requireStatus } from '@/lib/middleware/permissions';
+import { requireGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
@@ -14,7 +14,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { userId } = await requireStatus(_req, ['gestor']);
+    const { userId } = await requireGestorTrafego(_req);
     const { id: submissionId } = await params;
 
     const { data: submission, error: fetchError } = await supabaseServiceRole

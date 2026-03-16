@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
-import { requireStatus, getUserProfile } from '@/lib/middleware/permissions';
+import { getUserProfile } from '@/lib/middleware/permissions';
+import { requireGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
 import { getEffectiveDonoIdForGestor } from '@/lib/middleware/gestor-owner';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
@@ -27,7 +28,7 @@ export async function GET(
 ) {
   let gerenteId: string | undefined;
   try {
-    const { userId } = await requireStatus(req, ['gestor', 'admin', 'super_admin']);
+    const { userId } = await requireGestorTrafego(req);
     const profile = await getUserProfile(userId);
     if (!profile) return errorResponse('Perfil não encontrado', 403);
     const statusNorm = profile.status?.trim().toLowerCase();
@@ -35,7 +36,8 @@ export async function GET(
     let ownerId: string | null = null;
     if (statusNorm === 'gestor') {
       ownerId = await getEffectiveDonoIdForGestor(userId);
-    } else if (statusNorm === 'admin' || statusNorm === 'super_admin') {
+    } else {
+      // Admin, Super Admin ou cargo com gestao_trafego: usam seletor (X-Effective-Dono-Id)
       ownerId = req.headers.get('X-Effective-Dono-Id');
     }
     if (!ownerId) {

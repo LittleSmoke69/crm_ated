@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
-import { requireStatus, validateHierarchy, UserStatus, getUserProfile } from '@/lib/middleware/permissions';
+import { validateHierarchy, UserStatus, getUserProfile } from '@/lib/middleware/permissions';
+import { requireGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
 import { getEffectiveDonoIdForGestor } from '@/lib/middleware/gestor-owner';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
@@ -13,8 +14,7 @@ import { randomUUID } from 'crypto';
  */
 export async function POST(req: NextRequest) {
   try {
-    const { userId } = await requireStatus(req, ['gestor', 'admin', 'super_admin']);
-    const profile = await getUserProfile(userId);
+    const { userId, profile } = await requireGestorTrafego(req);
     if (!profile) return errorResponse('Perfil não encontrado', 403);
     const statusNorm = profile.status?.trim().toLowerCase();
     let ownerId: string | null = statusNorm === 'gestor'
@@ -97,8 +97,12 @@ export async function POST(req: NextRequest) {
       });
 
     return successResponse(newUser, 'Usuário cadastrado com sucesso na banca vinculada');
-  } catch (err: any) {
-    console.error('[Gestor Users Create API] Erro:', err.message);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : '';
+    if (message.includes('Acesso negado') || message.includes('Não autenticado')) {
+      return errorResponse(message, 403);
+    }
+    console.error('[Gestor Users Create API] Erro:', message);
     return serverErrorResponse(err);
   }
 }

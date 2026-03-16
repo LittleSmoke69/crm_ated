@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { getUserProfile } from '@/lib/middleware/permissions';
+import { canAccessGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
 import { getEffectiveDonoIdForGestor } from '@/lib/middleware/gestor-owner';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { getDonoBancaDashboardData, getDashboardDataByBancaId } from '@/lib/services/dashboard/dono-banca';
@@ -52,11 +53,11 @@ export async function GET(req: NextRequest) {
     if (!profile) {
       return errorResponse('Perfil não encontrado', 403);
     }
-    const allowedStatuses = ['gestor', 'admin', 'super_admin'];
-    const normalizedStatus = profile.status?.trim().toLowerCase();
-    if (!normalizedStatus || !allowedStatuses.includes(normalizedStatus)) {
-      return errorResponse('Esta página é exclusiva para Gestores de Tráfego, Admin ou Super Admin.', 403);
+    const hasAccess = await canAccessGestorTrafego(profile);
+    if (!hasAccess) {
+      return errorResponse('Acesso negado. Você não tem permissão para acessar o módulo Gestão de Tráfego.', 403);
     }
+    const normalizedStatus = profile.status?.trim().toLowerCase();
 
     let donoId: string | null = null;
     let bancaId: string | null = null;

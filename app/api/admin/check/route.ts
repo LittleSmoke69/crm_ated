@@ -24,10 +24,17 @@ export async function GET(req: NextRequest) {
       return successResponse({ isAdmin: false, status: null, isActive: false });
     }
 
+    const [hasVslRedirect, hasGestaoTrafego] = await Promise.all([
+      hasSidebarPermission(profile, 'vsl_redirect'),
+      hasSidebarPermission(profile, 'gestao_trafego'),
+    ]);
+
     return successResponse({
       isAdmin: true,
       status: profile.status,
       isSuperAdmin: isSuperAdmin(profile),
+      hasVslRedirect: !!hasVslRedirect,
+      hasGestaoTrafego: !!hasGestaoTrafego,
       isActive: true,
     });
   } catch {
