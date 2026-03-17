@@ -80,8 +80,8 @@ export async function POST(req: NextRequest) {
         }
         continue;
       }
-      for (const jid of result.participants) {
-        const e164 = jidToE164(jid);
+      for (const p of result.participants) {
+        const e164 = jidToE164(p.phone);
         if (!e164 || !blacklistSet.has(e164)) continue;
         if (!phoneToGroups[e164]) phoneToGroups[e164] = [];
         if (!phoneToGroups[e164].includes(groupJid)) {

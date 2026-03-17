@@ -12,8 +12,13 @@ import {
   XCircle,
   AlertCircle,
   Trash2,
+  ScanLine,
+  ChevronDown,
+  ChevronRight,
+  Wifi,
 } from 'lucide-react';
 import VerifyGroupsOverlay from '@/components/anti-spam/VerifyGroupsOverlay';
+import { formatPhoneToList } from '@/lib/utils/phone-utils';
 
 interface AntiSpamConfigRow {
   id: string;
@@ -57,6 +62,72 @@ interface JoinEventRow {
   phone: string;
 }
 
+interface ScanContactRow {
+  phone: string;
+  name: string | null;
+  is_valid_br: boolean;
+  is_blacklisted: boolean;
+}
+
+interface ScanGroupResult {
+  group_jid: string;
+  group_name: string | null;
+  fetch_error?: string;
+  participants_total: number;
+  invalid_count: number;
+  blacklisted_count: number;
+  contacts: ScanContactRow[];
+}
+
+interface ScanResult {
+  instance: { id: string; name: string };
+  groups: ScanGroupResult[];
+  summary: {
+    groups_scanned: number;
+    total_participants: number;
+    invalid_total: number;
+    blacklisted_total: number;
+  };
+  message?: string;
+}
+
+const SCAN_MESSAGES = [
+  'Monitorando grupos…',
+  'Verificando participantes…',
+  'Checando números inválidos…',
+  'Analisando blacklist…',
+  'Processando grupos…',
+  'Quase lá…',
+];
+
+function ScanProgressBanner() {
+  const [idx, setIdx] = React.useState(0);
+  const [visible, setVisible] = React.useState(true);
+
+  React.useEffect(() => {
+    const cycle = setInterval(() => {
+      setVisible(false);
+      setTimeout(() => {
+        setIdx((i) => (i + 1) % SCAN_MESSAGES.length);
+        setVisible(true);
+      }, 300);
+    }, 2500);
+    return () => clearInterval(cycle);
+  }, []);
+
+  return (
+    <div className="sticky top-0 z-20 -mx-4 -mt-4 px-4 pt-4 pb-2 md:-mx-6 md:-mt-6 md:px-6 md:pt-6 lg:-mx-8 lg:-mt-8 lg:px-8 lg:pt-8 mb-4 flex items-center justify-center gap-2 rounded-b-lg bg-[#8CD955]/15 dark:bg-[#8CD955]/20 border-b-2 border-[#8CD955]/50 shadow-sm">
+      <Loader2 className="h-5 w-5 animate-spin text-[#8CD955] shrink-0" />
+      <span
+        className="text-sm font-medium text-gray-800 dark:text-gray-200 transition-opacity duration-300"
+        style={{ opacity: visible ? 1 : 0 }}
+      >
+        {SCAN_MESSAGES[idx]}
+      </span>
+    </div>
+  );
+}
+
 export default function AntiSpamPage() {
   const { checking, userId } = useRequireAuth();
   const [configs, setConfigs] = useState<AntiSpamConfigRow[]>([]);
@@ -83,11 +154,21 @@ export default function AntiSpamPage() {
   const [togglingGroupId, setTogglingGroupId] = useState<string | null>(null);
   const [verifyingGroups, setVerifyingGroups] = useState(false);
   const [verifyGroupsResult, setVerifyGroupsResult] = useState<{
-    report: { phone_e164: string; groups_count: number; group_jids: string[] }[];
-    removals: { phone_e164: string; group_jid: string; success: boolean; error?: string }[];
+    report: { phone_e164: string; groups_count: number; group_jids: string[]; reason: string }[];
+    removals: { phone_e164: string; group_jid: string; success: boolean; error?: string; reason: string }[];
     groupErrors?: { groupJid: string; error: string }[];
-    summary: { totalInGroups: number; totalRemovals: number; success: number; failed: number };
+    summary: { totalInGroups: number; totalRemovals: number; success: number; failed: number; invalid_removed?: number; blacklisted_removed?: number };
   } | null>(null);
+  const [scanningGroups, setScanningGroups] = useState(false);
+  const [scanJobId, setScanJobId] = useState<string | null>(null);
+  const [scanResult, setScanResult] = useState<ScanResult | null>(null);
+  const [scanExpandedGroup, setScanExpandedGroup] = useState<string | null>(null);
+  const [scanContactsPage, setScanContactsPage] = useState(1);
+  const [removingInvalids, setRemovingInvalids] = useState(false);
+  const [removeInvalidResult, setRemoveInvalidResult] = useState<{ total: number; removed: number; failed: number } | null>(null);
+  const [removingInvalidGroupId, setRemovingInvalidGroupId] = useState<string | null>(null);
+
+  const SCAN_CONTACTS_PAGE_SIZE = 20;
 
   const showToast = (type: 'success' | 'error', message: string) => {
     setToast({ type, message });
@@ -194,13 +275,14 @@ export default function AntiSpamPage() {
       const res = await fetch('/api/groups?allInstances=1', { headers: { 'X-User-Id': userId } });
       const json = await res.json();
       if (json.success && Array.isArray(json.data)) {
-        setSavedGroups(
-          json.data.map((g: { group_id: string; group_subject?: string; instance_name?: string }) => ({
-            group_id: g.group_id,
-            group_subject: g.group_subject || g.group_id,
-            instance_name: g.instance_name ?? '',
-          }))
-        );
+        const mapped = json.data.map((g: { group_id: string; group_subject?: string; instance_name?: string }) => ({
+          group_id: g.group_id,
+          group_subject: g.group_subject || g.group_id,
+          instance_name: g.instance_name ?? '',
+        }));
+        // Deduplicar por group_id — pode vir duplicado quando allInstances=1
+        const unique = Array.from(new Map(mapped.map((g: { group_id: string }) => [g.group_id, g])).values()) as typeof mapped;
+        setSavedGroups(unique);
       } else {
         setSavedGroups([]);
       }
@@ -344,6 +426,212 @@ export default function AntiSpamPage() {
     }
   }, [userId, configs, loadActions]);
 
+  const handleScanGroups = useCallback(async () => {
+    if (!userId || !configs[0]) return;
+    setScanningGroups(true);
+    setScanResult(null);
+    setScanExpandedGroup(null);
+    try {
+      const res = await fetch('/api/anti-spam/groups/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({ config_id: configs[0].id }),
+      });
+      const json = await res.json();
+      if (!json.success || !json.data?.job_id) {
+        showToast('error', json.error || json.message || 'Erro ao iniciar scan');
+        return;
+      }
+      // Dispara o polling em background via useEffect — UI não fica bloqueada
+      setScanJobId(json.data.job_id as string);
+    } catch (e: any) {
+      showToast('error', e?.message || 'Erro ao escanear grupos');
+    } finally {
+      setScanningGroups(false);
+    }
+  }, [userId, configs]);
+
+  // Polling de background para o scan — não bloqueia a UI
+  useEffect(() => {
+    if (!scanJobId || !userId) return;
+
+    const POLL_INTERVAL_MS = 4000;
+    let stopped = false;
+
+    const poll = async () => {
+      if (stopped) return;
+      try {
+        const res = await fetch(`/api/anti-spam/groups/scan?job_id=${encodeURIComponent(scanJobId)}`, {
+          headers: { 'X-User-Id': userId },
+        });
+        const data = await res.json();
+        if (stopped) return;
+
+        if (!data.success || !data.data) {
+          setScanJobId(null);
+          showToast('error', data.error || 'Erro ao verificar status do scan');
+          return;
+        }
+
+        const job = data.data;
+
+        if (job.status === 'failed') {
+          setScanJobId(null);
+          showToast('error', job.error || 'Scan falhou. Tente novamente.');
+          return;
+        }
+
+        if (job.status === 'completed' && job.result) {
+          setScanJobId(null);
+          const result = job.result as ScanResult;
+          const safeSummary = result.summary ?? { groups_scanned: 0, total_participants: 0, invalid_total: 0, blacklisted_total: 0 };
+          const safeGroups = Array.isArray(result.groups) ? result.groups : [];
+          setScanResult({ ...result, summary: safeSummary, groups: safeGroups });
+          setScanExpandedGroup(null);
+          const total = safeSummary.invalid_total + safeSummary.blacklisted_total;
+          showToast(
+            total > 0 ? 'error' : 'success',
+            total > 0
+              ? `Scan concluído: ${safeSummary.invalid_total} inválido(s), ${safeSummary.blacklisted_total} bloqueado(s).`
+              : result.message || 'Nenhuma violação encontrada nos grupos.'
+          );
+        }
+      } catch {
+        if (!stopped) {
+          setScanJobId(null);
+          showToast('error', 'Erro ao verificar status do scan');
+        }
+      }
+    };
+
+    const id = setInterval(poll, POLL_INTERVAL_MS);
+    return () => {
+      stopped = true;
+      clearInterval(id);
+    };
+  }, [scanJobId, userId]);
+
+  const handleRemoveInvalids = useCallback(async () => {
+    if (!userId || !configs[0]) return;
+    setRemovingInvalids(true);
+    setRemoveInvalidResult(null);
+    try {
+      const res = await fetch('/api/anti-spam/groups/remove-invalid', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({ config_id: configs[0].id }),
+      });
+      const json = await res.json();
+
+      if (!json.success || !json.data?.job_id) {
+        showToast('error', json.error || 'Erro ao iniciar remoção');
+        return;
+      }
+
+      const jobId = json.data.job_id as string;
+
+      const MAX_ATTEMPTS = 150;
+      const POLL_INTERVAL_MS = 3000;
+
+      for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+
+        const pollRes = await fetch(`/api/anti-spam/groups/remove-invalid?job_id=${encodeURIComponent(jobId)}`, {
+          headers: { 'X-User-Id': userId },
+        });
+        const poll = await pollRes.json();
+
+        if (!poll.success || !poll.data) {
+          showToast('error', 'Erro ao verificar status da remoção');
+          return;
+        }
+
+        const job = poll.data;
+
+        if (job.status === 'failed') {
+          showToast('error', job.error || 'Remoção falhou. Tente novamente.');
+          return;
+        }
+
+        if (job.status === 'completed' && job.result) {
+          const r = job.result as { total: number; removed: number; failed: number };
+          setRemoveInvalidResult(r);
+          setScanResult(null);
+          loadActions();
+          if (r.total === 0) {
+            showToast('success', 'Nenhum número inválido encontrado nos grupos.');
+          } else {
+            showToast(
+              r.failed > 0 ? 'error' : 'success',
+              `${r.removed} inválido(s) removido(s)${r.failed > 0 ? `, ${r.failed} falha(s)` : ''}.`
+            );
+          }
+          return;
+        }
+      }
+
+      showToast('error', 'Timeout: a remoção demorou muito. Tente novamente.');
+    } catch (e: any) {
+      showToast('error', e?.message || 'Erro ao remover inválidos');
+    } finally {
+      setRemovingInvalids(false);
+    }
+  }, [userId, configs, loadActions]);
+
+  const handleRemoveInvalidFromGroup = useCallback(
+    async (groupJid: string) => {
+      if (!userId || !configs[0]) return;
+      setRemovingInvalidGroupId(groupJid);
+      try {
+        const res = await fetch('/api/anti-spam/groups/remove-invalid-single', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+          body: JSON.stringify({ config_id: configs[0].id, group_jid: groupJid }),
+        });
+        const json = await res.json();
+        if (json.success) {
+          const r = json.data as { total: number; removed: number; failed: number };
+          if (r.total === 0) {
+            showToast('success', 'Nenhum inválido encontrado neste grupo.');
+          } else {
+            showToast(
+              r.failed > 0 ? 'error' : 'success',
+              `${r.removed} inválido(s) removido(s) do grupo${r.failed > 0 ? `, ${r.failed} falha(s)` : ''}.`
+            );
+          }
+          // Atualiza o grupo no scanResult localmente
+          setScanResult((prev) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              groups: prev.groups.map((g) =>
+                g.group_jid === groupJid
+                  ? {
+                      ...g,
+                      invalid_count: 0,
+                      contacts: g.contacts.filter((c) => c.is_valid_br || c.is_blacklisted),
+                    }
+                  : g
+              ),
+              summary: {
+                ...prev.summary,
+                invalid_total: Math.max(0, prev.summary.invalid_total - r.removed),
+              },
+            };
+          });
+          loadActions();
+        } else {
+          showToast('error', json.error || 'Erro ao remover inválidos');
+        }
+      } catch (e: any) {
+        showToast('error', e?.message || 'Erro ao remover inválidos');
+      } finally {
+        setRemovingInvalidGroupId(null);
+      }
+    },
+    [userId, configs, loadActions]
+  );
+
   const handleRemoveFromBlacklist = async (configId: string, phoneE164: string) => {
     if (!userId) return;
     try {
@@ -431,6 +719,7 @@ export default function AntiSpamPage() {
 
   const config = configs[0] ?? null;
   const totalPages = Math.ceil(actionsTotal / 25);
+  const scanInProgress = scanningGroups || scanJobId !== null;
 
   const inputClass =
     'mt-1 block w-full rounded-lg border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] px-3 py-2 text-sm text-gray-800 dark:text-gray-200 placeholder:text-gray-500 dark:placeholder-gray-400 focus:border-[#8CD955] focus:ring-2 focus:ring-[#8CD955]/20 [color-scheme:light] dark:[color-scheme:dark]';
@@ -444,6 +733,13 @@ export default function AntiSpamPage() {
           <div className="sticky top-0 z-20 -mx-4 -mt-4 px-4 pt-4 pb-2 md:-mx-6 md:-mt-6 md:px-6 md:pt-6 lg:-mx-8 lg:-mt-8 lg:px-8 lg:pt-8 mb-4 flex items-center justify-center gap-2 rounded-b-lg bg-[#8CD955]/15 dark:bg-[#8CD955]/20 border-b-2 border-[#8CD955]/50 shadow-sm">
             <Loader2 className="h-5 w-5 animate-spin text-[#8CD955]" />
             <span className="text-sm font-medium text-gray-800 dark:text-gray-200">Verificação de grupos em andamento em segundo plano</span>
+          </div>
+        )}
+        {scanJobId && <ScanProgressBanner />}
+        {removingInvalids && (
+          <div className="sticky top-0 z-20 -mx-4 -mt-4 px-4 pt-4 pb-2 md:-mx-6 md:-mt-6 md:px-6 md:pt-6 lg:-mx-8 lg:-mt-8 lg:px-8 lg:pt-8 mb-4 flex items-center justify-center gap-2 rounded-b-lg bg-red-50 dark:bg-red-900/20 border-b-2 border-red-300 dark:border-red-700 shadow-sm">
+            <Loader2 className="h-5 w-5 animate-spin text-red-500 dark:text-red-400" />
+            <span className="text-sm font-medium text-red-800 dark:text-red-200">Removendo inválidos em segundo plano… aguarde.</span>
           </div>
         )}
         <header className="mb-8">
@@ -576,10 +872,23 @@ export default function AntiSpamPage() {
         {activeTab === 'groups' && (
           <div className="rounded-xl border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] p-6 shadow-sm">
             {verifyingGroups && <VerifyGroupsOverlay isActive={verifyingGroups} />}
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">Grupos protegidos</h2>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-              Grupos que você já tem salvos em todas as instâncias. Se escolheu &quot;Apenas grupos que eu escolher&quot;, marque os que deseja proteger. Use &quot;Verificar grupos&quot; para remover números da blacklist que ainda estejam em algum grupo.
-            </p>
+            <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Grupos protegidos</h2>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+                  Use &quot;Escanear grupos&quot; para ver os contatos de cada grupo e quantos violam as regras. Use &quot;Remover violações&quot; para expulsar inválidos e bloqueados.
+                </p>
+              </div>
+              {config && (() => {
+                const inst = instances.find((i) => i.id === config.master_instance_id);
+                return inst ? (
+                  <div className="flex items-center gap-2 rounded-lg border border-[#8CD955]/40 bg-[#8CD955]/10 px-3 py-2 text-xs font-medium text-[#5a9e2f] dark:text-[#8CD955] shrink-0">
+                    <Wifi className="w-3.5 h-3.5" />
+                    Instância: <strong>{inst.instance_name}</strong>
+                  </div>
+                ) : null;
+              })()}
+            </div>
             {!config ? (
               <p className="text-sm text-amber-600 dark:text-amber-400">Configure primeiro na aba Configuração.</p>
             ) : (
@@ -588,20 +897,29 @@ export default function AntiSpamPage() {
                   <button
                     type="button"
                     onClick={fetchGroupsFromInstance}
-                    disabled={fetchingGroups || loadingGroups}
+                    disabled={fetchingGroups || loadingGroups || scanInProgress}
                     className="inline-flex items-center gap-2 rounded-lg border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50 transition"
                   >
                     {fetchingGroups ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                    Buscar grupos da instância
+                    Buscar grupos
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleScanGroups}
+                    disabled={scanInProgress || verifyingGroups || loadingGroups}
+                    className="inline-flex items-center gap-2 rounded-lg border border-blue-400 dark:border-blue-500 bg-blue-50 dark:bg-blue-900/20 px-4 py-2 text-sm font-medium text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/40 disabled:opacity-50 transition"
+                  >
+                    {scanningGroups ? <Loader2 className="w-4 h-4 animate-spin" /> : <ScanLine className="w-4 h-4" />}
+                    {scanJobId ? 'Escaneando…' : 'Escanear grupos'}
                   </button>
                   <button
                     type="button"
                     onClick={handleVerifyGroups}
-                    disabled={verifyingGroups || loadingGroups}
+                    disabled={verifyingGroups || scanInProgress || loadingGroups}
                     className="inline-flex items-center gap-2 rounded-lg bg-[#8CD955] px-4 py-2 text-sm font-medium text-white hover:bg-[#7BC84A] disabled:opacity-50 transition"
                   >
                     {verifyingGroups ? <Loader2 className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
-                    Verificar grupos
+                    Remover violações
                   </button>
                   {loadingGroups && (
                     <span className="text-sm text-gray-500 dark:text-gray-400 flex items-center gap-1">
@@ -609,70 +927,304 @@ export default function AntiSpamPage() {
                     </span>
                   )}
                 </div>
+
+                {/* Resultado do scan por grupo */}
+                {scanResult && scanResult.summary != null && Array.isArray(scanResult.groups) && (
+                  <div className="mb-6 space-y-3">
+                    <div className="flex flex-wrap items-center gap-3 p-3 rounded-lg bg-gray-50 dark:bg-[#333] border border-gray-200 dark:border-[#404040] text-sm">
+                      <span className="text-gray-700 dark:text-gray-300">
+                        <strong>{scanResult.summary.groups_scanned ?? 0}</strong> grupo(s) escaneado(s)
+                      </span>
+                      <span className="text-gray-700 dark:text-gray-300">
+                        <strong>{scanResult.summary.total_participants ?? 0}</strong> participante(s)
+                      </span>
+                      {(scanResult.summary.invalid_total ?? 0) > 0 && (
+                        <span className="flex items-center gap-2 text-red-600 dark:text-red-400 font-medium flex-wrap">
+                          <span className="flex items-center gap-1">
+                            <XCircle className="w-4 h-4" />
+                            {scanResult.summary.invalid_total} número(s) inválido(s)
+                          </span>
+                          <button
+                            type="button"
+                            onClick={handleRemoveInvalids}
+                            disabled={removingInvalids || verifyingGroups || scanInProgress}
+                            className="inline-flex items-center gap-1 rounded-lg bg-red-500 hover:bg-red-600 disabled:opacity-50 px-3 py-1 text-xs font-medium text-white transition"
+                          >
+                            {removingInvalids ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                            Remover inválidos
+                          </button>
+                        </span>
+                      )}
+                      {(scanResult.summary.blacklisted_total ?? 0) > 0 && (
+                        <span className="flex items-center gap-1 text-orange-600 dark:text-orange-400 font-medium">
+                          <AlertCircle className="w-4 h-4" />
+                          {scanResult.summary.blacklisted_total} bloqueado(s)
+                        </span>
+                      )}
+                      {(scanResult.summary.invalid_total ?? 0) === 0 && (scanResult.summary.blacklisted_total ?? 0) === 0 && (
+                        <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium">
+                          <CheckCircle2 className="w-4 h-4" /> Nenhuma violação encontrada
+                        </span>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      {scanResult.groups.map((g) => {
+                        const hasViolation = g.invalid_count > 0 || g.blacklisted_count > 0;
+                        const isExpanded = scanExpandedGroup === g.group_jid;
+                        return (
+                          <div key={g.group_jid} className={`rounded-lg border ${hasViolation ? 'border-red-300 dark:border-red-700 bg-red-50/40 dark:bg-red-900/10' : 'border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#2f2f2f]'}`}>
+                            <div className="flex items-center">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const next = isExpanded ? null : g.group_jid;
+                                setScanExpandedGroup(next);
+                                if (next) setScanContactsPage(1);
+                              }}
+                              className="flex-1 flex items-center gap-3 px-4 py-3 text-left"
+                            >
+                              {isExpanded ? <ChevronDown className="w-4 h-4 shrink-0 text-gray-500" /> : <ChevronRight className="w-4 h-4 shrink-0 text-gray-500" />}
+                              <span className="flex-1 text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
+                                {g.group_name || g.group_jid}
+                              </span>
+                              <span className="flex items-center gap-2 shrink-0 text-xs">
+                                <span className="text-gray-500 dark:text-gray-400">{g.participants_total} contato(s)</span>
+                                {(() => {
+                                  const validCount = g.participants_total - g.invalid_count - g.blacklisted_count;
+                                  return validCount > 0 ? (
+                                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 font-medium">
+                                      <CheckCircle2 className="w-3 h-3" /> {validCount} ok
+                                    </span>
+                                  ) : null;
+                                })()}
+                                {g.invalid_count > 0 && (
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 px-2 py-0.5 font-medium">
+                                    <XCircle className="w-3 h-3" /> {g.invalid_count} inválido(s)
+                                  </span>
+                                )}
+                                {g.blacklisted_count > 0 && (
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300 px-2 py-0.5 font-medium">
+                                    <AlertCircle className="w-3 h-3" /> {g.blacklisted_count} bloqueado(s)
+                                  </span>
+                                )}
+                                {!hasViolation && !g.fetch_error && (
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 font-medium">
+                                    <CheckCircle2 className="w-3 h-3" /> OK
+                                  </span>
+                                )}
+                                {g.fetch_error && (
+                                  <span className="text-red-500 dark:text-red-400">Erro</span>
+                                )}
+                              </span>
+                            </button>
+                            {g.invalid_count > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveInvalidFromGroup(g.group_jid)}
+                                disabled={removingInvalidGroupId === g.group_jid || removingInvalids || scanInProgress}
+                                title="Remover números inválidos deste grupo"
+                                className="shrink-0 mr-3 inline-flex items-center gap-1 rounded-lg bg-red-500 hover:bg-red-600 disabled:opacity-50 px-2.5 py-1.5 text-xs font-medium text-white transition"
+                              >
+                                {removingInvalidGroupId === g.group_jid
+                                  ? <Loader2 className="w-3 h-3 animate-spin" />
+                                  : <Trash2 className="w-3 h-3" />}
+                                Remover inválidos
+                              </button>
+                            )}
+                            </div>
+                            {isExpanded && (
+                              <div className="border-t border-gray-200 dark:border-[#404040] px-4 py-3">
+                                {g.fetch_error ? (
+                                  <p className="text-sm text-red-600 dark:text-red-400">{g.fetch_error}</p>
+                                ) : g.contacts.length === 0 ? (
+                                  <p className="text-sm text-gray-500 dark:text-gray-400">Nenhum participante.</p>
+                                ) : (() => {
+                                  const totalPages = Math.max(1, Math.ceil(g.contacts.length / SCAN_CONTACTS_PAGE_SIZE));
+                                  const page = Math.min(scanContactsPage, totalPages);
+                                  const start = (page - 1) * SCAN_CONTACTS_PAGE_SIZE;
+                                  const pageContacts = g.contacts.slice(start, start + SCAN_CONTACTS_PAGE_SIZE);
+                                  return (
+                                    <div className="space-y-3">
+                                      <div className="overflow-x-auto">
+                                        <table className="w-full text-xs">
+                                          <thead>
+                                            <tr className="text-left border-b border-gray-200 dark:border-[#404040]">
+                                              <th className="pb-2 pr-4 font-medium text-gray-600 dark:text-gray-400">Número</th>
+                                              <th className="pb-2 pr-4 font-medium text-gray-600 dark:text-gray-400">Nome</th>
+                                              <th className="pb-2 pr-4 font-medium text-gray-600 dark:text-gray-400">BR válido</th>
+                                              <th className="pb-2 font-medium text-gray-600 dark:text-gray-400">Blacklist</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody className="divide-y divide-gray-100 dark:divide-[#3a3a3a]">
+                                            {pageContacts.map((c, ci) => {
+                                              const rowBg = c.is_blacklisted
+                                                ? 'bg-orange-50/70 dark:bg-orange-900/10'
+                                                : c.is_valid_br
+                                                  ? 'bg-emerald-50/80 dark:bg-emerald-900/20'
+                                                  : 'bg-red-50/70 dark:bg-red-900/10';
+                                              const numColor = c.is_blacklisted
+                                                ? 'text-orange-700 dark:text-orange-300'
+                                                : c.is_valid_br
+                                                  ? 'text-emerald-700 dark:text-emerald-300 font-semibold'
+                                                  : 'text-red-700 dark:text-red-300';
+                                              return (
+                                                <tr key={start + ci} className={rowBg}>
+                                                  <td className={`py-1.5 pr-4 font-mono ${numColor}`}>{formatPhoneToList(c.phone)}</td>
+                                                  <td className="py-1.5 pr-4 text-gray-700 dark:text-gray-300 max-w-[140px] truncate" title={c.name ?? ''}>
+                                                    {c.name || <span className="text-gray-400">—</span>}
+                                                  </td>
+                                                  <td className="py-1.5 pr-4">
+                                                    {c.is_valid_br
+                                                      ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                                                      : <XCircle className="w-3.5 h-3.5 text-red-500" />}
+                                                  </td>
+                                                  <td className="py-1.5">
+                                                    {c.is_blacklisted
+                                                      ? <span className="text-orange-600 dark:text-orange-400 font-medium">Sim</span>
+                                                      : <span className="text-gray-400">—</span>}
+                                                  </td>
+                                                </tr>
+                                              );
+                                            })}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                      {totalPages > 1 && (
+                                        <div className="flex items-center justify-between gap-2 pt-1 border-t border-gray-200 dark:border-[#404040]">
+                                          <span className="text-xs text-gray-500 dark:text-gray-400">
+                                            Página {page} de {totalPages} ({g.contacts.length} contato(s))
+                                          </span>
+                                          <div className="flex items-center gap-1">
+                                            <button
+                                              type="button"
+                                              onClick={() => setScanContactsPage((p) => Math.max(1, p - 1))}
+                                              disabled={page <= 1}
+                                              className="px-2 py-1 text-xs rounded border border-gray-300 dark:border-[#505050] bg-white dark:bg-[#333] text-gray-700 dark:text-gray-200 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-[#404040]"
+                                            >
+                                              Anterior
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => setScanContactsPage((p) => Math.min(totalPages, p + 1))}
+                                              disabled={page >= totalPages}
+                                              className="px-2 py-1 text-xs rounded border border-gray-300 dark:border-[#505050] bg-white dark:bg-[#333] text-gray-700 dark:text-gray-200 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-[#404040]"
+                                            >
+                                              Próxima
+                                            </button>
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Resultado da remoção de inválidos */}
+                {removeInvalidResult && (
+                  <div className="mb-6 rounded-xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/10 p-4 flex flex-wrap gap-4 text-sm items-center">
+                    <XCircle className="w-4 h-4 text-red-500 dark:text-red-400 shrink-0" />
+                    <span className="text-gray-700 dark:text-gray-300">
+                      Inválidos encontrados: <strong>{removeInvalidResult.total}</strong>
+                    </span>
+                    <span className="text-emerald-600 dark:text-emerald-400">
+                      Removidos: <strong>{removeInvalidResult.removed}</strong>
+                    </span>
+                    {removeInvalidResult.failed > 0 && (
+                      <span className="text-red-600 dark:text-red-400">
+                        Falhas: <strong>{removeInvalidResult.failed}</strong>
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Resultado da remoção de violações */}
                 {verifyGroupsResult && (
-                  <div className="mb-6 rounded-xl border border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#333] p-4 space-y-4">
-                    <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200">Resultado da verificação</h3>
+                  <div className="mb-6 rounded-xl border border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#333] p-4 space-y-3">
+                    <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200">Resultado da remoção</h3>
                     <div className="flex flex-wrap gap-4 text-sm">
                       <span className="text-gray-600 dark:text-gray-300">
-                        Encontrados em grupos: <strong>{verifyGroupsResult.summary.totalInGroups}</strong>
+                        Violações encontradas: <strong>{verifyGroupsResult.summary.totalInGroups}</strong>
                       </span>
                       <span className="text-gray-600 dark:text-gray-300">
-                        Remoções: <strong className="text-emerald-600 dark:text-emerald-400">{verifyGroupsResult.summary.success} sucesso</strong>
+                        Removidos: <strong className="text-emerald-600 dark:text-emerald-400">{verifyGroupsResult.summary.success}</strong>
                         {verifyGroupsResult.summary.failed > 0 && (
-                          <>, <strong className="text-red-600 dark:text-red-400">{verifyGroupsResult.summary.failed} falha(s)</strong></>
+                          <> / <strong className="text-red-600 dark:text-red-400">{verifyGroupsResult.summary.failed} falha(s)</strong></>
                         )}
                       </span>
+                      {(verifyGroupsResult.summary.invalid_removed ?? 0) > 0 && (
+                        <span className="text-red-600 dark:text-red-400 text-xs">
+                          {verifyGroupsResult.summary.invalid_removed} inválido(s) removido(s)
+                        </span>
+                      )}
+                      {(verifyGroupsResult.summary.blacklisted_removed ?? 0) > 0 && (
+                        <span className="text-orange-600 dark:text-orange-400 text-xs">
+                          {verifyGroupsResult.summary.blacklisted_removed} bloqueado(s) removido(s)
+                        </span>
+                      )}
                     </div>
-                    {verifyGroupsResult.report?.length > 0 && (
-                      <div>
-                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Por número:</span>
-                        <ul className="mt-2 space-y-1 text-sm text-gray-600 dark:text-gray-400">
-                          {verifyGroupsResult.report.map((r, i) => (
-                            <li key={i}><strong>{r.phone_e164}</strong> — em {r.groups_count} grupo(s)</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
                     {verifyGroupsResult.removals?.length > 0 && (
-                      <ul className="text-sm max-h-32 overflow-y-auto space-y-1">
+                      <ul className="text-xs max-h-40 overflow-y-auto space-y-1 mt-2">
                         {verifyGroupsResult.removals.map((m, i) => (
                           <li key={i} className="flex items-center gap-2">
-                            {m.success ? <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" /> : <XCircle className="w-4 h-4 text-red-500 shrink-0" />}
-                            {m.phone_e164} — {m.group_jid} {!m.success && m.error && <span className="text-red-600 dark:text-red-400 text-xs">{m.error}</span>}
+                            {m.success ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" /> : <XCircle className="w-3.5 h-3.5 text-red-500 shrink-0" />}
+                            <span className="font-mono text-gray-700 dark:text-gray-300">{m.phone_e164}</span>
+                            <span className="text-gray-400 dark:text-gray-500 truncate max-w-[140px]">{m.group_jid}</span>
+                            <span className={`text-xs rounded-full px-1.5 py-0.5 ${m.reason === 'invalid_number' ? 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400' : 'bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400'}`}>
+                              {m.reason === 'invalid_number' ? 'inválido' : 'blacklist'}
+                            </span>
+                            {!m.success && m.error && <span className="text-red-600 dark:text-red-400">{m.error}</span>}
                           </li>
                         ))}
                       </ul>
                     )}
                   </div>
                 )}
-                {savedGroups.length === 0 ? (
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Nenhum grupo salvo. Use &quot;Buscar grupos da instância&quot;.</p>
-                ) : (
-                  <ul className="space-y-2 max-h-[360px] overflow-y-auto rounded-lg border border-gray-200 dark:border-[#404040] p-3">
-                    {savedGroups.map((g) => {
-                      const isProtected = protectedGroupIds.has(g.group_id);
-                      const busy = togglingGroupId === g.group_id;
-                      return (
-                        <li key={g.group_id} className="flex items-center gap-3 py-2 px-2 rounded-lg hover:bg-gray-50 dark:hover:bg-[#333]">
-                          <button
-                            type="button"
-                            onClick={() => toggleGroupProtected(g.group_id, g.group_subject, isProtected)}
-                            disabled={busy}
-                            className="flex items-center gap-2 text-left min-w-0 flex-1"
-                          >
-                            {busy ? <Loader2 className="w-4 h-4 animate-spin shrink-0 text-[#8CD955]" /> : (
-                              <span className={`shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center ${isProtected ? 'bg-[#8CD955] border-[#8CD955] text-white' : 'border-gray-400 dark:border-gray-500'}`}>
-                                {isProtected && <CheckCircle2 className="w-3 h-3" />}
+
+                {/* Lista de grupos para marcar como protegidos */}
+                <div className="mt-4">
+                  <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Marcar grupos como protegidos</h3>
+                  {savedGroups.length === 0 ? (
+                    <p className="text-sm text-gray-500 dark:text-gray-400">Nenhum grupo salvo. Use &quot;Buscar grupos&quot;.</p>
+                  ) : (
+                    <ul className="space-y-1.5 max-h-[320px] overflow-y-auto rounded-lg border border-gray-200 dark:border-[#404040] p-3">
+                      {Array.from(new Map(savedGroups.map((g) => [g.group_id, g])).values()).map((g) => {
+                        const isProtected = protectedGroupIds.has(g.group_id);
+                        const busy = togglingGroupId === g.group_id;
+                        const scan = scanResult?.groups?.find((sg) => sg.group_jid === g.group_id);
+                        return (
+                          <li key={g.group_id} className="flex items-center gap-3 py-2 px-2 rounded-lg hover:bg-gray-50 dark:hover:bg-[#333]">
+                            <button
+                              type="button"
+                              onClick={() => toggleGroupProtected(g.group_id, g.group_subject, isProtected)}
+                              disabled={busy}
+                              className="flex items-center gap-2 text-left min-w-0 flex-1"
+                            >
+                              {busy ? <Loader2 className="w-4 h-4 animate-spin shrink-0 text-[#8CD955]" /> : (
+                                <span className={`shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center ${isProtected ? 'bg-[#8CD955] border-[#8CD955] text-white' : 'border-gray-400 dark:border-gray-500'}`}>
+                                  {isProtected && <CheckCircle2 className="w-3 h-3" />}
+                                </span>
+                              )}
+                              <span className="text-sm text-gray-800 dark:text-gray-200 truncate">{g.group_subject || g.group_id}</span>
+                              {g.instance_name && <span className="text-xs text-gray-500 dark:text-gray-400 shrink-0">({g.instance_name})</span>}
+                            </button>
+                            {scan && (scan.invalid_count > 0 || scan.blacklisted_count > 0) && (
+                              <span className="text-xs text-red-600 dark:text-red-400 shrink-0">
+                                {scan.invalid_count + scan.blacklisted_count} violação(ões)
                               </span>
                             )}
-                            <span className="text-sm text-gray-800 dark:text-gray-200 truncate">{g.group_subject || g.group_id}</span>
-                            {g.instance_name && <span className="text-xs text-gray-500 dark:text-gray-400 shrink-0">({g.instance_name})</span>}
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
               </>
             )}
           </div>
@@ -706,7 +1258,7 @@ export default function AntiSpamPage() {
                           <td className="py-3 px-3 text-gray-800 dark:text-gray-200 truncate max-w-[180px]" title={r.group_id}>
                             {r.group_subject || r.group_id || '—'}
                           </td>
-                          <td className="py-3 px-3 text-gray-800 dark:text-gray-200 font-medium">{r.phone}</td>
+                          <td className="py-3 px-3 text-gray-800 dark:text-gray-200 font-mono font-medium">{formatPhoneToList(r.phone)}</td>
                           <td className="py-3 px-3">
                             <button
                               type="button"

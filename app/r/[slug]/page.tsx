@@ -1,168 +1,222 @@
-'use client';
+import { redirect, notFound } from 'next/navigation';
+import { after } from 'next/server';
+import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { selectGroupByWeight } from '@/lib/vsl/redirect-weight';
+import RedirectCountdownClient from './RedirectCountdownClient';
 
-import { useEffect, useState, useRef } from 'react';
-import { useParams } from 'next/navigation';
+type PageProps = {
+  params: Promise<{ slug: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
 
-const REDIRECT_COUNTDOWN_SECONDS = 3;
-
-export default function RedirectPage() {
-  const params = useParams();
-  const slug = params?.slug as string;
-  const [data, setData] = useState<{
-    invite_url: string;
-    timer_seconds: number;
-    logo_url: string | null;
-    project_name: string;
-    click_id: string;
-    pixel_id: string | null;
-    visit_id: string | null;
-  } | null>(null);
-  const [countdown, setCountdown] = useState<number>(REDIRECT_COUNTDOWN_SECONDS);
-  const [error, setError] = useState<string | null>(null);
-  const [sid, setSid] = useState<string | null>(null);
-  const didRedirect = useRef(false);
-  const visitIdRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (!slug) return;
-    const search = typeof window !== 'undefined' ? window.location.search : '';
-    const s = new URLSearchParams(search).get('sid');
-    if (s) setSid(s);
-  }, [slug]);
-
-  // Resolve redirect em paralelo (não bloqueia o countdown); envia UTM da URL para salvar
-  useEffect(() => {
-    if (!slug) return;
-    const search = typeof window !== 'undefined' ? window.location.search : '';
-    const params = new URLSearchParams(search);
-    const sidParam = sid ? `sid=${encodeURIComponent(sid)}` : '';
-    const utmParams = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term']
-      .filter((key) => params.get(key)?.trim())
-      .map((key) => `${key}=${encodeURIComponent(params.get(key)!.trim())}`)
-      .join('&');
-    const query = [sidParam, utmParams].filter(Boolean).join('&');
-    const url = `/api/redirect/${encodeURIComponent(slug)}/resolve${query ? `?${query}` : ''}`;
-    fetch(url)
-      .then((r) => r.json())
-      .then((json) => {
-        if (!json.success || !json.data) {
-          setError(json.error || 'Redirect não encontrado');
-          return;
-        }
-        setData(json.data);
-        visitIdRef.current = json.data?.visit_id ?? null;
-      })
-      .catch(() => setError('Erro ao carregar'));
-  }, [slug, sid]);
-
-  // Ao sair sem concluir o redirect: marca visit como Incomplete e dispara evento no pixel
-  useEffect(() => {
-    const handleLeave = () => {
-      if (didRedirect.current) return;
-      const vid = visitIdRef.current;
-      if (!vid) return;
-
-      if (typeof window !== 'undefined' && (window as unknown as { fbq?: (...args: unknown[]) => void }).fbq) {
-        (window as unknown as { fbq: (...args: unknown[]) => void }).fbq('trackCustom', 'RedirectIncomplete');
-      }
-
-      navigator.sendBeacon(
-        '/api/redirect/visit-incomplete',
-        new Blob([JSON.stringify({ visit_id: vid })], { type: 'application/json' })
-      );
-    };
-
-    window.addEventListener('pagehide', handleLeave);
-    return () => window.removeEventListener('pagehide', handleLeave);
-  }, []);
-
-  // Pixel Facebook no <head> da página /r/[slug] (rastreio PageView)
-  useEffect(() => {
-    const pixelId = data?.pixel_id;
-    if (!pixelId || typeof document === 'undefined') return;
-    const escapedId = pixelId.replace(/'/g, "\\'");
-    // Script do pixel (padrão Meta: init + PageView)
-    const script = document.createElement('script');
-    script.innerHTML = `
-      !function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?n.callMethod.apply(n,arguments):n.queue.push(arguments)};
-      if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;
-      t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,document,'script',
-      'https://connect.facebook.net/en_US/fbevents.js');
-      fbq('init', '${escapedId}');
-      fbq('track', 'PageView');
-    `;
-    document.head.appendChild(script);
-    // Fallback noscript (recomendado pelo Facebook quando JS está desabilitado)
-    const noscript = document.createElement('noscript');
-    const img = document.createElement('img');
-    img.height = 1;
-    img.width = 1;
-    img.style.display = 'none';
-    img.src = `https://www.facebook.com/tr?id=${encodeURIComponent(pixelId)}&ev=PageView&noscript=1`;
-    noscript.appendChild(img);
-    document.head.appendChild(noscript);
-    return () => {
-      try {
-        if (script.parentNode) script.parentNode.removeChild(script);
-        if (noscript.parentNode) noscript.parentNode.removeChild(noscript);
-      } catch {
-        // ignore
-      }
-    };
-  }, [data?.pixel_id]);
-
-  // Countdown começa imediatamente ao abrir a página (3, 2, 1) — não espera a API
-  useEffect(() => {
-    const t = setInterval(() => {
-      setCountdown((c) => (c <= 0 ? 0 : c - 1));
-    }, 1000);
-    return () => clearInterval(t);
-  }, []);
-
-  // Quando o countdown chega a 0: marca complete, dispara Lead no pixel (BM) e redireciona
-  useEffect(() => {
-    if (countdown > 0) return;
-    if (didRedirect.current) return;
-    if (!data?.invite_url) return;
-    didRedirect.current = true;
-
-    const pixelId = data.pixel_id;
-    if (pixelId && typeof window !== 'undefined' && (window as unknown as { fbq?: (...args: unknown[]) => void }).fbq) {
-      (window as unknown as { fbq: (...args: unknown[]) => void }).fbq('track', 'Lead');
+function decodeSlug(raw: string): string {
+  if (!raw) return '';
+  let s = raw;
+  try {
+    for (let i = 0; i < 3; i++) {
+      const next = decodeURIComponent(s);
+      if (next === s) break;
+      s = next;
     }
+  } catch { /* ignore */ }
+  return s.trim();
+}
 
-    fetch('/api/redirect/complete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ click_id: data.click_id, sid, visit_id: data.visit_id ?? undefined }),
-    }).catch(() => {});
+function sp(val: string | string[] | undefined): string | null {
+  return typeof val === 'string' ? val.trim() || null : null;
+}
 
-    window.location.href = data.invite_url;
-  }, [countdown, data, sid]);
+export default async function RedirectPage({ params, searchParams }: PageProps) {
+  const { slug: rawSlug } = await params;
+  const query = await searchParams;
 
-  if (error) {
-    return (
-      <main className="min-h-screen bg-gray-950 text-white flex items-center justify-center p-6">
-        <p className="text-red-400">{error}</p>
-      </main>
-    );
+  const slug = decodeSlug(rawSlug);
+  const sid = sp(query.sid);
+  const utm_source = sp(query.utm_source);
+  const utm_medium = sp(query.utm_medium);
+  const utm_campaign = sp(query.utm_campaign);
+  const utm_content = sp(query.utm_content);
+  const utm_term = sp(query.utm_term);
+
+  // Queries essenciais em paralelo
+  const [{ data: bySlug }, ] = await Promise.all([
+    supabaseServiceRole
+      .from('redirect_slugs')
+      .select('id, project_id')
+      .eq('slug', slug)
+      .eq('is_active', true)
+      .maybeSingle(),
+  ]);
+
+  const redirectRow = bySlug ?? null;
+  if (!redirectRow) notFound();
+
+  // Projeto + grupos em paralelo
+  const [{ data: project }, { data: linkRows }] = await Promise.all([
+    supabaseServiceRole
+      .from('vsl_projects')
+      .select('id, name, redirect_timer_seconds, logo_path, pixel_id')
+      .eq('id', redirectRow.project_id)
+      .single(),
+    supabaseServiceRole
+      .from('redirect_slug_groups')
+      .select('group_id')
+      .eq('redirect_slug_id', redirectRow.id),
+  ]);
+
+  if (!project) notFound();
+
+  const groupIds = (linkRows ?? []).map((r: { group_id: string }) => r.group_id);
+  if (groupIds.length === 0) notFound();
+
+  const { data: groups } = await supabaseServiceRole
+    .from('redirect_groups')
+    .select('id, name, invite_url, weight_percent')
+    .in('id', groupIds)
+    .eq('is_active', true);
+
+  const withWeight = (groups ?? []).filter((g: { weight_percent: number }) => g.weight_percent > 0);
+  const selected = selectGroupByWeight(withWeight);
+  if (!selected) notFound();
+
+  const timerSeconds = project.redirect_timer_seconds ?? 3;
+
+  // ── MODO INSTANTÂNEO ────────────────────────────────────────────────────────
+  // Tracking gravado após a resposta 302 (não bloqueia o redirect)
+  if (timerSeconds === 0) {
+    after(async () => {
+      let clickUtmCampaign: string | null = null;
+      let clickFbclid: string | null = null;
+      if (sid) {
+        const { data: sess } = await supabaseServiceRole
+          .from('vsl_sessions')
+          .select('utm_campaign, fbclid')
+          .eq('id', sid)
+          .single();
+        if (sess) {
+          clickUtmCampaign = sess.utm_campaign ?? null;
+          clickFbclid = sess.fbclid ?? null;
+        }
+      }
+
+      const { data: clickRow } = await supabaseServiceRole
+        .from('redirect_clicks')
+        .insert({
+          project_id: redirectRow.project_id,
+          redirect_slug_id: redirectRow.id,
+          group_id: selected.id,
+          session_id: sid,
+          utm_campaign: clickUtmCampaign,
+          fbclid: clickFbclid,
+        })
+        .select('id')
+        .single();
+
+      const hasUtm = [utm_source, utm_medium, utm_campaign, utm_content, utm_term].some((v) => v);
+      if (hasUtm) {
+        await supabaseServiceRole.from('redirect_visits').insert({
+          project_id: redirectRow.project_id,
+          redirect_slug_id: redirectRow.id,
+          utm_source,
+          utm_medium,
+          utm_campaign,
+          utm_content,
+          utm_term,
+          status: 'complete',
+        });
+      }
+
+      if (sid && clickRow?.id) {
+        await supabaseServiceRole.from('vsl_events').insert({
+          session_id: sid,
+          project_id: redirectRow.project_id,
+          event_name: 'REDIRECT_SELECTED',
+          event_id: crypto.randomUUID(),
+          metadata: { redirect_slug: slug, group_id: selected.id, click_id: clickRow.id },
+        });
+      }
+    });
+
+    redirect(selected.invite_url);
   }
 
+  // ── MODO TEMPORIZADO ─────────────────────────────────────────────────────────
+  // Tracking síncrono para obter click_id e visit_id que o client usa
+  let clickUtmCampaign: string | null = null;
+  let clickFbclid: string | null = null;
+  if (sid) {
+    const { data: sess } = await supabaseServiceRole
+      .from('vsl_sessions')
+      .select('utm_campaign, fbclid')
+      .eq('id', sid)
+      .single();
+    if (sess) {
+      clickUtmCampaign = sess.utm_campaign ?? null;
+      clickFbclid = sess.fbclid ?? null;
+    }
+  }
+
+  const [{ data: clickRow }, logoResult] = await Promise.all([
+    supabaseServiceRole
+      .from('redirect_clicks')
+      .insert({
+        project_id: redirectRow.project_id,
+        redirect_slug_id: redirectRow.id,
+        group_id: selected.id,
+        session_id: sid,
+        utm_campaign: clickUtmCampaign,
+        fbclid: clickFbclid,
+      })
+      .select('id')
+      .single(),
+    project.logo_path
+      ? supabaseServiceRole.storage.from('brand-assets').createSignedUrl(project.logo_path, 3600)
+      : Promise.resolve({ data: null }),
+  ]);
+
+  let visitId: string | null = null;
+  const hasUtm = [utm_source, utm_medium, utm_campaign, utm_content, utm_term].some((v) => v);
+  if (hasUtm) {
+    const { data: visitRow } = await supabaseServiceRole
+      .from('redirect_visits')
+      .insert({
+        project_id: redirectRow.project_id,
+        redirect_slug_id: redirectRow.id,
+        utm_source,
+        utm_medium,
+        utm_campaign,
+        utm_content,
+        utm_term,
+        status: 'pending',
+      })
+      .select('id')
+      .single();
+    if (visitRow?.id) visitId = visitRow.id;
+  }
+
+  if (sid && clickRow?.id) {
+    after(async () => {
+      await supabaseServiceRole.from('vsl_events').insert({
+        session_id: sid,
+        project_id: redirectRow.project_id,
+        event_name: 'REDIRECT_SELECTED',
+        event_id: crypto.randomUUID(),
+        metadata: { redirect_slug: slug, group_id: selected.id, click_id: clickRow.id },
+      });
+    });
+  }
+
+  const logoUrl = (logoResult as { data: { signedUrl: string } | null })?.data?.signedUrl ?? null;
+
   return (
-    <main className="min-h-screen bg-gray-950 text-white flex flex-col items-center justify-center p-6">
-      {data?.logo_url && (
-        <img
-          src={data.logo_url}
-          alt={data.project_name}
-          className="max-w-[200px] max-h-24 object-contain mb-8"
-        />
-      )}
-      <h1 className="text-xl font-semibold text-center mb-4">
-        Enviando você para o grupo de WhatsApp...
-      </h1>
-      <div className="text-4xl font-bold text-green-400 tabular-nums">
-        {countdown}
-      </div>
-    </main>
+    <RedirectCountdownClient
+      inviteUrl={selected.invite_url}
+      timerSeconds={timerSeconds}
+      logoUrl={logoUrl}
+      projectName={project.name}
+      pixelId={project.pixel_id ?? null}
+      clickId={clickRow?.id ?? ''}
+      visitId={visitId}
+    />
   );
 }

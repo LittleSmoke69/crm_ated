@@ -313,8 +313,30 @@ async function handleParticipantAdd(
     const raw =
       p?.phoneNumber ?? p?.id ?? p?.jid ?? (typeof p === 'string' ? p : null);
     if (!raw) continue;
-    const phoneE164 = normalizeToE164BR(raw) ?? (raw.includes('@') ? null : normalizeToE164BR('55' + raw.replace(/\D/g, '')));
-    if (!phoneE164) continue;
+    const phoneE164 = normalizeToE164BR(raw);
+
+    // Número inválido/não-brasileiro → remover automaticamente do grupo
+    if (!phoneE164) {
+      const rawDigits = String(raw).replace(/\D/g, '') || String(raw);
+      const idKey = rawDigits.slice(0, 30);
+      const already = await actionAlreadyDone(config.id, event.id, 'remove_invalid_number', groupJid, idKey);
+      if (!already) {
+        const removeResult = await removeParticipant(config.master_instance_id, groupJid, raw);
+        await recordAction(
+          config.id,
+          bancaId,
+          userId,
+          event.id,
+          groupJid,
+          null,
+          'remove_invalid_number',
+          removeResult.success ? 'success' : 'fail',
+          removeResult.error ?? null,
+          { raw_jid: raw, reason: 'invalid_br_number', idKey }
+        );
+      }
+      continue;
+    }
 
     const already = await actionAlreadyDone(
       config.id,
