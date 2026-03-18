@@ -56,6 +56,8 @@ export default function AdminRedirectPage() {
   const [weights, setWeights] = useState<Record<string, number>>({});
   const [saving, setSaving] = useState(false);
   const [savingPixel, setSavingPixel] = useState(false);
+  const [savingTimer, setSavingTimer] = useState(false);
+  const [redirectTimerSeconds, setRedirectTimerSeconds] = useState<number>(3);
   const [togglingId, setTogglingId] = useState<string | null>(null);
   const [copyDone, setCopyDone] = useState(false);
   const [pixelId, setPixelId] = useState('');
@@ -84,6 +86,7 @@ export default function AdminRedirectPage() {
         setActiveGroups(json.data.active_groups ?? 0);
         if (json.data.project_id) setProjectId(json.data.project_id);
         setPixelId(json.data.pixel_id ?? '');
+        setRedirectTimerSeconds(json.data.redirect_timer_seconds ?? 3);
         setUtmVisits(json.data.utm_visits ?? []);
         setUtmSummary(json.data.utm_summary ?? { total: 0, by_source: {}, by_medium: {}, by_campaign: {}, by_source_medium: {}, by_day: {}, sample_size: 0 });
         setLoading(false);
@@ -229,6 +232,27 @@ export default function AdminRedirectPage() {
     });
   };
 
+  const saveTimer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userId || !projectId) return;
+    setSavingTimer(true);
+    try {
+      const res = await fetch('/api/admin/redirect/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({ project_id: projectId, redirect_timer_seconds: redirectTimerSeconds }),
+      });
+      const json = await res.json();
+      if (json?.data) {
+        setRedirectTimerSeconds(json.data.redirect_timer_seconds ?? redirectTimerSeconds);
+      } else {
+        alert(json?.error || 'Erro ao salvar timer');
+      }
+    } finally {
+      setSavingTimer(false);
+    }
+  };
+
   const savePixel = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userId || !projectId) return;
@@ -320,6 +344,44 @@ export default function AdminRedirectPage() {
                 >
                   {savingPixel ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                   Salvar pixel
+                </button>
+              </form>
+            </section>
+            <section className="bg-white border border-gray-200 rounded-xl shadow-sm p-4">
+              <h2 className="font-semibold text-gray-800 text-sm mb-1">Timer do Redirect</h2>
+              <p className="text-xs text-gray-500 mb-3">Tempo antes de redirecionar na página <span className="font-mono text-gray-700">/r/{redirectSlug ?? ''}</span>. Use <strong>0</strong> para redirect instantâneo.</p>
+              <form onSubmit={saveTimer} className="space-y-3">
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={redirectTimerSeconds === 0}
+                      onChange={(e) => setRedirectTimerSeconds(e.target.checked ? 0 : 3)}
+                      className="w-4 h-4 rounded border-gray-300 text-[#8CD955] focus:ring-[#8CD955]"
+                    />
+                    <span className="text-sm font-medium text-gray-700">Instantâneo (0 seg)</span>
+                  </label>
+                </div>
+                {redirectTimerSeconds > 0 && (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      max={300}
+                      value={redirectTimerSeconds}
+                      onChange={(e) => setRedirectTimerSeconds(Math.max(1, Math.min(300, Number(e.target.value) || 1)))}
+                      className="w-24 border border-gray-300 rounded-xl px-3 py-2 text-gray-800 text-center font-semibold focus:ring-2 focus:ring-[#8CD955]/50 focus:border-[#8CD955] outline-none"
+                    />
+                    <span className="text-sm text-gray-600">segundo{redirectTimerSeconds !== 1 ? 's' : ''}</span>
+                  </div>
+                )}
+                <button
+                  type="submit"
+                  disabled={savingTimer}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-gray-700 text-white font-medium rounded-xl hover:bg-gray-800 transition disabled:opacity-50"
+                >
+                  {savingTimer ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                  Salvar timer
                 </button>
               </form>
             </section>

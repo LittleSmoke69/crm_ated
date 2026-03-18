@@ -273,13 +273,14 @@ export default function AdminAntiSpamPage() {
       const res = await fetch('/api/groups?allInstances=1', { headers: { 'X-User-Id': userId } });
       const json = await res.json();
       if (json.success && Array.isArray(json.data)) {
-        setSavedGroups(
-          json.data.map((g: { group_id: string; group_subject?: string; instance_name?: string }) => ({
-            group_id: g.group_id,
-            group_subject: g.group_subject || g.group_id,
-            instance_name: g.instance_name ?? '',
-          }))
-        );
+        const mapped = json.data.map((g: { group_id: string; group_subject?: string; instance_name?: string }) => ({
+          group_id: g.group_id,
+          group_subject: g.group_subject || g.group_id,
+          instance_name: g.instance_name ?? '',
+        }));
+        // Deduplicar por group_id — pode vir duplicado quando allInstances=1
+        const unique = Array.from(new Map(mapped.map((g: { group_id: string }) => [g.group_id, g])).values()) as typeof mapped;
+        setSavedGroups(unique);
       } else {
         setSavedGroups([]);
       }
@@ -1002,7 +1003,7 @@ export default function AdminAntiSpamPage() {
                       </button>
                     </div>
                     <ul className="space-y-2 max-h-[360px] overflow-y-auto rounded-lg border border-gray-200 dark:border-[#404040] p-3">
-                    {savedGroups.map((g) => {
+                    {Array.from(new Map(savedGroups.map((g) => [g.group_id, g])).values()).map((g) => {
                       const isProtected = protectedGroupIds.has(g.group_id);
                       const busy = togglingGroupId === g.group_id;
                       return (

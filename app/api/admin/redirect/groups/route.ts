@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
 
     const { data: project } = await supabaseServiceRole
       .from('vsl_projects')
-      .select('slug, pixel_id')
+      .select('slug, pixel_id, redirect_timer_seconds')
       .eq('id', projectId)
       .single();
     if (!project) return errorResponse('Projeto não encontrado', 404);
@@ -42,7 +42,7 @@ export async function GET(req: NextRequest) {
       .eq('slug', project.slug)
       .single();
     const emptyUtmSummary = { total: 0, by_source: {}, by_medium: {}, by_campaign: {}, by_source_medium: {}, by_day: {}, sample_size: 0 };
-    if (!redirectRow) return successResponse({ groups: [], redirect_slug_id: null, project_id: projectId, redirect_slug: project.slug, pixel_id: project.pixel_id ?? null, total_clicks: 0, total_groups: 0, active_groups: 0, utm_visits: [], utm_summary: emptyUtmSummary });
+    if (!redirectRow) return successResponse({ groups: [], redirect_slug_id: null, project_id: projectId, redirect_slug: project.slug, pixel_id: project.pixel_id ?? null, redirect_timer_seconds: project.redirect_timer_seconds ?? 3, total_clicks: 0, total_groups: 0, active_groups: 0, utm_visits: [], utm_summary: emptyUtmSummary });
 
     const { data: groups } = await supabaseServiceRole
       .from('redirect_groups')
@@ -124,6 +124,7 @@ export async function GET(req: NextRequest) {
       redirect_slug: project.slug,
       project_id: projectId,
       pixel_id: project.pixel_id ?? null,
+      redirect_timer_seconds: project.redirect_timer_seconds ?? 3,
       total_clicks,
       total_groups: list.length,
       active_groups: list.filter((g: { is_active: boolean }) => g.is_active).length,

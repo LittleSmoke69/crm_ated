@@ -19,7 +19,7 @@ export async function PATCH(req: NextRequest) {
 
     const payload: Record<string, unknown> = { updated_at: new Date().toISOString() };
     if (redirect_timer_seconds !== undefined) {
-      const sec = Math.min(60, Math.max(1, Math.round(redirect_timer_seconds)));
+      const sec = Math.min(300, Math.max(0, Math.round(redirect_timer_seconds)));
       payload.redirect_timer_seconds = sec;
     }
 
