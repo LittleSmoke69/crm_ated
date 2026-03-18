@@ -284,7 +284,7 @@ const TransferidoContent = () => {
             break;
           }
           if (thisLoadId !== loadIdRef.current) break;
-          let result: { success?: boolean; data?: unknown[]; error?: string; meta?: { has_more_pages_in_banca?: boolean; total_bancas?: number } };
+          let result: { success?: boolean; data?: unknown[]; error?: string; meta?: { has_more_pages_in_banca?: boolean; total_bancas?: number; totalBancas?: number } };
           try {
             result = await res.json();
           } catch (parseErr) {
@@ -312,7 +312,7 @@ const TransferidoContent = () => {
           }
           const leads: any[] = Array.isArray(result.data) ? result.data : [];
           const meta = result.meta ?? {};
-          const metaTotal = meta.total_bancas ?? result.meta?.totalBancas;
+          const metaTotal = meta.total_bancas ?? meta.totalBancas;
           if (typeof metaTotal === 'number' && metaTotal > 0) totalBancas = metaTotal;
           hasMorePagesInBanca = !!meta.has_more_pages_in_banca;
           const chunkFormatted = leads.map(formatLead);
