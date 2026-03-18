@@ -112,8 +112,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       }
     }
 
-    const sourceInBanca = await isConsultantInBanca(ctx.bancaId, sourceEmail);
-    if (!sourceInBanca) return errorResponse('O consultor doador não pertence à banca selecionada.', 400);
+    // Doador pode ser qualquer usuário do sistema; a disponibilidade de leads é validada no CRM abaixo.
     for (const c of validConsultores) {
       const email = emailById.get(c.consultor_id);
       if (email && !(await isConsultantInBanca(ctx.bancaId, email))) {

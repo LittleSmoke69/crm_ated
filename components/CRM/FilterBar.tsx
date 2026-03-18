@@ -270,8 +270,13 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
             placeholder="Buscar por nome, email ou telefone..."
             value={searchInputValue}
             onChange={(e) => setSearchInputValue(e.target.value)}
-            onBlur={() => onSearch(searchInputValue)}
-            onKeyDown={(e) => { if (e.key === 'Enter') onSearch(searchInputValue); }}
+            onBlur={(e) => onSearch(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                onSearch((e.target as HTMLInputElement).value);
+              }
+            }}
             className="w-full pl-10 pr-4 py-2.5 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#555] rounded-xl text-sm text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 focus:bg-gray-50 dark:focus:bg-[#333] focus:border-[#8CD955]/40 transition-all"
           />
         </div>

@@ -973,60 +973,18 @@ export async function getDashboardDataByBancaId({ bancaId, dateFrom, dateTo, met
   const gerentesProfiles = (profilesInBanca || []).filter((p: { status: string }) => p.status === 'gerente');
   const consultoresInBanca = (profilesInBanca || []).filter((p: { status: string }) => p.status === 'consultor');
 
-  let externalMetrics = null;
-  try {
-    const cleanBancaUrl = normalizeBancaUrl(bancaUrl);
-    const externalApiUrl = new URL(`${cleanBancaUrl}/api/crm/dashboard-metrics`);
-    if (dateFrom) externalApiUrl.searchParams.append('date_from', dateFrom);
-    if (dateTo) externalApiUrl.searchParams.append('date_to', dateTo);
-    const apiKey = process.env.CRM_API_KEY;
-    const res = await fetch(externalApiUrl.toString(), {
-      method: 'GET',
-      headers: { Accept: 'application/json', ...(apiKey && { 'X-API-KEY': apiKey }) },
-    });
-    if (res.ok) {
-      const data = await res.json();
-      const metrics = data?.metrics ?? data;
-      if (metrics && (metrics.total_leads !== undefined || metrics.total_deposited !== undefined)) {
-        externalMetrics = {
-          total_leads: Number(metrics.total_leads) || 0,
-          total_deposited: Number(metrics.total_deposited) || 0,
-          total_bets: Number(metrics.total_bets) || 0,
-          total_prizes: Number(metrics.total_prizes) || 0,
-          total_withdrawals: (Number(metrics.total_withdrawals) ?? Number(metrics.total_prizes)) || 0,
-          awarded_clients_count: Number(metrics.awarded_clients_count) || 0,
-          total_depositos_count: Number(metrics.total_depositos_count) || 0,
-          active_leads: Number(metrics.active_leads) || 0,
-          conversion_rate: Number(metrics.conversion_rate) || 0,
-          ltv_avg: Number(metrics.ltv_avg) || 0,
-          net_profit: Number(metrics.net_profit) ?? (Number(metrics.total_deposited) || 0) - (Number(metrics.total_prizes) || 0),
-        };
-        console.log('[DonoBanca Service] getDashboardDataByBancaId - Métricas agregadas (sem consultant):', {
-          total_depositos_count: externalMetrics.total_depositos_count,
-          total_depositos_count_veio_na_api: metrics.total_depositos_count !== undefined && metrics.total_depositos_count !== null,
-        });
-      }
-    }
-  } catch (e: any) {
-    console.warn('[DonoBanca Service] getDashboardDataByBancaId - Erro métricas externas:', e?.message);
-  }
-
-  const allConsultantsData: Array<{ id: string; email: string; name: string; total_deposited: number; total_leads: number; net_profit: number }> = [];
   const cleanBancaUrl = normalizeBancaUrl(bancaUrl);
+  const allConsultantsData: Array<{ id: string; email: string; name: string; total_deposited: number; total_leads: number; net_profit: number }> = [];
 
-  // Mesma forma que o CRM: get-indicateds-by-consultant com consultant=email (um por consultor/gerente)
-  const consultantEmailsBanca: string[] = [];
-  for (const p of profilesInBanca || []) {
-    if (p.email?.trim()) consultantEmailsBanca.push(p.email.trim());
-  }
+  // Única fonte de dados: get-indicateds-by-consultant SEM consultant (banca + período). Preenche métricas e tabela de gerentes.
+  let indicateds: IndicatedLead[] = [];
+  let externalMetrics: ExternalMetricsShape | null = null;
   let metricsByConsultantEmailBanca = new Map<string, ConsultantAggregatedMetrics>();
   try {
-    const indicateds =
-      consultantEmailsBanca.length > 0
-        ? await fetchIndicatedsByConsultants(cleanBancaUrl, dateFrom, dateTo, consultantEmailsBanca)
-        : await fetchIndicatedsByPeriod(cleanBancaUrl, dateFrom, dateTo);
+    indicateds = await fetchIndicatedsByPeriod(cleanBancaUrl, dateFrom, dateTo);
+    externalMetrics = computeExternalMetricsFromLeads(indicateds);
     metricsByConsultantEmailBanca = aggregateIndicatedsByConsultant(indicateds);
-    console.log('[DonoBanca Service] getDashboardDataByBancaId - Indicados agregados por consultor:', metricsByConsultantEmailBanca.size);
+    console.log('[DonoBanca Service] getDashboardDataByBancaId - get-indicateds-by-consultant (banca/período):', indicateds.length, 'leads → métricas e agregado por consultor:', metricsByConsultantEmailBanca.size);
   } catch (err: any) {
     console.warn('[DonoBanca Service] getDashboardDataByBancaId - Erro ao buscar indicados:', err?.message);
   }

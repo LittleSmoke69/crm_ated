@@ -300,66 +300,67 @@ export default function DonoBancaHierarquia({
     return { dateFrom, dateTo };
   };
 
+  const BATCH_SIZE = 500;
+
   const checkAuthorization = async () => {
     if (!userId) return;
-    
+
     try {
-      // Sempre usa loading específico (ofuscado) para não travar a página
       setLoadingMetrics(true);
       setExternalMetricsError(null);
-      
+
       const { dateFrom, dateTo } = getDateRange();
-      
-      // Monta a URL com parâmetros de data e banca_id (para super_admin/admin)
-      let url = '/api/dono-banca/dashboard';
-      const params = new URLSearchParams();
-      if (dateFrom) params.append('date_from', dateFrom);
-      if (dateTo) params.append('date_to', dateTo);
-      if (showBancaSelector && selectedBancaId) params.append('banca_id', selectedBancaId);
-      if (params.toString()) url += `?${params.toString()}`;
-      
-      const response = await fetch(url, {
-        headers: { 'X-User-Id': userId as string }
-      });
-      const result = await response.json();
-      
-      console.log('[Frontend] Response status:', response.status);
-      console.log('[Frontend] Result success:', result.success);
-      console.log('[Frontend] Result data:', result.data ? 'present' : 'missing');
-      console.log('[Frontend] Result error:', result.error);
-      
-      if (response.ok && result.success) {
-        // Se a API retornou sucesso, o usuário é dono de banca
-        console.log('[Frontend] Autorização OK - Usuário é dono de banca');
-        setIsAuthorized(true);
-        
-        // SEMPRE atualiza os gerentes quando os dados são buscados
-        // As métricas dos gerentes mudam conforme o período de data selecionado
-        setGerentes(result.data?.gerentes || []);
-        
-        // Atualiza Top 5 Consultores
-        setTop5Consultants(result.data?.top5Consultants || []);
-        
-        // Define métricas externas e erro se houver
-        if (result.data?.externalMetrics) {
-          setExternalMetrics(result.data.externalMetrics);
-          setExternalMetricsError(null);
-        } else {
-          setExternalMetrics(null);
-          // Se tem banca_url mas não tem métricas, houve erro
-          if (result.data?.externalMetricsError) {
-            setExternalMetricsError(result.data.externalMetricsError);
+
+      const buildUrl = (offset: number, limit: number) => {
+        const params = new URLSearchParams();
+        if (dateFrom) params.append('date_from', dateFrom);
+        if (dateTo) params.append('date_to', dateTo);
+        if (showBancaSelector && selectedBancaId) params.append('banca_id', selectedBancaId);
+        params.set('limit', String(limit));
+        params.set('offset', String(offset));
+        return `/api/dono-banca/dashboard?${params.toString()}`;
+      };
+
+      let offset = 0;
+      let hasMore = true;
+      let isFirstBatch = true;
+
+      while (hasMore) {
+        const url = buildUrl(offset, BATCH_SIZE);
+        const response = await fetch(url, {
+          headers: { 'X-User-Id': userId as string }
+        });
+        const result = await response.json();
+
+        if (!response.ok || !result.success) {
+          if (isFirstBatch) {
+            console.error('[Frontend] Erro na autorização:', result.error || result.message);
+            setIsAuthorized(false);
           }
+          break;
         }
-        
-        setBancaName(result.data?.bancaInfo?.name || null);
-        setBancaId(result.data?.bancaId || null);
-      } else {
-        // Se a API retornou erro, o usuário não é dono de banca
-        console.error('[Frontend] Erro na autorização:', result.error || result.message);
-        console.error('[Frontend] Response status:', response.status);
-        console.error('[Frontend] Full result:', JSON.stringify(result, null, 2));
-        setIsAuthorized(false);
+
+        const data = result.data;
+        if (isFirstBatch) {
+          setIsAuthorized(true);
+          setGerentes(data?.gerentes || []);
+          setTop5Consultants(data?.top5Consultants || []);
+          if (data?.externalMetrics) {
+            setExternalMetrics(data.externalMetrics);
+            setExternalMetricsError(null);
+          } else {
+            setExternalMetrics(null);
+            if (data?.externalMetricsError) setExternalMetricsError(data.externalMetricsError);
+          }
+          setBancaName(data?.bancaInfo?.name || null);
+          setBancaId(data?.bancaId || null);
+          isFirstBatch = false;
+        } else {
+          setGerentes((prev) => [...prev, ...(data?.gerentes || [])]);
+        }
+
+        hasMore = data?.hasMore === true;
+        offset += BATCH_SIZE;
       }
     } catch (error) {
       console.error('[Frontend] Erro ao verificar autorização:', error);

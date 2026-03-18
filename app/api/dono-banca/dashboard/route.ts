@@ -16,31 +16,43 @@ export async function GET(req: NextRequest) {
     const dateFrom = searchParams.get('date_from');
     const dateTo = searchParams.get('date_to');
     const bancaId = searchParams.get('banca_id')?.trim() || null;
+    const limit = Math.min(Math.max(parseInt(searchParams.get('limit') ?? '500', 10) || 500, 1), 1000);
+    const offset = Math.max(parseInt(searchParams.get('offset') ?? '0', 10) || 0, 0);
 
     const isAdminOrSuperAdmin = profile?.status === 'super_admin' || profile?.status === 'admin';
     const isDonoBanca = profile?.status === 'dono_banca';
+
+    let data: Awaited<ReturnType<typeof getDonoBancaDashboardData>> | Awaited<ReturnType<typeof getDashboardDataByBancaId>>;
 
     // Super_admin, admin ou cargo personalizado com gestao_banca: precisa selecionar banca
     if (isAdminOrSuperAdmin || !isDonoBanca) {
       if (!bancaId) {
         return errorResponse('Informe banca_id na URL para visualizar os dados da banca.', 400);
       }
-      const data = await getDashboardDataByBancaId({
+      data = await getDashboardDataByBancaId({
         bancaId,
         dateFrom: dateFrom ?? undefined,
         dateTo: dateTo ?? undefined,
       });
-      return successResponse(data);
+    } else {
+      // Dono de banca: comportamento original (usa banca do perfil)
+      data = await getDonoBancaDashboardData({
+        userId,
+        dateFrom,
+        dateTo
+      });
     }
 
-    // Dono de banca: comportamento original (usa banca do perfil)
-    const data = await getDonoBancaDashboardData({
-      userId,
-      dateFrom,
-      dateTo
-    });
+    const totalGerentes = data.gerentes?.length ?? 0;
+    const gerentesSlice = (data.gerentes ?? []).slice(offset, offset + limit);
+    const hasMore = offset + gerentesSlice.length < totalGerentes;
 
-    return successResponse(data);
+    return successResponse({
+      ...data,
+      gerentes: gerentesSlice,
+      totalGerentes,
+      hasMore,
+    });
   } catch (err: any) {
     console.error('[Dashboard API] Erro:', err.message);
 
