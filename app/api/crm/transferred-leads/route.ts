@@ -812,7 +812,8 @@ export async function GET(req: NextRequest) {
     if (batchMode) {
       console.log(`${LOG_PREFIX} Batch | Retornando ${combined.length} leads (banca ${currentBancaIndexForMeta ?? 0}, página ${currentPageReturned}).`);
     } else {
-      console.log(`${LOG_PREFIX} Total combinado: ${combined.length} (CRM transferidos: ${transferredOnly.length}, complemento log: ${extraLeads.length})`);
+      const complementCount = Math.max(0, combined.length - transferredOnly.length);
+      console.log(`${LOG_PREFIX} Total combinado: ${combined.length} (CRM transferidos: ${transferredOnly.length}, complemento log: ${complementCount})`);
     }
 
     // Filtro de data (São Paulo) - igual ao CRM principal
