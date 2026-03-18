@@ -553,10 +553,15 @@ export default function AdminLeadTransferPage() {
   /** Consultores da banca da solicitação (carregados ao abrir o modal de aprovar) */
   const [approveModalConsultants, setApproveModalConsultants] = useState<Consultant[]>([]);
   const [loadingApproveModalConsultants, setLoadingApproveModalConsultants] = useState(false);
-  /** Termo de busca no modal Aprovar (consultor doador: nome ou email) */
-  const [approveModalConsultantSearch, setApproveModalConsultantSearch] = useState('');
-  /** Observação opcional ao rejeitar a solicitação (modal Aprovar) */
-  const [approveModalRejectObservation, setApproveModalRejectObservation] = useState('');
+  /** Termo aplicado à lista do modal Aprovar (Enter ou clique fora do campo de busca no modal) */
+  const [approveModalConsultantSearchApplied, setApproveModalConsultantSearchApplied] = useState('');
+  const approveModalDonorSearchWrapRef = useRef<HTMLDivElement>(null);
+  const approveModalDonorSearchInputRef = useRef<HTMLInputElement>(null);
+  const [approveModalDonorSearchInputKey, setApproveModalDonorSearchInputKey] = useState(0);
+  /** Modal de confirmação de rejeição (abre ao clicar em Rejeitar no modal Aprovar) */
+  const [showRejectConfirmModal, setShowRejectConfirmModal] = useState(false);
+  /** Observação opcional no modal de confirmação de rejeição */
+  const [rejectConfirmObservation, setRejectConfirmObservation] = useState('');
   /** E-mail do doador ao redirecionar da aprovação para a aba Transferir (preenchido após loadConsultants) */
   const [transferFromSolicitationSourceEmail, setTransferFromSolicitationSourceEmail] = useState<string | null>(null);
   /** E-mail do consultor destino (recebedor) ao redirecionar da solicitação — preenchido quando consultants carregar */
@@ -764,13 +769,15 @@ export default function AdminLeadTransferPage() {
     setApproveFormConsultores([...(req.consultores || [])]);
     setApproveFormSourceConsultantId('');
     setApproveModalConsultants([]);
-    setApproveModalConsultantSearch('');
-    setApproveModalRejectObservation('');
+    setApproveModalConsultantSearchApplied('');
+    setApproveModalDonorSearchInputKey((k) => k + 1);
+    setShowRejectConfirmModal(false);
+    setRejectConfirmObservation('');
     setApproveModalOpen(true);
     if (bancaIdDaSolicitacao && userId) {
       approveModalLoadingRequestIdRef.current = requestId;
       setLoadingApproveModalConsultants(true);
-      fetch(`/api/admin/crm/consultants?banca_id=${encodeURIComponent(bancaIdDaSolicitacao)}&hierarchy_only=1&verify_crm=1`, { headers: headers() })
+      fetch(`/api/admin/crm/consultants?banca_id=${encodeURIComponent(bancaIdDaSolicitacao)}&all_profiles_for_donor=1`, { headers: headers() })
         .then(async (res) => {
           const json = await res.json();
           if (approveModalLoadingRequestIdRef.current !== requestId) return;
@@ -797,8 +804,14 @@ export default function AdminLeadTransferPage() {
     setApproveSubmitting(false);
     setApproveRejecting(false);
     setApproveModalConsultants([]);
-    setApproveModalConsultantSearch('');
-    setApproveModalRejectObservation('');
+    setApproveModalConsultantSearchApplied('');
+    setShowRejectConfirmModal(false);
+    setRejectConfirmObservation('');
+  };
+
+  const syncApproveModalDonorSearchFromInput = () => {
+    const v = approveModalDonorSearchInputRef.current?.value ?? '';
+    setApproveModalConsultantSearchApplied(v.trim());
   };
 
   /** Redireciona para a aba Transferir no step 3 (Filtros e buscar): banca e doador preenchidos e busca de leads disparada automaticamente (90 dias). */
@@ -904,7 +917,7 @@ export default function AdminLeadTransferPage() {
     }
   };
 
-  const handleRejectRequest = async () => {
+  const handleRejectRequest = async (observation?: string) => {
     if (!selectedRequestForApprove) return;
     setApproveRejecting(true);
     try {
@@ -912,13 +925,15 @@ export default function AdminLeadTransferPage() {
         method: 'PATCH',
         headers: headers(),
         body: JSON.stringify({
-        status: 'rejected',
-        rejection_observation: approveModalRejectObservation?.trim() || undefined,
-      }),
+          status: 'rejected',
+          rejection_observation: observation?.trim() || undefined,
+        }),
       });
       const json = await res.json();
       if (res.ok && json.success) {
         showToast('Solicitação rejeitada.', 'success');
+        setShowRejectConfirmModal(false);
+        setRejectConfirmObservation('');
         closeApproveModal();
         loadLeadRequests();
       } else {
@@ -929,6 +944,10 @@ export default function AdminLeadTransferPage() {
     } finally {
       setApproveRejecting(false);
     }
+  };
+
+  const confirmRejectFromModal = () => {
+    handleRejectRequest(rejectConfirmObservation);
   };
 
   const [reopeningRequestId, setReopeningRequestId] = useState<string | null>(null);
@@ -978,9 +997,9 @@ export default function AdminLeadTransferPage() {
     return [...list].sort((a, b) => (a.full_name || a.email || '').localeCompare(b.full_name || b.email || '', 'pt-BR'));
   }, [consultants, consultantOriginSearchQuery]);
 
-  /** Consultores do modal Aprovar: ordenados alfabeticamente (nome/email) e filtrados por busca. */
+  /** Consultores do modal Aprovar: lista filtrada só pelo termo aplicado (Enter ou blur no campo de busca). */
   const approveModalConsultantsSortedAndFiltered = React.useMemo(() => {
-    const q = approveModalConsultantSearch.trim().toLowerCase();
+    const q = approveModalConsultantSearchApplied.trim().toLowerCase();
     const list = !q
       ? approveModalConsultants
       : approveModalConsultants.filter((c) => {
@@ -991,7 +1010,7 @@ export default function AdminLeadTransferPage() {
     return [...list].sort((a, b) =>
       (a.full_name || a.email || '').localeCompare(b.full_name || b.email || '', 'pt-BR')
     );
-  }, [approveModalConsultants, approveModalConsultantSearch]);
+  }, [approveModalConsultants, approveModalConsultantSearchApplied]);
 
   const openConsultantOriginModal = () => {
     setConsultantOriginPendingEmail(sourceEmail?.trim() || null);
@@ -6926,7 +6945,13 @@ export default function AdminLeadTransferPage() {
       {/* Modal Aprovar solicitação de leads (consultor doador + edição) */}
       {approveModalOpen && selectedRequestForApprove && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
-          <div className="bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-hidden flex flex-col border border-gray-200 dark:border-gray-700">
+          <div
+            className="bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-hidden flex flex-col border border-gray-200 dark:border-gray-700"
+            onPointerDownCapture={(e) => {
+              if (approveModalDonorSearchWrapRef.current?.contains(e.target as Node)) return;
+              syncApproveModalDonorSearchFromInput();
+            }}
+          >
             <div className="p-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-[#A8E677] to-[#8CD955] text-white">
               <h2 className="text-lg font-bold">Aprovar solicitação</h2>
               <button type="button" onClick={closeApproveModal} className="hover:bg-white/20 p-1.5 rounded-xl transition-colors">
@@ -6955,17 +6980,24 @@ export default function AdminLeadTransferPage() {
                 ) : loadingApproveModalConsultants ? (
                   <div className="flex items-center gap-2 py-2 text-sm text-gray-500 dark:text-gray-400">
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    Carregando consultores da banca da solicitação...
+                    Carregando usuários...
                   </div>
                 ) : (
                   <>
-                    <div className="relative mb-2">
+                    <div className="relative mb-2" ref={approveModalDonorSearchWrapRef}>
                       <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-gray-400 pointer-events-none" />
                       <input
+                        key={approveModalDonorSearchInputKey}
+                        ref={approveModalDonorSearchInputRef}
                         type="text"
-                        value={approveModalConsultantSearch}
-                        onChange={(e) => setApproveModalConsultantSearch(e.target.value)}
-                        placeholder="Buscar por nome ou e-mail..."
+                        defaultValue=""
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            syncApproveModalDonorSearchFromInput();
+                          }
+                        }}
+                        placeholder="Buscar por nome ou e-mail (Enter ou clique no modal para filtrar)"
                         className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white dark:placeholder:text-gray-400 rounded-lg text-sm placeholder:text-gray-500 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
                       />
                     </div>
@@ -7003,30 +7035,18 @@ export default function AdminLeadTransferPage() {
                     </div>
                   </>
                 )}
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1.5">Consultores da banca da solicitação. Ao clicar em &quot;Ir para transferir&quot;, a aba Transferir abrirá com esta banca e o doador já preenchidos no passo Buscar.</p>
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-gray-600 dark:text-gray-400 uppercase mb-1">Observação da rejeição (opcional)</label>
-                <textarea
-                  value={approveModalRejectObservation}
-                  onChange={(e) => setApproveModalRejectObservation(e.target.value)}
-                  placeholder="Ex.: leads insuficientes no momento..."
-                  rows={2}
-                  maxLength={1000}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-[#404040] dark:bg-[#333] dark:text-white rounded-lg text-sm placeholder:text-gray-500 focus:ring-2 focus:ring-red-500/50 focus:border-red-500"
-                />
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Será enviada ao gerente junto com o status de rejeitada.</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1.5">Digite no campo e pressione <strong>Enter</strong> ou clique em <strong>outra área do modal</strong> (lista, botões…) para atualizar a lista filtrada. Clicar só dentro do campo de busca não altera o filtro até uma dessas ações.</p>
               </div>
             </div>
             <div className="p-4 border-t border-gray-100 dark:border-gray-700 space-y-3">
               <div className="flex gap-3">
                 <button
                   type="button"
-                  onClick={handleRejectRequest}
-                  disabled={approveRejecting || approveSubmitting}
+                  onClick={() => setShowRejectConfirmModal(true)}
+                  disabled={approveSubmitting}
                   className="flex-1 px-4 py-2.5 rounded-xl text-sm font-bold bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50"
                 >
-                  {approveRejecting ? 'Rejeitando...' : 'Rejeitar'}
+                  Rejeitar
                 </button>
                 <button
                   type="button"
@@ -7052,6 +7072,71 @@ export default function AdminLeadTransferPage() {
               >
                 <History className="w-4 h-4" />
                 Ir para leads expirados e transferências resolvidas
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de confirmação de rejeição (abre ao clicar em Rejeitar no modal Aprovar) */}
+      {showRejectConfirmModal && selectedRequestForApprove && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="modal-reject-confirm-title">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl w-full max-w-md border border-gray-200 dark:border-gray-700 overflow-hidden">
+            <div className="p-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-red-500/10 dark:bg-red-500/20">
+              <h2 id="modal-reject-confirm-title" className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-red-600 dark:text-red-400 flex-shrink-0" />
+                Confirmar rejeição
+              </h2>
+              <button
+                type="button"
+                onClick={() => { setShowRejectConfirmModal(false); setRejectConfirmObservation(''); }}
+                disabled={approveRejecting}
+                className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-200 dark:hover:bg-[#404040] transition-colors disabled:opacity-50"
+                aria-label="Fechar"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <p className="text-sm text-gray-700 dark:text-gray-200">
+                Deseja rejeitar a solicitação de <strong>{selectedRequestForApprove.gerente_name}</strong>? A observação abaixo é opcional e será enviada ao gerente.
+              </p>
+              <div>
+                <label className="block text-xs font-bold text-gray-600 dark:text-gray-400 uppercase mb-1">Observação da rejeição (opcional)</label>
+                <textarea
+                  value={rejectConfirmObservation}
+                  onChange={(e) => setRejectConfirmObservation(e.target.value)}
+                  placeholder="Ex.: leads insuficientes no momento..."
+                  rows={3}
+                  maxLength={1000}
+                  disabled={approveRejecting}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-[#404040] dark:bg-[#333] dark:text-white rounded-lg text-sm placeholder:text-gray-500 focus:ring-2 focus:ring-red-500/50 focus:border-red-500 disabled:opacity-60"
+                />
+              </div>
+            </div>
+            <div className="p-4 border-t border-gray-100 dark:border-gray-700 flex gap-3">
+              <button
+                type="button"
+                onClick={() => { setShowRejectConfirmModal(false); setRejectConfirmObservation(''); }}
+                disabled={approveRejecting}
+                className="flex-1 px-4 py-2.5 rounded-xl text-sm font-bold bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={confirmRejectFromModal}
+                disabled={approveRejecting}
+                className="flex-1 px-4 py-2.5 rounded-xl text-sm font-bold bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {approveRejecting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Rejeitando...
+                  </>
+                ) : (
+                  'Confirmar rejeição'
+                )}
               </button>
             </div>
           </div>

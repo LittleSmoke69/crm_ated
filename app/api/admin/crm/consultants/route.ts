@@ -39,6 +39,7 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
  * GET /api/admin/crm/consultants
  * Lista consultores da hierarquia da banca (apenas user_bancas + subordinados vinculados à banca).
  * Query: banca_id (obrigatório), hierarchy_only=0 (opcional), verify_crm=1 (opcional) — se verify_crm=1, filtra apenas consultores que têm conta na banca (CRM total-indicateds-by-consultant 200).
+ * all_profiles_for_donor=1 — lista todos os perfis com e-mail (modal consultor doador na aprovação de solicitação); banca_id só valida permissão do admin.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -53,6 +54,32 @@ export async function GET(req: NextRequest) {
 
     const ctx = await requireAdminLeadTransferContext(req, bancaId);
     console.log(`${LOG_PREFIX} GET context: userId=${ctx.userId}, bancaId=${ctx.bancaId}, crmBaseUrl=${ctx.crmBaseUrl}, bancaName=${ctx.bancaName ?? 'n/a'}`);
+
+    if (searchParams.get('all_profiles_for_donor') === '1') {
+      const { data: allProfiles, error: allErr } = await supabaseServiceRole
+        .from('profiles')
+        .select('id, email, full_name')
+        .not('email', 'is', null)
+        .order('full_name', { ascending: true, nullsFirst: false })
+        .limit(15000);
+      if (allErr) {
+        console.error(`${LOG_PREFIX} GET all_profiles_for_donor error:`, allErr);
+        return errorResponse('Erro ao listar usuários.', 500);
+      }
+      const consultants = (allProfiles ?? [])
+        .map((p: { id: string; email: string | null; full_name: string | null }) => {
+          const email = (p.email ?? '').trim();
+          if (!email) return null;
+          return {
+            id: p.id,
+            email,
+            full_name: ((p.full_name ?? p.email ?? '').trim() || email),
+          };
+        })
+        .filter(Boolean);
+      console.log(`${LOG_PREFIX} GET all_profiles_for_donor: ${consultants.length} usuário(s)`);
+      return successResponse({ consultants });
+    }
 
     // banca_ids é JSONB (array de UUIDs). Filtro "cs" (contains) exige JSON válido para evitar erro 22P02.
     const { data: userBancas, error: ubError } = await supabaseServiceRole
