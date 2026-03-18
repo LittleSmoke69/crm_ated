@@ -125,6 +125,7 @@ const TransferidoContent = () => {
     setBatchLoadInProgress(true);
     setBatchLoadFinished(false);
     setLoadingProgress({ totalLoaded: 0, currentBanca: 1, currentPage: 1, totalBancas: null });
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
     try {
       const baseUrl = new URL('/api/crm/transferred-leads', window.location.origin);
       if (targetUserId) {
@@ -183,6 +184,9 @@ const TransferidoContent = () => {
       const headers = { 'X-User-Id': userId };
       fullRequestAbortRef.current = new AbortController();
       const signal = fullRequestAbortRef.current.signal;
+      /** Timeout de 2 min por lote para evitar tela travada se a API demorar demais. */
+      const timeoutMs = 120_000;
+      timeoutId = setTimeout(() => fullRequestAbortRef.current?.abort(), timeoutMs);
 
       const formatLead = (l: any): Lead => {
         const fullName = `${l.name || ''} ${(l.last_name && l.last_name !== 'null' ? l.last_name : '')}`.trim() || 'Sem nome';
@@ -263,18 +267,47 @@ const TransferidoContent = () => {
           try {
             res = await fetch(batchUrl.toString(), { headers, signal });
           } catch (err: any) {
-            if (err?.name === 'AbortError') break;
+            if (timeoutId != null) {
+              clearTimeout(timeoutId);
+              timeoutId = null;
+            }
+            if (err?.name === 'AbortError') {
+              setLoading(false);
+              setFilterLoading(false);
+              break;
+            }
             if (thisLoadId !== loadIdRef.current) break;
             console.error('[Transferido] loadLeads | Erro de rede banca', bancaIndex, 'page', page, err);
             setError('Erro de conexão com o servidor');
+            setLoading(false);
+            setFilterLoading(false);
             break;
           }
           if (thisLoadId !== loadIdRef.current) break;
-          const result = await res.json();
+          let result: { success?: boolean; data?: unknown[]; error?: string; meta?: { has_more_pages_in_banca?: boolean; total_bancas?: number } };
+          try {
+            result = await res.json();
+          } catch (parseErr) {
+            if (timeoutId != null) {
+              clearTimeout(timeoutId);
+              timeoutId = null;
+            }
+            console.error('[Transferido] loadLeads | Resposta não é JSON válido', parseErr);
+            setError('Resposta inválida do servidor. Tente novamente.');
+            setLoading(false);
+            setFilterLoading(false);
+            break;
+          }
           if (signal.aborted) break;
           if (thisLoadId !== loadIdRef.current) break;
           if (!result.success) {
+            if (timeoutId != null) {
+              clearTimeout(timeoutId);
+              timeoutId = null;
+            }
             setError(result.error || 'Erro ao carregar leads transferidos');
+            setLoading(false);
+            setFilterLoading(false);
             break;
           }
           const leads: any[] = Array.isArray(result.data) ? result.data : [];
@@ -312,6 +345,10 @@ const TransferidoContent = () => {
         bancaIndex++;
       }
 
+      if (timeoutId != null) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
       if (thisLoadId !== loadIdRef.current) return;
       setLoading(false);
       setFilterLoading(false);
@@ -328,6 +365,7 @@ const TransferidoContent = () => {
         setBatchLoadFinished(true);
       });
     } catch (err) {
+      if (timeoutId != null) clearTimeout(timeoutId);
       if (thisLoadId !== loadIdRef.current) return;
       console.error('[Transferido] loadLeads | Erro:', err);
       setError('Erro de conexão com o servidor');
