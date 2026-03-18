@@ -508,11 +508,17 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    // Em batch mode (lote por banca/página): retornar só os transferidos do CRM para resposta rápida; complemento do log é pesado e atrasa a primeira tela.
+    let transferDateByLeadIdFromDb: Record<string, string> = {};
+    let vinculadoLeadIdsFromDb = new Set<string>();
+    let combined: any[];
+
+    if (!batchMode) {
     // Complemento: leads que constam nos nossos logs de transferência mas o CRM não gravou em "transferidos"
     const bancaIdsForLookup = listBancas.map((b) => b.id);
     type EntryRow = { lead_id: string; banca_id: string; created_at: string; resolution_status?: string | null; source_consultant_email?: string | null; lead_name?: string | null; lead_phone?: string | null; saldo_snapshot?: number | null; total_depositado_snapshot?: number | null; total_apostado_snapshot?: number | null; total_ganho_snapshot?: number | null; available_withdraw_snapshot?: number | null; total_saque_snapshot?: number | null; last_interaction_snapshot?: string | null };
-    let transferDateByLeadIdFromDb: Record<string, string> = {};
-    const vinculadoLeadIdsFromDb = new Set<string>();
+    transferDateByLeadIdFromDb = {};
+    vinculadoLeadIdsFromDb = new Set<string>();
     const selectFieldsFull = 'lead_id, banca_id, created_at, resolution_status, source_consultant_email, lead_name, lead_phone, saldo_snapshot, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, total_saque_snapshot, last_interaction_snapshot';
     const selectFieldsBasic = 'lead_id, banca_id, created_at, resolution_status, source_consultant_email, saldo_snapshot, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, total_saque_snapshot, last_interaction_snapshot';
     let dbEntriesResult = await supabaseServiceRole
@@ -789,18 +795,25 @@ export async function GET(req: NextRequest) {
 
     const combinedRaw = [...transferredOnly, ...extraLeads];
     const seenKeys = new Set<string>();
-    const combined = combinedRaw.filter((l: any) => {
+    combined = combinedRaw.filter((l: any) => {
       const key = `${l._bancaKey}-${String(l._originalId ?? l.id)}`;
       if (seenKeys.has(key)) return false;
       seenKeys.add(key);
       return true;
     });
+    } else {
+      combined = [...transferredOnly];
+    }
 
     if (combined.length === 0) {
       console.log(`${LOG_PREFIX} Nenhum lead transferido (nem do CRM nem do log Zaploto).`);
-      return successResponse([]);
+      return successResponse([], batchMode ? { meta: { total_bancas: totalBancasForMeta, has_more_pages_in_banca: false, current_page: currentPageReturned, batch_size: 0 } } : undefined);
     }
-    console.log(`${LOG_PREFIX} Total combinado: ${combined.length} (CRM transferidos: ${transferredOnly.length}, complemento log: ${extraLeads.length})`);
+    if (batchMode) {
+      console.log(`${LOG_PREFIX} Batch | Retornando ${combined.length} leads (banca ${currentBancaIndexForMeta ?? 0}, página ${currentPageReturned}).`);
+    } else {
+      console.log(`${LOG_PREFIX} Total combinado: ${combined.length} (CRM transferidos: ${transferredOnly.length}, complemento log: ${extraLeads.length})`);
+    }
 
     // Filtro de data (São Paulo) - igual ao CRM principal
     let filteredLeads = combined;
