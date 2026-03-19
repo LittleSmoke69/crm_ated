@@ -7,6 +7,12 @@ import { rateLimitService } from '@/lib/services/rate-limit-service';
 import { getUserEvolutionApi } from '@/lib/services/evolution-api-helper';
 import { evolutionApiSelector } from '@/lib/services/evolution-api-selector';
 import { getSubordinates } from '@/lib/middleware/permissions';
+import {
+  assertEvolutionCanReachWebhookBase,
+  buildInternalChatWebhookUrl,
+  EVOLUTION_CHAT_WEBHOOK_MESSAGE_EVENTS,
+  resolvePublicBaseUrlForWebhooks,
+} from '@/lib/server/evolution-chat-webhook-config';
 
 /**
  * GET /api/instances - Lista instâncias do usuário
@@ -230,7 +236,9 @@ export async function POST(req: NextRequest) {
       return errorResponse('Erro ao processar dados da requisição', 400);
     }
 
-    const { instanceName, isMaster, maturationType } = body;
+    const { instanceName, isMaster, maturationType, configureChatWebhook } = body;
+    /** Só registra webhook interno (/api/webhooks/evolution) quando o cliente marca explicitamente */
+    const shouldConfigureChatWebhook = configureChatWebhook === true;
 
     if (!instanceName) {
       return errorResponse('instanceName é obrigatório', 400);
@@ -334,40 +342,29 @@ export async function POST(req: NextRequest) {
 
     const normalizedBaseUrl = normalizeBaseUrl(selectedApi.base_url);
 
-    // Se for instância mestre, busca eventos habilitados e URL de produção
-    let enabledEvents: string[] = [];
-    let webhookUrl: string | null = null;
-    
-    if (isMaster === true) {
-      try {
-        // Busca configuração de eventos habilitados
-        const { data: eventsConfig } = await supabaseServiceRole
-          .from('webhook_events_config')
-          .select('enabled_events')
-          .eq('id', 'default')
-          .single();
-        
-        enabledEvents = eventsConfig?.enabled_events || [];
-        
-        // Obtém URL de produção (usando variável de ambiente ou headers da requisição)
-        const baseWebhookUrl = process.env.NEXT_PUBLIC_WEBHOOK_BASE_URL || 
-                                process.env.NEXT_PUBLIC_URL ||
-                                process.env.SITE_URL;
-        
-        if (baseWebhookUrl) {
-          webhookUrl = `${baseWebhookUrl}/api/webhooks/evolution/prod`;
-        } else {
-          // Fallback: usa headers da requisição
-          const origin = req.headers.get('origin') || req.headers.get('host') || req.headers.get('x-forwarded-host');
-          if (origin) {
-            const protocol = req.headers.get('x-forwarded-proto') || req.headers.get('x-forwarded-scheme') || 'https';
-            webhookUrl = origin.startsWith('http') ? `${origin}/api/webhooks/evolution/prod` : `${protocol}://${origin}/api/webhooks/evolution/prod`;
-          }
-        }
-        
-      } catch {
-        // Continuando sem webhook
+    /**
+     * Instância mestre: webhook fixo no sistema (`/api/webhooks/evolution`) para gravar
+     * todas as mensagens (upsert/update/delete/envio) em chat_conversations / chat_messages.
+     * Não depende de webhook_events_config nem de /evolution/prod (que só loga em evolution_webhook_events).
+     */
+    let masterChatWebhookUrl: string | null = null;
+    if (isMaster === true && shouldConfigureChatWebhook) {
+      const publicBase = resolvePublicBaseUrlForWebhooks(req);
+      if (!publicBase) {
+        return errorResponse(
+          'Instância mestre exige URL pública do app para registrar o webhook. Defina NEXT_PUBLIC_APP_URL ou NEXT_PUBLIC_WEBHOOK_BASE_URL (ou equivalente).',
+          400
+        );
       }
+      const reachErr = assertEvolutionCanReachWebhookBase(publicBase);
+      if (reachErr) {
+        return errorResponse(reachErr, 400);
+      }
+      const built = buildInternalChatWebhookUrl(publicBase);
+      if (!built.ok) {
+        return errorResponse(built.error, 500);
+      }
+      masterChatWebhookUrl = built.url;
     }
 
     // Cria instância na Evolution API selecionada pelo balanceador
@@ -376,9 +373,8 @@ export async function POST(req: NextRequest) {
       masterKey: selectedApi.api_key_global.trim(), // Remove espaços e garante string limpa
       apiKeyPreview: apiKeyPreview, // Preview para logs
       apiName: selectedApi.name, // Nome da API para logs de erro
-      isMaster: isMaster === true, // Flag para incluir webhook
-      enabledEvents: enabledEvents, // Eventos habilitados
-      webhookUrl: webhookUrl, // URL do webhook
+      isMaster: isMaster === true,
+      masterChatWebhookUrl,
       async createInstance(name: string, number: string, qrcode: boolean = true) {
         try {
           const requestUrl = `${this.baseUrl}/instance/create`;
@@ -393,16 +389,13 @@ export async function POST(req: NextRequest) {
             integration: 'WHATSAPP-BAILEYS',
           };
 
-          // Se for instância mestre e tiver webhook configurado, adiciona webhook
-          if (this.isMaster && this.webhookUrl && this.enabledEvents.length > 0) {
+          // Instância mestre: webhook interno que persiste mensagens no banco (chat)
+          if (this.isMaster && this.masterChatWebhookUrl) {
             requestBody.webhook = {
-              url: this.webhookUrl,
-              byEvents: false,
+              enabled: true,
+              url: this.masterChatWebhookUrl,
+              events: [...EVOLUTION_CHAT_WEBHOOK_MESSAGE_EVENTS],
               base64: true,
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              events: this.enabledEvents,
             };
           }
 
@@ -700,6 +693,7 @@ export async function POST(req: NextRequest) {
           apikey: instanceHash, // CRÍTICO: Salva o hash da instância (que é usado como apikey nos requests)
           is_master: isMaster === true, // Marca como instância mestre se solicitado
           maturation_type: maturationTypeValue, // virgem = auto maturação 5 dias; maturado = fluxo normal
+          webhook_configured: !!(isMaster === true && shouldConfigureChatWebhook && masterChatWebhookUrl),
         })
         .select()
         .single();

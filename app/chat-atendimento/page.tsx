@@ -35,12 +35,15 @@ import {
   Play,
   Pause,
   Square,
+  Headphones,
 } from 'lucide-react';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
 interface Message {
   id: string;
+  /** ID da mensagem no WhatsApp / Evolution (dedupe realtime vs envio) */
+  message_id?: string | null;
   text: string | null;
   direction: 'in' | 'out';
   status: string;
@@ -75,6 +78,8 @@ interface ChannelEvolution {
   id: string;
   instance_name: string;
   status: string;
+  /** Instância mestre vinculada à conta — oferecida como canal de atendimento */
+  is_master?: boolean;
 }
 
 interface ChannelWhatsAppOfficial {
@@ -433,6 +438,48 @@ type UserStatus = 'super_admin' | 'admin' | 'suporte' | string | null;
 
 const CONVERSATIONS_PAGE_SIZE = 10;
 const MESSAGES_PAGE_SIZE = 50;
+/** Cache local do histórico por conversa (sessionStorage) — reabrir sem depender só da rede */
+const MESSAGES_SESSION_CACHE_PREFIX = 'zaploto_atendimento_msgs_v1';
+const MESSAGES_SESSION_CACHE_MAX = 500;
+
+function messageTimestampMs(m: Message): number {
+  const t = m.timestamp;
+  if (typeof t === 'string') return parseInt(t, 10) * 1000;
+  return t > 1e12 ? t : t * 1000;
+}
+
+function sortMessagesChronological(list: Message[]): Message[] {
+  return [...list].sort((a, b) => messageTimestampMs(a) - messageTimestampMs(b));
+}
+
+function readMessagesFromSessionCache(userId: string, conversationId: string): Message[] | null {
+  if (typeof window === 'undefined' || !userId) return null;
+  try {
+    const raw = sessionStorage.getItem(`${MESSAGES_SESSION_CACHE_PREFIX}_${userId}_${conversationId}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Message[];
+    return Array.isArray(parsed) ? sortMessagesChronological(parsed) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeMessagesToSessionCache(userId: string, conversationId: string, messages: Message[]) {
+  if (typeof window === 'undefined' || messages.length === 0 || !userId) return;
+  try {
+    const sorted = sortMessagesChronological(messages);
+    const capped =
+      sorted.length > MESSAGES_SESSION_CACHE_MAX
+        ? sorted.slice(sorted.length - MESSAGES_SESSION_CACHE_MAX)
+        : sorted;
+    sessionStorage.setItem(
+      `${MESSAGES_SESSION_CACHE_PREFIX}_${userId}_${conversationId}`,
+      JSON.stringify(capped)
+    );
+  } catch (e) {
+    console.warn('[Chat Atendimento] Não foi possível gravar cache de mensagens:', e);
+  }
+}
 
 // ─── ChatPage ─────────────────────────────────────────────────────────────────
 
@@ -446,6 +493,10 @@ export default function ChatPage() {
     evolution: ChannelEvolution[];
     whatsapp_official: ChannelWhatsAppOfficial[];
   }>({ evolution: [], whatsapp_official: [] });
+  const [channelsLoading, setChannelsLoading] = useState(true);
+  /** Só entra no chat após o usuário confirmar qual instância/canal vai usar no atendimento */
+  const [atendimentoGatePassed, setAtendimentoGatePassed] = useState(false);
+  const [pendingAtendimentoChannel, setPendingAtendimentoChannel] = useState<Channel | null>(null);
   const [selectedChannel, setSelectedChannel] = useState<Channel | null>(null);
 
   // Conversas
@@ -522,7 +573,11 @@ export default function ChatPage() {
 
   const authHeaders = (): Record<string, string> => (userId ? { 'X-User-Id': userId } : {});
   const canSelectChannel =
-    userStatus === 'super_admin' || userStatus === 'admin' || userStatus === 'suporte';
+    userStatus === 'super_admin' ||
+    userStatus === 'admin' ||
+    userStatus === 'suporte' ||
+    userStatus === 'gerente' ||
+    userStatus === 'consultor';
 
   const handleSignOut = async () => {
     if (typeof window !== 'undefined') {
@@ -552,17 +607,18 @@ export default function ChatPage() {
   // ── Canais ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!userId) return;
-    fetch('/api/chat/channels', { headers: authHeaders() })
+    setChannelsLoading(true);
+    fetch('/api/chat/channels?require_webhook=1', { headers: authHeaders() })
       .then((r) => r.json())
       .then((result) => {
         if (result.success && result.data) {
           const evo: ChannelEvolution[] = result.data.evolution || [];
           const wa: ChannelWhatsAppOfficial[] = result.data.whatsapp_official || [];
           setChannels({ evolution: evo, whatsapp_official: wa });
-          const firstChannel = evo.length > 0 ? evo[0] : wa.length > 0 ? wa[0] : null;
-          if (!selectedChannel && firstChannel) {
-            setSelectedChannel(firstChannel);
-          }
+          const firstChannel: Channel | null =
+            evo.length > 0 ? evo[0] : wa.length > 0 ? wa[0] : null;
+          // Pré-seleção na tela de instância (antes de abrir o chat); não define selectedChannel aqui
+          setPendingAtendimentoChannel((prev) => prev ?? firstChannel);
           // Pré-carrega conversas de TODOS os canais em paralelo
           const allChannels: Array<{ id: string; type: 'evolution' | 'whatsapp_official' }> = [
             ...evo.map((c) => ({ id: c.id, type: 'evolution' as const })),
@@ -586,8 +642,51 @@ export default function ChatPage() {
           });
         }
       })
-      .catch((e) => console.error('[Chat] canais:', e));
+      .catch((e) => console.error('[Chat] canais:', e))
+      .finally(() => setChannelsLoading(false));
   }, [userId]);
+
+  /** Enquanto o gate está aberto, sincroniza contatos/chats via Evolution API (servidor) para o canal Evolution em foco. */
+  const pendingEvolutionInstanceIdForGate =
+    !atendimentoGatePassed && pendingAtendimentoChannel?.type === 'evolution'
+      ? pendingAtendimentoChannel.id
+      : null;
+
+  useEffect(() => {
+    if (!userId || channelsLoading || !pendingEvolutionInstanceIdForGate) return;
+    const params = `instance_id=${pendingEvolutionInstanceIdForGate}&sync_from_evolution=1`;
+    fetch(`/api/chat/conversations?${params}`, { headers: authHeaders() })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.success && Array.isArray(res.data)) {
+          conversationsCacheRef.current[pendingEvolutionInstanceIdForGate] = res.data;
+        }
+        const meta = res.meta as { evolution_directory_sync?: string; evolution_sync_error?: string } | undefined;
+        if (meta?.evolution_directory_sync === 'error' && meta.evolution_sync_error) {
+          console.warn('[Chat Atendimento] Sincronização Evolution:', meta.evolution_sync_error);
+        }
+      })
+      .catch(() => {});
+  }, [userId, channelsLoading, pendingEvolutionInstanceIdForGate]);
+
+  const channelPickerKey = (c: Channel) => `${c.type}:${c.id}`;
+
+  const openAtendimentoWithPendingChannel = () => {
+    if (!pendingAtendimentoChannel) return;
+    setSelectedChannel(pendingAtendimentoChannel);
+    setAtendimentoGatePassed(true);
+    setSelectedConversationId('');
+    setChatSidebarOpen(true);
+  };
+
+  const reopenAtendimentoInstancePicker = () => {
+    setPendingAtendimentoChannel((prev) => selectedChannel ?? prev);
+    setAtendimentoGatePassed(false);
+    setSelectedChannel(null);
+    setSelectedConversationId('');
+    setConversations([]);
+    setMessages([]);
+  };
 
   // ── Carregar Conversas ─────────────────────────────────────────────────────
   const loadConversationsFromApi = useCallback(
@@ -605,13 +704,17 @@ export default function ChatPage() {
       try {
         const params =
           selectedChannel.type === 'evolution'
-            ? `instance_id=${selectedChannel.id}`
+            ? `instance_id=${selectedChannel.id}&sync_from_evolution=1`
             : `whatsapp_config_id=${selectedChannel.id}`;
 
         const response = await fetch(`/api/chat/conversations?${params}`, { headers: authHeaders() });
         const result = await response.json();
         if (result.success) {
           const list: Conversation[] = result.data || [];
+          const meta = result.meta as { evolution_directory_sync?: string; evolution_sync_error?: string } | undefined;
+          if (meta?.evolution_directory_sync === 'error' && meta.evolution_sync_error) {
+            console.warn('[Chat Atendimento] Sincronização Evolution:', meta.evolution_sync_error);
+          }
           conversationsCacheRef.current[selectedChannel.id] = list;
           setConversations(list);
           if (keepSelectionIfPresent) {
@@ -636,7 +739,17 @@ export default function ChatPage() {
 
   // Etiquetas disponíveis (criadas pelo admin) para filtro e para marcar conversas
   useEffect(() => {
-    if (!userId || !(userStatus === 'suporte' || userStatus === 'admin' || userStatus === 'super_admin')) return;
+    if (
+      !userId ||
+      !(
+        userStatus === 'suporte' ||
+        userStatus === 'admin' ||
+        userStatus === 'super_admin' ||
+        userStatus === 'gerente' ||
+        userStatus === 'consultor'
+      )
+    )
+      return;
     fetch('/api/chat/tags', { headers: authHeaders() })
       .then((r) => r.json())
       .then((data) => {
@@ -653,7 +766,13 @@ export default function ChatPage() {
     const onVisibilityChange = () => {
       if (document.visibilityState !== 'visible') return;
       loadConversationsFromApi(true);
-      if (userStatus === 'suporte' || userStatus === 'admin' || userStatus === 'super_admin') {
+      if (
+        userStatus === 'suporte' ||
+        userStatus === 'admin' ||
+        userStatus === 'super_admin' ||
+        userStatus === 'gerente' ||
+        userStatus === 'consultor'
+      ) {
         fetch('/api/chat/tags', { headers: authHeaders() })
           .then((r) => r.json())
           .then((data) => {
@@ -677,17 +796,26 @@ export default function ChatPage() {
       return;
     }
 
+    const convId = selectedConversationId;
+    const cached = userId ? readMessagesFromSessionCache(userId, convId) : null;
+    if (cached && cached.length > 0) {
+      setMessages(cached);
+      setHasOlderMessages(cached.length >= MESSAGES_PAGE_SIZE);
+    }
+
     const loadMessages = async () => {
       setMessagesLoading(true);
       try {
         const response = await fetch(
-          `/api/chat/messages?conversation_id=${selectedConversationId}&limit=${MESSAGES_PAGE_SIZE}`,
+          `/api/chat/messages?conversation_id=${convId}&limit=${MESSAGES_PAGE_SIZE}`,
           { headers: authHeaders() }
         );
         const result = await response.json();
         if (result.success) {
-          setMessages(result.data || []);
+          const list = sortMessagesChronological((result.data || []) as Message[]);
+          setMessages(list);
           setHasOlderMessages(result.meta?.has_more === true);
+          if (userId) writeMessagesToSessionCache(userId, convId, list);
         }
       } catch (error) {
         console.error('[Chat] carregar mensagens:', error);
@@ -697,7 +825,15 @@ export default function ChatPage() {
     };
 
     loadMessages();
-  }, [selectedConversationId]);
+  }, [selectedConversationId, userId]);
+
+  /** Persiste histórico exibido (incl. chegadas via Realtime) para reabrir sem nova busca quando possível */
+  useEffect(() => {
+    if (!userId || !selectedConversationId || messages.length === 0) return;
+    const id = selectedConversationId;
+    const t = window.setTimeout(() => writeMessagesToSessionCache(userId, id, messages), 300);
+    return () => clearTimeout(t);
+  }, [userId, selectedConversationId, messages]);
 
   // ── Scroll infinito para cima: carrega mensagens mais antigas ──────────────
   const loadOlderMessages = useCallback(async () => {
@@ -719,7 +855,11 @@ export default function ChatPage() {
         const older: Message[] = result.data || [];
         setHasOlderMessages(result.meta?.has_more === true);
         if (older.length > 0) {
-          setMessages((prev) => [...older, ...prev]);
+          setMessages((prev) => {
+            const merged = sortMessagesChronological([...older, ...prev]);
+            if (userId && selectedConversationId) writeMessagesToSessionCache(userId, selectedConversationId, merged);
+            return merged;
+          });
           // Preserva a posição do scroll após inserir mensagens acima
           requestAnimationFrame(() => {
             if (container) container.scrollTop = container.scrollHeight - prevScrollHeight;
@@ -731,7 +871,7 @@ export default function ChatPage() {
     } finally {
       setLoadingOlderMessages(false);
     }
-  }, [selectedConversationId, loadingOlderMessages, hasOlderMessages, messages]);
+  }, [selectedConversationId, loadingOlderMessages, hasOlderMessages, messages, userId]);
 
   // Scroll automático ao abrir conversa (vai para o final)
   useEffect(() => {
@@ -795,7 +935,9 @@ export default function ChatPage() {
             };
             setMessages((prev) => {
               if (prev.some((m) => m.id === msg.id)) return prev;
-              return [...prev, msg];
+              const mid = msg.message_id;
+              if (mid && prev.some((m) => m.message_id === mid)) return prev;
+              return sortMessagesChronological([...prev, msg]);
             });
             const container = messagesContainerRef.current;
             const isAtBottom = container
@@ -811,9 +953,9 @@ export default function ChatPage() {
               timestamp:
                 typeof raw.timestamp === 'string' ? parseInt(raw.timestamp, 10) : raw.timestamp,
             };
-            setMessages((prev) => prev.map((m) => (m.id === msg.id ? msg : m)));
+            setMessages((prev) => sortMessagesChronological(prev.map((m) => (m.id === msg.id ? msg : m))));
           } else if (payload.eventType === 'DELETE') {
-            setMessages((prev) => prev.filter((m) => m.id !== payload.old.id));
+            setMessages((prev) => prev.filter((m) => m.id !== (payload.old as { id?: string }).id));
           }
         }
       )
@@ -856,7 +998,12 @@ export default function ChatPage() {
 
     const filterCol = selectedChannel.type === 'evolution' ? 'instance_id' : 'whatsapp_config_id';
     const filterVal = selectedChannel.id;
-    const canNotify = userStatus === 'super_admin' || userStatus === 'admin' || userStatus === 'suporte';
+    const canNotify =
+      userStatus === 'super_admin' ||
+      userStatus === 'admin' ||
+      userStatus === 'suporte' ||
+      userStatus === 'gerente' ||
+      userStatus === 'consultor';
 
     const channel = supabase
       .channel(`chat_conversations_${selectedChannel.type}_${selectedChannel.id}`)
@@ -888,7 +1035,9 @@ export default function ChatPage() {
               const updated = prev.findIndex((c) => c.id === newConv.id) >= 0
                 ? prev.map((c) => (c.id === newConv.id ? newConv : c))
                 : [newConv, ...prev];
-              return sort24(updated);
+              const next = sort24(updated);
+              conversationsCacheRef.current[filterVal] = next;
+              return next;
             });
 
             if (isNew && canNotify && typeof window !== 'undefined' && 'Notification' in window) {
@@ -896,7 +1045,7 @@ export default function ChatPage() {
               const preview = (newConv.last_message_preview || '').slice(0, 60);
               if (document.visibilityState === 'hidden' && Notification.permission === 'granted') {
                 try {
-                  new Notification('Nova conversa no Chat — Zaploto', {
+                  new Notification('Nova conversa no Chat Atendimento — Zaploto', {
                     body: preview
                       ? `${convTitle}: ${preview}${preview.length >= 60 ? '...' : ''}`
                       : convTitle,
@@ -905,6 +1054,14 @@ export default function ChatPage() {
                 } catch (_) {}
               }
             }
+          } else if (payload.eventType === 'DELETE') {
+            const removedId = (payload.old as Conversation).id;
+            if (!removedId) return;
+            setConversations((prev) => {
+              const next = prev.filter((c) => c.id !== removedId);
+              conversationsCacheRef.current[filterVal] = next;
+              return next;
+            });
           }
         }
       )
@@ -915,7 +1072,12 @@ export default function ChatPage() {
 
   // ── Permissão de notificação ───────────────────────────────────────────────
   useEffect(() => {
-    const canNotify = userStatus === 'super_admin' || userStatus === 'admin' || userStatus === 'suporte';
+    const canNotify =
+      userStatus === 'super_admin' ||
+      userStatus === 'admin' ||
+      userStatus === 'suporte' ||
+      userStatus === 'gerente' ||
+      userStatus === 'consultor';
     if (!canNotify || typeof window === 'undefined' || !('Notification' in window)) return;
     if (Notification.permission === 'default') Notification.requestPermission().catch(() => {});
   }, [userStatus]);
@@ -1249,6 +1411,22 @@ export default function ChatPage() {
         if (response.ok && result.success) {
           setMessageText('');
           if (textareaRef.current) textareaRef.current.style.height = 'auto';
+          const saved = (result as { data?: { message?: Message | null } }).data?.message;
+          if (saved && saved.id) {
+            const msg: Message = {
+              ...saved,
+              timestamp:
+                typeof saved.timestamp === 'string'
+                  ? parseInt(saved.timestamp, 10)
+                  : saved.timestamp,
+            };
+            setMessages((prev) => {
+              if (prev.some((m) => m.id === msg.id)) return prev;
+              const mid = msg.message_id;
+              if (mid && prev.some((m) => m.message_id === mid)) return prev;
+              return sortMessagesChronological([...prev, msg]);
+            });
+          }
         } else {
           setSendError(getSendErrorMessage(response.status, result.error || result.message));
         }
@@ -1471,6 +1649,123 @@ export default function ChatPage() {
     );
   }
 
+  // Tela inicial: escolher / confirmar instância (Evolution) ou canal WhatsApp Oficial antes de abrir o chat
+  if (!atendimentoGatePassed) {
+    const totalCanais = channels.evolution.length + channels.whatsapp_official.length;
+    return (
+      <Layout onSignOut={handleSignOut}>
+        <div className="flex flex-1 min-h-0 flex-col items-center justify-center p-4 sm:p-8 overflow-y-auto">
+          <div className="w-full max-w-lg bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-2xl shadow-lg p-6 sm:p-8">
+            <div className="flex items-center gap-3 mb-2">
+              <div
+                className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
+                style={{ backgroundColor: '#8CD95520' }}
+              >
+                <Headphones className="w-6 h-6" style={{ color: '#8CD955' }} />
+              </div>
+              <div>
+                <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
+                  Instância de atendimento
+                </h1>
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  Escolha com qual instância ou canal você vai trabalhar antes de abrir o chat.
+                </p>
+              </div>
+            </div>
+
+            {channelsLoading ? (
+              <div className="flex items-center justify-center gap-2 py-12 text-gray-500 dark:text-gray-400">
+                <Loader2 className="w-5 h-5 animate-spin" />
+                <span>Carregando canais disponíveis...</span>
+              </div>
+            ) : totalCanais === 0 ? (
+              <p className="text-sm text-center text-gray-600 dark:text-gray-400 py-8">
+                Nenhuma instância disponível para você. Se você é consultor, peça ao gerente para atribuir uma
+                instância de atendimento.
+              </p>
+            ) : (
+              <>
+                <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-3">
+                  Selecione o canal
+                </p>
+                <ul className="space-y-2 mb-6 max-h-[min(50vh,320px)] overflow-y-auto pr-1">
+                  {channels.evolution.map((ch) => {
+                    const selected = pendingAtendimentoChannel && channelPickerKey(pendingAtendimentoChannel) === channelPickerKey(ch);
+                    return (
+                      <li key={channelPickerKey(ch)}>
+                        <button
+                          type="button"
+                          onClick={() => setPendingAtendimentoChannel(ch)}
+                          className={`w-full text-left rounded-xl border-2 px-4 py-3 transition-colors ${
+                            selected
+                              ? 'border-[#8CD955] bg-[#8CD955]/10 dark:bg-[#8CD955]/15'
+                              : 'border-gray-200 dark:border-[#404040] hover:border-gray-300 dark:hover:border-[#555]'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <span className="font-medium text-gray-900 dark:text-gray-100">
+                              {ch.instance_name}
+                            </span>
+                            <span className="flex flex-wrap gap-1 justify-end">
+                              <span className="text-[10px] uppercase font-semibold px-2 py-0.5 rounded bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200">
+                                Evolution
+                              </span>
+                              {ch.is_master && (
+                                <span className="text-[10px] uppercase font-semibold px-2 py-0.5 rounded bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200">
+                                  Mestre
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Status: {ch.status}</p>
+                        </button>
+                      </li>
+                    );
+                  })}
+                  {channels.whatsapp_official.map((ch) => {
+                    const waCh: Channel = ch;
+                    const selected =
+                      pendingAtendimentoChannel &&
+                      channelPickerKey(pendingAtendimentoChannel) === channelPickerKey(waCh);
+                    return (
+                      <li key={channelPickerKey(waCh)}>
+                        <button
+                          type="button"
+                          onClick={() => setPendingAtendimentoChannel(waCh)}
+                          className={`w-full text-left rounded-xl border-2 px-4 py-3 transition-colors ${
+                            selected
+                              ? 'border-[#8CD955] bg-[#8CD955]/10 dark:bg-[#8CD955]/15'
+                              : 'border-gray-200 dark:border-[#404040] hover:border-gray-300 dark:hover:border-[#555]'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-medium text-gray-900 dark:text-gray-100">{ch.name}</span>
+                            <span className="text-[10px] uppercase font-semibold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200">
+                              WhatsApp Oficial
+                            </span>
+                          </div>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+                <button
+                  type="button"
+                  disabled={!pendingAtendimentoChannel}
+                  onClick={openAtendimentoWithPendingChannel}
+                  className="w-full py-3 rounded-xl text-white font-semibold text-sm disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
+                  style={{ backgroundColor: '#8CD955' }}
+                >
+                  Abrir chat de atendimento
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      </Layout>
+    );
+  }
+
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <Layout onSignOut={handleSignOut}>
@@ -1526,7 +1821,14 @@ export default function ChatPage() {
               <X className="w-4 h-4" />
             </button>
             <div className="p-4 border-b border-gray-200 dark:border-[#404040]">
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-3 pr-8">Zaploto Chat</h2>
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2 pr-8">Chat Atendimento</h2>
+              <button
+                type="button"
+                onClick={reopenAtendimentoInstancePicker}
+                className="mb-3 text-left w-full text-xs font-medium text-[#8CD955] hover:underline"
+              >
+                ← Trocar instância / canal
+              </button>
               <div className="space-y-1">
                 <button
                   onClick={() => setActiveView('chat')}
@@ -1584,7 +1886,8 @@ export default function ChatPage() {
                     <optgroup label="Evolution">
                       {channels.evolution.map((ch) => (
                         <option key={ch.id} value={`evolution:${ch.id}`}>
-                          {ch.instance_name} ({ch.status})
+                          {ch.instance_name}
+                          {ch.is_master ? ' · Mestre' : ''} ({ch.status})
                         </option>
                       ))}
                     </optgroup>
@@ -1604,7 +1907,18 @@ export default function ChatPage() {
               <div className="p-4 border-b border-gray-200 dark:border-[#404040]">
                 <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">Chat</div>
                 <div className="text-sm text-gray-700 dark:text-gray-200">
-                  {selectedChannel.type === 'evolution' ? selectedChannel.instance_name : selectedChannel.name}
+                  {selectedChannel.type === 'evolution' ? (
+                    <>
+                      {selectedChannel.instance_name}
+                      {selectedChannel.is_master ? (
+                        <span className="ml-1.5 text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200">
+                          Mestre
+                        </span>
+                      ) : null}
+                    </>
+                  ) : (
+                    selectedChannel.name
+                  )}
                 </div>
               </div>
             ) : null}
@@ -1629,7 +1943,7 @@ export default function ChatPage() {
                     type="button"
                     onClick={() => setChatSidebarOpen(true)}
                     className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] text-gray-600 dark:text-gray-300 flex-shrink-0"
-                    aria-label="Abrir menu Zaploto Chat"
+                    aria-label="Abrir menu Chat Atendimento"
                     title="Abrir menu (canal, conversas/contatos)"
                   >
                     <PanelLeft className="w-5 h-5" />
@@ -1702,7 +2016,7 @@ export default function ChatPage() {
                       type="button"
                       onClick={() => setChatSidebarOpen(true)}
                       className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] text-gray-600 dark:text-gray-300 inline-flex items-center gap-2 text-sm font-medium"
-                      aria-label="Abrir menu Zaploto Chat"
+                      aria-label="Abrir menu Chat Atendimento"
                       title="Abrir menu (canal, conversas/contatos)"
                     >
                       <PanelLeft className="w-5 h-5" />
@@ -1798,7 +2112,11 @@ export default function ChatPage() {
                           : conversationFilter === 'unassigned'
                             ? 'Nenhuma conversa no histórico (template ou resolvidas).'
                             : 'Nenhuma conversa encontrada.'}
-                        {(userStatus === 'super_admin' || userStatus === 'admin' || userStatus === 'suporte') && (
+                        {(userStatus === 'super_admin' ||
+                          userStatus === 'admin' ||
+                          userStatus === 'suporte' ||
+                          userStatus === 'gerente' ||
+                          userStatus === 'consultor') && (
                           <p className="mt-1 text-xs">
                             Novas mensagens aparecerão aqui automaticamente.
                           </p>
@@ -1987,7 +2305,11 @@ export default function ChatPage() {
                         </span>
                       </div>
                     </div>
-                    {(userStatus === 'suporte' || userStatus === 'admin' || userStatus === 'super_admin') && (
+                    {(userStatus === 'suporte' ||
+                      userStatus === 'admin' ||
+                      userStatus === 'super_admin' ||
+                      userStatus === 'gerente' ||
+                      userStatus === 'consultor') && (
                       <div ref={tagsPopoverRef} className="relative">
                         <button
                           type="button"
@@ -2056,7 +2378,11 @@ export default function ChatPage() {
                         Resolvida
                       </span>
                     ) : isWithin24hWindow(selectedConversation) &&
-                      (userStatus === 'suporte' || userStatus === 'admin' || userStatus === 'super_admin') ? (
+                      (userStatus === 'suporte' ||
+                        userStatus === 'admin' ||
+                        userStatus === 'super_admin' ||
+                        userStatus === 'gerente' ||
+                        userStatus === 'consultor') ? (
                       <button
                         onClick={handleResolveConversation}
                         disabled={resolvingConversation}

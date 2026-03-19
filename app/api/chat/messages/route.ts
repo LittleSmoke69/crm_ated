@@ -9,6 +9,7 @@ import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { canUserAccessEvolutionChatInstance } from '@/lib/services/atendimento-chat-access';
 
 /**
  * GET /api/chat/messages
@@ -52,8 +53,20 @@ export async function GET(req: NextRequest) {
       profile?.status === 'admin' ||
       profile?.status === 'super_admin' ||
       profile?.status === 'suporte';
-    const canAccessEvolution =
-      conversation.instance_id && (isAdminOrSuporte || conversation.user_id === userId);
+    let canAccessEvolution = false;
+    if (conversation.instance_id) {
+      if (isAdminOrSuporte) {
+        canAccessEvolution = true;
+      } else if (conversation.user_id === userId) {
+        canAccessEvolution = true;
+      } else {
+        canAccessEvolution = await canUserAccessEvolutionChatInstance(
+          userId,
+          profile || {},
+          conversation.instance_id
+        );
+      }
+    }
     const canAccessWhatsAppOfficial =
       conversation.whatsapp_config_id &&
       (isAdminOrSuporte || conversation.workspace_id === profile?.zaploto_id);

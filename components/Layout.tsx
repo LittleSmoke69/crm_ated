@@ -278,7 +278,7 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
     }
   };
 
-  const isChat = pathname === '/chat';
+  const isChat = pathname === '/chat' || pathname === '/chat-atendimento';
 
   return (
     <div className={`bg-gray-50 dark:bg-[#1a1a1a] flex flex-col lg:flex-row ${isChat ? 'h-screen overflow-hidden' : 'min-h-screen'}`}>

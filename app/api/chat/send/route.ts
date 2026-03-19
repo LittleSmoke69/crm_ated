@@ -9,6 +9,7 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { chatService } from '@/lib/services/chat-service';
+import { canUserAccessEvolutionChatInstance } from '@/lib/services/atendimento-chat-access';
 
 /**
  * POST /api/chat/send
@@ -48,9 +49,17 @@ export async function POST(req: NextRequest) {
       .eq('id', userId)
       .single();
 
-    const canSend = profile?.status === 'admin' || profile?.status === 'super_admin' || profile?.status === 'suporte';
-    if (!canSend && instance.user_id !== userId) {
-      return errorResponse('Acesso negado a esta instância.', 403);
+    const canSend =
+      profile?.status === 'admin' ||
+      profile?.status === 'super_admin' ||
+      profile?.status === 'suporte';
+    if (!canSend) {
+      if (instance.user_id !== userId) {
+        const allowed = await canUserAccessEvolutionChatInstance(userId, profile || {}, instance_id);
+        if (!allowed) {
+          return errorResponse('Acesso negado a esta instância.', 403);
+        }
+      }
     }
 
     const evolutionApi = Array.isArray(instance.evolution_apis) 

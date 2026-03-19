@@ -9,10 +9,14 @@ import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { canUserAccessEvolutionChatInstance } from '@/lib/services/atendimento-chat-access';
+import { syncEvolutionDirectoryToChatConversations } from '@/lib/server/evolution-chat-directory-sync';
 
 /**
  * GET /api/chat/conversations
  * Lista conversas de um canal: instance_id (Evolution) ou whatsapp_config_id (WhatsApp Oficial).
+ * Evolution: query opcional sync_from_evolution=1 chama a API Evolution (findChats + findContacts)
+ * e faz upsert em chat_conversations antes de retornar a lista do banco.
  * Retorna todos os campos, incluindo attendance_status, resolved_at, assigned_at, tags.
  */
 export async function GET(req: NextRequest) {
@@ -21,6 +25,7 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const instance_id = searchParams.get('instance_id');
     const whatsapp_config_id = searchParams.get('whatsapp_config_id');
+    const syncFromEvolution = searchParams.get('sync_from_evolution') === '1';
 
     if (instance_id && whatsapp_config_id) {
       return errorResponse('Informe apenas instance_id ou whatsapp_config_id', 400);
@@ -43,7 +48,7 @@ export async function GET(req: NextRequest) {
     if (instance_id) {
       const { data: instance, error: instError } = await supabaseServiceRole
         .from('evolution_instances')
-        .select('user_id, workspace_id')
+        .select('id')
         .eq('id', instance_id)
         .single();
 
@@ -52,8 +57,67 @@ export async function GET(req: NextRequest) {
         return errorResponse('Instância não encontrada', 404);
       }
 
-      if (!isAdminOrSuporte && instance.user_id !== userId) {
-        return errorResponse('Acesso negado.', 403);
+      if (!isAdminOrSuporte) {
+        const allowed = await canUserAccessEvolutionChatInstance(userId, profile || {}, instance_id);
+        if (!allowed) {
+          return errorResponse('Acesso negado.', 403);
+        }
+      }
+
+      let evolutionSyncMeta: Record<string, unknown> | undefined;
+      if (syncFromEvolution) {
+        const { data: fullInstance, error: fullInstError } = await supabaseServiceRole
+          .from('evolution_instances')
+          .select(
+            `
+            id,
+            instance_name,
+            apikey,
+            workspace_id,
+            user_id,
+            evolution_apis ( base_url )
+          `
+          )
+          .eq('id', instance_id)
+          .single();
+
+        const evolutionApi = fullInstance
+          ? Array.isArray((fullInstance as { evolution_apis?: unknown }).evolution_apis)
+            ? (fullInstance as { evolution_apis: { base_url?: string }[] }).evolution_apis[0]
+            : ((fullInstance as { evolution_apis?: { base_url?: string } }).evolution_apis ?? null)
+          : null;
+
+        const baseUrl = evolutionApi?.base_url;
+        const apikey = (fullInstance as { apikey?: string } | null)?.apikey;
+
+        if (!fullInstError && fullInstance && baseUrl && apikey) {
+          const syncResult = await syncEvolutionDirectoryToChatConversations({
+            instanceId: instance_id,
+            instanceName: String((fullInstance as { instance_name: string }).instance_name),
+            baseUrl,
+            apikey,
+            workspaceId: (fullInstance as { workspace_id?: string | null }).workspace_id ?? null,
+            instanceOwnerUserId: (fullInstance as { user_id?: string | null }).user_id ?? null,
+          });
+          evolutionSyncMeta = {
+            evolution_directory_sync: syncResult.error
+              ? 'error'
+              : syncResult.skippedCooldown
+                ? 'skipped_cooldown'
+                : 'ok',
+            evolution_sync_upserted: syncResult.upserted,
+            evolution_sync_error: syncResult.error,
+            find_chats_http_status: syncResult.findChatsStatus,
+            find_contacts_http_status: syncResult.findContactsStatus,
+          };
+        } else {
+          evolutionSyncMeta = {
+            evolution_directory_sync: 'skipped_config',
+            evolution_sync_error:
+              fullInstError?.message ||
+              (!baseUrl || !apikey ? 'Instância sem base_url Evolution ou apikey' : 'Instância incompleta'),
+          };
+        }
       }
 
       const { data: conversations, error } = await supabaseServiceRole
@@ -73,7 +137,7 @@ export async function GET(req: NextRequest) {
         '| total:', list.length,
         list.length > 0 ? `| ids: ${list.slice(0, 5).map((c: { id?: string }) => c.id).join(', ')}${list.length > 5 ? '...' : ''}` : ''
       );
-      return successResponse(list);
+      return successResponse(list, evolutionSyncMeta ? { meta: evolutionSyncMeta } : undefined);
     }
 
     const { data: config, error: configError } = await supabaseServiceRole
@@ -158,13 +222,11 @@ export async function PATCH(req: NextRequest) {
     }
 
     if (conv.instance_id) {
-      const { data: instance } = await supabaseServiceRole
-        .from('evolution_instances')
-        .select('user_id')
-        .eq('id', conv.instance_id)
-        .single();
-      if (!isAdminOrSuporte && instance?.user_id !== userId) {
-        return errorResponse('Acesso negado a esta conversa.', 403);
+      if (!isAdminOrSuporte) {
+        const allowed = await canUserAccessEvolutionChatInstance(userId, profile || {}, conv.instance_id);
+        if (!allowed) {
+          return errorResponse('Acesso negado a esta conversa.', 403);
+        }
       }
     } else if (conv.whatsapp_config_id) {
       if (!isAdminOrSuporte) {
