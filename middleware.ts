@@ -32,6 +32,7 @@ const RESERVED_FIRST_SEGMENTS = new Set([
   'import-contacts',
   'anti-spam',
   'chat',
+  'chat-atendimento',
   'perfil',
   'vsl',
   'r',
