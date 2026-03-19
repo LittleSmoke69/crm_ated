@@ -39,6 +39,34 @@ const bodySchema = z.object({
 
 const LOG_PREFIX = '[lead-transfer][redistribute-leads]';
 
+function normalizeCrmBaseUrl(raw: string): string {
+  const cleaned = raw.trim().replace(/^https?:\/\//i, '').replace(/\/api\/crm\/?/i, '').replace(/\/+$/, '').trim();
+  if (!cleaned) return '';
+  return `https://${cleaned}`;
+}
+
+function buildRedistributeCurlLog(params: {
+  crmBaseUrl: string;
+  sourceConsultantEmail: string;
+  targetConsultantEmail: string;
+  leadIds: Array<number | string>;
+}): string {
+  const baseUrl = normalizeCrmBaseUrl(params.crmBaseUrl);
+  const payload = JSON.stringify({
+    source_consultant_email: params.sourceConsultantEmail,
+    target_consultant_email: params.targetConsultantEmail,
+    leads_ids: params.leadIds,
+  }, null, 2);
+
+  return [
+    `curl -X POST "${baseUrl}/api/crm/redistribute-leads" \\`,
+    `  -H "x-api-key: $CRM_API_KEY" \\`,
+    `  -H "Accept: application/json" \\`,
+    `  -H "Content-Type: application/json" \\`,
+    `  -d '${payload}'`,
+  ].join('\n');
+}
+
 /**
  * POST /api/admin/crm/redistribute-leads
  * Proxy para CRM: redistribuir leads de um consultor para outro.
@@ -99,20 +127,6 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const [sourceInBanca, targetInBanca] = await Promise.all([
-      isConsultantInBanca(ctx.bancaId, source_consultant_email),
-      isConsultantInBanca(ctx.bancaId, target_consultant_email),
-    ]);
-
-    if (!sourceInBanca) {
-      console.log(`${LOG_PREFIX} POST source consultant not in banca (400): source_consultant_email=${source_consultant_email}, bancaId=${ctx.bancaId}`);
-      return errorResponse('Consultor origem não pertence à banca selecionada.', 400);
-    }
-    if (!targetInBanca) {
-      console.log(`${LOG_PREFIX} POST target consultant not in banca (400): target_consultant_email=${target_consultant_email}, bancaId=${ctx.bancaId}`);
-      return errorResponse('Consultor destino não pertence à banca selecionada.', 400);
-    }
-
     const normalizedLeadIds = (leads_ids || []).map((id) => {
       if (typeof id === 'number' && Number.isFinite(id)) return id;
       const s = String(id).trim();
@@ -130,6 +144,28 @@ export async function POST(req: NextRequest) {
     }
     if (isReverse) {
       console.log(`${LOG_PREFIX} POST [REVERSE] Atribuindo ${normalizedLeadIds.length} lead(s) ao consultor DESTINO: target_consultant_email=${target_consultant_email}. IDs (amostra): ${JSON.stringify(normalizedLeadIds.slice(0, 10))}`);
+    }
+
+    const curlForVerification = buildRedistributeCurlLog({
+      crmBaseUrl: ctx.crmBaseUrl,
+      sourceConsultantEmail: source_consultant_email,
+      targetConsultantEmail: target_consultant_email,
+      leadIds: normalizedLeadIds,
+    });
+    console.log(`${LOG_PREFIX} POST CRM cURL (verificação):\n${curlForVerification}`);
+
+    const [sourceInBanca, targetInBanca] = await Promise.all([
+      isConsultantInBanca(ctx.bancaId, source_consultant_email),
+      isConsultantInBanca(ctx.bancaId, target_consultant_email),
+    ]);
+
+    if (!sourceInBanca) {
+      console.log(`${LOG_PREFIX} POST source consultant not in banca (400): source_consultant_email=${source_consultant_email}, bancaId=${ctx.bancaId}`);
+      return errorResponse('Consultor origem não pertence à banca selecionada.', 400);
+    }
+    if (!targetInBanca) {
+      console.log(`${LOG_PREFIX} POST target consultant not in banca (400): target_consultant_email=${target_consultant_email}, bancaId=${ctx.bancaId}`);
+      return errorResponse('Consultor destino não pertence à banca selecionada.', 400);
     }
 
     console.log(`${LOG_PREFIX} POST calling CRM redistributeLeads: source=${source_consultant_email}, target=${target_consultant_email}, leads_ids=${normalizedLeadIds.length} items (sample: ${JSON.stringify(normalizedLeadIds.slice(0, 5))})`);
@@ -241,141 +277,149 @@ export async function POST(req: NextRequest) {
 
     if (logError) {
       console.error(`${LOG_PREFIX} POST audit log insert error:`, logError);
-    } else {
-      console.log(`${LOG_PREFIX} POST audit log inserted: banca_id=${ctx.bancaId}, performed_by=${ctx.userId}, count=${count}`);
-      if (insertedLog?.id && normalizedLeadIds.length > 0) {
-        const entries = normalizedLeadIds.map((leadId) => {
-          const sid = String(leadId);
-          const snap = snapshotByLeadId.get(sid);
-          const balance = snap?.saldo_snapshot != null ? Number(snap.saldo_snapshot) : null;
-          const hadBalance = (balance ?? 0) > 0;
-          return {
-            transfer_log_id: insertedLog.id,
-            banca_id: ctx.bancaId,
-            lead_id: sid,
-            source_consultant_email,
-            target_consultant_email,
-            transfer_type,
-            lead_name: snap?.lead_name ?? null,
-            lead_phone: snap?.lead_phone ?? null,
-            saldo_snapshot: balance,
-            last_interaction_snapshot: snap?.last_interaction_snapshot ?? null,
-            had_balance: hadBalance,
-            total_depositado_snapshot: snap?.total_depositado_snapshot != null ? Number(snap.total_depositado_snapshot) : null,
-            total_apostado_snapshot: snap?.total_apostado_snapshot != null ? Number(snap.total_apostado_snapshot) : null,
-            total_ganho_snapshot: snap?.total_ganho_snapshot != null ? Number(snap.total_ganho_snapshot) : null,
-            available_withdraw_snapshot: snap?.available_withdraw_snapshot != null ? Number(snap.available_withdraw_snapshot) : null,
-            total_saque_snapshot: snap?.total_saque_snapshot != null ? Number(snap.total_saque_snapshot) : null,
-          };
-        });
-        let { error: entriesError } = await supabaseServiceRole
-          .from('admin_lead_transfer_entries')
-          .insert(entries);
-        if (entriesError?.code === 'PGRST204' && entriesError.message?.includes('lead_name')) {
-          const entriesWithoutNamePhone = entries.map(({ lead_name: _n, lead_phone: _p, ...rest }) => rest);
-          const retry = await supabaseServiceRole.from('admin_lead_transfer_entries').insert(entriesWithoutNamePhone);
-          entriesError = retry.error;
-          if (!entriesError) console.log(`${LOG_PREFIX} POST entries inserted without lead_name/lead_phone (migration pending)`);
-        }
-        if (entriesError) {
-          console.error(`${LOG_PREFIX} POST admin_lead_transfer_entries insert error:`, entriesError);
-        } else {
-          const tipo = isDevolucao ? 'devolução' : isReverse ? 'reverse' : 'transferência';
-          console.log(`${LOG_PREFIX} POST admin_lead_transfer_entries inserted: ${entries.length} row(s) com snapshots — ${tipo}`);
-        }
+      return errorResponse(
+        'Transferência realizada no CRM, mas não foi possível salvar o log da transferência no banco de dados.',
+        500
+      );
+    }
+
+    console.log(`${LOG_PREFIX} POST audit log inserted: banca_id=${ctx.bancaId}, performed_by=${ctx.userId}, count=${count}`);
+    if (insertedLog?.id && normalizedLeadIds.length > 0) {
+      const entries = normalizedLeadIds.map((leadId) => {
+        const sid = String(leadId);
+        const snap = snapshotByLeadId.get(sid);
+        const balance = snap?.saldo_snapshot != null ? Number(snap.saldo_snapshot) : null;
+        const hadBalance = (balance ?? 0) > 0;
+        return {
+          transfer_log_id: insertedLog.id,
+          banca_id: ctx.bancaId,
+          lead_id: sid,
+          source_consultant_email,
+          target_consultant_email,
+          transfer_type,
+          lead_name: snap?.lead_name ?? null,
+          lead_phone: snap?.lead_phone ?? null,
+          saldo_snapshot: balance,
+          last_interaction_snapshot: snap?.last_interaction_snapshot ?? null,
+          had_balance: hadBalance,
+          total_depositado_snapshot: snap?.total_depositado_snapshot != null ? Number(snap.total_depositado_snapshot) : null,
+          total_apostado_snapshot: snap?.total_apostado_snapshot != null ? Number(snap.total_apostado_snapshot) : null,
+          total_ganho_snapshot: snap?.total_ganho_snapshot != null ? Number(snap.total_ganho_snapshot) : null,
+          available_withdraw_snapshot: snap?.available_withdraw_snapshot != null ? Number(snap.available_withdraw_snapshot) : null,
+          total_saque_snapshot: snap?.total_saque_snapshot != null ? Number(snap.total_saque_snapshot) : null,
+        };
+      });
+      let { error: entriesError } = await supabaseServiceRole
+        .from('admin_lead_transfer_entries')
+        .insert(entries);
+      if (entriesError?.code === 'PGRST204' && entriesError.message?.includes('lead_name')) {
+        const entriesWithoutNamePhone = entries.map(({ lead_name: _n, lead_phone: _p, ...rest }) => rest);
+        const retry = await supabaseServiceRole.from('admin_lead_transfer_entries').insert(entriesWithoutNamePhone);
+        entriesError = retry.error;
+        if (!entriesError) console.log(`${LOG_PREFIX} POST entries inserted without lead_name/lead_phone (migration pending)`);
+      }
+      if (entriesError) {
+        console.error(`${LOG_PREFIX} POST admin_lead_transfer_entries insert error:`, entriesError);
+        return errorResponse(
+          'Transferência realizada no CRM, mas não foi possível salvar os leads transferidos no banco de dados.',
+          500
+        );
+      } else {
+        const tipo = isDevolucao ? 'devolução' : isReverse ? 'reverse' : 'transferência';
+        console.log(`${LOG_PREFIX} POST admin_lead_transfer_entries inserted: ${entries.length} row(s) com snapshots — ${tipo}`);
+      }
+    }
+
+    // Marca as entries da transferência de origem como 'repassado' (remove da lista Mover leads)
+    if (source_transfer_log_id && normalizedLeadIds.length > 0) {
+      const leadIdStrings = normalizedLeadIds.map((id) => String(id));
+      const { error: updateSourceError } = await supabaseServiceRole
+        .from('admin_lead_transfer_entries')
+        .update({
+          resolution_status: 'repassado',
+          resolved_at: new Date().toISOString(),
+        })
+        .eq('transfer_log_id', source_transfer_log_id)
+        .eq('banca_id', ctx.bancaId)
+        .in('lead_id', leadIdStrings)
+        .eq('resolution_status', 'disponivel_retransferencia');
+      if (updateSourceError) {
+        console.warn(`${LOG_PREFIX} POST update source entries to repassado (optional):`, updateSourceError);
+      } else {
+        console.log(`${LOG_PREFIX} POST source entries marked repassado: log=${source_transfer_log_id}, count=${leadIdStrings.length}`);
+      }
+    }
+
+    const isDevolucaoLog = filters_snapshot != null && typeof filters_snapshot === 'object' && 'devolucao' in filters_snapshot && 'log_origem_id' in filters_snapshot;
+    const logOrigemId = isDevolucaoLog && typeof (filters_snapshot as { log_origem_id?: string }).log_origem_id === 'string' ? (filters_snapshot as { log_origem_id: string }).log_origem_id.trim() : null;
+    if (logOrigemId) {
+      const devolvidoAt = new Date().toISOString();
+      const { error: updateDevolvidoError } = await supabaseServiceRole
+        .from('admin_lead_transfer_logs')
+        .update({ devolvido_at: devolvidoAt })
+        .eq('id', logOrigemId);
+      if (updateDevolvidoError) {
+        console.error(`${LOG_PREFIX} POST update devolvido_at on origin log:`, updateDevolvidoError);
+      } else {
+        console.log(`${LOG_PREFIX} POST origin log ${logOrigemId} marked as devolvido_at=${devolvidoAt}`);
       }
 
-      // Marca as entries da transferência de origem como 'repassado' (remove da lista Mover leads)
-      if (source_transfer_log_id && normalizedLeadIds.length > 0) {
-        const leadIdStrings = normalizedLeadIds.map((id) => String(id));
-        const { error: updateSourceError } = await supabaseServiceRole
-          .from('admin_lead_transfer_entries')
-          .update({
-            resolution_status: 'repassado',
-            resolved_at: new Date().toISOString(),
-          })
-          .eq('transfer_log_id', source_transfer_log_id)
-          .eq('banca_id', ctx.bancaId)
-          .in('lead_id', leadIdStrings)
-          .eq('resolution_status', 'disponivel_retransferencia');
-        if (updateSourceError) {
-          console.warn(`${LOG_PREFIX} POST update source entries to repassado (optional):`, updateSourceError);
-        } else {
-          console.log(`${LOG_PREFIX} POST source entries marked repassado: log=${source_transfer_log_id}, count=${leadIdStrings.length}`);
-        }
+      // Marcar entries da transferência original como 'devolvido' para que não apareçam no CRM transferido do consultor destino antigo
+      const leadIdStrings = normalizedLeadIds.map((id) => String(id));
+      const { error: updateOrigEntriesErr, count: updatedOrigEntries } = await supabaseServiceRole
+        .from('admin_lead_transfer_entries')
+        .update({ resolution_status: 'devolvido', resolved_at: devolvidoAt })
+        .eq('transfer_log_id', logOrigemId)
+        .eq('banca_id', ctx.bancaId)
+        .in('lead_id', leadIdStrings);
+      if (updateOrigEntriesErr) {
+        console.warn(`${LOG_PREFIX} POST update original entries to devolvido:`, updateOrigEntriesErr);
+      } else {
+        console.log(`${LOG_PREFIX} POST original entries marked devolvido: log=${logOrigemId}, count=${updatedOrigEntries ?? leadIdStrings.length}`);
+      }
+    }
+
+    // Reverse: marcar entries da devolução como 'reversed' para que não apareçam no CRM transferido do doador original
+    const isReverseLog = filters_snapshot != null && typeof filters_snapshot === 'object' && 'reverse_devolucao' in filters_snapshot;
+    const logDevolucaoId = isReverseLog && typeof (filters_snapshot as { log_devolucao_id?: string }).log_devolucao_id === 'string' ? (filters_snapshot as { log_devolucao_id: string }).log_devolucao_id.trim() : null;
+    if (logDevolucaoId) {
+      const reversedAt = new Date().toISOString();
+      const leadIdStrings = normalizedLeadIds.map((id) => String(id));
+      const { error: updateDevEntriesErr, count: updatedDevEntries } = await supabaseServiceRole
+        .from('admin_lead_transfer_entries')
+        .update({ resolution_status: 'reversed', resolved_at: reversedAt })
+        .eq('transfer_log_id', logDevolucaoId)
+        .eq('banca_id', ctx.bancaId)
+        .in('lead_id', leadIdStrings);
+      if (updateDevEntriesErr) {
+        console.warn(`${LOG_PREFIX} POST update devolução entries to reversed:`, updateDevEntriesErr);
+      } else {
+        console.log(`${LOG_PREFIX} POST devolução entries marked reversed: log=${logDevolucaoId}, count=${updatedDevEntries ?? leadIdStrings.length}`);
       }
 
-      const isDevolucaoLog = filters_snapshot != null && typeof filters_snapshot === 'object' && 'devolucao' in filters_snapshot && 'log_origem_id' in filters_snapshot;
-      const logOrigemId = isDevolucaoLog && typeof (filters_snapshot as { log_origem_id?: string }).log_origem_id === 'string' ? (filters_snapshot as { log_origem_id: string }).log_origem_id.trim() : null;
-      if (logOrigemId) {
-        const devolvidoAt = new Date().toISOString();
-        const { error: updateDevolvidoError } = await supabaseServiceRole
+      // Também "reativar" as entries originais (que foram marcadas como 'devolvido') para que voltem ao CRM do consultor destino
+      const fromDevolvidoAt = (filters_snapshot as { from_devolvido_at?: boolean }).from_devolvido_at;
+      if (fromDevolvidoAt) {
+        const { data: devLogRow } = await supabaseServiceRole
           .from('admin_lead_transfer_logs')
-          .update({ devolvido_at: devolvidoAt })
-          .eq('id', logOrigemId);
-        if (updateDevolvidoError) {
-          console.error(`${LOG_PREFIX} POST update devolvido_at on origin log:`, updateDevolvidoError);
-        } else {
-          console.log(`${LOG_PREFIX} POST origin log ${logOrigemId} marked as devolvido_at=${devolvidoAt}`);
-        }
-
-        // Marcar entries da transferência original como 'devolvido' para que não apareçam no CRM transferido do consultor destino antigo
-        const leadIdStrings = normalizedLeadIds.map((id) => String(id));
-        const { error: updateOrigEntriesErr, count: updatedOrigEntries } = await supabaseServiceRole
-          .from('admin_lead_transfer_entries')
-          .update({ resolution_status: 'devolvido', resolved_at: devolvidoAt })
-          .eq('transfer_log_id', logOrigemId)
+          .select('filters_snapshot')
+          .eq('id', logDevolucaoId)
           .eq('banca_id', ctx.bancaId)
-          .in('lead_id', leadIdStrings);
-        if (updateOrigEntriesErr) {
-          console.warn(`${LOG_PREFIX} POST update original entries to devolvido:`, updateOrigEntriesErr);
-        } else {
-          console.log(`${LOG_PREFIX} POST original entries marked devolvido: log=${logOrigemId}, count=${updatedOrigEntries ?? leadIdStrings.length}`);
-        }
-      }
-
-      // Reverse: marcar entries da devolução como 'reversed' para que não apareçam no CRM transferido do doador original
-      const isReverseLog = filters_snapshot != null && typeof filters_snapshot === 'object' && 'reverse_devolucao' in filters_snapshot;
-      const logDevolucaoId = isReverseLog && typeof (filters_snapshot as { log_devolucao_id?: string }).log_devolucao_id === 'string' ? (filters_snapshot as { log_devolucao_id: string }).log_devolucao_id.trim() : null;
-      if (logDevolucaoId) {
-        const reversedAt = new Date().toISOString();
-        const leadIdStrings = normalizedLeadIds.map((id) => String(id));
-        const { error: updateDevEntriesErr, count: updatedDevEntries } = await supabaseServiceRole
-          .from('admin_lead_transfer_entries')
-          .update({ resolution_status: 'reversed', resolved_at: reversedAt })
-          .eq('transfer_log_id', logDevolucaoId)
-          .eq('banca_id', ctx.bancaId)
-          .in('lead_id', leadIdStrings);
-        if (updateDevEntriesErr) {
-          console.warn(`${LOG_PREFIX} POST update devolução entries to reversed:`, updateDevEntriesErr);
-        } else {
-          console.log(`${LOG_PREFIX} POST devolução entries marked reversed: log=${logDevolucaoId}, count=${updatedDevEntries ?? leadIdStrings.length}`);
-        }
-
-        // Também "reativar" as entries originais (que foram marcadas como 'devolvido') para que voltem ao CRM do consultor destino
-        const fromDevolvidoAt = (filters_snapshot as { from_devolvido_at?: boolean }).from_devolvido_at;
-        if (fromDevolvidoAt) {
-          const { data: devLogRow } = await supabaseServiceRole
-            .from('admin_lead_transfer_logs')
-            .select('filters_snapshot')
-            .eq('id', logDevolucaoId)
+          .maybeSingle();
+        const devFs = devLogRow?.filters_snapshot as Record<string, unknown> | null;
+        const origLogId = devFs?.log_origem_id ? String(devFs.log_origem_id).trim() : null;
+        if (origLogId) {
+          const { error: reactivateErr, count: reactivatedCount } = await supabaseServiceRole
+            .from('admin_lead_transfer_entries')
+            .update({ resolution_status: null, resolved_at: null })
+            .eq('transfer_log_id', origLogId)
             .eq('banca_id', ctx.bancaId)
-            .maybeSingle();
-          const devFs = devLogRow?.filters_snapshot as Record<string, unknown> | null;
-          const origLogId = devFs?.log_origem_id ? String(devFs.log_origem_id).trim() : null;
-          if (origLogId) {
-            const { error: reactivateErr, count: reactivatedCount } = await supabaseServiceRole
-              .from('admin_lead_transfer_entries')
-              .update({ resolution_status: null, resolved_at: null })
-              .eq('transfer_log_id', origLogId)
-              .eq('banca_id', ctx.bancaId)
-              .in('lead_id', leadIdStrings)
-              .eq('resolution_status', 'devolvido');
-            if (reactivateErr) {
-              console.warn(`${LOG_PREFIX} POST reactivate original entries after reverse:`, reactivateErr);
-            } else {
-              console.log(`${LOG_PREFIX} POST original entries reactivated (devolvido→null): log=${origLogId}, count=${reactivatedCount ?? leadIdStrings.length}`);
-            }
+            .in('lead_id', leadIdStrings)
+            .eq('resolution_status', 'devolvido');
+          if (reactivateErr) {
+            console.warn(`${LOG_PREFIX} POST reactivate original entries after reverse:`, reactivateErr);
+          } else {
+            console.log(`${LOG_PREFIX} POST original entries reactivated (devolvido→null): log=${origLogId}, count=${reactivatedCount ?? leadIdStrings.length}`);
           }
         }
       }

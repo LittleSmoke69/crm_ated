@@ -11,6 +11,16 @@ const LOG_PREFIX = '[admin][transfer-metrics]';
 const LOGS_PAGE_SIZE = 1000;
 const IN_BATCH_SIZE = 150;
 
+function normalizeCrmWarning(message?: string | null): string | null {
+  const msg = String(message ?? '').trim();
+  const lower = msg.toLowerCase();
+  if (!msg) return null;
+  if (lower.includes('too many attempts') || lower.includes('too many requests') || lower.includes('429')) {
+    return 'CRM temporariamente com muitas tentativas (429). Alguns números podem ficar incompletos.';
+  }
+  return null;
+}
+
 function chunkArray<T>(arr: T[], size: number): T[][] {
   const chunks: T[][] = [];
   for (let i = 0; i < arr.length; i += size) chunks.push(arr.slice(i, i + size));
@@ -153,6 +163,7 @@ export async function GET(req: NextRequest) {
       by_type: Record<string, number>;
       receivedByTarget?: number;
       convertedCount?: number;
+      crm_warning?: string;
     } = {
       transferidos_total,
       transferidos_com_saldo,
@@ -181,6 +192,11 @@ export async function GET(req: NextRequest) {
             sort: 'created_at',
             direction: 'desc',
           });
+          if (!result.success) {
+            payload.convertedCount = undefined;
+            payload.crm_warning = normalizeCrmWarning(result.error ?? result.message) ?? undefined;
+            return successResponse(payload);
+          }
           const leads = result.success && Array.isArray(result.data) ? result.data : [];
           const isTransferred = (lead: unknown) => {
             const l = lead as { transferred?: unknown };
