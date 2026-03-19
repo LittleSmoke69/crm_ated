@@ -5,7 +5,7 @@ import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Save, Loader2, FileVideo, Upload } from 'lucide-react';
+import { Save, Loader2, FileVideo, Upload, ArrowLeft, Eye, EyeOff, CheckCircle2, ImageIcon } from 'lucide-react';
 import { getStoredUserId } from '@/lib/utils/stored-user-id';
 
 type Module = {
@@ -27,6 +27,7 @@ export default function AdminAcademyModuloEditPage() {
   const [module, setModule] = useState<Module | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [form, setForm] = useState({ title: '', slug: '', description: '', order_index: 0, is_published: false, thumbnail_url: '' });
   const [uploadingThumb, setUploadingThumb] = useState(false);
 
@@ -90,6 +91,7 @@ export default function AdminAcademyModuloEditPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
+    setSaved(false);
     try {
       const res = await fetch(`/api/admin/academy/modules/${id}`, {
         method: 'PATCH',
@@ -111,12 +113,14 @@ export default function AdminAcademyModuloEditPage() {
       const data = await res.json();
       setModule(data);
       setForm({ ...form, ...data });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
     } finally {
       setSaving(false);
     }
   };
 
-  if (checking) {
+  if (checking || (loading && !module)) {
     return (
       <Layout>
         <div className="flex items-center justify-center p-12">
@@ -129,16 +133,6 @@ export default function AdminAcademyModuloEditPage() {
   if (id === 'novo') {
     router.replace('/admin/academy/modulos/novo');
     return null;
-  }
-
-  if (loading && !module) {
-    return (
-      <Layout>
-        <div className="flex items-center justify-center p-12">
-          <Loader2 className="h-8 w-8 animate-spin text-[var(--zaploto-green)]" />
-        </div>
-      </Layout>
-    );
   }
 
   if (!module) {
@@ -155,95 +149,156 @@ export default function AdminAcademyModuloEditPage() {
   return (
     <Layout>
       <div className="p-6 max-w-2xl mx-auto">
-        <Link href="/admin/academy/modulos" className="mb-4 inline-block text-sm text-[var(--muted-foreground)] hover:text-[var(--zaploto-green)]">← Módulos</Link>
-        <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-bold">Editar módulo</h1>
+        {/* Header */}
+        <div className="mb-6 flex items-center gap-3">
+          <Link
+            href="/admin/academy/modulos"
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--card-border)] hover:bg-[var(--input-bg)] transition"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </Link>
+          <div className="flex-1">
+            <h1 className="text-xl font-bold">Editar módulo</h1>
+            <p className="text-xs text-[var(--muted-foreground)]">/{module.slug}</p>
+          </div>
           <Link
             href={`/admin/academy/aulas?moduleId=${module.id}`}
-            className="inline-flex items-center gap-2 rounded-lg border border-[var(--card-border)] px-3 py-2 text-sm hover:bg-[var(--input-bg)]"
+            className="inline-flex items-center gap-2 rounded-lg border border-[var(--card-border)] px-3 py-2 text-sm font-medium hover:bg-[var(--input-bg)] transition"
           >
-            <FileVideo className="h-4 w-4" /> Aulas
+            <FileVideo className="h-4 w-4" /> Gerenciar aulas
           </Link>
         </div>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium mb-1">Título *</label>
-            <input
-              type="text"
-              value={form.title}
-              onChange={(e) => setForm({ ...form, title: e.target.value })}
-              className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2"
-              required
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Slug</label>
-            <input
-              type="text"
-              value={form.slug}
-              onChange={(e) => setForm({ ...form, slug: e.target.value })}
-              className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Descrição</label>
-            <textarea
-              value={form.description}
-              onChange={(e) => setForm({ ...form, description: e.target.value })}
-              className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2"
-              rows={3}
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Thumbnail</label>
-            {thumbnailSrc && (
-              <div className="mb-2">
-                <img src={thumbnailSrc} alt="Thumbnail" className="h-24 w-auto rounded-lg border border-[var(--card-border)] object-cover" />
+
+        <form onSubmit={handleSubmit} className="space-y-5">
+          {/* Thumbnail section */}
+          <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-5">
+            <h2 className="mb-4 font-semibold">Capa do módulo</h2>
+
+            {thumbnailSrc ? (
+              <div className="mb-4 overflow-hidden rounded-xl border border-[var(--card-border)]">
+                <img src={thumbnailSrc} alt="Thumbnail" className="h-48 w-full object-cover" />
+              </div>
+            ) : (
+              <div className="mb-4 flex h-36 items-center justify-center rounded-xl border border-dashed border-[var(--card-border)] bg-[var(--input-bg)]">
+                <div className="text-center">
+                  <ImageIcon className="mx-auto mb-2 h-8 w-8 text-[var(--muted-foreground)]" />
+                  <p className="text-xs text-[var(--muted-foreground)]">Sem imagem</p>
+                </div>
               </div>
             )}
-            <div className="flex flex-wrap items-center gap-2">
-              <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-sm hover:bg-[var(--input-bg)]">
-                <Upload className="h-4 w-4" />
+
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-[var(--zaploto-green)] px-4 py-2 text-sm font-medium text-white hover:opacity-90 transition">
+                {uploadingThumb ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
                 {uploadingThumb ? 'Enviando…' : 'Enviar imagem'}
                 <input type="file" accept=".png,.jpg,.jpeg,.webp" onChange={handleThumbnailUpload} className="hidden" disabled={uploadingThumb} />
               </label>
-              <span className="text-xs text-[var(--muted-foreground)]">ou URL externa:</span>
+              <span className="text-xs text-[var(--muted-foreground)]">PNG, JPG ou WEBP</span>
             </div>
-            <input
-              type="text"
-              value={form.thumbnail_url}
-              onChange={(e) => setForm({ ...form, thumbnail_url: e.target.value })}
-              className="mt-1 w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2 text-sm"
-              placeholder="path do Storage (ex: thumbnails/...) ou https://..."
-            />
+
+            {form.thumbnail_url && (
+              <input
+                type="text"
+                value={form.thumbnail_url}
+                onChange={(e) => setForm({ ...form, thumbnail_url: e.target.value })}
+                className="mt-3 w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2 text-xs text-[var(--muted-foreground)]"
+                placeholder="path do Storage ou URL externa"
+              />
+            )}
           </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Ordem</label>
-            <input
-              type="number"
-              value={form.order_index}
-              onChange={(e) => setForm({ ...form, order_index: parseInt(e.target.value, 10) || 0 })}
-              className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2"
-            />
+
+          {/* Basic info section */}
+          <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-5">
+            <h2 className="mb-4 font-semibold">Informações básicas</h2>
+            <div className="space-y-4">
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">Título *</label>
+                <input
+                  type="text"
+                  value={form.title}
+                  onChange={(e) => setForm({ ...form, title: e.target.value })}
+                  className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2.5"
+                  required
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">Slug (URL)</label>
+                <div className="flex items-center gap-2 rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2.5">
+                  <span className="text-sm text-[var(--muted-foreground)]">/academy/modulos/</span>
+                  <input
+                    type="text"
+                    value={form.slug}
+                    onChange={(e) => setForm({ ...form, slug: e.target.value })}
+                    className="flex-1 bg-transparent text-sm outline-none"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">Descrição</label>
+                <textarea
+                  value={form.description}
+                  onChange={(e) => setForm({ ...form, description: e.target.value })}
+                  className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2.5"
+                  rows={3}
+                  placeholder="Breve descrição do módulo…"
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">Ordem de exibição</label>
+                <input
+                  type="number"
+                  value={form.order_index}
+                  onChange={(e) => setForm({ ...form, order_index: parseInt(e.target.value, 10) || 0 })}
+                  className="w-32 rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2.5"
+                />
+              </div>
+            </div>
           </div>
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={form.is_published}
-              onChange={(e) => setForm({ ...form, is_published: e.target.checked })}
-            />
-            <span className="text-sm">Publicado</span>
-          </label>
-          <div className="flex gap-2 pt-4">
+
+          {/* Publication section */}
+          <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-5">
+            <h2 className="mb-4 font-semibold">Publicação</h2>
+            <button
+              type="button"
+              onClick={() => setForm((f) => ({ ...f, is_published: !f.is_published }))}
+              className={`flex w-full items-center gap-3 rounded-xl border-2 p-4 text-left transition ${
+                form.is_published
+                  ? 'border-[var(--zaploto-green)] bg-[var(--zaploto-green-bg)]'
+                  : 'border-[var(--card-border)] bg-[var(--input-bg)]'
+              }`}
+            >
+              <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${
+                form.is_published ? 'bg-[var(--zaploto-green)]' : 'bg-zinc-700'
+              }`}>
+                {form.is_published ? <Eye className="h-5 w-5 text-white" /> : <EyeOff className="h-5 w-5 text-white" />}
+              </div>
+              <div>
+                <p className="font-medium">{form.is_published ? 'Publicado' : 'Rascunho'}</p>
+                <p className="text-xs text-[var(--muted-foreground)]">
+                  {form.is_published ? 'Visível para todos os alunos' : 'Não aparece na área pública'}
+                </p>
+              </div>
+            </button>
+          </div>
+
+          {/* Save button */}
+          <div className="flex items-center gap-3">
             <button
               type="submit"
               disabled={saving}
-              className="inline-flex items-center gap-2 rounded-lg bg-[var(--zaploto-green)] px-4 py-2 text-white hover:opacity-90 disabled:opacity-50"
+              className="inline-flex items-center gap-2 rounded-xl bg-[var(--zaploto-green)] px-6 py-2.5 font-semibold text-white hover:opacity-90 disabled:opacity-50 transition"
             >
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-              Salvar
+              {saving ? 'Salvando…' : 'Salvar módulo'}
             </button>
-            <Link href="/admin/academy/modulos" className="rounded-lg border border-[var(--card-border)] px-4 py-2 text-sm">Cancelar</Link>
+            {saved && (
+              <span className="flex items-center gap-1.5 text-sm text-[var(--zaploto-green)]">
+                <CheckCircle2 className="h-4 w-4" /> Salvo!
+              </span>
+            )}
+            <Link href="/admin/academy/modulos" className="ml-auto text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+              Cancelar
+            </Link>
           </div>
         </form>
       </div>
