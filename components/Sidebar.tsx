@@ -258,6 +258,12 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const itemAgentesIAAdmin: MenuItem = { href: '/admin/ai-agents', icon: Bot, label: 'Agentes IA' };
   const itemAgentesIA: MenuItem = { href: '/ai-agents', icon: Bot, label: 'Agentes IA' };
   const itemChatInterno: MenuItem = { href: '/chat', icon: MessageSquare, label: 'Chat Interno' };
+  const itemChatAtendimento: MenuItem = { href: '/chat-atendimento', icon: Headphones, label: 'Chat Atendimento' };
+  const itemGerenteAtendimentoChat: MenuItem = {
+    href: '/gerente/atendimento-chat',
+    icon: MessageSquare,
+    label: 'Instâncias atendimento',
+  };
   const itemRelatorioChat: MenuItem = { href: '/admin/chat-report', icon: Headphones, label: 'Relatório Chat' };
   const itemEtiquetasChat: MenuItem = { href: '/admin/chat-tags', icon: MessageSquare, label: 'Etiquetas Chat' };
   const itemCRM: MenuItem = {
@@ -461,6 +467,8 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemZaplinkGerente,
         itemDashboard,
         itemInstances,
+        itemChatAtendimento,
+        itemGerenteAtendimentoChat,
         itemAgentesIA,
         itemAcademyPublic,
         itemCRM,
@@ -478,6 +486,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
       return [
         itemMeuDesempenho,
         itemInstances,
+        itemChatAtendimento,
         itemCRM,
         itemCampanhaConsultor,
         itemAgentesIA,

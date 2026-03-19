@@ -1,0 +1,49 @@
+import { supabaseServiceRole } from '@/lib/services/supabase-service';
+
+export type AtendimentoChatProfile = {
+  status?: string | null;
+};
+
+/**
+ * Permite acesso às conversas/mensagens/envio Evolution do chat quando:
+ * - admin / super_admin / suporte; ou
+ * - dono da instância (evolution_instances.user_id); ou
+ * - existe vínculo em atendimento_chat_assignments (gerente ou consultor atribuído).
+ */
+export async function canUserAccessEvolutionChatInstance(
+  userId: string,
+  profile: AtendimentoChatProfile,
+  instanceId: string
+): Promise<boolean> {
+  const status = (profile.status || '').trim().toLowerCase();
+  if (status === 'super_admin' || status === 'admin' || status === 'suporte') {
+    return true;
+  }
+
+  const { data: instance, error } = await supabaseServiceRole
+    .from('evolution_instances')
+    .select('id, user_id, is_chat_instance, is_master')
+    .eq('id', instanceId)
+    .maybeSingle();
+
+  if (error || !instance) return false;
+
+  const isOwner = instance.user_id === userId;
+  const isOwnChatInstance = isOwner && instance.is_chat_instance === true;
+  const isOwnMasterInstance = isOwner && instance.is_master === true;
+
+  if (isOwnChatInstance || isOwnMasterInstance) {
+    return true;
+  }
+
+  const { data: row } = await supabaseServiceRole
+    .from('atendimento_chat_assignments')
+    .select('gerente_user_id, consultor_user_id')
+    .eq('evolution_instance_id', instanceId)
+    .maybeSingle();
+
+  if (!row) return false;
+  if (row.gerente_user_id === userId) return true;
+  if (row.consultor_user_id === userId) return true;
+  return false;
+}

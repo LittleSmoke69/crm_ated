@@ -3433,7 +3433,24 @@ export default function AdminLeadTransferPage() {
         const moveTransferLogId = json?.data?.transfer_log_id ?? null;
         if (moveLeadsSelectedRequest?.id && userId) {
           const sourceConsultant = moveLeadsConsultants.find((c) => c.email?.toLowerCase() === moveLeadsSelectedLog?.target_consultant_email?.toLowerCase());
-          const sourceConsultantId = (sourceConsultant?.id ?? moveLeadsSelectedRequest.source_consultant_id ?? '').toString().trim();
+          const sourceConsultantId = (
+            sourceConsultant?.id
+            ?? approveFormSourceConsultantId
+            ?? moveLeadsSelectedRequest.source_consultant_id
+            ?? ''
+          ).toString().trim();
+          const transferFiltersSnapshot = {
+            moved_from_resolved: true,
+            source_transfer_log_id: moveLeadsSelectedLog?.log_id ?? null,
+            transfer_log_id: moveTransferLogId,
+            transfer_type: moveLeadsTransferType,
+            transfer_deadline_days: moveLeadsDeadlineDays,
+            source_consultant_email: moveLeadsSelectedLog?.target_consultant_email ?? moveLeadsSelectedRequest.source_consultant_email ?? null,
+            target_consultant_email: targetEmail,
+            moved_count: movedCount,
+            moved_lead_ids: leadIds,
+            selected_log_banca_id: moveLeadsSelectedLog?.banca_id ?? moveLeadsSelectedRequest.banca_id ?? null,
+          };
           try {
             if (sourceConsultantId) {
             const approveRes = await fetch(`/api/admin/crm/lead-requests/${moveLeadsSelectedRequest.id}`, {
@@ -3446,6 +3463,8 @@ export default function AdminLeadTransferPage() {
                 banca_id: moveLeadsSelectedLog?.banca_id ?? moveLeadsSelectedRequest.banca_id ?? null,
                 consultores: moveLeadsSelectedRequest.consultores?.map((c) => ({ consultor_id: c.consultor_id, quantity: c.quantity })) ?? [],
                 leads_transferred_count: movedCount,
+                transfer_filters_snapshot: transferFiltersSnapshot,
+                deadline_days: moveLeadsDeadlineDays,
                 transfer_log_id: moveTransferLogId,
               }),
             });

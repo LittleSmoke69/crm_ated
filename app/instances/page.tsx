@@ -69,6 +69,8 @@ const InstancesPage = () => {
 
   const [instanceName, setInstanceName] = useState('');
   const [isMaster, setIsMaster] = useState(false);
+  /** Webhook interno Zaploto (chat): só enviado à API se marcado; padrão desmarcado */
+  const [configureChatWebhook, setConfigureChatWebhook] = useState(false);
   const [maturationType, setMaturationType] = useState<'virgem' | 'maturado'>('maturado');
   const [qrCode, setQrCode] = useState('');
   const [qrTimer, setQrTimer] = useState(0);
@@ -157,6 +159,13 @@ const InstancesPage = () => {
     }
   }, [instances.length, isLoadingInstances]);
 
+  // Modal de criação: webhook do chat sempre começa desmarcado
+  useEffect(() => {
+    if (isCreateModalOpen) {
+      setConfigureChatWebhook(false);
+    }
+  }, [isCreateModalOpen]);
+
   // Mostra botão "Fechar e continuar em segundo plano" no modal de extração após 6 segundos
   useEffect(() => {
     if (!extractGroupsModalExtracting) {
@@ -232,7 +241,12 @@ const InstancesPage = () => {
       const response = await fetch('/api/instances', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-        body: JSON.stringify({ instanceName, isMaster, maturationType }),
+        body: JSON.stringify({
+          instanceName,
+          isMaster,
+          maturationType,
+          configureChatWebhook: isMaster && configureChatWebhook,
+        }),
       });
 
       const data = await response.json().catch((err) => {
@@ -1470,7 +1484,12 @@ const InstancesPage = () => {
                   <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-2 h-5 flex items-center">Tipo de Instância*</label>
                   <div className="grid grid-rows-2 gap-2 flex-1 min-h-[140px]">
                     <div
-                      onClick={() => !loading && setIsMaster(true)}
+                      onClick={() => {
+                        if (!loading) {
+                          setIsMaster(true);
+                          setConfigureChatWebhook(false);
+                        }
+                      }}
                       className={`border-2 rounded-lg p-3 transition flex items-center gap-3 min-h-[64px] ${
                         isMaster ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD95515] dark:bg-[#00ff0015] cursor-pointer' : 'border-gray-200 dark:border-[#555] hover:border-[#8CD95540] dark:hover:border-[#00ff0040] hover:bg-gray-50 dark:hover:bg-[#333] cursor-pointer'
                       } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
@@ -1491,7 +1510,12 @@ const InstancesPage = () => {
                       </div>
                     </div>
                     <div
-                      onClick={() => !loading && setIsMaster(false)}
+                      onClick={() => {
+                        if (!loading) {
+                          setIsMaster(false);
+                          setConfigureChatWebhook(false);
+                        }
+                      }}
                       className={`border-2 rounded-lg p-3 cursor-pointer transition flex items-center gap-3 min-h-[64px] ${
                         !isMaster ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD95515] dark:bg-[#00ff0015]' : 'border-gray-200 dark:border-[#555] hover:border-[#8CD95540] dark:hover:border-[#00ff0040] hover:bg-gray-50 dark:hover:bg-[#333]'
                       } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
@@ -1557,6 +1581,31 @@ const InstancesPage = () => {
                   </div>
                 </div>
               </div>
+
+              {/* Webhook do chat (opcional, padrão desmarcado) — só para instância mestre */}
+              {isMaster && (
+                <div className="rounded-lg border-2 border-gray-200 dark:border-[#555] bg-gray-50/80 dark:bg-[#333]/60 px-4 py-3">
+                  <label className="flex items-start gap-3 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={configureChatWebhook}
+                      onChange={(e) => setConfigureChatWebhook(e.target.checked)}
+                      disabled={loading}
+                      className="mt-1 h-4 w-4 shrink-0 rounded border-gray-300 text-[#8CD955] focus:ring-[#8CD955] dark:border-[#555] dark:bg-[#2a2a2a] disabled:opacity-50"
+                    />
+                    <span className="text-sm text-gray-700 dark:text-[#ddd] leading-snug">
+                      <span className="font-semibold text-gray-800 dark:text-white block mb-0.5">
+                        Registrar webhook do Zaploto (chat)
+                      </span>
+                      Ao marcar, a Evolution envia mensagens para o sistema e elas são gravadas no banco (chat
+                      interno / atendimento). Exige{' '}
+                      <code className="text-xs bg-gray-200 dark:bg-[#444] px-1 rounded">NEXT_PUBLIC_APP_URL</code> e{' '}
+                      <code className="text-xs bg-gray-200 dark:bg-[#444] px-1 rounded">EVOLUTION_WEBHOOK_TOKEN</code>{' '}
+                      configurados. Padrão: desmarcado.
+                    </span>
+                  </label>
+                </div>
+              )}
 
               {/* Botão Criar */}
               <button
