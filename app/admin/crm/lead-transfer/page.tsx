@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { useToast } from '@/hooks/useToast';
@@ -355,7 +355,6 @@ interface GerenteLeadRequest {
 
 export default function AdminLeadTransferPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const { checking, userId } = useRequireAuth();
   const { toasts, showToast, removeToast } = useToast();
 
@@ -821,18 +820,20 @@ export default function AdminLeadTransferPage() {
    * A busca automática de leads segue no efeito existente quando consultants carregar.
    */
   useEffect(() => {
+    if (typeof window === 'undefined') return;
     if (transferUrlInitAppliedRef.current) return;
-    const fromSolicitation = searchParams.get('from_solicitation');
+    const urlSearchParams = new URLSearchParams(window.location.search);
+    const fromSolicitation = urlSearchParams.get('from_solicitation');
     if (fromSolicitation !== '1') return;
 
-    const tab = searchParams.get('tab');
-    const stepParam = Number(searchParams.get('step') || '3');
-    const bancaIdFromUrl = searchParams.get('banca_id')?.trim() || '';
-    const bancaNameFromUrl = searchParams.get('banca_name')?.trim() || '';
-    const sourceEmailFromUrl = searchParams.get('source_email')?.trim() || '';
-    const targetEmailFromUrl = searchParams.get('target_email')?.trim() || '';
-    const targetNameFromUrl = searchParams.get('target_name')?.trim() || '';
-    const requestIdFromUrl = searchParams.get('request_id')?.trim() || '';
+    const tab = urlSearchParams.get('tab');
+    const stepParam = Number(urlSearchParams.get('step') || '3');
+    const bancaIdFromUrl = urlSearchParams.get('banca_id')?.trim() || '';
+    const bancaNameFromUrl = urlSearchParams.get('banca_name')?.trim() || '';
+    const sourceEmailFromUrl = urlSearchParams.get('source_email')?.trim() || '';
+    const targetEmailFromUrl = urlSearchParams.get('target_email')?.trim() || '';
+    const targetNameFromUrl = urlSearchParams.get('target_name')?.trim() || '';
+    const requestIdFromUrl = urlSearchParams.get('request_id')?.trim() || '';
 
     if (!bancaIdFromUrl || !sourceEmailFromUrl) return;
 
@@ -858,7 +859,7 @@ export default function AdminLeadTransferPage() {
     });
     setHistoryBancaFilter(bancaIdFromUrl);
     setActiveTab(tab === 'history' || tab === 'solicitations' || tab === 'analysis' ? tab : 'transfer');
-  }, [searchParams]);
+  }, []);
 
   const loadConsultants = useCallback(async () => {
     if (!bancaId || !userId) return;
