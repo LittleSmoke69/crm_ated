@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname } from 'next/navigation';
-import { LogIn, LayoutDashboard, Menu, X } from 'lucide-react';
+import { LogIn, LayoutDashboard, Menu, X, ArrowLeft } from 'lucide-react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 
 // delay em segundos para cada dot flutuar fora de sincronia
@@ -190,15 +190,25 @@ export default function AcademyLayout({ children }: { children: React.ReactNode 
                 {label}
               </Link>
             ))}
+
+            {/* Separador */}
+            <div className="mx-1 h-4 w-px bg-white/10" />
+
+            {/* Voltar ao Zaploto */}
+            <Link href="/"
+              className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-white/40 transition hover:text-white/70">
+              <ArrowLeft className="h-3.5 w-3.5" /> Zaploto
+            </Link>
+
             {!checking && (
               userId ? (
                 <Link href="/admin"
-                  className="ml-2 flex items-center gap-1.5 rounded-lg border border-[#4ade80]/40 bg-[#4ade80]/10 px-3 py-2 text-sm font-medium text-[#4ade80] hover:bg-[#4ade80]/20 transition">
+                  className="ml-1 flex items-center gap-1.5 rounded-lg border border-[#4ade80]/40 bg-[#4ade80]/10 px-3 py-2 text-sm font-medium text-[#4ade80] hover:bg-[#4ade80]/20 transition">
                   <LayoutDashboard className="h-4 w-4" /> Painel
                 </Link>
               ) : (
                 <Link href="/login"
-                  className="ml-2 flex items-center gap-1.5 rounded-lg border border-[#4ade80]/40 bg-[#4ade80]/10 px-3 py-2 text-sm font-medium text-[#4ade80] hover:bg-[#4ade80]/20 transition">
+                  className="ml-1 flex items-center gap-1.5 rounded-lg border border-[#4ade80]/40 bg-[#4ade80]/10 px-3 py-2 text-sm font-medium text-[#4ade80] hover:bg-[#4ade80]/20 transition">
                   <LogIn className="h-4 w-4" /> Entrar
                 </Link>
               )
@@ -228,20 +238,29 @@ export default function AcademyLayout({ children }: { children: React.ReactNode 
                   {label}
                 </Link>
               ))}
-              {!checking && (
-                <div className="mt-2 pt-2 border-t border-[#1a3d1a]">
-                  {userId ? (
-                    <Link href="/admin" onClick={() => setMenuOpen(false)}
-                      className="flex items-center gap-2 rounded-lg border border-[#4ade80]/40 bg-[#4ade80]/10 px-3 py-3 text-sm font-medium text-[#4ade80]">
-                      <LayoutDashboard className="h-4 w-4" /> Painel administrativo
-                    </Link>
-                  ) : (
-                    <Link href="/login" onClick={() => setMenuOpen(false)}
-                      className="flex items-center gap-2 rounded-lg border border-[#4ade80]/40 bg-[#4ade80]/10 px-3 py-3 text-sm font-medium text-[#4ade80]">
-                      <LogIn className="h-4 w-4" /> Entrar na conta
-                    </Link>
-                  )}
-                </div>
+              <div className="mt-2 pt-2 border-t border-[#1a3d1a] flex flex-col gap-1">
+                {/* Voltar ao Zaploto */}
+                <Link href="/" onClick={() => setMenuOpen(false)}
+                  className="flex items-center gap-2 rounded-lg px-3 py-3 text-sm font-medium text-white/50 hover:text-white/80 transition">
+                  <ArrowLeft className="h-4 w-4" /> Voltar ao Zaploto
+                </Link>
+
+                {!checking && (
+                  <>
+                    {userId ? (
+                      <Link href="/admin" onClick={() => setMenuOpen(false)}
+                        className="flex items-center gap-2 rounded-lg border border-[#4ade80]/40 bg-[#4ade80]/10 px-3 py-3 text-sm font-medium text-[#4ade80]">
+                        <LayoutDashboard className="h-4 w-4" /> Painel administrativo
+                      </Link>
+                    ) : (
+                      <Link href="/login" onClick={() => setMenuOpen(false)}
+                        className="flex items-center gap-2 rounded-lg border border-[#4ade80]/40 bg-[#4ade80]/10 px-3 py-3 text-sm font-medium text-[#4ade80]">
+                        <LogIn className="h-4 w-4" /> Entrar na conta
+                      </Link>
+                    )}
+                  </>
+                )}
+              </div>
               )}
             </nav>
           </div>
