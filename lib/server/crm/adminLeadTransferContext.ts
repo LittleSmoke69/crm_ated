@@ -18,6 +18,64 @@ export interface AdminLeadTransferContext {
   bancaName?: string;
 }
 
+function normalizeBancaUrl(raw: string): string {
+  const cleaned = raw.trim().replace(/^https?:\/\//i, '').replace(/\/api\/crm\/?/i, '').replace(/\/+$/, '').trim();
+  if (!cleaned) return '';
+  return `https://${cleaned}`;
+}
+
+async function hasConsultantInExternalCrm(bancaId: string, consultantEmail: string): Promise<boolean> {
+  try {
+    const { data: banca } = await supabaseServiceRole
+      .from('crm_bancas')
+      .select('url')
+      .eq('id', bancaId)
+      .maybeSingle();
+    const bancaUrl = typeof banca?.url === 'string' ? normalizeBancaUrl(banca.url) : '';
+    const apiKey = process.env.CRM_API_KEY?.trim();
+    if (!bancaUrl || !apiKey) {
+      console.log(`${LOG_PREFIX} isConsultantInBanca external check skipped: bancaUrl/apiKey ausente, bancaId=${bancaId}`);
+      return false;
+    }
+
+    const endpoint = `${bancaUrl}/api/crm/total-indicateds-by-consultant?consultant=${encodeURIComponent(consultantEmail.trim())}`;
+    const curlPreview = [
+      `curl --request GET \\`,
+      `  --url '${endpoint}' \\`,
+      `  --header 'accept: application/json' \\`,
+      `  --header 'x-api-key: $CRM_API_KEY'`,
+    ].join('\n');
+    console.log(`${LOG_PREFIX} isConsultantInBanca external cURL (verificação):\n${curlPreview}`);
+
+    const response = await fetch(endpoint, {
+      method: 'GET',
+      headers: {
+        accept: 'application/json',
+        'x-api-key': apiKey,
+      },
+      signal: AbortSignal.timeout(12000),
+    });
+
+    if (response.status === 200) {
+      console.log(`${LOG_PREFIX} isConsultantInBanca external check: inBanca=true (CRM 200), bancaId=${bancaId}, consultantEmail=${consultantEmail}`);
+      return true;
+    }
+
+    if (response.status === 404) {
+      console.log(`${LOG_PREFIX} isConsultantInBanca external check: inBanca=false (CRM 404), bancaId=${bancaId}, consultantEmail=${consultantEmail}`);
+      return false;
+    }
+
+    const bodyPreview = await response.text().catch(() => '');
+    console.log(`${LOG_PREFIX} isConsultantInBanca external check: status inesperado (CRM ${response.status}), tratando como inBanca=false, bancaId=${bancaId}, consultantEmail=${consultantEmail}, body=${bodyPreview.slice(0, 300)}`);
+    return false;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.log(`${LOG_PREFIX} isConsultantInBanca external check error: bancaId=${bancaId}, consultantEmail=${consultantEmail}, message=${msg}`);
+    return false;
+  }
+}
+
 /**
  * Retorna os IDs de todas as bancas permitidas para admin/super_admin (para filtro "Todas as Bancas").
  * @param zaplotoId - ID do tenant (ex.: de getEffectiveZaplotoId)
@@ -121,8 +179,9 @@ export async function isConsultantInBanca(bancaId: string, consultantEmail: stri
     .limit(1);
 
   if (!profiles?.length) {
-    console.log(`${LOG_PREFIX} isConsultantInBanca: no profile for email, bancaId=${bancaId}, consultantEmail=${consultantEmail}`);
-    return false;
+    const existsInExternalCrm = await hasConsultantInExternalCrm(bancaId, consultantEmail);
+    console.log(`${LOG_PREFIX} isConsultantInBanca: no profile for email, bancaId=${bancaId}, consultantEmail=${consultantEmail}, externalCrm=${existsInExternalCrm}`);
+    return existsInExternalCrm;
   }
 
   const userId = profiles[0].id;
@@ -153,6 +212,7 @@ export async function isConsultantInBanca(bancaId: string, consultantEmail: stri
     }
   }
 
-  console.log(`${LOG_PREFIX} isConsultantInBanca: bancaId=${bancaId}, consultantEmail=${consultantEmail}, userId=${userId}, inBanca=false`);
-  return false;
+  const existsInExternalCrm = await hasConsultantInExternalCrm(bancaId, consultantEmail);
+  console.log(`${LOG_PREFIX} isConsultantInBanca: bancaId=${bancaId}, consultantEmail=${consultantEmail}, userId=${userId}, inBanca=false (supabase), externalCrm=${existsInExternalCrm}`);
+  return existsInExternalCrm;
 }

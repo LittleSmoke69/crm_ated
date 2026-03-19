@@ -8,6 +8,11 @@ import { normalizeDateParam, dateToStartOfDaySãoPauloISO, dateToEndOfDaySãoPau
 
 const LOG_PREFIX = '[admin][transfer-consultant-verifier]';
 
+function isCrmRateLimitMessage(message?: string | null): boolean {
+  const msg = String(message ?? '').toLowerCase();
+  return msg.includes('too many attempts') || msg.includes('too many requests') || msg.includes('429');
+}
+
 export type ConsultantVerifierRow = {
   consultant_email: string;
   consultant_name: string;
@@ -98,6 +103,7 @@ export async function GET(req: NextRequest) {
     const client = createCrmRedistributionClient(resolved.crmBaseUrl);
     const results: ConsultantVerifierRow[] = [];
     const emailToName = new Map<string, string>();
+    let crmRateLimitDetected = false;
 
     for (const [consultantEmail, consultantEntries] of entriesByConsultant.entries()) {
       let depositaramDepois = 0;
@@ -111,6 +117,20 @@ export async function GET(req: NextRequest) {
           1,
           { transferredFilter: 'yes', sort: 'created_at', direction: 'desc' }
         );
+        if (!result.success) {
+          if (isCrmRateLimitMessage(result.error ?? result.message)) {
+            crmRateLimitDetected = true;
+          }
+          results.push({
+            consultant_email: consultantEmail,
+            consultant_name: emailToName.get(consultantEmail) ?? consultantEmail,
+            total_transferidos: consultantEntries.length,
+            depositaram_depois: 0,
+            jogaram_depois: 0,
+            sacaram_depois: 0,
+          });
+          continue;
+        }
         const leads = result.success && Array.isArray(result.data) ? result.data : [];
         const currentByLeadId = new Map<string, { total_depositado?: number; total_apostado?: number; total_saque?: number; available_withdraw?: number }>();
         for (const l of leads) {
@@ -173,6 +193,13 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    if (crmRateLimitDetected) {
+      return successResponse(results, {
+        meta: {
+          crm_warning: 'CRM temporariamente com muitas tentativas (429). Parte dos consultores pode aparecer com contagem incompleta.',
+        },
+      });
+    }
     return successResponse(results);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);

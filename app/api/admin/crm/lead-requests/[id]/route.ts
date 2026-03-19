@@ -300,13 +300,38 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       const prevSnap = (existing.approval_snapshot ?? {}) as { total_leads_transferred?: number; leads_transferred_count?: number; transfer_log_ids?: string[] };
       const existingTransferred = prevSnap.total_leads_transferred ?? prevSnap.leads_transferred_count ?? 0;
       const existingLogIds = Array.isArray(prevSnap.transfer_log_ids) ? prevSnap.transfer_log_ids : [];
-      const newBatch = typeof leadsTransferredCount === 'number' && Number.isInteger(leadsTransferredCount) && leadsTransferredCount >= 0 ? leadsTransferredCount : 0;
+      const newLogId = typeof transferLogId === 'string' && transferLogId.trim() ? transferLogId.trim() : null;
+      let computedTransferredFromLog: number | null = null;
+      if (newLogId) {
+        const { data: transferLogRow } = await supabaseServiceRole
+          .from('admin_lead_transfer_logs')
+          .select('count')
+          .eq('id', newLogId)
+          .maybeSingle();
+        const logCount = Number((transferLogRow as { count?: unknown } | null)?.count);
+        if (Number.isFinite(logCount) && logCount >= 0) {
+          computedTransferredFromLog = logCount;
+        } else {
+          const { count: entryCount } = await supabaseServiceRole
+            .from('admin_lead_transfer_entries')
+            .select('id', { count: 'exact', head: true })
+            .eq('transfer_log_id', newLogId);
+          if (typeof entryCount === 'number' && Number.isFinite(entryCount) && entryCount >= 0) {
+            computedTransferredFromLog = entryCount;
+          }
+        }
+      }
+
+      const payloadTransferredCount =
+        typeof leadsTransferredCount === 'number' && Number.isInteger(leadsTransferredCount) && leadsTransferredCount >= 0
+          ? leadsTransferredCount
+          : 0;
+      const alreadyCountedThisLog = newLogId ? existingLogIds.includes(newLogId) : false;
+      const newBatch = alreadyCountedThisLog ? 0 : (computedTransferredFromLog ?? payloadTransferredCount);
       const cumulativeTransferred = existingTransferred + newBatch;
       const isComplete = cumulativeTransferred >= totalRequested;
       updatePayload.status = isComplete ? 'approved' : 'partial';
-
-      const newLogId = typeof transferLogId === 'string' && transferLogId.trim() ? transferLogId.trim() : null;
-      const allLogIds = newLogId ? [...existingLogIds, newLogId] : existingLogIds;
+      const allLogIds = newLogId ? [...new Set([...existingLogIds, newLogId])] : existingLogIds;
 
       if (hasTransferMetadata) {
         updatePayload.approval_snapshot = {
