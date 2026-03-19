@@ -77,7 +77,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
     }
   };
 
-  // Carrega grupos da Evolution (fetchAllGroups)
+  // Carrega grupos da Evolution (fetchAllGroups) com retry em segundo plano
   const fetchEvolutionGroups = async () => {
     if (!selectedInstance) {
       showToast('Selecione uma instância primeiro', 'error');
@@ -85,67 +85,21 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
     }
     setFetchingAll(true);
     try {
-      // Timeout de 50 segundos para buscar grupos
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => {
-        controller.abort();
-        console.warn('⏱️ [FETCH GROUPS] Timeout de 50s atingido ao buscar grupos');
-      }, 50000);
+      const response = await fetch('/api/groups/fetch', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-Id': userId
+        },
+        body: JSON.stringify({ instanceName: selectedInstance }),
+      });
 
-      let response: Response;
-      try {
-        response = await fetch('/api/groups/fetch', {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            'X-User-Id': userId 
-          },
-          body: JSON.stringify({ instanceName: selectedInstance }),
-          signal: controller.signal,
-        });
-        clearTimeout(timeoutId);
-      } catch (fetchError: any) {
-        clearTimeout(timeoutId);
-        
-        // Se foi abortado por timeout, relança com mensagem específica
-        if (fetchError.name === 'AbortError' || controller.signal.aborted) {
-          throw new Error('Timeout: A busca de grupos demorou muito. Tente novamente.');
-        }
-        
-        // Outros erros de rede
-        throw new Error(`Erro de conexão: ${fetchError.message || 'Erro desconhecido'}`);
-      }
-
-      // Verifica se a resposta é JSON antes de tentar parsear
-      const contentType = response.headers.get('content-type');
-      let data: any;
-      
-      if (!contentType || !contentType.includes('application/json')) {
-        const text = await response.text();
-        console.error('❌ [FETCH GROUPS] Resposta não é JSON:', text.substring(0, 200));
-        
-        // Se for erro 504 (Gateway Timeout), mensagem específica
-        if (response.status === 504) {
-          throw new Error('Timeout do servidor: A busca de grupos demorou muito. Tente novamente.');
-        }
-        
-        throw new Error(`Servidor retornou erro (${response.status}). Tente novamente.`);
-      }
-
-      try {
-        data = await response.json();
-      } catch (parseError: any) {
-        console.error('❌ [FETCH GROUPS] Erro ao parsear JSON:', parseError);
-        throw new Error('Erro ao processar resposta do servidor. Tente novamente.');
-      }
-
+      const data = await response.json();
       if (data.success) {
-        // Combina com os grupos existentes sem duplicar por id
         const evoGroups = (data.data || []).map((g: any) => ({
           id: g.id || g.remoteJid,
           subject: g.subject
         }));
-        
         setGroups(prev => {
           const byId = new Map<string, Group>(prev.map(p => [p.id, p]));
           evoGroups.forEach((g: Group) => { if (!byId.has(g.id)) byId.set(g.id, g); });
@@ -156,16 +110,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
         showToast(`Erro ao buscar grupos: ${data.error || 'Erro desconhecido'}`, 'error');
       }
     } catch (error: any) {
-      console.error('❌ [FETCH GROUPS] Erro ao buscar grupos:', error);
-      
-      // Mensagens de erro mais específicas
-      if (error.name === 'AbortError' || error.message?.includes('Timeout')) {
-        showToast('Timeout: A busca de grupos demorou muito. Tente novamente ou selecione outra instância.', 'error');
-      } else if (error.message) {
-        showToast(`Erro ao buscar grupos: ${error.message}`, 'error');
-      } else {
-        showToast('Erro ao buscar grupos da Evolution. Tente novamente.', 'error');
-      }
+      showToast('Erro ao buscar grupos da Evolution. Tente novamente.', 'error');
     } finally {
       setFetchingAll(false);
     }

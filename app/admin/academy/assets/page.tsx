@@ -4,7 +4,7 @@ import { useEffect, useState, useRef } from 'react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import Link from 'next/link';
-import { Upload, Loader2, FileText, Image as ImageIcon, FileSpreadsheet, File } from 'lucide-react';
+import { Upload, Loader2, FileText, Image as ImageIcon, FileSpreadsheet, File, ArrowLeft, ExternalLink, CheckCircle2, AlertCircle } from 'lucide-react';
 import { getStoredUserId } from '@/lib/utils/stored-user-id';
 
 type Asset = {
@@ -19,12 +19,29 @@ type Asset = {
   created_at: string;
 };
 
+function AssetIcon({ type }: { type: string }) {
+  if (type === 'pdf' || type === 'doc' || type === 'docx') return <FileText className="h-5 w-5" />;
+  if (type === 'table') return <FileSpreadsheet className="h-5 w-5" />;
+  if (type === 'image') return <ImageIcon className="h-5 w-5" />;
+  return <File className="h-5 w-5" />;
+}
+
+const TYPE_COLORS: Record<string, string> = {
+  pdf: 'bg-red-500/15 text-red-400',
+  doc: 'bg-blue-500/15 text-blue-400',
+  docx: 'bg-blue-500/15 text-blue-400',
+  table: 'bg-green-500/15 text-green-400',
+  image: 'bg-purple-500/15 text-purple-400',
+  other: 'bg-zinc-600/40 text-[var(--muted-foreground)]',
+};
+
 export default function AdminAcademyAssetsPage() {
   const { checking, userId } = useRequireAuth();
   const [assets, setAssets] = useState<Asset[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadSuccess, setUploadSuccess] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
   const [uploadForm, setUploadForm] = useState({ file: null as File | null, type: '', title: '' });
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -56,6 +73,7 @@ export default function AdminAcademyAssetsPage() {
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
     setUploadError(null);
+    setUploadSuccess(false);
     if (!uploadForm.file || !uploadForm.file.size) {
       setUploadError('Selecione um arquivo.');
       return;
@@ -82,11 +100,13 @@ export default function AdminAcademyAssetsPage() {
       });
       const errData = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setUploadError(errData.error || (res.status === 403 ? 'Acesso negado. Apenas Admin.' : 'Erro no upload. Tente outro formato ou tamanho.'));
+        setUploadError(errData.error || (res.status === 403 ? 'Acesso negado.' : 'Erro no upload.'));
         return;
       }
       setUploadForm({ file: null, type: '', title: '' });
       if (fileInputRef.current) fileInputRef.current.value = '';
+      setUploadSuccess(true);
+      setTimeout(() => setUploadSuccess(false), 4000);
       fetchAssets();
     } finally {
       setUploading(false);
@@ -106,96 +126,148 @@ export default function AdminAcademyAssetsPage() {
   return (
     <Layout>
       <div className="p-6 max-w-4xl mx-auto">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
-          <h1 className="text-2xl font-bold text-[var(--foreground)]">Materiais (Assets)</h1>
-          <Link href="/admin/academy" className="rounded-lg border border-[var(--card-border)] px-4 py-2 text-sm font-medium hover:bg-[var(--input-bg)]">Voltar</Link>
+        {/* Header */}
+        <div className="mb-6 flex items-center gap-3">
+          <Link
+            href="/admin/academy"
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--card-border)] hover:bg-[var(--input-bg)] transition"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </Link>
+          <div>
+            <h1 className="text-xl font-bold">Materiais de apoio</h1>
+            <p className="text-xs text-[var(--muted-foreground)]">
+              {assets.length} arquivo{assets.length !== 1 ? 's' : ''} · associe às aulas em Editar aula → Anexos
+            </p>
+          </div>
         </div>
 
-        <form onSubmit={handleUpload} className="mb-8 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-          <h2 className="font-semibold mb-1">Material de apoio</h2>
-          <p className="text-sm text-[var(--muted-foreground)] mb-3">
-            Envie PDFs, documentos, planilhas, imagens ou outros arquivos. Depois associe às aulas em Editar aula → Anexos. O usuário poderá baixar qualquer tipo.
-          </p>
+        {/* Upload card */}
+        <div className="mb-6 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-5">
+          <div className="mb-4 flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-purple-500/10">
+              <Upload className="h-5 w-5 text-purple-400" />
+            </div>
+            <div>
+              <h2 className="font-semibold">Novo material</h2>
+              <p className="text-xs text-[var(--muted-foreground)]">PDF, DOC, planilha, imagem, ZIP e mais</p>
+            </div>
+          </div>
+
           {uploadError && (
-            <div className="mb-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-600 dark:text-red-400 text-sm p-3">
-              {uploadError}
+            <div className="mb-4 flex items-start gap-2 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-400">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /> {uploadError}
             </div>
           )}
-          <div className="flex flex-wrap gap-4 items-end">
-            <div>
-              <label className="block text-sm font-medium mb-1">Arquivo *</label>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.webp,.gif,.svg,.txt,.csv,.xls,.xlsx,.zip,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*,text/*,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/zip"
-                onChange={(e) => setUploadForm({ ...uploadForm, file: e.target.files?.[0] ?? null })}
-                className="block w-full text-sm file:mr-2 file:rounded file:border-0 file:bg-[var(--zaploto-green)] file:px-3 file:py-1.5 file:text-white file:text-sm"
-              />
+          {uploadSuccess && (
+            <div className="mb-4 flex items-center gap-2 rounded-xl border border-[var(--zaploto-green-border)] bg-[var(--zaploto-green-bg)] p-3 text-sm text-[var(--zaploto-green)]">
+              <CheckCircle2 className="h-4 w-4 shrink-0" /> Material enviado com sucesso!
             </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">Tipo (opcional)</label>
-              <select value={uploadForm.type} onChange={(e) => setUploadForm({ ...uploadForm, type: e.target.value })} className="rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2">
-                <option value="">Detectar pelo arquivo</option>
-                <option value="pdf">PDF</option>
-                <option value="doc">DOC</option>
-                <option value="docx">DOCX</option>
-                <option value="image">Imagem</option>
-                <option value="table">Planilha/Tabela</option>
-                <option value="other">Outro</option>
-              </select>
-            </div>
-            <div className="min-w-[200px] flex-1">
-              <label className="block text-sm font-medium mb-1">Título *</label>
-              <input
-                type="text"
-                value={uploadForm.title}
-                onChange={(e) => setUploadForm({ ...uploadForm, title: e.target.value })}
-                className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2"
-                placeholder="Ex: Apostila módulo 1"
-              />
-            </div>
-            <button type="submit" disabled={uploading || !uploadForm.file} className="inline-flex items-center gap-2 rounded-lg bg-[var(--zaploto-green)] px-4 py-2 text-white hover:opacity-90 disabled:opacity-50">
-              {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />} Enviar
-            </button>
-          </div>
-        </form>
+          )}
 
+          <form onSubmit={handleUpload}>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="sm:col-span-2">
+                <label className="mb-1.5 block text-sm font-medium">Arquivo *</label>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.webp,.gif,.svg,.txt,.csv,.xls,.xlsx,.zip,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*,text/*,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/zip"
+                  onChange={(e) => setUploadForm({ ...uploadForm, file: e.target.files?.[0] ?? null })}
+                  className="block w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] p-2 text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-[var(--zaploto-green)] file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white"
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">Título *</label>
+                <input
+                  type="text"
+                  value={uploadForm.title}
+                  onChange={(e) => setUploadForm({ ...uploadForm, title: e.target.value })}
+                  className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2.5"
+                  placeholder="Ex: Apostila módulo 1"
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">Tipo</label>
+                <select
+                  value={uploadForm.type}
+                  onChange={(e) => setUploadForm({ ...uploadForm, type: e.target.value })}
+                  className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2.5"
+                >
+                  <option value="">Detectar automaticamente</option>
+                  <option value="pdf">PDF</option>
+                  <option value="doc">DOC</option>
+                  <option value="docx">DOCX</option>
+                  <option value="image">Imagem</option>
+                  <option value="table">Planilha/Tabela</option>
+                  <option value="other">Outro</option>
+                </select>
+              </div>
+            </div>
+            <div className="mt-4">
+              <button
+                type="submit"
+                disabled={uploading || !uploadForm.file || !uploadForm.title}
+                className="inline-flex items-center gap-2 rounded-xl bg-[var(--zaploto-green)] px-5 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50 transition"
+              >
+                {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                {uploading ? 'Enviando…' : 'Enviar material'}
+              </button>
+            </div>
+          </form>
+        </div>
+
+        {/* List */}
         {listError && (
-          <div className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-amber-700 dark:text-amber-400 text-sm">
-            {listError}
+          <div className="mb-4 flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-400">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /> {listError}
           </div>
         )}
 
         {loading ? (
-          <div className="flex justify-center py-12">
+          <div className="flex justify-center py-16">
             <Loader2 className="h-8 w-8 animate-spin text-[var(--zaploto-green)]" />
           </div>
         ) : assets.length === 0 ? (
-          <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-12 text-center text-[var(--muted-foreground)]">
-            {listError ? null : 'Nenhum material. Faça upload acima.'}
+          <div className="rounded-2xl border border-dashed border-[var(--card-border)] p-12 text-center text-[var(--muted-foreground)]">
+            {!listError && 'Nenhum material enviado ainda. Use o formulário acima.'}
           </div>
         ) : (
           <ul className="space-y-2">
-            {assets.map((a) => (
-              <li key={a.id} className="flex items-center gap-3 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-                {a.type === 'pdf' || a.type === 'doc' || a.type === 'docx' ? (
-                  <FileText className="h-5 w-5 shrink-0 text-[var(--muted-foreground)]" />
-                ) : a.type === 'table' ? (
-                  <FileSpreadsheet className="h-5 w-5 shrink-0 text-[var(--muted-foreground)]" />
-                ) : a.type === 'image' ? (
-                  <ImageIcon className="h-5 w-5 shrink-0 text-[var(--muted-foreground)]" />
-                ) : (
-                  <File className="h-5 w-5 shrink-0 text-[var(--muted-foreground)]" />
-                )}
-                <div className="min-w-0 flex-1">
-                  <p className="font-medium">{a.title}</p>
-                  <p className="text-sm text-[var(--muted-foreground)]">{a.type} · {a.file_path}</p>
-                </div>
-                {a.public_url && (
-                  <a href={a.public_url} target="_blank" rel="noopener noreferrer" className="text-sm text-[var(--zaploto-green)] hover:underline shrink-0">Abrir</a>
-                )}
-              </li>
-            ))}
+            {assets.map((a) => {
+              const colorClass = TYPE_COLORS[a.type] ?? TYPE_COLORS.other;
+              return (
+                <li key={a.id} className="flex items-center gap-3 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 hover:border-[var(--zaploto-green-border)] transition">
+                  {/* Icon */}
+                  <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${colorClass}`}>
+                    <AssetIcon type={a.type} />
+                  </div>
+
+                  {/* Info */}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <p className="font-medium truncate">{a.title}</p>
+                      <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium uppercase ${colorClass}`}>
+                        {a.type}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 truncate text-xs text-[var(--muted-foreground)]">{a.file_path}</p>
+                  </div>
+
+                  {/* Link */}
+                  {a.public_url && (
+                    <a
+                      href={a.public_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="shrink-0 flex items-center gap-1 rounded-lg border border-[var(--card-border)] px-3 py-1.5 text-xs font-medium hover:bg-[var(--input-bg)] transition"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" /> Abrir
+                    </a>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>

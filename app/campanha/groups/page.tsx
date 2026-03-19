@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import Layout from '@/components/Layout';
 import { useDashboardData, WhatsAppInstance, DbGroup, EvolutionGroup, Contact } from '@/hooks/useDashboardData';
@@ -21,6 +21,22 @@ import {
 } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import { supabase } from '@/lib/supabase';
+
+/** Evita SyntaxError quando a API retorna HTML (404, 500, etc.) em vez de JSON. */
+async function parseJsonFromResponse(response: Response): Promise<unknown> {
+  const contentType = response.headers.get('content-type') ?? '';
+  const text = await response.text();
+  if (!contentType.includes('application/json')) {
+    console.warn('[groups] Resposta não é JSON:', text.substring(0, 150));
+    throw new Error('Resposta inválida do servidor. Verifique se está logado e tente novamente.');
+  }
+  if (!text || !text.trim()) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error('Resposta inválida do servidor. Tente novamente.');
+  }
+}
 
 const GroupsPage = () => {
   const { checking } = useRequireAuth();
@@ -60,6 +76,7 @@ const GroupsPage = () => {
   const [availGroupsSearch, setAvailGroupsSearch] = useState('');
   const [availGroupsPage, setAvailGroupsPage] = useState(1);
   const [availGroupsPerPage, setAvailGroupsPerPage] = useState(10);
+  const waitAbortedRef = useRef(false);
 
   useEffect(() => {
     if (userId) {
@@ -170,7 +187,7 @@ const GroupsPage = () => {
         }),
       });
 
-      const result = await response.json();
+      const result = (await parseJsonFromResponse(response)) as { success?: boolean; message?: string };
 
       if (result.success) {
         setSuccess(true);
@@ -195,30 +212,102 @@ const GroupsPage = () => {
     }
   };
 
-  // Funções de gestão de grupos
+  // Um job por usuário+instância (API deduplica); cliente espera com /wait (poucas requisições)
   const handleLoadGroups = async () => {
     if (!userId || !selectedInstance) {
       showToast('Selecione uma instância', 'error');
       return;
     }
+    if (groupsLoading) {
+      showToast('Aguarde a busca atual terminar.', 'info');
+      return;
+    }
 
+    waitAbortedRef.current = false;
     setGroupsLoading(true);
     try {
       const response = await fetch('/api/groups/fetch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-        body: JSON.stringify({ instanceName: selectedInstance }),
+        body: JSON.stringify({ instanceName: selectedInstance, background: true }),
       });
 
-      const data = await response.json();
-      if (response.ok && data.data) {
-        setAvailableGroups(data.data);
+      const data = (await parseJsonFromResponse(response)) as {
+        job_id?: string;
+        reused?: boolean;
+        data?: unknown[];
+        error?: string;
+      };
+
+      if (response.status === 202 && data.job_id) {
+        const jobId = data.job_id as string;
+        showToast(
+          data.reused ? 'Continuando busca em andamento...' : 'Busca de grupos em andamento. Aguarde...',
+          'info'
+        );
+        const maxWaitRounds = 120;
+        let rounds = 0;
+
+        while (rounds < maxWaitRounds && !waitAbortedRef.current) {
+          const waitRes = await fetch(`/api/groups/fetch/jobs/${jobId}/wait`, {
+            headers: { 'X-User-Id': userId ?? '' },
+          });
+          const waitJson = (await parseJsonFromResponse(waitRes)) as {
+            success?: boolean;
+            data?: { status?: string; groups_count?: number; error_message?: string; done?: boolean };
+            error?: string;
+          };
+          if (!waitRes.ok || !waitJson.success) {
+            showToast(waitJson?.error || 'Erro ao aguardar job', 'error');
+            break;
+          }
+          const d = waitJson.data;
+          if (d?.status === 'completed') {
+            const count = d.groups_count ?? 0;
+            showToast(`${count} grupo(s) carregados e sincronizados.`, 'success');
+            await loadDbGroups();
+            const listRes = await fetch(`/api/groups?instanceName=${encodeURIComponent(selectedInstance)}`, {
+              headers: { 'X-User-Id': userId ?? '' },
+            });
+            const listJson = (await parseJsonFromResponse(listRes)) as {
+              success?: boolean;
+              data?: { group_id: string; group_subject?: string | null }[];
+            };
+            if (listRes.ok && listJson.success && Array.isArray(listJson.data)) {
+              setAvailableGroups(
+                listJson.data.map((g: { group_id: string; group_subject?: string | null }) => ({
+                  id: g.group_id,
+                  subject: g.group_subject ?? '',
+                  pictureUrl: undefined,
+                  size: undefined,
+                }))
+              );
+            }
+            break;
+          }
+          if (d?.status === 'failed') {
+            showToast(d.error_message || 'Falha ao buscar grupos', 'error');
+            break;
+          }
+          if (d?.done === true && d?.status !== 'pending' && d?.status !== 'processing') {
+            break;
+          }
+          rounds++;
+        }
+        if (rounds >= maxWaitRounds) {
+          showToast('A busca ainda está em andamento. Atualize a página em alguns minutos.', 'info');
+        }
+        return;
+      }
+
+      if (response.ok && data.data && Array.isArray(data.data)) {
+        setAvailableGroups(data.data as EvolutionGroup[]);
         showToast(`${data.data.length} grupo(s) carregado(s)`, 'success');
       } else {
         showToast(data.error || 'Erro ao carregar grupos', 'error');
       }
     } catch (error) {
-      showToast('Erro ao carregar grupos', 'error');
+      showToast(error instanceof Error ? error.message : 'Erro ao carregar grupos', 'error');
     } finally {
       setGroupsLoading(false);
     }
@@ -238,7 +327,7 @@ const GroupsPage = () => {
           size: group.size,
         }),
       });
-      const data = await response.json();
+      const data = (await parseJsonFromResponse(response)) as { error?: string };
       if (response.ok) {
         showToast('Grupo salvo com sucesso', 'success');
         await loadDbGroups();
@@ -246,7 +335,7 @@ const GroupsPage = () => {
         showToast(data.error || 'Erro ao salvar grupo', 'error');
       }
     } catch (error) {
-      showToast('Erro ao salvar grupo', 'error');
+      showToast(error instanceof Error ? error.message : 'Erro ao salvar grupo', 'error');
     }
   };
 
@@ -268,7 +357,11 @@ const GroupsPage = () => {
         headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
         body: JSON.stringify({ instanceName: selectedInstance, groups }),
       });
-      const data = await response.json();
+      const data = (await parseJsonFromResponse(response)) as {
+        success?: boolean;
+        data?: { inserted?: number; updated?: number };
+        error?: string;
+      };
       if (response.ok && data.success) {
         const { inserted = 0, updated = 0 } = data.data || {};
         showToast(`${inserted + updated} grupo(s) salvos/sincronizados (sem duplicar existentes)`, 'success');
@@ -278,7 +371,7 @@ const GroupsPage = () => {
         showToast(data.error || 'Erro ao salvar grupos', 'error');
       }
     } catch (error) {
-      showToast('Erro ao salvar todos os grupos', 'error');
+      showToast(error instanceof Error ? error.message : 'Erro ao salvar todos os grupos', 'error');
     } finally {
       setSavingAllGroups(false);
     }
@@ -307,11 +400,17 @@ const GroupsPage = () => {
     loadDbGroups();
   }, [loadDbGroups]);
 
-  // Filtros e paginação
-  const filteredSavedGroups = dbGroups.filter(g => {
+  // Filtros e paginação (deduplica por group_id para evitar keys duplicadas no React)
+  const rawFilteredSaved = dbGroups.filter(g => {
     const q = savedGroupsSearch.toLowerCase().trim();
     if (!q) return true;
     return (g.group_subject || '').toLowerCase().includes(q) || (g.group_id || '').toLowerCase().includes(q);
+  });
+  const seenGroupIds = new Set<string>();
+  const filteredSavedGroups = rawFilteredSaved.filter(g => {
+    if (seenGroupIds.has(g.group_id)) return false;
+    seenGroupIds.add(g.group_id);
+    return true;
   });
 
   const filteredAvailGroups = availableGroups.filter(g => {
@@ -580,13 +679,9 @@ const GroupsPage = () => {
                     className="flex-1 py-3 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition disabled:opacity-50 flex items-center justify-center gap-2"
                   >
                     {groupsLoading ? (
-                      <span className="inline-flex items-center">
-                        Isso pode demorar um pouco
-                        <span className="inline-flex ml-1 gap-0">
-                          <span className="wave-dot-1">.</span>
-                          <span className="wave-dot-2">.</span>
-                          <span className="wave-dot-3">.</span>
-                        </span>
+                      <span className="inline-flex items-center gap-2">
+                        <Loader2 className="w-5 h-5 animate-spin shrink-0" />
+                        Carregando grupos…
                       </span>
                     ) : (
                       'Carregar Grupos da instância'

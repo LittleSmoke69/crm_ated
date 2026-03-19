@@ -5,20 +5,13 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import {
-  Check,
-  Download,
-  ExternalLink,
-  Lock,
-  Loader2,
-  FileText,
-  Image as ImageIcon,
-  FileSpreadsheet,
-  File as FileIcon,
+  Check, Download, ExternalLink, Lock, Loader2,
+  FileText, Image as ImageIcon, FileSpreadsheet, File as FileIcon,
+  ArrowLeft, CheckCircle2, ChevronRight, ChevronDown, Clock, PlayCircle,
 } from 'lucide-react';
 import VturbPlayer from '@/components/academy/VturbPlayer';
 import LessonComments from '@/components/academy/LessonComments';
 
-/** Extrai e valida src de um HTML de iframe (apenas https). */
 function sanitizeIframeSrc(html: string | null): string | null {
   if (!html || typeof html !== 'string') return null;
   const match = html.match(/<iframe[^>]+src=["']([^"']+)["']/i);
@@ -54,6 +47,7 @@ type Lesson = {
   }>;
 };
 
+type LessonListItem = { id: string; title: string; slug: string; estimated_minutes: number | null };
 type ProgressItem = { lesson_id: string; status: string };
 
 export default function AcademyLessonPage() {
@@ -61,11 +55,12 @@ export default function AcademyLessonPage() {
   const lessonSlug = params.lessonSlug as string;
   const { userId } = useRequireAuth();
   const [lesson, setLesson] = useState<Lesson | null>(null);
-  const [lessonsInModule, setLessonsInModule] = useState<{ id: string; title: string; slug: string }[]>([]);
+  const [lessonsInModule, setLessonsInModule] = useState<LessonListItem[]>([]);
   const [progress, setProgress] = useState<ProgressItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [markingComplete, setMarkingComplete] = useState(false);
   const [completed, setCompleted] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
     if (!lessonSlug) return;
@@ -73,7 +68,9 @@ export default function AcademyLessonPage() {
       try {
         const [lessonRes, progRes] = await Promise.all([
           fetch(`/api/academy/lessons/${lessonSlug}`),
-          userId ? fetch('/api/academy/progress', { headers: { 'x-user-id': userId } }).then((r) => r.ok ? r.json() : []) : Promise.resolve([]),
+          userId
+            ? fetch('/api/academy/progress', { headers: { 'x-user-id': userId } }).then((r) => r.ok ? r.json() : [])
+            : Promise.resolve([]),
         ]);
         if (lessonRes.ok) {
           const data = await lessonRes.json();
@@ -82,8 +79,16 @@ export default function AcademyLessonPage() {
           if (data.module?.slug) {
             const listRes = await fetch(`/api/academy/lessons?moduleSlug=${encodeURIComponent(data.module.slug)}`);
             if (listRes.ok) {
-              const list = await listRes.json();
-              setLessonsInModule(list);
+              const listJson = await listRes.json();
+              const lessonsRows = Array.isArray(listJson?.lessons) ? listJson.lessons : [];
+              // Mantém apenas o shape que o componente usa para navegação
+              const mapped: LessonListItem[] = lessonsRows.map((l: any) => ({
+                id: String(l.id),
+                title: String(l.title ?? ''),
+                slug: String(l.slug ?? ''),
+                estimated_minutes: l.estimated_minutes ?? null,
+              }));
+              setLessonsInModule(mapped);
             }
           }
         }
@@ -105,10 +110,7 @@ export default function AcademyLessonPage() {
       });
       if (res.ok) {
         setCompleted(true);
-        setProgress((prev) => {
-          const rest = prev.filter((p) => p.lesson_id !== lesson.id);
-          return [...rest, { lesson_id: lesson.id, status: 'completed' }];
-        });
+        setProgress((prev) => [...prev.filter((p) => p.lesson_id !== lesson.id), { lesson_id: lesson.id, status: 'completed' }]);
       }
     } finally {
       setMarkingComplete(false);
@@ -121,21 +123,14 @@ export default function AcademyLessonPage() {
     if (data.url) window.open(data.url, '_blank');
   };
 
+  const isLessonCompleted = (id: string) => progress.some((p) => p.lesson_id === id && p.status === 'completed');
+
   const renderPlayer = () => {
     if (!lesson) return null;
     const isLocked = !userId;
+
     if (lesson.content_type === 'vturb' && lesson.vturb_project_id && lesson.vturb_player_id) {
-      if (isLocked) {
-        return (
-          <div className="flex aspect-video w-full flex-col items-center justify-center rounded-xl bg-black/90 text-white">
-            <Lock className="mb-2 h-12 w-12" />
-            <p className="mb-4 text-center">Faça login para assistir</p>
-            <Link href="/login" className="rounded-lg bg-[var(--zaploto-green)] px-4 py-2 font-medium text-white hover:opacity-90">
-              Entrar
-            </Link>
-          </div>
-        );
-      }
+      if (isLocked) return <LockedPlayer />;
       return (
         <VturbPlayer
           projectId={lesson.vturb_project_id}
@@ -146,35 +141,27 @@ export default function AcademyLessonPage() {
       );
     }
     if (lesson.content_type === 'iframe' && lesson.iframe_html) {
-      if (isLocked) {
-        return (
-          <div className="flex aspect-video w-full flex-col items-center justify-center rounded-xl bg-black/90 text-white">
-            <Lock className="mb-2 h-12 w-12" />
-            <p className="mb-4 text-center">Faça login para assistir</p>
-            <Link href="/login" className="rounded-lg bg-[var(--zaploto-green)] px-4 py-2 font-medium text-white hover:opacity-90">
-              Entrar
-            </Link>
-          </div>
-        );
-      }
+      if (isLocked) return <LockedPlayer />;
       const safeSrc = sanitizeIframeSrc(lesson.iframe_html);
       if (safeSrc) {
         return (
-          <div className="aspect-video w-full overflow-hidden rounded-xl bg-black">
+          <div className="aspect-video w-full overflow-hidden rounded-2xl bg-black shadow-lg">
             <iframe title="Aula" src={safeSrc} className="h-full w-full border-0" allowFullScreen />
           </div>
         );
       }
       return (
-        <div className="flex aspect-video w-full items-center justify-center rounded-xl bg-[var(--card-bg)] text-[var(--muted-foreground)]">
+        <div className="flex aspect-video w-full items-center justify-center rounded-2xl bg-[var(--card-bg)] text-sm text-[var(--muted-foreground)]">
           Conteúdo iframe inválido.
         </div>
       );
     }
     if (lesson.content_type === 'text') {
       return (
-        <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-6">
-          {lesson.description ? <p className="whitespace-pre-wrap text-[var(--foreground)]">{lesson.description}</p> : <p className="text-[var(--muted-foreground)]">Conteúdo em texto.</p>}
+        <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-5 sm:p-6">
+          {lesson.description
+            ? <p className="whitespace-pre-wrap leading-relaxed text-[var(--foreground)]">{lesson.description}</p>
+            : <p className="text-[var(--muted-foreground)]">Conteúdo em texto.</p>}
         </div>
       );
     }
@@ -183,125 +170,267 @@ export default function AcademyLessonPage() {
 
   if (loading || !lesson) {
     return (
-      <div className="flex min-h-[50vh] items-center justify-center">
+      <div className="flex min-h-[60vh] items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-[var(--zaploto-green)]" />
       </div>
     );
   }
 
+  const safeLessonsInModule = Array.isArray(lessonsInModule) ? lessonsInModule : [];
+  const currentIndex = safeLessonsInModule.findIndex((l) => l.slug === lesson.slug);
+  const nextLesson = safeLessonsInModule[currentIndex + 1] ?? null;
+  const prevLesson = safeLessonsInModule[currentIndex - 1] ?? null;
+  const completedCount = safeLessonsInModule.filter((l) => isLessonCompleted(l.id)).length;
+
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-      <div className="grid gap-8 lg:grid-cols-[1fr_280px]">
-        <div>
-          <Link href={`/academy/modulos/${lesson.module?.slug ?? ''}`} className="mb-4 inline-flex items-center gap-1 text-sm text-[var(--muted-foreground)] hover:text-[var(--zaploto-green)]">
-            ← {lesson.module?.title ?? 'Módulo'}
-          </Link>
-          <h1 className="mb-2 text-2xl font-bold tracking-tight">{lesson.title}</h1>
-          {lesson.estimated_minutes != null && (
-            <p className="mb-4 text-sm text-[var(--muted-foreground)]">Duração estimada: {lesson.estimated_minutes} min</p>
-          )}
+    <div className="mx-auto max-w-7xl px-3 py-4 sm:px-6 sm:py-6 lg:px-8">
+      {/* ── Back button ── */}
+      <Link
+        href={`/academy/modulos/${lesson.module?.slug ?? ''}`}
+        className="mb-4 inline-flex items-center gap-2 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-sm font-medium text-[var(--muted-foreground)] shadow-sm transition hover:border-[#4ade80]/50 hover:text-[#4ade80]"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        <span className="hidden xs:inline">{lesson.module?.title ?? 'Voltar ao módulo'}</span>
+        <span className="xs:hidden">Voltar</span>
+      </Link>
 
-          <div className="mb-6">{renderPlayer()}</div>
+      <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
+        {/* ── MAIN CONTENT ── */}
+        <div className="min-w-0">
+          {/* Title + duration */}
+          <div className="mb-4">
+            <h1 className="text-xl font-bold leading-snug tracking-tight sm:text-2xl">{lesson.title}</h1>
+            {lesson.estimated_minutes != null && (
+              <p className="mt-1 flex items-center gap-1.5 text-sm text-[var(--muted-foreground)]">
+                <Clock className="h-4 w-4" /> {lesson.estimated_minutes} min de duração
+              </p>
+            )}
+          </div>
 
-          {lesson.description && (
-            <div className="mb-6 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-              <h3 className="mb-2 font-semibold">Descrição</h3>
-              <p className="whitespace-pre-wrap text-sm text-[var(--muted-foreground)]">{lesson.description}</p>
+          {/* Player — full width, no extra px on mobile */}
+          <div className="-mx-3 mb-5 sm:mx-0">{renderPlayer()}</div>
+
+          {/* ── Mobile: collapsible lesson list ── */}
+          {safeLessonsInModule.length > 0 && (
+            <div className="mb-5 overflow-hidden rounded-2xl border border-[#1a3d1a] lg:hidden">
+              <button
+                type="button"
+                onClick={() => setSidebarOpen((v) => !v)}
+                className="relative flex w-full items-center gap-3 overflow-hidden bg-[#060f07] px-4 py-3.5 text-left"
+              >
+                <div className="pointer-events-none absolute inset-0 opacity-[0.04]"
+                  style={{ backgroundImage: 'linear-gradient(#4ade80 1px, transparent 1px), linear-gradient(90deg, #4ade80 1px, transparent 1px)', backgroundSize: '30px 30px' }} />
+                <div className="relative flex-1">
+                  <p className="text-xs font-medium uppercase tracking-widest text-[#4ade80]/70">Zaploto Academy</p>
+                  <p className="text-sm font-bold text-white">Aulas do módulo</p>
+                  {userId && lessonsInModule.length > 0 && (
+                    <p className="mt-0.5 text-xs text-white/40">{completedCount}/{lessonsInModule.length} concluídas</p>
+                  )}
+                </div>
+                <ChevronDown className={`relative h-5 w-5 shrink-0 text-[#4ade80] transition-transform ${sidebarOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {sidebarOpen && (
+                <ul className="divide-y divide-[var(--card-border)] bg-[var(--card-bg)]">
+                  {lessonsInModule.map((l, index) => {
+                    const isCurrent = l.slug === lesson.slug;
+                    const isDone = isLessonCompleted(l.id);
+                    return (
+                      <li key={l.id}>
+                        <Link
+                          href={`/academy/aula/${l.slug}`}
+                          onClick={() => setSidebarOpen(false)}
+                          className={`flex items-center gap-3 px-4 py-3 text-sm transition hover:bg-[var(--input-bg)] ${isCurrent ? 'bg-[#4ade80]/5 border-l-2 border-[#4ade80]' : 'border-l-2 border-transparent'}`}
+                        >
+                          <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${isDone ? 'bg-[#4ade80] text-[#060f07]' : isCurrent ? 'bg-[#4ade80] text-[#060f07]' : 'bg-[var(--input-bg)] text-[var(--muted-foreground)]'}`}>
+                            {isDone ? <Check className="h-3.5 w-3.5" /> : isCurrent ? <PlayCircle className="h-3.5 w-3.5" /> : index + 1}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className={`truncate font-medium ${isCurrent ? 'text-[#4ade80]' : 'text-[var(--foreground)]'}`}>{l.title}</p>
+                            {l.estimated_minutes != null && (
+                              <p className="flex items-center gap-1 text-xs text-[var(--muted-foreground)]">
+                                <Clock className="h-3 w-3" /> {l.estimated_minutes} min
+                              </p>
+                            )}
+                          </div>
+                          {isCurrent && <span className="shrink-0 rounded-full bg-[#4ade80]/20 px-2 py-0.5 text-xs text-[#4ade80]">Atual</span>}
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
             </div>
           )}
 
-          <div className="flex flex-wrap gap-3">
+          {/* Prev / Next navigation */}
+          {(prevLesson || nextLesson) && (
+            <div className="mb-5 flex gap-2">
+              {prevLesson && (
+                <Link href={`/academy/aula/${prevLesson.slug}`}
+                  className="flex flex-1 items-center gap-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-3 text-sm transition hover:border-[#4ade80]/50">
+                  <ArrowLeft className="h-4 w-4 shrink-0 text-[var(--muted-foreground)]" />
+                  <span className="min-w-0">
+                    <span className="block text-xs text-[var(--muted-foreground)]">Anterior</span>
+                    <span className="block truncate font-medium">{prevLesson.title}</span>
+                  </span>
+                </Link>
+              )}
+              {nextLesson && (
+                <Link href={`/academy/aula/${nextLesson.slug}`}
+                  className="flex flex-1 items-center justify-end gap-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-3 text-sm transition hover:border-[#4ade80]/50">
+                  <span className="min-w-0 text-right">
+                    <span className="block text-xs text-[var(--muted-foreground)]">Próxima</span>
+                    <span className="block truncate font-medium">{nextLesson.title}</span>
+                  </span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-[var(--muted-foreground)]" />
+                </Link>
+              )}
+            </div>
+          )}
+
+          {/* Description */}
+          {lesson.description && lesson.content_type !== 'text' && (
+            <div className="mb-5 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 sm:p-5">
+              <h3 className="mb-2 font-semibold">Sobre esta aula</h3>
+              <p className="whitespace-pre-wrap text-sm leading-relaxed text-[var(--muted-foreground)]">{lesson.description}</p>
+            </div>
+          )}
+
+          {/* Actions — full width on mobile */}
+          <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
             {userId && (
               <button
                 type="button"
                 onClick={markComplete}
                 disabled={completed || markingComplete}
-                className="inline-flex items-center gap-2 rounded-lg bg-[var(--zaploto-green)] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+                className={`flex w-full items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition sm:w-auto ${
+                  completed ? 'bg-[#4ade80]/10 text-[#4ade80] border border-[#4ade80]/40' : 'bg-[#4ade80] text-[#060f07] hover:opacity-90'
+                } disabled:opacity-50`}
               >
-                {completed ? <Check className="h-4 w-4" /> : null}
-                {markingComplete ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                {completed ? 'Concluída' : markingComplete ? 'Salvando…' : 'Marcar como concluída'}
+                {completed ? <CheckCircle2 className="h-4 w-4" /> : markingComplete ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {completed ? 'Aula concluída' : markingComplete ? 'Salvando…' : 'Marcar como concluída'}
               </button>
-            )}
-            {lesson.attachments && lesson.attachments.length > 0 && (
-              <>
-                {userId ? (
-                  lesson.attachments.map((att) => {
-                    const asset = att.academy_assets;
-                    if (!asset) return null;
-                    return (
-                      <button
-                        key={att.id}
-                        type="button"
-                        onClick={() => getSignedUrl(asset.file_path)}
-                        className="inline-flex items-center gap-2 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-2 text-sm font-medium hover:bg-[var(--input-bg)]"
-                      >
-                        {asset.type === 'pdf' || asset.type === 'doc' || asset.type === 'docx' ? (
-                          <FileText className="h-4 w-4" />
-                        ) : asset.type === 'table' ? (
-                          <FileSpreadsheet className="h-4 w-4" />
-                        ) : asset.type === 'image' ? (
-                          <ImageIcon className="h-4 w-4" />
-                        ) : (
-                          <FileIcon className="h-4 w-4" />
-                        )}
-                        {att.label || asset.title}
-                        <Download className="h-4 w-4" />
-                      </button>
-                    );
-                  })
-                ) : (
-                  <Link href="/login" className="inline-flex items-center gap-2 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-2 text-sm font-medium hover:bg-[var(--input-bg)]">
-                    <Lock className="h-4 w-4" /> Entrar para baixar materiais
-                  </Link>
-                )}
-              </>
             )}
             {lesson.cta_label && lesson.cta_url && (
               lesson.cta_type === 'external' ? (
-                <a
-                  href={lesson.cta_url}
-                  target={lesson.cta_target}
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-2 rounded-lg bg-[var(--zaploto-green-bg)] px-4 py-2 text-sm font-medium text-[var(--zaploto-green)] hover:bg-[var(--zaploto-green-bg-hover)]"
-                >
-                  {lesson.cta_label}
-                  <ExternalLink className="h-4 w-4" />
+                <a href={lesson.cta_url} target={lesson.cta_target} rel="noopener noreferrer"
+                  className="flex w-full items-center justify-center gap-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] px-5 py-3 text-sm font-semibold hover:bg-[var(--input-bg)] transition sm:w-auto">
+                  {lesson.cta_label} <ExternalLink className="h-4 w-4" />
                 </a>
               ) : (
-                <Link
-                  href={lesson.cta_url}
-                  className="inline-flex items-center gap-2 rounded-lg bg-[var(--zaploto-green-bg)] px-4 py-2 text-sm font-medium text-[var(--zaploto-green)] hover:bg-[var(--zaploto-green-bg-hover)]"
-                >
+                <Link href={lesson.cta_url}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] px-5 py-3 text-sm font-semibold hover:bg-[var(--input-bg)] transition sm:w-auto">
                   {lesson.cta_label}
                 </Link>
               )
             )}
           </div>
 
-          <div className="mt-8">
-            <LessonComments lessonSlug={lesson.slug} />
-          </div>
+          {/* Attachments */}
+          {lesson.attachments && lesson.attachments.length > 0 && (
+            <div className="mb-5 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 sm:p-5">
+              <h3 className="mb-3 font-semibold">Materiais da aula</h3>
+              <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                {userId ? (
+                  lesson.attachments.map((att) => {
+                    const asset = att.academy_assets;
+                    if (!asset) return null;
+                    return (
+                      <button key={att.id} type="button" onClick={() => getSignedUrl(asset.file_path)}
+                        className="flex w-full items-center gap-2 rounded-xl border border-[var(--card-border)] bg-[var(--input-bg)] px-4 py-3 text-sm font-medium transition hover:border-[#4ade80]/50 hover:text-[#4ade80] sm:w-auto">
+                        {asset.type === 'pdf' || asset.type === 'doc' || asset.type === 'docx' ? <FileText className="h-4 w-4 shrink-0" />
+                          : asset.type === 'table' ? <FileSpreadsheet className="h-4 w-4 shrink-0" />
+                          : asset.type === 'image' ? <ImageIcon className="h-4 w-4 shrink-0" />
+                          : <FileIcon className="h-4 w-4 shrink-0" />}
+                        <span className="truncate">{att.label || asset.title}</span>
+                        <Download className="ml-auto h-4 w-4 shrink-0 opacity-60" />
+                      </button>
+                    );
+                  })
+                ) : (
+                  <Link href="/login"
+                    className="flex w-full items-center justify-center gap-2 rounded-xl border border-[var(--card-border)] bg-[var(--input-bg)] px-4 py-3 text-sm font-medium sm:w-auto">
+                    <Lock className="h-4 w-4" /> Entrar para baixar materiais
+                  </Link>
+                )}
+              </div>
+            </div>
+          )}
+
+          <LessonComments lessonSlug={lesson.slug} />
         </div>
 
+        {/* ── SIDEBAR desktop only ── */}
         {lessonsInModule.length > 0 && (
-          <aside className="lg:sticky lg:top-24 lg:self-start">
-            <h3 className="mb-3 font-semibold">Aulas do módulo</h3>
-            <ul className="space-y-1 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-2">
-              {lessonsInModule.map((l) => (
-                <li key={l.id}>
-                  <Link
-                    href={`/academy/aula/${l.slug}`}
-                    className={`block rounded-lg px-3 py-2 text-sm transition hover:bg-[var(--input-bg)] ${l.slug === lesson.slug ? 'bg-[var(--zaploto-green-bg)] font-medium text-[var(--zaploto-green)]' : ''}`}
-                  >
-                    {l.title}
-                  </Link>
-                </li>
-              ))}
-            </ul>
+          <aside className="hidden lg:block lg:sticky lg:top-20 lg:self-start">
+            <div className="overflow-hidden rounded-2xl border border-[#1a3d1a]">
+              {/* Header com textura */}
+              <div className="relative overflow-hidden bg-[#060f07] px-4 py-4">
+                <div className="absolute inset-0 overflow-hidden">
+                  <div className="absolute -right-4 -top-4 h-20 w-20 rounded-full bg-[#1a5c1a]/50 blur-2xl" />
+                  <div className="absolute bottom-0 left-0 h-16 w-24 rounded-full bg-[#0d3d0d]/60 blur-2xl" />
+                  {[
+                    { s: 3, x: '10%', y: '30%', o: 0.5 },
+                    { s: 4, x: '60%', y: '70%', o: 0.3 },
+                    { s: 3, x: '85%', y: '20%', o: 0.4 },
+                  ].map((dot, i) => (
+                    <div key={i} className="absolute rounded-full bg-[#4ade80]"
+                      style={{ width: dot.s, height: dot.s, left: dot.x, top: dot.y, opacity: dot.o, filter: 'blur(1px)' }} />
+                  ))}
+                  <div className="absolute inset-0 opacity-[0.04]"
+                    style={{ backgroundImage: 'linear-gradient(#4ade80 1px, transparent 1px), linear-gradient(90deg, #4ade80 1px, transparent 1px)', backgroundSize: '30px 30px' }} />
+                </div>
+                <div className="relative">
+                  <p className="text-xs font-medium uppercase tracking-widest text-[#4ade80]/70">Zaploto Academy</p>
+                  <h3 className="mt-0.5 text-sm font-bold text-white">Aulas do módulo</h3>
+                  {lesson.module?.title && <p className="mt-0.5 truncate text-xs text-white/40">{lesson.module.title}</p>}
+                  {userId && lessonsInModule.length > 0 && (
+                    <p className="mt-1 text-xs text-white/30">{completedCount}/{lessonsInModule.length} concluídas</p>
+                  )}
+                </div>
+              </div>
+              {/* List */}
+              <ul className="max-h-[60vh] divide-y divide-[var(--card-border)] overflow-y-auto bg-[var(--card-bg)]">
+                {lessonsInModule.map((l, index) => {
+                  const isCurrent = l.slug === lesson.slug;
+                  const isDone = isLessonCompleted(l.id);
+                  return (
+                    <li key={l.id}>
+                      <Link href={`/academy/aula/${l.slug}`}
+                        className={`flex items-start gap-3 px-4 py-3 text-sm transition hover:bg-[var(--input-bg)] ${isCurrent ? 'bg-[#4ade80]/5 border-l-2 border-[#4ade80]' : 'border-l-2 border-transparent'}`}>
+                        <div className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-bold ${isDone || isCurrent ? 'bg-[#4ade80] text-[#060f07]' : 'bg-[var(--input-bg)] text-[var(--muted-foreground)]'}`}>
+                          {isDone ? <Check className="h-3 w-3" /> : isCurrent ? <PlayCircle className="h-3 w-3" /> : index + 1}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className={`font-medium leading-snug ${isCurrent ? 'text-[#4ade80]' : 'text-[var(--foreground)]'}`}>{l.title}</p>
+                          {l.estimated_minutes != null && (
+                            <p className="mt-0.5 flex items-center gap-1 text-xs text-[var(--muted-foreground)]">
+                              <Clock className="h-3 w-3" /> {l.estimated_minutes} min
+                            </p>
+                          )}
+                        </div>
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
           </aside>
         )}
       </div>
+    </div>
+  );
+}
+
+function LockedPlayer() {
+  return (
+    <div className="flex aspect-video w-full flex-col items-center justify-center rounded-2xl bg-black/90 text-white">
+      <Lock className="mb-3 h-10 w-10 opacity-50" />
+      <p className="mb-5 text-center text-sm font-medium">Faça login para assistir</p>
+      <Link href="/login" className="rounded-xl border border-[#4ade80]/40 bg-[#4ade80]/10 px-5 py-2.5 text-sm font-semibold text-[#4ade80] hover:bg-[#4ade80]/20 transition">
+        Entrar
+      </Link>
     </div>
   );
 }
