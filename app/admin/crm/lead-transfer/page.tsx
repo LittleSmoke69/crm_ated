@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { useToast } from '@/hooks/useToast';
@@ -355,6 +355,7 @@ interface GerenteLeadRequest {
 
 export default function AdminLeadTransferPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { checking, userId } = useRequireAuth();
   const { toasts, showToast, removeToast } = useToast();
 
@@ -711,6 +712,10 @@ export default function AdminLeadTransferPage() {
   const transferFromSolicitationRequestIdRef = useRef<string | null>(null);
   /** ID da solicitação para a qual estamos carregando consultores no modal Aprovar (evita race condition) */
   const approveModalLoadingRequestIdRef = useRef<string | null>(null);
+  /** Evita reprocessar params da URL mais de uma vez no mesmo carregamento */
+  const transferUrlInitAppliedRef = useRef(false);
+  /** Quando true, avança para step 3 automaticamente após preencher step 1/2 e carrega leads */
+  const advanceToStep3FromSolicitationRef = useRef(false);
   /** Paginação da aba Solicitações */
   const [solicitationPage, setSolicitationPage] = useState(1);
   const [solicitationPageSize, setSolicitationPageSize] = useState(SOLICITATION_PAGE_SIZE_DEFAULT);
@@ -808,6 +813,53 @@ export default function AdminLeadTransferPage() {
     loadBancas();
   }, [userId]);
 
+  /**
+   * Hidrata fluxo "Ir para transferir" via URL (suporta refresh/entrada direta):
+   * - seleciona aba Transferir e step;
+   * - aplica banca, doador e destinatário;
+   * - mantém request_id para aprovar ao confirmar.
+   * A busca automática de leads segue no efeito existente quando consultants carregar.
+   */
+  useEffect(() => {
+    if (transferUrlInitAppliedRef.current) return;
+    const fromSolicitation = searchParams.get('from_solicitation');
+    if (fromSolicitation !== '1') return;
+
+    const tab = searchParams.get('tab');
+    const stepParam = Number(searchParams.get('step') || '3');
+    const bancaIdFromUrl = searchParams.get('banca_id')?.trim() || '';
+    const bancaNameFromUrl = searchParams.get('banca_name')?.trim() || '';
+    const sourceEmailFromUrl = searchParams.get('source_email')?.trim() || '';
+    const targetEmailFromUrl = searchParams.get('target_email')?.trim() || '';
+    const targetNameFromUrl = searchParams.get('target_name')?.trim() || '';
+    const requestIdFromUrl = searchParams.get('request_id')?.trim() || '';
+
+    if (!bancaIdFromUrl || !sourceEmailFromUrl) return;
+
+    transferUrlInitAppliedRef.current = true;
+    transferFromSolicitationBancaIdRef.current = bancaIdFromUrl;
+    preserveTargetEmailFromSolicitationRef.current = true;
+    setBancaId(bancaIdFromUrl);
+    setBancaSearchQuery(bancaNameFromUrl || bancaIdFromUrl);
+    setDaysInactivePreset('90');
+    setDaysInactive('90');
+    setTransferFromSolicitationSourceEmail(sourceEmailFromUrl);
+    setTransferFromSolicitationTargetEmail(targetEmailFromUrl || null);
+    transferFromSolicitationTargetNameRef.current = targetNameFromUrl || null;
+    setTargetEmail(targetEmailFromUrl || '');
+    if (requestIdFromUrl) {
+      transferFromSolicitationRequestIdRef.current = requestIdFromUrl;
+    }
+    setCurrentStep(stepParam >= 1 && stepParam <= 2 ? stepParam : 2);
+    advanceToStep3FromSolicitationRef.current = true;
+    setHistoryBancaFromSolicitation({
+      id: bancaIdFromUrl,
+      name: bancaNameFromUrl || bancaIdFromUrl,
+    });
+    setHistoryBancaFilter(bancaIdFromUrl);
+    setActiveTab(tab === 'history' || tab === 'solicitations' || tab === 'analysis' ? tab : 'transfer');
+  }, [searchParams]);
+
   const loadConsultants = useCallback(async () => {
     if (!bancaId || !userId) return;
     setLoadingConsultants(true);
@@ -864,18 +916,23 @@ export default function AdminLeadTransferPage() {
     transferFromSolicitationBancaIdRef.current = null;
   }, [activeTab, bancas, bancaId]);
 
-  /** Ao redirecionar da solicitação: preenche consultor origem (doador) e dispara busca de leads — só limpa quando aplicar, para permitir retry após consultants carregar */
+  /** Ao redirecionar da solicitação: preenche consultor origem (doador) e dispara busca de leads. */
   useEffect(() => {
-    if (activeTab !== 'transfer' || !bancaId || !transferFromSolicitationSourceEmail || consultants.length === 0) return;
-    const source = transferFromSolicitationSourceEmail.trim().toLowerCase();
-    const found = consultants.find((c) => (c.email ?? '').trim().toLowerCase() === source);
-    if (found) {
-      const email = (found.email ?? '').trim();
-      setSourceEmail(email);
-      setTransferFromSolicitationSourceEmail(null);
-      loadLeads('90', email);
+    if (activeTab !== 'transfer' || !bancaId || !transferFromSolicitationSourceEmail || loadingConsultants) return;
+    const sourceEmailFromSolicitation = transferFromSolicitationSourceEmail.trim();
+    if (!sourceEmailFromSolicitation) return;
+    const sourceLower = sourceEmailFromSolicitation.toLowerCase();
+    const found = consultants.find((c) => (c.email ?? '').trim().toLowerCase() === sourceLower);
+    const email = (found?.email ?? sourceEmailFromSolicitation).trim();
+    if (!email) return;
+    setSourceEmail(email);
+    setTransferFromSolicitationSourceEmail(null);
+    if (advanceToStep3FromSolicitationRef.current) {
+      setCurrentStep(3);
+      advanceToStep3FromSolicitationRef.current = false;
     }
-  }, [activeTab, bancaId, consultants, transferFromSolicitationSourceEmail]);
+    loadLeads('90', email);
+  }, [activeTab, bancaId, consultants, transferFromSolicitationSourceEmail, loadingConsultants]);
 
   /** Ao redirecionar da solicitação: mantém consultor destino (recebedor) selecionado no passo, mesmo que não esteja na lista da banca */
   useEffect(() => {
@@ -1022,11 +1079,23 @@ export default function AdminLeadTransferPage() {
     } else {
       transferFromSolicitationTargetNameRef.current = null;
     }
-    setCurrentStep(3);
+    setCurrentStep(2);
+    advanceToStep3FromSolicitationRef.current = true;
     setHistoryBancaFromSolicitation({ id: requestBancaId, name: bancaDisplayName });
     setHistoryBancaFilter(requestBancaId);
     setActiveTab('transfer');
     setManagementLoaded(true);
+    const transferUrlParams = new URLSearchParams();
+    transferUrlParams.set('from_solicitation', '1');
+    transferUrlParams.set('tab', 'transfer');
+    transferUrlParams.set('step', '3');
+    transferUrlParams.set('banca_id', requestBancaId);
+    transferUrlParams.set('banca_name', bancaDisplayName);
+    transferUrlParams.set('source_email', doadorEmail);
+    if (recebedorEmail) transferUrlParams.set('target_email', recebedorEmail);
+    if (recebedor?.consultor_name?.trim()) transferUrlParams.set('target_name', recebedor.consultor_name.trim());
+    transferUrlParams.set('request_id', selectedRequestForApprove.id);
+    router.replace(`/admin/crm/lead-transfer?${transferUrlParams.toString()}`);
     closeApproveModal();
     showToast(`Aba Transferir aberta no passo Buscar com banca e doador preenchidos.`, 'success');
   };
