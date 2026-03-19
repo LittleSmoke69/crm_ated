@@ -1,20 +1,25 @@
 import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
-import { getUserProfile, UserProfile } from '@/lib/middleware/permissions';
+import { getUserProfile, hasSidebarPermission, UserProfile } from '@/lib/middleware/permissions';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 const VSL_ADMIN_STATUSES = ['gestor', 'admin', 'super_admin'] as const;
 
 /**
- * Verifica se o perfil pode acessar o painel/admin VSL (gestor, super_admin ou admin).
+ * Verifica se o perfil pode acessar o painel/admin VSL:
+ * - status gestor, admin ou super_admin; ou
+ * - cargo com permissão de sidebar vsl_redirect (VSL & Redirect).
  */
-export function canAccessVslAdmin(profile: UserProfile | null): boolean {
+export async function canAccessVslAdmin(profile: UserProfile | null): Promise<boolean> {
   if (!profile?.status) return false;
-  return VSL_ADMIN_STATUSES.includes(profile.status as (typeof VSL_ADMIN_STATUSES)[number]);
+  if (VSL_ADMIN_STATUSES.includes(profile.status as (typeof VSL_ADMIN_STATUSES)[number])) {
+    return true;
+  }
+  return hasSidebarPermission(profile, 'vsl_redirect');
 }
 
 /**
- * Requer usuário autenticado com perfil gestor, super_admin ou admin.
+ * Requer usuário autenticado com acesso ao módulo VSL (por status ou permissão de cargo).
  * Retorna { userId, profile }.
  */
 export async function requireVslAdmin(req: NextRequest): Promise<{ userId: string; profile: UserProfile }> {
@@ -23,8 +28,8 @@ export async function requireVslAdmin(req: NextRequest): Promise<{ userId: strin
   if (!profile) {
     throw new Error('Perfil não encontrado');
   }
-  if (!canAccessVslAdmin(profile)) {
-    throw new Error('Acesso negado. Apenas Gestor, Admin ou Super Admin podem acessar o módulo VSL.');
+  if (!(await canAccessVslAdmin(profile))) {
+    throw new Error('Acesso negado. Você não tem permissão para acessar o módulo VSL & Redirect.');
   }
   return { userId, profile };
 }

@@ -82,10 +82,7 @@ export async function POST(req: NextRequest) {
 
     console.log(`📋 [EXTRACT-CONTACTS] Extraindo contatos do grupo ${groupId} da instância ${instanceName} usando apikey da instância`);
 
-    // Busca grupos com participantes
-    const url = `${evolutionApi.base_url}/group/fetchAllGroups/${instanceName}?getParticipants=true`;
-    
-    // Usa timeout similar ao endpoint de fetch
+    // Usa findGroupInfos para buscar apenas UM grupo (muito mais rápido que fetchAllGroups com getParticipants=true)
     const fetchWithTimeout = async (url: string, options: RequestInit, timeoutMs: number) => {
       const controller = new AbortController();
       const id = setTimeout(() => controller.abort(), timeoutMs);
@@ -96,43 +93,32 @@ export async function POST(req: NextRequest) {
       }
     };
 
-    const PER_TRY_TIMEOUT = 300_000; // 5 minutos (aumentado para instâncias com muitos grupos)
+    const PER_TRY_TIMEOUT = 10_000; // 10 segundos (busca de grupo único é rápida)
+    const url = `${evolutionApi.base_url}/group/findGroupInfos/${instanceName}?groupJid=${encodeURIComponent(groupId)}`;
+    console.log(`🔍 [EXTRACT-CONTACTS] Buscando grupo específico: ${url}`);
+
     const response = await fetchWithTimeout(
       url,
-      { method: 'GET', headers: { apikey: instanceApikey } }, // CRÍTICO: Usa apikey da instância
+      { method: 'GET', headers: { apikey: instanceApikey } },
       PER_TRY_TIMEOUT
     );
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => '');
-      console.error(`Erro ao buscar grupos: ${response.status} ${response.statusText}`, errorText);
-      return errorResponse(`Erro ao buscar grupos: ${response.statusText} (${response.status})`, response.status);
+      console.error(`Erro ao buscar grupo: ${response.status} ${response.statusText}`, errorText);
+      return errorResponse(`Erro ao buscar grupo: ${response.statusText} (${response.status})`, response.status);
     }
 
-    const groupsData = await response.json().catch(() => {
+    const groupData = await response.json().catch(() => {
       console.error('Erro ao parsear resposta JSON');
-      return [];
+      return null;
     });
-    
-    let groupsList: any[] = [];
-    
-    if (Array.isArray(groupsData)) {
-      groupsList = groupsData;
-    } else if (Array.isArray(groupsData?.groups)) {
-      groupsList = groupsData.groups;
-    } else if (groupsData?.id && groupsData?.subject) {
-      groupsList = [groupsData];
-    }
 
-    if (groupsList.length === 0) {
-      return errorResponse('Nenhum grupo encontrado na resposta da API', 404);
-    }
+    // findGroupInfos pode retornar o grupo direto ou em array
+    const targetGroup = Array.isArray(groupData) ? groupData[0] : groupData;
 
-    // Encontra o grupo específico
-    const targetGroup = groupsList.find(g => g.id === groupId);
-    
-    if (!targetGroup) {
-      return errorResponse(`Grupo ${groupId} não encontrado na lista de ${groupsList.length} grupo(s)`, 404);
+    if (!targetGroup || (!targetGroup.id && !targetGroup.subject)) {
+      return errorResponse(`Grupo ${groupId} não encontrado`, 404);
     }
 
     // Extrai participantes

@@ -1,9 +1,9 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { Activity, Heart, Search, Plus, MoreVertical, Paperclip, X, Trash2, Edit2, Star, Info, Upload, ArrowLeft, Video, Phone, MoreVertical as MoreVerticalIcon, Smile, Camera, Mic, Check, CheckCheck, Send, Calendar, Clock, Play, Pause, Eye, Trash, Music } from 'lucide-react';
+import { Activity, Heart, Search, Plus, MoreVertical, Paperclip, X, Trash2, Edit2, Star, Info, Upload, ArrowLeft, Video, Phone, MoreVertical as MoreVerticalIcon, Smile, Camera, Mic, Check, CheckCheck, Send, Calendar, Clock, Play, Pause, Eye, Trash, Music, Megaphone } from 'lucide-react';
 import SendActivationsModal from '@/components/CRM/SendActivationsModal';
 import ScheduleDetailsModal from '@/components/CRM/ScheduleDetailsModal';
 import { useToast } from '@/hooks/useToast';
@@ -93,10 +93,17 @@ const ActivationsPage = () => {
   // Envio de ativações
   const [showSendModal, setShowSendModal] = useState(false);
   const [messageToSend, setMessageToSend] = useState<Message | null>(null);
+
+  /** Ao editar mensagem "para este grupo" no card: salvar cria novo modelo e atualiza só esse agendamento */
+  const [editingForScheduleId, setEditingForScheduleId] = useState<string | null>(null);
   
   // Tabs
-  const [activeTab, setActiveTab] = useState<'messages' | 'schedules'>('messages');
-  
+  const [activeTab, setActiveTab] = useState<'messages' | 'schedules' | 'mass_send'>('messages');
+
+  // Campanhas de disparo em massa
+  const [massSendJobs, setMassSendJobs] = useState<any[]>([]);
+  const [loadingMassSendJobs, setLoadingMassSendJobs] = useState(false);
+
   // Agendamentos
   const [schedules, setSchedules] = useState<any[]>([]);
   const [loadingSchedules, setLoadingSchedules] = useState(false);
@@ -215,6 +222,27 @@ const ActivationsPage = () => {
       loadSchedules();
     }
   }, [userId, activeTab]);
+
+  const loadMassSendJobs = useCallback(async () => {
+    if (!userId) return;
+    setLoadingMassSendJobs(true);
+    try {
+      const res = await fetch('/api/crm/activations/mass-send/jobs', { headers: { 'X-User-Id': userId } });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.data)) setMassSendJobs(data.data);
+      else setMassSendJobs([]);
+    } catch {
+      setMassSendJobs([]);
+    } finally {
+      setLoadingMassSendJobs(false);
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    if (userId && activeTab === 'mass_send') {
+      loadMassSendJobs();
+    }
+  }, [userId, activeTab, loadMassSendJobs]);
 
   // Recalcula próxima execução de todos os recorrentes (corrige dados antigos)
   const handleRecalculateRecurring = async () => {
@@ -604,11 +632,19 @@ const ActivationsPage = () => {
           setUploadProgress(100);
         } catch (mediaError: any) {
           console.error('Erro ao fazer upload de mídia:', mediaError);
-          showToast(`Erro ao fazer upload de mídia: ${mediaError.message}`, 'error');
+          // Deleta a mensagem órfã criada no passo 1 para evitar lixo no banco
+          try {
+            await fetch(`/api/crm/messages/${messageId}`, {
+              method: 'DELETE',
+              headers: { 'X-User-Id': userId },
+            });
+          } catch (deleteErr) {
+            console.error('Erro ao deletar mensagem órfã:', deleteErr);
+          }
+          showToast(`Erro ao fazer upload de mídia: ${mediaError.message}. A mensagem não foi salva; tente novamente.`, 'error');
           setIsUploading(false);
           setUploadProgress(0);
           setUploadStatus('');
-          // Não retorna aqui - a mensagem já foi criada, apenas sem mídia
           return;
         }
       }
@@ -618,7 +654,7 @@ const ActivationsPage = () => {
         setUploadProgress(100);
         setUploadStatus('Concluído!');
       }
-      
+
       setShowCreateModal(false);
       setFormData({ 
         title: '', 
@@ -648,31 +684,168 @@ const ActivationsPage = () => {
   // Editar mensagem com upload de mídia se houver
   const handleEditMessage = async () => {
     if (!userId || !editingMessage) return;
-    
-    // Validação: título sempre obrigatório, conteúdo só obrigatório se não for áudio
+
     if (!formData.title.trim()) {
       showToast('Título é obrigatório', 'error');
       return;
     }
-    
-    // Conteúdo obrigatório exceto para áudio, PTV e vídeo
     if (formData.message_type !== 'audio' && formData.message_type !== 'ptv' && formData.message_type !== 'video' && !formData.content.trim()) {
       showToast('Conteúdo é obrigatório', 'error');
       return;
     }
 
-    // Só mostra loading se tiver arquivo novo para upload
+    const isEditForOneGroup = !!editingForScheduleId;
+
     if (attachmentFile && mediaType) {
       setIsUploading(true);
       setUploadProgress(0);
-      setUploadStatus('Atualizando mensagem...');
+      setUploadStatus(isEditForOneGroup ? 'Criando novo modelo de mensagem...' : 'Atualizando mensagem...');
     }
 
     try {
-      // 1. Atualizar mensagem primeiro (sem mídia nova ainda)
+      if (isEditForOneGroup) {
+        // Fluxo "editar para este grupo": criar nova mensagem (novo modelo) e atualizar só esse agendamento
+        const normalizedMessageType =
+          formData.message_type === 'video' ? 'text_with_attachment' : formData.message_type;
+        const hasNewAttachment = !!attachmentFile && !!mediaType;
+        const attachmentUrlToUse = hasNewAttachment ? null : (formData.attachment_url || editingMessage.attachment_url || null);
+
+        const createResponse = await fetch('/api/crm/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-User-Id': userId,
+          },
+          body: JSON.stringify({
+            title: formData.title.trim(),
+            content: formData.content.trim(),
+            category: formData.category,
+            has_attachment: formData.has_attachment || hasNewAttachment,
+            attachment_with_caption: formData.attachment_with_caption,
+            mention_all: formData.mention_all,
+            message_type: normalizedMessageType,
+            send_intelligent: !!formData.send_intelligent,
+            attachment_url: attachmentUrlToUse,
+            ptv_delay: formData.message_type === 'ptv' ? (formData.ptv_delay ?? 1200) : undefined,
+          }),
+        });
+
+        const createData = await createResponse.json();
+        if (!createResponse.ok) {
+          throw new Error(createData.error || 'Erro ao criar novo modelo de mensagem');
+        }
+        const newMessageId = createData.data?.id;
+        if (!newMessageId) {
+          throw new Error('ID da nova mensagem não retornado');
+        }
+
+        if (attachmentFile && mediaType) {
+          setUploadProgress(20);
+          setUploadStatus('Enviando mídia do novo modelo...');
+          try {
+            const uploadUrlResponse = await fetch('/api/messages/upload-media', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+              body: JSON.stringify({
+                messageId: newMessageId,
+                mediaType,
+                mime: attachmentFile.type,
+                size: attachmentFile.size,
+                originalName: attachmentFile.name,
+              }),
+            });
+            const uploadUrlData = await uploadUrlResponse.json();
+            if (!uploadUrlResponse.ok) {
+              throw new Error(uploadUrlData.error || 'Erro ao gerar URL de upload');
+            }
+            const { bucket, path, token, signedUrl } = uploadUrlData.data;
+            setUploadProgress(40);
+            if (signedUrl) {
+              await uploadFileWithProgress(signedUrl, attachmentFile, {
+                onProgress: (percent) => setUploadProgress(40 + Math.round(percent * 0.4)),
+              });
+            } else if (token && path) {
+              const { error: uploadError } = await supabaseClient.storage
+                .from(bucket)
+                .uploadToSignedUrl(path, token, attachmentFile);
+              if (uploadError) throw new Error(`Erro no upload: ${uploadError.message}`);
+            } else {
+              throw new Error('URL de upload não fornecida');
+            }
+            setUploadProgress(80);
+            const updateMediaResponse = await fetch('/api/messages/update-media-url', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+              body: JSON.stringify({
+                messageId: newMessageId,
+                bucket,
+                path,
+                mime: attachmentFile.type,
+                size: attachmentFile.size,
+                mediaType,
+              }),
+            });
+            const updateMediaData = await updateMediaResponse.json();
+            if (!updateMediaResponse.ok) {
+              throw new Error(updateMediaData.error || 'Erro ao atualizar mídia do novo modelo');
+            }
+          } catch (mediaError: any) {
+            // Deleta a mensagem órfã criada para este grupo para evitar lixo no banco
+            try {
+              await fetch(`/api/crm/messages/${newMessageId}`, {
+                method: 'DELETE',
+                headers: { 'X-User-Id': userId },
+              });
+            } catch (deleteErr) {
+              console.error('Erro ao deletar mensagem órfã (edit-group):', deleteErr);
+            }
+            showToast(`Erro no upload de mídia: ${mediaError.message}. A mensagem não foi salva; tente novamente.`, 'error');
+            setIsUploading(false);
+            setUploadProgress(0);
+            setUploadStatus('');
+            return;
+          }
+        }
+
+        const patchRes = await fetch(`/api/crm/activations/schedules/${editingForScheduleId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+          body: JSON.stringify({ message_id: newMessageId }),
+        });
+        const patchData = await patchRes.json();
+        if (!patchRes.ok) {
+          throw new Error(patchData.error || 'Erro ao vincular agendamento ao novo modelo');
+        }
+
+        setEditingForScheduleId(null);
+        setEditingMessage(null);
+        setShowCreateModal(false);
+        setFormData({
+          title: '',
+          content: '',
+          category: 'Boas vindas',
+          has_attachment: false,
+          attachment_with_caption: false,
+          mention_all: false,
+          message_type: 'text_only',
+          attachment_url: null,
+          send_intelligent: false,
+          ptv_delay: 1200,
+        });
+        handleRemoveFile();
+        await loadMessages();
+        await loadSchedules();
+        showToast('Novo modelo de mensagem criado e aplicado apenas a este grupo.', 'success');
+        return;
+      }
+
+      // Fluxo normal: atualizar a mensagem existente (todos os grupos do card continuam com ela)
       if (attachmentFile && mediaType) {
         setUploadProgress(10);
       }
+      // Normaliza 'video' → 'text_with_attachment' igual ao fluxo de criação
+      const normalizedEditMessageType =
+        formData.message_type === 'video' ? 'text_with_attachment' : formData.message_type;
       const updateResponse = await fetch(`/api/crm/messages/${editingMessage.id}`, {
         method: 'PATCH',
         headers: {
@@ -686,7 +859,7 @@ const ActivationsPage = () => {
           has_attachment: formData.has_attachment || !!attachmentFile,
           attachment_with_caption: formData.attachment_with_caption,
           mention_all: formData.mention_all,
-          message_type: formData.message_type,
+          message_type: normalizedEditMessageType,
           ptv_delay: formData.message_type === 'ptv' ? (formData.ptv_delay ?? 1200) : undefined,
         }),
       });
@@ -700,13 +873,11 @@ const ActivationsPage = () => {
         setUploadProgress(20);
       }
 
-      // 2. Se tem arquivo novo, fazer upload e atualizar mensagem
       if (attachmentFile && mediaType) {
         try {
-          // 2.1. Obter signed upload URL
           setUploadStatus('Preparando upload...');
           setUploadProgress(30);
-          
+
           const uploadUrlResponse = await fetch('/api/messages/upload-media', {
             method: 'POST',
             headers: {
@@ -730,7 +901,6 @@ const ActivationsPage = () => {
           const { bucket, path, token, signedUrl } = uploadUrlData.data;
           setUploadProgress(40);
 
-          // 2.2. Fazer upload do arquivo (com progresso real)
           setUploadStatus(`Enviando ${mediaType === 'image' ? 'imagem' : mediaType === 'video' ? 'vídeo' : 'áudio'}...`);
           if (signedUrl) {
             await uploadFileWithProgress(signedUrl, attachmentFile, {
@@ -748,7 +918,6 @@ const ActivationsPage = () => {
           setUploadProgress(80);
           setUploadStatus('Finalizando...');
 
-          // 2.3. Atualizar mensagem com URL da mídia
           const updateMediaResponse = await fetch('/api/messages/update-media-url', {
             method: 'POST',
             headers: {
@@ -777,23 +946,21 @@ const ActivationsPage = () => {
           setIsUploading(false);
           setUploadProgress(0);
           setUploadStatus('');
-          // Não retorna aqui - a mensagem já foi atualizada, apenas sem mídia nova
           return;
         }
       }
 
-      // Sucesso
       if (attachmentFile && mediaType) {
         setUploadProgress(100);
         setUploadStatus('Concluído!');
       }
-      
+
       setEditingMessage(null);
       setShowCreateModal(false);
-      setFormData({ 
-        title: '', 
-        content: '', 
-        category: 'Boas vindas', 
+      setFormData({
+        title: '',
+        content: '',
+        category: 'Boas vindas',
         has_attachment: false,
         attachment_with_caption: false,
         mention_all: false,
@@ -1034,55 +1201,54 @@ const ActivationsPage = () => {
   };
 
   const handleEditMessageFromSchedule = async (messageId: string) => {
-    // Buscar a mensagem e abrir o modal de edição
+    setEditingForScheduleId(null);
+    openEditModalForMessage(messageId);
+  };
+
+  /** Abre o modal de edição para uma mensagem (por id). Usado tanto para "editar no card" quanto "editar para este grupo". */
+  const openEditModalForMessage = (messageId: string) => {
     const message = messages.find(m => m.id === messageId);
-    if (message) {
-      setEditingMessage(message);
-      
-      // Determina o tipo de mensagem baseado na mídia existente
-      let messageType = message.message_type || 'text_only';
-      if (message.has_attachment && message.attachment_type) {
-        if (message.attachment_type === 'audio') {
-          messageType = 'audio';
-        } else {
-          messageType = 'text_with_attachment';
-        }
-      }
-      
-      // Preencher o form com os dados da mensagem
-      const msg = message as Message;
-      setFormData({
-        title: message.title,
-        content: message.content,
-        category: message.category,
-        has_attachment: message.has_attachment,
-        attachment_with_caption: message.attachment_with_caption || false,
-        mention_all: message.mention_all || false,
-        message_type: messageType,
-        attachment_url: message.attachment_url,
-        send_intelligent: !!message.send_intelligent,
-        ptv_delay: typeof msg.ptv_delay === 'number' && msg.ptv_delay >= 0 ? msg.ptv_delay : 1200,
-      });
-
-      // Se a mensagem tem mídia, carregar para preview
-      if (message.has_attachment && message.attachment_url && message.attachment_type) {
-        setMediaPreviewUrl(message.attachment_url);
-        setMediaType(message.attachment_type as 'image' | 'video' | 'audio');
-        setAttachmentFile(null); // É mídia existente, não arquivo novo
-      } else {
-        // Limpa preview se não tem mídia
-        if (mediaPreviewUrl && mediaPreviewUrl.startsWith('blob:')) {
-          URL.revokeObjectURL(mediaPreviewUrl);
-        }
-        setMediaPreviewUrl(null);
-        setMediaType(null);
-        setAttachmentFile(null);
-      }
-
-      setShowCreateModal(true);
-    } else {
+    if (!message) {
       showToast('Mensagem não encontrada', 'error');
+      return;
     }
+    setEditingMessage(message);
+    let messageType = message.message_type || 'text_only';
+    if (message.has_attachment && message.attachment_type) {
+      messageType = message.attachment_type === 'audio' ? 'audio' : 'text_with_attachment';
+    }
+    const msg = message as Message;
+    setFormData({
+      title: message.title,
+      content: message.content,
+      category: message.category,
+      has_attachment: message.has_attachment,
+      attachment_with_caption: message.attachment_with_caption || false,
+      mention_all: message.mention_all || false,
+      message_type: messageType,
+      attachment_url: message.attachment_url,
+      send_intelligent: !!message.send_intelligent,
+      ptv_delay: typeof msg.ptv_delay === 'number' && msg.ptv_delay >= 0 ? msg.ptv_delay : 1200,
+    });
+    if (message.has_attachment && message.attachment_url && message.attachment_type) {
+      setMediaPreviewUrl(message.attachment_url);
+      setMediaType(message.attachment_type as 'image' | 'video' | 'audio');
+      setAttachmentFile(null);
+    } else {
+      if (mediaPreviewUrl && mediaPreviewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(mediaPreviewUrl);
+      }
+      setMediaPreviewUrl(null);
+      setMediaType(null);
+      setAttachmentFile(null);
+    }
+    setShowCreateModal(true);
+  };
+
+  /** Editar mensagem só para um grupo do card: ao salvar, cria novo modelo e atualiza apenas esse agendamento */
+  const handleEditMessageForGroup = (messageId: string, scheduleId: string) => {
+    setEditingForScheduleId(scheduleId);
+    openEditModalForMessage(messageId);
   };
 
   // Excluir agendamento
@@ -1155,6 +1321,17 @@ const ActivationsPage = () => {
               }`}
             >
               Agendamento
+            </button>
+            <button
+              onClick={() => setActiveTab('mass_send')}
+              className={`flex-1 px-6 py-4 font-medium transition-colors flex items-center justify-center gap-2 ${
+                activeTab === 'mass_send'
+                  ? 'text-[#8CD955] border-b-2 border-[#8CD955] bg-[#8CD955]/5 dark:bg-[#8CD955]/10'
+                  : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-[#333]'
+              }`}
+            >
+              <Megaphone className="w-4 h-4" />
+              Campanhas de disparo
             </button>
           </div>
         </div>
@@ -1360,12 +1537,17 @@ const ActivationsPage = () => {
               {/* Header */}
               <div className="flex justify-between items-center p-6 border-b border-gray-200 dark:border-[#404040]">
                 <h2 className="text-xl font-bold text-gray-800 dark:text-white">
-                  {editingMessage ? 'Editar mensagem' : 'Nova mensagem'}
+                  {editingForScheduleId
+                    ? 'Editar mensagem (só para este grupo)'
+                    : editingMessage
+                      ? 'Editar mensagem'
+                      : 'Nova mensagem'}
                 </h2>
                 <button
                   onClick={() => {
                     setShowCreateModal(false);
                     setEditingMessage(null);
+                    setEditingForScheduleId(null);
                     setFormData({ 
                       title: '', 
                       content: '', 
@@ -1831,6 +2013,7 @@ const ActivationsPage = () => {
                       if (isUploading) return; // Não permite cancelar durante upload
                       setShowCreateModal(false);
                       setEditingMessage(null);
+                      setEditingForScheduleId(null);
                       setFormData({ 
                         title: '', 
                         content: '', 
@@ -2153,6 +2336,112 @@ const ActivationsPage = () => {
             )}
           </div>
         )}
+
+        {/* Tab Campanhas de disparo em massa */}
+        {activeTab === 'mass_send' && (
+          <div className="space-y-4">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-md border border-gray-200 dark:border-[#404040] p-4">
+              <p className="text-sm text-gray-600 dark:text-gray-400">
+                Campanhas criadas com muitos grupos são processadas em segundo plano. Acompanhe o progresso abaixo.
+              </p>
+            </div>
+            {loadingMassSendJobs ? (
+              <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-md border border-gray-200 dark:border-[#404040] p-12 text-center">
+                <div className="inline-block w-8 h-8 border-4 border-[#8CD955] border-t-transparent rounded-full animate-spin" />
+                <p className="mt-4 text-gray-600 dark:text-gray-400">Carregando campanhas...</p>
+              </div>
+            ) : massSendJobs.length === 0 ? (
+              <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-md border border-gray-200 dark:border-[#404040] p-12 text-center">
+                <Megaphone className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
+                <p className="text-gray-500 dark:text-gray-400">Nenhuma campanha de disparo em massa.</p>
+                <p className="text-sm text-gray-400 dark:text-gray-500 mt-2">Ao enviar para mais de 10 grupos, uma campanha é criada automaticamente.</p>
+              </div>
+            ) : (
+              <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-md border border-gray-200 dark:border-[#404040] overflow-hidden">
+                <table className="w-full">
+                  <thead className="bg-gray-50 dark:bg-[#333]">
+                    <tr>
+                      <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Mensagem</th>
+                      <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Instância</th>
+                      <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Status</th>
+                      <th className="text-center p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Sucesso</th>
+                      <th className="text-center p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Falhas</th>
+                      <th className="text-center p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Total</th>
+                      <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Criada em</th>
+                      <th className="text-center p-3 text-sm font-medium text-gray-700 dark:text-[#ccc] w-24">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {massSendJobs.map((job) => {
+                      const sent = job.sent_count ?? 0;
+                      const failed = job.failed_count ?? 0;
+                      const total = job.total_groups ?? 0;
+                      return (
+                        <tr key={job.id} className="border-t border-gray-100 dark:border-[#404040]">
+                          <td className="p-3 font-medium text-gray-900 dark:text-white">{job.message_title || job.message_id?.slice(0, 8) || '—'}</td>
+                          <td className="p-3 text-sm text-gray-600 dark:text-[#aaa]">{job.instance_name}</td>
+                          <td className="p-3">
+                            <span className={`px-2 py-1 rounded text-xs font-medium ${
+                              job.status === 'completed' ? 'bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-200' :
+                              job.status === 'processing' || job.status === 'pending' ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200' :
+                              job.status === 'failed' ? 'bg-red-100 dark:bg-red-900/40 text-red-800 dark:text-red-200' :
+                              'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300'
+                            }`}>
+                              {job.status === 'completed' ? 'Concluída' : job.status === 'processing' ? 'Em andamento' : job.status === 'pending' ? 'Pendente' : job.status === 'failed' ? 'Falhou' : job.status}
+                            </span>
+                          </td>
+                          <td className="p-3 text-center">
+                            <span className="inline-flex items-center justify-center min-w-[2.5rem] px-2 py-1 rounded-md bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-200 font-semibold text-sm">
+                              {sent}
+                            </span>
+                          </td>
+                          <td className="p-3 text-center">
+                            <span className={`inline-flex items-center justify-center min-w-[2.5rem] px-2 py-1 rounded-md font-semibold text-sm ${failed > 0 ? 'bg-red-100 dark:bg-red-900/40 text-red-800 dark:text-red-200' : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400'}`}>
+                              {failed}
+                            </span>
+                          </td>
+                          <td className="p-3 text-center text-sm text-gray-700 dark:text-[#ccc] font-medium">
+                            {total}
+                          </td>
+                          <td className="p-3 text-sm text-gray-500 dark:text-[#888]">
+                            {job.created_at ? new Date(job.created_at).toLocaleString('pt-BR') : '—'}
+                          </td>
+                          <td className="p-3 text-center">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (!window.confirm('Excluir esta campanha? O envio será interrompido.')) return;
+                                try {
+                                  const res = await fetch(`/api/crm/activations/mass-send/jobs/${job.id}`, {
+                                    method: 'DELETE',
+                                    headers: { 'X-User-Id': userId ?? '' },
+                                  });
+                                  const data = await res.json();
+                                  if (res.ok && data.success) {
+                                    showToast('Campanha excluída.', 'success');
+                                    loadMassSendJobs();
+                                  } else {
+                                    showToast(data?.error || 'Erro ao excluir campanha.', 'error');
+                                  }
+                                } catch {
+                                  showToast('Erro ao excluir campanha.', 'error');
+                                }
+                              }}
+                              className="p-2 rounded-lg text-gray-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400 transition-colors"
+                              title="Excluir campanha"
+                            >
+                              <Trash className="w-4 h-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Modal de Detalhes do Agendamento */}
@@ -2169,6 +2458,7 @@ const ActivationsPage = () => {
           userId={userId}
           onUpdate={loadSchedules}
           onEditMessage={handleEditMessageFromSchedule}
+          onEditMessageForGroup={handleEditMessageForGroup}
         />
       )}
     </Layout>

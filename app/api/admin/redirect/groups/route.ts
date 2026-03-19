@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
 
     const { data: project } = await supabaseServiceRole
       .from('vsl_projects')
-      .select('slug')
+      .select('slug, pixel_id, redirect_timer_seconds')
       .eq('id', projectId)
       .single();
     if (!project) return errorResponse('Projeto não encontrado', 404);
@@ -41,7 +41,8 @@ export async function GET(req: NextRequest) {
       .eq('project_id', projectId)
       .eq('slug', project.slug)
       .single();
-    if (!redirectRow) return successResponse({ groups: [], redirect_slug_id: null, project_id: projectId, redirect_slug: project.slug, total_clicks: 0, total_groups: 0, active_groups: 0 });
+    const emptyUtmSummary = { total: 0, by_source: {}, by_medium: {}, by_campaign: {}, by_source_medium: {}, by_day: {}, sample_size: 0 };
+    if (!redirectRow) return successResponse({ groups: [], redirect_slug_id: null, project_id: projectId, redirect_slug: project.slug, pixel_id: project.pixel_id ?? null, redirect_timer_seconds: project.redirect_timer_seconds ?? 3, total_clicks: 0, total_groups: 0, active_groups: 0, utm_visits: [], utm_summary: emptyUtmSummary });
 
     const { data: groups } = await supabaseServiceRole
       .from('redirect_groups')
@@ -68,14 +69,67 @@ export async function GET(req: NextRequest) {
     }));
 
     const total_clicks = Object.values(counts).reduce((a, b) => a + b, 0);
+
+    const { data: utmVisits } = await supabaseServiceRole
+      .from('redirect_visits')
+      .select('id, utm_source, utm_medium, utm_campaign, utm_content, utm_term, status, created_at')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    const { count: utmTotalCount } = await supabaseServiceRole
+      .from('redirect_visits')
+      .select('id', { count: 'exact', head: true })
+      .eq('project_id', projectId);
+
+    const { data: utmRows } = await supabaseServiceRole
+      .from('redirect_visits')
+      .select('utm_source, utm_medium, utm_campaign, created_at')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false })
+      .limit(5000);
+
+    const bySource: Record<string, number> = {};
+    const byMedium: Record<string, number> = {};
+    const byCampaign: Record<string, number> = {};
+    const bySourceMedium: Record<string, number> = {};
+    const byDay: Record<string, number> = {};
+    for (const r of utmRows ?? []) {
+      const row = r as { utm_source: string | null; utm_medium: string | null; utm_campaign: string | null; created_at: string };
+      const src = row.utm_source?.trim() || '(vazio)';
+      const med = row.utm_medium?.trim() || '(vazio)';
+      const camp = row.utm_campaign?.trim() || '(vazio)';
+      bySource[src] = (bySource[src] ?? 0) + 1;
+      byMedium[med] = (byMedium[med] ?? 0) + 1;
+      byCampaign[camp] = (byCampaign[camp] ?? 0) + 1;
+      const key = `${src} | ${med}`;
+      bySourceMedium[key] = (bySourceMedium[key] ?? 0) + 1;
+      const day = row.created_at ? row.created_at.slice(0, 10) : '';
+      if (day) byDay[day] = (byDay[day] ?? 0) + 1;
+    }
+
+    const utm_summary = {
+      total: utmTotalCount ?? 0,
+      by_source: bySource,
+      by_medium: byMedium,
+      by_campaign: byCampaign,
+      by_source_medium: bySourceMedium,
+      by_day: byDay,
+      sample_size: (utmRows ?? []).length,
+    };
+
     return successResponse({
       groups: list,
       redirect_slug_id: redirectRow.id,
       redirect_slug: project.slug,
       project_id: projectId,
+      pixel_id: project.pixel_id ?? null,
+      redirect_timer_seconds: project.redirect_timer_seconds ?? 3,
       total_clicks,
       total_groups: list.length,
       active_groups: list.filter((g: { is_active: boolean }) => g.is_active).length,
+      utm_visits: utmVisits ?? [],
+      utm_summary,
     });
   } catch (e: unknown) {
     if (e instanceof Error && e.message.includes('Acesso negado')) {

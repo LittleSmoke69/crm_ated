@@ -2,99 +2,136 @@ import { NextRequest } from 'next/server';
 import { requireAdmin } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { getAdminBancaId } from '@/lib/server/crm/adminLeadTransferContext';
-import { normalizeDateParam, dateToStartOfDaySãoPauloISO, dateToEndOfDaySãoPauloISO } from '@/lib/server/crm/transfer-date-utils';
+import { isTransferExpired } from '@/lib/server/crm/resolveTransferLog';
 
 const LOG_PREFIX = '[admin][transfer-logs]';
+/** Tamanho da página por request (PostgREST costuma limitar ~1000). */
+const LOGS_PAGE_SIZE = 1000;
+/** Máximo de páginas para não travar (ex.: 100k logs). */
+const LOGS_MAX_PAGES = 100;
+const IN_BATCH_SIZE = 150;
+const ENTRIES_PAGE_SIZE = 10000;
 
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) chunks.push(arr.slice(i, i + size));
+  return chunks;
+}
+
+/** Tipo da linha retornada pelo select em admin_lead_transfer_logs (evita GenericStringError do Supabase). */
+type TransferLogRow = {
+  id: string;
+  banca_id?: string | null;
+  performed_by_user_id?: string | null;
+  source_consultant_email?: string | null;
+  target_consultant_email?: string | null;
+  leads_ids?: unknown;
+  count?: number | null;
+  transfer_type?: string | null;
+  deadline_days?: number | null;
+  devolvido_at?: string | null;
+  filters_snapshot?: unknown;
+  crm_response?: unknown;
+  created_at?: string | null;
+};
 /**
  * GET /api/admin/crm/transfer-logs
- * Lista logs de transferência de leads (auditoria).
- * Query: banca_id (obrigatório), from (YYYY-MM-DD), to (YYYY-MM-DD), transfer_type (TF|TF1|TF2|TF3), target_consultant_email? (filtrar por consultor destino)
+ * Retorna TODAS as transferências do banco (paginação interna até acabar).
  */
 export async function GET(req: NextRequest) {
   try {
-    const { userId, profile } = await requireAdmin(req);
+    await requireAdmin(req);
     const { searchParams } = req.nextUrl;
 
     const bancaId = searchParams.get('banca_id')?.trim() || null;
-    if (!bancaId) {
-      return errorResponse('banca_id é obrigatório.');
+    const transferType = searchParams.get('transfer_type')?.trim() || null;
+    const targetConsultant = searchParams.get('target_consultant_email')?.trim() || null;
+    const sourceConsultant = searchParams.get('source_consultant_email')?.trim() || null;
+    // Período (from/to) não é aplicado aqui: a API retorna sempre todas as transferências do escopo.
+    // O frontend filtra por data em memória (managementFrom/managementTo).
+
+    const allLogs: TransferLogRow[] = [];
+    let offset = 0;
+    for (let i = 0; i < LOGS_MAX_PAGES; i++) {
+      let q = supabaseServiceRole
+        .from('admin_lead_transfer_logs')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .range(offset, offset + LOGS_PAGE_SIZE - 1);
+      if (bancaId) q = q.eq('banca_id', bancaId);
+      if (transferType && ['TF', 'TF1', 'TF2', 'TF3'].includes(transferType)) q = q.eq('transfer_type', transferType);
+      if (targetConsultant) q = q.ilike('target_consultant_email', targetConsultant);
+      if (sourceConsultant) q = q.ilike('source_consultant_email', sourceConsultant);
+      const { data: logs, error } = await q;
+      if (error) {
+        console.error(`${LOG_PREFIX} GET error:`, error);
+        return errorResponse('Erro ao buscar logs de transferência.');
+      }
+      const rows = (Array.isArray(logs) ? logs : []) as TransferLogRow[];
+      allLogs.push(...rows);
+      if (rows.length === 0) break;
+      // Próximo offset = onde paramos (Supabase pode devolver < 1000 por request)
+      offset += rows.length;
     }
 
-    const resolved = await getAdminBancaId(userId, profile, bancaId);
-    if (!resolved) {
-      return errorResponse('Banca não encontrada ou sem permissão.');
-    }
-
-    const fromParam = normalizeDateParam(searchParams.get('from'));
-    const toParam = normalizeDateParam(searchParams.get('to'));
-    const transferType = searchParams.get('transfer_type')?.trim();
-    const targetConsultantEmail = searchParams.get('target_consultant_email')?.trim() || null;
-
-    let query = supabaseServiceRole
-      .from('admin_lead_transfer_logs')
-      .select('id, banca_id, performed_by_user_id, source_consultant_email, target_consultant_email, leads_ids, count, transfer_type, filters_snapshot, crm_response, created_at')
-      .eq('banca_id', resolved.bancaId)
-      .order('created_at', { ascending: false });
-
-    if (fromParam) {
-      query = query.gte('created_at', dateToStartOfDaySãoPauloISO(fromParam));
-    }
-    if (toParam) {
-      query = query.lte('created_at', dateToEndOfDaySãoPauloISO(toParam));
-    }
-    if (transferType && ['TF', 'TF1', 'TF2', 'TF3'].includes(transferType)) {
-      query = query.eq('transfer_type', transferType);
-    }
-    if (targetConsultantEmail) {
-      query = query.ilike('target_consultant_email', targetConsultantEmail);
-    }
-
-    const { data: logs, error } = await query.limit(500);
-
-    if (error) {
-      console.error(`${LOG_PREFIX} GET error:`, error);
-      return errorResponse('Erro ao buscar logs de transferência.');
-    }
-
-    const list = Array.isArray(logs) ? logs : [];
+    const list = allLogs;
     if (list.length === 0) {
       return successResponse([]);
     }
 
-    const logIds = list.map((r: { id: string }) => r.id);
-    const { data: entries } = await supabaseServiceRole
-      .from('admin_lead_transfer_entries')
-      .select('transfer_log_id, saldo_snapshot')
-      .in('transfer_log_id', logIds);
+    const logIds = list.map((r) => r.id);
+    type EntryRow = { transfer_log_id: string; saldo_snapshot?: number | null; resolution_status?: string | null };
+    const allEntries: EntryRow[] = [];
+    for (const chunk of chunkArray(logIds, IN_BATCH_SIZE)) {
+      let entOffset = 0;
+      while (true) {
+        const { data } = await supabaseServiceRole
+          .from('admin_lead_transfer_entries')
+          .select('transfer_log_id, saldo_snapshot, resolution_status')
+          .in('transfer_log_id', chunk)
+          .range(entOffset, entOffset + ENTRIES_PAGE_SIZE - 1);
+        const rows = Array.isArray(data) ? (data as EntryRow[]) : [];
+        allEntries.push(...rows);
+        if (rows.length < ENTRIES_PAGE_SIZE) break;
+        entOffset += ENTRIES_PAGE_SIZE;
+      }
+    }
 
     const totalBalanceByLogId = new Map<string, number>();
-    (entries ?? []).forEach((e: { transfer_log_id: string; saldo_snapshot?: number | null }) => {
+    const resolutionByLogId = new Map<string, { hasPending: boolean; total: number; vinculado: number; disponivel: number }>();
+    allEntries.forEach((e: EntryRow) => {
       const current = totalBalanceByLogId.get(e.transfer_log_id) ?? 0;
       const saldo = e.saldo_snapshot != null ? Number(e.saldo_snapshot) : 0;
       totalBalanceByLogId.set(e.transfer_log_id, current + saldo);
+      const res = resolutionByLogId.get(e.transfer_log_id) ?? { hasPending: false, total: 0, vinculado: 0, disponivel: 0 };
+      res.total += 1;
+      if (e.resolution_status === 'pending') res.hasPending = true;
+      else if (e.resolution_status === 'vinculado') res.vinculado += 1;
+      else if (e.resolution_status === 'disponivel_retransferencia') res.disponivel += 1;
+      resolutionByLogId.set(e.transfer_log_id, res);
     });
 
-    let storedTotalByLogId = new Map<string, number>();
-    const { data: logsWithTotal, error: totalErr } = await supabaseServiceRole
-      .from('admin_lead_transfer_logs')
-      .select('id, total_balance_snapshot')
-      .in('id', logIds);
-    if (!totalErr && Array.isArray(logsWithTotal)) {
-      logsWithTotal.forEach((row: { id: string; total_balance_snapshot?: number | null }) => {
-        if (row.total_balance_snapshot != null) {
-          storedTotalByLogId.set(row.id, Number(row.total_balance_snapshot));
-        }
-      });
-    }
-    if (totalErr?.code === 'PGRST204') {
-      console.warn(`${LOG_PREFIX} Coluna total_balance_snapshot não existe. Use a soma das entries. Execute add_total_balance_snapshot_to_transfer_logs.sql no Supabase.`);
+    const storedTotalByLogId = new Map<string, number>();
+    for (const chunk of chunkArray(logIds, IN_BATCH_SIZE)) {
+      const { data: logsWithTotal, error: totalErr } = await supabaseServiceRole
+        .from('admin_lead_transfer_logs')
+        .select('id, total_balance_snapshot')
+        .in('id', chunk);
+      if (!totalErr && Array.isArray(logsWithTotal)) {
+        logsWithTotal.forEach((row: { id: string; total_balance_snapshot?: number | null }) => {
+          if (row.total_balance_snapshot != null) {
+            storedTotalByLogId.set(row.id, Number(row.total_balance_snapshot));
+          }
+        });
+      }
+      if (totalErr?.code === 'PGRST204') {
+        console.warn(`${LOG_PREFIX} Coluna total_balance_snapshot não existe. Use a soma das entries. Execute add_total_balance_snapshot_to_transfer_logs.sql no Supabase.`);
+      }
     }
 
     const emailsLower = new Set<string>();
     const performedByUserIds = new Set<string>();
-    list.forEach((log: { source_consultant_email?: string | null; target_consultant_email?: string | null; performed_by_user_id?: string | null }) => {
+    list.forEach((log) => {
       const s = (log.source_consultant_email ?? '').trim().toLowerCase();
       const t = (log.target_consultant_email ?? '').trim().toLowerCase();
       if (s) emailsLower.add(s);
@@ -107,8 +144,7 @@ export async function GET(req: NextRequest) {
       const { data: profiles } = await supabaseServiceRole
         .from('profiles')
         .select('email, full_name')
-        .not('email', 'is', null)
-        .limit(2000);
+        .not('email', 'is', null);
       (profiles ?? []).forEach((p: { email: string | null; full_name: string | null }) => {
         const email = (p.email ?? '').trim().toLowerCase();
         if (email && emailsLower.has(email)) {
@@ -130,18 +166,31 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    const enriched = list.map((log: any) => {
+    const DEFAULT_DEADLINE = 10;
+    const enriched = list.map((log) => {
       const sourceEmail = (log.source_consultant_email ?? '').trim().toLowerCase();
       const targetEmail = (log.target_consultant_email ?? '').trim().toLowerCase();
       const storedTotal = storedTotalByLogId.get(log.id) ?? null;
       const totalBalance = storedTotal ?? totalBalanceByLogId.get(log.id) ?? 0;
       const performedBy = (log.performed_by_user_id ?? '').trim();
+      const deadlineDays = log.deadline_days != null ? log.deadline_days : DEFAULT_DEADLINE;
+      const expired = isTransferExpired(log.created_at, deadlineDays);
+      const resInfo = resolutionByLogId.get(log.id);
+      let resolution_status_log: 'no_prazo' | 'expirada' | 'resolvida' = 'no_prazo';
+      if (expired) {
+        resolution_status_log = resInfo?.hasPending ? 'expirada' : 'resolvida';
+      }
+      const resInfoFull = resolutionByLogId.get(log.id);
       return {
         ...log,
+        deadline_days: deadlineDays,
         total_balance_snapshot: totalBalance,
         source_consultant_name: sourceEmail ? (emailToName.get(sourceEmail) || log.source_consultant_email) : (log.source_consultant_email ?? '-'),
         target_consultant_name: targetEmail ? (emailToName.get(targetEmail) || log.target_consultant_email) : (log.target_consultant_email ?? '-'),
         performed_by_name: performedBy ? (performedByName.get(performedBy) || '-') : '-',
+        resolution_status_log,
+        vinculado_count: resInfoFull?.vinculado ?? 0,
+        disponivel_count: resInfoFull?.disponivel ?? 0,
       };
     });
 

@@ -146,6 +146,13 @@ export function VslPageClient({
         fbq('track', 'PageView');
       `;
       document.head.appendChild(script);
+      return () => {
+        try {
+          if (script.parentNode) script.parentNode.removeChild(script);
+        } catch {
+          // Evita erro removeChild quando o nó já foi removido
+        }
+      };
     }
   }, [projectId, pageId, pixelId]);
 

@@ -78,6 +78,29 @@ export interface GetIndicatedsByConsultantResponse {
   error?: string;
 }
 
+/** Item do histórico de depósitos (get-user-deposit-history) */
+export interface DepositHistoryItem {
+  id: number;
+  value: number;
+  status: string;
+  status_code: number;
+  date: string;
+  created_at?: string;
+  updated_at?: string;
+  reference?: string | null;
+  txid?: string | null;
+  link?: string | null;
+}
+
+export interface GetUserDepositHistoryResponse {
+  success: boolean;
+  message?: string;
+  total_value?: number;
+  history?: DepositHistoryItem[];
+  pagination?: { current_page?: number; per_page?: string; total?: number; last_page?: number; from?: number; to?: number };
+  error?: string;
+}
+
 export interface CrmRedistributionClientOptions {
   crmBaseUrl: string;
   apiKey: string;
@@ -158,18 +181,26 @@ export class CrmRedistributionClient {
 
   /**
    * GET /api/crm/redistribution-leads
-   * Query: source_consultant_email (obrigatório), days_inactive?, tag?
-   * URL final ex.: .../redistribution-leads?source_consultant_email=adasd%40gmail.com (CRM decodifica e recebe adasd@gmail.com)
+   * Query: source_consultant_email (obrigatório), days_inactive?, tag?, lead_types? (filtros do modal: registered, with_balance, has_won, has_withdrawn).
+   * Se o CRM suportar lead_types, retorna já filtrado; caso contrário filtrar em memória.
    */
   async getRedistributionLeads(params: {
     source_consultant_email: string;
     days_inactive?: number;
     tag?: string;
+    /** yes = só transferidos, no = só não transferidos (padrão no para busca de origem) */
+    transferred_filter?: 'yes' | 'no';
+    /** Filtros do modal de aprovação: registered | with_balance | has_won | has_withdrawn (enviados ao CRM se suportar) */
+    lead_types?: string[];
   }): Promise<RedistributionLeadsResponse> {
     const search = new URLSearchParams();
     search.set('source_consultant_email', params.source_consultant_email.trim());
     if (params.days_inactive != null) search.set('days_inactive', String(params.days_inactive));
     if (params.tag != null && params.tag.trim()) search.set('tag', params.tag.trim());
+    if (params.transferred_filter) search.set('transferred_filter', params.transferred_filter);
+    if (Array.isArray(params.lead_types) && params.lead_types.length > 0) {
+      search.set('lead_types', params.lead_types.join(','));
+    }
 
     const { data, status } = await this.fetch<RedistributionLeadsResponse>(
       `/redistribution-leads?${search.toString()}`
@@ -231,29 +262,42 @@ export class CrmRedistributionClient {
 
     if (status !== 200) {
       const msg = (data as RedistributeLeadsResponse).error ?? (data as RedistributeLeadsResponse).message ?? `HTTP ${status}`;
-      console.log(`${LOG_PREFIX} redistributeLeads failed: status=${status}, message=${msg}`, data);
+      console.log(`${LOG_PREFIX} redistributeLeads failed: status=${status}, message=${msg}`, JSON.stringify(data));
       return { success: false, error: msg, message: msg };
     }
 
     const count = (data as RedistributeLeadsResponse).count ?? (data as RedistributeLeadsResponse).data?.count;
-    console.log(`${LOG_PREFIX} redistributeLeads success: count=${count}, message=${(data as RedistributeLeadsResponse).message ?? 'n/a'}`);
+    console.log(`${LOG_PREFIX} redistributeLeads success: count=${count}, message=${(data as RedistributeLeadsResponse).message ?? 'n/a'}, fullResponse=${JSON.stringify(data)}`);
     return data as RedistributeLeadsResponse;
   }
 
   /**
    * GET /api/crm/get-indicateds-by-consultant
-   * Query: consultant (email), per_page, page (opcional, para paginação).
+   * Query: consultant (email), per_page, page (opcional), transferred_filter (yes|no), sort, direction, lead_types? (filtros do modal).
    * Retorna lista detalhada de indicados do consultor (para enriquecer leads por id).
    */
   async getIndicatedsByConsultant(
     consultantEmail: string,
     perPage: number = 2000,
-    page: number = 1
+    page: number = 1,
+    options?: {
+      transferredFilter?: 'yes' | 'no';
+      sort?: string;
+      direction?: string;
+      /** Filtros do modal: registered | with_balance | has_won | has_withdrawn (enviados ao CRM se suportar) */
+      leadTypes?: string[];
+    }
   ): Promise<GetIndicatedsByConsultantResponse> {
     const search = new URLSearchParams();
     search.set('consultant', consultantEmail.trim());
     search.set('per_page', String(perPage));
     if (page > 1) search.set('page', String(page));
+    if (options?.transferredFilter) search.set('transferred_filter', options.transferredFilter);
+    if (options?.sort) search.set('sort', options.sort);
+    if (options?.direction) search.set('direction', options.direction);
+    if (Array.isArray(options?.leadTypes) && options.leadTypes.length > 0) {
+      search.set('lead_types', options.leadTypes.join(','));
+    }
 
     const { data, status } = await this.fetch<GetIndicatedsByConsultantResponse>(
       `/get-indicateds-by-consultant?${search.toString()}`
@@ -272,6 +316,44 @@ export class CrmRedistributionClient {
       success: raw.success,
       data: list,
       message: raw.message,
+      pagination: raw.pagination,
+      error: raw.error,
+    };
+  }
+
+  /**
+   * GET /api/crm/get-user-deposit-history
+   * Query: user_id (obrigatório), per_page, page.
+   * Usado na resolução de transferências expiradas: compara data de transferência com último depósito aprovado.
+   */
+  async getUserDepositHistory(
+    userId: string,
+    perPage: number = 100,
+    page: number = 1
+  ): Promise<GetUserDepositHistoryResponse> {
+    const search = new URLSearchParams();
+    search.set('user_id', String(userId).trim());
+    search.set('per_page', String(perPage));
+    search.set('page', String(page));
+
+    const { data, status } = await this.fetch<GetUserDepositHistoryResponse>(
+      `/get-user-deposit-history?${search.toString()}`
+    );
+
+    if (status !== 200) {
+      const msg = (data as GetUserDepositHistoryResponse).error ?? (data as GetUserDepositHistoryResponse).message ?? `HTTP ${status}`;
+      console.log(`${LOG_PREFIX} getUserDepositHistory failed: status=${status}, message=${msg}`, data);
+      return { success: false, error: msg, message: msg };
+    }
+
+    const raw = data as GetUserDepositHistoryResponse;
+    const history = Array.isArray(raw.history) ? raw.history : [];
+    console.log(`${LOG_PREFIX} getUserDepositHistory success: user_id=${userId}, ${history.length} item(s)`);
+    return {
+      success: raw.success,
+      message: raw.message,
+      total_value: raw.total_value,
+      history,
       pagination: raw.pagination,
       error: raw.error,
     };

@@ -73,8 +73,14 @@ const AdminLoginPage = () => {
         return;
       }
 
-      // Verifica se o usuário pode acessar o painel admin (super_admin ou admin)
-      const canAccessAdmin = user.status === 'super_admin' || user.status === 'admin' || user.status === 'dono_banca';
+      // Verifica se o usuário pode acessar o painel: status fixo ou cargo com permissão na sidebar (ver página = acessar página)
+      const fixedAccess = user.status === 'super_admin' || user.status === 'admin' || user.status === 'dono_banca';
+      let canAccessAdmin = fixedAccess;
+      if (!canAccessAdmin) {
+        const res = await fetch(`/api/user/can-access-admin?userId=${encodeURIComponent(user.id)}`, { credentials: 'include' });
+        const json = await res.json();
+        canAccessAdmin = json?.success === true && json?.data?.canAccess === true;
+      }
       if (!canAccessAdmin) {
         setErrorMsg('Acesso negado. Esta conta não possui permissões de administrador.');
         setLoading(false);

@@ -7,6 +7,7 @@
 import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { getUserProfile } from '@/lib/middleware/permissions';
+import { canAccessGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import {
   getMetaConfig,
@@ -79,10 +80,8 @@ export async function GET(req: NextRequest) {
     }
     if (!profile) return errorResponse('Perfil não encontrado', 403);
 
-    const allowedStatuses = ['gestor', 'admin', 'super_admin'];
-    if (!profile.status || !allowedStatuses.includes(profile.status)) {
-      return errorResponse('Acesso negado.', 403);
-    }
+    const hasAccess = await canAccessGestorTrafego(profile);
+    if (!hasAccess) return errorResponse('Acesso negado. Você não tem permissão para acessar o módulo Gestão de Tráfego.', 403);
 
     const bancaId = req.nextUrl.searchParams.get('banca_id')?.trim();
     if (!bancaId) return errorResponse('banca_id é obrigatório', 400);
@@ -143,10 +142,8 @@ export async function PUT(req: NextRequest) {
     }
     if (!profile) return errorResponse('Perfil não encontrado', 403);
 
-    const allowedStatuses = ['gestor', 'admin', 'super_admin'];
-    if (!profile.status || !allowedStatuses.includes(profile.status)) {
-      return errorResponse('Acesso negado.', 403);
-    }
+    const hasAccessPut = await canAccessGestorTrafego(profile);
+    if (!hasAccessPut) return errorResponse('Acesso negado. Você não tem permissão para acessar o módulo Gestão de Tráfego.', 403);
 
     const body = await req.json().catch(() => ({}));
     const bancaId = body?.banca_id?.trim();
@@ -156,7 +153,7 @@ export async function PUT(req: NextRequest) {
     if (!canAccess) return errorResponse('Você não tem permissão para configurar Meta nesta banca.', 403);
 
     // Gestor: só pode alterar Ad Account, Pixel e Campanha padrão; URL e token ficam travados (apenas admin)
-    const isGestor = profile.status === 'gestor';
+    const isGestor = profile.status?.trim().toLowerCase() === 'gestor';
     const payload: Record<string, unknown> = {
       ad_account_id: body.ad_account_id,
       pixel_id: body.pixel_id,

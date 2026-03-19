@@ -49,20 +49,31 @@ export function errorResponse(error: string | Error, status: number = 400): Next
   );
 }
 
+/** Mensagens que indicam erro de autenticação (retornar 401) */
+const AUTH_ERROR_MESSAGES = ['Não autenticado', 'Usuário inválido', 'Perfil não encontrado'];
+
+/** Mensagens que indicam erro de autorização (retornar 403) */
+const FORBIDDEN_MESSAGES = ['Acesso negado'];
+
 export function serverErrorResponse(error: string | Error | any): NextResponse {
   const err = typeof error === 'object' && error !== null && 'statusCode' in error
     ? (error as any)
     : null;
-  const status = err?.statusCode === 503 ? 503 : 500;
+  let status = err?.statusCode === 503 ? 503 : 500;
 
   let message: string;
   if (error instanceof Error) {
     message = error.message;
   } else if (typeof error === 'object' && error !== null) {
-    // Tenta pegar message, hint ou details de erros do Supabase/PG
     message = error.message || error.details || error.hint || JSON.stringify(error);
   } else {
     message = String(error);
+  }
+
+  if (status === 500 && AUTH_ERROR_MESSAGES.some((msg) => message.includes(msg))) {
+    status = 401;
+  } else if (status === 500 && FORBIDDEN_MESSAGES.some((msg) => message.includes(msg))) {
+    status = 403;
   }
 
   return errorResponse(message, status);

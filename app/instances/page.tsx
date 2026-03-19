@@ -83,6 +83,10 @@ const InstancesPage = () => {
   const [checkingInstance, setCheckingInstance] = useState<string | null>(null); // Instância sendo verificada
   const [showExtractGroupsPrompt, setShowExtractGroupsPrompt] = useState(false);
   const [newlyConnectedInstance, setNewlyConnectedInstance] = useState<string | null>(null);
+  /** No modal de extrair grupos: true enquanto fetch+sync roda (mostra "Extraindo em segundo plano..."). */
+  const [extractGroupsModalExtracting, setExtractGroupsModalExtracting] = useState(false);
+  /** Mostra o botão "Fechar e continuar em segundo plano" no modal de extração após alguns segundos. */
+  const [showCloseExtractModalButton, setShowCloseExtractModalButton] = useState(false);
   /** Instância cujo extração de grupos está rodando em segundo plano (null = nenhuma). */
   const [groupsProcessingForInstance, setGroupsProcessingForInstance] = useState<string | null>(null);
   /** Verificação de todas as instâncias em andamento. */
@@ -152,6 +156,16 @@ const InstancesPage = () => {
       setIsLoadingInstances(false);
     }
   }, [instances.length, isLoadingInstances]);
+
+  // Mostra botão "Fechar e continuar em segundo plano" no modal de extração após 6 segundos
+  useEffect(() => {
+    if (!extractGroupsModalExtracting) {
+      setShowCloseExtractModalButton(false);
+      return;
+    }
+    const t = setTimeout(() => setShowCloseExtractModalButton(true), 6000);
+    return () => clearTimeout(t);
+  }, [extractGroupsModalExtracting]);
 
   useEffect(() => {
     const checkRole = async () => {
@@ -377,13 +391,13 @@ const InstancesPage = () => {
             body: JSON.stringify({ instanceName }),
           });
           const fetchData = await fetchResponse.json();
-          if (!fetchResponse.ok || !fetchData.data) {
+          const groups = Array.isArray(fetchData.data) ? fetchData.data : fetchData.data ?? [];
+          if (!fetchResponse.ok) {
             setGroupsProcessingForInstance(null);
-            showToast('Erro ao buscar grupos da API', 'error');
+            showToast(fetchData.error || 'Erro ao buscar grupos da API', 'error');
             addLog(`Erro ao buscar grupos da instância ${instanceName}`, 'error');
             return;
           }
-          const groups = fetchData.data;
 
           const syncResponse = await fetch('/api/groups/sync', {
             method: 'POST',
@@ -405,6 +419,58 @@ const InstancesPage = () => {
           addLog(`Erro ao extrair grupos (${instanceName}): ${String(error)}`, 'error');
         }
       })();
+    },
+    [userId, showToast, addLog]
+  );
+
+  /** Extrair e salvar todos os grupos no modal: mantém usuário na página, mostra "em segundo plano" e ao terminar fecha o modal. */
+  const handleExtractAndSaveAllInModal = useCallback(
+    async (instanceName: string) => {
+      if (!userId || !instanceName) return;
+      setExtractGroupsModalExtracting(true);
+      setGroupsProcessingForInstance(instanceName);
+      addLog(`Extraindo grupos da instância ${instanceName} (modal)...`, 'info');
+      try {
+        const fetchResponse = await fetch('/api/groups/fetch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+          body: JSON.stringify({ instanceName }),
+        });
+        const fetchData = await fetchResponse.json();
+        // Aceita sucesso com array (vazio ou não) — a API /api/groups/fetch retorna { data: [] } quando não há grupos
+        const groups = Array.isArray(fetchData.data) ? fetchData.data : fetchData.data ?? [];
+        if (!fetchResponse.ok) {
+          showToast(fetchData.error || 'Erro ao buscar grupos da API', 'error');
+          addLog(`Erro ao buscar grupos da instância ${instanceName}`, 'error');
+          setExtractGroupsModalExtracting(false);
+          setGroupsProcessingForInstance(null);
+          return;
+        }
+        const syncResponse = await fetch('/api/groups/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+          body: JSON.stringify({ instanceName, groups }),
+        });
+        const syncData = await syncResponse.json();
+        setGroupsProcessingForInstance(null);
+        setExtractGroupsModalExtracting(false);
+        setShowExtractGroupsPrompt(false);
+        setNewlyConnectedInstance(null);
+        if (syncResponse.ok && syncData.success) {
+          const { inserted = 0, updated = 0 } = syncData.data || {};
+          showToast(`${inserted + updated} grupo(s) salvos/sincronizados com sucesso!`, 'success');
+          addLog(`${inserted + updated} grupos da instância ${instanceName} extraídos e salvos`, 'success');
+        } else {
+          showToast(syncData.error || 'Erro ao sincronizar grupos', 'error');
+        }
+      } catch (error) {
+        setExtractGroupsModalExtracting(false);
+        setGroupsProcessingForInstance(null);
+        setShowExtractGroupsPrompt(false);
+        setNewlyConnectedInstance(null);
+        showToast('Erro ao extrair grupos', 'error');
+        addLog(`Erro ao extrair grupos (${instanceName}): ${String(error)}`, 'error');
+      }
     },
     [userId, showToast, addLog]
   );
@@ -1397,8 +1463,8 @@ const InstancesPage = () => {
                 </div>
               </div>
 
-              {/* Linha 2: Tipo de Instância e Tipo de Maturação — colunas alinhadas e altura uniforme */}
-              <div className={`grid grid-cols-1 ${!isConsultor ? 'lg:grid-cols-2' : ''} gap-5 items-stretch`}>
+              {/* Linha 2: Tipo de Instância e Tipo de Maturação — colunas alinhadas e altura uniforme (consultor e admin) */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-stretch">
                 {/* Tipo de Instância */}
                 <div className="flex flex-col">
                   <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-2 h-5 flex items-center">Tipo de Instância*</label>
@@ -1448,50 +1514,48 @@ const InstancesPage = () => {
                   </div>
                 </div>
 
-                {/* Tipo de Maturação */}
-                {!isConsultor && (
-                  <div className="flex flex-col">
-                    <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-2 h-5 flex items-center">Tipo de Maturação*</label>
-                    <div className="grid grid-rows-2 gap-2 flex-1 min-h-[140px]">
-                      <div
-                        onClick={() => !loading && setMaturationType('maturado')}
-                        className={`border-2 rounded-lg p-3 cursor-pointer transition flex items-center gap-3 min-h-[64px] ${
-                          maturationType === 'maturado' ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD95515] dark:bg-[#00ff0015]' : 'border-gray-200 dark:border-[#555] hover:border-[#8CD95540] dark:hover:border-[#00ff0040] hover:bg-gray-50 dark:hover:bg-[#333]'
-                        } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
-                      >
-                        <div className={`w-5 h-5 shrink-0 rounded-full border-2 flex items-center justify-center ${
-                          maturationType === 'maturado' ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD955] dark:bg-[#00ff00]' : 'border-gray-300 dark:border-[#555]'
-                        }`}>
-                          {maturationType === 'maturado' && <div className="w-3 h-3 rounded-full bg-white" />}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <span className="font-semibold text-gray-800 dark:text-white text-sm block mb-0.5">Maturado</span>
-                          <p className="text-xs text-gray-600 dark:text-[#aaa] leading-snug">
-                            Número já maturado. Pode operar normalmente após conectar.
-                          </p>
-                        </div>
+                {/* Tipo de Maturação — visível para consultor e admin */}
+                <div className="flex flex-col">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-2 h-5 flex items-center">Tipo de Maturação*</label>
+                  <div className="grid grid-rows-2 gap-2 flex-1 min-h-[140px]">
+                    <div
+                      onClick={() => !loading && setMaturationType('maturado')}
+                      className={`border-2 rounded-lg p-3 cursor-pointer transition flex items-center gap-3 min-h-[64px] ${
+                        maturationType === 'maturado' ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD95515] dark:bg-[#00ff0015]' : 'border-gray-200 dark:border-[#555] hover:border-[#8CD95540] dark:hover:border-[#00ff0040] hover:bg-gray-50 dark:hover:bg-[#333]'
+                      } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                      <div className={`w-5 h-5 shrink-0 rounded-full border-2 flex items-center justify-center ${
+                        maturationType === 'maturado' ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD955] dark:bg-[#00ff00]' : 'border-gray-300 dark:border-[#555]'
+                      }`}>
+                        {maturationType === 'maturado' && <div className="w-3 h-3 rounded-full bg-white" />}
                       </div>
-                      <div
-                        onClick={() => !loading && setMaturationType('virgem')}
-                        className={`border-2 rounded-lg p-3 cursor-pointer transition flex items-center gap-3 min-h-[64px] ${
-                          maturationType === 'virgem' ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD95515] dark:bg-[#00ff0015]' : 'border-gray-200 dark:border-[#555] hover:border-[#8CD95540] dark:hover:border-[#00ff0040] hover:bg-gray-50 dark:hover:bg-[#333]'
-                        } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
-                      >
-                        <div className={`w-5 h-5 shrink-0 rounded-full border-2 flex items-center justify-center ${
-                          maturationType === 'virgem' ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD955] dark:bg-[#00ff00]' : 'border-gray-300 dark:border-[#555]'
-                        }`}>
-                          {maturationType === 'virgem' && <div className="w-3 h-3 rounded-full bg-white" />}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <span className="font-semibold text-gray-800 dark:text-white text-sm block mb-0.5">Virgem</span>
-                          <p className="text-xs text-gray-600 dark:text-[#aaa] leading-snug">
-                            Número novo. Após QR Code, auto maturação por 5 dias (bloqueada para campanhas/fluxos).
-                          </p>
-                        </div>
+                      <div className="min-w-0 flex-1">
+                        <span className="font-semibold text-gray-800 dark:text-white text-sm block mb-0.5">Maturado</span>
+                        <p className="text-xs text-gray-600 dark:text-[#aaa] leading-snug">
+                          Número já maturado. Pode operar normalmente após conectar.
+                        </p>
+                      </div>
+                    </div>
+                    <div
+                      onClick={() => !loading && setMaturationType('virgem')}
+                      className={`border-2 rounded-lg p-3 cursor-pointer transition flex items-center gap-3 min-h-[64px] ${
+                        maturationType === 'virgem' ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD95515] dark:bg-[#00ff0015]' : 'border-gray-200 dark:border-[#555] hover:border-[#8CD95540] dark:hover:border-[#00ff0040] hover:bg-gray-50 dark:hover:bg-[#333]'
+                      } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                      <div className={`w-5 h-5 shrink-0 rounded-full border-2 flex items-center justify-center ${
+                        maturationType === 'virgem' ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD955] dark:bg-[#00ff00]' : 'border-gray-300 dark:border-[#555]'
+                      }`}>
+                        {maturationType === 'virgem' && <div className="w-3 h-3 rounded-full bg-white" />}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <span className="font-semibold text-gray-800 dark:text-white text-sm block mb-0.5">Virgem</span>
+                        <p className="text-xs text-gray-600 dark:text-[#aaa] leading-snug">
+                          Número novo. Após QR Code, auto maturação por 5 dias (bloqueada para campanhas/fluxos).
+                        </p>
                       </div>
                     </div>
                   </div>
-                )}
+                </div>
               </div>
 
               {/* Botão Criar */}
@@ -1523,7 +1587,7 @@ const InstancesPage = () => {
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4"
           onClick={(e) => {
-            if (e.target === e.currentTarget) {
+            if (e.target === e.currentTarget && !extractGroupsModalExtracting) {
               setShowExtractGroupsPrompt(false);
               setNewlyConnectedInstance(null);
             }
@@ -1534,36 +1598,57 @@ const InstancesPage = () => {
           
           {/* Modal */}
           <div className="relative bg-white dark:bg-[#2a2a2a] rounded-xl shadow-2xl p-6 max-w-md w-full z-10 animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-[#404040]">
-            <div className="text-center mb-6">
-              <CheckCircle2 className="w-16 h-16 text-[#8CD955] dark:text-[#00ff00] mx-auto mb-4" />
-              <h2 className="text-xl font-semibold text-gray-800 dark:text-white mb-2">Instância Conectada!</h2>
-              <p className="text-gray-600 dark:text-[#ccc]">Deseja extrair e salvar todos os grupos desta instância?</p>
-            </div>
+            {extractGroupsModalExtracting ? (
+              <>
+                <div className="text-center mb-6">
+                  <Loader2 className="w-16 h-16 text-[#8CD955] dark:text-[#00ff00] mx-auto mb-4 animate-spin" />
+                  <h2 className="text-xl font-semibold text-gray-800 dark:text-white mb-2">Extraindo grupos em segundo plano</h2>
+                  <p className="text-gray-600 dark:text-[#ccc] mb-4">
+                    Os grupos estão sendo puxados e salvos. Você pode continuar na página da instância; será avisado quando terminar.
+                  </p>
+                  {showCloseExtractModalButton && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowExtractGroupsPrompt(false);
+                        setNewlyConnectedInstance(null);
+                        showToast('Modal fechado. A extração continua em segundo plano — acompanhe o aviso na página.', 'info');
+                      }}
+                      className="w-full py-2.5 rounded-lg border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] text-gray-700 dark:text-[#ccc] font-medium hover:bg-gray-50 dark:hover:bg-[#404040] transition text-sm"
+                    >
+                      Fechar e continuar em segundo plano
+                    </button>
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-center mb-6">
+                  <CheckCircle2 className="w-16 h-16 text-[#8CD955] dark:text-[#00ff00] mx-auto mb-4" />
+                  <h2 className="text-xl font-semibold text-gray-800 dark:text-white mb-2">Instância Conectada!</h2>
+                  <p className="text-gray-600 dark:text-[#ccc]">Deseja extrair e salvar todos os grupos desta instância?</p>
+                </div>
 
-            <div className="flex gap-3">
-              <button
-                onClick={() => {
-                  setShowExtractGroupsPrompt(false);
-                  setNewlyConnectedInstance(null);
-                  showToast('Instância conectada com sucesso!', 'success');
-                }}
-                className="flex-1 py-3 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-lg font-medium transition"
-              >
-                Fechar
-              </button>
-              <button
-                onClick={() => {
-                  const instanceName = newlyConnectedInstance;
-                  setShowExtractGroupsPrompt(false);
-                  setNewlyConnectedInstance(null);
-                  showToast('Instância conectada com sucesso!', 'success');
-                  if (instanceName) runExtractGroupsInBackground(instanceName);
-                }}
-                className="flex-1 py-3 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition"
-              >
-                Extrair
-              </button>
-            </div>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => {
+                      setShowExtractGroupsPrompt(false);
+                      setNewlyConnectedInstance(null);
+                      showToast('Instância conectada com sucesso!', 'success');
+                    }}
+                    className="flex-1 py-3 bg-gray-200 hover:bg-gray-300 dark:bg-[#404040] dark:hover:bg-[#555] text-gray-800 dark:text-white rounded-lg font-medium transition"
+                  >
+                    Fechar
+                  </button>
+                  <button
+                    onClick={() => newlyConnectedInstance && handleExtractAndSaveAllInModal(newlyConnectedInstance)}
+                    className="flex-1 py-3 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition flex items-center justify-center gap-2"
+                  >
+                    Extrair e salvar todos
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

@@ -1,9 +1,11 @@
 import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { getUserProfile } from '@/lib/middleware/permissions';
+import { canAccessGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
 import { getEffectiveDonoIdForGestor } from '@/lib/middleware/gestor-owner';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
-import { getDashboardDataFromIndicatedsOnly } from '@/lib/services/dashboard/dono-banca';
+import { getDonoBancaDashboardData, getDashboardDataByBancaId } from '@/lib/services/dashboard/dono-banca';
+import { getMetaInsightsAggregated, getMetaCampaignsWithInsights } from '@/lib/services/meta-sync-service';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 function normalizeBancaUrl(url: string | null | undefined): string {
@@ -17,7 +19,9 @@ function normalizeBancaUrl(url: string | null | undefined): string {
 
 /**
  * GET /api/gestor-trafego/dashboard
- * Utiliza exclusivamente o endpoint get-indicateds-by-consultant (from/to) para montar o dashboard.
+ * Busca dados da banca e Meta Ads da mesma forma que a gestão de consultores (dono-banca):
+ * - Com donoId: getDonoBancaDashboardData (dashboard-metrics + get-indicateds-by-consultant + Meta Ads).
+ * - Com bancaId apenas: getDashboardDataByBancaId (mesma lógica por banca).
  * Gestor: dados do dono vinculado (enroller) ou header X-Effective-Dono-Id / X-Effective-Banca-Id.
  * Admin/Super Admin: header X-Effective-Dono-Id.
  */
@@ -28,6 +32,9 @@ export async function GET(req: NextRequest) {
     const metaActiveOnly = metaActiveOnlyParam === '0' || metaActiveOnlyParam === 'false' ? false : true;
     const dateFrom = searchParams.get('date_from');
     const dateTo = searchParams.get('date_to');
+    // only_meta=1 → retorna apenas dados Meta Ads (rápido, só DB). skip_meta=1 → retorna só dados de banca (sem Meta).
+    const onlyMeta = searchParams.get('only_meta') === '1';
+    const skipMeta = searchParams.get('skip_meta') === '1';
 
     const auth = await requireAuth(req);
     if (!auth?.userId) {
@@ -46,18 +53,18 @@ export async function GET(req: NextRequest) {
     if (!profile) {
       return errorResponse('Perfil não encontrado', 403);
     }
-    const allowedStatuses = ['gestor', 'admin', 'super_admin'];
-    const normalizedStatus = profile.status?.trim().toLowerCase();
-    if (!normalizedStatus || !allowedStatuses.includes(normalizedStatus)) {
-      return errorResponse('Esta página é exclusiva para Gestores de Tráfego, Admin ou Super Admin.', 403);
+    const hasAccess = await canAccessGestorTrafego(profile);
+    if (!hasAccess) {
+      return errorResponse('Acesso negado. Você não tem permissão para acessar o módulo Gestão de Tráfego.', 403);
     }
+    const normalizedStatus = profile.status?.trim().toLowerCase();
 
     let donoId: string | null = null;
     let bancaId: string | null = null;
     let bancaUrl: string | null = null;
     let bancaName: string | null = null;
 
-    if (profile.status === 'gestor') {
+    if (normalizedStatus === 'gestor') {
       const effectiveBancaIdHeader = (req.headers.get('X-Effective-Banca-Id') ?? req.headers.get('x-effective-banca-id'))?.trim();
       if (effectiveBancaIdHeader) {
         const { data: banca } = await supabaseServiceRole
@@ -167,7 +174,7 @@ export async function GET(req: NextRequest) {
           403
         );
       }
-    } else if (profile.status === 'admin' || profile.status === 'super_admin') {
+    } else if (normalizedStatus === 'admin' || normalizedStatus === 'super_admin') {
       const effectiveBancaIdHeader = (req.headers.get('X-Effective-Banca-Id') ?? req.headers.get('x-effective-banca-id'))?.trim();
       if (effectiveBancaIdHeader) {
         const { data: banca } = await supabaseServiceRole
@@ -215,15 +222,39 @@ export async function GET(req: NextRequest) {
       return errorResponse('Banca não definida.', 400);
     }
 
-    const data = await getDashboardDataFromIndicatedsOnly({
-      bancaUrl,
-      bancaId: bancaId || '',
-      bancaName,
-      dateFrom,
-      dateTo,
-      donoId,
-      metaActiveOnly,
-    });
+    // Modo rápido: apenas Meta Ads (só queries no Supabase, sem chamadas externas)
+    if (onlyMeta) {
+      if (!bancaId) {
+        return successResponse({ bancaId: null, bancaInfo: { name: bancaName, url: bancaUrl }, metaFunnel: null, metaCampaignsData: [] });
+      }
+      const [metaFunnel, metaCampaignsData] = await Promise.all([
+        getMetaInsightsAggregated(bancaId, dateFrom ?? undefined, dateTo ?? undefined, metaActiveOnly).catch(() => null),
+        getMetaCampaignsWithInsights(bancaId, dateFrom ?? undefined, dateTo ?? undefined, metaActiveOnly).catch(() => []),
+      ]);
+      return successResponse({ bancaId, bancaInfo: { name: bancaName, url: bancaUrl }, metaFunnel, metaCampaignsData });
+    }
+
+    // Modo banca: dados de gerentes/métricas (sem Meta Ads para evitar timeout)
+    let data: Awaited<ReturnType<typeof getDonoBancaDashboardData>>;
+    if (donoId) {
+      data = await getDonoBancaDashboardData({
+        userId: donoId,
+        dateFrom: dateFrom ?? undefined,
+        dateTo: dateTo ?? undefined,
+        metaActiveOnly,
+        skipMeta: true, // Meta é sempre buscado separado via ?only_meta=1
+      });
+    } else if (bancaId) {
+      data = await getDashboardDataByBancaId({
+        bancaId,
+        dateFrom: dateFrom ?? undefined,
+        dateTo: dateTo ?? undefined,
+        metaActiveOnly,
+        skipMeta: skipMeta || true,
+      });
+    } else {
+      return errorResponse('Banca ou dono não definido.', 400);
+    }
 
     return successResponse(data);
   } catch (err: any) {

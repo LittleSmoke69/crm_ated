@@ -4,6 +4,9 @@ import { requireAuth } from './auth';
 
 export type UserStatus = 'super_admin' | 'admin' | 'consultor' | 'gerente' | 'dono_banca' | 'gestor' | 'auditoria' | 'suporte';
 
+/** Status do sistema com regras de hierarquia. Cargos personalizados (zaploto_roles) podem ser qualquer string fora desta lista. */
+const KNOWN_HIERARCHY_STATUSES: UserStatus[] = ['super_admin', 'admin', 'consultor', 'gerente', 'dono_banca', 'gestor', 'auditoria', 'suporte'];
+
 export interface UserProfile {
   id: string;
   email: string;
@@ -112,7 +115,8 @@ export async function hasStatus(userId: string, status: UserStatus): Promise<boo
 }
 
 /**
- * Requer que o usuário seja Admin ou Dono de Banca (pode acessar painel admin)
+ * Requer que o usuário seja Admin, Auditoria ou cargo com permissão painel_admin na sidebar.
+ * Garante que todos os cargos com permissão atribuída tenham acesso sem exceção.
  */
 export async function requireAdmin(req: NextRequest): Promise<{ userId: string; profile: UserProfile }> {
   const { userId } = await requireAuth(req);
@@ -125,15 +129,21 @@ export async function requireAdmin(req: NextRequest): Promise<{ userId: string; 
     throw new Error('Perfil não encontrado');
   }
 
-  if (!hasFullAdminAccess(profile)) {
-    throw new Error('Acesso negado. Apenas SuperAdmin ou Admin podem acessar o painel administrativo.');
+  if (hasFullAdminAccess(profile)) {
+    return { userId, profile };
   }
 
-  return { userId, profile };
+  const hasPanelPermission = await hasSidebarPermission(profile, 'painel_admin');
+  if (hasPanelPermission) {
+    return { userId, profile };
+  }
+
+  throw new Error('Acesso negado. Apenas SuperAdmin, Admin, Auditoria ou cargo com permissão de painel podem acessar.');
 }
 
 /**
- * Requer que o usuário seja SuperAdmin, Admin ou Suporte (acesso à Hierarquia e alterações na rede)
+ * Requer que o usuário seja SuperAdmin, Admin, Suporte ou cargo com permissão hierarquia na sidebar.
+ * Garante que cargos com permissão de hierarquia tenham acesso sem exceção.
  */
 export async function requireAdminOrSuporte(req: NextRequest): Promise<{ userId: string; profile: UserProfile }> {
   const { userId } = await requireAuth(req);
@@ -145,10 +155,14 @@ export async function requireAdminOrSuporte(req: NextRequest): Promise<{ userId:
   if (!profile) {
     throw new Error('Perfil não encontrado');
   }
-  if (!hasHierarchyAccess(profile)) {
-    throw new Error('Acesso negado. Apenas SuperAdmin, Admin ou Suporte podem acessar a Hierarquia.');
+  if (hasHierarchyAccess(profile)) {
+    return { userId, profile };
   }
-  return { userId, profile };
+  const hasHierarchyPermission = await hasSidebarPermission(profile, 'hierarquia');
+  if (hasHierarchyPermission) {
+    return { userId, profile };
+  }
+  throw new Error('Acesso negado. Apenas SuperAdmin, Admin, Suporte ou cargo com permissão de hierarquia podem acessar.');
 }
 
 /**
@@ -187,6 +201,81 @@ export async function requireSuperAdmin(req: NextRequest): Promise<{ userId: str
   }
 
   return { userId, profile };
+}
+
+/** Tenant padrão quando profile.zaploto_id é null (ex: usuários antigos) */
+const DEFAULT_ZAPLOTO_ID = '00000000-0000-0000-0000-000000000001';
+
+/**
+ * Verifica se o perfil tem permissão para um item da sidebar (zaploto_role_sidebar).
+ * Usado para cargos personalizados que não têm status fixo do sistema.
+ * Usa zaploto_id do perfil ou DEFAULT quando null. Match do role code é case-insensitive.
+ */
+export async function hasSidebarPermission(
+  profile: UserProfile | null,
+  sidebarItemCode: string
+): Promise<boolean> {
+  if (!profile?.status?.trim()) return false;
+  const roleCode = profile.status.trim();
+  const zaplotoId = profile.zaploto_id ?? DEFAULT_ZAPLOTO_ID;
+
+  const { data: roles } = await supabaseServiceRole
+    .from('zaploto_roles')
+    .select('id')
+    .eq('zaploto_id', zaplotoId)
+    .ilike('code', roleCode);
+
+  const role = Array.isArray(roles) && roles.length > 0 ? roles[0] : null;
+  if (!role?.id) return false;
+
+  const { data: item } = await supabaseServiceRole
+    .from('zaploto_sidebar_items')
+    .select('id')
+    .eq('zaploto_id', zaplotoId)
+    .eq('code', sidebarItemCode)
+    .single();
+
+  if (!item?.id) return false;
+
+  const { data: perm } = await supabaseServiceRole
+    .from('zaploto_role_sidebar')
+    .select('visible')
+    .eq('role_id', role.id)
+    .eq('sidebar_item_id', item.id)
+    .maybeSingle();
+
+  return perm?.visible === true;
+}
+
+/**
+ * Requer que o usuário tenha um status específico OU permissão na sidebar (para cargos personalizados).
+ */
+export async function requireStatusOrSidebarPermission(
+  req: NextRequest,
+  allowedStatuses: UserStatus[],
+  sidebarItemCode: string
+): Promise<{ userId: string; profile: UserProfile }> {
+  const { userId } = await requireAuth(req);
+  const profile = await getUserProfile(userId);
+
+  if (!profile) {
+    console.error('[requireStatusOrSidebarPermission] Perfil não encontrado para userId:', userId);
+    throw new Error('Perfil não encontrado');
+  }
+
+  const normalizedStatus = profile.status?.trim().toLowerCase();
+  const normalizedAllowed = allowedStatuses.map(s => String(s).trim().toLowerCase());
+
+  if (normalizedStatus && normalizedAllowed.includes(normalizedStatus)) {
+    return { userId, profile };
+  }
+
+  const hasPermission = await hasSidebarPermission(profile, sidebarItemCode);
+  if (hasPermission) {
+    return { userId, profile };
+  }
+
+  throw new Error(`Acesso negado. Esta página é exclusiva para usuários autorizados. Status atual: ${profile.status || 'null'}`);
 }
 
 /**
@@ -338,65 +427,78 @@ export async function getSubordinates(userId: string): Promise<UserProfile[]> {
  * Admin deve ter enroller NULL
  * Auditoria e Suporte podem ter Admin como enroller ou NULL
  */
-export async function validateHierarchy(userId: string, status: UserStatus, enroller: string | null): Promise<{ valid: boolean; error?: string }> {
-  // Admin sempre deve ter enroller NULL
-  if (status === 'admin') {
-    if (enroller !== null) {
-      return { valid: false, error: 'Admin não pode ter enroller' };
+export async function validateHierarchy(userId: string, status: UserStatus | string | null | undefined, enroller: string | null): Promise<{ valid: boolean; error?: string }> {
+  // Trata string vazia como null (dono/superior opcional ao atribuir gerente)
+  const enrollerId = (enroller != null && String(enroller).trim() !== '') ? String(enroller).trim() : null;
+
+  // Cargos personalizados (White Label & Cargos): aceita qualquer enroller ou null, sem validar hierarquia
+  const statusStr = status != null ? String(status).trim() : '';
+  if (!statusStr || !KNOWN_HIERARCHY_STATUSES.includes(statusStr as UserStatus)) {
+    return { valid: true };
+  }
+
+  // Admin e Super Admin sempre devem ter enroller NULL
+  if (statusStr === 'admin' || statusStr === 'super_admin') {
+    if (enrollerId !== null) {
+      return { valid: false, error: `${statusStr === 'super_admin' ? 'Super Admin' : 'Admin'} não pode ter enroller` };
     }
     return { valid: true };
   }
 
   // Auditoria e Suporte podem ter enroller NULL ou Admin
-  if (status === 'auditoria' || status === 'suporte') {
-    if (enroller === null) {
+  if (statusStr === 'auditoria' || statusStr === 'suporte') {
+    if (enrollerId === null) {
       return { valid: true };
     }
-    const enrollerProfile = await getUserProfile(enroller);
+    const enrollerProfile = await getUserProfile(enrollerId);
     if (!enrollerProfile) {
       return { valid: false, error: 'Enroller não encontrado' };
     }
     if (enrollerProfile.status !== 'admin') {
-      return { valid: false, error: `${status} deve ter Admin como enroller ou NULL` };
+      return { valid: false, error: `${statusStr} deve ter Admin como enroller ou NULL` };
     }
     return { valid: true };
   }
 
   // Gerente, Dono de banca e Gestor podem ter enroller NULL (sem superior). Consultor sempre deve ter um Gerente.
-  if (enroller === null) {
-    if (status === 'consultor') {
+  if (enrollerId === null) {
+    if (statusStr === 'consultor') {
       return { valid: false, error: 'Consultor deve ser atribuído a um Gerente' };
     }
-    if (status === 'dono_banca' || status === 'gerente' || status === 'gestor') {
+    if (statusStr === 'dono_banca' || statusStr === 'gerente' || statusStr === 'gestor') {
       return { valid: true };
     }
-    return { valid: false, error: `${status} deve ter um enroller` };
+    return { valid: false, error: `${statusStr} deve ter um enroller` };
   }
 
   // Verifica se o enroller existe
-  const enrollerProfile = await getUserProfile(enroller);
+  const enrollerProfile = await getUserProfile(enrollerId);
   if (!enrollerProfile) {
     return { valid: false, error: 'Enroller não encontrado' };
   }
 
   // Valida hierarquia
-  if (status === 'consultor') {
+  if (statusStr === 'consultor') {
     if (enrollerProfile.status !== 'gerente') {
       return { valid: false, error: 'Consultor deve ter um Gerente como enroller' };
     }
-  } else if (status === 'gerente') {
-    if (enrollerProfile.status !== 'dono_banca') {
-      return { valid: false, error: 'Gerente deve ter um Dono de banca como enroller' };
+  } else if (statusStr === 'gerente') {
+    // Gerente pode ter Dono de banca, outro Gerente, Admin ou Super Admin como enroller (super_admin/admin/suporte podem atribuir sem dono de banca)
+    const validGerenteEnroller = ['dono_banca', 'gerente', 'admin', 'super_admin'].includes(enrollerProfile.status ?? '');
+    if (!validGerenteEnroller) {
+      return { valid: false, error: 'Gerente deve ter Dono de banca, outro Gerente, Admin ou Super Admin como enroller' };
     }
-  } else if (status === 'dono_banca') {
-    // Dono de banca pode ter outro Dono de banca como enroller (estrutura superior)
-    if (enrollerProfile.status !== 'dono_banca' && enrollerProfile.status !== 'admin') {
-      return { valid: false, error: 'Dono de banca deve ter outro Dono de banca ou Admin como enroller' };
+  } else if (statusStr === 'dono_banca') {
+    // Dono de banca pode ter outro Dono de banca, Admin ou Super Admin como enroller
+    const validDonoEnroller = ['dono_banca', 'admin', 'super_admin'].includes(enrollerProfile.status ?? '');
+    if (!validDonoEnroller) {
+      return { valid: false, error: 'Dono de banca deve ter outro Dono de banca, Admin ou Super Admin como enroller' };
     }
-  } else if (status === 'gestor') {
-    // Gestor de tráfego deve ter Dono de banca ou Admin como enroller (para ver dados da banca)
-    if (enrollerProfile.status !== 'dono_banca' && enrollerProfile.status !== 'admin') {
-      return { valid: false, error: 'Gestor de tráfego deve ter Dono de banca ou Admin como enroller' };
+  } else if (statusStr === 'gestor') {
+    // Gestor de tráfego pode ter Dono de banca, Admin ou Super Admin como enroller
+    const validGestorEnroller = ['dono_banca', 'admin', 'super_admin'].includes(enrollerProfile.status ?? '');
+    if (!validGestorEnroller) {
+      return { valid: false, error: 'Gestor de tráfego deve ter Dono de banca, Admin ou Super Admin como enroller' };
     }
   }
 

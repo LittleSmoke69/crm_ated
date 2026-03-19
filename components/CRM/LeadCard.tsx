@@ -123,6 +123,11 @@ interface LeadCardProps {
   transferDeadlineDays?: number;
 }
 
+/** Prazo em dias desde o último depósito para considerar "possível transferência" (cronômetro decrescente até 90d). */
+const INACTIVITY_DEADLINE_DAYS = 90;
+/** Prazo em dias desde o cadastro para leads que apenas se cadastraram (sem depósito); cronômetro decrescente. */
+const REGISTRATION_DEADLINE_DAYS = 30;
+
 const LeadCard: React.FC<LeadCardProps> = ({ 
   lead, 
   onFavorite, 
@@ -165,14 +170,25 @@ const LeadCard: React.FC<LeadCardProps> = ({
   const [bonusGirosHistory, setBonusGirosHistory] = useState<{ quantity: number; date: string }[]>([]);
   const [bonusGirosHistoryLoading, setBonusGirosHistoryLoading] = useState(false);
   const bonusDropdownRef = useRef<HTMLDivElement>(null);
+  // Rifa (bilhetes) no modal de detalhe
+  const [bonusRifaQuantity, setBonusRifaQuantity] = useState(1);
+  const [bonusRifaSending, setBonusRifaSending] = useState(false);
+  const [bonusRifaError, setBonusRifaError] = useState<string | null>(null);
+  const [bonusRifaSuccessMessage, setBonusRifaSuccessMessage] = useState<string | null>(null);
 
-  /** Tick para contagem regressiva em tempo real do prazo de leads transferidos (1s para contador h/m/s) */
+  /** Tick para contagem regressiva em tempo real (transferidos, 90d último depósito, 30d cadastro) */
   const [nowTick, setNowTick] = useState(0);
+  const isApenasCadastrado = (lead.total_depositos_count || 0) === 0;
+  const hasCreatedAt = !!(lead.created_at || lead.createdAt);
   useEffect(() => {
-    if (!lead.transferred || !lead.transferred_at) return;
-    const id = setInterval(() => setNowTick((t) => t + 1), 1000); // atualiza a cada 1 segundo
+    const needsTick =
+      (lead.transferred && lead.transferred_at) ||
+      !!lead.last_deposit_at ||
+      (isApenasCadastrado && hasCreatedAt);
+    if (!needsTick) return;
+    const id = setInterval(() => setNowTick((t) => t + 1), 1000);
     return () => clearInterval(id);
-  }, [lead.transferred, lead.transferred_at]);
+  }, [lead.transferred, lead.transferred_at, lead.last_deposit_at, isApenasCadastrado, hasCreatedAt]);
 
   /** Retorna tempo até o próximo dia (quando daysLeft diminui) e formata como "Xh Ym Zs" */
   const getCountdownToNextDay = (transferredAt: Date): string => {
@@ -185,6 +201,47 @@ const LeadCard: React.FC<LeadCardProps> = ({
     const m = Math.floor((remaining % 3600) / 60);
     const s = remaining % 60;
     return `${h}h ${m}m ${s}s`;
+  };
+
+  /**
+   * Cronômetro decrescente: data do último depósito + 90 dias = prazo.
+   * Retorna o tempo restante até esse prazo (contagem regressiva) ou expired quando já passou.
+   * Atualiza a cada segundo via nowTick.
+   */
+  const getInactivity90Info = (lastDepositAt: string): { expired: boolean; daysLeft: number; countdownStr: string } => {
+    const lastDeposit = new Date(lastDepositAt);
+    const deadline = new Date(lastDeposit);
+    deadline.setDate(deadline.getDate() + INACTIVITY_DEADLINE_DAYS);
+    const now = new Date();
+    const remainingMs = Math.max(0, deadline.getTime() - now.getTime());
+    const expired = remainingMs === 0;
+    const totalSeconds = Math.floor(remainingMs / 1000);
+    const daysLeft = Math.floor(totalSeconds / (24 * 3600));
+    const h = Math.floor((totalSeconds % (24 * 3600)) / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    const s = totalSeconds % 60;
+    const countdownStr = expired ? '' : `${daysLeft}d ${h}h ${m}m ${s}s`;
+    return { expired, daysLeft, countdownStr };
+  };
+
+  /**
+   * Cronômetro decrescente para quem apenas se cadastrou: data de cadastro + 30 dias = prazo.
+   * Retorna tempo restante até esse prazo (contagem regressiva) ou expired quando já passou.
+   */
+  const getRegistration30Info = (createdAt: string): { expired: boolean; daysLeft: number; countdownStr: string } => {
+    const created = new Date(createdAt);
+    const deadline = new Date(created);
+    deadline.setDate(deadline.getDate() + REGISTRATION_DEADLINE_DAYS);
+    const now = new Date();
+    const remainingMs = Math.max(0, deadline.getTime() - now.getTime());
+    const expired = remainingMs === 0;
+    const totalSeconds = Math.floor(remainingMs / 1000);
+    const daysLeft = Math.floor(totalSeconds / (24 * 3600));
+    const h = Math.floor((totalSeconds % (24 * 3600)) / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    const s = totalSeconds % 60;
+    const countdownStr = expired ? '' : `${daysLeft}d ${h}h ${m}m ${s}s`;
+    return { expired, daysLeft, countdownStr };
   };
 
   // Estados para os históricos
@@ -253,6 +310,8 @@ const LeadCard: React.FC<LeadCardProps> = ({
     const url = new URL(`/api/crm/leads/${leadIdUsed}/deposits`, window.location.origin);
     if (bancaUrlForHistory) {
       url.searchParams.append('banca_url', bancaUrlForHistory);
+    } else if (lead.banca_id) {
+      url.searchParams.append('banca_id', lead.banca_id);
     }
     url.searchParams.append('page', page.toString());
     url.searchParams.append('per_page', '15');
@@ -342,6 +401,8 @@ const LeadCard: React.FC<LeadCardProps> = ({
     const url = new URL(`/api/crm/leads/${leadIdUsed}/withdraws`, window.location.origin);
     if (bancaUrlForHistory) {
       url.searchParams.append('banca_url', bancaUrlForHistory);
+    } else if (lead.banca_id) {
+      url.searchParams.append('banca_id', lead.banca_id);
     }
     url.searchParams.append('page', page.toString());
     url.searchParams.append('per_page', '15');
@@ -431,6 +492,8 @@ const LeadCard: React.FC<LeadCardProps> = ({
     const url = new URL(`/api/crm/leads/${leadIdUsed}/bets`, window.location.origin);
     if (bancaUrlForHistory) {
       url.searchParams.append('banca_url', bancaUrlForHistory);
+    } else if (lead.banca_id) {
+      url.searchParams.append('banca_id', lead.banca_id);
     }
     url.searchParams.append('page', page.toString());
     url.searchParams.append('per_page', '15');
@@ -671,6 +734,52 @@ const LeadCard: React.FC<LeadCardProps> = ({
       setBonusGirosError('Erro ao enviar giros.');
     } finally {
       setBonusGirosSending(false);
+    }
+  };
+
+  const handleSendBonusTickets = async () => {
+    if (!consultorUserId || !bancaUrlForBonus || bonusRifaQuantity < 1) return;
+    setBonusRifaSending(true);
+    setBonusRifaError(null);
+    try {
+      let consultantId = lead.consultant_id != null ? Number(lead.consultant_id) : null;
+      if (consultantId == null) {
+        const res = await fetch(
+          `/api/crm/consultant-external-id?userId=${encodeURIComponent(targetUserId || consultorUserId)}&banca_url=${encodeURIComponent(bancaUrlForBonus)}`,
+          { headers: { 'X-User-Id': consultorUserId } }
+        );
+        const data = await res.json();
+        if (data?.success && data?.data?.consultant_id != null) consultantId = Number(data.data.consultant_id);
+      }
+      if (consultantId == null) {
+        setBonusRifaError('Não foi possível obter o id do consultor.');
+        setBonusRifaSending(false);
+        return;
+      }
+      const res = await fetch('/api/crm/send-tickets-to-lead', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': consultorUserId },
+        body: JSON.stringify({
+          consultant_id: consultantId,
+          lead_id: getLeadIdForApi(lead),
+          quantity: Number(bonusRifaQuantity),
+          banca_url: bancaUrlForBonus,
+          userId: targetUserId || consultorUserId,
+        }),
+      });
+      const data = await res.json();
+      if (!data?.success) {
+        setBonusRifaError(data?.error || 'Erro ao enviar bilhetes.');
+        setBonusRifaSending(false);
+        return;
+      }
+      setSelectedBonusType(null);
+      setBonusRifaError(null);
+      setBonusRifaSuccessMessage(`${bonusRifaQuantity} bilhete(s) enviado(s) com sucesso!`);
+    } catch {
+      setBonusRifaError('Erro ao enviar bilhetes.');
+    } finally {
+      setBonusRifaSending(false);
     }
   };
 
@@ -1134,7 +1243,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
     const wagered = Number((lead as any).aposta_estrelas) ?? 0;
     const starInfo = getStarLevelInfo(wagered);
     const levelLabel = starInfo.currentLevel === 0 ? 'Iniciante' : `${starInfo.currentLevel} ${starInfo.currentLevel === 1 ? 'Estrela' : 'Estrelas'}`;
-    const lastDepositText = lead.last_deposit_at ? formatRelativeDate(lead.last_deposit_at, 'Nunca') : 'Nunca depositou';
+    const lastDepositText = lead.last_deposit_at ? formatCreatedDate(lead.last_deposit_at) : 'Nunca depositou';
     const createdDateFormatted = formatCreatedDate(lead.created_at || lead.createdAt);
     return (
       <div
@@ -1177,11 +1286,9 @@ const LeadCard: React.FC<LeadCardProps> = ({
                       <XIcon className="w-3.5 h-3.5" /> Remover Etiqueta
                     </button>
                   )}
-                  {hasInteraction && (
-                    <button onClick={async () => { setShowMenu(false); setShowAllFeedbacksModal(true); await loadAllFeedbacks(); }} className="w-full text-left px-3 py-1.5 text-xs text-gray-600 hover:bg-blue-50 flex items-center gap-2 font-bold">
-                      <MessageSquare className="w-3.5 h-3.5" /> Ver Feedbacks
-                    </button>
-                  )}
+                  <button onClick={async () => { setShowMenu(false); setShowAllFeedbacksModal(true); await loadAllFeedbacks(); }} className="w-full text-left px-3 py-1.5 text-xs text-gray-600 hover:bg-blue-50 flex items-center gap-2 font-bold">
+                    <MessageSquare className="w-3.5 h-3.5" /> Ver todos os feedbacks
+                  </button>
                 </div>
               )}
             </div>
@@ -1323,13 +1430,45 @@ const LeadCard: React.FC<LeadCardProps> = ({
                 <span>Último depósito: {lastDepositText}</span>
               </div>
             )}
+            {/* Cronômetro decrescente: último depósito + 90 dias → tempo restante ou "Possível transferência" */}
+            {lead.last_deposit_at && (() => {
+              const info = getInactivity90Info(lead.last_deposit_at);
+              return (
+                <div className="flex items-center gap-1.5 text-[10px] font-bold mt-0.5 flex-wrap" title={`Contagem regressiva até ${INACTIVITY_DEADLINE_DAYS} dias após o último depósito. Após isso: possível transferência.`}>
+                  <Clock className="w-3.5 h-3.5 shrink-0 text-amber-500" />
+                  {info.expired ? (
+                    <span className="text-amber-600">Possível transferência</span>
+                  ) : (
+                    <span className="text-gray-600 tabular-nums">Faltam {info.countdownStr}</span>
+                  )}
+                </div>
+              );
+            })()}
+            {/* Cronômetro decrescente para quem apenas se cadastrou: cadastro + 30 dias */}
+            {!lead.last_deposit_at && (lead.created_at || lead.createdAt) && (() => {
+              const createdAt = lead.created_at || lead.createdAt || '';
+              const info = getRegistration30Info(createdAt);
+              return (
+                <div className="flex items-center gap-1.5 text-[10px] font-bold mt-0.5 flex-wrap" title={`Contagem regressiva até ${REGISTRATION_DEADLINE_DAYS} dias após o cadastro. Após isso: possível transferência.`}>
+                  <Clock className="w-3.5 h-3.5 shrink-0 text-sky-500" />
+                  {info.expired ? (
+                    <span className="text-amber-600">Possível transferência</span>
+                  ) : (
+                    <span className="text-gray-600 tabular-nums">Faltam {info.countdownStr}</span>
+                  )}
+                </div>
+              );
+            })()}
           </div>
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              setShowContactFeedbackModal(true);
-              setTimeout(() => { window.open(`https://wa.me/55${(lead.phone || '').replace(/\D/g, '')}`, '_blank'); }, 100);
+              setShowAllFeedbacksModal(true);
+              loadAllFeedbacks();
+              if (lead.phone) {
+                setTimeout(() => { window.open(`https://wa.me/55${(lead.phone || '').replace(/\D/g, '')}`, '_blank'); }, 100);
+              }
             }}
             className="flex items-center justify-center gap-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white py-2.5 px-4 rounded-xl text-xs font-black transition-all shadow-md shrink-0"
           >
@@ -1484,19 +1623,16 @@ const LeadCard: React.FC<LeadCardProps> = ({
                     <XIcon className="w-4 h-4" /> Remover Etiqueta
                   </button>
                 )}
-                {/* Opção para ver todos os feedbacks - apenas se has_interaction = true */}
-                {hasInteraction && (
-                  <button 
-                    onClick={async () => {
-                      setShowMenu(false);
-                      setShowAllFeedbacksModal(true);
-                      await loadAllFeedbacks();
-                    }} 
-                    className="w-full text-left px-4 py-2 text-sm text-gray-600 hover:bg-blue-50 hover:text-blue-600 flex items-center gap-3 font-bold transition-colors border-t border-gray-100 mt-1 pt-2"
-                  >
-                    <MessageSquare className="w-4 h-4" /> Ver Todos os Feedbacks
-                  </button>
-                )}
+                <button 
+                  onClick={async () => {
+                    setShowMenu(false);
+                    setShowAllFeedbacksModal(true);
+                    await loadAllFeedbacks();
+                  }} 
+                  className="w-full text-left px-4 py-2 text-sm text-gray-600 hover:bg-blue-50 hover:text-blue-600 flex items-center gap-3 font-bold transition-colors border-t border-gray-100 mt-1 pt-2"
+                >
+                  <MessageSquare className="w-4 h-4" /> Ver todos os feedbacks
+                </button>
               </div>
             )}
           </div>
@@ -1683,24 +1819,45 @@ const LeadCard: React.FC<LeadCardProps> = ({
             <span>{formatCreatedDate(lead.created_at || lead.createdAt)}</span>
           </div>
           {lead.last_deposit_at ? (
-            <>
-              <div className="flex items-center gap-1.5 text-[10px] text-gray-500 font-bold" title="Último depósito">
-                <History className="w-3.5 h-3.5 text-gray-400" /> 
-                <span>{formatLastDeposit(lead.last_deposit_at)}</span>
-              </div>
-              {lead.last_deposit_value !== null && lead.last_deposit_value !== undefined && (
-                <div className="flex items-center gap-1.5 text-[10px] text-gray-500 font-bold" title="Último valor depositado">
-                  <Target className="w-3.5 h-3.5 text-gray-400" /> 
-                  <span>Último valor depositado: {formatCurrency(lead.last_deposit_value)}</span>
-                </div>
-              )}
-            </>
+            <div className="flex items-center gap-1.5 text-[10px] text-gray-500 font-bold" title="Último depósito">
+              <History className="w-3.5 h-3.5 text-gray-400" /> 
+              <span>Último depósito: {formatCreatedDate(lead.last_deposit_at)}</span>
+            </div>
           ) : (
             <div className="flex items-center gap-1.5 text-[10px] text-gray-400 font-medium italic">
               <History className="w-3.5 h-3.5" /> 
               <span>Último depósito: Nunca depositou</span>
             </div>
           )}
+          {/* Cronômetro decrescente: último depósito + 90 dias → tempo restante ou "Possível transferência" */}
+          {lead.last_deposit_at && (() => {
+            const info = getInactivity90Info(lead.last_deposit_at);
+            return (
+              <div className="flex items-center gap-1.5 text-[10px] font-bold mt-0.5" title={`Contagem regressiva até ${INACTIVITY_DEADLINE_DAYS} dias após o último depósito. Após isso: possível transferência.`}>
+                <Clock className="w-3.5 h-3.5 text-amber-500" />
+                {info.expired ? (
+                  <span className="text-amber-600">Possível transferência</span>
+                ) : (
+                  <span className="text-gray-600 tabular-nums">Faltam {info.countdownStr}</span>
+                )}
+              </div>
+            );
+          })()}
+          {/* Cronômetro decrescente para quem apenas se cadastrou: cadastro + 30 dias */}
+          {!lead.last_deposit_at && (lead.created_at || lead.createdAt) && (() => {
+            const createdAt = lead.created_at || lead.createdAt || '';
+            const info = getRegistration30Info(createdAt);
+            return (
+              <div className="flex items-center gap-1.5 text-[10px] font-bold mt-0.5" title={`Contagem regressiva até ${REGISTRATION_DEADLINE_DAYS} dias após o cadastro. Após isso: possível transferência.`}>
+                <Clock className="w-3.5 h-3.5 text-sky-500" />
+                {info.expired ? (
+                  <span className="text-amber-600">Possível transferência</span>
+                ) : (
+                  <span className="text-gray-600 tabular-nums">Faltam {info.countdownStr}</span>
+                )}
+              </div>
+            );
+          })()}
         </div>
         
         <div className="flex items-center gap-2">
@@ -1708,7 +1865,6 @@ const LeadCard: React.FC<LeadCardProps> = ({
           {isContacted && (
             <button
               onClick={async () => {
-                // Busca o feedback quando o botão for clicado
                 await loadFeedback();
                 setShowFeedbackViewModal(true);
               }}
@@ -1729,15 +1885,16 @@ const LeadCard: React.FC<LeadCardProps> = ({
               )}
             </button>
           )}
-          
-          {/* Botão Chamar - abre modal em todos os blocos */}
+          {/* Botão Chamar - abre modal Todos os feedbacks */}
           <button
             onClick={() => {
-              setShowContactFeedbackModal(true);
-              // Abre WhatsApp em nova aba após um pequeno delay
-              setTimeout(() => {
-                window.open(`https://wa.me/55${lead.phone.replace(/\D/g, '')}`, '_blank');
-              }, 100);
+              setShowAllFeedbacksModal(true);
+              loadAllFeedbacks();
+              if (lead.phone) {
+                setTimeout(() => {
+                  window.open(`https://wa.me/55${lead.phone.replace(/\D/g, '')}`, '_blank');
+                }, 100);
+              }
             }}
             className="flex items-center gap-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white px-5 py-2.5 rounded-2xl text-xs font-black transition-all shadow-lg shadow-[#8CD955]/20 active:scale-95 hover:-translate-y-0.5"
           >
@@ -2045,6 +2202,8 @@ const LeadCard: React.FC<LeadCardProps> = ({
             setBonusGirosError(null);
             setBonusGirosSuccessMessage(null);
             setBonusGirosHistory([]);
+            setBonusRifaError(null);
+            setBonusRifaSuccessMessage(null);
             setShowAllDeposits(false);
             setSelectedBetForModal(null);
             setShowAllWithdraws(false);
@@ -2084,6 +2243,8 @@ const LeadCard: React.FC<LeadCardProps> = ({
                   setBonusDropdownOpen(false);
                   setBonusGirosSuccessMessage(null);
                   setBonusGirosHistory([]);
+                  setBonusRifaError(null);
+                  setBonusRifaSuccessMessage(null);
                   setShowAllDeposits(false);
                   setShowAllWithdraws(false);
                   setSelectedBetForModal(null);
@@ -2095,14 +2256,57 @@ const LeadCard: React.FC<LeadCardProps> = ({
               </button>
             </div>
 
-            {/* Conteúdo do Modal */}
-            <div className="overflow-y-auto flex-1 px-4 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-6">
+            {/* Conteúdo do Modal - min-h-0 permite que o flex filho encolha e o scroll funcione */}
+            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-6 custom-scrollbar">
               {/* Informações Básicas */}
               <div className="bg-gray-50 dark:bg-[#333] rounded-lg sm:rounded-xl p-4 sm:p-5">
-                <h3 className="text-base sm:text-lg font-bold text-gray-800 dark:text-white mb-3 sm:mb-4 flex items-center gap-2">
-                  <User className="w-4 h-4 sm:w-5 sm:h-5 text-[#8CD955] shrink-0" />
-                  <span>Informações Básicas</span>
-                </h3>
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-3 sm:mb-4">
+                  <h3 className="text-base sm:text-lg font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                    <User className="w-4 h-4 sm:w-5 sm:h-5 text-[#8CD955] shrink-0" />
+                    <span>Informações Básicas</span>
+                  </h3>
+                  <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2 shrink-0 w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={() => setShowAddTagModal(true)}
+                      className="inline-flex items-center justify-center gap-2 px-3 py-2.5 sm:py-1.5 rounded-lg bg-[#8CD955]/20 text-[#8CD955] hover:bg-[#8CD955]/30 font-bold text-sm transition-colors w-full sm:w-auto min-h-[44px] sm:min-h-0"
+                    >
+                      <TagIcon className="w-4 h-4" />
+                      Adicionar etiqueta
+                    </button>
+                    {consultorUserId && (
+                      <button
+                        type="button"
+                        onClick={() => { setEditingFeedback(null); setShowContactFeedbackModal(true); }}
+                        className="inline-flex items-center justify-center gap-2 px-3 py-2.5 sm:py-1.5 rounded-lg bg-blue-500/20 text-blue-600 dark:text-blue-400 hover:bg-blue-500/30 font-bold text-sm transition-colors w-full sm:w-auto min-h-[44px] sm:min-h-0"
+                      >
+                        <MessageSquare className="w-4 h-4" />
+                        Adicionar feedback
+                      </button>
+                    )}
+                    {(() => {
+                      const phoneForWa = (lead as any).whatsapp || lead.phone || '';
+                      const digits = phoneForWa.replace(/\D/g, '');
+                      const waNumber = digits.startsWith('55') ? digits : `55${digits}`;
+                      const hasValidWa = waNumber.length >= 12;
+                      if (!hasValidWa) return null;
+                      return (
+                        <a
+                          href={`https://wa.me/${waNumber}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center justify-center gap-2 px-3 py-2.5 sm:py-1.5 rounded-lg bg-[#25D366]/15 text-[#25D366] hover:bg-[#25D366]/25 font-medium text-sm transition-colors w-full sm:w-auto min-h-[44px] sm:min-h-0"
+                          title="Chamar no WhatsApp"
+                        >
+                          <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                            <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
+                          </svg>
+                          <span>Chamar no WhatsApp</span>
+                        </a>
+                      );
+                    })()}
+                  </div>
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                   <div className="sm:col-span-2">
                     <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Nome Completo</p>
@@ -2199,7 +2403,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
                       onClick={() => setBonusDropdownOpen((o) => !o)}
                       className="flex items-center justify-between gap-2 w-full sm:w-auto min-w-[200px] px-4 py-2.5 bg-amber-100 hover:bg-amber-200 text-amber-800 font-bold rounded-xl border border-amber-300 transition-colors"
                     >
-                      <span>{selectedBonusType === 'giros' ? 'Bonus de Roleta' : 'Escolher bônus'}</span>
+                      <span>{selectedBonusType === 'giros' ? 'Bonus de Roleta' : selectedBonusType === 'rifa' ? 'Bonus de Rifa' : 'Escolher bônus'}</span>
                       <ChevronDown className={`w-4 h-4 shrink-0 transition-transform ${bonusDropdownOpen ? 'rotate-180' : ''}`} />
                     </button>
                     {bonusDropdownOpen && (
@@ -2214,13 +2418,16 @@ const LeadCard: React.FC<LeadCardProps> = ({
                             Adicionar Giros (Roleta)
                           </span>
                         </button>
-                        <div className="w-full flex items-center justify-between gap-3 px-4 py-2.5 text-left text-sm text-gray-400 cursor-not-allowed border-t border-gray-100">
+                        <button
+                          type="button"
+                          onClick={() => { setSelectedBonusType('rifa'); setBonusDropdownOpen(false); }}
+                          className="w-full flex items-center justify-between gap-3 px-4 py-2.5 text-left text-sm font-medium text-gray-800 hover:bg-amber-50 transition-colors border-t border-gray-100"
+                        >
                           <span className="flex items-center gap-3">
-                            <Ticket className="w-4 h-4 text-gray-300 shrink-0" />
+                            <Ticket className="w-4 h-4 text-amber-600 shrink-0" />
                             Adicionar Rifa
                           </span>
-                          <span className="text-xs">Em breve</span>
-                        </div>
+                        </button>
                         <div className="w-full flex items-center justify-between gap-3 px-4 py-2.5 text-left text-sm text-gray-400 cursor-not-allowed">
                           <span className="flex items-center gap-3">
                             <Layers className="w-4 h-4 text-gray-300 shrink-0" />
@@ -2303,6 +2510,55 @@ const LeadCard: React.FC<LeadCardProps> = ({
                             ))}
                           </ul>
                         </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Formulário quando Rifa selecionado */}
+                  {selectedBonusType === 'rifa' && (
+                    <div className="space-y-3 pt-2 border-t border-amber-200/60" ref={bonusDropdownRef}>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <label className="flex flex-col gap-1">
+                          <span className="text-sm font-bold text-gray-800 dark:text-white">Quantidade (bilhetes)</span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={999}
+                            value={bonusRifaQuantity}
+                            onChange={(e) => setBonusRifaQuantity(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                            className="w-20 px-2 py-1.5 bg-gray-200 dark:bg-[#404040] border border-gray-500 dark:border-[#505050] rounded-lg text-sm font-bold text-gray-900 dark:text-white placeholder:text-gray-600"
+                          />
+                        </label>
+                        <div className="flex items-end gap-2">
+                          <button
+                            type="button"
+                            onClick={handleSendBonusTickets}
+                            disabled={bonusRifaSending || !bancaUrlForBonus}
+                            className="flex items-center gap-2 px-4 py-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-xl transition-colors"
+                          >
+                            {bonusRifaSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Ticket className="w-4 h-4" />}
+                            {bonusRifaSending ? 'Enviando...' : 'Enviar bilhetes'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setSelectedBonusType(null); setBonusRifaError(null); setBonusRifaSuccessMessage(null); setBonusDropdownOpen(false); }}
+                            className="px-3 py-2 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-[#404040] rounded-lg text-sm font-medium"
+                          >
+                            Limpar
+                          </button>
+                        </div>
+                      </div>
+                      {bonusRifaError && (
+                        <p className="text-sm text-red-600 dark:text-red-400 font-medium flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4 shrink-0" />
+                          {bonusRifaError}
+                        </p>
+                      )}
+                      {bonusRifaSuccessMessage && (
+                        <p className="text-sm text-[#8CD955] font-medium flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 shrink-0" />
+                          {bonusRifaSuccessMessage}
+                        </p>
                       )}
                     </div>
                   )}
@@ -2484,40 +2740,43 @@ const LeadCard: React.FC<LeadCardProps> = ({
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                     {(leadDetails || lead).total_saque !== undefined && (
                       <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-[#404040]">
-                        <p className="text-xs font-bold text-gray-500 uppercase mb-1">Total Sacado</p>
+                        <p className="text-xs font-bold text-gray-500 dark:text-gray-300 uppercase mb-1">Total Sacado</p>
                         <p className="text-base sm:text-lg font-bold text-gray-800 dark:text-white">{formatCurrency((leadDetails || lead).total_saque || 0)}</p>
                       </div>
                     )}
                     {/* Último Saque - Data e Valor juntos */}
                     <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border-2 border-gray-200 dark:border-[#404040]">
-                      <p className="text-xs font-bold text-gray-500 uppercase mb-2">Último Saque</p>
-                      <p className="text-xs sm:text-sm font-semibold text-gray-700 mb-1">
+                      <p className="text-xs font-bold text-gray-500 dark:text-gray-300 uppercase mb-2">Último Saque</p>
+                      <p className="text-xs sm:text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">
                         Data: <span className="text-gray-900 dark:text-white">
-                          {(leadDetails || lead).last_withdraw_at 
+                          {(leadDetails || lead).last_withdraw_at
                             ? formatRelativeDate((leadDetails || lead).last_withdraw_at!, 'Nunca sacou')
                             : 'Nunca sacou'}
                         </span>
                       </p>
-                      <p className="text-base sm:text-lg font-bold text-gray-800">
-                        Valor: {(leadDetails || lead).last_withdraw_value 
+                      <p className="text-base sm:text-lg font-bold text-gray-800 dark:text-white">
+                        Valor: {(leadDetails || lead).last_withdraw_value
                           ? formatCurrency((leadDetails || lead).last_withdraw_value!)
                           : 'R$ 0,00'}
                       </p>
                     </div>
                     {/* Último Ganho - Data e Valor */}
                     <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border-2 border-[#8CD955]/30 dark:border-[#8CD955]/50">
-                      <p className="text-xs font-bold text-gray-500 uppercase mb-2">Último Ganho</p>
-                      <p className="text-xs sm:text-sm font-semibold text-gray-700 mb-1">
+                      <p className="text-xs font-bold text-gray-500 dark:text-gray-300 uppercase mb-2">Último Ganho</p>
+                      <p className="text-xs sm:text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">
                         Data: <span className="text-gray-900 dark:text-white">
                           {(leadDetails || lead).last_winner_at
                             ? formatRelativeDate((leadDetails || lead).last_winner_at!, 'Nunca')
                             : 'Nunca'}
                         </span>
                       </p>
-                      <p className="text-base sm:text-lg font-bold text-[#8CD955]">
-                        Valor: {(leadDetails || lead).last_winner_value
-                          ? formatCurrency((leadDetails || lead).last_winner_value!)
-                          : 'R$ 0,00'}
+                      <p className="text-base sm:text-lg font-bold">
+                        <span className="text-gray-800 dark:text-gray-200">Valor: </span>
+                        <span className="text-[#8CD955]">
+                          {(leadDetails || lead).last_winner_value
+                            ? formatCurrency((leadDetails || lead).last_winner_value!)
+                            : 'R$ 0,00'}
+                        </span>
                       </p>
                     </div>
                   </div>
@@ -2561,8 +2820,8 @@ const LeadCard: React.FC<LeadCardProps> = ({
                 </h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                   <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-[#404040]">
-                    <p className="text-xs font-bold text-gray-500 uppercase mb-1">Última Interação</p>
-                    <p className="text-sm font-semibold text-gray-800">
+                    <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Última Interação</p>
+                    <p className="text-sm font-semibold text-gray-800 dark:text-white">
                       {lead.last_interaction || lead.lastInteractionAt 
                         ? formatCreatedDate(lead.last_interaction || lead.lastInteractionAt) 
                         : 'Nunca'}
@@ -2570,7 +2829,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
                   </div>
                   <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-[#404040]">
                     <p className="text-xs font-bold text-gray-500 uppercase mb-1">Tem Interação</p>
-                    <p className="text-sm font-semibold text-gray-800">
+                    <p className={`text-sm font-semibold ${lead.has_interaction ? 'text-gray-800 dark:text-white' : 'text-red-600 dark:text-red-400'}`}>
                       {lead.has_interaction ? '✅ Sim' : '❌ Não'}
                     </p>
                   </div>
@@ -3050,12 +3309,12 @@ const LeadCard: React.FC<LeadCardProps> = ({
               })()}
 
               {/* Etiquetas */}
-              {lead.tags && lead.tags.length > 0 && (
-                <div className="bg-pink-50 rounded-lg sm:rounded-xl p-4 sm:p-5">
-                  <h3 className="text-base sm:text-lg font-bold text-gray-800 dark:text-white mb-3 sm:mb-4 flex items-center gap-2">
-                    <TagIcon className="w-4 h-4 sm:w-5 sm:h-5 text-[#8CD955] shrink-0" />
-                    <span>Etiquetas</span>
-                  </h3>
+              <div className="bg-pink-50 dark:bg-pink-900/20 rounded-lg sm:rounded-xl p-4 sm:p-5 border border-pink-100 dark:border-pink-800/40">
+                <h3 className="text-base sm:text-lg font-bold text-gray-800 dark:text-white mb-3 sm:mb-4 flex items-center gap-2">
+                  <TagIcon className="w-4 h-4 sm:w-5 sm:h-5 text-[#8CD955] shrink-0" />
+                  <span>Etiquetas</span>
+                </h3>
+                {lead.tags && lead.tags.length > 0 ? (
                   <div className="flex flex-wrap gap-2">
                     {lead.tags.map((tag) => (
                       <span
@@ -3075,8 +3334,10 @@ const LeadCard: React.FC<LeadCardProps> = ({
                       </span>
                     ))}
                   </div>
-                </div>
-              )}
+                ) : (
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Nenhuma etiqueta.</p>
+                )}
+              </div>
             </div>
 
             {/* Footer do Modal */}

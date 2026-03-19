@@ -42,7 +42,10 @@ export async function GET(req: NextRequest) {
     }
 
     const client = createCrmRedistributionClient(ctx.crmBaseUrl);
-    const result = await client.getIndicatedsByConsultant(source_consultant_email, DETAIL_PAGE_SIZE, page);
+    const result = await client.getIndicatedsByConsultant(source_consultant_email, DETAIL_PAGE_SIZE, page, {
+      sort: 'created_at',
+      direction: 'desc',
+    });
 
     if (!result.success) {
       return errorResponse(result.error ?? result.message ?? 'Erro ao buscar detalhes no CRM', 400);

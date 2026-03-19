@@ -8,6 +8,7 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { toWaJid } from '@/lib/utils/phone-utils';
 
 const FETCH_TIMEOUT_MS = 25_000;
+const SCAN_FETCH_TIMEOUT_MS = 10_000; // timeout menor para leituras de scan
 const RATE_LIMIT_MS = 1000; // 1 por segundo por instância
 const MAX_RETRIES = 3;
 const BACKOFF_BASE_MS = 500;
@@ -78,6 +79,239 @@ export interface RemoveParticipantResult {
   httpStatus?: number;
 }
 
+/** Participante enriquecido retornado pela Evolution API V2 */
+export interface ParticipantInfo {
+  /** Número do telefone (somente dígitos, ex.: 558195561309) */
+  phone: string;
+  /** Nome do contato, se disponível */
+  name: string | null;
+  /** Admin do grupo: null | 'admin' | 'superadmin' */
+  admin: string | null;
+}
+
+export interface GetGroupParticipantsResult {
+  success: boolean;
+  participants?: ParticipantInfo[];
+  error?: string;
+  httpStatus?: number;
+}
+
+export interface FetchAllGroupsResult {
+  success: boolean;
+  /** mapa de groupJid → lista de participantes */
+  groupMap?: Map<string, ParticipantInfo[]>;
+  /** mapa de groupJid → mensagem de erro (grupos que falharam individualmente) */
+  errorMap?: Map<string, string>;
+  error?: string;
+  httpStatus?: number;
+}
+
+/**
+ * Helper interno: busca participantes de um grupo usando credenciais já resolvidas.
+ * Extrai phoneNumber (sem @s.whatsapp.net) e name de cada participante.
+ * Evita N+1 queries ao Supabase quando chamado em loop.
+ */
+async function _fetchGroupParticipants(
+  creds: InstanceCredentials,
+  groupJid: string,
+  timeoutMs = FETCH_TIMEOUT_MS
+): Promise<{ participants?: ParticipantInfo[]; error?: string }> {
+  const baseUrl = normalizeBaseUrl(creds.baseUrl);
+  const url = `${baseUrl}/group/participants/${creds.instanceName}?groupJid=${encodeURIComponent(groupJid)}`;
+  const finalUrl = url.replace(/([^:]\/)\/+/g, '$1');
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    const response = await fetch(finalUrl, {
+      method: 'GET',
+      headers: { apikey: creds.apikey },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    const text = await response.text();
+    let data: any;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      return { error: text || `HTTP ${response.status}` };
+    }
+
+    if (!response.ok) {
+      return { error: data?.message || data?.error || `HTTP ${response.status}` };
+    }
+
+    const raw: any[] = Array.isArray(data?.participants) ? data.participants : [];
+    const participants = raw
+      .map((p: any): ParticipantInfo | null => {
+        // phoneNumber é o campo confiável da V2: "558195561309@s.whatsapp.net"
+        // id pode ser um @lid (ID interno do WhatsApp), não é um número de telefone
+        const rawPhone =
+          p?.phoneNumber ??
+          (typeof p?.id === 'string' && !String(p.id).includes('@lid') ? p.id : null) ??
+          p?.jid ??
+          (typeof p === 'string' ? p : null);
+        if (!rawPhone) return null;
+        const phone = String(rawPhone).replace(/@.*$/, '').replace(/\D/g, '').trim();
+        if (!phone) return null;
+        return {
+          phone,
+          name: p?.name ? String(p.name).trim() || null : null,
+          admin: p?.admin ? String(p.admin) : null,
+        };
+      })
+      .filter(Boolean) as ParticipantInfo[];
+
+    return { participants };
+  } catch (err: any) {
+    return { error: err?.message || String(err) };
+  }
+}
+
+/**
+ * Evolution API V2: busca participantes de um grupo.
+ * GET /group/participants/{instance}?groupJid=...
+ * Doc: https://doc.evolution-api.com/v2/api-reference/group-controller/find-participants
+ */
+export async function getGroupParticipantsV2(
+  instanceId: string,
+  groupJid: string
+): Promise<GetGroupParticipantsResult> {
+  const creds = await getInstanceCredentials(instanceId);
+  if (!creds) {
+    return { success: false, error: 'Instância não encontrada ou sem credenciais' };
+  }
+
+  const result = await _fetchGroupParticipants(creds, groupJid);
+  if (result.error !== undefined) {
+    return { success: false, error: result.error };
+  }
+  return { success: true, participants: result.participants ?? [] };
+}
+
+/**
+ * Busca participantes dos grupos: usa Evolution API V2 GET /group/participants/{instance}
+ * quando groupJids é informado; caso contrário tenta fetchAllGroups?getParticipants=true (legado).
+ * @param instanceId - ID da instância
+ * @param groupJids - opcional: lista de JIDs dos grupos; quando passado, usa endpoint V2 por grupo
+ */
+export async function fetchAllGroupsWithParticipants(
+  instanceId: string,
+  groupJids?: string[]
+): Promise<FetchAllGroupsResult> {
+  const creds = await getInstanceCredentials(instanceId);
+  if (!creds) {
+    return { success: false, error: 'Instância não encontrada ou sem credenciais' };
+  }
+
+  // Evolution API V2: participantes vêm do GET /group/participants por grupo (uma chamada por grupo)
+  if (groupJids && groupJids.length > 0) {
+    const groupMap = new Map<string, ParticipantInfo[]>();
+    const errorMap = new Map<string, string>();
+    const startMs = Date.now();
+    for (const groupJid of groupJids) {
+      await waitRateLimit(instanceId);
+      // Usa helper interno: credenciais já resolvidas, sem N+1 queries ao Supabase
+      const result = await _fetchGroupParticipants(creds, groupJid, SCAN_FETCH_TIMEOUT_MS);
+      if (result.participants !== undefined) {
+        groupMap.set(groupJid, [...result.participants]);
+      } else if (result.error) {
+        errorMap.set(groupJid, result.error);
+      }
+    }
+    const durationMs = Date.now() - startMs;
+    console.log('[evolution-client] fetchParticipants V2', {
+      instance: creds.instanceName,
+      groups_requested: groupJids.length,
+      groups_ok: groupMap.size,
+      groups_error: errorMap.size > 0 ? errorMap.size : undefined,
+      duration_ms: durationMs,
+    });
+    return { success: true, groupMap, errorMap };
+  }
+
+  // Fallback legado: fetchAllGroups (V2 pode não retornar participants no body)
+  const baseUrl = normalizeBaseUrl(creds.baseUrl);
+  const url = `${baseUrl}/group/fetchAllGroups/${creds.instanceName}?getParticipants=true`;
+  const finalUrl = url.replace(/([^:]\/)\/+/g, '$1');
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    const response = await fetch(finalUrl, {
+      method: 'GET',
+      headers: { apikey: creds.apikey },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    const text = await response.text();
+    let data: any;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      return { success: false, error: text || `HTTP ${response.status}`, httpStatus: response.status };
+    }
+
+    if (!response.ok) {
+      return {
+        success: false,
+        error: data?.message || data?.error || `HTTP ${response.status}`,
+        httpStatus: response.status,
+      };
+    }
+
+    const allGroups: any[] = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.groups)
+        ? data.groups
+        : Array.isArray(data?.data)
+          ? data.data
+          : [];
+
+    const groupMap = new Map<string, ParticipantInfo[]>();
+    for (const g of allGroups) {
+      const gId: string = g?.id ?? g?.remoteJid ?? '';
+      if (!gId) continue;
+      const raw: any[] = Array.isArray(g.participants) ? g.participants : [];
+      const participants = raw
+        .map((p: any): ParticipantInfo | null => {
+          const rawPhone =
+            p?.phoneNumber ??
+            (typeof p?.id === 'string' && !String(p.id).includes('@lid') ? p.id : null) ??
+            p?.jid ??
+            (typeof p === 'string' ? p : null);
+          if (!rawPhone) return null;
+          const phone = String(rawPhone).replace(/@.*$/, '').replace(/\D/g, '').trim();
+          if (!phone) return null;
+          return {
+            phone,
+            name: p?.name ? String(p.name).trim() || null : null,
+            admin: p?.admin ? String(p.admin) : null,
+          };
+        })
+        .filter(Boolean) as ParticipantInfo[];
+      groupMap.set(gId, participants);
+    }
+
+    return { success: true, groupMap };
+  } catch (err: any) {
+    return { success: false, error: err?.message || String(err) };
+  }
+}
+
+/**
+ * Lista participantes de um grupo via Evolution API V2.
+ * GET /group/participants/{instance}?groupJid=...
+ */
+export async function getGroupParticipants(
+  instanceId: string,
+  groupJid: string
+): Promise<GetGroupParticipantsResult> {
+  return getGroupParticipantsV2(instanceId, groupJid);
+}
+
 /**
  * Remove participante do grupo via Evolution API.
  * participantJidOrPhone: JID (5531999887766@s.whatsapp.net) ou número (31999887766).
@@ -99,6 +333,7 @@ export async function removeParticipant(
     : toWaJid(participantJidOrPhone);
 
   const baseUrl = normalizeBaseUrl(creds.baseUrl);
+  // groupJid como query param — padrão desta versão da Evolution API
   const url = `${baseUrl}/group/updateParticipant/${creds.instanceName}?groupJid=${encodeURIComponent(groupJid)}`;
   const finalUrl = url.replace(/([^:]\/)\/+/g, '$1');
 

@@ -357,6 +357,7 @@ export default function ConsultorPage() {
       params.append('banca_url', selectedBanca);
       if (dateFrom) params.append('date_from', dateFrom);
       if (dateTo) params.append('date_to', dateTo);
+      if (isAdminOrSuperAdmin && selectedConsultorId) params.append('consultor_id', selectedConsultorId);
       const response = await fetch(`/api/consultor/winners?${params.toString()}`, {
         headers: { 'X-User-Id': userId as string },
       });
@@ -389,7 +390,7 @@ export default function ConsultorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dateFilter, appliedStartDate, appliedEndDate, selectedBanca, selectedConsultorId, isAdminOrSuperAdmin, consultoresDaBanca.length]);
 
-  // Carrega lista de ganhadores quando banca ou período (last_winner_at) mudar
+  // Carrega lista de ganhadores quando banca, período ou consultor (admin) mudar
   useEffect(() => {
     if (!userId || !selectedBanca) {
       setWinners([]);
@@ -397,7 +398,7 @@ export default function ConsultorPage() {
     }
     loadWinners();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedBanca, winnersPeriod, winnersAppliedStart, winnersAppliedEnd]);
+  }, [selectedBanca, winnersPeriod, winnersAppliedStart, winnersAppliedEnd, isAdminOrSuperAdmin ? selectedConsultorId : null]);
 
   const handleSignOut = () => {
     if (typeof window !== 'undefined') {

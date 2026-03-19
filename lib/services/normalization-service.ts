@@ -85,7 +85,17 @@ export class NormalizationService {
       }
 
       if (!rules?.length) {
-        return payload; // Nenhuma regra, retorna payload original
+        // Mesmo sem regras, aplica normalizações comuns para eventos conhecidos (ex.: group-participants)
+        // para que action, groupId, phoneNumber estejam sempre disponíveis para flows de boas-vindas
+        const eventTypeNorm = String(eventType || '').toLowerCase();
+        if (
+          eventTypeNorm === 'group-participants.update' ||
+          eventTypeNorm.includes('participants')
+        ) {
+          const base = JSON.parse(JSON.stringify(payload));
+          return this.applyCommonNormalizations(base, payload, eventType);
+        }
+        return payload;
       }
 
       // Inicia com payload original (clone)

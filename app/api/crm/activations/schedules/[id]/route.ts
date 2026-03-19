@@ -16,12 +16,12 @@ export async function PATCH(
   try {
     const { userId } = await requireAuth(req);
     const body = await req.json();
-    const { status, scheduled_at_utc, instance_name, group_id, group_subject } = body;
+    const { status, scheduled_at_utc, instance_name, group_id, group_subject, message_id } = body;
     const { id } = await params;
 
     // Valida que pelo menos um campo foi fornecido
     const hasUpdate = status !== undefined || scheduled_at_utc !== undefined || instance_name !== undefined
-      || group_id !== undefined || group_subject !== undefined;
+      || group_id !== undefined || group_subject !== undefined || message_id !== undefined;
     if (!hasUpdate) {
       return errorResponse('Pelo menos um campo deve ser fornecido para atualização', 400);
     }
@@ -80,11 +80,11 @@ export async function PATCH(
     if (instance_name !== undefined) {
       updateData.instance_name = instance_name;
       // Ao trocar instância em disparo failed ou paused, reativar: status → scheduled e limpar erro
+      // Assim a mensagem é disparada novamente na próxima execução do worker (instância ativa ou trocada)
       if (schedule.status === 'failed' || schedule.status === 'paused') {
         updateData.status = 'scheduled';
         updateData.last_error = null;
         updateData.attempts = 0;
-        // Para recorrente, recalcular próxima execução
         if (schedule.schedule_type === 'recurring') {
           const tz = (schedule.timezone as string) || 'America/Sao_Paulo';
           const recurringTime =
@@ -101,6 +101,9 @@ export async function PATCH(
           if (nextRunUTC) {
             updateData.next_run_utc = nextRunUTC;
           }
+        } else {
+          // Pontual (once): disparar na próxima execução do worker
+          updateData.next_run_utc = new Date().toISOString();
         }
       }
     }
@@ -110,6 +113,9 @@ export async function PATCH(
     }
     if (group_subject !== undefined) {
       updateData.group_subject = group_subject;
+    }
+    if (message_id !== undefined) {
+      updateData.message_id = message_id;
     }
 
     // Atualiza o agendamento

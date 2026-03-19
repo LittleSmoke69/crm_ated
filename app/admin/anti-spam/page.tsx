@@ -19,6 +19,7 @@ import {
   XCircle,
   AlertCircle,
 } from 'lucide-react';
+import VerifyGroupsOverlay from '@/components/anti-spam/VerifyGroupsOverlay';
 
 interface AntiSpamConfigRow {
   id: string;
@@ -95,11 +96,19 @@ export default function AdminAntiSpamPage() {
   const BLACKLIST_PAGE_SIZE = 10;
   const [activeTab, setActiveTab] = useState<'config' | 'groups' | 'blacklist' | 'events' | 'logs'>('config');
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
-  const [savedGroups, setSavedGroups] = useState<{ group_id: string; group_subject: string }[]>([]);
+  const [savedGroups, setSavedGroups] = useState<{ group_id: string; group_subject: string; instance_name?: string }[]>([]);
   const [protectedGroupIds, setProtectedGroupIds] = useState<Set<string>>(new Set());
   const [loadingGroups, setLoadingGroups] = useState(false);
   const [fetchingGroups, setFetchingGroups] = useState(false);
   const [togglingGroupId, setTogglingGroupId] = useState<string | null>(null);
+  const [verifyingGroups, setVerifyingGroups] = useState(false);
+  const [markingAllGroups, setMarkingAllGroups] = useState(false);
+  const [verifyGroupsResult, setVerifyGroupsResult] = useState<{
+    report: { phone_e164: string; groups_count: number; group_jids: string[] }[];
+    removals: { phone_e164: string; group_jid: string; success: boolean; error?: string }[];
+    groupErrors?: { groupJid: string; error: string }[];
+    summary: { totalInGroups: number; totalRemovals: number; success: number; failed: number };
+  } | null>(null);
 
   const showToast = (type: 'success' | 'error', message: string) => {
     setToast({ type, message });
@@ -245,6 +254,7 @@ export default function AdminAntiSpamPage() {
             json.data.map((g: { group_id: string; group_subject?: string }) => ({
               group_id: g.group_id,
               group_subject: g.group_subject || g.group_id,
+              instance_name: instanceName,
             }))
           );
         } else {
@@ -256,6 +266,28 @@ export default function AdminAntiSpamPage() {
     },
     [userId]
   );
+
+  const loadSavedGroupsAll = useCallback(async () => {
+    if (!userId) return;
+    try {
+      const res = await fetch('/api/groups?allInstances=1', { headers: { 'X-User-Id': userId } });
+      const json = await res.json();
+      if (json.success && Array.isArray(json.data)) {
+        const mapped = json.data.map((g: { group_id: string; group_subject?: string; instance_name?: string }) => ({
+          group_id: g.group_id,
+          group_subject: g.group_subject || g.group_id,
+          instance_name: g.instance_name ?? '',
+        }));
+        // Deduplicar por group_id — pode vir duplicado quando allInstances=1
+        const unique = Array.from(new Map(mapped.map((g: { group_id: string }) => [g.group_id, g])).values()) as typeof mapped;
+        setSavedGroups(unique);
+      } else {
+        setSavedGroups([]);
+      }
+    } catch (e) {
+      setSavedGroups([]);
+    }
+  }, [userId]);
 
   const loadProtectedGroups = useCallback(
     async (configId: string) => {
@@ -280,19 +312,13 @@ export default function AdminAntiSpamPage() {
   const loadGroupsTabData = useCallback(async () => {
     const config = configs.find((c) => c.id === selectedConfigId);
     if (!config || !userId) return;
-    const instanceName = instances.find((i) => i.id === config.master_instance_id)?.instance_name;
-    if (!instanceName) {
-      setSavedGroups([]);
-      setProtectedGroupIds(new Set());
-      return;
-    }
     setLoadingGroups(true);
     try {
-      await Promise.all([loadSavedGroups(instanceName), loadProtectedGroups(config.id)]);
+      await Promise.all([loadSavedGroupsAll(), loadProtectedGroups(config.id)]);
     } finally {
       setLoadingGroups(false);
     }
-  }, [userId, selectedConfigId, configs, instances, loadSavedGroups, loadProtectedGroups]);
+  }, [userId, selectedConfigId, configs, loadSavedGroupsAll, loadProtectedGroups]);
 
   const fetchGroupsFromInstance = useCallback(async () => {
     const config = configs.find((c) => c.id === selectedConfigId);
@@ -322,10 +348,10 @@ export default function AdminAntiSpamPage() {
         } else {
           showToast('success', 'Grupos buscados (falha ao salvar no banco).');
         }
-        await loadSavedGroups(instanceName);
+        await loadSavedGroupsAll();
       } else if (json.success) {
         showToast('success', 'Nenhum grupo encontrado na instância.');
-        await loadSavedGroups(instanceName);
+        await loadSavedGroupsAll();
       } else {
         showToast('error', json.error || 'Erro ao buscar grupos');
       }
@@ -334,7 +360,7 @@ export default function AdminAntiSpamPage() {
     } finally {
       setFetchingGroups(false);
     }
-  }, [userId, selectedConfigId, configs, instances, loadSavedGroups]);
+  }, [userId, selectedConfigId, configs, instances, loadSavedGroupsAll]);
 
   const toggleGroupProtected = useCallback(
     async (groupId: string, groupName: string, isCurrentlyProtected: boolean) => {
@@ -382,6 +408,51 @@ export default function AdminAntiSpamPage() {
     [userId, selectedConfigId]
   );
 
+  const handleMarkAllGroups = useCallback(async () => {
+    if (!userId || !selectedConfigId) return;
+    const toAdd = savedGroups.filter((g) => !protectedGroupIds.has(g.group_id));
+    if (toAdd.length === 0) {
+      showToast('success', 'Todos os grupos já estão marcados.');
+      return;
+    }
+    setMarkingAllGroups(true);
+    let success = 0;
+    let failed = 0;
+    try {
+      for (const g of toAdd) {
+        try {
+          const res = await fetch('/api/admin/anti-spam/groups', {
+            method: 'POST',
+            headers: { 'X-User-Id': userId, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              config_id: selectedConfigId,
+              group_jid: g.group_id,
+              group_name: g.group_subject || g.group_id,
+            }),
+          });
+          const json = await res.json();
+          if (json.success) {
+            setProtectedGroupIds((prev) => new Set(prev).add(g.group_id));
+            success++;
+          } else {
+            failed++;
+          }
+        } catch {
+          failed++;
+        }
+      }
+      if (failed > 0) {
+        showToast('error', `Marcados ${success} grupo(s). Falha em ${failed}.`);
+      } else {
+        showToast('success', `Todos os ${success} grupo(s) foram marcados.`);
+      }
+    } catch (e: any) {
+      showToast('error', e?.message || 'Erro ao marcar grupos');
+    } finally {
+      setMarkingAllGroups(false);
+    }
+  }, [userId, selectedConfigId, savedGroups, protectedGroupIds]);
+
   useEffect(() => {
     loadBancas();
   }, [loadBancas]);
@@ -406,18 +477,10 @@ export default function AdminAntiSpamPage() {
     setBlacklistPage(1);
   }, [selectedConfigId]);
 
-  // Carrega grupos salvos da instância da config para o dropdown "Grupo para denúncias" e para a aba Grupos protegidos
+  // Carrega grupos salvos (todas as instâncias) para o dropdown "Grupo para denúncias" e para a aba Grupos protegidos
   useEffect(() => {
-    const currentConfig = configs.find((c) => c.id === selectedConfigId) ?? configs[0] ?? null;
-    const instanceName = currentConfig?.master_instance_id
-      ? instances.find((i) => i.id === currentConfig.master_instance_id)?.instance_name
-      : null;
-    if (instanceName && userId) {
-      loadSavedGroups(instanceName);
-    } else {
-      setSavedGroups([]);
-    }
-  }, [configs, selectedConfigId, instances, userId, loadSavedGroups]);
+    if (userId) loadSavedGroupsAll();
+  }, [userId, loadSavedGroupsAll]);
 
   const handleSaveConfig = async (payload: Partial<AntiSpamConfigRow>) => {
     if (!userId) return;
@@ -467,6 +530,26 @@ export default function AdminAntiSpamPage() {
     }
   };
 
+  const handleRemoveFromBlacklist = async (configId: string, phoneE164: string) => {
+    if (!userId) return;
+    try {
+      const res = await fetch('/api/admin/anti-spam/blacklist/remove', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({ config_id: configId, phone_e164: phoneE164 }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        showToast('success', 'Número removido da lista negra');
+        loadBlacklist();
+      } else {
+        showToast('error', json.error || 'Erro');
+      }
+    } catch (e: any) {
+      showToast('error', e?.message || 'Erro');
+    }
+  };
+
   const handleTestRun = async () => {
     if (!userId) return;
     setLoading(true);
@@ -484,6 +567,41 @@ export default function AdminAntiSpamPage() {
       setLoading(false);
     }
   };
+
+  const handleVerifyGroups = useCallback(async () => {
+    if (!userId || !selectedConfigId) return;
+    setVerifyingGroups(true);
+    setVerifyGroupsResult(null);
+    try {
+      const res = await fetch('/api/admin/anti-spam/verify-groups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({ config_id: selectedConfigId }),
+      });
+      const json = await res.json();
+      if (json.success && json.data) {
+        setVerifyGroupsResult(json.data);
+        const s = json.data.summary;
+        if (s.totalRemovals > 0) {
+          showToast(
+            s.failed === 0 ? 'success' : 'error',
+            `Verificação concluída: ${s.success} remoção(ões) com sucesso${s.failed > 0 ? `, ${s.failed} falha(s)` : ''}.`
+          );
+        } else if (json.data.report?.length > 0) {
+          showToast('success', `Encontrados ${json.data.report.length} número(s) da blacklist em grupos. Remoções executadas.`);
+        } else {
+          showToast('success', json.data.message || 'Nenhum número da blacklist encontrado nos grupos monitorados.');
+        }
+        loadActions();
+      } else {
+        showToast('error', json.error || 'Erro ao verificar grupos');
+      }
+    } catch (e: any) {
+      showToast('error', e?.message || 'Erro ao verificar grupos');
+    } finally {
+      setVerifyingGroups(false);
+    }
+  }, [userId, selectedConfigId, loadActions]);
 
   if (checking) {
     return (
@@ -506,6 +624,12 @@ export default function AdminAntiSpamPage() {
   return (
     <Layout>
       <div className="p-4 md:p-6 lg:p-8 max-w-5xl mx-auto">
+        {verifyingGroups && (
+          <div className="sticky top-0 z-20 -mx-4 -mt-4 px-4 pt-4 pb-2 md:-mx-6 md:-mt-6 md:px-6 md:pt-6 lg:-mx-8 lg:-mt-8 lg:px-8 lg:pt-8 mb-4 flex items-center justify-center gap-2 rounded-b-lg bg-[#8CD955]/15 dark:bg-[#8CD955]/20 border-b-2 border-[#8CD955]/50 shadow-sm">
+            <Loader2 className="h-5 w-5 animate-spin text-[#8CD955]" />
+            <span className="text-sm font-medium text-gray-800 dark:text-gray-200">Verificação de grupos em andamento em segundo plano</span>
+          </div>
+        )}
         <header className="mb-8">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
@@ -701,7 +825,12 @@ export default function AdminAntiSpamPage() {
                   disabled={!config?.master_instance_id}
                 >
                   <option value="">Nenhum</option>
-                  {savedGroups.map((g) => (
+                  {(config?.master_instance_id
+                    ? savedGroups.filter(
+                        (g) => g.instance_name === instances.find((i) => i.id === config.master_instance_id)?.instance_name
+                      )
+                    : savedGroups
+                  ).map((g) => (
                     <option key={g.group_id} value={g.group_id}>
                       {g.group_subject || g.group_id}
                     </option>
@@ -753,6 +882,7 @@ export default function AdminAntiSpamPage() {
 
         {activeTab === 'groups' && (
           <div className="rounded-xl border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] p-6 shadow-sm">
+            {verifyingGroups && <VerifyGroupsOverlay isActive={verifyingGroups} />}
             <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">Grupos protegidos</h2>
             <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
               Se você escolheu &quot;Apenas grupos que eu escolher&quot;, marque abaixo os grupos que deseja proteger.
@@ -778,19 +908,102 @@ export default function AdminAntiSpamPage() {
                     {fetchingGroups ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
                     Buscar grupos da instância
                   </button>
+                  <button
+                    type="button"
+                    onClick={handleVerifyGroups}
+                    disabled={verifyingGroups || loadingGroups}
+                    className="inline-flex items-center gap-2 rounded-lg bg-[#8CD955] px-4 py-2 text-sm font-medium text-white hover:bg-[#7BC84A] disabled:opacity-50 transition"
+                  >
+                    {verifyingGroups ? <Loader2 className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
+                    Verificar grupos
+                  </button>
                   {loadingGroups && (
                     <span className="text-sm text-gray-500 dark:text-gray-400 flex items-center gap-1">
                       <Loader2 className="w-4 h-4 animate-spin" /> Carregando…
                     </span>
                   )}
                 </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+                  Verificar grupos: consulta os participantes de cada grupo monitorado, identifica números da blacklist e remove (um por request). Exige ao menos um grupo protegido.
+                </p>
+                {verifyGroupsResult && (
+                  <div className="mb-6 rounded-xl border border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#333] p-4 space-y-4">
+                    <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200">Resultado da verificação</h3>
+                    <div className="flex flex-wrap gap-4 text-sm">
+                      <span className="text-gray-600 dark:text-gray-300">
+                        Encontrados em grupos: <strong>{verifyGroupsResult.summary.totalInGroups}</strong>
+                      </span>
+                      <span className="text-gray-600 dark:text-gray-300">
+                        Remoções: <strong className="text-emerald-600 dark:text-emerald-400">{verifyGroupsResult.summary.success} sucesso</strong>
+                        {verifyGroupsResult.summary.failed > 0 && (
+                          <>, <strong className="text-red-600 dark:text-red-400">{verifyGroupsResult.summary.failed} falha(s)</strong></>
+                        )}
+                      </span>
+                    </div>
+                    {verifyGroupsResult.groupErrors && verifyGroupsResult.groupErrors.length > 0 && (
+                      <div className="text-sm">
+                        <span className="font-medium text-amber-700 dark:text-amber-400">Erros ao consultar grupos:</span>
+                        <ul className="mt-1 list-disc list-inside text-amber-700 dark:text-amber-300">
+                          {verifyGroupsResult.groupErrors.map((e, i) => (
+                            <li key={i}>{e.groupJid}: {e.error}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {verifyGroupsResult.report.length > 0 && (
+                      <div>
+                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Por número (em quantos grupos foi encontrado):</span>
+                        <ul className="mt-2 space-y-1 text-sm text-gray-600 dark:text-gray-400">
+                          {verifyGroupsResult.report.map((r, i) => (
+                            <li key={i}>
+                              <strong>{r.phone_e164}</strong> — em <strong>{r.groups_count}</strong> grupo(s)
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {verifyGroupsResult.removals.length > 0 && (
+                      <div>
+                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Remoções (sucesso / falha):</span>
+                        <ul className="mt-2 space-y-1 text-sm max-h-48 overflow-y-auto">
+                          {verifyGroupsResult.removals.map((m, i) => (
+                            <li key={i} className="flex items-center gap-2">
+                              {m.success ? (
+                                <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-500" />
+                              ) : (
+                                <span title={m.error}><XCircle className="w-4 h-4 shrink-0 text-red-500" /></span>
+                              )}
+                              <span className="text-gray-700 dark:text-gray-300">{m.phone_e164}</span>
+                              <span className="text-gray-500 dark:text-gray-400 truncate max-w-[200px]" title={m.group_jid}>{m.group_jid}</span>
+                              {!m.success && m.error && (
+                                <span className="text-red-600 dark:text-red-400 text-xs" title={m.error}>{m.error}</span>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
                 {savedGroups.length === 0 ? (
                   <p className="text-sm text-gray-500 dark:text-gray-400">
                     Nenhum grupo salvo ainda. Use &quot;Buscar grupos da instância&quot; para carregar os grupos da instância da configuração.
                   </p>
                 ) : (
-                  <ul className="space-y-2 max-h-[360px] overflow-y-auto rounded-lg border border-gray-200 dark:border-[#404040] p-3">
-                    {savedGroups.map((g) => {
+                  <>
+                    <div className="mb-3 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleMarkAllGroups}
+                        disabled={markingAllGroups || savedGroups.every((g) => protectedGroupIds.has(g.group_id))}
+                        className="inline-flex items-center gap-2 rounded-lg border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50 transition"
+                      >
+                        {markingAllGroups ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                        Marcar todos os grupos
+                      </button>
+                    </div>
+                    <ul className="space-y-2 max-h-[360px] overflow-y-auto rounded-lg border border-gray-200 dark:border-[#404040] p-3">
+                    {Array.from(new Map(savedGroups.map((g) => [g.group_id, g])).values()).map((g) => {
                       const isProtected = protectedGroupIds.has(g.group_id);
                       const busy = togglingGroupId === g.group_id;
                       return (
@@ -820,11 +1033,15 @@ export default function AdminAntiSpamPage() {
                             <span className="text-sm text-gray-800 dark:text-gray-200 truncate" title={g.group_subject}>
                               {g.group_subject || g.group_id}
                             </span>
+                            {g.instance_name && (
+                              <span className="text-xs text-gray-500 dark:text-gray-400 shrink-0">({g.instance_name})</span>
+                            )}
                           </button>
                         </li>
                       );
                     })}
-                  </ul>
+                    </ul>
+                  </>
                 )}
               </>
             )}
@@ -966,6 +1183,7 @@ export default function AdminAntiSpamPage() {
                     <th className="py-3 px-3 font-medium text-gray-700 dark:text-gray-300">Motivo</th>
                     <th className="py-3 px-3 font-medium text-gray-700 dark:text-gray-300">Status</th>
                     <th className="py-3 px-3 font-medium text-gray-700 dark:text-gray-300">Última vez</th>
+                    <th className="py-3 px-3 font-medium text-gray-700 dark:text-gray-300">Ação</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -975,6 +1193,15 @@ export default function AdminAntiSpamPage() {
                       <td className="py-3 px-3 text-gray-700 dark:text-gray-300">{r.reason}</td>
                       <td className="py-3 px-3 text-gray-700 dark:text-gray-300">{r.status}</td>
                       <td className="py-3 px-3 text-gray-500 dark:text-gray-400">{new Date(r.last_seen_at).toLocaleString('pt-BR')}</td>
+                      <td className="py-3 px-3">
+                        <button
+                          type="button"
+                          onClick={() => selectedConfigId && handleRemoveFromBlacklist(selectedConfigId, r.phone_e164)}
+                          className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium border border-red-300 dark:border-red-600 text-red-700 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition"
+                        >
+                          <Trash2 className="w-3 h-3" /> Remover
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

@@ -77,7 +77,7 @@ export async function GET(req: NextRequest) {
         }
       }
       if (listBancas.length === 0) {
-        const visiveis = await getBancasVisiveis(requesterId, requesterProfile);
+        const visiveis = await getBancasVisiveis(requesterId, requesterProfile, { transferredFilter: 'no' });
         if (visiveis.length > 0) {
           listBancas = visiveis.map(b => ({ id: b.id, url: b.url, name: b.name }));
         } else {
@@ -106,16 +106,21 @@ export async function GET(req: NextRequest) {
     }
     const cleanApiKey = apiKey.trim().replace(/\s+/g, '');
 
-    const queryParams: string[] = [];
-    queryParams.push(`consultant=${targetProfile.email}`);
-    const perPage = 2000;
+    // Padrão de busca alinhado ao CRM Kanban: get-indicateds-by-consultant com transferred_filter=no, sort e direction
+    const queryParams: string[] = [
+      `consultant=${encodeURIComponent(targetProfile.email.trim())}`,
+      `per_page=2000`,
+      `sort=created_at`,
+      `direction=desc`,
+      `transferred_filter=no`,
+    ];
     const optionalParams = ['search', 'status', 'from', 'to', 'star_filter', 'affiliate_filter'];
-    const baseQueryParams = [...queryParams];
     optionalParams.forEach(param => {
       const value = searchParams.get(param);
-      if (value && value.trim()) baseQueryParams.push(`${param}=${value.trim()}`);
+      if (value && value.trim()) queryParams.push(`${param}=${encodeURIComponent(value.trim())}`);
     });
-    baseQueryParams.push(`per_page=${perPage}`);
+    const baseQueryParams = queryParams;
+    const perPage = 2000;
 
     function normalizeBancaUrl(raw: string): string {
       let u = raw.trim().replace(/^https?:\/\//i, '').replace(/\/api\/crm\/?/i, '').replace(/\/+$/, '').trim();
@@ -187,7 +192,7 @@ export async function GET(req: NextRequest) {
       console.log('[CRM Leads] Bancas a consultar:', listBancas.length);
 
       let allLeads: any[] = [];
-      let responseMeta: { next: { banca_index: number; page: number } | null } | undefined;
+      let responseMeta: { next: { banca_index: number; page: number } | null; total_bancas?: number; current_banca_index?: number; current_page?: number } | undefined;
 
       if (isChunkRequest) {
         // Carregamento em background: apenas uma fatia (uma banca, uma página)
@@ -195,7 +200,7 @@ export async function GET(req: NextRequest) {
         const pageNum = Math.max(1, parseInt(pageParam!, 10) || 1);
         if (bancaIndex >= listBancas.length) {
           console.log('[CRM Leads] banca_index fora do intervalo; retornando vazio.');
-          return successResponse([], { meta: { next: null } });
+          return successResponse([], { meta: { next: null, total_bancas: listBancas.length } });
         }
         const banca = listBancas[bancaIndex];
         const { leads, hasMore } = await fetchOneBancaPage(banca, pageNum);
@@ -206,9 +211,9 @@ export async function GET(req: NextRequest) {
         } else if (bancaIndex + 1 < listBancas.length) {
           next = { banca_index: bancaIndex + 1, page: 1 };
         }
-        responseMeta = { next };
+        responseMeta = { next, total_bancas: listBancas.length, current_banca_index: bancaIndex, current_page: pageNum };
         if (allLeads.length === 0) {
-          return successResponse([], { meta: { next } });
+          return successResponse([], { meta: { next, total_bancas: listBancas.length, current_banca_index: bancaIndex, current_page: pageNum } });
         }
         // Aplica filtros e formatação a essa fatia (continuará abaixo no fluxo comum)
       } else if (onlyResponded) {
@@ -224,7 +229,7 @@ export async function GET(req: NextRequest) {
         }
         if (allLeads.length === 0) {
           console.log('[CRM Leads] only_responded: nenhum lead na primeira página das bancas.');
-          return successResponse([], { meta: { next: listBancas.length > 0 ? { banca_index: 0, page: 1 } : null } });
+          return successResponse([], { meta: { next: listBancas.length > 0 ? { banca_index: 0, page: 1 } : null, total_bancas: listBancas.length } });
         }
         // Filtros e formatação abaixo; depois filtrar por has_interaction e retornar com meta.next
       } else {
@@ -526,6 +531,7 @@ export async function GET(req: NextRequest) {
         // Cliente carrega em background a partir da página 1 (não da 2), para não pular os leads da primeira página
         responseMeta = {
           next: listBancas.length > 0 ? { banca_index: 0, page: 1 } : null,
+          total_bancas: listBancas.length,
         };
         console.log(`[CRM Leads] 200 OK (only_responded): ${respondedOnly.length} leads, meta.next para background`);
         return successResponse(respondedOnly, { meta: responseMeta });

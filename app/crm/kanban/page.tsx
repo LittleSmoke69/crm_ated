@@ -1,9 +1,9 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useMemo, useCallback, Suspense } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback, Suspense, startTransition } from 'react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { Kanban as KanbanIcon, Plus, Users, Target, CheckCircle2, MessageSquare, AlertCircle, Eye, RefreshCw, X, Gift, Loader2, Search } from 'lucide-react';
+import { Kanban as KanbanIcon, Plus, Users, Target, CheckCircle2, MessageSquare, AlertCircle, Eye, RefreshCw, X, Gift, Loader2, Search, Ticket, Sparkles, Package } from 'lucide-react';
 import FilterBar from '@/components/CRM/FilterBar';
 import KanbanColumn from '@/components/CRM/KanbanColumn';
 import SortColumnModal from '@/components/CRM/SortColumnModal';
@@ -36,6 +36,18 @@ const STAR_LEVELS = [
   { level: 6, min: 15000, max: 29999 },
   { level: 7, min: 30000, max: 50000 },
 ] as const;
+
+/** Prazo em dias desde o último depósito para "possível transferência" (deve bater com LeadCard). */
+const INACTIVITY_DEADLINE_DAYS = 90;
+
+/** True se o lead tem último depósito e já passou de 90 dias desde essa data. */
+function isLeadPast90DaysInactivity(lead: Lead): boolean {
+  if (!lead.last_deposit_at) return false;
+  const lastDeposit = new Date(lead.last_deposit_at);
+  const deadline = new Date(lastDeposit);
+  deadline.setDate(deadline.getDate() + INACTIVITY_DEADLINE_DAYS);
+  return new Date().getTime() >= deadline.getTime();
+}
 
 /** Retorna o valor (em R$) que falta para a próxima estrela, ou null se já está no nível máximo. */
 function getMissingForNextStar(apostaEstrelas: number): number | null {
@@ -191,6 +203,13 @@ const getDefaultColumns = (leads: Lead[] = []): Column[] => {
       totalLeads: leads.filter(l => 
         l.status === 'ativo'
       ).length
+    },
+    { 
+      id: 'possivel_transferencia', 
+      title: '🔄 Possível transferência', 
+      color: 'amber', 
+      leads: leads.filter(l => isLeadPast90DaysInactivity(l)).slice(0, 100),
+      totalLeads: leads.filter(l => isLeadPast90DaysInactivity(l)).length
     }
   ];
 };
@@ -205,15 +224,15 @@ const KanbanContent = () => {
   const [loading, setLoading] = useState(false); // true apenas quando a requisição de leads estiver em andamento
   const [filterLoading, setFilterLoading] = useState(false); // Loading ao mudar banca/período
   const [backgroundLoading, setBackgroundLoading] = useState(false); // true quando o resto dos leads está carregando em segundo plano
+  const [backgroundProgress, setBackgroundProgress] = useState<{ currentBanca: number; totalBancas: number; currentPage: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filters, setFilters] = useState<Record<string, any>>(() => {
-    // Predefinido como diário (dia atual)
-    const today = new Date().toISOString().split('T')[0];
+    // Predefinido como todo o período: ao entrar no CRM já busca todas as bancas + todo o período
     return {
       date: {
-        value: 'diario',
-        label: 'Diário'
+        value: 'todos',
+        label: 'Todo o Período'
       }
     };
   });
@@ -234,15 +253,26 @@ const KanbanContent = () => {
   
   // Estado para controlar o modal informativo de status
   const [showStatusModal, setShowStatusModal] = useState(false);
+  // Modal seleção tipo de bônus (abre antes do modal de Giros)
+  const [showBonusTypeModal, setShowBonusTypeModal] = useState(false);
   // Modal Enviar Giros (Roleta)
   const [showSpinModal, setShowSpinModal] = useState(false);
   const [spinSelectedLeadIds, setSpinSelectedLeadIds] = useState<Set<string>>(new Set());
   const [spinSearchTerm, setSpinSearchTerm] = useState('');
+  /** Valor digitado na busca do modal de giros; o filtro só é aplicado no onBlur (clicar fora). */
+  const [spinSearchInputValue, setSpinSearchInputValue] = useState('');
   const [spinQuantity, setSpinQuantity] = useState<number>(5);
   const [spinHistory, setSpinHistory] = useState<{ quantity: number; date: string }[]>([]);
   const [spinHistoryLoading, setSpinHistoryLoading] = useState(false);
   const [spinSending, setSpinSending] = useState(false);
   const [spinError, setSpinError] = useState<string | null>(null);
+  // Modal Enviar Rifas (bilhetes)
+  const [showTicketModal, setShowTicketModal] = useState(false);
+  const [ticketSelectedLeadIds, setTicketSelectedLeadIds] = useState<Set<string>>(new Set());
+  const [ticketSearchTerm, setTicketSearchTerm] = useState('');
+  const [ticketQuantity, setTicketQuantity] = useState<number>(1);
+  const [ticketSending, setTicketSending] = useState(false);
+  const [ticketError, setTicketError] = useState<string | null>(null);
 
   const isInitialLoadRef = useRef<boolean>(true);
   /** Cancela o carregamento em background quando uma nova busca é iniciada (ex.: mudança de filtro). */
@@ -327,6 +357,11 @@ const KanbanContent = () => {
     return () => clearInterval(interval);
   }, [userId, isConsultorViewingOwn]);
 
+  // Ao abrir o modal de giros, sincroniza o valor do input com o termo de filtro atual
+  useEffect(() => {
+    if (showSpinModal) setSpinSearchInputValue(spinSearchTerm);
+  }, [showSpinModal]);
+
   // Métricas são calculadas localmente baseadas nos leads filtrados
   // Não precisa mais da função loadMetrics da API
 
@@ -393,10 +428,12 @@ const KanbanContent = () => {
       } else if (exclusiveBancasList.length > 0) {
         url.searchParams.append('banca_urls', exclusiveBancasList.map(b => b.url).join(','));
       }
-      const dateValue = filters.date ? (typeof filters.date === 'object' ? filters.date.value : filters.date) : 'diario';
+      const dateValue = filters.date ? (typeof filters.date === 'object' ? filters.date.value : filters.date) : 'todos';
       const nowSP = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
       const today = nowSP.toISOString().split('T')[0];
-      if (dateValue === 'diario') {
+      if (dateValue === 'todos') {
+        // Todo o período: não envia from/to; a API retorna todos os leads
+      } else if (dateValue === 'diario') {
         url.searchParams.append('from', today);
         url.searchParams.append('to', today);
       } else if (dateValue === 'ontem') {
@@ -452,8 +489,7 @@ const KanbanContent = () => {
       if (result.success) {
         const leads: any[] = result.data || [];
         const formattedLeads = formatApiLeadsToLead(leads);
-        console.log('[Kanban] Primeira carga (já respondidos):', formattedLeads.length, 'leads');
-        setRawLeads(formattedLeads);
+        startTransition(() => setRawLeads(formattedLeads));
 
         if (targetUserId && targetUserId !== userId) {
           const profileRes = await fetch(`/api/admin/users/${targetUserId}`, {
@@ -471,12 +507,18 @@ const KanbanContent = () => {
         }
 
         const next = result.meta?.next;
+        const totalBancas = result.meta?.total_bancas ?? 0;
         if (next && typeof next.banca_index === 'number' && typeof next.page === 'number') {
           setBackgroundLoading(true);
+          setBackgroundProgress({ currentBanca: next.banca_index + 1, totalBancas: totalBancas || 1, currentPage: next.page });
           (async () => {
             let current: { banca_index: number; page: number } | null = { banca_index: next.banca_index, page: next.page };
             const headers = { 'X-User-Id': userId as string };
+            const totalBancasRef = totalBancas || 1;
             while (current && thisLoadId === loadIdRef.current) {
+              if (thisLoadId === loadIdRef.current) {
+                setBackgroundProgress({ currentBanca: current.banca_index + 1, totalBancas: totalBancasRef, currentPage: current.page });
+              }
               const chunkUrl = buildBaseUrl();
               chunkUrl.searchParams.set('banca_index', String(current.banca_index));
               chunkUrl.searchParams.set('page', String(current.page));
@@ -487,11 +529,17 @@ const KanbanContent = () => {
                 if (chunkResult.success && Array.isArray(chunkResult.data)) {
                   const newLeads = formatApiLeadsToLead(chunkResult.data);
                   if (newLeads.length > 0) {
-                    setRawLeads(prev => {
-                      const byId = new Map(prev.map(l => [l.id, l]));
-                      newLeads.forEach(l => byId.set(l.id, l));
-                      return Array.from(byId.values());
+                    startTransition(() => {
+                      setRawLeads(prev => {
+                        const byId = new Map(prev.map(l => [l.id, l]));
+                        newLeads.forEach(l => byId.set(l.id, l));
+                        return Array.from(byId.values());
+                      });
                     });
+                  }
+                  const meta = chunkResult.meta;
+                  if (meta?.current_banca_index != null && meta?.total_bancas != null && thisLoadId === loadIdRef.current) {
+                    setBackgroundProgress({ currentBanca: meta.current_banca_index + 1, totalBancas: meta.total_bancas, currentPage: meta.current_page ?? current.page });
                   }
                 }
                 current = chunkResult.meta?.next ?? null;
@@ -501,16 +549,16 @@ const KanbanContent = () => {
             }
             if (thisLoadId === loadIdRef.current) {
               setBackgroundLoading(false);
+              setBackgroundProgress(null);
               showToast('Todos os leads foram carregados.', 'success');
             }
           })();
         }
       } else {
         const errorMessage = result.error || 'Erro ao carregar leads';
-        console.error('[Kanban] Erro ao carregar leads:', errorMessage, result);
         if (errorMessage.includes('404') || errorMessage.includes('No indicateds found') || errorMessage.includes('Nenhum lead')) {
           setError(null);
-          setRawLeads([]);
+          startTransition(() => setRawLeads([]));
         } else {
           setError(errorMessage);
         }
@@ -587,6 +635,14 @@ const KanbanContent = () => {
       (l.name || '').toLowerCase().includes(term) || (l.email || '').toLowerCase().includes(term)
     );
   }, [spinEligibleLeads, spinSearchTerm]);
+  // Rifas: mesma base de leads, filtro por pesquisa
+  const ticketFilteredLeads = useMemo(() => {
+    const term = ticketSearchTerm.trim().toLowerCase();
+    if (!term) return spinEligibleLeads;
+    return spinEligibleLeads.filter(l =>
+      (l.name || '').toLowerCase().includes(term) || (l.email || '').toLowerCase().includes(term)
+    );
+  }, [spinEligibleLeads, ticketSearchTerm]);
   // Um único lead selecionado (para exibir histórico)
   const spinSelectedLead = useMemo(() => {
     if (spinSelectedLeadIds.size !== 1) return null;
@@ -785,6 +841,81 @@ const KanbanContent = () => {
     setSpinSending(false);
   }, [spinEligibleLeads, spinSelectedLeadIds, spinQuantity, spinSelectedLead, targetUserId, userId, showToast, getLeadIdForApi]);
 
+  const handleSendTickets = useCallback(async () => {
+    const selectedLeads = spinEligibleLeads.filter(l => ticketSelectedLeadIds.has(String(l.id)));
+    if (selectedLeads.length === 0 || ticketQuantity < 1) return;
+    setTicketSending(true);
+    setTicketError(null);
+    const consultantIdByBanca = new Map<string, number>();
+    const getConsultantId = async (lead: Lead): Promise<number | null> => {
+      const bancaUrl = lead.banca_url;
+      if (!bancaUrl) return null;
+      if (lead.consultant_id != null) return Number(lead.consultant_id);
+      const cached = consultantIdByBanca.get(bancaUrl);
+      if (cached != null) return cached;
+      try {
+        const url = new URL('/api/crm/consultant-external-id', window.location.origin);
+        url.searchParams.set('userId', targetUserId || (userId as string));
+        url.searchParams.set('banca_url', bancaUrl);
+        const res = await fetch(url.toString(), { headers: { 'X-User-Id': userId as string } });
+        const data = await res.json();
+        if (data?.success && data?.data?.consultant_id != null) {
+          const cid = Number(data.data.consultant_id);
+          consultantIdByBanca.set(bancaUrl, cid);
+          return cid;
+        }
+      } catch {
+        // ignore
+      }
+      return null;
+    };
+    const successfulLeads: Lead[] = [];
+    let err = 0;
+    for (const lead of selectedLeads) {
+      const bancaUrl = lead.banca_url;
+      if (!bancaUrl) {
+        err++;
+        continue;
+      }
+      const consultantId = await getConsultantId(lead);
+      if (consultantId == null) {
+        err++;
+        continue;
+      }
+      try {
+        const res = await fetch('/api/crm/send-tickets-to-lead', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId as string },
+          body: JSON.stringify({
+            consultant_id: consultantId,
+            lead_id: getLeadIdForApi(lead),
+            quantity: Number(ticketQuantity),
+            banca_url: bancaUrl,
+            userId: targetUserId || userId,
+          }),
+        });
+        const data = await res.json();
+        if (data?.success) successfulLeads.push(lead);
+        else err++;
+      } catch {
+        err++;
+      }
+    }
+    const ok = successfulLeads.length;
+    if (ok > 0) {
+      showToast(
+        err > 0
+          ? `${ticketQuantity} bilhete(s) enviados para ${ok} lead(s). ${err} falha(s).`
+          : `${ticketQuantity} bilhete(s) enviado(s) para ${ok} lead(s).`,
+        'success'
+      );
+    }
+    if (err > 0) {
+      setTicketError(err === selectedLeads.length ? 'Falha ao enviar bilhetes.' : `Falha para ${err} de ${selectedLeads.length} lead(s).`);
+    }
+    setTicketSending(false);
+  }, [spinEligibleLeads, ticketSelectedLeadIds, ticketQuantity, targetUserId, userId, showToast, getLeadIdForApi]);
+
   // Função para carregar mais leads em uma coluna (apenas atualiza limite local, sem API)
   const handleLoadMore = (columnId: string) => {
     setLeadsPerColumn(prev => ({
@@ -876,6 +1007,14 @@ const KanbanContent = () => {
   // Aplica filtros locais e monta colunas/métricas (sem chamar API)
   const { columns, metrics: derivedMetrics } = useMemo(() => {
     let formattedLeads: Lead[] = [...rawLeads];
+
+    // Filtro: apenas leads em possível transferência (90+ dias sem depósito)
+    if (filters.possivelTransferencia) {
+      const value = typeof filters.possivelTransferencia === 'object' ? filters.possivelTransferencia.value : filters.possivelTransferencia;
+      if (value === 'only') {
+        formattedLeads = formattedLeads.filter(l => isLeadPast90DaysInactivity(l));
+      }
+    }
 
     // Filtro de Afiliado
     if (filters.affiliate) {
@@ -1074,48 +1213,46 @@ const KanbanContent = () => {
     ).length;
     const conversionRate = totalLeads > 0 ? (activeLeads / totalLeads) * 100 : 0;
 
-    // Colunas com totalLeads = total que se encaixa no filtro; leads exibidos limitados a 100 (ou leadsPerColumn)
+    // Uma única passagem para distribuir leads nas colunas (evita 11+ .filter() sobre a lista)
+    const colLeads: Record<string, Lead[]> = {
+      novo: [], contactados: [], deposito_sem_aposta: [], saque_disponivel: [], deposito_1x: [],
+      deposito_2x: [], deposito_3x: [], deposito_5x: [], deposito_10x: [], ativo: [], possivel_transferencia: [],
+    };
+    for (const l of formattedLeads) {
+      const count = l.total_depositos_count || 0;
+      const depositado = l.total_depositado || 0;
+      const apostado = l.total_apostado || 0;
+      const ok = depositado <= apostado;
+      const availWithdraw = parseFloat(String(l.available_withdraw ?? 0)) || 0;
+      if (count === 0 && l.status !== 'ativo' && !(l.has_interaction === true)) colLeads.novo.push(l);
+      if (l.has_interaction === true && count === 0) colLeads.contactados.push(l);
+      if (depositado > apostado || (l.balance ?? 0) > 0) colLeads.deposito_sem_aposta.push(l);
+      if (availWithdraw > 0) colLeads.saque_disponivel.push(l);
+      if (count === 1 && ok) colLeads.deposito_1x.push(l);
+      if (count === 2 && ok) colLeads.deposito_2x.push(l);
+      if (count >= 3 && count < 5 && ok) colLeads.deposito_3x.push(l);
+      if (count >= 5 && count < 10 && ok) colLeads.deposito_5x.push(l);
+      if (count >= 10 && ok) colLeads.deposito_10x.push(l);
+      if (l.status === 'ativo') colLeads.ativo.push(l);
+      if (isLeadPast90DaysInactivity(l)) colLeads.possivel_transferencia.push(l);
+    }
+    colLeads.contactados.sort((a, b) => {
+      const tA = a.lastInteractionAt ? new Date(a.lastInteractionAt).getTime() : (a.last_interaction ? new Date(a.last_interaction).getTime() : 0);
+      const tB = b.lastInteractionAt ? new Date(b.lastInteractionAt).getTime() : (b.last_interaction ? new Date(b.last_interaction).getTime() : 0);
+      return tA - tB;
+    });
     const baseColumns: Column[] = [
-      (() => {
-        const filtered = formattedLeads.filter(l => (l.total_depositos_count || 0) === 0 && l.status !== 'ativo' && !(l.has_interaction === true));
-        return { id: 'novo', title: '👥 Clientes cadastrados', color: 'gray', leads: filtered, totalLeads: filtered.length };
-      })(),
-      (() => {
-        const filtered = formattedLeads.filter(l => l.has_interaction === true && (l.total_depositos_count || 0) === 0).sort((a, b) => { const tA = a.lastInteractionAt ? new Date(a.lastInteractionAt).getTime() : (a.last_interaction ? new Date(a.last_interaction).getTime() : 0); const tB = b.lastInteractionAt ? new Date(b.lastInteractionAt).getTime() : (b.last_interaction ? new Date(b.last_interaction).getTime() : 0); return tA - tB; });
-        return { id: 'contactados', title: '📞 Clientes Contactados', color: 'blue', leads: filtered, totalLeads: filtered.length };
-      })(),
-      (() => {
-        const filtered = formattedLeads.filter(l => (l.total_depositado || 0) > (l.total_apostado || 0) || (l.balance ?? 0) > 0);
-        return { id: 'deposito_sem_aposta', title: '💰 Com Saldo Disponível', color: 'red', leads: filtered, totalLeads: filtered.length };
-      })(),
-      (() => {
-        const filtered = formattedLeads.filter(l => (parseFloat(String(l.available_withdraw ?? 0)) || 0) > 0);
-        return { id: 'saque_disponivel', title: '💸 Saque Disponível', color: 'teal', leads: filtered, totalLeads: filtered.length };
-      })(),
-      (() => {
-        const filtered = formattedLeads.filter(l => (l.total_depositos_count || 0) === 1 && (l.total_depositado || 0) <= (l.total_apostado || 0));
-        return { id: 'deposito_1x', title: '💰 1º Depósito', color: 'emerald', leads: filtered, totalLeads: filtered.length };
-      })(),
-      (() => {
-        const filtered = formattedLeads.filter(l => (l.total_depositos_count || 0) === 2 && (l.total_depositado || 0) <= (l.total_apostado || 0));
-        return { id: 'deposito_2x', title: '🔥 2º Depósito', color: 'orange', leads: filtered, totalLeads: filtered.length };
-      })(),
-      (() => {
-        const filtered = formattedLeads.filter(l => { const c = l.total_depositos_count || 0; return c >= 3 && c < 5 && (l.total_depositado || 0) <= (l.total_apostado || 0); });
-        return { id: 'deposito_3x', title: '💎 DEPOSITOU 3X', color: 'indigo', leads: filtered, totalLeads: filtered.length };
-      })(),
-      (() => {
-        const filtered = formattedLeads.filter(l => { const c = l.total_depositos_count || 0; return c >= 5 && c < 10 && (l.total_depositado || 0) <= (l.total_apostado || 0); });
-        return { id: 'deposito_5x', title: '⭐ DEPOSITOU 5X', color: 'amber', leads: filtered, totalLeads: filtered.length };
-      })(),
-      (() => {
-        const filtered = formattedLeads.filter(l => (l.total_depositos_count || 0) >= 10 && (l.total_depositado || 0) <= (l.total_apostado || 0));
-        return { id: 'deposito_10x', title: '👑 DEPOSITOU 10X+', color: 'rose', leads: filtered, totalLeads: filtered.length };
-      })(),
-      (() => {
-        const filtered = formattedLeads.filter(l => l.status === 'ativo');
-        return { id: 'ativo', title: '✅ CLIENTE ATIVO', color: 'purple', leads: filtered, totalLeads: filtered.length };
-      })()
+      { id: 'novo', title: '👥 Clientes cadastrados', color: 'gray', leads: colLeads.novo, totalLeads: colLeads.novo.length },
+      { id: 'contactados', title: '📞 Clientes Contactados', color: 'blue', leads: colLeads.contactados, totalLeads: colLeads.contactados.length },
+      { id: 'deposito_sem_aposta', title: '💰 Com Saldo Disponível', color: 'red', leads: colLeads.deposito_sem_aposta, totalLeads: colLeads.deposito_sem_aposta.length },
+      { id: 'saque_disponivel', title: '💸 Saque Disponível', color: 'teal', leads: colLeads.saque_disponivel, totalLeads: colLeads.saque_disponivel.length },
+      { id: 'deposito_1x', title: '💰 1º Depósito', color: 'emerald', leads: colLeads.deposito_1x, totalLeads: colLeads.deposito_1x.length },
+      { id: 'deposito_2x', title: '🔥 2º Depósito', color: 'orange', leads: colLeads.deposito_2x, totalLeads: colLeads.deposito_2x.length },
+      { id: 'deposito_3x', title: '💎 DEPOSITOU 3X', color: 'indigo', leads: colLeads.deposito_3x, totalLeads: colLeads.deposito_3x.length },
+      { id: 'deposito_5x', title: '⭐ DEPOSITOU 5X', color: 'amber', leads: colLeads.deposito_5x, totalLeads: colLeads.deposito_5x.length },
+      { id: 'deposito_10x', title: '👑 DEPOSITOU 10X+', color: 'rose', leads: colLeads.deposito_10x, totalLeads: colLeads.deposito_10x.length },
+      { id: 'ativo', title: '✅ CLIENTE ATIVO', color: 'purple', leads: colLeads.ativo, totalLeads: colLeads.ativo.length },
+      { id: 'possivel_transferencia', title: '🔄 Possível transferência', color: 'amber', leads: colLeads.possivel_transferencia, totalLeads: colLeads.possivel_transferencia.length },
     ];
 
     // Aplica ordenação e limita leads exibidos (padrão 100); contador mostra exibidos/total (ex: 100/700)
@@ -1168,6 +1305,8 @@ const KanbanContent = () => {
 
   const onDrop = (e: React.DragEvent, newStatus: string) => {
     e.preventDefault();
+    // Coluna "Possível transferência" é apenas vista (90d sem depósito); não altera status do lead
+    if (newStatus === 'possivel_transferencia') return;
     const leadId = e.dataTransfer.getData('leadId');
     setRawLeads(prev =>
       prev.map(l =>
@@ -1182,12 +1321,11 @@ const KanbanContent = () => {
     setLeadsPerColumn({});
     
     if (type === 'clear') {
-      // Ao limpar, mantém o filtro de data padrão (Diário)
-      const today = new Date().toISOString().split('T')[0];
+      // Ao limpar, volta para o padrão da página (Todo o Período)
       setFilters({
         date: {
-          value: 'diario',
-          label: 'Diário'
+          value: 'todos',
+          label: 'Todo o Período'
         }
       });
     } else if (type === 'date' && value === null) {
@@ -1195,8 +1333,8 @@ const KanbanContent = () => {
       setFilters(prev => ({
         ...prev,
         date: {
-          value: 'diario',
-          label: 'Diário'
+          value: 'todos',
+          label: 'Todo o Período'
         }
       }));
     } else {
@@ -1271,13 +1409,13 @@ const KanbanContent = () => {
                 <span>Informações <span className="hidden xs:inline">de Status</span></span>
               </button>
               <button
-                onClick={() => setShowSpinModal(true)}
+                onClick={() => setShowBonusTypeModal(true)}
                 disabled={loading || filterLoading}
                 className="whitespace-nowrap flex items-center gap-2 bg-orange-500 hover:bg-orange-600 border border-orange-600 px-3 py-2 rounded-xl text-[11px] md:text-sm font-bold text-white shadow-sm flex-shrink-0 transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-orange-500 disabled:hover:border-orange-600"
-                title={loading || filterLoading ? 'Aguarde o carregamento dos clientes' : 'Enviar giros (roleta) para leads'}
+                title={loading || filterLoading ? 'Aguarde o carregamento dos clientes' : 'Escolher tipo de bônus para enviar'}
               >
                 <Gift className="w-3.5 h-3.5" />
-                <span>Enviar Giros <span className="hidden xs:inline">(Roleta)</span></span>
+                <span>Enviar Bonus</span>
               </button>
             </div>
           </div>
@@ -1320,9 +1458,16 @@ const KanbanContent = () => {
           {backgroundLoading && (
             <div className="mb-4 py-3 px-4 bg-[#8CD955]/15 dark:bg-[#8CD955]/10 border-2 border-[#8CD955]/50 text-gray-800 dark:text-gray-200 rounded-xl flex items-center gap-3 text-sm font-medium animate-in fade-in shadow-sm">
               <RefreshCw className="w-5 h-5 animate-spin text-[#8CD955] flex-shrink-0" />
-              <div>
-                <p className="font-semibold">Carregando mais leads em segundo plano</p>
-                <p className="text-xs text-gray-600 dark:text-gray-400 font-normal mt-0.5">Você já pode usar o quadro; novos leads aparecerão automaticamente.</p>
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold">Carregando leads em segundo plano</p>
+                {backgroundProgress && backgroundProgress.totalBancas > 0 ? (
+                  <p className="text-xs text-gray-600 dark:text-gray-400 font-normal mt-0.5">
+                    Banca {backgroundProgress.currentBanca} de {backgroundProgress.totalBancas}
+                    {backgroundProgress.currentPage > 1 ? ` · Página ${backgroundProgress.currentPage}` : ''}
+                  </p>
+                ) : (
+                  <p className="text-xs text-gray-600 dark:text-gray-400 font-normal mt-0.5">Você já pode usar o quadro; novos leads aparecerão automaticamente.</p>
+                )}
               </div>
             </div>
           )}
@@ -1350,6 +1495,7 @@ const KanbanContent = () => {
               initialDateFilter={filters.date}
               onBancasLoaded={handleBancasLoaded}
               targetUserId={targetUserId || undefined}
+              transferredFilter="no"
             />
           </div>
         </div>
@@ -1648,6 +1794,90 @@ const KanbanContent = () => {
           </div>
         )}
 
+      {/* Modal Seleção tipo de bônus */}
+      {showBonusTypeModal && (
+        <div
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => setShowBonusTypeModal(false)}
+        >
+          <div
+            className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-2xl max-w-sm w-full border border-gray-200 dark:border-[#404040]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 py-4 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between rounded-t-2xl">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
+                  <Gift className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                </div>
+                <h2 className="text-lg font-bold text-gray-800 dark:text-white">Enviar Bonus</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowBonusTypeModal(false)}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-[#404040] rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+            <p className="px-6 pt-3 text-xs text-gray-500 dark:text-gray-400">Selecione o tipo de bônus que deseja enviar:</p>
+            <div className="p-4 space-y-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowBonusTypeModal(false);
+                  setShowSpinModal(true);
+                }}
+                className="w-full flex items-center gap-3 p-4 rounded-xl border-2 border-gray-200 dark:border-[#404040] hover:border-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/10 transition-colors text-left"
+              >
+                <div className="p-2 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
+                  <Gift className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                </div>
+                <span className="font-semibold text-gray-800 dark:text-white">Giros</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowBonusTypeModal(false);
+                  setShowTicketModal(true);
+                }}
+                className="w-full flex items-center gap-3 p-4 rounded-xl border-2 border-gray-200 dark:border-[#404040] hover:border-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/10 transition-colors text-left"
+              >
+                <div className="p-2 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
+                  <Ticket className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                </div>
+                <span className="font-semibold text-gray-800 dark:text-white">Rifa</span>
+              </button>
+              <button
+                type="button"
+                disabled
+                className="w-full flex items-center gap-3 p-4 rounded-xl border-2 border-gray-100 dark:border-[#353535] bg-gray-50 dark:bg-[#252525] cursor-not-allowed opacity-75 text-left"
+              >
+                <div className="p-2 bg-gray-100 dark:bg-[#404040] rounded-lg">
+                  <Sparkles className="w-5 h-5 text-gray-400" />
+                </div>
+                <div className="flex-1">
+                  <span className="font-semibold text-gray-600 dark:text-gray-400">Raspadinha</span>
+                  <span className="ml-2 text-xs text-gray-500 dark:text-gray-500">(Em breve)</span>
+                </div>
+              </button>
+              <button
+                type="button"
+                disabled
+                className="w-full flex items-center gap-3 p-4 rounded-xl border-2 border-gray-100 dark:border-[#353535] bg-gray-50 dark:bg-[#252525] cursor-not-allowed opacity-75 text-left"
+              >
+                <div className="p-2 bg-gray-100 dark:bg-[#404040] rounded-lg">
+                  <Package className="w-5 h-5 text-gray-400" />
+                </div>
+                <div className="flex-1">
+                  <span className="font-semibold text-gray-600 dark:text-gray-400">Caixa Surpresa</span>
+                  <span className="ml-2 text-xs text-gray-500 dark:text-gray-500">(Em breve)</span>
+                </div>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Modal Enviar Giros (Roleta) */}
       {showSpinModal && (
         <div
@@ -1684,9 +1914,10 @@ const KanbanContent = () => {
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                   <input
                     type="text"
-                    value={spinSearchTerm}
-                    onChange={(e) => setSpinSearchTerm(e.target.value)}
-                    placeholder="Nome ou e-mail..."
+                    value={spinSearchInputValue}
+                    onChange={(e) => setSpinSearchInputValue(e.target.value)}
+                    onBlur={() => setSpinSearchTerm(spinSearchInputValue)}
+                    placeholder="Nome ou e-mail... (clique fora para filtrar)"
                     className="w-full pl-9 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-amber-400/40"
                   />
                 </div>
@@ -1820,6 +2051,156 @@ const KanbanContent = () => {
               >
                 {spinSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Gift className="w-4 h-4" />}
                 {spinSending ? 'Enviando...' : `Enviar giros${spinSelectedLeadIds.size > 0 ? ` (${spinSelectedLeadIds.size})` : ''}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Enviar Rifas (bilhetes) */}
+      {showTicketModal && (
+        <div
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => !ticketSending && setShowTicketModal(false)}
+        >
+          <div
+            className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-2xl max-w-md w-full max-h-[90vh] overflow-y-auto border border-gray-200 dark:border-[#404040]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="sticky top-0 bg-white dark:bg-[#2a2a2a] border-b border-gray-200 dark:border-[#404040] px-6 py-4 flex items-center justify-between rounded-t-2xl">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
+                  <Ticket className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-gray-800 dark:text-white">Enviar Rifas</h2>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Selecione o lead e a quantidade de bilhetes</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => !ticketSending && setShowTicketModal(false)}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-[#404040] rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">Pesquisar lead</label>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <input
+                    type="text"
+                    value={ticketSearchTerm}
+                    onChange={(e) => setTicketSearchTerm(e.target.value)}
+                    placeholder="Nome ou e-mail..."
+                    className="w-full pl-9 pr-4 py-3 bg-gray-50 dark:bg-[#353535] border border-gray-200 dark:border-[#404040] rounded-xl text-sm text-gray-800 dark:text-white placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-amber-400/40"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider">Leads</label>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setTicketSelectedLeadIds(new Set(ticketFilteredLeads.map(l => String(l.id))))}
+                      className="text-[10px] font-bold text-amber-600 hover:text-amber-700"
+                    >
+                      Selecionar todos
+                    </button>
+                    <span className="text-gray-300">|</span>
+                    <button
+                      type="button"
+                      onClick={() => setTicketSelectedLeadIds(new Set())}
+                      className="text-[10px] font-bold text-gray-500 hover:text-gray-700"
+                    >
+                      Desmarcar
+                    </button>
+                  </div>
+                </div>
+                <div className="bg-gray-50 dark:bg-[#353535] border border-gray-200 dark:border-[#404040] rounded-xl max-h-44 overflow-y-auto">
+                  {ticketFilteredLeads.length === 0 ? (
+                    <p className="p-4 text-sm text-gray-500 text-center">Nenhum lead encontrado.</p>
+                  ) : (
+                    <ul className="divide-y divide-gray-100 dark:divide-[#404040] py-1">
+                      {ticketFilteredLeads.map((lead) => {
+                        const idStr = String(lead.id);
+                        const checked = ticketSelectedLeadIds.has(idStr);
+                        return (
+                          <li key={idStr}>
+                            <label className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-100 dark:hover:bg-[#404040] cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => {
+                                  setTicketSelectedLeadIds(prev => {
+                                    const next = new Set(prev);
+                                    if (next.has(idStr)) next.delete(idStr);
+                                    else next.add(idStr);
+                                    return next;
+                                  });
+                                }}
+                                className="w-4 h-4 rounded border-gray-300 text-amber-500 focus:ring-amber-400"
+                              />
+                              <span className="text-sm text-gray-800 dark:text-white truncate flex-1">
+                                {lead.name || 'Sem nome'}
+                                {lead.email ? (
+                                  <span className="text-gray-500 font-normal"> — {lead.email}</span>
+                                ) : null}
+                              </span>
+                            </label>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
+                {ticketSelectedLeadIds.size > 0 && (
+                  <p className="mt-1.5 text-xs text-gray-500">
+                    {ticketSelectedLeadIds.size} lead(s) selecionado(s)
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">Quantidade de bilhetes (por lead)</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={ticketQuantity}
+                  onChange={(e) => setTicketQuantity(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  className="w-full bg-gray-50 dark:bg-[#353535] border border-gray-200 dark:border-[#404040] rounded-xl px-4 py-3 text-sm text-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-400/40"
+                />
+              </div>
+
+              {ticketError && (
+                <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-800 text-red-600 dark:text-red-400 rounded-xl text-sm flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                  {ticketError}
+                </div>
+              )}
+            </div>
+
+            <div className="sticky bottom-0 bg-gray-50 dark:bg-[#252525] border-t border-gray-200 dark:border-[#404040] px-6 py-4 rounded-b-2xl flex gap-2">
+              <button
+                type="button"
+                onClick={() => !ticketSending && setShowTicketModal(false)}
+                className="flex-1 py-3 bg-gray-200 dark:bg-[#404040] hover:bg-gray-300 dark:hover:bg-[#505050] text-gray-800 dark:text-white font-bold rounded-xl transition-colors"
+              >
+                Fechar
+              </button>
+              <button
+                type="button"
+                onClick={handleSendTickets}
+                disabled={ticketSending || ticketSelectedLeadIds.size === 0 || ticketQuantity < 1}
+                className="flex-1 py-3 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white font-bold rounded-xl transition-colors flex items-center justify-center gap-2"
+              >
+                {ticketSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Ticket className="w-4 h-4" />}
+                {ticketSending ? 'Enviando...' : `Enviar bilhetes${ticketSelectedLeadIds.size > 0 ? ` (${ticketSelectedLeadIds.size})` : ''}`}
               </button>
             </div>
           </div>

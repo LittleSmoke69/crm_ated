@@ -1,16 +1,16 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { 
-  Briefcase, 
-  Users, 
-  TrendingUp, 
-  Eye, 
-  UserPlus, 
-  Target, 
-  Rocket, 
+import {
+  Briefcase,
+  Users,
+  TrendingUp,
+  Eye,
+  UserPlus,
+  Target,
+  Rocket,
   CheckCircle2,
   X,
   Plus,
@@ -30,11 +30,18 @@ import {
   Trophy,
   TrendingDown,
   Info,
-  Clock
+  Clock,
+  Tag,
+  History,
+  ChevronRight,
+  ClipboardList
 } from 'lucide-react';
 import Link from 'next/link';
 import StatusDistributionChart from '@/components/Charts/StatusDistributionChart';
 import FinancialMetricsBarChart from '@/components/Charts/FinancialMetricsBarChart';
+import TagsSummaryChart from '@/components/Charts/TagsSummaryChart';
+import { useToast } from '@/hooks/useToast';
+import ToastContainer from '@/components/Toast/ToastContainer';
 
 interface ConsultorMetric {
   id: string;
@@ -46,6 +53,7 @@ interface ConsultorMetric {
   successRate: string;
   lastSeenAt?: string | null;
   totalOnlineTime?: number;
+  totalCrmTime?: number;
   externalKpis?: {
     total_leads: number;
     total_deposited: number;
@@ -58,6 +66,8 @@ interface ConsultorMetric {
     net_profit: number;
   } | null;
   externalKpisError?: string | null;
+  /** Bancas em que o consultor tem dados (preenchido quando filtro "Todas as bancas" está ativo). */
+  banca_names?: string[];
 }
 
 interface GerenteDashboardData {
@@ -89,21 +99,80 @@ interface GerenteDashboardData {
   };
 }
 
+interface TagUsageItem {
+  consultorId: string;
+  consultorName: string;
+  tags: Array<{
+    id: string;
+    label: string;
+    color: string;
+    count: number;
+  }>;
+}
+
+interface TagsReportData {
+  tagUsage: TagUsageItem[];
+  recentTaggedClients: Array<{
+    leadId: string;
+    leadName: string;
+    leadPhone: string | null;
+    consultorName: string;
+    tagName: string;
+    tagColor: string;
+    createdAt: string;
+  }>;
+  hasMore?: boolean;
+  loadingInBackground?: boolean;
+  loadedCount?: number;
+}
+
+/** Mescla tagUsage de um novo lote no estado atual (soma contagens por consultor e etiqueta). */
+function mergeTagUsage(current: TagUsageItem[], batch: TagUsageItem[]): TagUsageItem[] {
+  const byConsultor = new Map<string, { name: string; byTag: Map<string, { label: string; color: string; count: number }> }>();
+  current.forEach((item) => {
+    const byTag = new Map<string, { label: string; color: string; count: number }>();
+    item.tags.forEach((t) => byTag.set(t.id, { label: t.label, color: t.color, count: t.count }));
+    byConsultor.set(item.consultorId, { name: item.consultorName, byTag });
+  });
+  batch.forEach((item) => {
+    let entry = byConsultor.get(item.consultorId);
+    if (!entry) {
+      entry = { name: item.consultorName, byTag: new Map() };
+      byConsultor.set(item.consultorId, entry);
+    }
+    item.tags.forEach((t) => {
+      const existing = entry!.byTag.get(t.id);
+      if (existing) existing.count += t.count;
+      else entry!.byTag.set(t.id, { label: t.label, color: t.color, count: t.count });
+    });
+  });
+  return Array.from(byConsultor.entries()).map(([consultorId, { name, byTag }]) => ({
+    consultorId,
+    consultorName: name,
+    tags: Array.from(byTag.entries())
+      .map(([id, t]) => ({ id, label: t.label, color: t.color, count: t.count }))
+      .sort((a, b) => b.count - a.count)
+  }));
+}
+
 export default function GerentePage() {
   const { checking, userId } = useRequireAuth();
   const [initialLoading, setInitialLoading] = useState(false);
   const [dataLoading, setDataLoading] = useState(false);
   const [data, setData] = useState<GerenteDashboardData | null>(null);
+  const [tagsReportData, setTagsReportData] = useState<TagsReportData | null>(null);
+  const [tagsLoading, setTagsLoading] = useState(false);
+  const [tagsLoadingInBackground, setTagsLoadingInBackground] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  
-  // Filtro de data
-  const [dateFilter, setDateFilter] = useState<'daily' | 'yesterday' | '7days' | '15days' | '30days' | 'custom' | 'all'>('daily');
+
+  // Filtro de data (inicial: todo o período)
+  const [dateFilter, setDateFilter] = useState<'daily' | 'yesterday' | '7days' | '15days' | '30days' | 'custom' | 'all'>('all');
   const [customStartDate, setCustomStartDate] = useState<string>('');
   const [customEndDate, setCustomEndDate] = useState<string>('');
   const [appliedStartDate, setAppliedStartDate] = useState<string>('');
   const [appliedEndDate, setAppliedEndDate] = useState<string>('');
   const [showDatePicker, setShowDatePicker] = useState(false);
-  
+
   // Form state
   const [formData, setFormData] = useState({
     email: '',
@@ -113,7 +182,7 @@ export default function GerentePage() {
   const [formError, setFormError] = useState('');
   const [formSuccess, setFormSuccess] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  
+
   // Modal de confirmação de delete
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [consultorToDelete, setConsultorToDelete] = useState<ConsultorMetric | null>(null);
@@ -129,12 +198,84 @@ export default function GerentePage() {
 
   // Modal Resumo do consultor (nome, email, leads, depositado, lucro + ações)
   const [resumoModalConsultor, setResumoModalConsultor] = useState<ConsultorMetric | null>(null);
-  
+
+  // Zaplink notifications (apenas atribuições a este gerente, com dados completos)
+  type ZaplinkNotif = {
+    id: string;
+    submission?: {
+      full_name: string;
+      email?: string;
+      phone?: string;
+      instagram_handle?: string | null;
+      form_name?: string | null;
+      banca_name?: string | null;
+    } | null;
+  };
+  const [zaplinkNotifications, setZaplinkNotifications] = useState<ZaplinkNotif[]>([]);
+  const [zaplinkModalOpen, setZaplinkModalOpen] = useState(false);
+  const [zaplinkBulkSending, setZaplinkBulkSending] = useState(false);
+  const [zaplinkBulkSendConfigOpen, setZaplinkBulkSendConfigOpen] = useState(false);
+  const [zaplinkBulkSendMessage, setZaplinkBulkSendMessage] = useState(
+    'Olá, {{nome}}! Seu cadastro foi realizado com sucesso. Em breve nosso consultor entrará em contato.'
+  );
+  const [zaplinkBulkSendDelayMinutes, setZaplinkBulkSendDelayMinutes] = useState(0);
+  const [zaplinkBulkSendDelaySeconds, setZaplinkBulkSendDelaySeconds] = useState(30);
+  type BulkSendLogItem = { id: string; sent_count: number; message_preview: string; delay_seconds: number; created_at: string; status?: string; error_message?: string | null };
+  const [zaplinkBulkSendLog, setZaplinkBulkSendLog] = useState<BulkSendLogItem[]>([]);
+  const [zaplinkBulkSendLogLoading, setZaplinkBulkSendLogLoading] = useState(false);
+
+  // Modal Solicitação de leads: bancas = filtro das já carregadas (página) pelas bancas em que o consultor faz parte (API)
+  const [solicitationModalOpen, setSolicitationModalOpen] = useState(false);
+  const [solicitationConsultorId, setSolicitationConsultorId] = useState<string>('');
+  const [solicitationBancaId, setSolicitationBancaId] = useState<string>('');
+  const [solicitationBancasForConsultant, setSolicitationBancasForConsultant] = useState<Array<{ id: string; name: string; url: string }>>([]);
+  const [solicitationBancasLoading, setSolicitationBancasLoading] = useState(false);
+  const [solicitationQuantity, setSolicitationQuantity] = useState<number>(10);
+  const [solicitationDeadlineDays, setSolicitationDeadlineDays] = useState<number>(10);
+  const [solicitationObservations, setSolicitationObservations] = useState<string>('');
+  const [solicitationSubmitting, setSolicitationSubmitting] = useState(false);
+  const [solicitationError, setSolicitationError] = useState('');
+  const [solicitationSuccess, setSolicitationSuccess] = useState('');
+  // Modal de escolha: Pedir lead ou Consultor
+  const [solicitationChoiceOpen, setSolicitationChoiceOpen] = useState(false);
+  // Modal Consultor: seleção de banca + quantidade
+  const [consultorBancaModalOpen, setConsultorBancaModalOpen] = useState(false);
+  const [consultorBancaId, setConsultorBancaId] = useState<string>('');
+  const [consultorQuantity, setConsultorQuantity] = useState<number>(1);
+  const [consultorRequestSubmitting, setConsultorRequestSubmitting] = useState(false);
+  const [consultorRequestError, setConsultorRequestError] = useState('');
+  const [consultorRequestSuccess, setConsultorRequestSuccess] = useState('');
+
+  // Histórico de solicitações de leads (abaixo da tabela Sua equipe)
+  type LeadRequestStatus = 'pending' | 'approved' | 'rejected' | 'partial';
+  type LeadRequestItem = {
+    id: string;
+    lead_type: string;
+    lead_type_label: string;
+    consultores: { consultor_id: string; quantity: number; consultor_name?: string }[];
+    status: LeadRequestStatus;
+    banca_id?: string | null;
+    banca_name?: string;
+    created_at: string;
+    approved_at?: string | null;
+    deadline_days?: number | null;
+    /** Observação enviada pelo gerente na solicitação (opcional) */
+    observations?: string | null;
+    /** Observação do admin ao rejeitar (opcional) */
+    rejection_observation?: string | null;
+  };
+  const [leadRequestsHistory, setLeadRequestsHistory] = useState<LeadRequestItem[]>([]);
+  const [leadRequestsHistoryLoading, setLeadRequestsHistoryLoading] = useState(false);
+  /** Filtros do Histórico de solicitações: consultor (id ou 'all') e status ('all' | pending | approved | partial | rejected) */
+  const [leadRequestHistoryConsultorFilter, setLeadRequestHistoryConsultorFilter] = useState<string>('all');
+  const [leadRequestHistoryStatusFilter, setLeadRequestHistoryStatusFilter] = useState<string>('all');
+
   // Filtros de banca e consultor
+  const BANCA_ALL = '__all__'; // valor especial para "Todas as bancas" (apenas gerente)
   const [bancas, setBancas] = useState<Array<{ id: string; name: string; url: string }>>([]);
   const [bancasLoading, setBancasLoading] = useState(true);
   const [allConsultores, setAllConsultores] = useState<ConsultorMetric[]>([]);
-  const [selectedBanca, setSelectedBanca] = useState<string>('');
+  const [selectedBanca, setSelectedBanca] = useState<string>(BANCA_ALL);
   const [selectedConsultor, setSelectedConsultor] = useState<string>('all');
   const [showBancaFilter, setShowBancaFilter] = useState(false);
   const [showConsultorFilter, setShowConsultorFilter] = useState(false);
@@ -148,17 +289,94 @@ export default function GerentePage() {
   const [showGerenteFilter, setShowGerenteFilter] = useState(false);
   const [gerenteSearchTerm, setGerenteSearchTerm] = useState('');
   const [consultorSearchTerm, setConsultorSearchTerm] = useState('');
+  const { toasts, showToast, removeToast } = useToast();
+  const [backgroundBancasLoading, setBackgroundBancasLoading] = useState(false);
+  const [backgroundBancasProgress, setBackgroundBancasProgress] = useState({ current: 0, total: 0 });
+  /** Progresso da busca de consultores em lotes de 5: exibe "Buscando consultores X-Y de N" (e banca quando "Todas as bancas"). */
+  const [loadingConsultoresProgress, setLoadingConsultoresProgress] = useState<{
+    from: number;
+    to: number;
+    total: number;
+    bancaCurrent?: number;
+    bancaTotal?: number;
+    bancaName?: string;
+  } | null>(null);
 
-  // Filtros locais da tabela
+  // Filtros e paginação da tabela "Sua equipe"
   const [tableSearchTerm, setTableSearchTerm] = useState('');
-  const [sortBy, setSortBy] = useState<'name' | 'leads' | 'deposited' | 'profit'>('name');
+  type TeamTableSortField = 'name' | 'lastSeenAt' | 'totalOnlineTime' | 'totalCrmTime' | 'leads' | 'deposited' | 'profit';
+  const [sortBy, setSortBy] = useState<TeamTableSortField>('name');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [teamTablePageSize, setTeamTablePageSize] = useState(10);
+  const [teamTablePage, setTeamTablePage] = useState(1);
+
+  /** Agrega gerenteTotalKpis e chartData a partir da lista completa de consultorMetrics (usado ao finalizar busca em lotes). */
+  const aggregateKpisAndChartFromMetrics = useCallback((consultorMetrics: ConsultorMetric[]) => {
+    let totalLeadsForLtv = 0;
+    let sumLtvWeighted = 0;
+    const gerenteTotalKpis = consultorMetrics.reduce(
+      (acc, consultor) => {
+        if (consultor.externalKpis && !consultor.externalKpisError) {
+          const k = consultor.externalKpis;
+          acc.total_leads += k.total_leads || 0;
+          acc.total_deposited += k.total_deposited || 0;
+          acc.total_bets += k.total_bets || 0;
+          acc.total_prizes += k.total_prizes || 0;
+          acc.awarded_clients_count += k.awarded_clients_count || 0;
+          acc.active_leads += k.active_leads || 0;
+          acc.net_profit += k.net_profit || 0;
+          if (k.ltv_avg && k.total_leads > 0) {
+            sumLtvWeighted += k.ltv_avg * k.total_leads;
+            totalLeadsForLtv += k.total_leads;
+          }
+        }
+        return acc;
+      },
+      {
+        total_leads: 0,
+        total_deposited: 0,
+        total_bets: 0,
+        total_prizes: 0,
+        awarded_clients_count: 0,
+        active_leads: 0,
+        net_profit: 0,
+        ltv_avg: 0,
+        conversion_rate: 0,
+      } as {
+        total_leads: number;
+        total_deposited: number;
+        total_bets: number;
+        total_prizes: number;
+        awarded_clients_count: number;
+        active_leads: number;
+        net_profit: number;
+        ltv_avg: number;
+        conversion_rate: number;
+      }
+    );
+    gerenteTotalKpis.ltv_avg = totalLeadsForLtv > 0 ? sumLtvWeighted / totalLeadsForLtv : 0;
+    gerenteTotalKpis.conversion_rate =
+      gerenteTotalKpis.total_leads > 0 ? (gerenteTotalKpis.active_leads / gerenteTotalKpis.total_leads) * 100 : 0;
+    const chartData = {
+      status_distribution: {
+        Ativo: gerenteTotalKpis.active_leads,
+        Novo: Math.max(0, gerenteTotalKpis.total_leads - gerenteTotalKpis.active_leads),
+      },
+      financial_metrics: {
+        total_deposited: gerenteTotalKpis.total_deposited,
+        total_bets: gerenteTotalKpis.total_bets,
+        total_prizes: gerenteTotalKpis.total_prizes,
+        net_profit: gerenteTotalKpis.net_profit,
+      },
+    };
+    return { gerenteTotalKpis, chartData };
+  }, []);
 
   // Calcula as datas baseado no filtro selecionado
   const getDateRange = () => {
     let dateFrom: string | null = null;
     let dateTo: string | null = null;
-    
+
     switch (dateFilter) {
       case 'daily':
         // Usa a data de hoje
@@ -212,9 +430,55 @@ export default function GerentePage() {
         dateTo = null;
         break;
     }
-    
+
     return { dateFrom, dateTo };
   };
+
+  // Zaplink: buscar notificações o mais cedo possível (antes de bancas/dados) para modal aparecer de imediato
+  const fetchZaplinkNotifications = useCallback(() => {
+    if (!userId) return;
+    fetch('/api/gerente/zaplink-notifications', { headers: { 'X-User-Id': userId } })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.success && Array.isArray(res.data) && res.data.length > 0) {
+          const list = res.data.filter((n: ZaplinkNotif) => n.submission);
+          if (list.length > 0) {
+            setZaplinkNotifications(list);
+            setZaplinkBulkSendConfigOpen(false);
+            setZaplinkModalOpen(true);
+          }
+        }
+      })
+      .catch(() => {});
+  }, [userId]);
+
+  const fetchZaplinkBulkSendLog = useCallback(() => {
+    if (!userId) return;
+    setZaplinkBulkSendLogLoading(true);
+    fetch('/api/gerente/zaplink-notifications/bulk-send-log?limit=10', { headers: { 'X-User-Id': userId } })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.success && Array.isArray(res.data)) setZaplinkBulkSendLog(res.data);
+      })
+      .catch(() => {})
+      .finally(() => setZaplinkBulkSendLogLoading(false));
+  }, [userId]);
+
+  // Dispara fetch Zaplink logo que tiver userId (primeiro efeito que roda, para modal aparecer de imediato)
+  useEffect(() => {
+    if (!userId) return;
+    fetchZaplinkNotifications();
+  }, [userId, fetchZaplinkNotifications]);
+
+  useEffect(() => {
+    if (zaplinkModalOpen && userId) fetchZaplinkBulkSendLog();
+  }, [zaplinkModalOpen, userId, fetchZaplinkBulkSendLog]);
+
+  useEffect(() => {
+    if (!userId) return;
+    const interval = setInterval(fetchZaplinkNotifications, 20000);
+    return () => clearInterval(interval);
+  }, [userId, fetchZaplinkNotifications]);
 
   // Carrega perfil para saber se é super_admin/admin (filtro de gerente)
   useEffect(() => {
@@ -224,7 +488,7 @@ export default function GerentePage() {
       .then((res) => {
         if (res.success && res.data?.status) setUserStatus(res.data.status);
       })
-      .catch(() => {});
+      .catch(() => { });
   }, [userId]);
 
   // Ao entrar em /gerente, carrega a lista de bancas
@@ -240,10 +504,10 @@ export default function GerentePage() {
     }
   }, [bancas, selectedBanca]);
 
-  // super_admin/admin: carrega gerentes da banca selecionada
+  // super_admin/admin: carrega gerentes da banca selecionada (ignora quando "Todas as bancas")
   const isAdminOrSuperAdmin = userStatus === 'super_admin' || userStatus === 'admin';
   useEffect(() => {
-    if (!userId || !isAdminOrSuperAdmin || !selectedBanca) {
+    if (!userId || !isAdminOrSuperAdmin || !selectedBanca || selectedBanca === BANCA_ALL) {
       setGerentes([]);
       setSelectedGerente('');
       return;
@@ -270,13 +534,17 @@ export default function GerentePage() {
   //   }
   // }, [userId]);
 
-  // Carrega dados quando filtros mudam (banca, data, consultor, gerente para admin)
+  // Busca só na carga inicial; depois o usuário usa o botão FILTRAR para aplicar banca e período
+  const initialLoadDone = useRef(false);
   useEffect(() => {
     if (!userId || initialLoading) return;
     if (!selectedBanca) return;
-    if (isAdminOrSuperAdmin && gerentes.length > 0 && !selectedGerente) return; // admin aguarda seleção de gerente
+    if (selectedBanca === BANCA_ALL && bancas.length === 0) return;
+    if (isAdminOrSuperAdmin && selectedBanca !== BANCA_ALL && gerentes.length > 0 && !selectedGerente) return;
+    if (initialLoadDone.current) return;
+    initialLoadDone.current = true;
     loadData(false);
-  }, [dateFilter, appliedStartDate, appliedEndDate, selectedBanca, selectedConsultor, selectedGerente, isAdminOrSuperAdmin, gerentes.length]);
+  }, [userId, selectedBanca, bancas.length, isAdminOrSuperAdmin, gerentes.length, selectedGerente]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -296,6 +564,66 @@ export default function GerentePage() {
     }
   }, [showDatePicker, showBancaFilter, showConsultorFilter, showGerenteFilter]);
 
+  // Ajusta página da tabela "Sua equipe" quando o total de itens filtrados diminui (evita página em branco)
+  const consultorMetricsForCount = data?.consultorMetrics ?? [];
+  const teamFilteredCount = consultorMetricsForCount.filter(
+    (c: ConsultorMetric) => c.externalKpis != null && !c.externalKpisError
+  ).filter(
+    (c: ConsultorMetric) =>
+      !tableSearchTerm.trim() ||
+      (c.name || '').toLowerCase().includes(tableSearchTerm.toLowerCase().trim()) ||
+      (c.email || '').toLowerCase().includes(tableSearchTerm.toLowerCase().trim())
+  ).length;
+  useEffect(() => {
+    const tp = Math.max(1, Math.ceil(teamFilteredCount / teamTablePageSize));
+    if (teamTablePage > tp) setTeamTablePage(tp);
+  }, [teamFilteredCount, teamTablePageSize, teamTablePage]);
+
+  const loadLeadRequests = useCallback(async () => {
+    if (!userId) return;
+    setLeadRequestsHistoryLoading(true);
+    try {
+      const res = await fetch('/api/gerente/lead-requests', { headers: { 'X-User-Id': userId } });
+      const json = await res.json();
+      if (json?.success && Array.isArray(json.data)) {
+        setLeadRequestsHistory(json.data as LeadRequestItem[]);
+      } else {
+        setLeadRequestsHistory([]);
+      }
+    } catch {
+      setLeadRequestsHistory([]);
+    } finally {
+      setLeadRequestsHistoryLoading(false);
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    if (userId) loadLeadRequests();
+  }, [userId, loadLeadRequests]);
+
+  /** Consultores únicos do histórico (para filtro): id + nome */
+  const leadRequestHistoryConsultores = React.useMemo(() => {
+    const map = new Map<string, string>();
+    leadRequestsHistory.forEach((req) => {
+      (req.consultores ?? []).forEach((c) => {
+        const id = c.consultor_id;
+        const name = (c.consultor_name || id).trim();
+        if (id && !map.has(id)) map.set(id, name || id);
+      });
+    });
+    return Array.from(map.entries()).map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+  }, [leadRequestsHistory]);
+
+  /** Histórico de solicitações filtrado por consultor e status */
+  const leadRequestsHistoryFiltered = React.useMemo(() => {
+    return leadRequestsHistory.filter((req) => {
+      if (leadRequestHistoryStatusFilter !== 'all' && req.status !== leadRequestHistoryStatusFilter) return false;
+      if (leadRequestHistoryConsultorFilter === 'all') return true;
+      const hasConsultor = (req.consultores ?? []).some((c) => c.consultor_id === leadRequestHistoryConsultorFilter);
+      return hasConsultor;
+    });
+  }, [leadRequestsHistory, leadRequestHistoryStatusFilter, leadRequestHistoryConsultorFilter]);
+
   const loadBancas = async () => {
     setBancasLoading(true);
     try {
@@ -303,7 +631,7 @@ export default function GerentePage() {
         headers: { 'X-User-Id': userId as string }
       });
       const result = await response.json();
-      
+
       if (result.success) {
         setBancas(result.data || []);
       }
@@ -314,6 +642,89 @@ export default function GerentePage() {
     }
   };
 
+  /** Mescla resposta de uma banca no estado atual do dashboard (soma KPIs, concatena banca_names). */
+  const mergeDashboardData = useCallback(
+    (current: GerenteDashboardData | null, incoming: GerenteDashboardData): GerenteDashboardData => {
+      if (!current) return incoming;
+      const byId = new Map(current.consultorMetrics.map((c) => [c.id, { ...c }]));
+      for (const m of incoming.consultorMetrics) {
+        const existing = byId.get(m.id);
+        if (!existing) {
+          byId.set(m.id, { ...m });
+          continue;
+        }
+        const exK = existing.externalKpis;
+        const inK = m.externalKpis;
+        if (!inK) continue;
+        if (!exK) {
+          existing.externalKpis = inK;
+          existing.banca_names = [...(m.banca_names || [])];
+          continue;
+        }
+        const totalLeads = (exK.total_leads || 0) + (inK.total_leads || 0);
+        const totalLeadsLtv = (exK.total_leads || 0) * (exK.ltv_avg || 0) + (inK.total_leads || 0) * (inK.ltv_avg || 0);
+        existing.externalKpis = {
+          total_leads: totalLeads,
+          total_deposited: (exK.total_deposited || 0) + (inK.total_deposited || 0),
+          total_bets: (exK.total_bets || 0) + (inK.total_bets || 0),
+          total_prizes: (exK.total_prizes || 0) + (inK.total_prizes || 0),
+          awarded_clients_count: (exK.awarded_clients_count || 0) + (inK.awarded_clients_count || 0),
+          active_leads: (exK.active_leads || 0) + (inK.active_leads || 0),
+          net_profit: (exK.net_profit || 0) + (inK.net_profit || 0),
+          conversion_rate: totalLeads > 0 ? ((exK.active_leads || 0) + (inK.active_leads || 0)) / totalLeads * 100 : 0,
+          ltv_avg: totalLeads > 0 ? totalLeadsLtv / totalLeads : 0,
+        };
+        const names = new Set([...(existing.banca_names || []), ...(m.banca_names || [])]);
+        existing.banca_names = Array.from(names);
+      }
+      const mergedMetrics = Array.from(byId.values());
+      const curKpis = current.gerenteTotalKpis;
+      const incKpis = incoming.gerenteTotalKpis;
+      let mergedKpis = current.gerenteTotalKpis;
+      if (curKpis && incKpis) {
+        const tLeads = (curKpis.total_leads || 0) + (incKpis.total_leads || 0);
+        const tLeadsLtv = (curKpis.total_leads || 0) * (curKpis.ltv_avg || 0) + (incKpis.total_leads || 0) * (incKpis.ltv_avg || 0);
+        mergedKpis = {
+          total_leads: tLeads,
+          total_deposited: (curKpis.total_deposited || 0) + (incKpis.total_deposited || 0),
+          total_bets: (curKpis.total_bets || 0) + (incKpis.total_bets || 0),
+          total_prizes: (curKpis.total_prizes || 0) + (incKpis.total_prizes || 0),
+          awarded_clients_count: (curKpis.awarded_clients_count || 0) + (incKpis.awarded_clients_count || 0),
+          active_leads: (curKpis.active_leads || 0) + (incKpis.active_leads || 0),
+          net_profit: (curKpis.net_profit || 0) + (incKpis.net_profit || 0),
+          conversion_rate: tLeads > 0 ? ((curKpis.active_leads || 0) + (incKpis.active_leads || 0)) / tLeads * 100 : 0,
+          ltv_avg: tLeads > 0 ? tLeadsLtv / tLeads : 0,
+        };
+      } else if (incKpis) mergedKpis = incKpis;
+      const curChart = current.chartData || {};
+      const incChart = incoming.chartData || {};
+      const status = { ...curChart.status_distribution };
+      for (const k of Object.keys(incChart.status_distribution || {})) {
+        status[k] = (status[k] || 0) + (incChart.status_distribution?.[k] || 0);
+      }
+      const defaultFin = { total_deposited: 0, total_bets: 0, total_prizes: 0, net_profit: 0 };
+      const financial = curChart.financial_metrics || defaultFin;
+      const incFin = incChart.financial_metrics || defaultFin;
+      const chartData = {
+        ...curChart,
+        status_distribution: status,
+        financial_metrics: {
+          total_deposited: (financial.total_deposited || 0) + (incFin.total_deposited || 0),
+          total_bets: (financial.total_bets || 0) + (incFin.total_bets || 0),
+          total_prizes: (financial.total_prizes || 0) + (incFin.total_prizes || 0),
+          net_profit: (financial.net_profit || 0) + (incFin.net_profit || 0),
+        },
+      };
+      return {
+        gerenteInfo: current.gerenteInfo,
+        consultorMetrics: mergedMetrics,
+        gerenteTotalKpis: mergedKpis || undefined,
+        chartData,
+      };
+    },
+    []
+  );
+
   const loadData = async (isInitial = false) => {
     try {
       if (isInitial) {
@@ -321,37 +732,167 @@ export default function GerentePage() {
       } else {
         setDataLoading(true);
       }
-      
+
       const { dateFrom, dateTo } = getDateRange();
-      
-      let url = '/api/gerente/dashboard';
-      const params = new URLSearchParams();
-      if (dateFrom) params.append('date_from', dateFrom);
-      if (dateTo) params.append('date_to', dateTo);
-      if (selectedBanca) {
-        params.append('banca_url', selectedBanca);
+
+      // "Todas as bancas": busca em lotes de 5 consultores por banca, acumulando na tela a cada lote
+      if (selectedBanca === BANCA_ALL && bancas.length > 0) {
+        setBackgroundBancasLoading(false);
+        const BATCH_SIZE_ALL = 5;
+        const baseParams = new URLSearchParams();
+        if (dateFrom) baseParams.append('date_from', dateFrom);
+        if (dateTo) baseParams.append('date_to', dateTo);
+        if (selectedConsultor && selectedConsultor !== 'all') baseParams.append('consultor_id', selectedConsultor);
+        if (isAdminOrSuperAdmin && selectedGerente) baseParams.append('gerente_id', selectedGerente);
+        baseParams.append('limit', String(BATCH_SIZE_ALL));
+
+        let merged: GerenteDashboardData | null = null;
+
+        for (let bancaIndex = 0; bancaIndex < bancas.length; bancaIndex++) {
+          const banca = bancas[bancaIndex];
+          const bancaName = banca.name || banca.url || `Banca ${bancaIndex + 1}`;
+          let offset = 0;
+
+          for (;;) {
+            const params = new URLSearchParams(baseParams);
+            params.append('banca_url', banca.url);
+            params.set('offset', String(offset));
+            const url = `/api/gerente/dashboard?${params.toString()}`;
+
+            setLoadingConsultoresProgress({
+              from: offset + 1,
+              to: offset + BATCH_SIZE_ALL,
+              total: 0,
+              bancaCurrent: bancaIndex + 1,
+              bancaTotal: bancas.length,
+              bancaName,
+            });
+
+            const res = await fetch(url, { headers: { 'X-User-Id': userId as string } });
+            const json = await res.json();
+
+            if (!json.success || !json.data) break;
+
+            const batch = json.data.consultorMetrics as ConsultorMetric[] | undefined;
+            const totalConsultores = json.data.totalConsultores as number | undefined;
+            const hasMore = json.data.hasMore === true;
+
+            const batchData: GerenteDashboardData = {
+              gerenteInfo: json.data.gerenteInfo ?? merged?.gerenteInfo ?? { id: '', email: '', name: '' },
+              consultorMetrics: batch ?? [],
+            };
+            merged = mergeDashboardData(merged, batchData);
+
+            setLoadingConsultoresProgress({
+              from: offset + 1,
+              to: Math.min(offset + (batch?.length ?? 0), totalConsultores ?? offset + (batch?.length ?? 0)),
+              total: totalConsultores ?? merged.consultorMetrics.length,
+              bancaCurrent: bancaIndex + 1,
+              bancaTotal: bancas.length,
+              bancaName,
+            });
+
+            setData(merged);
+            if (selectedConsultor === 'all' && merged.consultorMetrics.length > 0) {
+              setAllConsultores(merged.consultorMetrics);
+            }
+
+            if (!hasMore || !batch?.length) break;
+            offset += BATCH_SIZE_ALL;
+          }
+        }
+
+        if (merged && merged.consultorMetrics.length > 0) {
+          const { gerenteTotalKpis, chartData } = aggregateKpisAndChartFromMetrics(merged.consultorMetrics);
+          setData((prev) => (prev ? { ...prev, gerenteTotalKpis, chartData } : prev));
+        }
+        setLoadingConsultoresProgress(null);
+        loadTagsReport();
+        if (isInitial) setInitialLoading(false);
+        else setDataLoading(false);
+        showToast('Equipe e todas as bancas carregadas.', 'success');
+        return;
+      }
+
+      const BATCH_SIZE = 5;
+      const baseParams = new URLSearchParams();
+      if (dateFrom) baseParams.append('date_from', dateFrom);
+      if (dateTo) baseParams.append('date_to', dateTo);
+      if (selectedBanca && selectedBanca !== BANCA_ALL) {
+        baseParams.append('banca_url', selectedBanca);
       }
       if (selectedConsultor && selectedConsultor !== 'all') {
-        params.append('consultor_id', selectedConsultor);
+        baseParams.append('consultor_id', selectedConsultor);
       }
       if (isAdminOrSuperAdmin && selectedGerente) {
-        params.append('gerente_id', selectedGerente);
+        baseParams.append('gerente_id', selectedGerente);
       }
-      if (params.toString()) {
-        url += `?${params.toString()}`;
-      }
-      
-      const response = await fetch(url, {
-        headers: { 'X-User-Id': userId as string }
-      });
-      const result = await response.json();
-      
-      if (result.success) {
-        setData(result.data);
-        if (!selectedBanca && selectedConsultor === 'all' && result.data.consultorMetrics) {
-          setAllConsultores(result.data.consultorMetrics);
+      baseParams.append('limit', String(BATCH_SIZE));
+
+      let offset = 0;
+      let accumulatedMetrics: ConsultorMetric[] = [];
+      let gerenteInfo: GerenteDashboardData['gerenteInfo'] | null = null;
+
+      for (;;) {
+        const params = new URLSearchParams(baseParams);
+        params.set('offset', String(offset));
+        const url = `/api/gerente/dashboard?${params.toString()}`;
+
+        setLoadingConsultoresProgress((prev) => {
+          const total = prev?.total ?? 0;
+          return { from: offset + 1, to: Math.min(offset + BATCH_SIZE, total || offset + BATCH_SIZE), total: total || 0 };
+        });
+
+        const response = await fetch(url, {
+          headers: { 'X-User-Id': userId as string },
+        });
+        const result = await response.json();
+
+        if (!result.success || !result.data) break;
+
+        const batch = result.data.consultorMetrics as ConsultorMetric[];
+        const totalConsultores = result.data.totalConsultores as number | undefined;
+        const hasMore = result.data.hasMore === true;
+
+        if (batch?.length) {
+          accumulatedMetrics = [...accumulatedMetrics, ...batch];
         }
+        if (result.data.gerenteInfo) {
+          gerenteInfo = result.data.gerenteInfo;
+        }
+
+        setLoadingConsultoresProgress({
+          from: offset + 1,
+          to: Math.min(offset + batch.length, totalConsultores ?? offset + batch.length),
+          total: totalConsultores ?? accumulatedMetrics.length,
+        });
+
+        setData((prev) => {
+          const next: GerenteDashboardData = {
+            gerenteInfo: gerenteInfo ?? prev?.gerenteInfo ?? { id: '', email: '', name: '' },
+            consultorMetrics: accumulatedMetrics,
+          };
+          if (!hasMore && accumulatedMetrics.length > 0) {
+            const { gerenteTotalKpis, chartData } = aggregateKpisAndChartFromMetrics(accumulatedMetrics);
+            next.gerenteTotalKpis = gerenteTotalKpis;
+            next.chartData = chartData;
+          } else if (prev?.gerenteTotalKpis) {
+            next.gerenteTotalKpis = prev.gerenteTotalKpis;
+            next.chartData = prev.chartData;
+          }
+          return next;
+        });
+        if (selectedConsultor === 'all' && accumulatedMetrics.length > 0) {
+          setAllConsultores(accumulatedMetrics);
+        }
+
+        if (!hasMore) break;
+        offset += BATCH_SIZE;
       }
+
+      setLoadingConsultoresProgress(null);
+      loadTagsReport();
+
     } catch (error) {
       console.error('Erro ao carregar dados:', error);
     } finally {
@@ -360,6 +901,84 @@ export default function GerentePage() {
       } else {
         setDataLoading(false);
       }
+    }
+  };
+
+  const buildTagsReportUrl = (page: number) => {
+    const { dateFrom, dateTo } = getDateRange();
+    const params = new URLSearchParams();
+    if (isAdminOrSuperAdmin && selectedGerente) params.append('gerente_id', selectedGerente);
+    if (dateFrom) params.append('date_from', dateFrom);
+    if (dateTo) params.append('date_to', dateTo);
+    if (selectedBanca && selectedBanca !== BANCA_ALL) params.append('banca_url', selectedBanca);
+    if (page > 0) params.append('page', String(page));
+    return `/api/gerente/reports/tags${params.toString() ? `?${params.toString()}` : ''}`;
+  };
+
+  const loadTagsReport = async () => {
+    try {
+      setTagsLoading(true);
+      setTagsLoadingInBackground(false);
+
+      const url = buildTagsReportUrl(0);
+      const response = await fetch(url, { headers: { 'X-User-Id': userId as string } });
+      const result = await response.json();
+
+      if (!result.success) {
+        setTagsReportData(null);
+        return;
+      }
+
+      const data = result.data as TagsReportData & { hasMore?: boolean; loadedCount?: number };
+      setTagsReportData({
+        tagUsage: data.tagUsage ?? [],
+        recentTaggedClients: data.recentTaggedClients ?? [],
+        hasMore: data.hasMore,
+        loadingInBackground: data.loadingInBackground ?? false,
+        loadedCount: data.loadedCount ?? 0
+      });
+
+      if (data.hasMore) {
+        setTagsLoadingInBackground(true);
+        let page = 1;
+        let currentTagUsage = data.tagUsage ?? [];
+
+        const fetchNextPage = async () => {
+          const nextUrl = buildTagsReportUrl(page);
+          const res = await fetch(nextUrl, { headers: { 'X-User-Id': userId as string } });
+          const nextResult = await res.json();
+          if (!nextResult.success) {
+            setTagsLoadingInBackground(false);
+            return;
+          }
+          const nextData = nextResult.data as TagsReportData & { hasMore?: boolean; loadedCount?: number };
+          const merged = mergeTagUsage(currentTagUsage, nextData.tagUsage ?? []);
+          currentTagUsage = merged;
+          setTagsReportData((prev) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              tagUsage: merged,
+              hasMore: nextData.hasMore,
+              loadingInBackground: nextData.hasMore ?? false,
+              loadedCount: nextData.loadedCount ?? prev.loadedCount
+            };
+          });
+          if (nextData.hasMore) {
+            page++;
+            await fetchNextPage();
+          } else {
+            setTagsLoadingInBackground(false);
+          }
+        };
+
+        void fetchNextPage();
+      }
+    } catch (error) {
+      console.error('Erro ao carregar relatório de etiquetas:', error);
+      setTagsLoadingInBackground(false);
+    } finally {
+      setTagsLoading(false);
     }
   };
 
@@ -372,7 +991,7 @@ export default function GerentePage() {
     try {
       const response = await fetch('/api/gerente/consultores/create', {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
           'X-User-Id': userId as string
         },
@@ -397,21 +1016,33 @@ export default function GerentePage() {
 
   const handleDeleteConsultor = async () => {
     if (!consultorToDelete) return;
-    
+
     setIsDeleting(true);
     try {
       const response = await fetch(`/api/gerente/consultores/${consultorToDelete.id}`, {
         method: 'DELETE',
-        headers: { 
+        headers: {
           'X-User-Id': userId as string
         }
       });
 
       const result = await response.json();
       if (result.success) {
+        const deletedId = consultorToDelete.id;
         setDeleteModalOpen(false);
         setConsultorToDelete(null);
-        loadData();
+        setData((prev) => {
+          if (!prev) return prev;
+          const newMetrics = prev.consultorMetrics.filter((c) => c.id !== deletedId);
+          const { gerenteTotalKpis: newKpis, chartData: newChart } = aggregateKpisAndChartFromMetrics(newMetrics);
+          return {
+            ...prev,
+            consultorMetrics: newMetrics,
+            gerenteTotalKpis: newKpis,
+            chartData: newChart,
+          };
+        });
+        setAllConsultores((prev) => prev.filter((c) => c.id !== deletedId));
       } else {
         alert(result.error || 'Erro ao deletar consultor');
       }
@@ -460,8 +1091,22 @@ export default function GerentePage() {
       });
       const result = await response.json();
       if (result.success) {
+        const editedId = consultorToEdit.id;
+        const newName = editFormData.fullName.trim() || editFormData.email.trim();
+        const newEmail = editFormData.email.trim();
         setEditFormSuccess('Consultor atualizado com sucesso!');
-        loadData();
+        setData((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            consultorMetrics: prev.consultorMetrics.map((c) =>
+              c.id === editedId ? { ...c, name: newName || c.name, email: newEmail || c.email } : c
+            ),
+          };
+        });
+        setAllConsultores((prev) =>
+          prev.map((c) => (c.id === editedId ? { ...c, name: newName || c.name, email: newEmail || c.email } : c))
+        );
         setTimeout(() => {
           setEditModalOpen(false);
           setConsultorToEdit(null);
@@ -484,6 +1129,92 @@ export default function GerentePage() {
     return `${seconds}s`;
   };
 
+  const openSolicitationModal = () => {
+    setSolicitationConsultorId('');
+    setSolicitationBancaId('');
+    setSolicitationBancasForConsultant([]);
+    setSolicitationBancasLoading(false);
+    setSolicitationQuantity(10);
+    setSolicitationDeadlineDays(10);
+    setSolicitationError('');
+    setSolicitationSuccess('');
+    setSolicitationModalOpen(true);
+  };
+
+  // Ao selecionar o consultor: busca bancas em que ele faz parte (API) e filtra as bancas já carregadas da página
+  useEffect(() => {
+    if (!solicitationModalOpen || !userId) return;
+    if (!solicitationConsultorId?.trim()) {
+      setSolicitationBancasForConsultant([]);
+      setSolicitationBancaId('');
+      return;
+    }
+    let cancelled = false;
+    setSolicitationBancasLoading(true);
+    setSolicitationBancaId('');
+    fetch(`/api/gerente/consultores/${solicitationConsultorId.trim()}/bancas`, { headers: { 'X-User-Id': userId } })
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled) return;
+        const apiBancas = (data?.success && Array.isArray(data?.data) ? data.data : []) as { id: string; name: string; url: string }[];
+        const idsFromApi = new Set(apiBancas.map((b) => b.id));
+        const filtered = bancas.filter((b) => idsFromApi.has(b.id));
+        setSolicitationBancasForConsultant(filtered);
+        if (filtered.length > 0) setSolicitationBancaId(filtered[0].id);
+      })
+      .catch(() => {
+        if (!cancelled) setSolicitationBancasForConsultant([]);
+      })
+      .finally(() => {
+        if (!cancelled) setSolicitationBancasLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [solicitationModalOpen, solicitationConsultorId, userId, bancas]);
+
+  const handleSolicitationSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!solicitationConsultorId?.trim()) {
+      setSolicitationError('Selecione o consultor que receberá os leads.');
+      return;
+    }
+    if (!solicitationBancaId?.trim()) {
+      setSolicitationError('Selecione a banca para qual os leads serão transferidos.');
+      return;
+    }
+    const qty = Math.min(200, Math.max(1, Number(solicitationQuantity) || 1));
+    setSolicitationError('');
+    setSolicitationSuccess('');
+    setSolicitationSubmitting(true);
+    try {
+      const response = await fetch('/api/gerente/lead-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId as string },
+        body: JSON.stringify({
+          banca_id: solicitationBancaId.trim(),
+          lead_type: ['registered'],
+          consultores: [{ consultor_id: solicitationConsultorId.trim(), quantity: qty }],
+          deadline_days: Math.max(1, Number(solicitationDeadlineDays) || 10),
+          observations: solicitationObservations?.trim() || undefined,
+        }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        setSolicitationSuccess('Solicitação enviada com sucesso.');
+        setSolicitationObservations('');
+        loadLeadRequests();
+        setTimeout(() => {
+          setSolicitationModalOpen(false);
+        }, 1500);
+      } else {
+        setSolicitationError(result.error || 'Erro ao enviar solicitação.');
+      }
+    } catch {
+      setSolicitationError('Erro de conexão.');
+    } finally {
+      setSolicitationSubmitting(false);
+    }
+  };
+
   const handleSignOut = () => {
     if (typeof window !== 'undefined') {
       sessionStorage.removeItem('user_id');
@@ -493,6 +1224,24 @@ export default function GerentePage() {
       window.location.href = '/login';
     }
   };
+
+  /** Durante a busca em lotes, exibe KPIs e gráficos parciais com o que já foi carregado; ao terminar usa os totais finais. (Hooks devem vir antes de qualquer return.) */
+  const consultorMetricsForKpis = data?.consultorMetrics ?? [];
+  const gerenteTotalKpis = React.useMemo(() => {
+    if (loadingConsultoresProgress && consultorMetricsForKpis.length > 0) {
+      const { gerenteTotalKpis: partial } = aggregateKpisAndChartFromMetrics(consultorMetricsForKpis);
+      return partial;
+    }
+    return data?.gerenteTotalKpis ?? null;
+  }, [data?.gerenteTotalKpis, data?.consultorMetrics, loadingConsultoresProgress, aggregateKpisAndChartFromMetrics]);
+
+  const chartData = React.useMemo(() => {
+    if (loadingConsultoresProgress && consultorMetricsForKpis.length > 0) {
+      const { chartData: partial } = aggregateKpisAndChartFromMetrics(consultorMetricsForKpis);
+      return partial;
+    }
+    return data?.chartData ?? null;
+  }, [data?.chartData, data?.consultorMetrics, loadingConsultoresProgress, aggregateKpisAndChartFromMetrics]);
 
   if (checking) {
     return (
@@ -518,8 +1267,6 @@ export default function GerentePage() {
 
   const gerenteInfo = data?.gerenteInfo || { id: '', email: '', name: '' };
   const consultorMetrics = data?.consultorMetrics || [];
-  const gerenteTotalKpis = data?.gerenteTotalKpis || null;
-  const chartData = data?.chartData || null;
 
   // Calcula Top 5 Consultores por Vendas (total_deposited)
   const top5Consultants = [...consultorMetrics]
@@ -532,20 +1279,34 @@ export default function GerentePage() {
       email: c.email
     }));
 
-  // Filtra e ordena os consultores localmente
+  // Apenas consultores que trouxeram resultado na requisição (banca(s) + período), filtrados e ordenados
   const processedMetrics = [...(consultorMetrics || [])]
-    .filter(c => 
-      c.name.toLowerCase().includes(tableSearchTerm.toLowerCase()) || 
-      c.email.toLowerCase().includes(tableSearchTerm.toLowerCase())
+    .filter(c => c.externalKpis != null && !c.externalKpisError)
+    .filter(c =>
+      !tableSearchTerm.trim() ||
+      c.name.toLowerCase().includes(tableSearchTerm.toLowerCase().trim()) ||
+      c.email.toLowerCase().includes(tableSearchTerm.toLowerCase().trim())
     )
     .sort((a, b) => {
-      let valA: any = 0;
-      let valB: any = 0;
+      let valA: string | number | undefined;
+      let valB: string | number | undefined;
 
       switch (sortBy) {
         case 'name':
-          valA = a.name.toLowerCase();
-          valB = b.name.toLowerCase();
+          valA = (a.name || a.email || '').toLowerCase();
+          valB = (b.name || b.email || '').toLowerCase();
+          break;
+        case 'lastSeenAt':
+          valA = a.lastSeenAt ? new Date(a.lastSeenAt).getTime() : 0;
+          valB = b.lastSeenAt ? new Date(b.lastSeenAt).getTime() : 0;
+          break;
+        case 'totalOnlineTime':
+          valA = a.totalOnlineTime ?? 0;
+          valB = b.totalOnlineTime ?? 0;
+          break;
+        case 'totalCrmTime':
+          valA = a.totalCrmTime ?? 0;
+          valB = b.totalCrmTime ?? 0;
           break;
         case 'leads':
           valA = a.externalKpis?.total_leads || 0;
@@ -559,6 +1320,9 @@ export default function GerentePage() {
           valA = a.externalKpis?.net_profit || 0;
           valB = b.externalKpis?.net_profit || 0;
           break;
+        default:
+          valA = (a.name || a.email || '').toLowerCase();
+          valB = (b.name || b.email || '').toLowerCase();
       }
 
       if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
@@ -566,17 +1330,207 @@ export default function GerentePage() {
       return 0;
     });
 
-  const toggleSort = (field: typeof sortBy) => {
+  const totalFiltered = processedMetrics.length;
+  const totalPages = Math.max(1, Math.ceil(totalFiltered / teamTablePageSize));
+  const effectivePage = Math.min(Math.max(1, teamTablePage), totalPages);
+  const paginatedMetrics = processedMetrics.slice(
+    (effectivePage - 1) * teamTablePageSize,
+    effectivePage * teamTablePageSize
+  );
+
+  const toggleSort = (field: TeamTableSortField) => {
     if (sortBy === field) {
       setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
     } else {
       setSortBy(field);
-      setSortOrder('desc');
+      setSortOrder(field === 'name' ? 'asc' : 'desc');
+    }
+    setTeamTablePage(1);
+  };
+
+  const SortableTh = ({ field, label, align = 'center' }: { field: TeamTableSortField; label: string; align?: 'left' | 'center' | 'right' }) => (
+    <th
+      onClick={() => toggleSort(field)}
+      className={`px-4 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase cursor-pointer hover:text-[#8CD955] transition-colors select-none ${align === 'right' ? 'text-right' : align === 'left' ? 'text-left' : 'text-center'}`}
+    >
+      <div className={`flex items-center gap-1 ${align === 'right' ? 'justify-end' : align === 'left' ? 'justify-start' : 'justify-center'}`}>
+        {label}
+        {sortBy === field && (sortOrder === 'asc' ? <ChevronDown className="w-3 h-3 rotate-180" /> : <ChevronDown className="w-3 h-3" />)}
+      </div>
+    </th>
+  );
+
+  const handleZaplinkMarkSeen = async () => {
+    if (!userId || zaplinkNotifications.length === 0) return;
+    try {
+      await fetch('/api/gerente/zaplink-notifications/mark-seen', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({
+          notification_ids: zaplinkNotifications.map((n) => n.id),
+        }),
+      });
+      setZaplinkNotifications([]);
+      setZaplinkModalOpen(false);
+    } catch {}
+  };
+
+  const openZaplinkBulkSendConfig = () => setZaplinkBulkSendConfigOpen(true);
+
+  const handleZaplinkBulkSend = async () => {
+    if (!userId) return;
+    setZaplinkBulkSending(true);
+    try {
+      const res = await fetch('/api/gerente/zaplink-notifications/bulk-send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({
+          message: zaplinkBulkSendMessage.trim() || 'Olá, {{nome}}! Seu cadastro foi realizado com sucesso. Em breve nosso consultor entrará em contato.',
+          delay_minutes: Math.max(0, zaplinkBulkSendDelayMinutes),
+          delay_seconds: Math.max(0, Math.min(59, zaplinkBulkSendDelaySeconds)),
+        }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setZaplinkBulkSendConfigOpen(false);
+        fetchZaplinkBulkSendLog();
+        handleZaplinkMarkSeen();
+      }
+    } catch {}
+    finally {
+      setZaplinkBulkSending(false);
     }
   };
 
   return (
     <Layout onSignOut={handleSignOut}>
+      {/* Modal Zaplink Notifications */}
+      {zaplinkModalOpen && zaplinkNotifications.length > 0 && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
+            {zaplinkBulkSendConfigOpen ? (
+              <>
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Configurar disparo em massa</h2>
+                <p className="text-sm text-gray-600 dark:text-[#aaa] mb-3">Mensagem que será enviada aos novos consultores (use {'{{nome}}'} para personalizar):</p>
+                <textarea
+                  value={zaplinkBulkSendMessage}
+                  onChange={(e) => setZaplinkBulkSendMessage(e.target.value)}
+                  rows={4}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg bg-white dark:bg-[#1f1f1f] text-gray-900 dark:text-gray-100 text-sm resize-y mb-2"
+                  placeholder="Olá, {{nome}}! Seu cadastro foi realizado..."
+                />
+                <p className="text-xs text-gray-500 dark:text-[#888] mb-1">Exemplo com nome:</p>
+                <p className="text-sm text-gray-700 dark:text-[#bbb] mb-4 rounded bg-gray-100 dark:bg-[#1f1f1f] px-3 py-2 border border-gray-200 dark:border-[#444]">
+                  {zaplinkBulkSendMessage.trim().replace(/\{\{nome\}\}/gi, 'João') || '—'}
+                </p>
+                <p className="text-sm text-gray-600 dark:text-[#aaa] mb-2">Intervalo entre uma mensagem e outra:</p>
+                <div className="flex gap-3 items-center mb-6">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={0}
+                      max={59}
+                      value={zaplinkBulkSendDelayMinutes}
+                      onChange={(e) => setZaplinkBulkSendDelayMinutes(Math.max(0, Math.min(59, parseInt(e.target.value, 10) || 0)))}
+                      className="w-16 px-2 py-2 border border-gray-300 dark:border-[#555] rounded-lg bg-white dark:bg-[#1f1f1f] text-gray-900 dark:text-gray-100 text-sm"
+                    />
+                    <span className="text-sm text-gray-600 dark:text-[#aaa]">min</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={0}
+                      max={59}
+                      value={zaplinkBulkSendDelaySeconds}
+                      onChange={(e) => setZaplinkBulkSendDelaySeconds(Math.max(0, Math.min(59, parseInt(e.target.value, 10) || 0)))}
+                      className="w-16 px-2 py-2 border border-gray-300 dark:border-[#555] rounded-lg bg-white dark:bg-[#1f1f1f] text-gray-900 dark:text-gray-100 text-sm"
+                    />
+                    <span className="text-sm text-gray-600 dark:text-[#aaa]">seg</span>
+                  </div>
+                </div>
+                <div className="flex gap-3 justify-end">
+                  <button
+                    onClick={() => setZaplinkBulkSendConfigOpen(false)}
+                    className="px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#404040] transition"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={handleZaplinkBulkSend}
+                    disabled={zaplinkBulkSending}
+                    className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2 transition"
+                  >
+                    {zaplinkBulkSending ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        Enviando...
+                      </>
+                    ) : (
+                      'Enviar'
+                    )}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Novos consultores atribuídos a você (Zaplink)</h2>
+                <div className="space-y-3 mb-4 max-h-48 overflow-y-auto">
+                  {zaplinkNotifications.map((n) => (
+                    <div key={n.id} className="rounded-lg border border-gray-200 dark:border-gray-600 p-3 bg-gray-50 dark:bg-[#1f1f1f]">
+                      <p className="text-sm font-medium text-gray-900 dark:text-white mb-1">{n.submission?.full_name || '—'}</p>
+                      {n.submission?.email && <p className="text-xs text-gray-600 dark:text-[#aaa]">Email: {n.submission.email}</p>}
+                      {n.submission?.phone && <p className="text-xs text-gray-600 dark:text-[#aaa]">Telefone: {n.submission.phone}</p>}
+                      {n.submission?.instagram_handle && <p className="text-xs text-gray-600 dark:text-[#aaa]">Instagram: @{n.submission.instagram_handle.replace(/^@/, '')}</p>}
+                      {n.submission?.banca_name && <p className="text-xs text-gray-500 dark:text-[#888] mt-1">Banca: {n.submission.banca_name}</p>}
+                      {n.submission?.form_name && <p className="text-xs text-gray-500 dark:text-[#888]">Formulário: {n.submission.form_name}</p>}
+                    </div>
+                  ))}
+                </div>
+                {zaplinkBulkSendLog.length > 0 && (
+                  <div className="mb-4">
+                    <p className="text-sm font-medium text-gray-700 dark:text-[#bbb] mb-2">Histórico de disparos em massa (Zaplink)</p>
+                    <div className="space-y-2 max-h-32 overflow-y-auto rounded-lg border border-gray-200 dark:border-[#444] p-2 bg-gray-50 dark:bg-[#1f1f1f]">
+                      {zaplinkBulkSendLog.map((log) => (
+                        <div key={log.id} className="text-xs text-gray-600 dark:text-[#aaa] flex flex-wrap gap-x-2 gap-y-1">
+                          <span className="font-medium text-gray-800 dark:text-[#ccc]">{new Date(log.created_at).toLocaleString('pt-BR')}</span>
+                          <span className={log.status === 'failed' ? 'text-red-600 dark:text-red-400 font-medium' : 'text-green-600 dark:text-green-400 font-medium'}>
+                            {log.status === 'failed' ? 'Falhou' : 'Sucesso'}
+                          </span>
+                          {log.status !== 'failed' && <span>{log.sent_count} envio(s)</span>}
+                          {log.delay_seconds > 0 && log.status !== 'failed' && <span>intervalo {log.delay_seconds}s</span>}
+                          {log.status === 'failed' && log.error_message && (
+                            <span className="w-full text-red-600 dark:text-red-400 truncate" title={log.error_message}>{log.error_message}</span>
+                          )}
+                          <span className="w-full truncate" title={log.message_preview}>{log.message_preview}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {zaplinkBulkSendLogLoading && zaplinkBulkSendLog.length === 0 && (
+                  <p className="text-sm text-gray-500 dark:text-[#888] mb-4">Carregando histórico...</p>
+                )}
+                <div className="flex gap-3 justify-end">
+                  <button
+                    onClick={handleZaplinkMarkSeen}
+                    className="px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#404040] transition"
+                  >
+                    OK
+                  </button>
+                  <button
+                    onClick={openZaplinkBulkSendConfig}
+                    disabled={zaplinkBulkSending}
+                    className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2 transition"
+                  >
+                    Disparo em massa
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="w-full space-y-6 p-4 sm:p-6 bg-gray-50 dark:bg-[#1a1a1a] min-h-screen">
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -589,7 +1543,7 @@ export default function GerentePage() {
               <p className="text-sm text-gray-500 dark:text-gray-400">Gestão de equipe e performance de conversão</p>
             </div>
           </div>
-          
+
           <div className="flex gap-2 flex-wrap">
             {/* Filtro de Banca */}
             <div className="relative banca-filter-container">
@@ -615,12 +1569,12 @@ export default function GerentePage() {
                 ) : (
                   <>
                     <Filter className="w-4 h-4 text-[#8CD955]" />
-                    {bancas.find(b => b.url === selectedBanca)?.name || 'Selecione uma Banca'}
+                    {selectedBanca === BANCA_ALL ? 'Todas as bancas' : (bancas.find(b => b.url === selectedBanca)?.name || 'Selecione uma Banca')}
                     <ChevronDown className="w-4 h-4" />
                   </>
                 )}
               </button>
-              
+
               {showBancaFilter && (
                 <div className="absolute right-0 mt-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 rounded-xl shadow-lg z-50 min-w-[280px] max-h-[400px] overflow-hidden flex flex-col">
                   {bancasLoading ? (
@@ -644,15 +1598,27 @@ export default function GerentePage() {
                           />
                         </div>
                       </div>
-                      
+
                       <div className="overflow-y-auto max-h-[320px] p-2">
+                        {userStatus === 'gerente' && (
+                          <button
+                            onClick={() => {
+                              setSelectedBanca(BANCA_ALL);
+                              setShowBancaFilter(false);
+                              setBancaSearchTerm('');
+                            }}
+                            className={`w-full text-left px-4 py-2.5 rounded-lg text-sm transition-colors hover:bg-gray-50 dark:hover:bg-gray-700 ${selectedBanca === BANCA_ALL ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-bold' : 'text-gray-700 dark:text-gray-200'}`}
+                          >
+                            Todas as bancas
+                          </button>
+                        )}
                         {bancas
-                          .filter((banca) => 
+                          .filter((banca) =>
                             banca.name.toLowerCase().includes(bancaSearchTerm.toLowerCase())
                           )
                           .length > 0 ? (
                           bancas
-                            .filter((banca) => 
+                            .filter((banca) =>
                               banca.name.toLowerCase().includes(bancaSearchTerm.toLowerCase())
                             )
                             .map((banca) => (
@@ -663,9 +1629,8 @@ export default function GerentePage() {
                                   setShowBancaFilter(false);
                                   setBancaSearchTerm('');
                                 }}
-                                className={`w-full text-left px-4 py-2.5 rounded-lg text-sm transition-colors hover:bg-gray-50 dark:hover:bg-gray-700 ${
-                                  selectedBanca === banca.url ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-bold' : 'text-gray-700 dark:text-gray-200'
-                                }`}
+                                className={`w-full text-left px-4 py-2.5 rounded-lg text-sm transition-colors hover:bg-gray-50 dark:hover:bg-gray-700 ${selectedBanca === banca.url ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-bold' : 'text-gray-700 dark:text-gray-200'
+                                  }`}
                               >
                                 {banca.name}
                               </button>
@@ -724,9 +1689,8 @@ export default function GerentePage() {
                               setShowGerenteFilter(false);
                               setGerenteSearchTerm('');
                             }}
-                            className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                              selectedGerente === gerente.id ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
-                            }`}
+                            className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${selectedGerente === gerente.id ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
+                              }`}
                           >
                             {gerente.full_name || gerente.email}
                           </button>
@@ -753,12 +1717,12 @@ export default function GerentePage() {
                   className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all shadow-sm"
                 >
                   <Users className="w-4 h-4 text-[#8CD955]" />
-                  {selectedConsultor === 'all' 
-                    ? 'Todos os Consultores' 
+                  {selectedConsultor === 'all'
+                    ? 'Todos os Consultores'
                     : allConsultores.find(c => c.id === selectedConsultor)?.name || 'Consultor'}
                   <ChevronDown className="w-4 h-4" />
                 </button>
-                
+
                 {showConsultorFilter && (
                   <div className="absolute right-0 mt-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 rounded-xl shadow-lg z-50 min-w-[250px] max-h-[380px] overflow-hidden flex flex-col">
                     <div className="p-2 border-b border-gray-100 dark:border-[#404040]">
@@ -781,9 +1745,8 @@ export default function GerentePage() {
                           setShowConsultorFilter(false);
                           setConsultorSearchTerm('');
                         }}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          selectedConsultor === 'all' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
-                        }`}
+                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${selectedConsultor === 'all' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
+                          }`}
                       >
                         Todos os Consultores
                       </button>
@@ -797,9 +1760,8 @@ export default function GerentePage() {
                               setShowConsultorFilter(false);
                               setConsultorSearchTerm('');
                             }}
-                            className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                              selectedConsultor === consultor.id ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
-                            }`}
+                            className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${selectedConsultor === consultor.id ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
+                              }`}
                           >
                             {consultor.name || consultor.email}
                           </button>
@@ -831,7 +1793,7 @@ export default function GerentePage() {
                 {dateFilter === 'all' && 'Todo o Período'}
                 <ChevronDown className="w-4 h-4" />
               </button>
-              
+
               {showDatePicker && (
                 <div className="absolute right-0 mt-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 rounded-xl shadow-lg z-50 min-w-[200px]">
                   <div className="p-2">
@@ -846,9 +1808,8 @@ export default function GerentePage() {
                             setDateFilter('custom');
                           }
                         }}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === filter ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
-                        }`}
+                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${dateFilter === filter ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
+                          }`}
                       >
                         {filter === 'daily' && 'Diário'}
                         {filter === 'yesterday' && 'Ontem'}
@@ -859,7 +1820,7 @@ export default function GerentePage() {
                         {filter === 'all' && 'Todo o Período'}
                       </button>
                     ))}
-                    
+
                     {dateFilter === 'custom' && (
                       <div className="p-3 border-t border-gray-200 dark:border-gray-600 space-y-3 mt-2">
                         <div>
@@ -903,125 +1864,158 @@ export default function GerentePage() {
               )}
             </div>
 
-            <Link
-              href="/add-to-group"
+            <button
+              type="button"
+              onClick={() => loadData(false)}
+              disabled={dataLoading || (selectedBanca === BANCA_ALL && bancas.length === 0)}
+              className="flex items-center gap-2 bg-[#8CD955] hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed text-white dark:text-gray-900 px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-sm"
+            >
+              <Filter className="w-4 h-4" />
+              Filtrar
+            </button>
+
+            <button
+              onClick={() => setSolicitationChoiceOpen(true)}
               className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all shadow-sm"
             >
-              <Rocket className="w-4 h-4 text-[#8CD955]" />
-              Nova Campanha
-            </Link>
-            <button 
-              onClick={() => setIsModalOpen(true)}
-              className="flex items-center gap-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-md shadow-[#8CD955]/20"
-            >
-              <UserPlus className="w-4 h-4" />
-              Novo Consultor
+              <ClipboardList className="w-4 h-4 text-[#8CD955]" />
+              Solicitações
             </button>
           </div>
         </div>
 
+        {backgroundBancasLoading && selectedBanca === BANCA_ALL && (
+          <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-200">
+            <div className="animate-spin rounded-full h-5 w-5 border-2 border-blue-500 border-t-transparent shrink-0" />
+            <div>
+              <p className="font-medium text-sm">Carregando mais informações sobre outras bancas em segundo plano</p>
+              <p className="text-xs opacity-90 mt-0.5">
+                {backgroundBancasProgress.total > 0
+                  ? `Banca ${backgroundBancasProgress.current} de ${backgroundBancasProgress.total}`
+                  : 'Aguarde...'}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Loading da busca de consultores em lotes — fixo no topo do dashboard para ficar sempre visível */}
+        {loadingConsultoresProgress && (
+          <div className="flex flex-wrap items-center gap-2 text-sm text-[#8CD955] bg-[#8CD95510] dark:bg-[#8CD95515] border border-[#8CD95530] dark:border-[#8CD95540] rounded-xl px-4 py-3 shadow-sm">
+            <div className="animate-spin rounded-full h-5 w-5 border-2 border-[#8CD955] border-t-transparent shrink-0" />
+            <span className="font-medium">
+              Buscando consultores {loadingConsultoresProgress.from}-{loadingConsultoresProgress.to} de {loadingConsultoresProgress.total || '…'}
+              {loadingConsultoresProgress.bancaTotal != null && loadingConsultoresProgress.bancaTotal > 0 && (
+                <> · Banca {loadingConsultoresProgress.bancaCurrent}/{loadingConsultoresProgress.bancaTotal}{loadingConsultoresProgress.bancaName ? ` (${loadingConsultoresProgress.bancaName})` : ''}</>
+              )}
+            </span>
+            <span className="text-gray-500 dark:text-gray-400">
+              — O dashboard e a tabela abaixo são atualizados com os dados à medida que são carregados.
+            </span>
+          </div>
+        )}
+
         {/* Resumo Geral do Gerente */}
         <div className="relative">
-          {dataLoading && (
+          {(dataLoading || initialLoading) && !gerenteTotalKpis && consultorMetrics.length === 0 && (
             <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
             </div>
           )}
           {gerenteTotalKpis ? (
             <div className="bg-gradient-to-br from-[#A8E677] to-[#8CD955] p-6 rounded-2xl shadow-lg border border-[#8CD955]/40">
-            <div className="flex items-center gap-2 mb-6">
-              <Briefcase className="w-6 h-6 text-white" />
-              <h2 className="text-xl font-bold text-white">Resumo Geral - {gerenteInfo.name || 'Gerente'}</h2>
+              <div className="flex items-center gap-2 mb-6">
+                <Briefcase className="w-6 h-6 text-white" />
+                <h2 className="text-xl font-bold text-white">Resumo Geral - {gerenteInfo.name || 'Gerente'}</h2>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-9 gap-4">
+                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Users className="w-4 h-4 text-white" />
+                    <p className="text-xs font-bold text-white/90 uppercase">Total de Leads</p>
+                  </div>
+                  <p className="text-2xl font-bold text-white">{gerenteTotalKpis.total_leads || 0}</p>
+                </div>
+
+                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <CheckCircle2 className="w-4 h-4 text-white" />
+                    <p className="text-xs font-bold text-white/90 uppercase">Clientes Ativos</p>
+                  </div>
+                  <p className="text-2xl font-bold text-white">{gerenteTotalKpis.active_leads || 0}</p>
+                </div>
+
+                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <DollarSign className="w-4 h-4 text-white" />
+                    <p className="text-xs font-bold text-white/90 uppercase">Total Depositado</p>
+                  </div>
+                  <p className="text-2xl font-bold text-white">
+                    R$ {(gerenteTotalKpis.total_deposited || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                  </p>
+                </div>
+
+                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Target className="w-4 h-4 text-white" />
+                    <p className="text-xs font-bold text-white/90 uppercase">Total Apostado</p>
+                  </div>
+                  <p className="text-2xl font-bold text-white">
+                    R$ {(gerenteTotalKpis.total_bets || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                  </p>
+                </div>
+
+                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Award className="w-4 h-4 text-white" />
+                    <p className="text-xs font-bold text-white/90 uppercase">Total Prêmios</p>
+                  </div>
+                  <p className="text-2xl font-bold text-white">
+                    R$ {(gerenteTotalKpis.total_prizes || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                  </p>
+                </div>
+
+                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Trophy className="w-4 h-4 text-white" />
+                    <p className="text-xs font-bold text-white/90 uppercase">Clientes Premiados</p>
+                  </div>
+                  <p className="text-2xl font-bold text-white">
+                    {gerenteTotalKpis.awarded_clients_count || 0}
+                  </p>
+                </div>
+
+                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Wallet className="w-4 h-4 text-white" />
+                    <p className="text-xs font-bold text-white/90 uppercase">Lucro Líquido</p>
+                  </div>
+                  <p className="text-2xl font-bold text-white">
+                    R$ {(gerenteTotalKpis.net_profit || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                  </p>
+                </div>
+
+                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <BarChart3 className="w-4 h-4 text-white" />
+                    <p className="text-xs font-bold text-white/90 uppercase">Taxa de Conversão</p>
+                  </div>
+                  <p className="text-2xl font-bold text-white">
+                    {(gerenteTotalKpis.conversion_rate || 0).toFixed(2)}%
+                  </p>
+                </div>
+
+                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <TrendingUp className="w-4 h-4 text-white" />
+                    <p className="text-xs font-bold text-white/90 uppercase">LTV Médio</p>
+                  </div>
+                  <p className="text-2xl font-bold text-white">
+                    R$ {(gerenteTotalKpis.ltv_avg || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </p>
+                </div>
+              </div>
             </div>
-            
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-9 gap-4">
-              <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <Users className="w-4 h-4 text-white" />
-                  <p className="text-xs font-bold text-white/90 uppercase">Total de Leads</p>
-                </div>
-                <p className="text-2xl font-bold text-white">{gerenteTotalKpis.total_leads || 0}</p>
-              </div>
-              
-              <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <CheckCircle2 className="w-4 h-4 text-white" />
-                  <p className="text-xs font-bold text-white/90 uppercase">Clientes Ativos</p>
-                </div>
-                <p className="text-2xl font-bold text-white">{gerenteTotalKpis.active_leads || 0}</p>
-              </div>
-              
-              <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <DollarSign className="w-4 h-4 text-white" />
-                  <p className="text-xs font-bold text-white/90 uppercase">Total Depositado</p>
-                </div>
-                <p className="text-2xl font-bold text-white">
-                  R$ {(gerenteTotalKpis.total_deposited || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                </p>
-              </div>
-              
-              <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <Target className="w-4 h-4 text-white" />
-                  <p className="text-xs font-bold text-white/90 uppercase">Total Apostado</p>
-                </div>
-                <p className="text-2xl font-bold text-white">
-                  R$ {(gerenteTotalKpis.total_bets || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                </p>
-              </div>
-              
-              <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <Award className="w-4 h-4 text-white" />
-                  <p className="text-xs font-bold text-white/90 uppercase">Total Prêmios</p>
-                </div>
-                <p className="text-2xl font-bold text-white">
-                  R$ {(gerenteTotalKpis.total_prizes || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                </p>
-              </div>
-              
-              <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <Trophy className="w-4 h-4 text-white" />
-                  <p className="text-xs font-bold text-white/90 uppercase">Clientes Premiados</p>
-                </div>
-                <p className="text-2xl font-bold text-white">
-                  {gerenteTotalKpis.awarded_clients_count || 0}
-                </p>
-              </div>
-              
-              <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <Wallet className="w-4 h-4 text-white" />
-                  <p className="text-xs font-bold text-white/90 uppercase">Lucro Líquido</p>
-                </div>
-                <p className="text-2xl font-bold text-white">
-                  R$ {(gerenteTotalKpis.net_profit || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                </p>
-              </div>
-              
-              <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <BarChart3 className="w-4 h-4 text-white" />
-                  <p className="text-xs font-bold text-white/90 uppercase">Taxa de Conversão</p>
-                </div>
-                <p className="text-2xl font-bold text-white">
-                  {(gerenteTotalKpis.conversion_rate || 0).toFixed(2)}%
-                </p>
-              </div>
-              
-              <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <TrendingUp className="w-4 h-4 text-white" />
-                  <p className="text-xs font-bold text-white/90 uppercase">LTV Médio</p>
-                </div>
-                <p className="text-2xl font-bold text-white">
-                  R$ {(gerenteTotalKpis.ltv_avg || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </p>
-              </div>
-            </div>
-          </div>
           ) : (
             <div className="bg-gradient-to-br from-[#A8E677] to-[#8CD955] p-6 rounded-2xl shadow-lg border border-[#8CD955]/40">
               <div className="text-center py-8">
@@ -1034,43 +2028,43 @@ export default function GerentePage() {
 
         {/* Gráficos */}
         <div className="relative">
-          {dataLoading && (
+          {(dataLoading || initialLoading) && !chartData && consultorMetrics.length === 0 && (
             <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
             </div>
           )}
           {chartData ? (
             <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
-            <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-6 flex items-center gap-2">
-              <BarChart3 className="w-5 h-5 text-[#8CD955]" />
-              Análises e Gráficos
-            </h2>
-            
-            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-2 gap-6">
-              {/* Distribuição por Status */}
-              {chartData.status_distribution && (
-                <div className="bg-gray-50/50 dark:bg-gray-800/50 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
-                  <h3 className="text-sm font-bold text-gray-600 dark:text-gray-400 mb-4">Distribuição por Status</h3>
-                  <div className="h-64">
-                    <StatusDistributionChart 
-                      data={chartData.status_distribution} 
-                      colors={['#10b981', '#ef4444']} 
-                    />
-                  </div>
-                </div>
-              )}
+              <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-6 flex items-center gap-2">
+                <BarChart3 className="w-5 h-5 text-[#8CD955]" />
+                Análises e Gráficos
+              </h2>
 
-              {/* Métricas Financeiras */}
-              {chartData.financial_metrics && (
-                <div className="bg-gray-50/50 dark:bg-gray-800/50 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
-                  <h3 className="text-sm font-bold text-gray-600 dark:text-gray-400 mb-4">Métricas Financeiras</h3>
-                  <div className="h-64">
-                    <FinancialMetricsBarChart data={chartData.financial_metrics} />
+              <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-2 gap-6">
+                {/* Distribuição por Status */}
+                {chartData.status_distribution && (
+                  <div className="bg-gray-50/50 dark:bg-gray-800/50 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
+                    <h3 className="text-sm font-bold text-gray-600 dark:text-gray-400 mb-4">Distribuição por Status</h3>
+                    <div className="h-64">
+                      <StatusDistributionChart
+                        data={chartData.status_distribution}
+                        colors={['#10b981', '#ef4444']}
+                      />
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
+
+                {/* Métricas Financeiras */}
+                {chartData.financial_metrics && (
+                  <div className="bg-gray-50/50 dark:bg-gray-800/50 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
+                    <h3 className="text-sm font-bold text-gray-600 dark:text-gray-400 mb-4">Métricas Financeiras</h3>
+                    <div className="h-64">
+                      <FinancialMetricsBarChart data={chartData.financial_metrics} />
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
           ) : (
             <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
               <div className="text-center py-8">
@@ -1087,7 +2081,7 @@ export default function GerentePage() {
             <Trophy className="w-5 h-5 text-amber-500 dark:text-amber-400" />
             Top 5 Consultores por Vendas
           </h2>
-          
+
           {top5Consultants && top5Consultants.length > 0 ? (
             <div className="space-y-4">
               {top5Consultants.map((consultant, index) => {
@@ -1157,12 +2151,11 @@ export default function GerentePage() {
                       </div>
 
                       {/* Avatar */}
-                      <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-sm text-white shadow-md ${
-                        position === 1 ? 'bg-gradient-to-br from-amber-500 to-amber-700' :
+                      <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-sm text-white shadow-md ${position === 1 ? 'bg-gradient-to-br from-amber-500 to-amber-700' :
                         position === 2 ? 'bg-gradient-to-br from-gray-400 to-gray-600' :
-                        position === 3 ? 'bg-gradient-to-br from-orange-400 to-orange-600' :
-                        'bg-gradient-to-br from-blue-500 to-blue-700'
-                      }`}>
+                          position === 3 ? 'bg-gradient-to-br from-orange-400 to-orange-600' :
+                            'bg-gradient-to-br from-blue-500 to-blue-700'
+                        }`}>
                         {initials}
                       </div>
 
@@ -1186,11 +2179,10 @@ export default function GerentePage() {
                       {/* Badge de Destaque para Top 3 */}
                       {position <= 3 && (
                         <div className="flex items-center gap-1 px-3 py-1 rounded-full bg-white/80 dark:bg-gray-700/80 backdrop-blur-sm border border-white/50 dark:border-gray-600">
-                          <Trophy className={`w-4 h-4 ${
-                            position === 1 ? 'text-amber-500' :
+                          <Trophy className={`w-4 h-4 ${position === 1 ? 'text-amber-500' :
                             position === 2 ? 'text-gray-500 dark:text-gray-400' :
-                            'text-orange-500'
-                          }`} />
+                              'text-orange-500'
+                            }`} />
                           <span className="text-xs font-bold text-gray-700 dark:text-gray-200">
                             {position === 1 ? 'Campeão' : position === 2 ? 'Vice' : '3º Lugar'}
                           </span>
@@ -1209,11 +2201,10 @@ export default function GerentePage() {
                         </div>
                         <div className="w-full bg-white/60 dark:bg-gray-600 rounded-full h-2 overflow-hidden">
                           <div
-                            className={`h-full rounded-full transition-all ${
-                              position === 2 ? 'bg-gradient-to-r from-gray-400 to-gray-500' :
+                            className={`h-full rounded-full transition-all ${position === 2 ? 'bg-gradient-to-r from-gray-400 to-gray-500' :
                               position === 3 ? 'bg-gradient-to-r from-orange-400 to-orange-500' :
-                              'bg-gradient-to-r from-blue-400 to-blue-500'
-                            }`}
+                                'bg-gradient-to-r from-blue-400 to-blue-500'
+                              }`}
                             style={{ width: `${(consultant.value / top5Consultants[0].value) * 100}%` }}
                           />
                         </div>
@@ -1232,152 +2223,615 @@ export default function GerentePage() {
           )}
         </div>
 
+        {/* Resumo de Etiquetas (gráficos) */}
+        <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
+          <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-6 flex items-center gap-2">
+            <Tag className="w-5 h-5 text-[#8CD955]" />
+            Resumo de Etiquetas
+          </h2>
+          {tagsLoading ? (
+            <div className="py-12 flex flex-col items-center justify-center gap-3">
+              <div className="animate-spin rounded-full h-8 w-8 border-2 border-[#8CD955] border-t-transparent" />
+              <p className="text-sm text-gray-500">Carregando resumo...</p>
+            </div>
+          ) : tagsReportData?.tagUsage && tagsReportData.tagUsage.length > 0 ? (
+            <TagsSummaryChart tagUsage={tagsReportData.tagUsage} />
+          ) : (
+            <div className="py-12 text-center text-gray-500">
+              <Tag className="w-12 h-12 text-gray-200 dark:text-gray-700 mx-auto mb-3" />
+              <p className="text-sm">Nenhum uso de etiqueta para exibir no resumo</p>
+            </div>
+          )}
+        </div>
+
+        {/* Relatório de Etiquetas */}
+        <div className="space-y-4">
+          {tagsLoadingInBackground && (
+            <div className="flex items-center gap-2 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-4 py-2 text-sm text-amber-800 dark:text-amber-200">
+              <div className="animate-spin rounded-full h-4 w-4 border-2 border-amber-500 border-t-transparent shrink-0" />
+              <span>Carregando dados em segundo plano… Os números podem atualizar em instantes.</span>
+            </div>
+          )}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Uso de Etiquetas por Consultor */}
+          <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
+            <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-6 flex items-center gap-2">
+              <Tag className="w-5 h-5 text-[#8CD955]" />
+              Uso de Etiquetas por Consultor
+            </h2>
+
+            <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
+              {tagsLoading ? (
+                <div className="py-12 flex flex-col items-center justify-center gap-3">
+                  <div className="animate-spin rounded-full h-8 w-8 border-2 border-[#8CD955] border-t-transparent" />
+                  <p className="text-sm text-gray-500">Carregando dados...</p>
+                </div>
+              ) : tagsReportData?.tagUsage && tagsReportData.tagUsage.length > 0 ? (
+                tagsReportData.tagUsage.map((item, idx) =>
+                  item.tags.length === 0 ? (
+                    <div
+                      key={idx}
+                      className="p-4 bg-gray-200/80 dark:bg-gray-700/60 rounded-xl border border-gray-200 dark:border-gray-600"
+                    >
+                      <div className="text-sm font-bold text-gray-600 dark:text-gray-300 mb-2 flex items-center gap-2">
+                        <div className="w-6 h-6 rounded-full bg-gray-400 dark:bg-gray-500 text-gray-600 dark:text-gray-200 flex items-center justify-center text-[10px]">
+                          {item.consultorName[0].toUpperCase()}
+                        </div>
+                        {item.consultorName}
+                      </div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 italic">Não usou etiquetas</p>
+                    </div>
+                  ) : (
+                    <div key={idx} className="p-4 bg-gray-50 dark:bg-gray-800/50 rounded-xl border border-gray-100 dark:border-gray-700">
+                      <div className="text-sm font-bold text-gray-700 dark:text-gray-200 mb-3 flex items-center gap-2">
+                        <div className="w-6 h-6 rounded-full bg-[#8CD95520] text-[#8CD955] flex items-center justify-center text-[10px]">
+                          {item.consultorName[0].toUpperCase()}
+                        </div>
+                        {item.consultorName}
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {item.tags.map((tag, tIdx) => (
+                          <div
+                            key={tIdx}
+                            className="flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium"
+                            style={{
+                              backgroundColor: `${tag.color}15`,
+                              borderColor: `${tag.color}40`,
+                              color: tag.color
+                            }}
+                          >
+                            <span>{tag.label}</span>
+                            <span className="bg-white/50 dark:bg-black/20 px-1.5 py-0.5 rounded-md font-bold">
+                              {tag.count}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                )
+              ) : (
+                <div className="py-12 text-center text-gray-500">
+                  <Tag className="w-12 h-12 text-gray-200 dark:text-gray-700 mx-auto mb-3" />
+                  <p className="text-sm">Nenhum uso de etiqueta registrado</p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Clientes Recentemente Etiquetados */}
+          <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
+            <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-6 flex items-center gap-2">
+              <History className="w-5 h-5 text-blue-500" />
+              Clientes Recentemente Etiquetados
+            </h2>
+
+            <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
+              {tagsLoading ? (
+                <div className="py-12 flex flex-col items-center justify-center gap-3">
+                  <div className="animate-spin rounded-full h-8 w-8 border-2 border-[#8CD955] border-t-transparent" />
+                  <p className="text-sm text-gray-500">Carregando histórico...</p>
+                </div>
+              ) : tagsReportData?.recentTaggedClients && tagsReportData.recentTaggedClients.length > 0 ? (
+                tagsReportData.recentTaggedClients.map((client, idx) => (
+                  <div key={idx} className="flex items-center gap-3 p-3 hover:bg-gray-50 dark:hover:bg-gray-800/50 rounded-xl transition-colors border border-transparent hover:border-gray-100 dark:hover:border-gray-700 group">
+                    <div className="w-10 h-10 rounded-full bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
+                      <Users className="w-5 h-5" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-bold text-gray-800 dark:text-gray-100 truncate">
+                          {client.leadName}
+                        </p>
+                        <span className="text-[10px] text-gray-400 dark:text-gray-500 shrink-0">
+                          {new Date(client.createdAt).toLocaleString('pt-BR', {
+                            day: '2-digit',
+                            month: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 mt-1">
+                        <p className="text-xs text-gray-500 truncate flex items-center gap-1">
+                          <Briefcase className="w-3 h-3" />
+                          {client.consultorName}
+                        </p>
+                        <ChevronRight className="w-3 h-3 text-gray-300" />
+                        <span
+                          className="text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider"
+                          style={{ backgroundColor: `${client.tagColor}20`, color: client.tagColor }}
+                        >
+                          {client.tagName}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="py-12 text-center text-gray-500">
+                  <History className="w-12 h-12 text-gray-200 dark:text-gray-700 mx-auto mb-3" />
+                  <p className="text-sm">Nenhum histórico de etiquetas encontrado</p>
+                </div>
+              )}
+            </div>
+          </div>
+          </div>
+        </div>
+
         {/* Consultores List */}
         <div className="relative">
-          {dataLoading && (
+          {dataLoading && !loadingConsultoresProgress && consultorMetrics.length === 0 && (
             <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
             </div>
           )}
           <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
-          <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/50 flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <h2 className="text-sm font-bold text-gray-600 dark:text-gray-400 uppercase tracking-wider flex items-center gap-2">
-              <Users className="w-4 h-4" />
-              Desempenho da Equipe
-            </h2>
-            
-            <div className="relative w-full md:w-64">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-gray-400" />
-              <input
-                type="text"
-                placeholder="Buscar consultor..."
-                value={tableSearchTerm}
-                onChange={(e) => setTableSearchTerm(e.target.value)}
-                className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-xs text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#8CD955] outline-none transition-all"
-              />
-            </div>
-          </div>
+            <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/50 flex flex-col gap-3">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <h2 className="text-sm font-bold text-gray-600 dark:text-gray-400 uppercase tracking-wider flex items-center gap-2">
+                  <Users className="w-4 h-4" />
+                  Sua equipe
+                </h2>
 
-          {/* Versão Desktop (Table) */}
-          {processedMetrics && processedMetrics.length > 0 ? (
-            <div className="hidden md:block overflow-x-auto w-full">
-              <table className="w-full text-left border-collapse min-w-full">
-                <thead>
-                  <tr className="bg-gray-50/30 dark:bg-gray-800/60">
-                    <th
-                      onClick={() => toggleSort('name')}
-                      className="px-6 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase cursor-pointer hover:text-[#8CD955] transition-colors"
-                    >
-                      <div className="flex items-center gap-1">
-                        Consultor
-                        {sortBy === 'name' && (sortOrder === 'asc' ? <ChevronDown className="w-3 h-3 rotate-180" /> : <ChevronDown className="w-3 h-3" />)}
-                      </div>
-                    </th>
-                    <th className="px-6 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-center">Último acesso</th>
-                    <th className="px-6 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-center">Horas online</th>
-                    <th className="px-4 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-right min-w-[120px]">
-                      Ações
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-                  {processedMetrics.map((consultor) => (
-                    <tr key={consultor.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-800/50 transition-colors">
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-full bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] flex items-center justify-center font-bold text-sm">
-                            {(consultor.name || consultor.email)[0].toUpperCase()}
-                          </div>
-                          <div>
-                            <p className="font-bold text-gray-800 dark:text-gray-100 text-sm">{consultor.name || 'Sem nome'}</p>
-                            <p className="text-[11px] text-gray-400 dark:text-gray-500">{consultor.email}</p>
-                          </div>
+                <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full md:w-auto">
+                <div className="relative w-full sm:flex-1 md:w-64">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-gray-400" />
+                  <input
+                    type="text"
+                    placeholder="Buscar consultor..."
+                    value={tableSearchTerm}
+                    onChange={(e) => {
+                      setTableSearchTerm(e.target.value);
+                      setTeamTablePage(1);
+                    }}
+                    className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-xs text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#8CD955] outline-none transition-all"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsModalOpen(true)}
+                  className="flex items-center justify-center gap-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-md shadow-[#8CD955]/20 w-full sm:w-auto"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  Novo Consultor
+                </button>
+              </div>
+              </div>
+            </div>
+
+            {/* Versão Desktop (Table) */}
+            {processedMetrics && processedMetrics.length > 0 ? (
+              <div className="hidden md:block overflow-x-auto w-full">
+                <table className="w-full text-left border-collapse min-w-full">
+                  <thead>
+                    <tr className="bg-gray-50/30 dark:bg-gray-800/60">
+                      <th
+                        onClick={() => toggleSort('name')}
+                        className="px-6 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase cursor-pointer hover:text-[#8CD955] transition-colors"
+                      >
+                        <div className="flex items-center gap-1">
+                          Consultor
+                          {sortBy === 'name' && (sortOrder === 'asc' ? <ChevronDown className="w-3 h-3 rotate-180" /> : <ChevronDown className="w-3 h-3" />)}
                         </div>
-                      </td>
-                      <td className="px-6 py-4 text-center">
-                        <span className="text-xs text-gray-600 dark:text-gray-400">
-                          {consultor.lastSeenAt
-                            ? new Date(consultor.lastSeenAt).toLocaleString('pt-BR', {
+                      </th>
+                      <SortableTh field="lastSeenAt" label="Último acesso" />
+                      <SortableTh field="totalOnlineTime" label="Horas online" />
+                      <SortableTh field="totalCrmTime" label="Horas no CRM" />
+                      <SortableTh field="leads" label="Leads" align="right" />
+                      <SortableTh field="deposited" label="Depositado" align="right" />
+                      <SortableTh field="profit" label="Lucro" align="right" />
+                      <th className="px-4 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-right min-w-[120px]">
+                        Ações
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                    {paginatedMetrics.map((consultor) => (
+                      <tr key={consultor.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-800/50 transition-colors">
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-full bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] flex items-center justify-center font-bold text-sm">
+                              {(consultor.name || consultor.email)[0].toUpperCase()}
+                            </div>
+                            <div>
+                              <p className="font-bold text-gray-800 dark:text-gray-100 text-sm">{consultor.name || 'Sem nome'}</p>
+                              <p className="text-[11px] text-gray-400 dark:text-gray-500">{consultor.email}</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <span className="text-xs text-gray-600 dark:text-gray-400">
+                            {consultor.lastSeenAt
+                              ? new Date(consultor.lastSeenAt).toLocaleString('pt-BR', {
                                 day: '2-digit',
                                 month: '2-digit',
                                 year: 'numeric',
                                 hour: '2-digit',
                                 minute: '2-digit'
                               })
-                            : '—'}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 text-center">
-                        <span className="text-xs font-medium text-gray-700 dark:text-gray-300">
-                          {formatTime(consultor.totalOnlineTime || 0)}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 align-middle text-right">
-                        <button
-                          type="button"
-                          onClick={() => setResumoModalConsultor(consultor)}
-                          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 hover:bg-[#8CD95515] hover:text-[#8CD955] border border-gray-200 dark:border-gray-600 hover:border-[#8CD955]/30 transition-colors"
-                        >
-                          <BarChart3 className="w-4 h-4" />
-                          Resumo
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="hidden md:block p-8 text-center">
-              <AlertCircle className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
-              <p className="text-gray-600 dark:text-gray-400 font-medium">
-                {tableSearchTerm ? 'Nenhum consultor encontrado com este nome' : 'Dados não encontrados'}
-              </p>
-            </div>
-          )}
-
-          {/* Versão Mobile (Cards) */}
-          {processedMetrics && processedMetrics.length > 0 ? (
-            <div className="md:hidden divide-y divide-gray-100 dark:divide-gray-700">
-              {processedMetrics.map((consultor) => (
-                <div key={consultor.id} className="p-4 space-y-3">
+                              : '—'}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <span className="text-xs font-medium text-gray-700 dark:text-gray-300">
+                            {formatTime(consultor.totalOnlineTime || 0)}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <span className="text-xs font-medium text-gray-700 dark:text-gray-300">
+                            {formatTime(consultor.totalCrmTime || 0)}
+                          </span>
+                        </td>
+                        <td className="px-4 py-4 text-right">
+                          <span className="text-xs font-medium text-gray-700 dark:text-gray-300">
+                            {consultor.externalKpis?.total_leads ?? 0}
+                          </span>
+                        </td>
+                        <td className="px-4 py-4 text-right">
+                          <span className="text-xs font-medium text-gray-700 dark:text-gray-300">
+                            {consultor.externalKpis?.total_deposited != null
+                              ? `R$ ${(consultor.externalKpis.total_deposited / 1000).toFixed(1)}k`
+                              : '—'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-4 text-right">
+                          <span className={`text-xs font-medium ${(consultor.externalKpis?.net_profit ?? 0) >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                            {consultor.externalKpis?.net_profit != null
+                              ? `R$ ${(consultor.externalKpis.net_profit / 1000).toFixed(1)}k`
+                              : '—'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 align-middle text-right">
+                          <button
+                            type="button"
+                            onClick={() => setResumoModalConsultor(consultor)}
+                            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 hover:bg-[#8CD95515] hover:text-[#8CD955] border border-gray-200 dark:border-gray-600 hover:border-[#8CD955]/30 transition-colors"
+                          >
+                            <BarChart3 className="w-4 h-4" />
+                            Resumo
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/30">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] flex items-center justify-center font-bold text-base shrink-0">
-                      {(consultor.name || consultor.email)[0].toUpperCase()}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="font-bold text-gray-800 dark:text-gray-100 truncate">{consultor.name || 'Sem nome'}</p>
-                      <p className="text-xs text-gray-400 dark:text-gray-500 truncate">{consultor.email}</p>
-                    </div>
+                    <span className="text-xs text-gray-600 dark:text-gray-400">Mostrar</span>
+                    <select
+                      value={teamTablePageSize}
+                      onChange={(e) => {
+                        setTeamTablePageSize(Number(e.target.value));
+                        setTeamTablePage(1);
+                      }}
+                      className="px-2 py-1.5 text-xs font-medium bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] outline-none"
+                    >
+                      {[10, 25, 50].map((n) => (
+                        <option key={n} value={n}>{n}</option>
+                      ))}
+                    </select>
+                    <span className="text-xs text-gray-600 dark:text-gray-400">por página</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-600 dark:text-gray-400">
+                      {totalFiltered === 0 ? '0' : `${(effectivePage - 1) * teamTablePageSize + 1}-${Math.min(effectivePage * teamTablePageSize, totalFiltered)}`} de {totalFiltered}
+                    </span>
                     <button
                       type="button"
-                      onClick={() => setResumoModalConsultor(consultor)}
-                      className="shrink-0 inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 hover:bg-[#8CD95515] hover:text-[#8CD955] border border-gray-200 dark:border-gray-600 transition-colors"
+                      onClick={() => setTeamTablePage((p) => Math.max(1, p - 1))}
+                      disabled={effectivePage <= 1}
+                      className="p-2 rounded-lg border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      aria-label="Página anterior"
                     >
-                      <BarChart3 className="w-4 h-4" />
-                      Resumo
+                      <ChevronDown className="w-4 h-4 rotate-90" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTeamTablePage((p) => Math.min(totalPages, p + 1))}
+                      disabled={effectivePage >= totalPages}
+                      className="p-2 rounded-lg border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      aria-label="Próxima página"
+                    >
+                      <ChevronDown className="w-4 h-4 -rotate-90" />
                     </button>
                   </div>
-                  <div className="flex gap-4 text-xs text-gray-600 dark:text-gray-400">
-                    <div className="flex items-center gap-1">
-                      <Clock className="w-3.5 h-3.5" />
-                      <span>{consultor.lastSeenAt ? new Date(consultor.lastSeenAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}</span>
+                </div>
+              </div>
+            ) : (
+              <div className="hidden md:block p-8 text-center">
+                <AlertCircle className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
+                <p className="text-gray-600 dark:text-gray-400 font-medium">
+                  {tableSearchTerm ? 'Nenhum consultor encontrado com este nome' : 'Nenhum consultor trouxe resultado na busca para a banca e período selecionados'}
+                </p>
+              </div>
+            )}
+
+            {/* Versão Mobile (Cards) */}
+            {processedMetrics && processedMetrics.length > 0 ? (
+              <>
+              <div className="md:hidden divide-y divide-gray-100 dark:divide-gray-700">
+                {paginatedMetrics.map((consultor) => (
+                  <div key={consultor.id} className="p-4 space-y-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] flex items-center justify-center font-bold text-base shrink-0">
+                        {(consultor.name || consultor.email)[0].toUpperCase()}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-bold text-gray-800 dark:text-gray-100 truncate">{consultor.name || 'Sem nome'}</p>
+                        <p className="text-xs text-gray-400 dark:text-gray-500 truncate">{consultor.email}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setResumoModalConsultor(consultor)}
+                        className="shrink-0 inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 hover:bg-[#8CD95515] hover:text-[#8CD955] border border-gray-200 dark:border-gray-600 transition-colors"
+                      >
+                        <BarChart3 className="w-4 h-4" />
+                        Resumo
+                      </button>
                     </div>
-                    <div>
-                      <span className="font-medium text-gray-700 dark:text-gray-300">{formatTime(consultor.totalOnlineTime || 0)}</span> online
+                    <div className="flex flex-wrap gap-4 text-xs text-gray-600 dark:text-gray-400">
+                      <div className="flex items-center gap-1">
+                        <Clock className="w-3.5 h-3.5" />
+                        <span>{consultor.lastSeenAt ? new Date(consultor.lastSeenAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}</span>
+                      </div>
+                      <div>
+                        <span className="font-medium text-gray-700 dark:text-gray-300">{formatTime(consultor.totalOnlineTime || 0)}</span> online
+                      </div>
+                      <div>
+                        <span className="font-medium text-gray-700 dark:text-gray-300">{formatTime(consultor.totalCrmTime || 0)}</span> no CRM
+                      </div>
+                      <div>Leads: <span className="font-medium text-gray-700 dark:text-gray-300">{consultor.externalKpis?.total_leads ?? 0}</span></div>
+                      <div>Dep.: <span className="font-medium text-gray-700 dark:text-gray-300">{consultor.externalKpis?.total_deposited != null ? `R$ ${(consultor.externalKpis.total_deposited / 1000).toFixed(1)}k` : '—'}</span></div>
+                      <div>Lucro: <span className={`font-medium ${(consultor.externalKpis?.net_profit ?? 0) >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>{consultor.externalKpis?.net_profit != null ? `R$ ${(consultor.externalKpis.net_profit / 1000).toFixed(1)}k` : '—'}</span></div>
                     </div>
                   </div>
+                ))}
+              </div>
+              <div className="md:hidden flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/30">
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-gray-600 dark:text-gray-400">Mostrar</span>
+                  <select
+                    value={teamTablePageSize}
+                    onChange={(e) => {
+                      setTeamTablePageSize(Number(e.target.value));
+                      setTeamTablePage(1);
+                    }}
+                    className="px-2 py-1.5 text-xs font-medium bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] outline-none"
+                  >
+                    {[10, 25, 50].map((n) => (
+                      <option key={n} value={n}>{n}</option>
+                    ))}
+                  </select>
+                  <span className="text-xs text-gray-600 dark:text-gray-400">por página</span>
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div className="md:hidden p-8 text-center">
-              <AlertCircle className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
-              <p className="text-gray-600 dark:text-gray-400 font-medium">
-                {tableSearchTerm ? 'Nenhum consultor encontrado com este nome' : 'Dados não encontrados'}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-600 dark:text-gray-400">
+                    {totalFiltered === 0 ? '0' : `${(effectivePage - 1) * teamTablePageSize + 1}-${Math.min(effectivePage * teamTablePageSize, totalFiltered)}`} de {totalFiltered}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setTeamTablePage((p) => Math.max(1, p - 1))}
+                    disabled={effectivePage <= 1}
+                    className="p-2 rounded-lg border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    aria-label="Página anterior"
+                  >
+                    <ChevronDown className="w-4 h-4 rotate-90" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTeamTablePage((p) => Math.min(totalPages, p + 1))}
+                    disabled={effectivePage >= totalPages}
+                    className="p-2 rounded-lg border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    aria-label="Próxima página"
+                  >
+                    <ChevronDown className="w-4 h-4 -rotate-90" />
+                  </button>
+                </div>
+              </div>
+              </>
+            ) : (
+              <div className="md:hidden p-8 text-center">
+                <AlertCircle className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
+                <p className="text-gray-600 dark:text-gray-400 font-medium">
+                  {tableSearchTerm ? 'Nenhum consultor encontrado com este nome' : 'Nenhum consultor trouxe resultado na busca para a banca e período selecionados'}
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Histórico de solicitações de leads */}
+        <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
+          <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/50">
+            <h2 className="text-sm font-bold text-gray-600 dark:text-gray-400 uppercase tracking-wider flex items-center gap-2">
+              <ClipboardList className="w-4 h-4" />
+              Histórico de solicitações de leads
+            </h2>
+          </div>
+          <div className="p-4">
+            {leadRequestsHistoryLoading ? (
+              <div className="py-12 flex flex-col items-center justify-center gap-3">
+                <div className="animate-spin rounded-full h-8 w-8 border-2 border-[#8CD955] border-t-transparent" />
+                <p className="text-sm text-gray-500 dark:text-gray-400">Carregando solicitações...</p>
+              </div>
+            ) : leadRequestsHistory.length === 0 ? (
+              <p className="text-center py-8 text-gray-500 dark:text-gray-400 text-sm">
+                Nenhuma solicitação de leads ainda. Use o botão acima para solicitar leads para sua equipe.
               </p>
-            </div>
-          )}
+            ) : (
+              <>
+                {/* Filtros: consultor e status */}
+                <div className="flex flex-wrap items-center gap-3 mb-4">
+                  <div className="flex items-center gap-2">
+                    <Filter className="w-4 h-4 text-gray-500 dark:text-gray-400" aria-hidden />
+                    <label htmlFor="hist-consultor" className="text-xs font-medium text-gray-600 dark:text-gray-400">Consultor</label>
+                    <select
+                      id="hist-consultor"
+                      value={leadRequestHistoryConsultorFilter}
+                      onChange={(e) => setLeadRequestHistoryConsultorFilter(e.target.value)}
+                      className="text-sm border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 focus:ring-2 focus:ring-[#8CD955]/50 focus:border-[#8CD955]"
+                    >
+                      <option value="all">Todos</option>
+                      {leadRequestHistoryConsultores.map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label htmlFor="hist-status" className="text-xs font-medium text-gray-600 dark:text-gray-400">Situação</label>
+                    <select
+                      id="hist-status"
+                      value={leadRequestHistoryStatusFilter}
+                      onChange={(e) => setLeadRequestHistoryStatusFilter(e.target.value)}
+                      className="text-sm border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 focus:ring-2 focus:ring-[#8CD955]/50 focus:border-[#8CD955]"
+                    >
+                      <option value="all">Todas</option>
+                      <option value="pending">Pendente</option>
+                      <option value="approved">Aprovada</option>
+                      <option value="partial">Faltam leads</option>
+                      <option value="rejected">Rejeitada</option>
+                    </select>
+                  </div>
+                  {(leadRequestHistoryConsultorFilter !== 'all' || leadRequestHistoryStatusFilter !== 'all') && (
+                    <span className="text-xs text-gray-500 dark:text-gray-400">
+                      {leadRequestsHistoryFiltered.length} de {leadRequestsHistory.length} solicitações
+                    </span>
+                  )}
+                </div>
+                {leadRequestsHistoryFiltered.length === 0 ? (
+                  <p className="text-center py-8 text-gray-500 dark:text-gray-400 text-sm">
+                    Nenhuma solicitação encontrada com os filtros selecionados.
+                  </p>
+                ) : (
+                <>
+                <div className="hidden md:block overflow-x-auto">
+                  <table className="w-full text-left border-collapse min-w-full">
+                    <thead>
+                      <tr className="bg-gray-50/30 dark:bg-gray-800/60 border-b border-gray-100 dark:border-gray-700">
+                        <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase">Data</th>
+                        <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase">Banca</th>
+                        <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase">Tipo de lead</th>
+                        <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase">Consultores / Qtd</th>
+                        <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-center">Prazo (dias)</th>
+                        <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-center">Situação</th>
+                        <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase">Observação (solicitação)</th>
+                        <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase">Observação de rejeição</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                      {leadRequestsHistoryFiltered.map((req) => (
+                        <tr key={req.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-800/50 transition-colors">
+                          <td className="px-4 py-3 text-xs text-gray-700 dark:text-gray-300 whitespace-nowrap">
+                            {new Date(req.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                          </td>
+                          <td className="px-4 py-3 text-xs font-medium text-gray-800 dark:text-gray-200">{req.banca_name ?? req.banca_id ?? '—'}</td>
+                          <td className="px-4 py-3 text-xs text-gray-700 dark:text-gray-300">{req.lead_type_label ?? req.lead_type}</td>
+                          <td className="px-4 py-3 text-xs text-gray-700 dark:text-gray-300">
+                            {(req.consultores ?? []).map((c) => `${c.consultor_name ?? c.consultor_id}: ${c.quantity}`).join('; ') || '—'}
+                          </td>
+                          <td className="px-4 py-3 text-xs text-center text-gray-700 dark:text-gray-300">{req.deadline_days ?? '—'}</td>
+                          <td className="px-4 py-3 text-center">
+                            <span className={`inline-flex px-2 py-1 rounded-lg text-xs font-bold ${
+                              req.status === 'pending'
+                                ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300'
+                                : req.status === 'approved'
+                                  ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300'
+                                  : req.status === 'partial'
+                                    ? 'bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300'
+                                    : 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300'
+                            }`}>
+                              {req.status === 'pending' ? 'Pendente' : req.status === 'approved' ? 'Aprovada' : req.status === 'partial' ? 'Faltam leads' : 'Rejeitada'}
+                            </span>
+                            {(req.status === 'approved' || req.status === 'partial') && req.approved_at && (
+                              <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">
+                                {new Date(req.approved_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                              </p>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-xs text-gray-700 dark:text-gray-300 max-w-[200px]">
+                            {req.observations?.trim() ? (
+                              <span className="whitespace-pre-wrap text-left block" title={req.observations.trim()}>{req.observations.trim()}</span>
+                            ) : '—'}
+                          </td>
+                          <td className="px-4 py-3 text-xs max-w-[200px]">
+                            {req.status === 'rejected' && req.rejection_observation?.trim() ? (
+                              <span className="whitespace-pre-wrap text-left block text-red-700 dark:text-red-300" title={req.rejection_observation.trim()}>{req.rejection_observation.trim()}</span>
+                            ) : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="md:hidden space-y-3">
+                  {leadRequestsHistoryFiltered.map((req) => (
+                    <div key={req.id} className="p-4 rounded-xl border border-gray-100 dark:border-gray-700 bg-gray-50/30 dark:bg-gray-800/30 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-gray-500 dark:text-gray-400">
+                          {new Date(req.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                        <span className={`inline-flex px-2 py-1 rounded-lg text-xs font-bold ${
+                          req.status === 'pending'
+                            ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300'
+                            : req.status === 'approved'
+                              ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300'
+                              : req.status === 'partial'
+                                ? 'bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300'
+                                : 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300'
+                        }`}>
+                          {req.status === 'pending' ? 'Pendente' : req.status === 'approved' ? 'Aprovada' : req.status === 'partial' ? 'Faltam leads' : 'Rejeitada'}
+                        </span>
+                      </div>
+                      {req.observations?.trim() && (
+                        <div className="rounded-lg border border-gray-200 dark:border-gray-600 bg-gray-50/80 dark:bg-gray-800/50 p-3">
+                          <p className="text-[10px] font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide mb-1">Observação (solicitação)</p>
+                          <p className="text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap">{req.observations.trim()}</p>
+                        </div>
+                      )}
+                      {req.status === 'rejected' && req.rejection_observation?.trim() && (
+                        <div className="rounded-lg border border-red-200 dark:border-red-900/50 bg-red-50/80 dark:bg-red-900/20 p-3">
+                          <p className="text-[10px] font-semibold text-red-700 dark:text-red-300 uppercase tracking-wide mb-1">Observação de rejeição</p>
+                          <p className="text-sm text-red-800 dark:text-red-200 whitespace-pre-wrap">{req.rejection_observation.trim()}</p>
+                        </div>
+                      )}
+                      <p className="text-sm font-medium text-gray-800 dark:text-gray-200">{req.banca_name ?? req.banca_id ?? '—'}</p>
+                      <p className="text-xs text-gray-600 dark:text-gray-400">{req.lead_type_label ?? req.lead_type}</p>
+                      <p className="text-xs text-gray-600 dark:text-gray-400">
+                        {(req.consultores ?? []).map((c) => `${c.consultor_name ?? c.consultor_id}: ${c.quantity}`).join('; ') || '—'}
+                      </p>
+                      {req.deadline_days != null && <p className="text-xs text-gray-500 dark:text-gray-400">Prazo: {req.deadline_days} dias</p>}
+                      {(req.status === 'approved' || req.status === 'partial') && req.approved_at && (
+                        <p className="text-[10px] text-gray-400 dark:text-gray-500">Aprovada em {new Date(req.approved_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                </>
+                )}
+              </>
+            )}
           </div>
         </div>
 
@@ -1484,6 +2938,273 @@ export default function GerentePage() {
           </div>
         )}
 
+        {/* Modal de escolha: Pedir lead ou Consultor */}
+        {solicitationChoiceOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-gray-700">
+              <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-[#A8E677] to-[#8CD955] text-white shrink-0">
+                <h2 className="text-xl font-bold flex items-center gap-2">
+                  <ClipboardList className="w-6 h-6" />
+                  Solicitações
+                </h2>
+                <button onClick={() => setSolicitationChoiceOpen(false)} className="hover:bg-white/20 p-1.5 rounded-xl transition-colors">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+              <div className="p-6 flex flex-col gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSolicitationChoiceOpen(false);
+                    openSolicitationModal();
+                  }}
+                  className="w-full flex items-center justify-center gap-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white font-bold py-3.5 rounded-xl transition-colors"
+                >
+                  <Users className="w-5 h-5" />
+                  Pedir lead
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSolicitationChoiceOpen(false);
+                    setConsultorBancaId(bancas.length > 0 ? (bancas.find((b) => b.url === selectedBanca)?.id ?? bancas[0].id) : '');
+                    setConsultorQuantity(1);
+                    setConsultorRequestError('');
+                    setConsultorBancaModalOpen(true);
+                  }}
+                  className="w-full flex items-center justify-center gap-2 bg-white dark:bg-gray-700 border-2 border-[#8CD955] text-[#8CD955] dark:text-[#8CD955] font-bold py-3.5 rounded-xl hover:bg-[#8CD955]/10 dark:hover:bg-[#8CD955]/10 transition-colors"
+                >
+                  <UserPlus className="w-5 h-5" />
+                  Consultor
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Solicitação de leads */}
+        {solicitationModalOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-hidden animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-gray-700 flex flex-col">
+              <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-[#A8E677] to-[#8CD955] text-white shrink-0">
+                <h2 className="text-xl font-bold flex items-center gap-2">
+                  <ClipboardList className="w-6 h-6" />
+                  Solicitação de leads
+                </h2>
+                <button onClick={() => { setSolicitationModalOpen(false); setSolicitationObservations(''); }} className="hover:bg-white/20 p-1.5 rounded-xl transition-colors">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSolicitationSubmit} className="flex flex-col flex-1 overflow-hidden">
+                <div className="p-6 space-y-4 overflow-y-auto flex-1">
+                  {solicitationError && <div className="bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-300 p-3 rounded-xl text-sm font-medium border border-red-100 dark:border-red-800">{solicitationError}</div>}
+                  {solicitationSuccess && <div className="bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] p-3 rounded-xl text-sm font-medium border border-[#8CD955]/30">{solicitationSuccess}</div>}
+
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-2 ml-1">Consultor que receberá os leads</label>
+                    <select
+                      required
+                      value={solicitationConsultorId}
+                      onChange={(e) => setSolicitationConsultorId(e.target.value)}
+                      className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium"
+                    >
+                      <option value="">Selecione um consultor</option>
+                      {[...(allConsultores.length > 0 ? allConsultores : consultorMetrics)]
+                        .sort((a, b) => (a.name || a.email || '').localeCompare((b.name || b.email || ''), 'pt-BR', { sensitivity: 'base' }))
+                        .map((c) => (
+                          <option key={c.id} value={c.id}>{c.name || c.email}</option>
+                        ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-2 ml-1">Banca para qual os leads serão transferidos</label>
+                    {!solicitationConsultorId?.trim() ? (
+                      <p className="py-2.5 px-3 text-sm text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-xl">
+                        Selecione um consultor para carregar as bancas em que ele está cadastrado
+                      </p>
+                    ) : solicitationBancasLoading ? (
+                      <div className="flex items-center gap-2 py-2 text-sm text-gray-500 dark:text-gray-400">
+                        <div className="animate-spin rounded-full h-4 w-4 border-2 border-[#8CD955] border-t-transparent" />
+                        Buscando bancas do consultor...
+                      </div>
+                    ) : solicitationBancasForConsultant.length === 0 ? (
+                      <p className="py-2.5 px-3 text-sm text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl">
+                        Nenhuma banca encontrada para este consultor na sua base
+                      </p>
+                    ) : (
+                      <select
+                        required
+                        value={solicitationBancaId}
+                        onChange={(e) => setSolicitationBancaId(e.target.value)}
+                        className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium"
+                      >
+                        <option value="">Selecione a banca</option>
+                        {solicitationBancasForConsultant.map((b) => (
+                          <option key={b.id} value={b.id}>{b.name || b.url}</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-2 ml-1">Quantidade de leads</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={200}
+                        value={solicitationQuantity}
+                        onChange={(e) => setSolicitationQuantity(Math.min(200, Math.max(1, parseInt(e.target.value, 10) || 1)))}
+                        className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium"
+                      />
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 ml-1">Máx: 200</p>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-2 ml-1">Período do pacote (dias)</label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={solicitationDeadlineDays}
+                        onChange={(e) => setSolicitationDeadlineDays(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                        className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium"
+                      />
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 ml-1">Prazo para conversão dos leads</p>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-2 ml-1">Observação (opcional)</label>
+                    <textarea
+                      value={solicitationObservations}
+                      onChange={(e) => setSolicitationObservations(e.target.value)}
+                      placeholder="Ex.: priorizar leads com aposta recente..."
+                      rows={3}
+                      maxLength={1000}
+                      className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium placeholder:text-gray-400 resize-y"
+                    />
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 ml-1">Será enviada ao admin junto com a solicitação</p>
+                  </div>
+                </div>
+
+                <div className="p-6 pt-0 flex gap-3 shrink-0 border-t border-gray-100 dark:border-gray-700 justify-between">
+                  <button type="button" onClick={() => { setSolicitationModalOpen(false); setSolicitationObservations(''); }} className="bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 font-bold py-3 px-6 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors">Cancelar</button>
+                  <button
+                    type="submit"
+                    disabled={solicitationSubmitting || (!!solicitationConsultorId?.trim() && (solicitationBancasLoading || solicitationBancasForConsultant.length === 0)) || !solicitationBancaId?.trim()}
+                    className="bg-[#8CD955] hover:bg-[#7BC84A] text-white font-bold py-3 px-6 rounded-xl disabled:opacity-50 transition-colors"
+                  >
+                    {solicitationSubmitting ? 'Enviando...' : 'Enviar solicitação'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Consultor - seleção de banca */}
+        {consultorBancaModalOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-gray-700">
+              <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-[#A8E677] to-[#8CD955] text-white shrink-0">
+                <h2 className="text-xl font-bold flex items-center gap-2">
+                  <UserPlus className="w-6 h-6" />
+                  Solicitação de consultor
+                </h2>
+                <button onClick={() => setConsultorBancaModalOpen(false)} className="hover:bg-white/20 p-1.5 rounded-xl transition-colors">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!consultorBancaId || consultorQuantity < 1) return;
+                  setConsultorRequestError('');
+                  setConsultorRequestSubmitting(true);
+                  try {
+                    const res = await fetch('/api/gerente/consultant-request', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json', 'X-User-Id': userId as string },
+                      body: JSON.stringify({ banca_id: consultorBancaId, quantity_requested: consultorQuantity }),
+                    });
+                    const json = await res.json();
+                    if (json.success) {
+                      setConsultorRequestSuccess(json.message || 'Solicitação registrada.');
+                      setTimeout(() => {
+                        setConsultorBancaModalOpen(false);
+                        setConsultorRequestSuccess('');
+                      }, 1500);
+                    } else {
+                      setConsultorRequestError(json.error || 'Erro ao enviar.');
+                    }
+                  } catch {
+                    setConsultorRequestError('Erro de conexão.');
+                  } finally {
+                    setConsultorRequestSubmitting(false);
+                  }
+                }}
+                className="p-6"
+              >
+                {consultorRequestSuccess && (
+                  <div className="mb-4 p-3 rounded-xl bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-300 text-sm border border-green-200 dark:border-green-800">
+                    {consultorRequestSuccess}
+                  </div>
+                )}
+                {consultorRequestError && (
+                  <div className="mb-4 p-3 rounded-xl bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-300 text-sm border border-red-200 dark:border-red-800">
+                    {consultorRequestError}
+                  </div>
+                )}
+                <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-2 ml-1">Banca</label>
+                {bancasLoading ? (
+                  <div className="flex items-center gap-2 py-2 text-sm text-gray-500 dark:text-gray-400">
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-[#8CD955] border-t-transparent" />
+                    Carregando bancas...
+                  </div>
+                ) : (
+                  <select
+                    value={consultorBancaId}
+                    onChange={(e) => setConsultorBancaId(e.target.value)}
+                    required
+                    className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium mb-4"
+                  >
+                    <option value="">Selecione a banca</option>
+                    {bancas.map((b) => (
+                      <option key={b.id} value={b.id}>{b.name || b.url || b.id}</option>
+                    ))}
+                  </select>
+                )}
+                <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-2 ml-1">Número de consultores</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={500}
+                  value={consultorQuantity}
+                  onChange={(e) => setConsultorQuantity(Math.max(1, Math.min(500, parseInt(e.target.value, 10) || 1)))}
+                  className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium mb-6"
+                />
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setConsultorBancaModalOpen(false)}
+                    className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 font-bold py-3 rounded-xl"
+                  >
+                    Fechar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={consultorRequestSubmitting || !consultorBancaId}
+                    className="flex-1 bg-[#8CD955] hover:bg-[#7BC84A] text-white font-bold py-3 rounded-xl disabled:opacity-50"
+                  >
+                    {consultorRequestSubmitting ? 'Enviando...' : 'Enviar solicitação'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
         {/* Modal de Cadastro */}
         {isModalOpen && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -1497,42 +3218,42 @@ export default function GerentePage() {
                   <X className="w-6 h-6" />
                 </button>
               </div>
-              
+
               <form onSubmit={handleCreateConsultor} className="p-6 space-y-4">
                 {formError && <div className="bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-300 p-3 rounded-xl text-sm font-medium border border-red-100 dark:border-red-800">{formError}</div>}
                 {formSuccess && <div className="bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] p-3 rounded-xl text-sm font-medium border border-[#8CD955]/30">{formSuccess}</div>}
 
                 <div>
                   <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-1.5 ml-1">Nome do Consultor</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     required
                     placeholder="Ex: João Silva"
                     className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium transition-all"
                     value={formData.fullName}
-                    onChange={e => setFormData({...formData, fullName: e.target.value})}
+                    onChange={e => setFormData({ ...formData, fullName: e.target.value })}
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-1.5 ml-1">E-mail</label>
-                  <input 
-                    type="email" 
+                  <input
+                    type="email"
                     required
                     placeholder="exemplo@email.com"
                     className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium transition-all"
                     value={formData.email}
-                    onChange={e => setFormData({...formData, email: e.target.value})}
+                    onChange={e => setFormData({ ...formData, email: e.target.value })}
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-1.5 ml-1">Senha Inicial</label>
-                  <input 
-                    type="password" 
+                  <input
+                    type="password"
                     required
                     placeholder="••••••••"
                     className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium transition-all"
                     value={formData.password}
-                    onChange={e => setFormData({...formData, password: e.target.value})}
+                    onChange={e => setFormData({ ...formData, password: e.target.value })}
                   />
                 </div>
 
@@ -1615,18 +3336,18 @@ export default function GerentePage() {
                   <Trash2 className="w-6 h-6" />
                   Confirmar Exclusão
                 </h2>
-                <button 
+                <button
                   onClick={() => {
                     setDeleteModalOpen(false);
                     setConsultorToDelete(null);
-                  }} 
+                  }}
                   className="hover:bg-white/20 p-1.5 rounded-xl transition-colors"
                   disabled={isDeleting}
                 >
                   <X className="w-6 h-6" />
                 </button>
               </div>
-              
+
               <div className="p-6 space-y-4">
                 <div className="flex items-center gap-4">
                   <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/50 text-red-600 dark:text-red-400 flex items-center justify-center font-bold text-lg">
@@ -1644,7 +3365,7 @@ export default function GerentePage() {
                     <div>
                       <p className="text-sm font-bold text-red-800 dark:text-red-200 mb-1">Atenção! Esta ação não pode ser desfeita.</p>
                       <p className="text-xs text-red-700 dark:text-red-300">
-                        Você está prestes a deletar permanentemente a conta do consultor <strong>{consultorToDelete.name || consultorToDelete.email}</strong>. 
+                        Você está prestes a deletar permanentemente a conta do consultor <strong>{consultorToDelete.name || consultorToDelete.email}</strong>.
                         Todos os dados associados a esta conta serão removidos.
                       </p>
                     </div>
@@ -1652,20 +3373,20 @@ export default function GerentePage() {
                 </div>
 
                 <div className="pt-4 flex gap-3">
-                  <button 
-                    type="button" 
+                  <button
+                    type="button"
                     onClick={() => {
                       setDeleteModalOpen(false);
                       setConsultorToDelete(null);
-                    }} 
+                    }}
                     disabled={isDeleting}
                     className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 font-bold py-3 rounded-xl hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Cancelar
                   </button>
-                  <button 
+                  <button
                     type="button"
-                    onClick={handleDeleteConsultor} 
+                    onClick={handleDeleteConsultor}
                     disabled={isDeleting}
                     className="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
                   >
@@ -1687,6 +3408,7 @@ export default function GerentePage() {
           </div>
         )}
       </div>
+      <ToastContainer toasts={toasts} onClose={removeToast} />
     </Layout>
   );
 }

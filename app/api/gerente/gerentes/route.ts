@@ -11,7 +11,8 @@ function normalizeBancaUrl(url: string | null | undefined): string {
 
 /**
  * GET /api/gerente/gerentes?banca_url=...
- * Lista gerentes da banca para filtro (super_admin e admin).
+ * Lista APENAS gerentes (status = 'gerente') da banca — usado em Zaplink (atribuir ao gerente) e dashboard gerente.
+ * Não inclui consultores, gestores nem outros cargos.
  * Retorna { id, email, full_name } dos gerentes que pertencem à banca (enroller = dono da banca ou user_bancas).
  */
 export async function GET(req: NextRequest) {
@@ -82,17 +83,21 @@ export async function GET(req: NextRequest) {
       return successResponse([]);
     }
 
+    // Busca apenas perfis com status exatamente 'gerente' (inclui telefone para exibição no Zaplink)
     const { data: gerentes } = await supabaseServiceRole
       .from('profiles')
-      .select('id, email, full_name')
+      .select('id, email, full_name, telefone, status')
       .in('id', allGerenteIds)
       .eq('status', 'gerente');
 
-    const list = (gerentes || []).map((g: { id: string; email: string; full_name: string | null }) => ({
-      id: g.id,
-      email: g.email,
-      full_name: g.full_name,
-    }));
+    const list = (gerentes || [])
+      .filter((g: { status?: string }) => g.status === 'gerente')
+      .map((g: { id: string; email: string; full_name: string | null; telefone?: string | null }) => ({
+        id: g.id,
+        email: g.email,
+        full_name: g.full_name,
+        telefone: g.telefone ?? null,
+      }));
 
     return successResponse(list);
   } catch (err: any) {

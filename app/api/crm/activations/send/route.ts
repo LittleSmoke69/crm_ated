@@ -53,14 +53,19 @@ async function fetchVideoUrlAsBase64(videoUrl: string): Promise<string> {
 }
 
 
+/** Acima deste número de grupos, o envio é enfileirado e processado em segundo plano (evita timeout na Netlify). */
+const THRESHOLD_MASS_SEND = 10;
+
 /**
  * POST /api/crm/activations/send - Envia uma mensagem de ativação para vários grupos
+ * Se groupIds.length > THRESHOLD_MASS_SEND (ou forceMassSend=true), cria campanha em massa e retorna 202.
  */
 export async function POST(req: NextRequest) {
   try {
     const { userId } = await requireAuth(req);
     const body = await req.json();
-    const { messageId, groupIds, instanceName } = body;
+    const { messageId, groupIds, instanceName, forceMassSend, forceSync } = body;
+    const isCronProcess = req.headers.get('x-internal-cron-secret') === process.env.CRON_SECRET;
 
     if (!messageId || !groupIds || !Array.isArray(groupIds) || groupIds.length === 0 || !instanceName) {
       return errorResponse('messageId, groupIds e instanceName são obrigatórios', 400);
@@ -75,6 +80,66 @@ export async function POST(req: NextRequest) {
 
     if (messageError || !message) {
       return errorResponse('Mensagem não encontrada', 404);
+    }
+
+    // Chamada interna do worker de campanhas em massa: sempre envia o lote de forma síncrona
+    const useMassSend =
+      !(forceSync === true && isCronProcess) &&
+      (forceMassSend === true || groupIds.length > THRESHOLD_MASS_SEND);
+    if (useMassSend) {
+      const { data: job, error: jobError } = await supabaseServiceRole
+        .from('activation_mass_send_jobs')
+        .insert({
+          user_id: userId,
+          message_id: messageId,
+          instance_name: instanceName,
+          message_title: message.title || null,
+          group_ids: groupIds,
+          status: 'pending',
+          total_groups: groupIds.length,
+          sent_count: 0,
+          failed_count: 0,
+        })
+        .select('id')
+        .single();
+      if (jobError || !job) {
+        console.error('[ACTIVATION] Erro ao criar job de disparo em massa:', jobError);
+        return errorResponse('Erro ao criar campanha de disparo em massa. Tente novamente.', 500);
+      }
+      console.log(`📋 [ACTIVATION] Campanha de disparo em massa criada: job ${job.id}, ${groupIds.length} grupos`);
+
+      // Dispara o processamento imediato (em segundo plano) para a campanha começar a executar em segundos
+      const cronSecret = process.env.CRON_SECRET;
+      if (cronSecret) {
+        const base =
+          process.env.URL ||
+          process.env.NEXT_PUBLIC_SITE_URL ||
+          (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null);
+        const siteUrl = base ? base.replace(/\/$/, '') : null;
+        if (siteUrl) {
+          const processUrl = `${siteUrl}/api/crm/activations/mass-send/process`;
+          fetch(processUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-internal-cron-secret': cronSecret,
+            },
+          }).catch((err) => {
+            console.warn('[ACTIVATION] Trigger em background do processamento falhou (cron continuará):', err?.message);
+          });
+        }
+      }
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          job_id: job.id,
+          mass_send: true,
+          total_groups: groupIds.length,
+          message: 'Campanha de disparo em massa criada. O envio continuará em segundo plano. Acompanhe em Ativações > Campanhas de disparo.',
+        }),
+        { status: 202, headers: { 'Content-Type': 'application/json' } }
+      );
     }
 
     // 1.1. Se tem attachment_url, regenera URL assinada com 1 ano de validade para evitar expiração
@@ -124,6 +189,7 @@ export async function POST(req: NextRequest) {
         )
       `)
       .eq('instance_name', instanceName)
+      .eq('user_id', userId)
       .eq('is_active', true)
       .single();
 

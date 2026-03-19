@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   UserPlus, 
   Users, 
@@ -26,12 +26,14 @@ import {
   Wallet,
   Trophy,
   Loader2,
-  Filter
+  Filter,
+  Download
 } from 'lucide-react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import FinancialMetricsBarChart from '@/components/Charts/FinancialMetricsBarChart';
 import LeadsDistributionChart from '@/components/Charts/LeadsDistributionChart';
+import ExportCsvModal from '@/components/dono-banca/ExportCsvModal';
 
 interface ConsultorOutraBanca {
   id: string;
@@ -104,6 +106,10 @@ interface DonoBancaClientProps {
   serverError?: string;
   userStatus?: string | null;
   isAdminOrSuperAdmin?: boolean;
+  /** Cargo com status dono_banca, admin/super_admin ou permissão sidebar gestao_banca */
+  canAccessDonoBanca?: boolean;
+  /** Deve exibir seletor de banca (admin/super ou cargo custom com gestao_banca) */
+  canSelectBanca?: boolean;
 }
 
 export default function DonoBancaHierarquia({ 
@@ -112,14 +118,20 @@ export default function DonoBancaHierarquia({
   authError,
   serverError,
   userStatus: serverUserStatus,
-  isAdminOrSuperAdmin = false
+  isAdminOrSuperAdmin = false,
+  canAccessDonoBanca = false,
+  canSelectBanca = false
 }: DonoBancaClientProps) {
   const { checking: authChecking, userId: clientUserId } = useRequireAuth();
   const userId = serverUserId || clientUserId;
   const checking = serverUserId ? false : authChecking;
+
+  const showBancaSelector = isAdminOrSuperAdmin || canSelectBanca;
   
   const [loading, setLoading] = useState(false);
-  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(authError ? false : (initialData && !isAdminOrSuperAdmin ? true : null));
+  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(
+    authError ? false : !canAccessDonoBanca ? false : (initialData && !showBancaSelector ? true : null)
+  );
   const [gerentes, setGerentes] = useState<Gerente[]>(initialData?.gerentes || []);
   const [externalMetrics, setExternalMetrics] = useState<ExternalMetrics | null>(initialData?.externalMetrics || null);
   const [externalMetricsError, setExternalMetricsError] = useState<string | null>(initialData?.externalMetricsError || null);
@@ -161,9 +173,12 @@ export default function DonoBancaHierarquia({
 
   const [isFirstRender, setIsFirstRender] = useState(true);
 
-  // Carrega lista de bancas para super_admin/admin
+  // ── Export CSV (modal com filtros do CRM) ───────────────────────────────────
+  const [exportCsvModalOpen, setExportCsvModalOpen] = useState(false);
+
+  // Carrega lista de bancas para super_admin/admin ou cargo com permissão sidebar gestao_banca
   useEffect(() => {
-    if (!userId || !isAdminOrSuperAdmin) return;
+    if (!userId || !showBancaSelector) return;
     let cancelled = false;
     setBancasLoading(true);
     fetch('/api/crm/bancas', { headers: { 'X-User-Id': userId } })
@@ -178,15 +193,15 @@ export default function DonoBancaHierarquia({
       })
       .finally(() => { if (!cancelled) setBancasLoading(false); });
     return () => { cancelled = true; };
-  }, [userId, isAdminOrSuperAdmin]);
+  }, [userId, showBancaSelector]);
 
   useEffect(() => {
     if (!userId) return;
     
-    // super_admin/admin: só busca quando tiver banca selecionada
-    if (isAdminOrSuperAdmin) {
+    // super_admin/admin ou cargo com gestao_banca: só busca quando tiver banca selecionada
+    if (showBancaSelector) {
       if (!selectedBancaId) {
-        setIsAuthorized(null);
+        setIsAuthorized(canAccessDonoBanca ? null : false);
         return;
       }
       setIsFirstRender(false);
@@ -215,7 +230,7 @@ export default function DonoBancaHierarquia({
         checkAuthorization();
       }
     }
-  }, [userId, dateFilter, appliedStartDate, appliedEndDate, selectedBancaId, isAdminOrSuperAdmin]);
+  }, [userId, dateFilter, appliedStartDate, appliedEndDate, selectedBancaId, showBancaSelector]);
 
   // Período considerado "longo" para aviso de consulta em segundo plano
   const isLongPeriod = (): boolean => {
@@ -285,66 +300,67 @@ export default function DonoBancaHierarquia({
     return { dateFrom, dateTo };
   };
 
+  const BATCH_SIZE = 500;
+
   const checkAuthorization = async () => {
     if (!userId) return;
-    
+
     try {
-      // Sempre usa loading específico (ofuscado) para não travar a página
       setLoadingMetrics(true);
       setExternalMetricsError(null);
-      
+
       const { dateFrom, dateTo } = getDateRange();
-      
-      // Monta a URL com parâmetros de data e banca_id (para super_admin/admin)
-      let url = '/api/dono-banca/dashboard';
-      const params = new URLSearchParams();
-      if (dateFrom) params.append('date_from', dateFrom);
-      if (dateTo) params.append('date_to', dateTo);
-      if (isAdminOrSuperAdmin && selectedBancaId) params.append('banca_id', selectedBancaId);
-      if (params.toString()) url += `?${params.toString()}`;
-      
-      const response = await fetch(url, {
-        headers: { 'X-User-Id': userId as string }
-      });
-      const result = await response.json();
-      
-      console.log('[Frontend] Response status:', response.status);
-      console.log('[Frontend] Result success:', result.success);
-      console.log('[Frontend] Result data:', result.data ? 'present' : 'missing');
-      console.log('[Frontend] Result error:', result.error);
-      
-      if (response.ok && result.success) {
-        // Se a API retornou sucesso, o usuário é dono de banca
-        console.log('[Frontend] Autorização OK - Usuário é dono de banca');
-        setIsAuthorized(true);
-        
-        // SEMPRE atualiza os gerentes quando os dados são buscados
-        // As métricas dos gerentes mudam conforme o período de data selecionado
-        setGerentes(result.data?.gerentes || []);
-        
-        // Atualiza Top 5 Consultores
-        setTop5Consultants(result.data?.top5Consultants || []);
-        
-        // Define métricas externas e erro se houver
-        if (result.data?.externalMetrics) {
-          setExternalMetrics(result.data.externalMetrics);
-          setExternalMetricsError(null);
-        } else {
-          setExternalMetrics(null);
-          // Se tem banca_url mas não tem métricas, houve erro
-          if (result.data?.externalMetricsError) {
-            setExternalMetricsError(result.data.externalMetricsError);
+
+      const buildUrl = (offset: number, limit: number) => {
+        const params = new URLSearchParams();
+        if (dateFrom) params.append('date_from', dateFrom);
+        if (dateTo) params.append('date_to', dateTo);
+        if (showBancaSelector && selectedBancaId) params.append('banca_id', selectedBancaId);
+        params.set('limit', String(limit));
+        params.set('offset', String(offset));
+        return `/api/dono-banca/dashboard?${params.toString()}`;
+      };
+
+      let offset = 0;
+      let hasMore = true;
+      let isFirstBatch = true;
+
+      while (hasMore) {
+        const url = buildUrl(offset, BATCH_SIZE);
+        const response = await fetch(url, {
+          headers: { 'X-User-Id': userId as string }
+        });
+        const result = await response.json();
+
+        if (!response.ok || !result.success) {
+          if (isFirstBatch) {
+            console.error('[Frontend] Erro na autorização:', result.error || result.message);
+            setIsAuthorized(false);
           }
+          break;
         }
-        
-        setBancaName(result.data?.bancaInfo?.name || null);
-        setBancaId(result.data?.bancaId || null);
-      } else {
-        // Se a API retornou erro, o usuário não é dono de banca
-        console.error('[Frontend] Erro na autorização:', result.error || result.message);
-        console.error('[Frontend] Response status:', response.status);
-        console.error('[Frontend] Full result:', JSON.stringify(result, null, 2));
-        setIsAuthorized(false);
+
+        const data = result.data;
+        if (isFirstBatch) {
+          setIsAuthorized(true);
+          setGerentes(data?.gerentes || []);
+          setTop5Consultants(data?.top5Consultants || []);
+          if (data?.externalMetrics) {
+            setExternalMetrics(data.externalMetrics);
+            setExternalMetricsError(null);
+          } else {
+            setExternalMetrics(null);
+            if (data?.externalMetricsError) setExternalMetricsError(data.externalMetricsError);
+          }
+          setBancaName(data?.bancaInfo?.name || null);
+          setBancaId(data?.bancaId || null);
+          isFirstBatch = false;
+        } else {
+          setGerentes((prev) => [...prev, ...(data?.gerentes || [])]);
+        }
+
+        hasMore = data?.hasMore === true;
+        offset += BATCH_SIZE;
       }
     } catch (error) {
       console.error('[Frontend] Erro ao verificar autorização:', error);
@@ -398,32 +414,6 @@ export default function DonoBancaHierarquia({
     (g.full_name?.toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
-  const [addingToBancaUserId, setAddingToBancaUserId] = useState<string | null>(null);
-
-  const handleAddConsultantToBanca = async (consultantId: string) => {
-    const id = bancaId;
-    if (!id) return;
-    setAddingToBancaUserId(consultantId);
-    try {
-      const res = await fetch(`/api/dono-banca/bancas/${id}/add-user`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: consultantId }),
-        credentials: 'include',
-      });
-      const result = await res.json();
-      if (result.success) {
-        await checkAuthorization();
-      } else {
-        console.error(result.error || 'Erro ao atribuir');
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setAddingToBancaUserId(null);
-    }
-  };
-
   const handleSignOut = () => {
     if (typeof window !== 'undefined') {
       sessionStorage.removeItem('user_id');
@@ -449,8 +439,8 @@ export default function DonoBancaHierarquia({
     }
   }, [showDatePicker, showBancaFilter]);
 
-  // super_admin/admin sem banca selecionada: exibe seletor de banca
-  if (isAdminOrSuperAdmin && !selectedBancaId) {
+  // Quem precisa escolher banca (admin/super ou cargo com gestao_banca) sem banca selecionada
+  if (showBancaSelector && !selectedBancaId) {
     return (
       <Layout onSignOut={handleSignOut}>
         <div className="min-h-screen p-4 sm:p-6 space-y-6 max-w-7xl mx-auto bg-gray-50 dark:bg-[#1a1a1a]">
@@ -518,8 +508,8 @@ export default function DonoBancaHierarquia({
     );
   }
 
-  // Se não está autorizado (não é dono de banca), mostra mensagem de acesso negado
-  if (isAuthorized === false) {
+  // Se não tem permissão para a página (nem status fixo nem sidebar gestao_banca)
+  if (!canAccessDonoBanca) {
     return (
       <Layout onSignOut={handleSignOut}>
         <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-[#1a1a1a] p-6">
@@ -556,16 +546,38 @@ export default function DonoBancaHierarquia({
             <p className="text-gray-500 dark:text-gray-400 text-sm sm:text-base">Gerencie sua hierarquia de Gerentes e Consultores</p>
           </div>
           
-          {!isAdminOrSuperAdmin && (
-            <button 
-              onClick={() => setIsModalOpen(true)}
-              className="flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl font-bold transition-all shadow-md shadow-emerald-100 dark:shadow-none shrink-0"
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() => setExportCsvModalOpen(true)}
+              disabled={!userId}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold transition-all shadow-sm shrink-0 text-sm bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Exportar leads da banca em CSV (com filtros do CRM)"
             >
-              <UserPlus className="w-5 h-5" />
-              Cadastrar Usuário
+              <Download className="w-4 h-4" />
+              Exportar CSV
             </button>
-          )}
+
+            {!isAdminOrSuperAdmin && (
+              <button
+                onClick={() => setIsModalOpen(true)}
+                className="flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl font-bold transition-all shadow-md shadow-emerald-100 dark:shadow-none shrink-0"
+              >
+                <UserPlus className="w-5 h-5" />
+                Cadastrar Usuário
+              </button>
+            )}
+          </div>
         </div>
+
+        {/* Modal Export CSV (filtros iguais ao CRM) */}
+        <ExportCsvModal
+          open={exportCsvModalOpen}
+          onClose={() => setExportCsvModalOpen(false)}
+          userId={userId as string}
+          bancasFromParent={showBancaSelector ? bancas : []}
+          defaultBancaId={showBancaSelector ? null : bancaId}
+          showBancaSelector={showBancaSelector}
+        />
 
         {/* KPIs da API Externa */}
         <div className="mb-4 sm:mb-6">
@@ -576,8 +588,8 @@ export default function DonoBancaHierarquia({
             </h2>
             
             <div className="flex items-center gap-2 flex-wrap min-w-0">
-            {/* Filtro de Banca (super_admin/admin) */}
-            {isAdminOrSuperAdmin && (
+            {/* Filtro de Banca (super_admin/admin ou cargo com gestao_banca) */}
+            {showBancaSelector && (
               <div className="relative banca-filter-container">
                 <button
                   onClick={() => {
@@ -1236,37 +1248,6 @@ export default function DonoBancaHierarquia({
                         </a>
                       </td>
                     </tr>
-                    {gerente.consultoresEmOutrasBancas && gerente.consultoresEmOutrasBancas.length > 0 && (
-                      <tr className="bg-amber-50/60 dark:bg-amber-900/20 border-l-4 border-amber-300 dark:border-amber-600">
-                        <td colSpan={7} className="px-4 sm:px-6 py-3 text-sm">
-                          <p className="font-semibold text-amber-800 dark:text-amber-200 mb-2 flex items-center gap-1.5">
-                            <Users className="w-4 h-4 shrink-0" />
-                            Consultores deste gerente em outras bancas (ainda não atribuídos a {bancaName || 'esta banca'})
-                          </p>
-                          <ul className="space-y-1.5">
-                            {gerente.consultoresEmOutrasBancas.map((c) => (
-                              <li key={c.id} className="flex items-center justify-between gap-3 flex-wrap bg-white/80 dark:bg-gray-800/80 rounded-lg px-3 py-2 border border-amber-100 dark:border-amber-800">
-                                <span className="text-gray-700 dark:text-gray-200">{c.full_name || c.email}</span>
-                                <span className="text-gray-500 dark:text-gray-400 text-xs">{c.email}</span>
-                                <button
-                                  type="button"
-                                  onClick={() => handleAddConsultantToBanca(c.id)}
-                                  disabled={!!addingToBancaUserId || !bancaId}
-                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                                >
-                                  {addingToBancaUserId === c.id ? (
-                                    <Loader2 className="w-4 h-4 animate-spin" />
-                                  ) : (
-                                    <Plus className="w-4 h-4" />
-                                  )}
-                                  Atribuir à {bancaName || 'banca'}
-                                </button>
-                              </li>
-                            ))}
-                          </ul>
-                        </td>
-                      </tr>
-                    )}
                     </React.Fragment>
                   ))
                 )}
@@ -1327,30 +1308,6 @@ export default function DonoBancaHierarquia({
                       </p>
                     </div>
                   </div>
-                  {gerente.consultoresEmOutrasBancas && gerente.consultoresEmOutrasBancas.length > 0 && (
-                    <div className="mt-3 pt-3 border-t border-amber-200 dark:border-amber-700 bg-amber-50/60 dark:bg-amber-900/20 rounded-xl p-3">
-                      <p className="text-xs font-semibold text-amber-800 dark:text-amber-200 mb-2 flex items-center gap-1">
-                        <Users className="w-3.5 h-3.5 shrink-0" />
-                        Em outras bancas (atribuir a {bancaName || 'esta banca'})
-                      </p>
-                      <ul className="space-y-2">
-                        {gerente.consultoresEmOutrasBancas.map((c) => (
-                          <li key={c.id} className="flex items-center justify-between gap-2 flex-wrap bg-white/90 dark:bg-gray-800/80 rounded-lg px-2.5 py-2 border border-amber-100 dark:border-amber-800">
-                            <span className="text-gray-700 dark:text-gray-200 text-sm truncate">{c.full_name || c.email}</span>
-                            <button
-                              type="button"
-                              onClick={() => handleAddConsultantToBanca(c.id)}
-                              disabled={!!addingToBancaUserId || !bancaId}
-                              className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500 text-white text-xs font-medium hover:bg-amber-600 disabled:opacity-50"
-                            >
-                              {addingToBancaUserId === c.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
-                              Atribuir
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
                 </div>
               ))
             )}

@@ -13,6 +13,8 @@ interface ScheduleDetailsModalProps {
   userId: string | null;
   onUpdate: () => void;
   onEditMessage: (messageId: string) => void;
+  /** Ao editar mensagem para um grupo específico: cria novo modelo e atualiza só esse grupo no card */
+  onEditMessageForGroup?: (messageId: string, scheduleId: string) => void;
 }
 
 const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
@@ -23,6 +25,7 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
   userId,
   onUpdate,
   onEditMessage,
+  onEditMessageForGroup,
 }) => {
   const { showToast } = useToast();
   const [isEditing, setIsEditing] = useState(false);
@@ -455,18 +458,34 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
                       key={s.id}
                       className="flex items-center justify-between gap-2 py-2 border-b border-gray-100 dark:border-[#404040] last:border-0"
                     >
-                      <span className="text-gray-800 dark:text-white font-medium truncate">
+                      <span className="text-gray-800 dark:text-white font-medium truncate min-w-0">
                         {s.group_subject || s.group_id}
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveFromDisparo(s.id)}
-                        className="shrink-0 px-2 py-1 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded text-sm font-medium flex items-center gap-1"
-                        title="Remover este grupo do disparo"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                        Remover
-                      </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {onEditMessageForGroup && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onEditMessageForGroup(schedule.message_id, s.id);
+                              onClose();
+                            }}
+                            className="px-2 py-1 text-[#8CD955] hover:bg-[#8CD955]/10 dark:hover:bg-[#8CD955]/20 rounded text-sm font-medium flex items-center gap-1"
+                            title="Editar mensagem só para este grupo (cria novo modelo)"
+                          >
+                            <Edit2 className="w-4 h-4" />
+                            Editar mensagem
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveFromDisparo(s.id)}
+                          className="px-2 py-1 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded text-sm font-medium flex items-center gap-1"
+                          title="Remover este grupo do disparo"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                          Remover
+                        </button>
+                      </div>
                     </li>
                   ))}
                 </ul>

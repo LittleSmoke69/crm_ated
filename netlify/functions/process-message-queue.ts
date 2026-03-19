@@ -66,6 +66,20 @@ const LOCK_TTL_MINUTES = 3; // TTL do lock (recupera jobs travados após 3 min)
 const FETCH_TIMEOUT_MS = 30000; // Timeout para Evolution API
 const LOOKAHEAD_MINUTES = 2; // Lookahead para buscar jobs próximos
 
+/** Indica se o erro é por instância inativa/desconectada — nesses casos não conta para o limite de tentativas e o job continua sendo reagendado até a instância voltar. */
+function isInstanceUnavailableError(errorMsg: string): boolean {
+  const msg = (errorMsg || '').toLowerCase();
+  return (
+    msg.includes('instância não encontrada') ||
+    msg.includes('instancia não encontrada') ||
+    msg.includes('ou inativa') ||
+    msg.includes('inativa') && msg.includes('instância') ||
+    msg.includes('evolution api não encontrada') ||
+    msg.includes('base_url não configurado') ||
+    msg.includes('instância sem apikey')
+  );
+}
+
 // Normaliza base_url
 function normalizeBaseUrl(baseUrl: string): string {
   if (!baseUrl) return baseUrl;
@@ -104,15 +118,17 @@ async function fetchVideoUrlAsBase64(videoUrl: string): Promise<string> {
 
 
 // Wrapper que chama a lib com logger para manter logs do worker
+// asOfUtc: quando informado (ex: após enviar o job), usa esse instante como referência em vez de "agora" — evita que atraso do worker faça a próxima execução pular para +1 semana
 function calculateNextRecurringRun(
   cronExpr: string,
   timezone: string,
   recurringDays: any,
   recurringTime: string,
-  logPrefix: string = ''
+  logPrefix: string = '',
+  asOfUtc?: string
 ): string {
   const log = (msg: string, ...args: unknown[]) => console.log(`${logPrefix} ${msg}`, ...args);
-  return calcNextRun(cronExpr, timezone, recurringDays, recurringTime, log);
+  return calcNextRun(cronExpr, timezone, recurringDays, recurringTime, log, asOfUtc);
 }
 
 // Processa um job individual de envio de mensagem
@@ -478,13 +494,14 @@ async function processMessageJob(job: any, workerId: string): Promise<{ success:
       // Se for recorrente, calcula próximo next_run_utc
       let nextRunUTC = null;
       if (schedule_type === 'recurring') {
-        console.log(`${logPrefix} 🔄 [RECORRENTE] Calculando próximo horário de execução...`);
+        console.log(`${logPrefix} 🔄 [RECORRENTE] Calculando próximo horário de execução (referência: execução em ${next_run_utc || 'agora'})...`);
         nextRunUTC = calculateNextRecurringRun(
           cron_expr || '',
           timezone || 'America/Sao_Paulo',
           recurring_days, // Passa o valor bruto, a função normaliza internamente
           recurring_time || '',
-          logPrefix
+          logPrefix,
+          new Date().toISOString() // Usa o momento real da execução, não o horário agendado
         );
         
         // Se não conseguiu calcular, usa fallback: amanhã no mesmo horário no timezone do agendamento (evita +7 dias)
@@ -529,33 +546,33 @@ async function processMessageJob(job: any, workerId: string): Promise<{ success:
 
       return { success: true };
     } else {
-      // Erro
+      // Erro na resposta da API
       const errorMsg = responseData.message || responseText || `HTTP ${response.status}`;
-      
-      // Verifica se deve fazer retry
-      const maxRetries = 3;
-      const attempts = (job.attempts || 0) + 1;
+      const instanceUnavailable = isInstanceUnavailableError(errorMsg);
+      // Para instância inativa/reconectada: não conta tentativas — sempre reagenda até a instância voltar
+      const maxRetries = instanceUnavailable ? Infinity : 3;
+      const attempts = instanceUnavailable ? (job.attempts || 0) : (job.attempts || 0) + 1;
+
+      if (instanceUnavailable) {
+        console.log(`${logPrefix} 🔄 [INSTÂNCIA INDISPONÍVEL] Reagendando para 5 min (mensagem será reenviada quando a instância estiver ativa)`);
+      }
 
       if (attempts < maxRetries) {
-        // Retry: agenda para 5 minutos depois
         const nextRetry = new Date(Date.now() + 5 * 60 * 1000);
-        
         await supabaseServiceRole
           .from('message_schedules')
           .update({
             status: 'scheduled',
             next_run_utc: nextRetry.toISOString(),
-            attempts,
+            attempts: instanceUnavailable ? (job.attempts || 0) : attempts,
             last_error: errorMsg,
             updated_at: new Date().toISOString(),
             locked_at: null,
             locked_by: null,
           })
           .eq('id', id);
-
         return { success: false, error: `Retry agendado: ${errorMsg}` };
       } else {
-        // Esgotou tentativas, marca como failed
         await supabaseServiceRole
           .from('message_schedules')
           .update({
@@ -567,7 +584,6 @@ async function processMessageJob(job: any, workerId: string): Promise<{ success:
             locked_by: null,
           })
           .eq('id', id);
-
         return { success: false, error: errorMsg };
       }
     }
@@ -575,26 +591,28 @@ async function processMessageJob(job: any, workerId: string): Promise<{ success:
     const errorMsg = error?.message || String(error);
     console.error(`[WORKER ${workerId}] Job ${id}: ❌ ERRO - ${errorMsg}`);
 
-    // Verifica se deve fazer retry
-    const maxRetries = 3;
-    const attempts = (job.attempts || 0) + 1;
+    const instanceUnavailable = isInstanceUnavailableError(errorMsg);
+    const maxRetries = instanceUnavailable ? Infinity : 3;
+    const attempts = instanceUnavailable ? (job.attempts || 0) : (job.attempts || 0) + 1;
+
+    if (instanceUnavailable) {
+      console.log(`[WORKER ${workerId}] Job ${id}: 🔄 [INSTÂNCIA INDISPONÍVEL] Reagendando para 5 min (será reenviado quando a instância estiver ativa)`);
+    }
 
     if (attempts < maxRetries) {
       const nextRetry = new Date(Date.now() + 5 * 60 * 1000);
-      
       await supabaseServiceRole
         .from('message_schedules')
         .update({
           status: 'scheduled',
           next_run_utc: nextRetry.toISOString(),
-          attempts,
+          attempts: instanceUnavailable ? (job.attempts || 0) : attempts,
           last_error: errorMsg,
           updated_at: new Date().toISOString(),
           locked_at: null,
           locked_by: null,
         })
         .eq('id', id);
-
       return { success: false, error: `Retry agendado: ${errorMsg}` };
     } else {
       await supabaseServiceRole
@@ -608,7 +626,6 @@ async function processMessageJob(job: any, workerId: string): Promise<{ success:
           locked_by: null,
         })
         .eq('id', id);
-
       return { success: false, error: errorMsg };
     }
   }
@@ -659,6 +676,7 @@ export const handler: Handler = async (event, context) => {
     const { data: unlockedJobs } = await supabaseServiceRole
       .from('message_schedules')
       .update({
+        status: 'scheduled', // Reseta para scheduled para que o job possa ser reprocessado
         locked_at: null,
         locked_by: null,
         updated_at: new Date().toISOString(),

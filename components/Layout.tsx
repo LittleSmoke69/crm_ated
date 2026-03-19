@@ -133,9 +133,14 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
       const id = sessionStorage.getItem('user_id') || localStorage.getItem('profile_id');
       if (!id) return;
 
+      // Contabiliza total_crm_time em: crm/kanban, crm/transferido, demais /crm, /consultor e /gerente
       const isCrmPage =
         typeof pathname === 'string' &&
-        (pathname.startsWith('/crm') || pathname.startsWith('/consultor') || pathname.startsWith('/gerente'));
+        (pathname.startsWith('/crm/kanban') ||
+          pathname.startsWith('/crm/transferido') ||
+          pathname.startsWith('/crm') ||
+          pathname.startsWith('/consultor') ||
+          pathname.startsWith('/gerente'));
 
       try {
         await fetch('/api/user/heartbeat', {
@@ -148,14 +153,21 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
       }
     };
 
-    // Envia o primeiro heartbeat após 10s para confirmar que o usuário realmente entrou
-    const initialTimeout = setTimeout(sendHeartbeat, 10000);
+    // Em página de CRM: envia heartbeat imediatamente para contabilizar tempo desde a entrada na página
+    const isCrmPage =
+      typeof pathname === 'string' &&
+      (pathname.startsWith('/crm/kanban') ||
+        pathname.startsWith('/crm/transferido') ||
+        pathname.startsWith('/crm') ||
+        pathname.startsWith('/consultor') ||
+        pathname.startsWith('/gerente'));
 
-    // Envia heartbeats subsequentes a cada 60 segundos
+    const initialTimeout = isCrmPage ? null : setTimeout(sendHeartbeat, 10000);
+    if (isCrmPage) sendHeartbeat();
+
     const heartbeatInterval = setInterval(sendHeartbeat, 60000);
-
     return () => {
-      clearTimeout(initialTimeout);
+      if (initialTimeout) clearTimeout(initialTimeout);
       clearInterval(heartbeatInterval);
     };
   }, [pathname]);
@@ -266,8 +278,10 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
     }
   };
 
+  const isChat = pathname === '/chat';
+
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-[#1a1a1a] flex flex-col lg:flex-row">
+    <div className={`bg-gray-50 dark:bg-[#1a1a1a] flex flex-col lg:flex-row ${isChat ? 'h-screen overflow-hidden' : 'min-h-screen'}`}>
       {/* Header Mobile */}
       <header className="lg:hidden h-16 bg-white dark:bg-[#2a2a2a] border-b border-gray-200 dark:border-[#404040] flex items-center justify-between px-4 sticky top-0 z-30 shadow-sm">
         <div className="flex items-center gap-2">
@@ -285,14 +299,20 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
       <Sidebar onSignOut={onSignOut} />
 
       <main
-        className="flex-1 transition-all duration-300 min-h-screen min-w-0"
+        className={`flex-1 transition-all duration-300 min-w-0 flex flex-col ${isChat ? 'overflow-hidden' : 'min-h-screen'}`}
         style={{
           paddingLeft: isMobile ? '0px' : `${sidebarWidth}px`
         }}
       >
-        <div className="p-4 sm:p-6 lg:p-8">
-          {children}
-        </div>
+        {isChat ? (
+          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+            {children}
+          </div>
+        ) : (
+          <div className="p-4 sm:p-6 lg:p-8">
+            {children}
+          </div>
+        )}
       </main>
 
       {/* Modal de telefone */}

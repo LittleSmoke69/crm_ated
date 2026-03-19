@@ -33,7 +33,10 @@ export async function GET(req: NextRequest) {
       .eq('id', userId)
       .single();
 
-    const isAdmin = profile?.status === 'admin' || profile?.status === 'super_admin';
+    const isAdminOrSuporte =
+      profile?.status === 'admin' ||
+      profile?.status === 'super_admin' ||
+      profile?.status === 'suporte';
 
     let evolutionQuery = supabaseServiceRole
       .from('evolution_instances')
@@ -41,7 +44,7 @@ export async function GET(req: NextRequest) {
       .eq('is_chat_instance', true)
       .order('created_at', { ascending: false });
 
-    if (!isAdmin) {
+    if (!isAdminOrSuporte) {
       evolutionQuery = evolutionQuery.eq('user_id', userId);
     }
 
@@ -52,7 +55,7 @@ export async function GET(req: NextRequest) {
       .select('id, name, phone_number_id')
       .eq('is_active', true);
 
-    if (!isAdmin && profile?.zaploto_id) {
+    if (!isAdminOrSuporte && profile?.zaploto_id) {
       whatsappOfficialQuery = whatsappOfficialQuery.eq('zaploto_id', profile.zaploto_id);
     }
 

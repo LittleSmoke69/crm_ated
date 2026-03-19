@@ -10,7 +10,7 @@ const LOGO_SIGNED_EXPIRES = 3600;
 /**
  * GET /api/redirect/[slug]/resolve
  * Resolve redirect por slug, escolhe grupo por peso, cria click e retorna invite_url + timer + logo.
- * Query: sid (opcional, session_id)
+ * Query: sid (opcional), utm_source, utm_medium, utm_campaign, utm_content, utm_term (salvos em redirect_visits se algum tiver valor).
  */
 /** Decodifica o slug da URL (pode vir codificado uma ou duas vezes). */
 function decodeSlug(raw: string): string {
@@ -39,6 +39,11 @@ export async function GET(
     }
     const slug = decodeSlug(rawSlug);
     const sid = req.nextUrl.searchParams.get('sid') ?? null;
+    const utm_source = req.nextUrl.searchParams.get('utm_source')?.trim() || null;
+    const utm_medium = req.nextUrl.searchParams.get('utm_medium')?.trim() || null;
+    const utm_campaign = req.nextUrl.searchParams.get('utm_campaign')?.trim() || null;
+    const utm_content = req.nextUrl.searchParams.get('utm_content')?.trim() || null;
+    const utm_term = req.nextUrl.searchParams.get('utm_term')?.trim() || null;
 
     let redirectRow: { id: string; project_id: string } | null = null;
 
@@ -83,12 +88,32 @@ export async function GET(
 
     const { data: project } = await supabaseServiceRole
       .from('vsl_projects')
-      .select('id, name, redirect_timer_seconds, logo_path')
+      .select('id, name, redirect_timer_seconds, logo_path, pixel_id')
       .eq('id', redirectRow.project_id)
       .single();
 
     if (!project) {
       return errorResponse('Projeto não encontrado', 404);
+    }
+
+    let visit_id: string | null = null;
+    const hasUtm = [utm_source, utm_medium, utm_campaign, utm_content, utm_term].some((v) => v && v.length > 0);
+    if (hasUtm) {
+      const { data: visitRow } = await supabaseServiceRole
+        .from('redirect_visits')
+        .insert({
+          project_id: redirectRow.project_id,
+          redirect_slug_id: redirectRow.id,
+          utm_source,
+          utm_medium,
+          utm_campaign,
+          utm_content,
+          utm_term,
+          status: 'pending',
+        })
+        .select('id')
+        .single();
+      if (visitRow?.id) visit_id = visitRow.id;
     }
 
     const { data: linkRows } = await supabaseServiceRole
@@ -113,8 +138,8 @@ export async function GET(
       return errorResponse('Nenhum grupo ativo com peso configurado', 400);
     }
 
-    let utm_campaign: string | null = null;
-    let fbclid: string | null = null;
+    let clickUtmCampaign: string | null = null;
+    let clickFbclid: string | null = null;
     if (sid) {
       const { data: sess } = await supabaseServiceRole
         .from('vsl_sessions')
@@ -122,8 +147,8 @@ export async function GET(
         .eq('id', sid)
         .single();
       if (sess) {
-        utm_campaign = sess.utm_campaign ?? null;
-        fbclid = sess.fbclid ?? null;
+        clickUtmCampaign = sess.utm_campaign ?? null;
+        clickFbclid = sess.fbclid ?? null;
       }
     }
 
@@ -134,8 +159,8 @@ export async function GET(
         redirect_slug_id: redirectRow.id,
         group_id: selected.id,
         session_id: sid,
-        utm_campaign,
-        fbclid,
+        utm_campaign: clickUtmCampaign,
+        fbclid: clickFbclid,
       })
       .select('id')
       .single();
@@ -170,6 +195,8 @@ export async function GET(
       project_name: project.name,
       group_id: selected.id,
       click_id: clickRow.id,
+      pixel_id: project.pixel_id ?? null,
+      visit_id,
     });
   } catch (e) {
     return serverErrorResponse(e);

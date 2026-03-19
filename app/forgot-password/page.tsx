@@ -67,8 +67,12 @@ export default function ForgotPasswordPage() {
     }
   };
 
+  /** Aceita DDD + número com 9 (ex: 81995124479). Remove 55 se colar número completo; por trás a API envia 55+valor. */
   const normalizePhoneInput = (v: string) => {
-    const digits = v.replace(/\D/g, '');
+    let digits = v.replace(/\D/g, '');
+    if (digits.startsWith('55') && digits.length >= 12) {
+      digits = digits.slice(2);
+    }
     if (digits.length <= 11) return digits;
     return digits.slice(0, 11);
   };

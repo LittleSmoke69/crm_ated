@@ -12,7 +12,9 @@
     "dev:clean": "npm run clean:win && npm run dev",
     "setup:scheduled-function": "tsx scripts/setup-scheduled-function.ts",
     "anti-spam:worker": "tsx scripts/anti-spam-worker.ts",
-    "backfill:transfer-balances": "tsx scripts/backfill-transfer-balances.ts"
+    "backfill:transfer-balances": "tsx scripts/backfill-transfer-balances.ts",
+    "test:resolve-expired": "tsx scripts/test-resolve-expired.ts",
+    "run:netlify-resolve-expired": "tsx scripts/run-netlify-resolve-expired.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.81.1",
@@ -36,7 +38,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "baseline-browser-mapping": "^2.9.19",
+    "baseline-browser-mapping": "^2.10.0",
     "concurrently": "^9.2.1",
     "tailwindcss": "^4",
     "tsx": "^4.20.6",

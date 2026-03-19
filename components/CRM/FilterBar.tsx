@@ -27,6 +27,8 @@ interface FilterBarProps {
   onBancasLoaded?: (bancas: { id: string; name: string; url: string }[]) => void;
   /** Quando informado (ex.: admin visualizando CRM de outro usuário), a API de bancas retorna as bancas do usuário alvo. */
   targetUserId?: string;
+  /** Para verificação de banca: 'no' = kanban (só bancas com lead não transferido), 'yes' = transferido (só bancas com lead transferido). */
+  transferredFilter?: 'yes' | 'no';
 }
 
 interface Banca {
@@ -41,7 +43,7 @@ interface Tag {
   color: string;
 }
 
-const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initialDateFilter, onBancasLoaded, targetUserId }) => {
+const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initialDateFilter, onBancasLoaded, targetUserId, transferredFilter }) => {
   const [searchInputValue, setSearchInputValue] = useState('');
   const [activeFilters, setActiveFilters] = useState<Record<string, any>>(() => {
     if (initialDateFilter) {
@@ -70,11 +72,19 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
     const controller = new AbortController();
     const { signal } = controller;
 
+    const getUserId = (): string | null => {
+      try {
+        return sessionStorage.getItem('user_id') || localStorage.getItem('profile_id') || null;
+      } catch {
+        return null;
+      }
+    };
+
     const loadBancas = async () => {
       setBancasLoading(true);
       let loadedBancas: { id: string; name: string; url: string }[] = [];
       try {
-        const userId = sessionStorage.getItem('user_id') || localStorage.getItem('profile_id');
+        const userId = getUserId();
         if (!userId) {
           if (!signal.aborted) {
             setBancasLoading(false);
@@ -83,10 +93,10 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           return;
         }
 
-        const bancasUrl = targetUserId
-          ? `/api/crm/bancas?targetUserId=${encodeURIComponent(targetUserId)}`
-          : '/api/crm/bancas';
-        const response = await fetch(bancasUrl, {
+        const url = new URL('/api/crm/bancas', window.location.origin);
+        if (targetUserId) url.searchParams.set('targetUserId', targetUserId);
+        if (transferredFilter) url.searchParams.set('transferred_filter', transferredFilter);
+        const response = await fetch(url.toString(), {
           headers: { 'X-User-Id': userId },
           signal,
         });
@@ -102,8 +112,9 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           setBancas(result.data);
           loadedBancas = result.data;
         }
-      } catch (err: any) {
-        if (err?.name === 'AbortError') return;
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === 'AbortError') return;
+        console.error('[FilterBar] Erro ao carregar bancas:', err);
       } finally {
         if (!signal.aborted) {
           setBancasLoading(false);
@@ -114,35 +125,42 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
 
     loadBancas();
     return () => controller.abort();
-  }, [onBancasLoaded, targetUserId]);
+  }, [onBancasLoaded, targetUserId, transferredFilter]);
 
   // Carrega tags
   useEffect(() => {
+    const getUserId = (): string | null => {
+      try {
+        return sessionStorage.getItem('user_id') || localStorage.getItem('profile_id') || null;
+      } catch {
+        return null;
+      }
+    };
+
     const loadTags = async () => {
       try {
-        const userId = sessionStorage.getItem('user_id') || localStorage.getItem('profile_id');
+        const userId = getUserId();
         if (!userId) {
-          console.warn('[FilterBar] Usuário não encontrado, não é possível carregar tags');
           return;
         }
-        
+
         const response = await fetch('/api/crm/tags', {
-          headers: { 'X-User-Id': userId }
+          headers: { 'X-User-Id': userId },
         });
-        
+
         if (!response.ok) {
           console.error('[FilterBar] Erro HTTP ao buscar tags:', response.status, response.statusText);
           return;
         }
-        
+
         const result = await response.json();
         if (result.success && Array.isArray(result.data)) {
           setTags(result.data);
         } else {
           console.error('[FilterBar] Erro na resposta das tags:', result.error || 'Resposta inválida');
         }
-      } catch (err: any) {
-        console.error('[FilterBar] Erro ao carregar tags:', err.message || err);
+      } catch (err: unknown) {
+        console.error('[FilterBar] Erro ao carregar tags:', err instanceof Error ? err.message : err);
       }
     };
     loadTags();
@@ -252,8 +270,13 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
             placeholder="Buscar por nome, email ou telefone..."
             value={searchInputValue}
             onChange={(e) => setSearchInputValue(e.target.value)}
-            onBlur={() => onSearch(searchInputValue)}
-            onKeyDown={(e) => { if (e.key === 'Enter') onSearch(searchInputValue); }}
+            onBlur={(e) => onSearch(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                onSearch((e.target as HTMLInputElement).value);
+              }
+            }}
             className="w-full pl-10 pr-4 py-2.5 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#555] rounded-xl text-sm text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 focus:bg-gray-50 dark:focus:bg-[#333] focus:border-[#8CD955]/40 transition-all"
           />
         </div>
@@ -851,6 +874,45 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                       'bg-red-200 border-red-400'
                     }`}
                   />
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Filtro: Apenas possível transferência (90+ dias sem depósito) */}
+        <div className="relative">
+          <button 
+            onClick={() => toggleMenu('possivelTransferencia')}
+            className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-xs font-semibold transition-all shadow-sm ${
+              openMenu === 'possivelTransferencia' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#8CD955]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
+            }`}
+          >
+            <Target className="w-3.5 h-3.5" />
+            {activeFilters.possivelTransferencia?.value === 'only' ? 'Apenas possível transferência' : 'Possível transferência'}
+            <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform ${openMenu === 'possivelTransferencia' ? 'rotate-180' : ''}`} />
+          </button>
+          {openMenu === 'possivelTransferencia' && (
+            <div className="absolute left-0 top-full mt-2 w-56 bg-white dark:bg-[#333] rounded-xl shadow-2xl border border-gray-100 dark:border-[#404040] py-2 z-[35] animate-in fade-in slide-in-from-top-2 duration-200">
+              {[
+                { value: null, label: 'Todos' },
+                { value: 'only', label: 'Apenas possível transferência' },
+              ].map(option => (
+                <button 
+                  key={option.value ?? 'all'}
+                  onClick={() => {
+                    if (option.value === null) {
+                      removeFilter('possivelTransferencia');
+                    } else {
+                      handleFilterSelect('possivelTransferencia', option.value, option.label);
+                    }
+                    setOpenMenu(null);
+                  }}
+                  className={`w-full text-left px-4 py-2.5 text-xs hover:bg-gray-50 dark:hover:bg-[#404040] hover:text-[#8CD955] transition-colors font-bold ${
+                    (option.value === null && !activeFilters.possivelTransferencia) || activeFilters.possivelTransferencia?.value === option.value ? 'bg-gray-50 dark:bg-[#404040] text-[#6AB83D]' : 'text-gray-600 dark:text-gray-300'
+                  }`}
+                >
                   {option.label}
                 </button>
               ))}

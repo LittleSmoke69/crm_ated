@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
-import { requireStatus, getUserProfile } from '@/lib/middleware/permissions';
+import { getUserProfile } from '@/lib/middleware/permissions';
+import { requireGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
 import { getEffectiveDonoIdForGestor } from '@/lib/middleware/gestor-owner';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
@@ -21,13 +22,14 @@ function normalizeBancaUrl(url: string | null | undefined): string {
  */
 export async function GET(req: NextRequest) {
   try {
-    const { userId } = await requireStatus(req, ['admin', 'super_admin', 'gestor']);
-    const profile = await getUserProfile(userId!);
+    const { userId } = await requireGestorTrafego(req);
+    const profile = await getUserProfile(userId);
     if (!profile) {
       return errorResponse('Perfil não encontrado', 403);
     }
 
-    if (profile.status === 'admin' || profile.status === 'super_admin') {
+    const statusNorm = profile?.status?.trim().toLowerCase();
+    if (statusNorm === 'admin' || statusNorm === 'super_admin') {
       const { data: donosData, error } = await supabaseServiceRole
         .from('profiles')
         .select('id, email, full_name, banca_name, banca_url')
@@ -55,7 +57,7 @@ export async function GET(req: NextRequest) {
     // Gestor: donos que pode acessar = enroller (se dono) + donos das bancas em user_bancas
     const donoIds = new Set<string>();
 
-    const effectiveDonoId = await getEffectiveDonoIdForGestor(userId!);
+    const effectiveDonoId = await getEffectiveDonoIdForGestor(userId);
     if (effectiveDonoId) {
       donoIds.add(effectiveDonoId);
     }
@@ -75,7 +77,7 @@ export async function GET(req: NextRequest) {
     const { data: ubRow } = await supabaseServiceRole
       .from('user_bancas')
       .select('banca_ids')
-      .eq('user_id', userId!)
+      .eq('user_id', userId)
       .maybeSingle();
     const bancaIds = Array.isArray(ubRow?.banca_ids) ? (ubRow.banca_ids as string[]) : [];
     if (bancaIds.length > 0) {

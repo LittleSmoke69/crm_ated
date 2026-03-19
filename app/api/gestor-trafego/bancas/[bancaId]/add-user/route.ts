@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { getUserProfile } from '@/lib/middleware/permissions';
+import { canAccessGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
@@ -22,8 +23,9 @@ export async function POST(
     if (!bancaId?.trim()) return errorResponse('banca_id é obrigatório', 400);
 
     const profile = await getUserProfile(userId);
-    if (!profile || profile.status !== 'gestor') {
-      return errorResponse('Acesso negado. Apenas gestor pode adicionar usuário à banca.', 403);
+    const hasAccess = profile ? await canAccessGestorTrafego(profile) : false;
+    if (!profile || !hasAccess) {
+      return errorResponse('Acesso negado. Você não tem permissão para acessar o módulo Gestão de Tráfego.', 403);
     }
 
     const body = await req.json().catch(() => ({}));

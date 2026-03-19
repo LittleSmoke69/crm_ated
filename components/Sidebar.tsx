@@ -34,6 +34,9 @@ import {
   ExternalLink,
   ArrowRightLeft,
   BookOpen,
+  Link2,
+  Headphones,
+  UserPlus,
 } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import Logo from '@/components/Logo';
@@ -71,14 +74,20 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   }, [pathname]);
 
   // Verifica se está nas páginas que devem mostrar o botão Sair
-  const shouldShowLogout = pathname === '/perfil' || 
+  const shouldShowLogout = pathname === '/perfil' ||
                           pathname === '/list-cleaning' ||
                           pathname === '/crm/transferido' ||
+                          pathname === '/crm/avulsos' ||
+                          pathname === '/anti-spam' ||
+                          pathname?.startsWith('/admin/anti-spam') ||
                           pathname?.startsWith('/admin/webhooks') ||
                           pathname?.startsWith('/admin/whatsapp-official') ||
                           pathname?.startsWith('/admin/meta') ||
                           pathname?.startsWith('/admin/crm/lead-transfer') ||
                           pathname?.startsWith('/admin/hierarchy') ||
+                          pathname?.startsWith('/admin/zaplink') ||
+                          pathname?.startsWith('/gerente/zaplink') ||
+                          pathname?.startsWith('/gestor-trafego/zaplink') ||
                           onSignOut !== undefined;
 
   // Função de logout padrão
@@ -133,7 +142,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const iconMap: Record<string, any> = {
     LayoutDashboard, MessageSquare, Rocket, Users, Plus, Shield, Webhook, Workflow, Bot, Layout,
     Kanban, Activity, BarChart3, Briefcase, Settings, FlaskConical, User, ListOrdered, ClipboardList,
-    ArrowLeftToLine, ExternalLink, ArrowRightLeft, BookOpen,
+    ArrowLeftToLine, ExternalLink, ArrowRightLeft, BookOpen, Link2, UserPlus,
   };
 
   useEffect(() => {
@@ -249,12 +258,15 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const itemAgentesIAAdmin: MenuItem = { href: '/admin/ai-agents', icon: Bot, label: 'Agentes IA' };
   const itemAgentesIA: MenuItem = { href: '/ai-agents', icon: Bot, label: 'Agentes IA' };
   const itemChatInterno: MenuItem = { href: '/chat', icon: MessageSquare, label: 'Chat Interno' };
+  const itemRelatorioChat: MenuItem = { href: '/admin/chat-report', icon: Headphones, label: 'Relatório Chat' };
+  const itemEtiquetasChat: MenuItem = { href: '/admin/chat-tags', icon: MessageSquare, label: 'Etiquetas Chat' };
   const itemCRM: MenuItem = {
     label: 'CRM',
     icon: Layout,
     submenu: [
       { href: '/crm/kanban', icon: Kanban, label: 'Kanban' },
       { href: '/crm/transferido', icon: ArrowRightLeft, label: 'Transferido' },
+      { href: '/crm/avulsos', icon: UserPlus, label: 'Avulsos' },
     ],
   };
   const itemCampanhas: MenuItem = {
@@ -287,6 +299,9 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const itemMeuDesempenho: MenuItem = { href: '/consultor', icon: BarChart3, label: 'Meu Desempenho' };
   const itemMetaAds: MenuItem = { href: '/admin/meta', icon: BarChart3, label: 'Meta Ads' };
   const itemVslRedirect: MenuItem = { href: '/admin/vsl', icon: ExternalLink, label: 'VSL & Redirect' };
+  const itemZaplink: MenuItem = { href: '/admin/zaplink', icon: Link2, label: 'Zaplink' };
+  const itemZaplinkGerente: MenuItem = { href: '/gerente/zaplink', icon: Link2, label: 'Zaplink' };
+  const itemZaplinkGestorTrafego: MenuItem = { href: '/gestor-trafego/zaplink', icon: Link2, label: 'Zaplink' };
   const itemAcademy: MenuItem = {
     href: '/admin/academy',
     icon: BookOpen,
@@ -316,6 +331,8 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemFlows,
         itemAgentesIAAdmin,
         itemChatInterno,
+        itemRelatorioChat,
+        itemEtiquetasChat,
         itemCRM,
         itemCampanhas,
         itemContatosAtivos,
@@ -327,6 +344,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemGestaoBanca,
         itemGestaoTrafego,
         itemVslRedirect,
+        itemZaplink,
         itemGestaoConsultores,
         itemAcademy,
       ];
@@ -342,8 +360,11 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemWebhooks,
         itemMetaAds,
         itemVslRedirect,
+        itemZaplink,
         itemAcademy,
         itemAgentesIAAdmin,
+        itemRelatorioChat,
+        itemEtiquetasChat,
         itemCRM,
         itemCampanhas,
         itemContatosAtivos,
@@ -413,10 +434,11 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
       ];
     }
 
-    // 📈 Gestor de Tráfego - Painel igual ao dono da banca + funil Facebook (vinculado a um dono)
+    // 📈 Gestor de Tráfego - Painel igual ao dono da banca + funil Facebook (vinculado a um dono) + Zaplink (seus formulários e leads)
     if (userStatus === 'gestor') {
       return [
         itemGestaoTrafego,
+        itemZaplinkGestorTrafego,
         itemVslRedirect,
         itemDashboard,
         itemInstances,
@@ -436,6 +458,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
     if (userStatus === 'gerente') {
       return [
         itemGestaoConsultores,
+        itemZaplinkGerente,
         itemDashboard,
         itemInstances,
         itemAgentesIA,
@@ -657,6 +680,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
                 <Link
                   key={item.href || item.label}
                   href={item.href || '#'}
+                  prefetch={item.href === '/admin' ? false : undefined}
                   onClick={(e) => {
                     if (window.innerWidth < 1024) {
                       setIsMobileOpen(false);

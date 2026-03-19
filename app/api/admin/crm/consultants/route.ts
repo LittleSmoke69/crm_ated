@@ -5,10 +5,41 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 const LOG_PREFIX = '[lead-transfer][consultants]';
 
+function normalizeBancaUrl(raw: string): string {
+  let u = raw.trim();
+  u = u.replace(/^https?:\/\//i, '').replace(/\/api\/crm\/?/i, '').replace(/\/+$/, '').trim();
+  if (!u) return '';
+  return u.startsWith('http') ? u : `https://${u}`;
+}
+
+/** Verifica no CRM (total-indicateds-by-consultant) se o consultor tem conta na banca. 200 = sim, 404 = não. */
+async function consultantHasAccountInBanca(crmBaseUrl: string, email: string, apiKey: string): Promise<boolean> {
+  const base = normalizeBancaUrl(crmBaseUrl);
+  if (!base || !email) return false;
+  const url = `${base}/api/crm/total-indicateds-by-consultant?consultant=${encodeURIComponent(email)}`;
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { Accept: 'application/json', 'x-api-key': apiKey },
+      signal: AbortSignal.timeout(12000),
+    });
+    return res.status === 200;
+  } catch {
+    return false;
+  }
+}
+
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) chunks.push(arr.slice(i, i + size));
+  return chunks;
+}
+
 /**
  * GET /api/admin/crm/consultants
- * Lista consultores da banca (user_bancas + profiles) para autocomplete origem/destino.
- * Query: banca_id (obrigatório)
+ * Lista consultores da hierarquia da banca (apenas user_bancas + subordinados vinculados à banca).
+ * Query: banca_id (obrigatório), hierarchy_only=0 (opcional), verify_crm=1 (opcional) — se verify_crm=1, filtra apenas consultores que têm conta na banca (CRM total-indicateds-by-consultant 200).
+ * all_profiles_for_donor=1 — lista todos os perfis com e-mail (modal consultor doador na aprovação de solicitação); banca_id só valida permissão do admin.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -23,6 +54,32 @@ export async function GET(req: NextRequest) {
 
     const ctx = await requireAdminLeadTransferContext(req, bancaId);
     console.log(`${LOG_PREFIX} GET context: userId=${ctx.userId}, bancaId=${ctx.bancaId}, crmBaseUrl=${ctx.crmBaseUrl}, bancaName=${ctx.bancaName ?? 'n/a'}`);
+
+    if (searchParams.get('all_profiles_for_donor') === '1') {
+      const { data: allProfiles, error: allErr } = await supabaseServiceRole
+        .from('profiles')
+        .select('id, email, full_name')
+        .not('email', 'is', null)
+        .order('full_name', { ascending: true, nullsFirst: false })
+        .limit(15000);
+      if (allErr) {
+        console.error(`${LOG_PREFIX} GET all_profiles_for_donor error:`, allErr);
+        return errorResponse('Erro ao listar usuários.', 500);
+      }
+      const consultants = (allProfiles ?? [])
+        .map((p: { id: string; email: string | null; full_name: string | null }) => {
+          const email = (p.email ?? '').trim();
+          if (!email) return null;
+          return {
+            id: p.id,
+            email,
+            full_name: ((p.full_name ?? p.email ?? '').trim() || email),
+          };
+        })
+        .filter(Boolean);
+      console.log(`${LOG_PREFIX} GET all_profiles_for_donor: ${consultants.length} usuário(s)`);
+      return successResponse({ consultants });
+    }
 
     // banca_ids é JSONB (array de UUIDs). Filtro "cs" (contains) exige JSON válido para evitar erro 22P02.
     const { data: userBancas, error: ubError } = await supabaseServiceRole
@@ -70,13 +127,25 @@ export async function GET(req: NextRequest) {
 
     const gerenteIds = list.filter((p: { status?: string | null }) => String(p.status ?? '').toLowerCase() === 'gerente').map((p: { id: string }) => p.id);
     const consultoresPorGerente = new Map<string, { id: string; full_name: string; email: string }[]>();
+    const hierarchyOnly = searchParams.get('hierarchy_only') !== '0';
     if (gerenteIds.length > 0) {
       const { data: subordinados } = await supabaseServiceRole
         .from('profiles')
         .select('id, email, full_name, enroller')
         .in('enroller', gerenteIds)
         .not('email', 'is', null);
+      const subordinadoIds = (subordinados ?? []).map((s: { id: string }) => s.id);
+      let idsPermitidos = new Set(subordinadoIds);
+      if (hierarchyOnly && subordinadoIds.length > 0) {
+        const { data: subUb } = await supabaseServiceRole
+          .from('user_bancas')
+          .select('user_id')
+          .filter('banca_ids', 'cs', JSON.stringify([ctx.bancaId]));
+        const idsNaBanca = new Set((subUb ?? []).map((u: { user_id: string }) => u.user_id));
+        idsPermitidos = new Set(subordinadoIds.filter((id: string) => idsNaBanca.has(id)));
+      }
       (subordinados ?? []).forEach((s: { id: string; email: string | null; full_name: string | null; enroller: string | null }) => {
+        if (!idsPermitidos.has(s.id)) return;
         const gerenteId = (s.enroller ?? '').trim();
         if (!gerenteId) return;
         const arr = consultoresPorGerente.get(gerenteId) ?? [];
@@ -137,9 +206,36 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const consultants = [...consultantsFromList, ...consultantsDosGerentes];
+    const allowedIds = new Set<string>(userIds);
+    consultoresPorGerente.forEach((subs) => subs.forEach((s) => allowedIds.add(s.id)));
+    const consultantsRaw = [...consultantsFromList, ...consultantsDosGerentes];
+    let consultants = consultantsRaw.filter((c): c is NonNullable<typeof c> => c != null && allowedIds.has(c.id));
 
-    console.log(`${LOG_PREFIX} GET success: ${consultants.length} consultant(s) (${consultantsFromList.length} diretos + ${consultantsDosGerentes.length} consultores de gerentes)`);
+    const verifyCrm = searchParams.get('verify_crm') === '1';
+    if (verifyCrm && consultants.length > 0 && ctx.crmBaseUrl) {
+      const apiKey = process.env.CRM_API_KEY?.trim();
+      if (apiKey) {
+        const BATCH = 8;
+        const withEmail = consultants.filter((c) => (c.email ?? '').trim());
+        const emails = [...new Set(withEmail.map((c) => (c.email ?? '').trim()))];
+        const hasAccount = new Map<string, boolean>();
+        for (const batch of chunkArray(emails, BATCH)) {
+          const results = await Promise.all(
+            batch.map(async (email) => {
+              const ok = await consultantHasAccountInBanca(ctx.crmBaseUrl!, email, apiKey);
+              return { email, ok } as const;
+            })
+          );
+          results.forEach((r) => hasAccount.set(r.email, r.ok));
+        }
+        consultants = consultants.filter((c) => hasAccount.get((c.email ?? '').trim()) === true);
+        console.log(`${LOG_PREFIX} GET verify_crm: ${consultants.length}/${consultantsRaw.length} com conta na banca (CRM)`);
+      } else {
+        console.warn(`${LOG_PREFIX} GET verify_crm=1 mas CRM_API_KEY não configurada; retornando lista sem filtrar.`);
+      }
+    }
+
+    console.log(`${LOG_PREFIX} GET success: ${consultants.length} consultant(s) (banca ${ctx.bancaId}, ${consultantsFromList.length} diretos + ${consultantsDosGerentes.length} de gerentes)`);
     return successResponse({ consultants });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);

@@ -12,6 +12,11 @@ import {
   MessageSquare,
   CheckCircle2,
   XCircle,
+  Copy,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  FileJson,
 } from 'lucide-react';
 import Layout from '@/components/Layout';
 
@@ -28,6 +33,14 @@ interface WhatsAppOfficialConfig {
   zaploto_id: string | null;
   created_at: string;
   updated_at: string;
+}
+
+interface WebhookEventRow {
+  id: string;
+  source: string;
+  event_name: string;
+  raw_payload: Record<string, unknown> | null;
+  created_at: string;
 }
 
 const emptyForm = () => ({
@@ -53,6 +66,15 @@ export default function WhatsAppOfficialAdmin() {
   const [testSending, setTestSending] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
+  const [webhookEvents, setWebhookEvents] = useState<WebhookEventRow[]>([]);
+  const [webhookEventsLoading, setWebhookEventsLoading] = useState(false);
+  const [webhookEventsPage, setWebhookEventsPage] = useState(1);
+  const [webhookEventsTotal, setWebhookEventsTotal] = useState(0);
+  const [webhookEventsTotalPages, setWebhookEventsTotalPages] = useState(0);
+  const [webhookUrlCopied, setWebhookUrlCopied] = useState(false);
+  const [payloadModalEvent, setPayloadModalEvent] = useState<WebhookEventRow | null>(null);
+  const [payloadCopied, setPayloadCopied] = useState(false);
+
   const userId = typeof window !== 'undefined' ? (sessionStorage.getItem('user_id') || localStorage.getItem('profile_id')) : null;
   const headers = () => ({ 'Content-Type': 'application/json', 'X-User-Id': userId || '' });
 
@@ -69,9 +91,67 @@ export default function WhatsAppOfficialAdmin() {
     }
   };
 
+  const loadWebhookEvents = async () => {
+    setWebhookEventsLoading(true);
+    try {
+      const res = await fetch(
+        `/api/admin/whatsapp-official/events?page=${webhookEventsPage}&limit=25`,
+        { headers: headers() }
+      );
+      const data = await res.json();
+      if (data.success && Array.isArray(data.data)) {
+        setWebhookEvents(data.data);
+        if (data.pagination) {
+          setWebhookEventsTotal(data.pagination.total);
+          setWebhookEventsTotalPages(Math.max(1, data.pagination.totalPages));
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setWebhookEventsLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchConfigs();
   }, []);
+
+  useEffect(() => {
+    loadWebhookEvents();
+  }, [webhookEventsPage]);
+
+  const webhookPath = '/api/webhooks/whatsapp-official';
+  const copyWebhookUrl = async () => {
+    const fullUrl = typeof window !== 'undefined' ? `${window.location.origin}${webhookPath}` : webhookPath;
+    try {
+      await navigator.clipboard.writeText(fullUrl);
+      setWebhookUrlCopied(true);
+      setTimeout(() => setWebhookUrlCopied(false), 2000);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const getEventSummary = (payload: Record<string, unknown> | null): string => {
+    if (!payload || typeof payload !== 'object') return '—';
+    const entry = payload.entry as unknown[] | undefined;
+    if (Array.isArray(entry) && entry.length > 0) {
+      const first = entry[0] as { changes?: unknown[] };
+      const changes = first?.changes;
+      if (Array.isArray(changes) && changes.length > 0) {
+        const value = (changes[0] as { value?: Record<string, unknown> })?.value;
+        if (value) {
+          if (Array.isArray(value.messages)) return `mensagens: ${value.messages.length}`;
+          if (Array.isArray(value.statuses)) return `status: ${value.statuses.length}`;
+          if (Array.isArray(value.contacts)) return 'contatos';
+          return 'entrada';
+        }
+      }
+      return `entries: ${entry.length}`;
+    }
+    return payload.object ? String(payload.object) : '—';
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -445,20 +525,168 @@ export default function WhatsAppOfficialAdmin() {
               </div>
             )}
 
-            <div className="mt-4 p-4 rounded-xl border border-[var(--card-border)] bg-[var(--card)]/50">
-              <h3 className="font-medium mb-2">Webhook</h3>
-              <p className="text-sm text-[var(--muted-foreground)] mb-2">
-                Configure no App da Meta (Developer Console) a URL de webhook:
-              </p>
-              <code className="block text-xs bg-[var(--muted)]/50 p-3 rounded break-all">
-                {typeof window !== 'undefined' ? `${window.location.origin}/api/webhooks/whatsapp-official` : '/api/webhooks/whatsapp-official'}
-              </code>
-              <p className="text-xs text-[var(--muted-foreground)] mt-2">
-                O verify token deve ser igual ao cadastrado em cada configuração.
-              </p>
+            {/* Card: Webhook da API oficial + Eventos de produção */}
+            <div className="mt-6 rounded-xl border border-[var(--card-border)] bg-[var(--card)] overflow-hidden">
+              <div className="p-4 border-b border-[var(--card-border)] bg-[var(--muted)]/30">
+                <h3 className="font-semibold mb-2 flex items-center gap-2">Webhook da API oficial (produção)</h3>
+                <p className="text-sm text-[var(--muted-foreground)] mb-3">
+                  Configure no App da Meta (Developer Console) a URL abaixo. O verify token deve ser igual ao cadastrado em cada configuração.
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <a
+                    href={webhookPath}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 text-sm text-[var(--zaploto-green)] hover:underline break-all font-mono"
+                  >
+                    {webhookPath}
+                    <ExternalLink className="w-4 h-4 shrink-0" />
+                  </a>
+                  <button
+                    type="button"
+                    onClick={copyWebhookUrl}
+                    className="p-1.5 rounded border border-[var(--card-border)] hover:bg-[var(--muted)]/50"
+                    title="Copiar URL"
+                  >
+                    {webhookUrlCopied ? (
+                      <CheckCircle2 className="w-4 h-4 text-green-600" />
+                    ) : (
+                      <Copy className="w-4 h-4 text-[var(--muted-foreground)]" />
+                    )}
+                  </button>
+                </div>
+              </div>
+              <div className="p-4">
+                <h4 className="font-medium mb-3">Eventos recebidos (produção)</h4>
+                {webhookEventsLoading ? (
+                  <div className="py-8 text-center text-[var(--muted-foreground)] text-sm">Carregando eventos...</div>
+                ) : webhookEvents.length === 0 ? (
+                  <div className="py-8 text-center text-[var(--muted-foreground)] text-sm">Nenhum evento ainda. Os eventos aparecem aqui quando a Meta envia dados para o webhook.</div>
+                ) : (
+                  <>
+                    <div className="overflow-x-auto -mx-4 px-4">
+                      <table className="w-full text-left text-sm">
+                        <thead>
+                          <tr className="border-b border-[var(--card-border)]">
+                            <th className="py-2 pr-4 font-medium text-[var(--muted-foreground)]">Data/Hora</th>
+                            <th className="py-2 pr-4 font-medium text-[var(--muted-foreground)]">Resumo</th>
+                            <th className="py-2 pr-4 font-medium text-[var(--muted-foreground)] w-24">Ações</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[var(--card-border)]">
+                          {webhookEvents.map((ev) => (
+                            <tr key={ev.id}>
+                              <td className="py-2 pr-4 whitespace-nowrap text-[var(--muted-foreground)]">
+                                {new Date(ev.created_at).toLocaleString('pt-BR')}
+                              </td>
+                              <td className="py-2 pr-4">{getEventSummary(ev.raw_payload)}</td>
+                              <td className="py-2 pr-4">
+                                <button
+                                  type="button"
+                                  onClick={() => setPayloadModalEvent(ev)}
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded border border-[var(--card-border)] hover:bg-[var(--muted)]/30 text-xs font-medium"
+                                  title="Ver payload do evento"
+                                >
+                                  <FileJson className="w-3.5 h-3.5" /> Ver payload
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {/* Paginação sempre visível quando há eventos */}
+                    <div className="flex items-center justify-between mt-4 pt-3 border-t border-[var(--card-border)]">
+                      <span className="text-xs text-[var(--muted-foreground)]">
+                        {webhookEventsTotal} evento(s){webhookEventsTotalPages >= 1 ? ` · Página ${webhookEventsPage} de ${webhookEventsTotalPages}` : ''}
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setWebhookEventsPage((p) => Math.max(1, p - 1))}
+                          disabled={webhookEventsPage <= 1 || webhookEventsLoading}
+                          className="p-2 rounded border border-[var(--card-border)] disabled:opacity-50 hover:bg-[var(--muted)]/30"
+                          title="Página anterior"
+                        >
+                          <ChevronLeft className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setWebhookEventsPage((p) => Math.min(webhookEventsTotalPages, p + 1))}
+                          disabled={webhookEventsPage >= webhookEventsTotalPages || webhookEventsLoading}
+                          className="p-2 rounded border border-[var(--card-border)] disabled:opacity-50 hover:bg-[var(--muted)]/30"
+                          title="Próxima página"
+                        >
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
+                {!webhookEventsLoading && webhookEvents.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => loadWebhookEvents()}
+                    className="mt-3 text-sm text-[var(--zaploto-green)] hover:underline flex items-center gap-1"
+                  >
+                    <RefreshCw className="w-4 h-4" /> Atualizar
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>
+
+        {/* Modal: Ver payload do evento */}
+        {payloadModalEvent && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60"
+            onClick={() => setPayloadModalEvent(null)}
+          >
+            <div
+              className="bg-[var(--card)] border border-[var(--card-border)] rounded-xl shadow-xl max-w-4xl w-full max-h-[85vh] flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between p-4 border-b border-[var(--card-border)]">
+                <h3 className="font-semibold flex items-center gap-2">
+                  <FileJson className="w-5 h-5 text-[var(--zaploto-green)]" />
+                  Payload do evento — {new Date(payloadModalEvent.created_at).toLocaleString('pt-BR')}
+                </h3>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const json = JSON.stringify(payloadModalEvent.raw_payload ?? {}, null, 2);
+                        await navigator.clipboard.writeText(json);
+                        setPayloadCopied(true);
+                        setTimeout(() => setPayloadCopied(false), 2000);
+                      } catch (e) {
+                        console.error(e);
+                      }
+                    }}
+                    className="p-2 rounded border border-[var(--card-border)] hover:bg-[var(--muted)]/30"
+                    title="Copiar JSON"
+                  >
+                    {payloadCopied ? <CheckCircle2 className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPayloadModalEvent(null)}
+                    className="p-2 rounded border border-[var(--card-border)] hover:bg-[var(--muted)]/30"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+              <div className="flex-1 overflow-auto p-4">
+                <pre className="text-xs font-mono bg-[var(--muted)]/30 rounded-lg p-4 overflow-x-auto whitespace-pre-wrap break-words">
+                  {JSON.stringify(payloadModalEvent.raw_payload ?? {}, null, 2)}
+                </pre>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </Layout>
   );

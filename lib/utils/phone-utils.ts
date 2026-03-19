@@ -49,25 +49,35 @@ export function extractPhones(text: string): string[] {
 
 /**
  * Normaliza número para E.164 Brasil (+55...).
- * Aceita: 31999887766, 31 99988-7766, +55 31 999887766, 999887766 (sem DDD não é possível E.164 único).
+ * Aceita: 31999887766, 31 99988-7766, +55 31 999887766, JIDs WhatsApp.
+ * Rejeita números que não correspondam ao formato BR válido:
+ *   - Fixo:   55 + DDD(2) + 8 dígitos  = 12 dígitos total
+ *   - Móvel:  55 + DDD(2) + 9XXXXXXXX  = 13 dígitos total
  */
 export function normalizeToE164BR(phone: string): string | null {
   if (!phone || typeof phone !== 'string') return null;
   let digits = phone.replace(/\D/g, '');
-  if (digits.startsWith('55') && digits.length >= 12) {
-    digits = digits.substring(0, 12); // 55 + 2 DDD + 8 ou 9 dígitos
-  } else if (digits.startsWith('55') && digits.length >= 11) {
-    digits = digits.substring(0, 12);
-  } else if (digits.length === 11 && digits.startsWith('9')) {
-    digits = '55' + digits; // assume BR
-  } else if (digits.length === 10 && !digits.startsWith('9')) {
-    digits = '55' + digits; // fixo
-  } else if (digits.length >= 10 && digits.length <= 12 && !digits.startsWith('55')) {
+  if (!digits.length) return null;
+
+  // Remove zeros à esquerda (ex.: 05531999887766 -> 5531999887766)
+  digits = digits.replace(/^0+/, '');
+
+  // Adiciona prefixo 55 se ausente (ex.: 31999887766 -> 5531999887766)
+  if (!digits.startsWith('55')) {
     digits = '55' + digits;
   }
-  if (digits.length < 12) return null; // 55 + DDD(2) + 8 ou 9
-  if (digits.length > 12) digits = digits.substring(0, 12);
-  return '+' + digits;
+
+  // 55 seguido de 0 (código de saída) + 11 dígitos: remove o 0 (ex.: 55031999887766 -> 5531999887766)
+  if (digits.length === 14 && digits.startsWith('55') && digits[2] === '0') {
+    digits = digits.slice(0, 2) + digits.slice(3);
+  }
+
+  // Apenas 12 (fixo) ou 13 (móvel) dígitos são válidos para BR
+  if (digits.length === 12 || digits.length === 13) {
+    return '+' + digits;
+  }
+
+  return null;
 }
 
 /**
@@ -77,4 +87,29 @@ export function toWaJid(phone: string): string {
   const e164 = normalizeToE164BR(phone) || phone.replace(/\D/g, '');
   const digits = e164.replace(/^\+/, '');
   return `${digits}@s.whatsapp.net`;
+}
+
+/**
+ * Formata número para exibição com +55 (ex.: +55 11 99988-7766).
+ * Aceita dígitos com ou sem 55 no início.
+ */
+export function formatPhoneDisplay(phone: string): string {
+  if (!phone || typeof phone !== 'string') return phone;
+  const digits = phone.replace(/\D/g, '');
+  if (!digits.length) return phone;
+  let d = digits.startsWith('55') ? digits : '55' + digits;
+  if (d.length === 12) return `+55 ${d.slice(2, 4)} ${d.slice(4, 8)}-${d.slice(8)}`;
+  if (d.length === 13) return `+55 ${d.slice(2, 4)} ${d.slice(4, 9)}-${d.slice(9)}`;
+  return d.length >= 2 ? '+55 ' + d.slice(2) : '+' + d;
+}
+
+/**
+ * Formato para listas: apenas dígitos, com 55 (ex.: 558396667315 ou 5598396667315).
+ * Sem prefixo + e sem espaços ou hífens.
+ */
+export function formatPhoneToList(phone: string): string {
+  if (!phone || typeof phone !== 'string') return phone;
+  const digits = phone.replace(/\D/g, '');
+  if (!digits.length) return phone;
+  return digits.startsWith('55') ? digits : '55' + digits;
 }

@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { requireStatus, getUserProfile } from '@/lib/middleware/permissions';
+import { requireStatusOrSidebarPermission, getUserProfile } from '@/lib/middleware/permissions';
 import { getEffectiveDonoIdForGestor } from '@/lib/middleware/gestor-owner';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
@@ -10,6 +10,24 @@ function normalizeBancaUrl(url: string | null | undefined): string {
   if (!url) return '';
   let s = String(url).trim().replace(/^https?:\/\//i, '').replace(/\/api\/crm\/?/i, '').replace(/\/+$/, '').trim();
   return s ? `https://${s}`.toLowerCase() : '';
+}
+
+/** Extrai apenas o slug da URL (subdomínio ou hostname sem TLD) para verificação e exibição, igual ao uso no top 5 vendas. */
+function urlToSlug(url: string | null | undefined): string {
+  if (!url || !String(url).trim()) return '';
+  try {
+    let u = String(url).trim();
+    if (!u.startsWith('http://') && !u.startsWith('https://')) u = `https://${u}`;
+    u = u.replace(/\/api\/crm\/?/i, '').replace(/\/+$/, '');
+    const hostname = new URL(u).hostname;
+    const parts = hostname.split('.');
+    if (parts.length >= 3) return parts[0].toLowerCase();
+    if (parts.length >= 2) return parts[0].toLowerCase();
+    return hostname.toLowerCase();
+  } catch {
+    const withoutProtocol = String(url).replace(/^https?:\/\//i, '').split('/')[0] || '';
+    return withoutProtocol.split('.')[0]?.toLowerCase() || '';
+  }
 }
 
 /**
@@ -181,7 +199,7 @@ async function getUserWithdrawals(bancaUrl: string, oddsUserId: number, apiKey: 
 export async function GET(req: NextRequest) {
   const startTime = Date.now();
   try {
-    const { userId, profile } = await requireStatus(req, ['gerente', 'gestor', 'super_admin', 'admin']);
+    const { userId, profile } = await requireStatusOrSidebarPermission(req, ['gerente', 'gestor', 'super_admin', 'admin'], 'gestao_consultores');
     let effectiveUserId = userId;
 
     const isAdminOrSuperAdmin = profile?.status === 'super_admin' || profile?.status === 'admin';
@@ -255,6 +273,11 @@ export async function GET(req: NextRequest) {
     const dateTo = searchParams.get('date_to');
     const bancaUrlFilter = searchParams.get('banca_url'); // Filtro de banca
     const consultorIdFilter = searchParams.get('consultor_id'); // Filtro de consultor
+    const offsetParam = searchParams.get('offset');
+    const limitParam = searchParams.get('limit');
+    const usePagination = limitParam != null && limitParam !== '';
+    const offset = usePagination ? Math.max(0, parseInt(offsetParam || '0', 10)) : 0;
+    const limit = usePagination ? Math.max(1, Math.min(100, parseInt(limitParam || '10', 10))) : 0;
 
     console.log('[Gerente Dashboard API] 🚀 Iniciando busca de métricas');
     console.log('[Gerente Dashboard API] 📅 Filtros recebidos:', { 
@@ -264,34 +287,75 @@ export async function GET(req: NextRequest) {
       consultorId: consultorIdFilter || 'todos'
     });
 
-    // 1. Busca o dono de banca acima do gerente na hierarquia (fallback se não houver filtro de banca)
-    let bancaUrl = bancaUrlFilter;
-    
-    if (!bancaUrl) {
-      const hierarchyPath = await getHierarchyPath(effectiveUserId);
-      const donoBanca = hierarchyPath.find(p => p.status === 'dono_banca');
-      
-      if (!donoBanca) {
-        return successResponse({
-          gerenteInfo: {
-            id: effectiveUserId,
-            email: (await getUserProfile(effectiveUserId))?.email || '',
-            name: (await getUserProfile(effectiveUserId))?.full_name || '',
-          },
-          consultores: [],
-          gerenteTotalKpis: null,
-          chartData: null,
-        });
+    // 1. Lista de URLs de banca(s) e mapa slug -> rótulo (slug apenas, sem domínio; mesma verificação do top 5 vendas).
+    let bancaUrls: string[] = [];
+    const bancaSlugToLabel: Record<string, string> = {};
+
+    if (bancaUrlFilter) {
+      bancaUrls = [bancaUrlFilter];
+    } else {
+      // Gerente sem banca_url = "Todas as bancas": usar TODAS as bancas de user_bancas (pesquisar em todas).
+      if (profile?.status === 'gerente') {
+        const { data: ubRow } = await supabaseServiceRole
+          .from('user_bancas')
+          .select('banca_ids')
+          .eq('user_id', effectiveUserId)
+          .maybeSingle();
+        const bancaIds = Array.isArray(ubRow?.banca_ids) ? ubRow.banca_ids : [];
+        if (bancaIds.length > 0) {
+          const { data: bancas } = await supabaseServiceRole
+            .from('crm_bancas')
+            .select('id, name, url')
+            .in('id', bancaIds);
+          const list = (bancas || []) as { id: string; name: string; url: string }[];
+          bancaUrls = list.map((b) => b.url).filter(Boolean);
+          list.forEach((b) => {
+            if (b.url) {
+              const slug = urlToSlug(b.url);
+              if (slug) bancaSlugToLabel[slug] = slug;
+            }
+          });
+        }
       }
 
-      // 2. Busca banca_url do dono de banca
-      const { data: donoProfile } = await supabaseServiceRole
-        .from('profiles')
-        .select('banca_url, banca_name')
-        .eq('id', donoBanca.id)
-        .single();
+      // Se não é gerente ou user_bancas está vazio: fallback hierarquia / primeira banca
+      if (bancaUrls.length === 0) {
+        const hierarchyPath = await getHierarchyPath(effectiveUserId);
+        const donoBanca = hierarchyPath.find(p => p.status === 'dono_banca');
+        let bancaUrl: string | null = null;
 
-      bancaUrl = donoProfile?.banca_url;
+        if (donoBanca) {
+          const { data: donoProfile } = await supabaseServiceRole
+            .from('profiles')
+            .select('banca_url, banca_name')
+            .eq('id', donoBanca.id)
+            .single();
+          bancaUrl = donoProfile?.banca_url ?? null;
+        }
+
+        if (!bancaUrl) {
+          const { data: ubRow } = await supabaseServiceRole
+            .from('user_bancas')
+            .select('banca_ids')
+            .eq('user_id', effectiveUserId)
+            .maybeSingle();
+          const bancaIds = Array.isArray(ubRow?.banca_ids) ? ubRow.banca_ids : [];
+          if (bancaIds.length > 0) {
+            const { data: banca } = await supabaseServiceRole
+              .from('crm_bancas')
+              .select('id, name, url')
+              .eq('id', bancaIds[0])
+              .single();
+            if (banca?.url) {
+              bancaUrls = [banca.url];
+              const slug = urlToSlug(banca.url);
+              if (slug) bancaSlugToLabel[slug] = slug;
+            }
+          }
+        } else {
+          bancaUrls = [bancaUrl];
+        }
+      }
     }
     const apiKey = process.env.CRM_API_KEY;
     
@@ -308,146 +372,184 @@ export async function GET(req: NextRequest) {
     if (consultorIdFilter) {
       consultores = consultores.filter(c => c.id === consultorIdFilter);
     }
-    
-    console.log('[Gerente Dashboard API] 👥 Total de consultores encontrados:', consultores.length);
 
-    // 4. Métricas por consultor com KPIs externos
-    // Removidos agregadores de gráficos que dependem de dados individuais dos leads
-    // Os gráficos agora serão baseados apenas nos dados do resumo geral
+    const totalConsultores = consultores.length;
+    if (usePagination) {
+      consultores = consultores.slice(offset, offset + limit);
+      console.log(`[Gerente Dashboard API] 👥 Paginação: processando consultores ${offset + 1}-${offset + consultores.length} de ${totalConsultores} (offset=${offset}, limit=${limit})`);
+    } else {
+      console.log('[Gerente Dashboard API] 👥 Total de consultores encontrados:', totalConsultores);
+    }
 
-    const consultorMetrics = await Promise.all(
-      consultores.map(async (c) => {
-        const { data: cCampaigns } = await supabaseServiceRole
-          .from('campaigns')
-          .select('processed_contacts, failed_contacts')
-          .eq('user_id', c.id);
+    // 4. Métricas por consultor com KPIs externos — processa em lotes de 10 para evitar rate limit e sobrecarga
+    const CONSULTORES_BATCH_SIZE = 5;
+    const consultorMetrics: Awaited<ReturnType<typeof buildConsultorMetric>>[] = [];
 
-        const processed = cCampaigns?.reduce((s, camp) => s + (camp.processed_contacts || 0), 0) || 0;
-        const failed = cCampaigns?.reduce((s, camp) => s + (camp.failed_contacts || 0), 0) || 0;
+    async function buildConsultorMetric(c: (typeof consultores)[0]) {
+      const { data: cCampaigns } = await supabaseServiceRole
+        .from('campaigns')
+        .select('processed_contacts, failed_contacts')
+        .eq('user_id', c.id);
 
-        // Busca métricas da API externa dashboard-metrics
-        let externalKpis = null;
-        let externalKpisError: string | null = null;
-        let statusCode: number | null = null;
-        
-        if (bancaUrl && c.email) {
-          // Normaliza a URL da banca
-          let cleanBancaUrl = bancaUrl.trim();
+      const processed = cCampaigns?.reduce((s, camp) => s + (camp.processed_contacts || 0), 0) || 0;
+      const failed = cCampaigns?.reduce((s, camp) => s + (camp.failed_contacts || 0), 0) || 0;
+
+      let externalKpis: {
+        total_leads: number;
+        total_deposited: number;
+        total_bets: number;
+        total_prizes: number;
+        awarded_clients_count: number;
+        active_leads: number;
+        conversion_rate: number;
+        ltv_avg: number;
+        net_profit: number;
+      } | null = null;
+      let externalKpisError: string | null = null;
+      let statusCode: number | null = null;
+      let totalLeadsForLtv = 0;
+      let sumLtvWeighted = 0;
+      const bancaNames: string[] = [];
+
+      if (bancaUrls.length > 0 && c.email) {
+        for (const bancaUrlItem of bancaUrls) {
+          let cleanBancaUrl = bancaUrlItem.trim();
           if (!cleanBancaUrl.startsWith('http://') && !cleanBancaUrl.startsWith('https://')) {
             cleanBancaUrl = `https://${cleanBancaUrl}`;
           }
           cleanBancaUrl = cleanBancaUrl.replace(/\/+$/, '');
-          
-          // Adiciona parâmetros de data (date_from e date_to)
-          // Se ambos forem null, não envia parâmetros de data (busca todo o período)
-          let dateFromParam = dateFrom;
-          let dateToParam = dateTo;
-          
-          // Busca métricas usando a função helper com retry
+
           const result = await fetchConsultorMetrics(
             cleanBancaUrl,
             c.email,
-            dateFromParam,
-            dateToParam,
+            dateFrom,
+            dateTo,
             apiKey,
             apiKeyPreview,
-            2, // maxRetries
-            2000 // retryDelay em ms
+            2,
+            2000
           );
-          
+
           statusCode = result.status;
-          
+
           if (result.success && result.data) {
-            const metrics = result.data;
-            
-            // Extrai todos os campos da API dashboard-metrics
-            const totalLeads = Number(metrics.total_leads) || 0;
-            const totalDeposited = Number(metrics.total_deposited) || 0;
-            const totalBets = Number(metrics.total_bets) || 0;
-            const totalPrizes = Number(metrics.total_prizes) || 0;
-            const awardedClientsCount = Number(metrics.awarded_clients_count) || 0;
-            const activeLeads = Number(metrics.active_leads) || 0;
-            const conversionRate = Number(metrics.conversion_rate) || 0;
-            const ltvAvg = Number(metrics.ltv_avg) || 0;
-            const netProfit = Number(metrics.net_profit) || 0;
-            
-            externalKpis = {
-              total_leads: totalLeads,
-              total_deposited: totalDeposited,
-              total_bets: totalBets,
-              total_prizes: totalPrizes,
-              awarded_clients_count: awardedClientsCount,
-              active_leads: activeLeads,
-              conversion_rate: conversionRate,
-              ltv_avg: ltvAvg,
-              net_profit: netProfit,
-            };
-            
-            console.log('[Gerente Dashboard API] ✅ Consultor', c.email, `: ${totalLeads} leads, R$ ${(totalDeposited / 1000).toFixed(1)}k depositado`);
+            const slug = urlToSlug(cleanBancaUrl);
+            const label = slug ? (bancaSlugToLabel[slug] || slug) : '';
+            if (label && !bancaNames.includes(label)) bancaNames.push(label);
+            const m = result.data;
+            const totalLeads = Number(m.total_leads) || 0;
+            const totalDeposited = Number(m.total_deposited) || 0;
+            const totalBets = Number(m.total_bets) || 0;
+            const totalPrizes = Number(m.total_prizes) || 0;
+            const awardedClientsCount = Number(m.awarded_clients_count) || 0;
+            const activeLeads = Number(m.active_leads) || 0;
+            const conversionRate = Number(m.conversion_rate) || 0;
+            const ltvAvg = Number(m.ltv_avg) || 0;
+            const netProfit = Number(m.net_profit) || 0;
+
+            if (!externalKpis) {
+              externalKpis = {
+                total_leads: totalLeads,
+                total_deposited: totalDeposited,
+                total_bets: totalBets,
+                total_prizes: totalPrizes,
+                awarded_clients_count: awardedClientsCount,
+                active_leads: activeLeads,
+                conversion_rate: conversionRate,
+                ltv_avg: ltvAvg,
+                net_profit: netProfit,
+              };
+              if (totalLeads > 0) {
+                sumLtvWeighted = ltvAvg * totalLeads;
+                totalLeadsForLtv = totalLeads;
+              }
+            } else {
+              externalKpis.total_leads += totalLeads;
+              externalKpis.total_deposited += totalDeposited;
+              externalKpis.total_bets += totalBets;
+              externalKpis.total_prizes += totalPrizes;
+              externalKpis.awarded_clients_count += awardedClientsCount;
+              externalKpis.active_leads += activeLeads;
+              externalKpis.net_profit += netProfit;
+              if (totalLeads > 0) {
+                sumLtvWeighted += ltvAvg * totalLeads;
+                totalLeadsForLtv += totalLeads;
+              }
+            }
+            console.log('[Gerente Dashboard API] ✅ Consultor', c.email, `(${cleanBancaUrl}): ${totalLeads} leads, R$ ${(totalDeposited / 1000).toFixed(1)}k depositado`);
           } else {
-            externalKpisError = result.error;
-            // Se for erro 429, marca para retry posterior
+            externalKpisError = result.error ?? externalKpisError;
             if (result.status === 429) {
               console.log('[Gerente Dashboard API] ⚠️ Consultor', c.email, 'marcado para retry (429)');
             }
           }
         }
 
-        return {
-          id: c.id,
-          email: c.email,
-          name: c.full_name || c.email,
-          campaignsCount: cCampaigns?.length || 0,
-          processed,
-          failed,
-          successRate: processed > 0 
-            ? ((processed - failed) / processed * 100).toFixed(2)
-            : '0.00',
-          externalKpis,
-          externalKpisError,
-          statusCode, // Armazena o código de status para identificar erros 429
-          lastSeenAt: (c as { last_seen_at?: string | null }).last_seen_at ?? null,
-          totalOnlineTime: (c as { total_online_time?: number | null }).total_online_time ?? 0,
-        };
-      })
-    );
+        if (externalKpis && totalLeadsForLtv > 0) {
+          externalKpis.ltv_avg = sumLtvWeighted / totalLeadsForLtv;
+        }
+        if (externalKpis && externalKpis.total_leads > 0) {
+          externalKpis.conversion_rate = (externalKpis.active_leads / externalKpis.total_leads) * 100;
+        }
+      }
 
-    // 4.5. Retry para consultores que falharam com erro 429
+      return {
+        id: c.id,
+        email: c.email,
+        name: c.full_name || c.email,
+        campaignsCount: cCampaigns?.length || 0,
+        processed,
+        failed,
+        successRate: processed > 0
+          ? ((processed - failed) / processed * 100).toFixed(2)
+          : '0.00',
+        externalKpis,
+        externalKpisError,
+        statusCode,
+        lastSeenAt: (c as { last_seen_at?: string | null }).last_seen_at ?? null,
+        totalOnlineTime: (c as { total_online_time?: number | null }).total_online_time ?? 0,
+        totalCrmTime: (c as { total_crm_time?: number | null }).total_crm_time ?? 0,
+        ...(bancaNames.length > 0 && { banca_names: bancaNames }),
+      };
+    }
+
+    for (let i = 0; i < consultores.length; i += CONSULTORES_BATCH_SIZE) {
+      const chunk = consultores.slice(i, i + CONSULTORES_BATCH_SIZE);
+      const batchNum = Math.floor(i / CONSULTORES_BATCH_SIZE) + 1;
+      const totalBatches = Math.ceil(consultores.length / CONSULTORES_BATCH_SIZE);
+      console.log(`[Gerente Dashboard API] 📦 Processando consultores ${i + 1}-${i + chunk.length} de ${consultores.length} (lote ${batchNum}/${totalBatches})`);
+      const batchResults = await Promise.all(chunk.map(buildConsultorMetric));
+      consultorMetrics.push(...batchResults);
+    }
+
+    // 4.5. Retry para consultores que falharam com erro 429 (apenas quando uma única banca)
     const failedConsultors = consultorMetrics.filter(c => c.externalKpisError && c.statusCode === 429);
     
-    if (failedConsultors.length > 0) {
+    if (failedConsultors.length > 0 && bancaUrls.length === 1) {
       console.log(`[Gerente Dashboard API] 🔄 Iniciando retry para ${failedConsultors.length} consultores com erro 429`);
       
-      // Aguarda um pouco antes de tentar novamente
       await new Promise(resolve => setTimeout(resolve, 3000));
       
-      // Normaliza a URL da banca (reutiliza do código acima)
-      let cleanBancaUrl = bancaUrl!.trim();
+      let cleanBancaUrl = bancaUrls[0].trim();
       if (!cleanBancaUrl.startsWith('http://') && !cleanBancaUrl.startsWith('https://')) {
         cleanBancaUrl = `https://${cleanBancaUrl}`;
       }
       cleanBancaUrl = cleanBancaUrl.replace(/\/+$/, '');
-      
-      // Prepara parâmetros de data
-      // Se ambos forem null, não envia parâmetros de data (busca todo o período)
-      let dateFromParam = dateFrom;
-      let dateToParam = dateTo;
-      
-      // Retry para cada consultor que falhou
+
       for (const failedConsultor of failedConsultors) {
         console.log(`[Gerente Dashboard API] 🔄 Retry para ${failedConsultor.email}`);
         
         const result = await fetchConsultorMetrics(
           cleanBancaUrl,
           failedConsultor.email,
-          dateFromParam,
-          dateToParam,
+          dateFrom,
+          dateTo,
           apiKey,
           apiKeyPreview,
-          2, // maxRetries
-          2000 // retryDelay em ms
+          2,
+          2000
         );
-        
+
         if (result.success && result.data) {
           const metrics = result.data;
           
@@ -623,11 +725,27 @@ export async function GET(req: NextRequest) {
     console.log('[Gerente Dashboard API]   📅 Filtros aplicados:', {
       date_from: dateFrom || 'hoje',
       date_to: dateTo || 'hoje',
-      banca_url: bancaUrl || 'não informado',
+      banca_url: bancaUrlFilter || (bancaUrls.length > 0 ? (bancaUrls.length === 1 ? bancaUrls[0] : 'todas') : 'não informado'),
       consultor_id: consultorIdFilter || 'todos'
     });
     console.log('[Gerente Dashboard API]   ⏱️  Tempo total de processamento:', `${totalTime}ms`);
     console.log('[Gerente Dashboard API] 🎉 Processamento concluído!');
+
+    if (usePagination) {
+      const hasMore = offset + consultorMetrics.length < totalConsultores;
+      return successResponse({
+        gerenteInfo: {
+          id: effectiveUserId,
+          email: gerenteProfile?.email || '',
+          name: gerenteProfile?.full_name || '',
+        },
+        consultorMetrics,
+        totalConsultores,
+        offset,
+        limit,
+        hasMore,
+      });
+    }
 
     return successResponse({
       gerenteInfo: {

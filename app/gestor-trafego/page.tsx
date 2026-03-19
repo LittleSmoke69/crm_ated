@@ -1,9 +1,8 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import GestorTrafegoClient from './GestorTrafegoClient';
-import { getDonoBancaDashboardData } from '@/lib/services/dashboard/dono-banca';
 import { getEffectiveDonoIdForGestor } from '@/lib/middleware/gestor-owner';
-import { getUserProfile } from '@/lib/middleware/permissions';
+import { getUserProfile, hasSidebarPermission } from '@/lib/middleware/permissions';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 export default async function GestorTrafegoPage() {
@@ -16,39 +15,44 @@ export default async function GestorTrafegoPage() {
 
   const profile = await getUserProfile(userId);
   const allowedStatuses: string[] = ['gestor', 'admin', 'super_admin'];
-  if (!profile || profile.status == null || !allowedStatuses.includes(profile.status)) {
+  const normalizedStatus = profile?.status?.trim().toLowerCase();
+  const hasStatusAccess = profile && normalizedStatus != null && allowedStatuses.includes(normalizedStatus);
+  const hasSidebarAccess = profile ? await hasSidebarPermission(profile, 'gestao_trafego') : false;
+  if (!profile || (!hasStatusAccess && !hasSidebarAccess)) {
     return (
       <GestorTrafegoClient
         initialData={null}
         userId={userId}
         userStatus={null}
-        authError="Esta página é exclusiva para Gestores de Tráfego, Admin ou Super Admin."
+        authError="Acesso negado. Você não tem permissão para acessar o módulo Gestão de Tráfego."
       />
     );
   }
 
-  type GestorPageStatus = 'gestor' | 'admin' | 'super_admin';
-  const userStatus: GestorPageStatus = profile.status as GestorPageStatus;
+  const userStatusForClient = (normalizedStatus === 'gestor' || normalizedStatus === 'admin' || normalizedStatus === 'super_admin')
+    ? (normalizedStatus as 'gestor' | 'admin' | 'super_admin')
+    : null;
 
-  // Admin e Super Admin não têm dono vinculado; carregam dados via seletor no client
-  if (profile.status === 'admin' || profile.status === 'super_admin') {
+  // Admin, Super Admin ou cargo personalizado com gestao_trafego: carregam dados via seletor no client
+  if (normalizedStatus === 'admin' || normalizedStatus === 'super_admin' || hasSidebarAccess) {
     return (
       <GestorTrafegoClient
         initialData={null}
         userId={userId}
-        userStatus={userStatus}
+        userStatus={userStatusForClient}
       />
     );
   }
 
   // Gestor: dono efetivo é o enroller (dono da banca) ou pode usar seletor (vinculado a Admin ou atribuído a bancas)
-  const donoId = await getEffectiveDonoIdForGestor(userId);
+  const donoId = normalizedStatus === 'gestor' ? await getEffectiveDonoIdForGestor(userId) : null;
   if (!donoId) {
     let canSelectDono = false;
     let userBancas: { banca_id: string }[] = [];
     if (profile.enroller) {
       const enrollerProfile = await getUserProfile(profile.enroller);
-      canSelectDono = enrollerProfile?.status === 'admin' || enrollerProfile?.status === 'super_admin';
+      const enrollerStatus = enrollerProfile?.status?.trim().toLowerCase();
+      canSelectDono = enrollerStatus === 'admin' || enrollerStatus === 'super_admin';
     }
     if (!canSelectDono) {
       const profileIdToUse = profile.id;
@@ -62,31 +66,12 @@ export default async function GestorTrafegoPage() {
       canSelectDono = userBancas.length > 0;
     }
     if (canSelectDono) {
-      // Pré-carrega dados da primeira banca atribuída (gerentes/consultores) sem precisar do dono
-      let initialData = null;
-      const firstBancaId = userBancas[0]?.banca_id;
-      if (firstBancaId) {
-        try {
-          const { getDashboardDataByBancaId } = await import('@/lib/services/dashboard/dono-banca');
-          const now = new Date();
-          const today = now.toISOString().split('T')[0];
-          const sevenDaysAgo = new Date(now);
-          sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
-          const dateFrom = sevenDaysAgo.toISOString().split('T')[0];
-          initialData = await getDashboardDataByBancaId({
-            bancaId: firstBancaId,
-            dateFrom,
-            dateTo: today,
-          });
-        } catch (_) {
-          // Ignora erro; client carregará ao selecionar
-        }
-      }
+      // Não pré-carrega no servidor — client busca em duas chamadas paralelas (Meta rápida + banca lenta)
       return (
         <GestorTrafegoClient
-          initialData={initialData}
+          initialData={null}
           userId={userId}
-          userStatus={userStatus}
+          userStatus={userStatusForClient}
           canSelectDono={true}
         />
       );
@@ -95,34 +80,12 @@ export default async function GestorTrafegoPage() {
       <GestorTrafegoClient
         initialData={null}
         userId={userId}
-        userStatus={userStatus}
+        userStatus={userStatusForClient}
         authError="Você precisa estar vinculado a um Dono de Banca para acessar os dados."
       />
     );
   }
 
-  try {
-    const now = new Date();
-    const today = now.toISOString().split('T')[0];
-    const sevenDaysAgo = new Date(now);
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
-    const dateFrom = sevenDaysAgo.toISOString().split('T')[0];
-    const initialData = await getDonoBancaDashboardData({
-      userId: donoId,
-      dateFrom,
-      dateTo: today,
-    });
-
-    return <GestorTrafegoClient initialData={initialData} userId={userId} userStatus={userStatus} />;
-  } catch (error: any) {
-    console.error('[Gestor Trafego Server] Erro ao carregar dados:', error.message);
-    if (error.message?.includes('Acesso negado')) {
-      return (
-        <GestorTrafegoClient initialData={null} userId={userId} userStatus={userStatus} authError={error.message} />
-      );
-    }
-    return (
-      <GestorTrafegoClient initialData={null} userId={userId} userStatus={userStatus} serverError={error.message} />
-    );
-  }
+  // Não pré-carrega no servidor — evita timeout no Netlify. Client busca em duas chamadas paralelas.
+  return <GestorTrafegoClient initialData={null} userId={userId} userStatus={userStatusForClient} />;
 }

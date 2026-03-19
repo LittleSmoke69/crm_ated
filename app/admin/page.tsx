@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { useRouter } from 'next/navigation';
 import Layout from '@/components/Layout';
@@ -66,7 +66,8 @@ import {
   LogIn,
   ExternalLink,
   ArrowRightLeft,
-  Headphones as HeadphonesIcon
+  Headphones as HeadphonesIcon,
+  Unplug
 } from 'lucide-react';
 import CRMStatCard from '@/components/CRM/CRMStatCard';
 import StatusDistributionChart from '@/components/Charts/StatusDistributionChart';
@@ -223,14 +224,20 @@ export default function AdminDashboard() {
   const { checking } = useRequireAuth();
   const router = useRouter();
   const { isCollapsed, setIsCollapsed, isMobileOpen, setIsMobileOpen } = useSidebar();
-  const { getTenantHeader } = useAdminTenantSwitcher() || { getTenantHeader: () => ({}) };
+  const { getTenantHeader, selectedTenantId } = useAdminTenantSwitcher() || {
+    getTenantHeader: () => ({}),
+    selectedTenantId: null,
+  };
   const [userId, setUserId] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminStatus, setAdminStatus] = useState<string | null>(null);
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+  const [hasVslRedirect, setHasVslRedirect] = useState(false);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [users, setUsers] = useState<User[]>([]);
+  const [zaplotoRoles, setZaplotoRoles] = useState<{ id: string; code: string; label: string }[]>([]);
+  const [loadingZaplotoRoles, setLoadingZaplotoRoles] = useState(false);
   const [usersLoadError, setUsersLoadError] = useState<string | null>(null);
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<'overview' | 'users' | 'campaigns' | 'settings' | 'proxys' | 'crm' | 'disparo' | 'maturador' | 'loto_assistencia'>('overview');
@@ -273,6 +280,9 @@ export default function AdminDashboard() {
   const [disparoUpcomingPage, setDisparoUpcomingPage] = useState(1);
   const DISPARO_UPCOMING_PAGE_SIZE = 10;
 
+  /** Evita múltiplas execuções de checkAdminAndLoad (reduz GET /admin e chamadas em duplicata). */
+  const adminCheckRunRef = useRef(false);
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const id =
@@ -293,9 +303,54 @@ export default function AdminDashboard() {
     }
   }, [isSuperAdmin, adminStatus, activeSection]);
 
+  // Carregar cargos do White Label & Cargos para exibir na seção de usuários (super_admin)
+  useEffect(() => {
+    if (!isSuperAdmin || !userId || activeSection !== 'users') return;
+    let cancelled = false;
+    const loadRoles = async () => {
+      setLoadingZaplotoRoles(true);
+      try {
+        let zaplotoId = selectedTenantId;
+        if (!zaplotoId) {
+          const tenantsRes = await fetch('/api/admin/zaploto/tenants', {
+            headers: { 'X-User-Id': userId },
+            credentials: 'include',
+          });
+          const tenantsData = await tenantsRes.json();
+          const list = tenantsData?.data ?? [];
+          zaplotoId = list[0]?.id ?? null;
+        }
+        if (!zaplotoId) {
+          setZaplotoRoles([]);
+          return;
+        }
+        const rolesRes = await fetch(
+          `/api/admin/zaploto/roles?zaploto_id=${encodeURIComponent(zaplotoId)}`,
+          { headers: { 'X-User-Id': userId }, credentials: 'include' }
+        );
+        const rolesData = await rolesRes.json();
+        if (cancelled) return;
+        if (rolesData?.success && Array.isArray(rolesData.data)) {
+          setZaplotoRoles(rolesData.data);
+        } else {
+          setZaplotoRoles([]);
+        }
+      } catch {
+        if (!cancelled) setZaplotoRoles([]);
+      } finally {
+        if (!cancelled) setLoadingZaplotoRoles(false);
+      }
+    };
+    loadRoles();
+    return () => { cancelled = true; };
+  }, [isSuperAdmin, userId, activeSection, selectedTenantId]);
+
   useEffect(() => {
     if (userId) {
-      checkAdminAndLoad();
+      if (!adminCheckRunRef.current) {
+        adminCheckRunRef.current = true;
+        checkAdminAndLoad();
+      }
     } else if (!checking) {
       router.push('/admin/login');
     }
@@ -332,6 +387,7 @@ export default function AdminDashboard() {
       setIsAdmin(true);
       setAdminStatus(result.data?.status || null);
       setIsSuperAdmin(!!result.data?.isSuperAdmin);
+      setHasVslRedirect(!!result.data?.hasVslRedirect);
       await Promise.all([
         loadData(),
         loadFinishedCampaigns()
@@ -822,8 +878,8 @@ export default function AdminDashboard() {
             </button>
           )}
 
-          {/* VSL White Label + Redirect: super_admin e admin (gestor acessa direto /admin/vsl) */}
-          {(isSuperAdmin || adminStatus === 'admin') && (
+          {/* VSL White Label + Redirect: super_admin, admin ou cargo com permissão vsl_redirect */}
+          {(isSuperAdmin || adminStatus === 'admin' || hasVslRedirect) && (
             <button
               onClick={() => router.push('/admin/vsl')}
               className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]"
@@ -1233,13 +1289,24 @@ export default function AdminDashboard() {
                                         >
                                           <Crown className={`w-4 h-4 ${inst.is_master ? 'fill-current' : ''}`} />
                                         </button>
-                                        <button
-                                          onClick={() => handleDeleteInstance(inst.id, inst.instance_name)}
-                                          className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                                          title="Excluir instância"
-                                        >
-                                          <Trash2 className="w-4 h-4" />
-                                        </button>
+                                        {isBlocked ? (
+                                          <button
+                                            onClick={() => handleDeleteInstance(inst.id, inst.instance_name)}
+                                            className="px-2 py-1 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 dark:bg-red-900/30 dark:text-red-300 dark:hover:bg-red-900/50 rounded-lg transition-colors flex items-center gap-1"
+                                            title="Deletar instância bloqueada"
+                                          >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                            Deletar
+                                          </button>
+                                        ) : (
+                                          <button
+                                            onClick={() => handleDeleteInstance(inst.id, inst.instance_name)}
+                                            className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                            title="Excluir instância"
+                                          >
+                                            <Trash2 className="w-4 h-4" />
+                                          </button>
+                                        )}
                                       </div>
                                     </div>
                                   </div>
@@ -1392,6 +1459,8 @@ export default function AdminDashboard() {
               onClearUserData={handleClearUserData}
               usersLoadError={usersLoadError}
               onRetryLoad={loadData}
+              isSuperAdmin={isSuperAdmin}
+              zaplotoRoles={zaplotoRoles}
             />
           )}
 
@@ -1990,21 +2059,28 @@ const MetricCard = ({ title, value, icon, bgColor }: any) => {
   );
 };
 
+type ZaplotoRole = { id: string; code: string; label: string };
+
 const UsersSection = ({ 
   users, 
   onUserSelect, 
   selectedUser,
   onClearUserData,
   usersLoadError,
-  onRetryLoad
+  onRetryLoad,
+  isSuperAdmin = false,
+  zaplotoRoles
 }: { 
   users: User[]; 
   onUserSelect: (userId: string | null) => void; 
   selectedUser: string | null;
   onClearUserData?: (userId: string, email: string) => Promise<void>;
   usersLoadError?: string | null;
-  onRetryLoad?: () => void;
+  onRetryLoad?: () => Promise<void>;
+  isSuperAdmin?: boolean;
+  zaplotoRoles?: ZaplotoRole[];
 }) => {
+  const roleList: ZaplotoRole[] = Array.isArray(zaplotoRoles) ? zaplotoRoles : [];
   const [editingUser, setEditingUser] = useState<string | null>(null);
   const [editFormData, setEditFormData] = useState<any>(null);
   const [saving, setSaving] = useState(false);
@@ -2132,16 +2208,24 @@ const UsersSection = ({
         }),
       });
 
-      const data = await res.json();
-      
+      let data: { success?: boolean; error?: string; message?: string } = {};
+      try {
+        const text = await res.text();
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        data = { error: res.statusText || `Erro ${res.status}` };
+      }
+
       if (res.ok && data.success) {
         alert('Usuário atualizado com sucesso!');
         setEditingUser(null);
         setEditFormData(null);
-        window.location.reload();
+        // Refaz o carregamento dos usuários sem reload da página (evita erro removeChild no DOM)
+        await onRetryLoad?.();
       } else {
-        console.error('Erro na resposta:', data);
-        alert(`Erro ao salvar: ${data.error || 'Erro desconhecido'}`);
+        const msg = data.error || data.message || res.statusText || `Erro ${res.status}`;
+        console.error('Erro ao salvar usuário:', res.status, data);
+        alert(`Erro ao salvar: ${msg}`);
       }
     } catch (error) {
       console.error('Erro ao salvar:', error);
@@ -2337,12 +2421,12 @@ const UsersSection = ({
     setCurrentPage(1); // Volta para primeira página ao ordenar
   };
 
-  // Filtra potenciais superiores baseados no status sendo editado
+  // Filtra potenciais superiores baseados no status sendo editado (super_admin pode atribuir qualquer hierarquia)
   const getPotentialEnrollers = (status: string) => {
     if (status === 'consultor') return users.filter(u => u.status === 'gerente');
-    if (status === 'gerente') return users.filter(u => u.status === 'dono_banca');
-    if (status === 'gestor') return users.filter(u => u.status === 'dono_banca' || u.status === 'admin');
-    if (status === 'auditoria' || status === 'suporte') return users.filter(u => u.status === 'admin');
+    if (status === 'gerente') return users.filter(u => ['dono_banca', 'gerente', 'admin', 'super_admin'].includes(u.status));
+    if (status === 'gestor') return users.filter(u => ['dono_banca', 'admin', 'super_admin'].includes(u.status));
+    if (status === 'auditoria' || status === 'suporte') return users.filter(u => u.status === 'admin' || (isSuperAdmin && u.status === 'super_admin'));
     return [];
   };
 
@@ -2403,6 +2487,17 @@ const UsersSection = ({
           >
             Todos
           </button>
+          {isSuperAdmin && (
+            <button
+              onClick={() => {
+                setStatusFilter('super_admin');
+                setCurrentPage(1);
+              }}
+              className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'super_admin' ? 'bg-amber-600 text-white' : 'bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-200 hover:bg-amber-100 dark:hover:bg-amber-900/50'}`}
+            >
+              Super Admins
+            </button>
+          )}
           <button
             onClick={() => {
               setStatusFilter('admin');
@@ -2536,13 +2631,22 @@ const UsersSection = ({
                     value={createFormData.status}
                     onChange={e => setCreateCreateFormData({...createFormData, status: e.target.value, enroller: ''})}
                   >
-                    <option value="admin">Admin</option>
-                    <option value="dono_banca">Dono de Banca</option>
-                    <option value="gestor">Gestor de Tráfego</option>
-                    <option value="gerente">Gerente</option>
-                    <option value="consultor">Consultor</option>
-                    <option value="auditoria">Auditoria</option>
-                    <option value="suporte">Suporte</option>
+                    {roleList.length > 0
+                      ? roleList.map(r => (
+                          <option key={r.id} value={r.code}>{r.label}</option>
+                        ))
+                      : (
+                        <>
+                          {isSuperAdmin && <option value="super_admin">Super Admin</option>}
+                          <option value="admin">Admin</option>
+                          <option value="dono_banca">Dono de Banca</option>
+                          <option value="gestor">Gestor de Tráfego</option>
+                          <option value="gerente">Gerente</option>
+                          <option value="consultor">Consultor</option>
+                          <option value="auditoria">Auditoria</option>
+                          <option value="suporte">Suporte</option>
+                        </>
+                      )}
                   </select>
                 </div>
 
@@ -2768,17 +2872,26 @@ const UsersSection = ({
                         <div className="space-y-2">
                           <div className="flex items-center justify-between gap-2">
                           <select
-                            value={editFormData.status}
+                            value={editFormData.status ?? ''}
                             onChange={e => setEditFormData({...editFormData, status: e.target.value, enroller: null})}
                               className="flex-1 px-2 py-1 text-sm border rounded text-gray-700 font-bold"
                           >
-                            <option value="admin">Admin</option>
-                            <option value="dono_banca">Dono de Banca</option>
-                            <option value="gestor">Gestor de Tráfego</option>
-                            <option value="gerente">Gerente</option>
-                            <option value="consultor">Consultor</option>
-                            <option value="auditoria">Auditoria</option>
-                            <option value="suporte">Suporte</option>
+                            {roleList.length > 0
+                              ? roleList.map(r => (
+                                  <option key={r.id} value={r.code}>{r.label}</option>
+                                ))
+                              : (
+                                <>
+                                  {isSuperAdmin && <option value="super_admin">Super Admin</option>}
+                                  <option value="admin">Admin</option>
+                                  <option value="dono_banca">Dono de Banca</option>
+                                  <option value="gestor">Gestor de Tráfego</option>
+                                  <option value="gerente">Gerente</option>
+                                  <option value="consultor">Consultor</option>
+                                  <option value="auditoria">Auditoria</option>
+                                  <option value="suporte">Suporte</option>
+                                </>
+                              )}
                           </select>
                             <button
                               type="button"
@@ -2798,6 +2911,18 @@ const UsersSection = ({
                             >
                               <option value="">Sem superior</option>
                               {getPotentialEnrollers(editFormData.status).map(pe => (
+                                <option key={pe.id} value={pe.id}>{pe.full_name || pe.email}</option>
+                              ))}
+                            </select>
+                          )}
+                          {editFormData.status === 'gestor' && (
+                            <select
+                              value={editFormData.enroller || ''}
+                              onChange={e => setEditFormData({...editFormData, enroller: e.target.value || null})}
+                              className="w-full px-2 py-1 text-sm border rounded text-gray-700"
+                            >
+                              <option value="">Sem superior (opcional)</option>
+                              {getPotentialEnrollers('gestor').map(pe => (
                                 <option key={pe.id} value={pe.id}>{pe.full_name || pe.email}</option>
                               ))}
                             </select>
@@ -2837,6 +2962,7 @@ const UsersSection = ({
                         <div>
                           <div className="flex items-center gap-2 mb-1">
                           <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                            user.status === 'super_admin' ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200' :
                             user.status === 'admin' ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300' :
                             user.status === 'dono_banca' ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300' :
                             user.status === 'gestor' ? 'bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300' :
@@ -3031,6 +3157,17 @@ const UsersSection = ({
   );
 };
 
+interface CampaignHistoryItem {
+  id: string;
+  phone: string;
+  status: string;
+  reason: string;
+  finished_at: string | null;
+  instance_name: string | null;
+  position: number;
+  created_at: string;
+}
+
 const CampaignsSection = ({ userId }: { userId: string | null }) => {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [loading, setLoading] = useState(true);
@@ -3039,6 +3176,12 @@ const CampaignsSection = ({ userId }: { userId: string | null }) => {
   const [editingCampaign, setEditingCampaign] = useState<Campaign | null>(null);
   const [instances, setInstances] = useState<any[]>([]);
   const [saving, setSaving] = useState(false);
+  const [historyCampaign, setHistoryCampaign] = useState<Campaign | null>(null);
+  const [historyItems, setHistoryItems] = useState<CampaignHistoryItem[]>([]);
+  const [historyPagination, setHistoryPagination] = useState<{ page: number; limit: number; total: number; totalPages: number } | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyStatusFilter, setHistoryStatusFilter] = useState<string>('');
 
   useEffect(() => {
     if (userId) {
@@ -3168,6 +3311,38 @@ const CampaignsSection = ({ userId }: { userId: string | null }) => {
     }
   };
 
+  const loadHistory = useCallback(async (campaignId: string, page: number, status?: string) => {
+    if (!userId) return;
+    setHistoryLoading(true);
+    try {
+      const params = new URLSearchParams({ page: String(page), limit: '50' });
+      if (status) params.set('status', status);
+      const res = await fetch(`/api/admin/campaigns/${campaignId}/history?${params}`, {
+        headers: { 'X-User-Id': userId },
+      });
+      const data = await res.json();
+      if (res.ok && data.success && data.data) {
+        setHistoryItems(data.data.items || []);
+        setHistoryPagination(data.data.pagination || null);
+      } else {
+        setHistoryItems([]);
+        setHistoryPagination(null);
+      }
+    } catch (error) {
+      console.error('Erro ao carregar histórico:', error);
+      setHistoryItems([]);
+      setHistoryPagination(null);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    if (historyCampaign && userId) {
+      loadHistory(historyCampaign.id, historyPage, historyStatusFilter || undefined);
+    }
+  }, [historyCampaign?.id, historyPage, historyStatusFilter, userId, loadHistory]);
+
   if (loading) {
     return <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow p-6 border border-gray-200 dark:border-[#404040] text-gray-700 dark:text-gray-300">Carregando...</div>;
   }
@@ -3287,14 +3462,27 @@ const CampaignsSection = ({ userId }: { userId: string | null }) => {
                       </div>
                     </td>
                     <td className="p-3 sm:p-4">
-                      <button
-                        onClick={() => setEditingCampaign(campaign)}
-                        className="px-3 py-1.5 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg text-sm font-medium transition flex items-center gap-2"
-                        title="Editar Campanha"
-                      >
-                        <Edit className="w-4 h-4" />
-                        Editar
-                      </button>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          onClick={() => setEditingCampaign(campaign)}
+                          className="px-3 py-1.5 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg text-sm font-medium transition flex items-center gap-2"
+                          title="Editar Campanha"
+                        >
+                          <Edit className="w-4 h-4" />
+                          Editar
+                        </button>
+                        <button
+                          onClick={() => {
+                            setHistoryCampaign(campaign);
+                            setHistoryPage(1);
+                          }}
+                          className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition flex items-center gap-2"
+                          title="Ver histórico da campanha"
+                        >
+                          <Eye className="w-4 h-4" />
+                          Histórico
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -3303,6 +3491,110 @@ const CampaignsSection = ({ userId }: { userId: string | null }) => {
           </table>
         </div>
       </div>
+
+      {/* Modal Histórico da Campanha */}
+      {historyCampaign && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setHistoryCampaign(null)}>
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] flex flex-col border border-gray-200 dark:border-[#404040]" onClick={e => e.stopPropagation()}>
+            <div className="p-4 border-b border-gray-200 dark:border-[#404040] flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-lg font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2">
+                <BarChart3 className="w-5 h-5 text-blue-600" />
+                Histórico: {historyCampaign.group_subject || historyCampaign.group_id}
+              </h3>
+              <button onClick={() => setHistoryCampaign(null)} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] text-gray-600 dark:text-gray-400">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 border-b border-gray-200 dark:border-[#404040] flex flex-wrap gap-2 items-center">
+              <span className="text-sm text-gray-600 dark:text-gray-400">Filtrar:</span>
+              <select
+                value={historyStatusFilter}
+                onChange={e => { setHistoryStatusFilter(e.target.value); setHistoryPage(1); }}
+                className="rounded-lg border border-gray-300 dark:border-[#404040] bg-white dark:bg-[#333] text-gray-800 dark:text-gray-200 px-3 py-1.5 text-sm"
+              >
+                <option value="">Todos</option>
+                <option value="success">Adicionados</option>
+                <option value="failed">Falhas</option>
+                <option value="queued">Na fila</option>
+              </select>
+            </div>
+            <div className="flex-1 overflow-auto p-4">
+              {historyLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-200 dark:border-[#404040]">
+                        <th className="text-left p-2 text-gray-700 dark:text-gray-300">Número</th>
+                        <th className="text-left p-2 text-gray-700 dark:text-gray-300">Status</th>
+                        <th className="text-left p-2 text-gray-700 dark:text-gray-300">Motivo / Resultado</th>
+                        <th className="text-left p-2 text-gray-700 dark:text-gray-300">Data/Hora</th>
+                        <th className="text-left p-2 text-gray-700 dark:text-gray-300">Instância</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {historyItems.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="p-4 text-center text-gray-500">Nenhum registro</td>
+                        </tr>
+                      ) : (
+                        historyItems.map((item) => (
+                          <tr key={item.id} className="border-b border-gray-100 dark:border-[#333]">
+                            <td className="p-2 font-mono text-gray-800 dark:text-gray-200">{item.phone}</td>
+                            <td className="p-2">
+                              <span className={`px-2 py-0.5 rounded text-xs ${
+                                item.status === 'success' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300' :
+                                item.status === 'failed' ? 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300' :
+                                'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'
+                              }`}>
+                                {item.status === 'success' ? 'Adicionado' : item.status === 'failed' ? 'Falha' : 'Fila'}
+                              </span>
+                            </td>
+                            <td className="p-2 text-gray-700 dark:text-gray-300 max-w-[200px] truncate" title={item.reason}>{item.reason}</td>
+                            <td className="p-2 text-gray-600 dark:text-gray-400">
+                              {item.finished_at ? new Date(item.finished_at).toLocaleString('pt-BR') : '-'}
+                            </td>
+                            <td className="p-2 text-gray-600 dark:text-gray-400">{item.instance_name || '-'}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+            {historyPagination && historyPagination.totalPages > 1 && (
+              <div className="p-4 border-t border-gray-200 dark:border-[#404040] flex items-center justify-between gap-2 flex-wrap">
+                <span className="text-sm text-gray-600 dark:text-gray-400">
+                  Total: {historyPagination.total} registro(s)
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    disabled={historyPage <= 1}
+                    onClick={() => setHistoryPage(p => Math.max(1, p - 1))}
+                    className="px-3 py-1.5 rounded-lg bg-gray-200 dark:bg-[#404040] text-gray-700 dark:text-gray-300 disabled:opacity-50 text-sm"
+                  >
+                    Anterior
+                  </button>
+                  <span className="px-3 py-1.5 text-sm text-gray-600 dark:text-gray-400">
+                    {historyPage} / {historyPagination.totalPages}
+                  </span>
+                  <button
+                    disabled={historyPage >= historyPagination.totalPages}
+                    onClick={() => setHistoryPage(p => p + 1)}
+                    className="px-3 py-1.5 rounded-lg bg-gray-200 dark:bg-[#404040] text-gray-700 dark:text-gray-300 disabled:opacity-50 text-sm"
+                  >
+                    Próxima
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Modal de Edição */}
       {editingCampaign && (
@@ -3341,6 +3633,9 @@ const CampaignsSection = ({ userId }: { userId: string | null }) => {
   );
 };
 
+const EVOLUTION_APIS_PER_PAGE = 10;
+const ATTRIBUTION_USERS_PER_PAGE = 10;
+
 const SettingsSection = () => {
   const [apis, setApis] = useState<EvolutionApi[]>([]);
   const [usersWithApis, setUsersWithApis] = useState<UserWithApis[]>([]);
@@ -3348,6 +3643,8 @@ const SettingsSection = () => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingApi, setEditingApi] = useState<EvolutionApi | null>(null);
   const [canEditEvolutionApi, setCanEditEvolutionApi] = useState(true);
+  const [evolutionApiPage, setEvolutionApiPage] = useState(1);
+  const [attributionPage, setAttributionPage] = useState(1);
   const router = useRouter();
   const [formData, setFormData] = useState({
     name: '',
@@ -3377,6 +3674,16 @@ const SettingsSection = () => {
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const maxEvolutionPage = Math.max(1, Math.ceil(apis.length / EVOLUTION_APIS_PER_PAGE));
+    if (evolutionApiPage > maxEvolutionPage) setEvolutionApiPage(maxEvolutionPage);
+  }, [apis.length, evolutionApiPage]);
+
+  useEffect(() => {
+    const maxAttributionPage = Math.max(1, Math.ceil(usersWithApis.length / ATTRIBUTION_USERS_PER_PAGE));
+    if (attributionPage > maxAttributionPage) setAttributionPage(maxAttributionPage);
+  }, [usersWithApis.length, attributionPage]);
 
   const loadData = async () => {
     setLoading(true);
@@ -3633,7 +3940,7 @@ const SettingsSection = () => {
             </div>
             <div className="flex items-center gap-2">
               {!canEditEvolutionApi && (
-                <span className="text-sm text-amber-600">Somente visualização: sem permissão para alterar APIs Evolution</span>
+                <span className="text-sm text-amber-600 dark:text-amber-400">Somente visualização: sem permissão para alterar APIs Evolution</span>
               )}
               <button
                 onClick={() => {
@@ -3654,50 +3961,52 @@ const SettingsSection = () => {
           <div className="overflow-x-auto -mx-4 sm:mx-0">
           <table className="w-full min-w-[600px]">
             <thead>
-              <tr className="border-b border-gray-200">
-                <th className="text-left p-3 sm:p-4 text-gray-700 text-sm sm:text-base">Nome</th>
-                <th className="text-left p-3 sm:p-4 text-gray-700 text-sm sm:text-base">URL Base</th>
-                <th className="text-left p-3 sm:p-4 text-gray-700 text-sm sm:text-base">Status</th>
-                <th className="text-left p-3 sm:p-4 text-gray-700 text-sm sm:text-base">Usuários</th>
-                <th className="text-left p-3 sm:p-4 text-gray-700 text-sm sm:text-base">Ações</th>
+              <tr className="border-b border-gray-200 dark:border-gray-600">
+                <th className="text-left p-3 sm:p-4 text-gray-700 dark:text-white text-sm sm:text-base">Nome</th>
+                <th className="text-left p-3 sm:p-4 text-gray-700 dark:text-white text-sm sm:text-base">URL Base</th>
+                <th className="text-left p-3 sm:p-4 text-gray-700 dark:text-white text-sm sm:text-base">Status</th>
+                <th className="text-left p-3 sm:p-4 text-gray-700 dark:text-white text-sm sm:text-base">Usuários</th>
+                <th className="text-left p-3 sm:p-4 text-gray-700 dark:text-white text-sm sm:text-base">Ações</th>
               </tr>
             </thead>
             <tbody>
               {apis.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="p-8 text-center text-gray-500">
+                  <td colSpan={5} className="p-8 text-center text-gray-500 dark:text-gray-300">
                     Nenhuma API configurada
                   </td>
                 </tr>
               ) : (
-                apis.map((api) => (
-                  <tr key={api.id} className="border-b border-gray-100 hover:bg-gray-50">
+                apis
+                  .slice((evolutionApiPage - 1) * EVOLUTION_APIS_PER_PAGE, evolutionApiPage * EVOLUTION_APIS_PER_PAGE)
+                  .map((api) => (
+                  <tr key={api.id} className="border-b border-gray-100 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700/50">
                     <td className="p-3 sm:p-4">
-                      <div className="font-medium text-gray-800 text-sm sm:text-base">{api.name}</div>
+                      <div className="font-medium text-gray-800 dark:text-white text-sm sm:text-base">{api.name}</div>
                       {api.description && (
-                        <div className="text-xs sm:text-sm text-gray-500">{api.description}</div>
+                        <div className="text-xs sm:text-sm text-gray-500 dark:text-gray-300">{api.description}</div>
                       )}
                     </td>
-                    <td className="p-3 sm:p-4 text-xs sm:text-sm text-gray-600 break-all">{api.base_url}</td>
+                    <td className="p-3 sm:p-4 text-xs sm:text-sm text-gray-600 dark:text-gray-200 break-all">{api.base_url}</td>
                     <td className="p-3 sm:p-4">
                       <div className="flex flex-col gap-1">
                         <span
                           className={`px-2 py-1 rounded text-xs ${
                             api.is_active
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-gray-100 text-gray-800'
+                              ? 'bg-emerald-100 dark:bg-emerald-900/50 text-emerald-800 dark:text-emerald-200'
+                              : 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
                           }`}
                         >
                           {api.is_active ? 'Ativa' : 'Inativa'}
                         </span>
                         {api.is_blocked_for_instances && (
-                          <span className="px-2 py-1 rounded text-xs bg-orange-100 text-orange-800">
+                          <span className="px-2 py-1 rounded text-xs bg-orange-100 dark:bg-orange-900/50 text-orange-800 dark:text-orange-200">
                             Bloqueada para Instâncias
                           </span>
                         )}
                       </div>
                     </td>
-                    <td className="p-3 sm:p-4 text-sm sm:text-base">{api.user_count}</td>
+                    <td className="p-3 sm:p-4 text-sm sm:text-base text-gray-800 dark:text-white">{api.user_count}</td>
                     <td className="p-3 sm:p-4">
                       <div className="flex gap-2">
                         <button
@@ -3705,8 +4014,8 @@ const SettingsSection = () => {
                           disabled={!canEditEvolutionApi}
                           className={`p-2 rounded disabled:opacity-50 disabled:cursor-not-allowed ${
                             api.is_blocked_for_instances
-                              ? 'text-orange-600 hover:bg-orange-50'
-                              : 'text-gray-600 hover:bg-gray-50'
+                              ? 'text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/30'
+                              : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600'
                           }`}
                           title={!canEditEvolutionApi ? 'Sem permissão' : api.is_blocked_for_instances ? 'Desbloquear para criação de instâncias' : 'Bloquear para criação de instâncias'}
                         >
@@ -3715,7 +4024,7 @@ const SettingsSection = () => {
                         <button
                           onClick={() => canEditEvolutionApi && handleEdit(api)}
                           disabled={!canEditEvolutionApi}
-                          className="p-2 text-[#8CD955] hover:bg-emerald-50 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="p-2 text-[#8CD955] hover:bg-emerald-50 dark:hover:bg-emerald-900/30 rounded disabled:opacity-50 disabled:cursor-not-allowed"
                           title={!canEditEvolutionApi ? 'Sem permissão' : 'Editar'}
                         >
                           <Edit className="w-4 h-4" />
@@ -3723,7 +4032,7 @@ const SettingsSection = () => {
                         <button
                           onClick={() => canEditEvolutionApi && handleDelete(api.id)}
                           disabled={!canEditEvolutionApi}
-                          className="p-2 text-red-600 hover:bg-red-50 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="p-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded disabled:opacity-50 disabled:cursor-not-allowed"
                           title={!canEditEvolutionApi ? 'Sem permissão' : 'Deletar'}
                         >
                           <Trash2 className="w-4 h-4" />
@@ -3735,33 +4044,44 @@ const SettingsSection = () => {
               )}
             </tbody>
           </table>
+          {apis.length > EVOLUTION_APIS_PER_PAGE && (
+            <Pagination
+              currentPage={evolutionApiPage}
+              totalPages={Math.ceil(apis.length / EVOLUTION_APIS_PER_PAGE)}
+              onPageChange={setEvolutionApiPage}
+              itemsPerPage={EVOLUTION_APIS_PER_PAGE}
+              totalItems={apis.length}
+            />
+          )}
         </div>
         </div>
       </div>
 
       
 
-      <div className="bg-gradient-to-br from-white to-slate-50 rounded-xl shadow-lg border border-slate-100 p-4 sm:p-6 relative overflow-hidden">
+      <div className="bg-gradient-to-br from-white to-slate-50 dark:from-[#2a2a2a] dark:to-slate-900/20 rounded-xl shadow-lg border border-slate-100 dark:border-slate-700 p-4 sm:p-6 relative overflow-hidden">
         {/* Decorative background elements */}
-        <div className="absolute top-0 right-0 w-32 h-32 bg-slate-200/20 rounded-full -mr-16 -mt-16"></div>
-        <div className="absolute bottom-0 left-0 w-24 h-24 bg-slate-300/10 rounded-full -ml-12 -mb-12"></div>
+        <div className="absolute top-0 right-0 w-32 h-32 bg-slate-200/20 dark:bg-slate-600/20 rounded-full -mr-16 -mt-16"></div>
+        <div className="absolute bottom-0 left-0 w-24 h-24 bg-slate-300/10 dark:bg-slate-600/10 rounded-full -ml-12 -mb-12"></div>
         
         <div className="relative z-10">
           <div className="flex items-center gap-2 mb-4 sm:mb-6">
-            <Users className="w-5 h-5 sm:w-6 sm:h-6 text-slate-600" />
-            <h2 className="text-xl sm:text-2xl font-bold text-gray-800">Atribuir Usuários às APIs</h2>
+            <Users className="w-5 h-5 sm:w-6 sm:h-6 text-slate-600 dark:text-slate-300" />
+            <h2 className="text-xl sm:text-2xl font-bold text-gray-800 dark:text-white">Atribuir Usuários às APIs</h2>
           </div>
           <div className="space-y-4">
-            {usersWithApis.map((user) => (
-              <div key={user.id} className="bg-gray-50/80 rounded-lg border border-gray-200 p-3 sm:p-4">
+            {usersWithApis
+              .slice((attributionPage - 1) * ATTRIBUTION_USERS_PER_PAGE, attributionPage * ATTRIBUTION_USERS_PER_PAGE)
+              .map((user) => (
+              <div key={user.id} className="bg-gray-50/80 dark:bg-gray-800/80 rounded-lg border border-gray-200 dark:border-gray-600 p-3 sm:p-4">
               <div className="flex flex-col sm:flex-row justify-between items-start gap-3 mb-3">
                 <div className="flex-1">
-                  <div className="font-medium text-gray-800 text-sm sm:text-base">{user.email}</div>
-                  <div className="text-xs sm:text-sm text-gray-500">{user.full_name || 'Sem nome'}</div>
+                  <div className="font-medium text-gray-800 dark:text-white text-sm sm:text-base">{user.email}</div>
+                  <div className="text-xs sm:text-sm text-gray-500 dark:text-gray-300">{user.full_name || 'Sem nome'}</div>
                 </div>
                 <select
                   disabled={!canEditEvolutionApi}
-                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-700 w-full sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="border border-gray-300 dark:border-gray-500 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-white bg-white dark:bg-[#333] w-full sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed"
                   value={user.evolution_apis.find(ua => ua.is_default)?.evolution_apis?.id || ''}
                   onChange={async (e) => {
                     const apiId = e.target.value;
@@ -3800,13 +4120,22 @@ const SettingsSection = () => {
                 </select>
               </div>
               {user.evolution_apis.length > 0 && (
-                <div className="text-sm text-gray-600">
+                <div className="text-sm text-gray-600 dark:text-gray-300">
                   APIs atribuídas: {user.evolution_apis.map(ua => ua.evolution_apis.name).join(', ')}
                 </div>
               )}
             </div>
           ))}
           </div>
+          {usersWithApis.length > ATTRIBUTION_USERS_PER_PAGE && (
+            <Pagination
+              currentPage={attributionPage}
+              totalPages={Math.ceil(usersWithApis.length / ATTRIBUTION_USERS_PER_PAGE)}
+              onPageChange={setAttributionPage}
+              itemsPerPage={ATTRIBUTION_USERS_PER_PAGE}
+              totalItems={usersWithApis.length}
+            />
+          )}
         </div>
       </div>
 
@@ -3824,7 +4153,7 @@ const SettingsSection = () => {
                   setShowAddModal(false);
                   setEditingApi(null);
                 }}
-                className="text-gray-400 hover:text-gray-600"
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-white"
               >
                 <X className="w-5 h-5 sm:w-6 sm:h-6" />
               </button>
@@ -3832,7 +4161,7 @@ const SettingsSection = () => {
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-2">
                   Nome *
                 </label>
                 <input
@@ -3845,7 +4174,7 @@ const SettingsSection = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-2">
                   URL Base *
                 </label>
                 <input
@@ -3859,7 +4188,7 @@ const SettingsSection = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-2">
                   API Key (Master Key) *
                 </label>
                 <input
@@ -3872,7 +4201,7 @@ const SettingsSection = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-2">
                   Descrição
                 </label>
                 <textarea
@@ -3891,7 +4220,7 @@ const SettingsSection = () => {
                   onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
                   className="w-4 h-4 text-[#8CD955] border-gray-300 rounded focus:ring-emerald-500"
                 />
-                <label htmlFor="is_active" className="ml-2 text-sm text-gray-700">
+                <label htmlFor="is_active" className="ml-2 text-sm text-gray-700 dark:text-gray-200">
                   API Ativa
                 </label>
               </div>
@@ -3904,9 +4233,9 @@ const SettingsSection = () => {
                   onChange={(e) => setFormData({ ...formData, is_blocked_for_instances: e.target.checked })}
                   className="w-4 h-4 text-orange-600 border-gray-300 rounded focus:ring-orange-500"
                 />
-                <label htmlFor="is_blocked_for_instances" className="ml-2 text-sm text-gray-700">
+                <label htmlFor="is_blocked_for_instances" className="ml-2 text-sm text-gray-700 dark:text-gray-200">
                   Bloqueada para Criação de Instâncias
-                  <span className="block text-xs text-gray-500 mt-1">
+                  <span className="block text-xs text-gray-500 dark:text-gray-400 mt-1">
                     (A API ainda poderá ser usada para adicionar pessoas em grupos e enviar mensagens)
                   </span>
                 </label>
@@ -3940,12 +4269,17 @@ const SettingsSection = () => {
   );
 };
 
+const PROXY_LIST_PER_PAGE = 10;
+const PROXY_ASSIGN_INSTANCES_PER_PAGE = 10;
+
 const ProxySection = () => {
   const [proxys, setProxys] = useState<Proxys[]>([]);
   const [editingProxy, setEditingProxy] = useState<Proxys | null>(null);  
   const [intancesWithProxy, setInstancesWithProxy] = useState<InstanceWithProxy[]>([]);
   const [showAddModalProxy, setShowAddModalProxy] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [proxyPage, setProxyPage] = useState(1);
+  const [assignInstancesPage, setAssignInstancesPage] = useState(1);
   const [formDataProxy, setFormDataProxy] = useState({
     name: '',
     host: '',
@@ -3955,10 +4289,20 @@ const ProxySection = () => {
     protocol: '',
   });
 
+  const proxyTotalPages = Math.ceil(proxys.length / PROXY_LIST_PER_PAGE) || 1;
+  const assignTotalPages = Math.ceil(intancesWithProxy.length / PROXY_ASSIGN_INSTANCES_PER_PAGE) || 1;
+
   useEffect(() => {
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (proxyPage > proxyTotalPages && proxyTotalPages >= 1) setProxyPage(1);
+  }, [proxys.length, proxyPage, proxyTotalPages]);
+  useEffect(() => {
+    if (assignInstancesPage > assignTotalPages && assignTotalPages >= 1) setAssignInstancesPage(1);
+  }, [intancesWithProxy.length, assignInstancesPage, assignTotalPages]);
 
   const loadData = async () => {
     setLoading(true);
@@ -4106,12 +4450,12 @@ const ProxySection = () => {
     }
   };
 
-  const handleUnassignUser = async (apiId: string, userId: string) => {
+  const handleUnassignUser = async (proxyId: string, instanceId: string) => {
     const adminUserId = getStoredUserId();
     if (!adminUserId) return;
     
     try {
-      const res = await fetch(`/api/admin/evolution-apis/${apiId}/assign-user?user_id=${userId}`, {
+      const res = await fetch(`/api/admin/proxy/${proxyId}/assign-user?user_id=${instanceId}`, {
         method: 'DELETE',
         headers: { 'X-User-Id': adminUserId },
       });
@@ -4129,21 +4473,41 @@ const ProxySection = () => {
     }
   };
 
+  const handleSetProxyEnabled = async (proxyId: string, enabled: boolean) => {
+    const adminUserId = getStoredUserId();
+    if (!adminUserId) return;
+    try {
+      const res = await fetch(`/api/admin/proxy/${proxyId}/set-enabled`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': adminUserId },
+        body: JSON.stringify({ enabled }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        await loadData();
+      } else {
+        alert(data.error || 'Erro ao alterar status do proxy.');
+      }
+    } catch (err) {
+      console.error('Erro ao alterar proxy:', err);
+      alert('Erro ao alterar status do proxy.');
+    }
+  };
+
   if (loading) {
     return <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow p-6 border border-gray-200 dark:border-[#404040] text-gray-700 dark:text-gray-300">Carregando...</div>;
   }
   return (
     <div className="space-y-4 sm:space-y-6">
-      <div className="bg-gradient-to-br from-white to-emerald-50 dark:from-[#2a2a2a] dark:to-emerald-900/20 rounded-xl shadow-lg border border-emerald-100 dark:border-emerald-800 p-4 sm:p-6 relative overflow-hidden">
-        {/* Decorative background elements */}
-        <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-200/20 dark:bg-emerald-500/10 rounded-full -mr-16 -mt-16"></div>
-        <div className="absolute bottom-0 left-0 w-24 h-24 bg-emerald-300/10 dark:bg-emerald-500/5 rounded-full -ml-12 -mb-12"></div>
+      <div className="bg-gradient-to-br from-white to-gray-50 dark:from-[#2a2a2a] dark:to-[#333] rounded-xl shadow-lg border border-gray-200 dark:border-[#404040] p-4 sm:p-6 relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-32 h-32 bg-[#8CD955]/10 dark:bg-[#8CD955]/5 rounded-full -mr-16 -mt-16"></div>
+        <div className="absolute bottom-0 left-0 w-24 h-24 bg-[#8CD955]/5 dark:bg-[#8CD955]/5 rounded-full -ml-12 -mb-12"></div>
         
         <div className="relative z-10">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4 sm:mb-6">
             <div className="flex items-center gap-2">
               <Settings className="w-5 h-5 sm:w-6 sm:h-6 text-[#8CD955]" />
-              <h2 className="text-xl sm:text-2xl font-bold text-gray-800">Proxys Evolution</h2>
+              <h2 className="text-xl sm:text-2xl font-bold text-gray-800 dark:text-white">Proxys Evolution</h2>
             </div>
           <button
             onClick={() => {
@@ -4161,58 +4525,67 @@ const ProxySection = () => {
         <div className="overflow-x-auto -mx-4 sm:mx-0">
           <table className="w-full min-w-[600px]">
             <thead>
-              <tr className="border-b border-gray-200">
-                <th className="text-left p-3 sm:p-4 text-gray-700 text-sm sm:text-base">Nome</th>
-                <th className="text-left p-3 sm:p-4 text-gray-700 text-sm sm:text-base">Host</th>
-                <th className="text-left p-3 sm:p-4 text-gray-700 text-sm sm:text-base">Port</th>
-                <th className="text-left p-3 sm:p-4 text-gray-700 text-sm sm:text-base">Protocol</th>
-                <th className="text-left p-3 sm:p-4 text-gray-700 text-sm sm:text-base">Username</th>
-                <th className="text-left p-3 sm:p-4 text-gray-700 text-sm sm:text-base">Status</th>
-                <th className="text-left p-3 sm:p-4 text-gray-700 text-sm sm:text-base">Ações</th>
+              <tr className="border-b border-gray-200 dark:border-[#404040]">
+                <th className="text-left p-3 sm:p-4 text-gray-700 dark:text-gray-300 text-sm sm:text-base">Nome</th>
+                <th className="text-left p-3 sm:p-4 text-gray-700 dark:text-gray-300 text-sm sm:text-base">Host</th>
+                <th className="text-left p-3 sm:p-4 text-gray-700 dark:text-gray-300 text-sm sm:text-base">Port</th>
+                <th className="text-left p-3 sm:p-4 text-gray-700 dark:text-gray-300 text-sm sm:text-base">Protocol</th>
+                <th className="text-left p-3 sm:p-4 text-gray-700 dark:text-gray-300 text-sm sm:text-base">Username</th>
+                <th className="text-left p-3 sm:p-4 text-gray-700 dark:text-gray-300 text-sm sm:text-base">Status</th>
+                <th className="text-left p-3 sm:p-4 text-gray-700 dark:text-gray-300 text-sm sm:text-base">Ações</th>
               </tr>
             </thead>
             <tbody>
               {proxys.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="p-8 text-center text-gray-500">
+                  <td colSpan={7} className="p-8 text-center text-gray-500 dark:text-gray-400">
                     Nenhuma Proxy configurada
                   </td>
                 </tr>
               ) : (
-                proxys.map((proxy) => (
-                  <tr key={proxy.id} className="border-b border-gray-100 hover:bg-gray-50">
+                proxys
+                  .slice((proxyPage - 1) * PROXY_LIST_PER_PAGE, proxyPage * PROXY_LIST_PER_PAGE)
+                  .map((proxy) => (
+                  <tr key={proxy.id} className="border-b border-gray-100 dark:border-[#404040] hover:bg-gray-50 dark:hover:bg-[#333]">
                     <td className="p-3 sm:p-4">
-                      <div className="font-medium text-gray-800 text-sm sm:text-base">{proxy.name || 'Sem nome'}</div>
+                      <div className="font-medium text-gray-800 dark:text-white text-sm sm:text-base">{proxy.name || 'Sem nome'}</div>
                     </td>
                     <td className="p-3 sm:p-4">
-                      <div className="text-gray-600 text-sm sm:text-base">{proxy.host}</div>
+                      <div className="text-gray-600 dark:text-gray-400 text-sm sm:text-base">{proxy.host}</div>
                     </td>
-                    <td className="p-3 sm:p-4 text-xs sm:text-sm text-gray-600 break-all">{proxy.port}</td>
-                    <td className="p-3 sm:p-4 text-xs sm:text-sm text-gray-600 break-all">{proxy.protocol}</td>
-                    <td className="p-3 sm:p-4 text-xs sm:text-sm text-gray-600 break-all">{proxy.username}</td>
+                    <td className="p-3 sm:p-4 text-xs sm:text-sm text-gray-600 dark:text-gray-400 break-all">{proxy.port}</td>
+                    <td className="p-3 sm:p-4 text-xs sm:text-sm text-gray-600 dark:text-gray-400 break-all">{proxy.protocol}</td>
+                    <td className="p-3 sm:p-4 text-xs sm:text-sm text-gray-600 dark:text-gray-400 break-all">{proxy.username}</td>
                     <td className="p-3 sm:p-4">
                       <span
-                        className={`px-2 py-1 rounded text-xs ${
+                        className={`px-2 py-1 rounded text-xs font-medium ${
                           proxy.enabled
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : 'bg-gray-100 text-gray-800'
+                            ? 'bg-[#8CD955]/20 text-[#8CD955] dark:bg-[#8CD955]/20 dark:text-[#8CD955]'
+                            : 'bg-gray-200 dark:bg-[#404040] text-gray-600 dark:text-gray-400'
                         }`}
                       >
                         {proxy.enabled ? 'Ativa' : 'Inativa'}
                       </span>
                     </td>
                     <td className="p-3 sm:p-4">
-                      <div className="flex gap-2">
+                      <div className="flex flex-wrap gap-1">
+                        <button
+                          onClick={() => handleSetProxyEnabled(proxy.id, !proxy.enabled)}
+                          className="p-2 rounded border border-gray-300 dark:border-[#404040] hover:bg-gray-100 dark:hover:bg-[#333] text-gray-700 dark:text-gray-300"
+                          title={proxy.enabled ? 'Bloquear uso do proxy (desativa na Evolution)' : 'Desbloquear proxy (habilita na Evolution)'}
+                        >
+                          {proxy.enabled ? <Lock className="w-4 h-4" /> : <Lock className="w-4 h-4 opacity-50" />}
+                        </button>
                         <button
                           onClick={() => handleEditProxy(proxy)}
-                          className="p-2 text-[#8CD955] hover:bg-emerald-50 rounded"
+                          className="p-2 text-[#8CD955] hover:bg-[#8CD955]/10 dark:hover:bg-[#8CD955]/10 rounded"
                           title="Editar"
                         >
                           <Edit className="w-4 h-4" />
                         </button>
                         <button
                           onClick={() => handleDelete(proxy.id)}
-                          className="p-2 text-red-600 hover:bg-red-50 rounded"
+                          className="p-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 rounded"
                           title="Deletar"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -4225,27 +4598,38 @@ const ProxySection = () => {
             </tbody>
           </table>
         </div>
+        {proxys.length > PROXY_LIST_PER_PAGE && (
+          <Pagination
+            currentPage={proxyPage}
+            totalPages={proxyTotalPages}
+            onPageChange={setProxyPage}
+            itemsPerPage={PROXY_LIST_PER_PAGE}
+            totalItems={proxys.length}
+          />
+        )}
         </div>
       </div>
-      <div className="bg-gradient-to-br from-white to-emerald-50 rounded-xl shadow-lg border border-emerald-100 p-4 sm:p-6 relative overflow-hidden">
-        {/* Decorative background elements */}
-        <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-200/20 rounded-full -mr-16 -mt-16"></div>
-        <div className="absolute bottom-0 left-0 w-24 h-24 bg-emerald-300/10 rounded-full -ml-12 -mb-12"></div>
+      <div className="bg-gradient-to-br from-white to-gray-50 dark:from-[#2a2a2a] dark:to-[#333] rounded-xl shadow-lg border border-gray-200 dark:border-[#404040] p-4 sm:p-6 relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-32 h-32 bg-[#8CD955]/10 dark:bg-[#8CD955]/5 rounded-full -mr-16 -mt-16"></div>
+        <div className="absolute bottom-0 left-0 w-24 h-24 bg-[#8CD955]/5 rounded-full -ml-12 -mb-12"></div>
         
         <div className="relative z-10">
           <div className="flex items-center gap-2 mb-4 sm:mb-6">
             <Users className="w-5 h-5 sm:w-6 sm:h-6 text-[#8CD955]" />
-            <h2 className="text-xl sm:text-2xl font-bold text-gray-800">Atribuir Instancias aos Proxys</h2>
+            <h2 className="text-xl sm:text-2xl font-bold text-gray-800 dark:text-white">Atribuir Instancias aos Proxys</h2>
           </div>
           <div className="space-y-4">
-            {intancesWithProxy.map((instance) => (
-              <div key={instance.id} className="bg-gray-50/80 rounded-lg border border-gray-200 p-3 sm:p-4">
+            {intancesWithProxy
+              .slice((assignInstancesPage - 1) * PROXY_ASSIGN_INSTANCES_PER_PAGE, assignInstancesPage * PROXY_ASSIGN_INSTANCES_PER_PAGE)
+              .map((instance) => (
+              <div key={instance.id} className="bg-gray-50/80 dark:bg-[#333] rounded-lg border border-gray-200 dark:border-[#404040] p-3 sm:p-4">
               <div className="flex flex-col sm:flex-row justify-between items-start gap-3 mb-3">
                 <div className="flex-1">
-                  <div className="font-medium text-gray-800 text-sm sm:text-base">{instance.instance_name}</div>
+                  <div className="font-medium text-gray-800 dark:text-white text-sm sm:text-base">{instance.instance_name}</div>
                 </div>
+                <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
                 <select
-                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-700 w-full sm:w-auto"
+                  className="border border-gray-300 dark:border-[#404040] rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-white bg-white dark:bg-[#2a2a2a] w-full sm:w-auto"
                   value={instance.proxy_instances.find(ua => ua.enabled)?.proxy_instances?.id || ''}
                   onChange={async (e) => {
                     const proxyId = e.target.value;
@@ -4282,22 +4666,56 @@ const ProxySection = () => {
                     </option>
                   ))}
                 </select>
+                {instance.proxy_instances.length > 0 && (() => {
+                  const current = instance.proxy_instances.find(ua => ua.enabled) ?? instance.proxy_instances[0];
+                  const proxyId = current?.proxy_instances?.id ?? current?.id;
+                  const proxyLabel = current?.proxy_instances?.name || current?.proxy_instances?.host || 'proxy';
+                  return proxyId ? (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!confirm(`Tirar o proxy "${proxyLabel}" da instância ${instance.instance_name}?`)) return;
+                      try {
+                        await handleUnassignUser(proxyId, instance.id);
+                        await loadData();
+                      } catch (e) {
+                        alert('Erro ao remover proxy da instância.');
+                      }
+                    }}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-amber-700 dark:text-amber-400 border border-amber-400 dark:border-amber-500 rounded-lg hover:bg-amber-50 dark:hover:bg-amber-500/10"
+                    title="Tirar proxy da instância"
+                  >
+                    <Unplug className="w-3.5 h-3.5" />
+                    Tirar da instância
+                  </button>
+                  ) : null;
+                })()}
+              </div>
               </div>
               {instance.proxy_instances.length > 0 && (
-                <div className="text-sm text-gray-600">
+                <div className="text-sm text-gray-600 dark:text-gray-400">
                   Proxies atribuídos: {instance.proxy_instances.map(pi => pi.proxy_instances.name || pi.proxy_instances.host).join(', ')}
                 </div>
               )}
             </div>
           ))}
           </div>
+          {intancesWithProxy.length > PROXY_ASSIGN_INSTANCES_PER_PAGE && (
+            <Pagination
+              currentPage={assignInstancesPage}
+              totalPages={assignTotalPages}
+              onPageChange={setAssignInstancesPage}
+              itemsPerPage={PROXY_ASSIGN_INSTANCES_PER_PAGE}
+              totalItems={intancesWithProxy.length}
+            />
+          )}
         </div>
       </div>
       {showAddModalProxy && (
         <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-lg p-4 sm:p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-gray-200 dark:border-[#404040]">
             <div className="flex justify-between items-center mb-4 sm:mb-6">
-              <h3 className="text-lg sm:text-xl font-semibold text-gray-800">
+              <h3 className="text-lg sm:text-xl font-semibold text-gray-800 dark:text-white">
                 {editingProxy ? 'Editar Proxy' : 'Adicionar Proxy'}
               </h3>
               <button
@@ -4305,7 +4723,7 @@ const ProxySection = () => {
                   setShowAddModalProxy(false);
                   setEditingProxy(null);
                 }}
-                className="text-gray-400 hover:text-gray-600"
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
               >
                 <X className="w-5 h-5 sm:w-6 sm:h-6" />
               </button>

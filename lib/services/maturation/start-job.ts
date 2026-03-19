@@ -219,6 +219,8 @@ export async function runMaturationStart(supabase: SupabaseClient, params: Start
   const { plan_id, target_chat_id, use_virgin_messages, preferred_evolution_instance_ids, delay_seconds_override } = body;
   const useVirgin = use_virgin_messages === true;
 
+  console.log(`[MATURATION] Iniciando job: ${useVirgin ? 'Auto maturador (mensagens virgem)' : 'Maturador manual (plano)'} plan_id=${useVirgin ? 'virgem' : plan_id || ''} user=${userId}`);
+
   const { data: profile } = await supabase.from('profiles').select('id').eq('id', userId).maybeSingle();
   if (!profile) {
     return { success: false, error: 'Usuário inválido', statusCode: 401 };
@@ -269,48 +271,21 @@ export async function runMaturationStart(supabase: SupabaseClient, params: Start
   const delayOverride =
     typeof delay_seconds_override === 'number' && delay_seconds_override >= 0 ? delay_seconds_override : null;
 
-  const jobIds: string[] = [];
-  const masterInstanceNames: string[] = [];
-
-  const createOneJob = async (): Promise<{ jobId: string; instanceName: string } | null> => {
-    const masterInstance = await selectAvailableMasterInstance(supabase, preferred_evolution_instance_ids);
-    if (!masterInstance) return null;
-
-    const { data: job, error: jobError } = await supabase
-      .from('maturation_jobs')
-      .insert({
-        owner_user_id: userId,
-        plan_id: planId,
-        master_instance_id: masterInstance.id,
-        target_chat_id: finalTargetChatId,
-        status: 'running',
-        progress_total: steps.length,
-        progress_done: 0,
-        started_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
-
-    if (jobError || !job) return null;
-
-    const locked = await lockMasterInstance(supabase, masterInstance.id, job.id);
-    if (!locked) {
-      await supabase.from('maturation_jobs').delete().eq('id', job.id);
-      return null;
-    }
-
+  /** Constrói os steps com delay cumulativo correto: cada step aguarda seu próprio delaySec a partir do anterior. */
+  function buildStepsToInsert(jobId: string) {
     const baseTime = new Date();
     let cumulativeDelay = 0;
-    const stepsToInsert = steps.map((step, index) => {
+    return steps.map((step, index) => {
       const stepDelay = delayOverride ?? step.delaySec ?? 5;
-      const scheduledAt = index === 0
-        ? baseTime
-        : new Date(baseTime.getTime() + cumulativeDelay * 1000);
       cumulativeDelay += stepDelay;
+      const scheduledAt = new Date(baseTime.getTime() + cumulativeDelay * 1000);
+      // Per-step target tem prioridade; se não tiver, usa o override passado (target do job)
       const stepTargetChatId =
-        typeof step.target_chat_id === 'string' && step.target_chat_id.trim() ? step.target_chat_id.trim() : null;
+        typeof step.target_chat_id === 'string' && step.target_chat_id.trim()
+          ? step.target_chat_id.trim()
+          : null;
       return {
-        job_id: job.id,
+        job_id: jobId,
         step_index: index,
         type: step.type,
         payload_json: step.payload || {},
@@ -319,34 +294,19 @@ export async function runMaturationStart(supabase: SupabaseClient, params: Start
         target_chat_id: stepTargetChatId,
       };
     });
-
-    const { error: stepsError } = await supabase.from('maturation_steps').insert(stepsToInsert);
-
-    if (stepsError) {
-      await supabase
-        .from('master_instances')
-        .update({ is_locked: false, locked_job_id: null, locked_at: null })
-        .eq('id', masterInstance.id);
-      await supabase.from('maturation_jobs').delete().eq('id', job.id);
-      return null;
-    }
-
-    await createMessage(supabase, {
-      jobId: job.id,
-      direction: 'system',
-      type: 'info',
-      title: 'Job iniciado',
-      content: `Job de maturação iniciado. Instância: ${masterInstance.instance_name}. Total de steps: ${steps.length}`,
-      status: 'info',
-    });
-
-    return { jobId: job.id, instanceName: masterInstance.instance_name };
-  };
+  }
 
   const multipleRequested = (preferred_evolution_instance_ids?.length ?? 0) > 1;
-  const participatingInstances: Array<{ jobId: string; instanceName: string; phoneNumber: string | null; masterInstanceId: string }> = [];
 
   if (multipleRequested) {
+    // Coleta todas as instâncias disponíveis e já as bloqueia
+    const participatingInstances: Array<{
+      jobId: string;
+      instanceName: string;
+      phoneNumber: string;
+      masterInstanceId: string;
+    }> = [];
+
     while (true) {
       const masterInstance = await selectAvailableMasterInstance(supabase, preferred_evolution_instance_ids);
       if (!masterInstance) break;
@@ -357,7 +317,7 @@ export async function runMaturationStart(supabase: SupabaseClient, params: Start
           owner_user_id: userId,
           plan_id: planId,
           master_instance_id: masterInstance.id,
-          target_chat_id: 'pending_assignment', // Providório
+          target_chat_id: null, // será atribuído após montar o anel
           status: 'running',
           progress_total: steps.length,
           progress_done: 0,
@@ -377,8 +337,8 @@ export async function runMaturationStart(supabase: SupabaseClient, params: Start
       participatingInstances.push({
         jobId: job.id,
         instanceName: masterInstance.instance_name,
-        phoneNumber: masterInstance.phone_number,
-        masterInstanceId: masterInstance.id
+        phoneNumber: masterInstance.phone_number!,
+        masterInstanceId: masterInstance.id,
       });
     }
 
@@ -390,38 +350,35 @@ export async function runMaturationStart(supabase: SupabaseClient, params: Start
       };
     }
 
-    // Agora atribui os alvos ciclicamente: A fala com B, B com C, ..., N com A
+    // Com apenas 1 instância disponível e sem target definido, não há com quem conversar
+    if (participatingInstances.length === 1 && !finalTargetChatId) {
+      const orphan = participatingInstances[0];
+      await supabase.from('master_instances')
+        .update({ is_locked: false, locked_job_id: null, locked_at: null })
+        .eq('id', orphan.masterInstanceId);
+      await supabase.from('maturation_jobs').delete().eq('id', orphan.jobId);
+      return {
+        success: false,
+        error: 'Apenas 1 instância disponível e nenhum destino configurado. Selecione ao menos 2 instâncias ou defina um destino.',
+        statusCode: 422,
+      };
+    }
+
+    // Anel cíclico: A→B, B→C, ..., N→A
+    // (com 1 instância disponível cai no target original)
     for (let i = 0; i < participatingInstances.length; i++) {
       const current = participatingInstances[i];
       const nextIndex = (i + 1) % participatingInstances.length;
       const partner = participatingInstances[nextIndex];
-      
-      // Se houver apenas 1 (ex: só uma estava livre de fato), usa o original
-      const target = participatingInstances.length > 1 
-        ? (partner.phoneNumber || partner.instanceName) + '@s.whatsapp.net'
-        : finalTargetChatId;
+
+      const target =
+        participatingInstances.length > 1
+          ? partner.phoneNumber + '@s.whatsapp.net'
+          : finalTargetChatId!;
 
       await supabase.from('maturation_jobs').update({ target_chat_id: target }).eq('id', current.jobId);
 
-      // Cria os steps para este job
-      const baseTime = new Date();
-      let cumulativeDelay = 0;
-      const stepsToInsert = steps.map((step, index) => {
-        const stepDelay = delayOverride ?? step.delaySec ?? 5;
-        const scheduledAt = index === 0 ? baseTime : new Date(baseTime.getTime() + cumulativeDelay * 1000);
-        cumulativeDelay += stepDelay;
-        const stepTargetChatId = typeof step.target_chat_id === 'string' && step.target_chat_id.trim() ? step.target_chat_id.trim() : null;
-        return {
-          job_id: current.jobId,
-          step_index: index,
-          type: step.type,
-          payload_json: step.payload || {},
-          scheduled_at: scheduledAt.toISOString(),
-          status: 'pending',
-          target_chat_id: stepTargetChatId,
-        };
-      });
-
+      const stepsToInsert = buildStepsToInsert(current.jobId);
       await supabase.from('maturation_steps').insert(stepsToInsert);
       await createMessage(supabase, {
         jobId: current.jobId,
@@ -433,6 +390,7 @@ export async function runMaturationStart(supabase: SupabaseClient, params: Start
       });
     }
 
+    console.log(`[MATURATION] Jobs criados (múltiplas instâncias): ${participatingInstances.length} job(s) ${steps.length} steps cada`);
     return {
       success: true,
       job_id: participatingInstances[0].jobId,
@@ -443,7 +401,7 @@ export async function runMaturationStart(supabase: SupabaseClient, params: Start
     };
   }
 
-  // Caso de única instância ou qualquer disponível
+  // Caso de instância única
   const masterInstance = await selectAvailableMasterInstance(supabase, preferred_evolution_instance_ids);
   if (!masterInstance) {
     return { success: false, error: 'Nenhuma instância mestre disponível.', statusCode: 503 };
@@ -472,26 +430,16 @@ export async function runMaturationStart(supabase: SupabaseClient, params: Start
     return { success: false, error: 'Instância ocupada', statusCode: 409 };
   }
 
-  // Cria os steps
-  const baseTime = new Date();
-  let cumulativeDelay = 0;
-  const stepsToInsert = steps.map((step, index) => {
-    const stepDelay = delayOverride ?? step.delaySec ?? 5;
-    const scheduledAt = index === 0 ? baseTime : new Date(baseTime.getTime() + cumulativeDelay * 1000);
-    cumulativeDelay += stepDelay;
-    const stepTargetChatId = typeof step.target_chat_id === 'string' && step.target_chat_id.trim() ? step.target_chat_id.trim() : null;
-    return {
-      job_id: job.id,
-      step_index: index,
-      type: step.type,
-      payload_json: step.payload || {},
-      scheduled_at: scheduledAt.toISOString(),
-      status: 'pending',
-      target_chat_id: stepTargetChatId,
-    };
-  });
+  const stepsToInsert = buildStepsToInsert(job.id);
+  const { error: stepsError } = await supabase.from('maturation_steps').insert(stepsToInsert);
+  if (stepsError) {
+    await supabase.from('master_instances')
+      .update({ is_locked: false, locked_job_id: null, locked_at: null })
+      .eq('id', masterInstance.id);
+    await supabase.from('maturation_jobs').delete().eq('id', job.id);
+    return { success: false, error: `Erro ao criar steps: ${stepsError.message}`, statusCode: 500 };
+  }
 
-  await supabase.from('maturation_steps').insert(stepsToInsert);
   await createMessage(supabase, {
     jobId: job.id,
     direction: 'system',
@@ -501,6 +449,7 @@ export async function runMaturationStart(supabase: SupabaseClient, params: Start
     status: 'info',
   });
 
+  console.log(`[MATURATION] Job criado: job_id=${job.id} instance=${masterInstance.instance_name} steps=${steps.length}`);
   return {
     success: true,
     job_id: job.id,

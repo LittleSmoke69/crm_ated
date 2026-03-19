@@ -13,21 +13,31 @@ export default function AdminHierarchyPage() {
   const [status, setStatus] = useState<string | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
 
+  const [hasHierarquiaSidebar, setHasHierarquiaSidebar] = useState(false);
+
   useEffect(() => {
     if (typeof window === 'undefined' || !userId) return;
     const loadProfile = async () => {
       try {
-        const res = await fetch('/api/user/profile', {
-          headers: { 'X-User-Id': userId ?? '' },
-        });
-        const json = await res.json();
-        if (res.ok && json.success && json.data?.status) {
-          setStatus(json.data.status);
+        const [profileRes, permRes] = await Promise.all([
+          fetch('/api/user/profile', { headers: { 'X-User-Id': userId ?? '' } }),
+          fetch('/api/user/has-sidebar-permission?code=hierarquia', { headers: { 'X-User-Id': userId ?? '' } }),
+        ]);
+        const profileJson = await profileRes.json();
+        const permJson = await permRes.json();
+        if (profileRes.ok && profileJson.success && profileJson.data?.status) {
+          setStatus(profileJson.data.status);
         } else {
           setStatus(null);
         }
+        if (permRes.ok && permJson.success && permJson.data?.hasPermission) {
+          setHasHierarquiaSidebar(true);
+        } else {
+          setHasHierarquiaSidebar(false);
+        }
       } catch {
         setStatus(null);
+        setHasHierarquiaSidebar(false);
       } finally {
         setLoadingStatus(false);
       }
@@ -35,7 +45,7 @@ export default function AdminHierarchyPage() {
     loadProfile();
   }, [userId]);
 
-  const canAccess = status === 'super_admin' || status === 'admin' || status === 'suporte';
+  const canAccess = status === 'super_admin' || status === 'admin' || status === 'suporte' || hasHierarquiaSidebar;
 
   if (checking || loadingStatus) {
     return (
@@ -54,7 +64,7 @@ export default function AdminHierarchyPage() {
           <div className="text-center bg-white dark:bg-[#2a2a2a] p-8 rounded-xl shadow-lg border border-gray-200 dark:border-[#404040]">
             <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
             <h1 className="text-xl font-bold text-gray-800 dark:text-white mb-2">Acesso Negado</h1>
-            <p className="text-gray-600 dark:text-[#aaa] mb-4">Apenas SuperAdmin, Admin ou Suporte podem acessar a Hierarquia.</p>
+            <p className="text-gray-600 dark:text-[#aaa] mb-4">Acesso restrito a SuperAdmin, Admin, Suporte ou cargo com permissão de Hierarquia.</p>
             <button
               onClick={() => router.push('/')}
               className="px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] transition"

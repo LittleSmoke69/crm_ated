@@ -4,6 +4,9 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
+  /* Fontes locais (sem dependência do Google Fonts) */
+  --font-geist-sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-geist-mono: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas, monospace;
   --background: #f9fafb;
   --foreground: #171717;
   --card-bg: #ffffff;
@@ -307,4 +310,97 @@ body {
 [data-theme="dark"] .react-flow__selection {
   border-color: #8CD955;
   background-color: rgba(140, 217, 85, 0.05);
+}
+
+/* Verificação de grupos — barra de progresso indeterminada */
+@keyframes verify-progress-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+.animate-verify-progress {
+  animation: verify-progress-slide 1.8s ease-in-out infinite;
+}
+
+/* ===== Zaploto Academy — background animations ===== */
+
+/* Bokeh dots: float suavemente com leve escala e glow */
+@keyframes academy-float {
+  0%,  100% { transform: translateY(0px)   scale(1);    opacity: var(--dot-o, 0.4); }
+  33%        { transform: translateY(-8px)  scale(1.4);  opacity: calc(var(--dot-o, 0.4) * 2.2); }
+  66%        { transform: translateY(4px)   scale(0.75); opacity: calc(var(--dot-o, 0.4) * 0.5); }
+}
+
+/* Orbs: respiram lentamente */
+@keyframes academy-orb-pulse {
+  0%,  100% { transform: scale(1)   translateX(0px)  translateY(0px);  opacity: 1;   }
+  50%        { transform: scale(1.4) translateX(10px) translateY(-8px); opacity: 0.5; }
+}
+
+/* Grid: deriva diagonalmente */
+@keyframes academy-grid-drift {
+  0%   { background-position: 0px 0px; }
+  100% { background-position: 40px 40px; }
+}
+
+/* Scanline: risca horizontal que varre de cima a baixo */
+@keyframes academy-scanline {
+  0%   { transform: translateY(-100%); opacity: 0; }
+  3%   { opacity: 1; }
+  97%  { opacity: 0.6; }
+  100% { transform: translateY(3000%); opacity: 0; }
+}
+
+/* Partícula subindo: nasce na base e sobe evaporando */
+@keyframes academy-particle-rise {
+  0%   { transform: translateY(0px)    scale(1);   opacity: var(--dot-o, 0.5); }
+  70%  { transform: translateY(-120px) scale(1.6); opacity: calc(var(--dot-o, 0.5) * 0.6); }
+  100% { transform: translateY(-200px) scale(0.4); opacity: 0; }
+}
+
+/* Glow pulse nos nós da grid */
+@keyframes academy-node-pulse {
+  0%, 100% { opacity: 0;   transform: scale(0.5); }
+  50%       { opacity: 0.7; transform: scale(1.5); }
+}
+
+.academy-bokeh-dot {
+  animation: academy-float 7s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+.academy-particle-rise {
+  animation: academy-particle-rise 6s ease-out infinite;
+  will-change: transform, opacity;
+}
+
+.academy-orb-pulse {
+  animation: academy-orb-pulse 10s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+.academy-grid-drift {
+  animation: academy-grid-drift 25s linear infinite;
+}
+
+.academy-scanline {
+  animation: academy-scanline 12s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+.academy-node-pulse {
+  animation: academy-node-pulse 4s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+/* Cards dentro da Academy ficam semi-transparentes para a textura aparecer por baixo */
+.academy-page .academy-card {
+  background-color: rgba(10, 20, 10, 0.75);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-color: rgba(74, 222, 128, 0.12);
 }

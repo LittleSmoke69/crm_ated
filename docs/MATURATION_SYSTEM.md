@@ -2,7 +2,7 @@
 
 ## Visão Geral
 
-O Sistema de Maturação permite executar diagnósticos e maturação em instâncias mestre do WhatsApp usando requests para a Evolution API. O sistema suporta:
+O Sistema de Maturação permite executar diagnósticos e maturação em instâncias mestre do WhatsApp usando requests **diretos** para a Evolution API (sem fila intermediária): cada step é enviado via `POST {base_url}/message/sendText`, `sendMedia` ou `sendWhatsAppAudio` da instância configurada. O sistema suporta:
 
 - **Maturação manual/agendada** (instâncias mestre): botão Start e cron (maturation-scheduler).
 - **Auto maturação virgem (5 dias)**: na criação da instância, o tipo pode ser "virgem" ou "maturado". Se virgem, após escanear o QR Code a instância entra automaticamente em maturação por 5 dias (bloqueada para campanhas e fluxos), com etapas: teste de conexão (24h), conversas 1:1 (2h), grupo (24h), posting status, ciclo repetido (dias 2-5). O maturation-tick processa tanto os steps dos jobs mestre quanto o fluxo virgem.
@@ -24,8 +24,9 @@ O Sistema de Maturação permite executar diagnósticos e maturação em instân
    - `maturation-scheduler`: Cria jobs agendados (scheduled, 10 min)
 
 3. **API Routes (Next.js)**
-   - `/api/maturation/jobs`: Lista e cria jobs
+   - `/api/maturation/jobs`: Lista e cria jobs (inclui `next_scheduled_at` para timer em tempo real)
    - `/api/maturation/jobs/[jobId]`: Detalhes e controle de job
+   - `/api/maturation/jobs/[jobId]/process-catch-up`: Processa em lote steps atrasados do job (envio direto Evolution API; retorna ok/falha por step)
    - `/api/maturation/jobs/[jobId]/messages`: Feed de mensagens
    - `/api/maturation/plans`: Lista planos
    - `/api/maturation/master-instances`: Lista instâncias mestre

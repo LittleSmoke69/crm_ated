@@ -1,7 +1,8 @@
-/* 
+/*
  * CHAT API - REATIVADA
- * 
+ *
  * API para gerenciar mensagens do chat.
+ * Suporta cursor-based pagination via before_timestamp para scroll infinito (carregar mais antigas).
  */
 
 import { NextRequest } from 'next/server';
@@ -11,15 +12,20 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 /**
  * GET /api/chat/messages
- * Lista mensagens de uma conversa
+ * Lista mensagens de uma conversa — carrega as mais recentes por padrão.
+ *
+ * Params:
+ *   conversation_id  (obrigatório)
+ *   limit            número de mensagens por página (default 50, max 100)
+ *   before_timestamp timestamp Unix (bigint) — retorna mensagens ANTES desse ponto (scroll infinito para cima)
  */
 export async function GET(req: NextRequest) {
   try {
     const { userId } = await requireAuth(req);
     const { searchParams } = new URL(req.url);
     const conversation_id = searchParams.get('conversation_id');
-    const limit = parseInt(searchParams.get('limit') || '50');
-    const offset = parseInt(searchParams.get('offset') || '0');
+    const before_timestamp = searchParams.get('before_timestamp');
+    const limit = Math.min(parseInt(searchParams.get('limit') || '50'), 100);
 
     if (!conversation_id) {
       return errorResponse('conversation_id é obrigatório', 400);
@@ -42,34 +48,53 @@ export async function GET(req: NextRequest) {
       .eq('id', userId)
       .single();
 
-    const isAdmin = profile?.status === 'admin' || profile?.status === 'super_admin';
-    const canAccessEvolution = conversation.instance_id && (isAdmin || conversation.user_id === userId);
-    const canAccessWhatsAppOfficial = conversation.whatsapp_config_id && (isAdmin || conversation.workspace_id === profile?.zaploto_id);
+    const isAdminOrSuporte =
+      profile?.status === 'admin' ||
+      profile?.status === 'super_admin' ||
+      profile?.status === 'suporte';
+    const canAccessEvolution =
+      conversation.instance_id && (isAdminOrSuporte || conversation.user_id === userId);
+    const canAccessWhatsAppOfficial =
+      conversation.whatsapp_config_id &&
+      (isAdminOrSuporte || conversation.workspace_id === profile?.zaploto_id);
     if (!canAccessEvolution && !canAccessWhatsAppOfficial) {
       return errorResponse('Acesso negado.', 403);
     }
 
-    // 2. Buscar mensagens
-    const { data: messages, error } = await supabaseServiceRole
+    // 2. Buscar mensagens com cursor-based pagination
+    //    - Sempre ordena DESC para pegar as mais recentes (ou as anteriores ao cursor)
+    //    - Depois reverte para exibição cronológica (mais antiga primeiro)
+    let query = supabaseServiceRole
       .from('chat_messages')
       .select('*')
       .eq('conversation_id', conversation_id)
-      .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1);
+      .order('timestamp', { ascending: false })
+      .limit(limit);
+
+    if (before_timestamp) {
+      // Carregar mensagens mais antigas que o cursor
+      query = query.lt('timestamp', parseInt(before_timestamp, 10));
+    }
+
+    const { data: messages, error } = await query;
 
     if (error) {
       return errorResponse(`Erro ao buscar mensagens: ${error.message}`);
     }
 
-    // Zerar contador de não lidas ao abrir a conversa
-    await supabaseServiceRole
-      .from('chat_conversations')
-      .update({ unread_count: 0 })
-      .eq('id', conversation_id);
+    const result = (messages || []).reverse(); // ordem cronológica para exibição
+    const hasMore = (messages || []).length === limit;
 
-    return successResponse(messages.reverse());
+    // 3. Zerar contador de não lidas ao abrir a conversa (apenas na carga inicial, sem cursor)
+    if (!before_timestamp) {
+      await supabaseServiceRole
+        .from('chat_conversations')
+        .update({ unread_count: 0 })
+        .eq('id', conversation_id);
+    }
+
+    return successResponse(result, { meta: { has_more: hasMore } });
   } catch (err: any) {
     return serverErrorResponse(err);
   }
 }
-

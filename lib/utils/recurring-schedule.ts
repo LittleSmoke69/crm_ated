@@ -130,8 +130,27 @@ export function getCurrentDateAndTimeInTimezone(timezone: string): {
   hours: number;
   minutes: number;
 } {
+  return getDateAndTimeInTimezoneAtUtc(timezone, new Date().toISOString());
+}
+
+/**
+ * Retorna a data civil (ano, mês, dia) e hora no timezone para um instante UTC.
+ * Usado ao calcular a próxima execução com base na data/hora em que o job rodou (evita usar "agora"
+ * e assim garante que 3 dias seguidos → próximo seja o primeiro dia da próxima semana, não +7 a partir do dia errado).
+ */
+export function getDateAndTimeInTimezoneAtUtc(
+  timezone: string,
+  utcIso: string
+): {
+  year: number;
+  month: number;
+  day: number;
+  dayOfWeek: number;
+  hours: number;
+  minutes: number;
+} {
   const tz = timezone || 'America/Sao_Paulo';
-  const now = new Date();
+  const date = new Date(utcIso);
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone: tz,
     weekday: 'long',
@@ -143,7 +162,7 @@ export function getCurrentDateAndTimeInTimezone(timezone: string): {
     second: '2-digit',
     hour12: false,
   });
-  const parts = formatter.formatToParts(now);
+  const parts = formatter.formatToParts(date);
   const get = (type: string) => parts.find((p) => p.type === type)?.value || '0';
   const dayName = get('weekday').toLowerCase();
   return {
@@ -264,18 +283,20 @@ function noop(_msg: string, ..._args: unknown[]) {}
  * - Se hoje (no TZ) for um dos dias e o horário ainda não passou → executa HOJE nesse horário no TZ.
  * - Se criou no dia marcado e ainda não deu o horário → executa no mesmo dia no horário certo.
  * - Se criou no domingo e tem segunda nos dias → próxima execução é segunda no horário marcado.
+ * @param asOfUtc - Quando informado (ex: após executar um job), usa este instante UTC como "hoje" no TZ em vez de "agora". Assim, 3 dias seguidos (seg/ter/qua) levam à próxima execução na segunda seguinte, e não a +7 dias a partir do dia em que o worker rodou.
  */
 export function calculateNextRecurringRun(
   cronExpr: string,
   timezone: string,
   recurringDays: unknown,
   recurringTime: string,
-  log: LogFn = noop
+  log: LogFn = noop,
+  asOfUtc?: string
 ): string {
   const tz = timezone || 'America/Sao_Paulo';
 
   if (cronExpr && cronExpr.trim()) {
-    const cronResult = calculateNextFromCronExpr(cronExpr, tz, log);
+    const cronResult = calculateNextFromCronExpr(cronExpr, tz, log, asOfUtc);
     if (cronResult) return cronResult;
   }
 
@@ -283,7 +304,9 @@ export function calculateNextRecurringRun(
   if (normalizedDays.length === 0 || !recurringTime) return '';
 
   const [targetHour, targetMinute] = recurringTime.split(':').map(Number);
-  const current = getCurrentDateAndTimeInTimezone(tz);
+  const current = asOfUtc
+    ? getDateAndTimeInTimezoneAtUtc(tz, asOfUtc)
+    : getCurrentDateAndTimeInTimezone(tz);
 
   const dayMap: Record<string, number> = {
     sunday: 0,
@@ -378,7 +401,8 @@ export function calculateNextRecurringRun(
 function calculateNextFromCronExpr(
   cronExpr: string,
   timezone: string,
-  log: LogFn
+  log: LogFn,
+  asOfUtc?: string
 ): string | null {
   if (!cronExpr || !cronExpr.trim()) return null;
 
@@ -388,9 +412,11 @@ function calculateNextFromCronExpr(
   const [cronMinute, cronHour, , , cronWeekdays] = parts;
   const tz = timezone || 'America/Sao_Paulo';
   const [targetHour, targetMinute] = [Number(cronHour), Number(cronMinute)];
+  const getCurrent = () =>
+    asOfUtc ? getDateAndTimeInTimezoneAtUtc(tz, asOfUtc) : getCurrentDateAndTimeInTimezone(tz);
 
   if (cronWeekdays === '*') {
-    const current = getCurrentDateAndTimeInTimezone(tz);
+    const current = getCurrent();
     const hasTimePassedToday =
       current.hours > targetHour ||
       (current.hours === targetHour && current.minutes >= targetMinute);
@@ -429,7 +455,7 @@ function calculateNextFromCronExpr(
 
   if (weekdayNumbers.length === 0) return null;
 
-  const current = getCurrentDateAndTimeInTimezone(tz);
+  const current = getCurrent();
   const hasTimePassedToday =
     current.hours > targetHour ||
     (current.hours === targetHour && current.minutes >= targetMinute);

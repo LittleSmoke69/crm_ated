@@ -6,6 +6,7 @@
 import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { getUserProfile } from '@/lib/middleware/permissions';
+import { canAccessGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { testConnection } from '@/lib/services/meta-sync-service';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
@@ -73,10 +74,8 @@ export async function POST(req: NextRequest) {
     }
     if (!profile) return errorResponse('Perfil não encontrado', 403);
 
-    const allowedStatuses = ['gestor', 'admin', 'super_admin'];
-    if (!profile.status || !allowedStatuses.includes(profile.status)) {
-      return errorResponse('Acesso negado.', 403);
-    }
+    const hasAccess = await canAccessGestorTrafego(profile);
+    if (!hasAccess) return errorResponse('Acesso negado. Você não tem permissão para acessar o módulo Gestão de Tráfego.', 403);
 
     const body = await req.json().catch(() => ({}));
     const bancaId = body?.banca_id?.trim();

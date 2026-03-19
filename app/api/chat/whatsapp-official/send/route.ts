@@ -10,7 +10,7 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { chatService } from '@/lib/services/chat-service';
 import * as whatsappOfficial from '@/lib/services/whatsapp-official-service';
 
-type SendType = 'text' | 'image' | 'audio';
+type SendType = 'text' | 'image' | 'audio' | 'video' | 'document';
 
 export async function POST(req: NextRequest) {
   try {
@@ -23,6 +23,7 @@ export async function POST(req: NextRequest) {
       type,
       text: bodyText,
       media_url,
+      meta_id,
       caption,
       reply_to_message_id: replyToMessageId,
     } = body as {
@@ -31,6 +32,7 @@ export async function POST(req: NextRequest) {
       type?: string;
       text?: string;
       media_url?: string;
+      meta_id?: string;
       caption?: string;
       reply_to_message_id?: string;
     };
@@ -40,15 +42,19 @@ export async function POST(req: NextRequest) {
     }
 
     const sendType = type as SendType;
-    if (!['text', 'image', 'audio'].includes(sendType)) {
-      return errorResponse('type deve ser text, image ou audio', 400);
+    if (!['text', 'image', 'audio', 'video', 'document'].includes(sendType)) {
+      return errorResponse('type deve ser text, image, audio, video ou document', 400);
     }
 
     if (sendType === 'text' && (bodyText == null || String(bodyText).trim() === '')) {
       return errorResponse('text é obrigatório quando type=text', 400);
     }
-    if ((sendType === 'image' || sendType === 'audio') && (!media_url || typeof media_url !== 'string')) {
-      return errorResponse('media_url é obrigatório quando type=image ou type=audio', 400);
+    // Para áudio: aceita meta_id (preferencial) ou media_url (fallback)
+    if (sendType === 'audio' && !meta_id && !media_url) {
+      return errorResponse('meta_id ou media_url é obrigatório para áudio', 400);
+    }
+    if ((sendType === 'image' || sendType === 'video' || sendType === 'document') && (!media_url || typeof media_url !== 'string')) {
+      return errorResponse('media_url é obrigatório para tipo de mídia', 400);
     }
 
     const { data: config, error: configError } = await supabaseServiceRole
@@ -68,12 +74,35 @@ export async function POST(req: NextRequest) {
       .eq('id', userId)
       .single();
 
-    const isAdmin = profile?.status === 'super_admin' || profile?.status === 'admin';
-    if (!isAdmin && profile?.zaploto_id !== config.zaploto_id) {
+    const status = String(profile?.status || '').toLowerCase();
+    const isAdminOrSuporte = status === 'super_admin' || status === 'admin' || status === 'suporte';
+    if (!isAdminOrSuporte && profile?.zaploto_id !== config.zaploto_id) {
       return errorResponse('Acesso negado a esta configuração', 403);
     }
 
     const normalizedTo = to.replace(/\D/g, '');
+    const remoteJid = `${normalizedTo}@s.whatsapp.net`;
+
+    // Janela de 24h (WhatsApp Oficial): mensagem livre só dentro de 24h da última mensagem do contato
+    const { data: existingConversation } = await supabaseServiceRole
+      .from('chat_conversations')
+      .select('id, last_customer_message_at')
+      .eq('whatsapp_config_id', config_id)
+      .eq('remote_jid', remoteJid)
+      .maybeSingle();
+
+    const WINDOW_24H_MS = 24 * 60 * 60 * 1000;
+    const lastCustomerAt = existingConversation?.last_customer_message_at
+      ? new Date(existingConversation.last_customer_message_at).getTime()
+      : null;
+    const isWithin24h = lastCustomerAt != null && Date.now() - lastCustomerAt < WINDOW_24H_MS;
+
+    if (!isWithin24h) {
+      return errorResponse(
+        'Fora da janela de 24h: o contato não enviou mensagem nas últimas 24 horas. Use mensagem template para iniciar ou reabrir a conversa.',
+        400
+      );
+    }
     const configForApi = {
       id: config.id,
       phone_number_id: config.phone_number_id,
@@ -95,15 +124,37 @@ export async function POST(req: NextRequest) {
         metaResponse = await whatsappOfficial.sendImage(
           configForApi,
           normalizedTo,
-          media_url!, // garantido pela validação quando type=image
+          media_url!,
           caption,
           replyToMessageId
         );
+      } else if (sendType === 'video') {
+        metaResponse = await whatsappOfficial.sendVideo(
+          configForApi,
+          normalizedTo,
+          media_url!,
+          caption,
+          replyToMessageId
+        );
+      } else if (sendType === 'document') {
+        metaResponse = await whatsappOfficial.sendDocument(
+          configForApi,
+          normalizedTo,
+          media_url!,
+          caption,
+          undefined,
+          replyToMessageId
+        );
       } else {
+        // meta_id = upload direto nos servidores da Meta (preferencial, garante entrega)
+        // media_url = fallback via link público (pode falhar para audio/webm)
+        const audioMedia = meta_id
+          ? { id: meta_id }
+          : { link: media_url! };
         metaResponse = await whatsappOfficial.sendAudio(
           configForApi,
           normalizedTo,
-          media_url!, // garantido pela validação quando type=audio
+          audioMedia,
           replyToMessageId
         );
       }
@@ -122,11 +173,11 @@ export async function POST(req: NextRequest) {
       instance_id: null,
       workspace_id: profile?.zaploto_id ?? null,
       user_id: userId,
-      remote_jid: `${normalizedTo}@s.whatsapp.net`,
+      remote_jid: remoteJid,
       title: normalizedTo,
       is_group: false,
       last_message_at: new Date().toISOString(),
-      last_message_preview: sendType === 'text' ? (bodyText || '').slice(0, 100) : (sendType === 'image' ? `Imagem${caption ? `: ${caption}` : ''}` : 'Áudio'),
+      last_message_preview: sendType === 'text' ? (bodyText || '').slice(0, 100) : sendType === 'image' ? `Imagem${caption ? `: ${caption}` : ''}` : sendType === 'video' ? `Vídeo${caption ? `: ${caption}` : ''}` : sendType === 'document' ? `Documento${caption ? `: ${caption}` : ''}` : 'Áudio',
     };
 
     const conversation = await chatService.upsertConversation(conversationData);
@@ -144,7 +195,7 @@ export async function POST(req: NextRequest) {
       text: sendType === 'text' ? String(bodyText).trim() : '',
       media_type: sendType === 'text' ? 'text' : sendType,
       media_url: sendType !== 'text' ? media_url ?? undefined : undefined,
-      caption: sendType === 'image' ? caption || '' : '',
+      caption: (sendType === 'image' || sendType === 'video' || sendType === 'document') ? caption || '' : '',
       status: 'sent',
       timestamp: Math.floor(Date.now() / 1000),
       provider: 'whatsapp_official' as const,

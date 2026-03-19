@@ -67,7 +67,7 @@ async function main() {
   for (const { id: bancaId, url: crmBaseUrl } of bancas) {
     const { data: entries, error: fetchError } = await supabase
       .from('admin_lead_transfer_entries')
-      .select('id, lead_id, source_consultant_email')
+      .select('id, lead_id, target_consultant_email')
       .eq('banca_id', bancaId)
       .is('saldo_snapshot', null);
 
@@ -82,19 +82,23 @@ async function main() {
       continue;
     }
 
-    const byConsultant = new Map<string, typeof list>();
+    const byTargetConsultant = new Map<string, typeof list>();
     for (const e of list) {
-      const email = (e.source_consultant_email ?? '').trim().toLowerCase();
+      const email = (e.target_consultant_email ?? '').trim().toLowerCase();
       if (!email) continue;
-      if (!byConsultant.has(email)) byConsultant.set(email, []);
-      byConsultant.get(email)!.push(e);
+      if (!byTargetConsultant.has(email)) byTargetConsultant.set(email, []);
+      byTargetConsultant.get(email)!.push(e);
     }
 
     const client = createCrmRedistributionClient(crmBaseUrl);
 
-    for (const [consultantEmail, groupEntries] of byConsultant) {
+    for (const [targetEmail, groupEntries] of byTargetConsultant) {
       try {
-        const result = await client.getIndicatedsByConsultant(consultantEmail, 2000);
+        const result = await client.getIndicatedsByConsultant(targetEmail, 2000, 1, {
+          transferredFilter: 'yes',
+          sort: 'created_at',
+          direction: 'desc',
+        });
         const details = Array.isArray(result.data) ? result.data : [];
         const balanceByLeadId = new Map<string, number>();
         for (const d of details) {
@@ -107,12 +111,13 @@ async function main() {
 
         for (const entry of groupEntries) {
           const leadId = String(entry.lead_id ?? '');
-          const balance = balanceByLeadId.get(leadId) ?? 0;
-          const hadBalance = balance > 0;
+          const balance = balanceByLeadId.get(leadId);
+          const saldoToSave = balance != null && Number.isFinite(balance) ? balance : 0;
+          const hadBalance = saldoToSave > 0;
 
           const { error: updateError } = await supabase
             .from('admin_lead_transfer_entries')
-            .update({ saldo_snapshot: balance, had_balance: hadBalance })
+            .update({ saldo_snapshot: saldoToSave, had_balance: hadBalance })
             .eq('id', entry.id);
 
           if (updateError) {
@@ -123,7 +128,7 @@ async function main() {
         }
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        errors.push(`CRM ${consultantEmail} (banca ${bancaId}): ${msg}`);
+        errors.push(`CRM ${targetEmail} (banca ${bancaId}): ${msg}`);
       }
     }
 

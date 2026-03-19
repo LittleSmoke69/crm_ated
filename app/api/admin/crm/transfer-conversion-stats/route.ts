@@ -8,6 +8,16 @@ import { normalizeDateParam, dateToStartOfDaySãoPauloISO, dateToEndOfDaySãoPau
 
 const LOG_PREFIX = '[admin][transfer-conversion-stats]';
 
+function normalizeCrmWarning(message?: string | null): string | null {
+  const msg = String(message ?? '').trim();
+  const lower = msg.toLowerCase();
+  if (!msg) return null;
+  if (lower.includes('too many attempts') || lower.includes('too many requests') || lower.includes('429')) {
+    return 'CRM temporariamente com muitas tentativas (429). Alguns números podem ficar incompletos.';
+  }
+  return null;
+}
+
 /**
  * GET /api/admin/crm/transfer-conversion-stats
  * Estatísticas de transferência e conversão.
@@ -75,6 +85,7 @@ export async function GET(req: NextRequest) {
       byType: Record<string, number>;
       receivedByTarget?: number;
       convertedCount?: number;
+      crm_warning?: string;
     } = { totalTransferred, byType };
 
     if (targetConsultantEmail) {
@@ -86,7 +97,16 @@ export async function GET(req: NextRequest) {
 
       try {
         const client = createCrmRedistributionClient(resolved.crmBaseUrl);
-        const result = await client.getIndicatedsByConsultant(targetConsultantEmail, 3000);
+        const result = await client.getIndicatedsByConsultant(targetConsultantEmail, 3000, 1, {
+          transferredFilter: 'yes',
+          sort: 'created_at',
+          direction: 'desc',
+        });
+        if (!result.success) {
+          payload.convertedCount = undefined;
+          payload.crm_warning = normalizeCrmWarning(result.error ?? result.message) ?? undefined;
+          return successResponse(payload);
+        }
         const leads = result.success && Array.isArray(result.data) ? result.data : [];
         const isTransferred = (lead: any) =>
           lead.transferred === true || lead.transferred === 'true' || lead.transferred === 1;

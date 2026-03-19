@@ -2,16 +2,36 @@ import { NextRequest } from 'next/server';
 import { requireAdmin } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { getAdminBancaId } from '@/lib/server/crm/adminLeadTransferContext';
+import { getAdminBancaId, getAdminAllowedBancaIds } from '@/lib/server/crm/adminLeadTransferContext';
+import { getEffectiveZaplotoId } from '@/lib/tenant-context';
 import { createCrmRedistributionClient } from '@/lib/server/crm/crmRedistributionClient';
 import { normalizeDateParam, dateToStartOfDaySãoPauloISO, dateToEndOfDaySãoPauloISO } from '@/lib/server/crm/transfer-date-utils';
 
 const LOG_PREFIX = '[admin][transfer-metrics]';
+const LOGS_PAGE_SIZE = 1000;
+const IN_BATCH_SIZE = 150;
+
+function normalizeCrmWarning(message?: string | null): string | null {
+  const msg = String(message ?? '').trim();
+  const lower = msg.toLowerCase();
+  if (!msg) return null;
+  if (lower.includes('too many attempts') || lower.includes('too many requests') || lower.includes('429')) {
+    return 'CRM temporariamente com muitas tentativas (429). Alguns números podem ficar incompletos.';
+  }
+  return null;
+}
+
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) chunks.push(arr.slice(i, i + size));
+  return chunks;
+}
 
 /**
  * GET /api/admin/crm/transfer-metrics
- * KPIs de transferência: total, com saldo, sem saldo; conversão por consultor destino.
- * Query: banca_id (obrigatório), from (YYYY-MM-DD), to (YYYY-MM-DD), transfer_type?, target_consultant_email? (para conversão)
+ * KPIs de transferência: total, com saldo, sem saldo; por tipo; conversão por consultor.
+ * Com/sem saldo: COUNT(lead_id) em admin_lead_transfer_entries WHERE had_balance = true|false (+ escopo por banca/período/log).
+ * Tudo via contagens (sem buscar linhas de entries); logs paginados para não capar no PostgREST.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -19,13 +39,29 @@ export async function GET(req: NextRequest) {
     const { searchParams } = req.nextUrl;
 
     const bancaId = searchParams.get('banca_id')?.trim() || null;
-    if (!bancaId) {
-      return errorResponse('banca_id é obrigatório.');
-    }
+    const sourceConsultantEmail = searchParams.get('source_consultant_email')?.trim() || null;
+    let bancaIds: string[];
+    let singleResolved: { bancaId: string; crmBaseUrl: string } | null = null;
 
-    const resolved = await getAdminBancaId(userId, profile, bancaId);
-    if (!resolved) {
-      return errorResponse('Banca não encontrada ou sem permissão.');
+    if (bancaId) {
+      const resolved = await getAdminBancaId(userId, profile, bancaId);
+      if (!resolved) return errorResponse('Banca não encontrada ou sem permissão.');
+      bancaIds = [resolved.bancaId];
+      singleResolved = { bancaId: resolved.bancaId, crmBaseUrl: resolved.crmBaseUrl };
+    } else {
+      const zaplotoId = await getEffectiveZaplotoId(req, profile);
+      const allowed = await getAdminAllowedBancaIds(profile, zaplotoId);
+      if (!allowed?.length) {
+        return successResponse({
+          transferidos_total: 0,
+          transferidos_com_saldo: 0,
+          transferidos_sem_saldo: 0,
+          by_type: { TF: 0, TF1: 0, TF2: 0, TF3: 0 },
+          receivedByTarget: undefined,
+          convertedCount: undefined,
+        });
+      }
+      bancaIds = allowed;
     }
 
     const fromParam = normalizeDateParam(searchParams.get('from'));
@@ -33,17 +69,30 @@ export async function GET(req: NextRequest) {
     const transferType = searchParams.get('transfer_type')?.trim();
     const targetConsultantEmail = searchParams.get('target_consultant_email')?.trim() || null;
 
-    let idsOnlyQuery = supabaseServiceRole
-      .from('admin_lead_transfer_logs')
-      .select('id')
-      .eq('banca_id', resolved.bancaId);
-    if (fromParam) idsOnlyQuery = idsOnlyQuery.gte('created_at', dateToStartOfDaySãoPauloISO(fromParam));
-    if (toParam) idsOnlyQuery = idsOnlyQuery.lte('created_at', dateToEndOfDaySãoPauloISO(toParam));
-    if (transferType && ['TF', 'TF1', 'TF2', 'TF3'].includes(transferType)) {
-      idsOnlyQuery = idsOnlyQuery.eq('transfer_type', transferType);
+    // 1) Trazer todos os logs do escopo (paginado), com id e transfer_type para by_type
+    type LogRow = { id: string; transfer_type?: string | null };
+    const allLogs: LogRow[] = [];
+    let logsOffset = 0;
+    let logsHasMore = true;
+    while (logsHasMore) {
+      let q = supabaseServiceRole
+        .from('admin_lead_transfer_logs')
+        .select('id, transfer_type')
+        .in('banca_id', bancaIds)
+        .order('created_at', { ascending: false })
+        .range(logsOffset, logsOffset + LOGS_PAGE_SIZE - 1);
+      if (fromParam) q = q.gte('created_at', dateToStartOfDaySãoPauloISO(fromParam));
+      if (toParam) q = q.lte('created_at', dateToEndOfDaySãoPauloISO(toParam));
+      if (transferType && ['TF', 'TF1', 'TF2', 'TF3'].includes(transferType)) q = q.eq('transfer_type', transferType);
+      if (sourceConsultantEmail) q = q.ilike('source_consultant_email', sourceConsultantEmail);
+      const { data: page } = await q;
+      const rows = (Array.isArray(page) ? page : []) as LogRow[];
+      allLogs.push(...rows);
+      logsHasMore = rows.length >= LOGS_PAGE_SIZE;
+      logsOffset += LOGS_PAGE_SIZE;
     }
-    const { data: logIds } = await idsOnlyQuery;
-    const logIdsFilter = (logIds ?? []).map((r: { id: string }) => r.id);
+
+    const logIdsFilter = allLogs.map((r) => r.id);
     if (logIdsFilter.length === 0) {
       return successResponse({
         transferidos_total: 0,
@@ -55,59 +104,55 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    let countQuery = supabaseServiceRole
-      .from('admin_lead_transfer_entries')
-      .select('id', { count: 'exact', head: true })
-      .eq('banca_id', resolved.bancaId)
-      .in('transfer_log_id', logIdsFilter);
-    if (targetConsultantEmail?.trim()) {
-      countQuery = countQuery.ilike('target_consultant_email', targetConsultantEmail.trim());
-    }
-    const { count: transferidos_totalCount } = await countQuery;
+    const logIdChunks = chunkArray(logIdsFilter, IN_BATCH_SIZE);
 
-    const entriesQuery = supabaseServiceRole
-      .from('admin_lead_transfer_entries')
-      .select('id, transfer_log_id, lead_id, had_balance, target_consultant_email')
-      .eq('banca_id', resolved.bancaId)
-      .in('transfer_log_id', logIdsFilter)
-      .limit(50000);
-    const { data: entries, error: entriesError } = await entriesQuery;
-
-    if (entriesError) {
-      console.error(`${LOG_PREFIX} entries error:`, entriesError);
-      return errorResponse('Erro ao buscar métricas de transferência.');
-    }
-
-    const list = Array.isArray(entries) ? entries : [];
-    const emailNorm = targetConsultantEmail ? targetConsultantEmail.toLowerCase().trim() : null;
-    const listToUse = emailNorm
-      ? list.filter((e: { target_consultant_email?: string }) => String(e.target_consultant_email ?? '').toLowerCase().trim() === emailNorm)
-      : list;
-
-    const transferidos_total = typeof transferidos_totalCount === 'number' ? transferidos_totalCount : listToUse.length;
-    const transferidos_com_saldo = listToUse.filter((e: { had_balance?: boolean }) => e.had_balance === true).length;
-    const transferidos_sem_saldo = transferidos_total - transferidos_com_saldo;
-
-    // byType deve ser derivado das mesmas entries (listToUse) para bater com total e com/sem saldo
-    const logIdsFromList = [...new Set(listToUse.map((e: { transfer_log_id?: string }) => e.transfer_log_id).filter(Boolean))];
-    let byType: Record<string, number> = { TF: 0, TF1: 0, TF2: 0, TF3: 0 };
-    if (logIdsFromList.length > 0) {
-      const { data: logsForType } = await supabaseServiceRole
-        .from('admin_lead_transfer_logs')
-        .select('id, transfer_type')
-        .eq('banca_id', resolved.bancaId)
-        .in('id', logIdsFromList);
-      const logIdToType = new Map<string, string>();
-      for (const row of Array.isArray(logsForType) ? logsForType : []) {
-        const type = (row.transfer_type && ['TF', 'TF1', 'TF2', 'TF3'].includes(String(row.transfer_type)))
-          ? String(row.transfer_type)
-          : 'TF';
-        logIdToType.set(String(row.id), type);
+    // 2) Contagens diretas: com saldo e sem saldo (as duas queries), em paralelo por chunk
+    // Equivalente: SELECT count(lead_id) FROM admin_lead_transfer_entries WHERE had_balance = true|false (+ escopo)
+    let transferidos_com_saldo = 0;
+    let transferidos_sem_saldo = 0;
+    for (const chunk of logIdChunks) {
+      let qCom = supabaseServiceRole
+        .from('admin_lead_transfer_entries')
+        .select('lead_id', { count: 'exact', head: true })
+        .in('banca_id', bancaIds)
+        .in('transfer_log_id', chunk)
+        .eq('had_balance', true);
+      let qSem = supabaseServiceRole
+        .from('admin_lead_transfer_entries')
+        .select('lead_id', { count: 'exact', head: true })
+        .in('banca_id', bancaIds)
+        .in('transfer_log_id', chunk)
+        .eq('had_balance', false);
+      if (targetConsultantEmail) {
+        qCom = qCom.ilike('target_consultant_email', targetConsultantEmail);
+        qSem = qSem.ilike('target_consultant_email', targetConsultantEmail);
       }
-      for (const entry of listToUse) {
-        const type = logIdToType.get(String(entry.transfer_log_id ?? '')) ?? 'TF';
-        if (byType[type] !== undefined) byType[type] += 1;
-        else byType[type] = 1;
+      const [rCom, rSem] = await Promise.all([qCom, qSem]);
+      transferidos_com_saldo += typeof rCom.count === 'number' ? rCom.count : 0;
+      transferidos_sem_saldo += typeof rSem.count === 'number' ? rSem.count : 0;
+    }
+
+    const transferidos_total = transferidos_com_saldo + transferidos_sem_saldo;
+
+    // 3) by_type: contagem por transfer_type (logs já têm transfer_type)
+    const typeToLogIds: Record<string, string[]> = { TF: [], TF1: [], TF2: [], TF3: [] };
+    for (const log of allLogs) {
+      const t = log.transfer_type && ['TF', 'TF1', 'TF2', 'TF3'].includes(log.transfer_type) ? log.transfer_type : 'TF';
+      if (typeToLogIds[t]) typeToLogIds[t].push(log.id);
+    }
+    const byType: Record<string, number> = { TF: 0, TF1: 0, TF2: 0, TF3: 0 };
+    for (const type of ['TF', 'TF1', 'TF2', 'TF3'] as const) {
+      const ids = typeToLogIds[type];
+      if (ids.length === 0) continue;
+      for (const chunk of chunkArray(ids, IN_BATCH_SIZE)) {
+        let q = supabaseServiceRole
+          .from('admin_lead_transfer_entries')
+          .select('lead_id', { count: 'exact', head: true })
+          .in('banca_id', bancaIds)
+          .in('transfer_log_id', chunk);
+        if (targetConsultantEmail) q = q.ilike('target_consultant_email', targetConsultantEmail);
+        const { count } = await q;
+        byType[type] += typeof count === 'number' ? count : 0;
       }
     }
 
@@ -118,6 +163,7 @@ export async function GET(req: NextRequest) {
       by_type: Record<string, number>;
       receivedByTarget?: number;
       convertedCount?: number;
+      crm_warning?: string;
     } = {
       transferidos_total,
       transferidos_com_saldo,
@@ -126,20 +172,45 @@ export async function GET(req: NextRequest) {
     };
 
     if (targetConsultantEmail) {
-      payload.receivedByTarget = listToUse.length;
-      try {
-        const client = createCrmRedistributionClient(resolved.crmBaseUrl);
-        const result = await client.getIndicatedsByConsultant(targetConsultantEmail, 3000);
-        const leads = result.success && Array.isArray(result.data) ? result.data : [];
-        const isTransferred = (lead: any) =>
-          lead.transferred === true || lead.transferred === 'true' || lead.transferred === 1;
-        const transferredLeads = leads.filter((l: any) => isTransferred(l));
-        const convertedCount = transferredLeads.filter(
-          (l: any) => (parseInt(String(l.total_depositos_count), 10) || 0) >= 1
-        ).length;
-        payload.convertedCount = convertedCount;
-      } catch (crmErr) {
-        console.warn(`${LOG_PREFIX} CRM getIndicatedsByConsultant failed:`, crmErr);
+      let receivedByTarget = 0;
+      for (const chunk of logIdChunks) {
+        let q = supabaseServiceRole
+          .from('admin_lead_transfer_entries')
+          .select('lead_id', { count: 'exact', head: true })
+          .in('banca_id', bancaIds)
+          .in('transfer_log_id', chunk)
+          .ilike('target_consultant_email', targetConsultantEmail);
+        const { count } = await q;
+        receivedByTarget += typeof count === 'number' ? count : 0;
+      }
+      payload.receivedByTarget = receivedByTarget;
+      if (singleResolved) {
+        try {
+          const client = createCrmRedistributionClient(singleResolved.crmBaseUrl);
+          const result = await client.getIndicatedsByConsultant(targetConsultantEmail, 3000, 1, {
+            transferredFilter: 'yes',
+            sort: 'created_at',
+            direction: 'desc',
+          });
+          if (!result.success) {
+            payload.convertedCount = undefined;
+            payload.crm_warning = normalizeCrmWarning(result.error ?? result.message) ?? undefined;
+            return successResponse(payload);
+          }
+          const leads = result.success && Array.isArray(result.data) ? result.data : [];
+          const isTransferred = (lead: unknown) => {
+            const l = lead as { transferred?: unknown };
+            return l.transferred === true || l.transferred === 'true' || l.transferred === 1;
+          };
+          const transferredLeads = leads.filter(isTransferred);
+          const convertedCount = transferredLeads.filter((lead: unknown) => {
+            const l = lead as { total_depositos_count?: unknown };
+            return (parseInt(String(l.total_depositos_count), 10) || 0) >= 1;
+          }).length;
+          payload.convertedCount = convertedCount;
+        } catch (crmErr) {
+          console.warn(`${LOG_PREFIX} CRM getIndicatedsByConsultant failed:`, crmErr);
+        }
       }
     }
 
