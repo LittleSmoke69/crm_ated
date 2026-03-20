@@ -444,6 +444,17 @@ const MESSAGES_PAGE_SIZE = 50;
 const MESSAGES_SESSION_CACHE_PREFIX = 'zaploto_atendimento_msgs_v1';
 const MESSAGES_SESSION_CACHE_MAX = 500;
 
+/** Alinhado a app/api/chat/send — instância Evolution indisponível ao enviar. */
+const EVOLUTION_INSTANCE_UNREACHABLE_CODE = 'EVOLUTION_INSTANCE_UNREACHABLE';
+
+type EvolutionSendApiResult = {
+  success?: boolean;
+  error?: string;
+  message?: string;
+  code?: string;
+  data?: unknown;
+};
+
 function messageTimestampMs(m: Message): number {
   const t = m.timestamp;
   if (typeof t === 'string') return parseInt(t, 10) * 1000;
@@ -498,6 +509,8 @@ export default function ChatPage() {
   const [channelsLoading, setChannelsLoading] = useState(true);
   /** Só entra no chat após o usuário confirmar qual instância/canal vai usar no atendimento */
   const [atendimentoGatePassed, setAtendimentoGatePassed] = useState(false);
+  /** Aviso na tela de seleção de instância (ex.: instância caiu durante o envio). */
+  const [atendimentoGateNotice, setAtendimentoGateNotice] = useState<string | null>(null);
   const [pendingAtendimentoChannel, setPendingAtendimentoChannel] = useState<Channel | null>(null);
   const [selectedChannel, setSelectedChannel] = useState<Channel | null>(null);
 
@@ -681,6 +694,7 @@ export default function ChatPage() {
 
   const openAtendimentoWithPendingChannel = () => {
     if (!pendingAtendimentoChannel) return;
+    setAtendimentoGateNotice(null);
     setSelectedChannel(pendingAtendimentoChannel);
     setAtendimentoGatePassed(true);
     setSelectedConversationId('');
@@ -688,12 +702,25 @@ export default function ChatPage() {
   };
 
   const reopenAtendimentoInstancePicker = () => {
+    setAtendimentoGateNotice(null);
     setPendingAtendimentoChannel((prev) => selectedChannel ?? prev);
     setAtendimentoGatePassed(false);
     setSelectedChannel(null);
     setSelectedConversationId('');
     setConversations([]);
     setMessages([]);
+  };
+
+  /** Volta ao seletor mantendo aviso (ex.: instância desconectada). */
+  const reopenAtendimentoInstancePickerWithNotice = (notice: string) => {
+    setPendingAtendimentoChannel((prev) => selectedChannel ?? prev);
+    setAtendimentoGatePassed(false);
+    setSelectedChannel(null);
+    setSelectedConversationId('');
+    setConversations([]);
+    setMessages([]);
+    setSendError(null);
+    setAtendimentoGateNotice(notice);
   };
 
   // ── Carregar Conversas ─────────────────────────────────────────────────────
@@ -744,6 +771,51 @@ export default function ChatPage() {
     if (!selectedChannel) return;
     loadConversationsFromApi(false);
   }, [selectedChannel, loadConversationsFromApi]);
+
+  // Reprocessa eventos pendentes de webhook a cada 5 minutos
+  // para garantir que mensagens faltantes sejam persistidas em chat_messages.
+  const processPendingWebhookEvents = useCallback(async () => {
+    if (!selectedChannel) return;
+
+    try {
+      if (selectedChannel.type === 'evolution') {
+        const res = await fetch('/api/chat/evolution-events/process-pending', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({
+            instance_name: selectedChannel.instance_name,
+            limit: 200,
+          }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (json?.success && Number(json?.data?.processed || 0) > 0) {
+          await loadConversationsFromApi(true);
+        }
+        return;
+      }
+
+      const res = await fetch('/api/chat/webhook-events/process-pending', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ limit: 200 }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (json?.success && Number(json?.data?.processed || 0) > 0) {
+        await loadConversationsFromApi(true);
+      }
+    } catch (error) {
+      console.error('[Chat Atendimento] processPendingWebhookEvents:', error);
+    }
+  }, [selectedChannel, loadConversationsFromApi, userId]);
+
+  useEffect(() => {
+    if (!selectedChannel || !atendimentoGatePassed) return;
+
+    // Executa uma vez ao entrar no atendimento e depois a cada 5 minutos.
+    processPendingWebhookEvents();
+    const intervalId = window.setInterval(processPendingWebhookEvents, 5 * 60 * 1000);
+    return () => window.clearInterval(intervalId);
+  }, [selectedChannel, atendimentoGatePassed, processPendingWebhookEvents]);
 
   // Etiquetas disponíveis (criadas pelo admin) para filtro e para marcar conversas
   useEffect(() => {
@@ -1485,7 +1557,7 @@ export default function ChatPage() {
     if (bodyError && bodyError.trim()) return bodyError;
     switch (status) {
       case 502: return 'Serviço temporariamente indisponível. Tente novamente.';
-      case 503: return 'Serviço em manutenção. Tente novamente em instantes.';
+      case 503: return 'Serviço temporariamente indisponível. Tente outra instância ou aguarde um instante.';
       case 504: return 'Tempo esgotado. A Meta pode estar lenta. Tente reenviar.';
       case 401: return 'Token inválido ou expirado. Renove em Admin > WhatsApp Oficial.';
       case 403: return 'Sem permissão para enviar. Verifique o canal e a janela de 24h.';
@@ -1533,8 +1605,12 @@ export default function ChatPage() {
                 }),
           }),
         });
-        let result: { success?: boolean; error?: string; message?: string } = {};
-        try { result = await response.json(); } catch { result = {}; }
+        let result: EvolutionSendApiResult = {};
+        try {
+          result = (await response.json()) as EvolutionSendApiResult;
+        } catch {
+          result = {};
+        }
         if (response.ok && result.success) {
           if (attachedMedia?.preview) URL.revokeObjectURL(attachedMedia.preview);
           setMessageText('');
@@ -1556,6 +1632,11 @@ export default function ChatPage() {
               return sortMessagesChronological([...prev, msg]);
             });
           }
+        } else if (result.code === EVOLUTION_INSTANCE_UNREACHABLE_CODE) {
+          reopenAtendimentoInstancePickerWithNotice(
+            result.error ||
+              'A instância WhatsApp desconectou ou ficou indisponível. Escolha outra instância ou reconecte em Instâncias WhatsApp.'
+          );
         } else {
           setSendError(getSendErrorMessage(response.status, result.error || result.message));
         }
@@ -1858,6 +1939,24 @@ export default function ChatPage() {
                 Selecione a instância WhatsApp para iniciar o atendimento
               </p>
             </div>
+
+            {atendimentoGateNotice && (
+              <div
+                className="mb-4 flex items-start gap-3 rounded-xl border border-amber-500/50 bg-amber-500/10 dark:bg-amber-500/15 px-4 py-3 text-amber-900 dark:text-amber-100"
+                role="alert"
+              >
+                <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+                <div className="flex-1 min-w-0 text-sm">{atendimentoGateNotice}</div>
+                <button
+                  type="button"
+                  onClick={() => setAtendimentoGateNotice(null)}
+                  className="flex-shrink-0 p-1 rounded-lg hover:bg-amber-500/20 text-amber-800 dark:text-amber-200"
+                  aria-label="Fechar aviso"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
 
             {/* Card */}
             <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-2xl shadow-sm overflow-hidden">

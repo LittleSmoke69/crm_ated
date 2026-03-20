@@ -11,6 +11,27 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { chatService } from '@/lib/services/chat-service';
 import { canUserAccessEvolutionChatInstance } from '@/lib/services/atendimento-chat-access';
 
+/** Código retornado ao cliente quando a Evolution não consegue enviar (instância/sessão caída). */
+export const EVOLUTION_INSTANCE_UNREACHABLE_CODE = 'EVOLUTION_INSTANCE_UNREACHABLE';
+
+/**
+ * Indica instância/sessão Evolution indisponível, por exemplo:
+ * - 400 com "Cannot read properties of undefined (reading 'sendMessage')"
+ * - 500 com "Connection Closed" (conexão WhatsApp encerrada no servidor Evolution)
+ */
+function isEvolutionInstanceUnreachableError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  const lower = msg.toLowerCase();
+  if (lower.includes('connection closed')) return true;
+  if (!msg.includes('400')) return false;
+  return (
+    msg.includes('sendMessage') ||
+    msg.includes('Cannot read properties of undefined') ||
+    msg.includes("reading 'sendMessage'") ||
+    msg.includes('reading "sendMessage"')
+  );
+}
+
 function normalizeEvolutionRemoteJid(rawRemoteJid: string): string {
   const input = String(rawRemoteJid || '').trim();
   const isGroup = input.endsWith('@g.us');
@@ -156,9 +177,17 @@ export async function POST(req: NextRequest) {
         message: savedMessage
       }, 'Mensagem enviada com sucesso');
 
-    } catch (sendErr: any) {
+    } catch (sendErr: unknown) {
       console.error('Erro ao enviar mensagem pela Evolution:', sendErr);
-      return errorResponse(`Falha ao enviar mensagem: ${sendErr.message}`, 500);
+      if (isEvolutionInstanceUnreachableError(sendErr)) {
+        return errorResponse(
+          'A instância WhatsApp está desconectada ou indisponível no momento. Selecione outra instância ou reconecte esta em Instâncias WhatsApp.',
+          503,
+          { code: EVOLUTION_INSTANCE_UNREACHABLE_CODE }
+        );
+      }
+      const message = sendErr instanceof Error ? sendErr.message : String(sendErr);
+      return errorResponse(`Falha ao enviar mensagem: ${message}`, 500);
     }
 
   } catch (err: any) {
