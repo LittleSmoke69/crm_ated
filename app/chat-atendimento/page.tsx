@@ -81,6 +81,7 @@ interface ChannelEvolution {
   status: string;
   /** Instância mestre vinculada à conta — oferecida como canal de atendimento */
   is_master?: boolean;
+  is_chat_instance?: boolean;
 }
 
 interface ChannelWhatsAppOfficial {
@@ -622,16 +623,14 @@ export default function ChatPage() {
       .then((result) => {
         if (result.success && result.data) {
           const evo: ChannelEvolution[] = result.data.evolution || [];
-          const wa: ChannelWhatsAppOfficial[] = result.data.whatsapp_official || [];
-          setChannels({ evolution: evo, whatsapp_official: wa });
-          const firstChannel: Channel | null =
-            evo.length > 0 ? evo[0] : wa.length > 0 ? wa[0] : null;
+          // Chat-atendimento usa exclusivamente Evolution — WhatsApp Oficial fica no /chat
+          setChannels({ evolution: evo, whatsapp_official: [] });
+          const firstChannel: Channel | null = evo.length > 0 ? evo[0] : null;
           // Pré-seleção na tela de instância (antes de abrir o chat); não define selectedChannel aqui
           setPendingAtendimentoChannel((prev) => prev ?? firstChannel);
-          // Pré-carrega conversas de TODOS os canais em paralelo
+          // Pré-carrega conversas de todas as instâncias Evolution em paralelo
           const allChannels: Array<{ id: string; type: 'evolution' | 'whatsapp_official' }> = [
             ...evo.map((c) => ({ id: c.id, type: 'evolution' as const })),
-            ...wa.map((c) => ({ id: c.id, type: 'whatsapp_official' as const })),
           ];
           allChannels.forEach(({ id, type }) => {
             const params = type === 'evolution' ? `instance_id=${id}` : `whatsapp_config_id=${id}`;
@@ -1832,114 +1831,150 @@ export default function ChatPage() {
   // Tela inicial: escolher / confirmar instância (Evolution) ou canal WhatsApp Oficial antes de abrir o chat
   if (!atendimentoGatePassed) {
     const totalCanais = channels.evolution.length + channels.whatsapp_official.length;
+    const statusConfig = (status: string) => {
+      const s = (status || '').toLowerCase();
+      if (s === 'open' || s === 'connected' || s === 'ok') return { dot: 'bg-emerald-400', label: 'Conectado', text: 'text-emerald-600 dark:text-emerald-400' };
+      if (s === 'connecting') return { dot: 'bg-amber-400 animate-pulse', label: 'Conectando', text: 'text-amber-600 dark:text-amber-400' };
+      return { dot: 'bg-red-400', label: 'Desconectado', text: 'text-red-500 dark:text-red-400' };
+    };
+
     return (
       <Layout onSignOut={handleSignOut}>
-        <div className="flex flex-1 min-h-0 flex-col items-center justify-center p-4 sm:p-8 overflow-y-auto">
-          <div className="w-full max-w-lg bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-2xl shadow-lg p-6 sm:p-8">
-            <div className="flex items-center gap-3 mb-2">
+        <div className="flex flex-1 min-h-0 flex-col items-center justify-center p-4 sm:p-6 overflow-y-auto bg-gray-50 dark:bg-[#1a1a1a]">
+          <div className="w-full max-w-2xl">
+
+            {/* Header */}
+            <div className="text-center mb-8">
               <div
-                className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
-                style={{ backgroundColor: '#8CD95520' }}
+                className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg"
+                style={{ backgroundColor: '#8CD955' }}
               >
-                <Headphones className="w-6 h-6" style={{ color: '#8CD955' }} />
+                <Headphones className="w-8 h-8 text-white" />
               </div>
-              <div>
-                <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
-                  Instância de atendimento
-                </h1>
-                <p className="text-sm text-gray-500 dark:text-gray-400">
-                  Escolha com qual instância ou canal você vai trabalhar antes de abrir o chat.
-                </p>
-              </div>
+              <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+                Chat de Atendimento
+              </h1>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                Selecione a instância WhatsApp para iniciar o atendimento
+              </p>
             </div>
 
-            {channelsLoading ? (
-              <div className="flex items-center justify-center gap-2 py-12 text-gray-500 dark:text-gray-400">
-                <Loader2 className="w-5 h-5 animate-spin" />
-                <span>Carregando canais disponíveis...</span>
-              </div>
-            ) : totalCanais === 0 ? (
-              <p className="text-sm text-center text-gray-600 dark:text-gray-400 py-8">
-                Nenhuma instância disponível para você. Se você é consultor, peça ao gerente para atribuir uma
-                instância de atendimento.
-              </p>
-            ) : (
-              <>
-                <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-3">
-                  Selecione o canal
-                </p>
-                <ul className="space-y-2 mb-6 max-h-[min(50vh,320px)] overflow-y-auto pr-1">
-                  {channels.evolution.map((ch) => {
-                    const selected = pendingAtendimentoChannel && channelPickerKey(pendingAtendimentoChannel) === channelPickerKey(ch);
-                    return (
-                      <li key={channelPickerKey(ch)}>
+            {/* Card */}
+            <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-2xl shadow-sm overflow-hidden">
+
+              {channelsLoading ? (
+                <div className="flex flex-col items-center justify-center gap-3 py-16 text-gray-400">
+                  <Loader2 className="w-8 h-8 animate-spin" style={{ color: '#8CD955' }} />
+                  <span className="text-sm">Carregando instâncias disponíveis...</span>
+                </div>
+
+              ) : totalCanais === 0 ? (
+                <div className="flex flex-col items-center justify-center gap-3 py-16 px-8 text-center">
+                  <div className="w-14 h-14 rounded-full bg-gray-100 dark:bg-[#333] flex items-center justify-center">
+                    <MessageSquare className="w-7 h-7 text-gray-400" />
+                  </div>
+                  <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Nenhuma instância disponível
+                  </p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 max-w-xs">
+                    Você ainda não possui instâncias WhatsApp ativas. Crie uma em{' '}
+                    <a href="/instances" className="underline" style={{ color: '#8CD955' }}>Instâncias WhatsApp</a>
+                    {' '}ou peça ao gerente para atribuir uma instância de atendimento.
+                  </p>
+                </div>
+
+              ) : (
+                <>
+                  {/* Label */}
+                  <div className="px-5 pt-5 pb-3 border-b border-gray-100 dark:border-[#3a3a3a]">
+                    <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-widest">
+                      {channels.evolution.length} {channels.evolution.length === 1 ? 'instância disponível' : 'instâncias disponíveis'}
+                    </p>
+                  </div>
+
+                  {/* Instance grid */}
+                  <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[min(55vh,400px)] overflow-y-auto">
+                    {channels.evolution.map((ch) => {
+                      const selected = pendingAtendimentoChannel && channelPickerKey(pendingAtendimentoChannel) === channelPickerKey(ch);
+                      const sc = statusConfig(ch.status);
+                      return (
                         <button
+                          key={channelPickerKey(ch)}
                           type="button"
                           onClick={() => setPendingAtendimentoChannel(ch)}
-                          className={`w-full text-left rounded-xl border-2 px-4 py-3 transition-colors ${
+                          className={`relative text-left rounded-xl border-2 p-4 transition-all duration-150 ${
                             selected
-                              ? 'border-[#8CD955] bg-[#8CD955]/10 dark:bg-[#8CD955]/15'
-                              : 'border-gray-200 dark:border-[#404040] hover:border-gray-300 dark:hover:border-[#555]'
+                              ? 'border-[#8CD955] bg-[#8CD955]/8 dark:bg-[#8CD955]/12 shadow-sm'
+                              : 'border-gray-200 dark:border-[#3a3a3a] hover:border-[#8CD955]/50 hover:bg-gray-50 dark:hover:bg-[#333]'
                           }`}
                         >
-                          <div className="flex items-center justify-between gap-2 flex-wrap">
-                            <span className="font-medium text-gray-900 dark:text-gray-100">
-                              {ch.instance_name}
+                          {/* Check mark quando selecionado */}
+                          {selected && (
+                            <span
+                              className="absolute top-3 right-3 w-5 h-5 rounded-full flex items-center justify-center"
+                              style={{ backgroundColor: '#8CD955' }}
+                            >
+                              <CheckCheck className="w-3 h-3 text-white" />
                             </span>
-                            <span className="flex flex-wrap gap-1 justify-end">
-                              <span className="text-[10px] uppercase font-semibold px-2 py-0.5 rounded bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200">
-                                Evolution
+                          )}
+
+                          {/* Avatar + nome */}
+                          <div className="flex items-center gap-3 mb-3">
+                            <div className="relative flex-shrink-0">
+                              <div className="w-10 h-10 rounded-full bg-gray-100 dark:bg-[#444] flex items-center justify-center">
+                                <MessageCircle className="w-5 h-5 text-gray-400 dark:text-gray-500" />
+                              </div>
+                              <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white dark:border-[#2a2a2a] ${sc.dot}`} />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="font-semibold text-sm text-gray-900 dark:text-gray-100 truncate">
+                                {ch.instance_name}
+                              </p>
+                              <p className={`text-xs font-medium ${sc.text}`}>
+                                {sc.label}
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* Badges */}
+                          <div className="flex flex-wrap gap-1">
+                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 border border-blue-200 dark:border-blue-800/50">
+                              Evolution
+                            </span>
+                            {ch.is_master && (
+                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 border border-amber-200 dark:border-amber-800/50">
+                                Mestre
                               </span>
-                              {ch.is_master && (
-                                <span className="text-[10px] uppercase font-semibold px-2 py-0.5 rounded bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200">
-                                  Mestre
-                                </span>
-                              )}
-                            </span>
-                          </div>
-                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Status: {ch.status}</p>
-                        </button>
-                      </li>
-                    );
-                  })}
-                  {channels.whatsapp_official.map((ch) => {
-                    const waCh: Channel = ch;
-                    const selected =
-                      pendingAtendimentoChannel &&
-                      channelPickerKey(pendingAtendimentoChannel) === channelPickerKey(waCh);
-                    return (
-                      <li key={channelPickerKey(waCh)}>
-                        <button
-                          type="button"
-                          onClick={() => setPendingAtendimentoChannel(waCh)}
-                          className={`w-full text-left rounded-xl border-2 px-4 py-3 transition-colors ${
-                            selected
-                              ? 'border-[#8CD955] bg-[#8CD955]/10 dark:bg-[#8CD955]/15'
-                              : 'border-gray-200 dark:border-[#404040] hover:border-gray-300 dark:hover:border-[#555]'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="font-medium text-gray-900 dark:text-gray-100">{ch.name}</span>
-                            <span className="text-[10px] uppercase font-semibold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200">
-                              WhatsApp Oficial
-                            </span>
+                            )}
+                            {ch.is_chat_instance && (
+                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 border border-purple-200 dark:border-purple-800/50">
+                                Chat
+                              </span>
+                            )}
                           </div>
                         </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-                <button
-                  type="button"
-                  disabled={!pendingAtendimentoChannel}
-                  onClick={openAtendimentoWithPendingChannel}
-                  className="w-full py-3 rounded-xl text-white font-semibold text-sm disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
-                  style={{ backgroundColor: '#8CD955' }}
-                >
-                  Abrir chat de atendimento
-                </button>
-              </>
-            )}
+                      );
+                    })}
+                  </div>
+
+                  {/* Footer com botão */}
+                  <div className="px-4 pb-4 pt-2 border-t border-gray-100 dark:border-[#3a3a3a]">
+                    <button
+                      type="button"
+                      disabled={!pendingAtendimentoChannel}
+                      onClick={openAtendimentoWithPendingChannel}
+                      className="w-full py-3 rounded-xl text-white font-semibold text-sm disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
+                      style={{ backgroundColor: '#8CD955' }}
+                    >
+                      <Headphones className="w-4 h-4" />
+                      {pendingAtendimentoChannel
+                        ? `Entrar com ${(pendingAtendimentoChannel as ChannelEvolution).instance_name}`
+                        : 'Selecione uma instância'}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </div>
       </Layout>

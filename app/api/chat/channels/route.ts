@@ -49,7 +49,6 @@ async function buildEvolutionChannels(userId: string): Promise<EvolutionChannelR
     .select('id, instance_name, status, created_at, is_master, is_chat_instance')
     .eq('user_id', userId)
     .eq('is_active', true)
-    .eq('webhook_configured', true)
     .order('created_at', { ascending: false });
 
   return ((rows || []) as EvolutionChannelRow[]).map((r) => ({
