@@ -669,7 +669,8 @@ export default function ChatPage() {
     type: 'image' | 'audio' | 'video' | 'document';
     name: string;
     preview?: string;
-    meta_id?: string; // ID do upload direto na Meta (para áudio gravado)
+    mimetype?: string;
+    meta_id?: string;
   } | null>(null);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
