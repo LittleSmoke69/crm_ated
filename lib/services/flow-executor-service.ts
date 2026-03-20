@@ -71,20 +71,6 @@ export class FlowExecutorService {
         return null;
       }
 
-      // Idempotência: evita executar o mesmo evento mais de uma vez (ex: múltiplas boas-vindas)
-      const { data: existingExecution } = await supabaseServiceRole
-        .from('flow_executions')
-        .select('id')
-        .eq('flow_id', flowId)
-        .eq('trigger_event_id', eventId)
-        .limit(1)
-        .maybeSingle();
-
-      if (existingExecution) {
-        console.log(`⚠️ [FLOW EXECUTOR] Execução já existente para flow=${flowId} event=${eventId}, ignorando (idempotência)`);
-        return existingExecution.id;
-      }
-
       // Prepara dados de entrada (usa payload_normalized se disponível, senão payload)
       const inputData = event.payload_normalized || event.payload;
       
@@ -100,7 +86,10 @@ export class FlowExecutorService {
       
       const graph = flow.graph_json as FlowGraph;
 
-      // Cria execução (env e instance_name vêm do evento)
+      // Cria execução com proteção atômica contra double-trigger.
+      // Usa ON CONFLICT DO NOTHING: se já existe execução para (flow_id, trigger_event_id),
+      // o INSERT é silenciosamente ignorado pelo banco — sem race condition.
+      // Requer UNIQUE CONSTRAINT uq_flow_executions_flow_event (migration: add_flow_executions_dedup_constraint.sql).
       const { data: execution, error: execError } = await supabaseServiceRole
         .from('flow_executions')
         .insert({
@@ -114,6 +103,19 @@ export class FlowExecutorService {
         })
         .select()
         .single();
+
+      // PGRST116 = no rows returned (ON CONFLICT DO NOTHING suprimiu o INSERT — duplicata)
+      if (execError?.code === 'PGRST116' || execError?.code === '23505') {
+        const { data: existingExecution } = await supabaseServiceRole
+          .from('flow_executions')
+          .select('id')
+          .eq('flow_id', flowId)
+          .eq('trigger_event_id', eventId)
+          .limit(1)
+          .maybeSingle();
+        console.log(`⚠️ [FLOW EXECUTOR] Execução duplicada ignorada (idempotência atômica) flow=${flowId} event=${eventId}`);
+        return existingExecution?.id ?? null;
+      }
 
       if (execError || !execution) {
         console.error(`❌ [FLOW EXECUTOR] Erro ao criar execução:`, execError);
