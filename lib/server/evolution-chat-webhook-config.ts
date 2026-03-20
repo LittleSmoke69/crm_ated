@@ -2,7 +2,9 @@ import type { NextRequest } from 'next/server';
 
 /**
  * Eventos enviados para o webhook interno que persiste mensagens no chat (Supabase).
- * Alinhado a `app/api/webhooks/evolution/route.ts`.
+ * Alinhado a `app/api/webhooks/evolution/route.ts` e `evolution-chat-webhook-handler.ts`.
+ *
+ * A Evolution pode enviar em maiúsculas (MESSAGES_UPSERT) ou com ponto (messages.upsert).
  */
 export const EVOLUTION_CHAT_WEBHOOK_MESSAGE_EVENTS = [
   'MESSAGES_UPSERT',
@@ -10,6 +12,27 @@ export const EVOLUTION_CHAT_WEBHOOK_MESSAGE_EVENTS = [
   'MESSAGES_DELETE',
   'SEND_MESSAGE',
 ] as const;
+
+/**
+ * Converte nomes de evento da Evolution (ex.: messages.upsert, MESSAGES_UPSERT) para o
+ * formato canônico usado no switch do handler (MESSAGES_UPSERT).
+ */
+export function normalizeEvolutionChatWebhookEvent(raw: string): string {
+  if (!raw || typeof raw !== 'string') return '';
+  const key = raw.trim().toLowerCase().replace(/_/g, '.');
+  const map: Record<string, string> = {
+    'messages.upsert': 'MESSAGES_UPSERT',
+    'messages.update': 'MESSAGES_UPDATE',
+    'messages.delete': 'MESSAGES_DELETE',
+    'send.message': 'SEND_MESSAGE',
+  };
+  return map[key] ?? raw;
+}
+
+/** Indica se o evento normalizado deve persistir em `chat_conversations` / `chat_messages`. */
+export function isEvolutionChatPersistenceEvent(normalized: string): boolean {
+  return (EVOLUTION_CHAT_WEBHOOK_MESSAGE_EVENTS as readonly string[]).includes(normalized);
+}
 
 /**
  * Resolve URL pública do app para a Evolution API alcançar o webhook (não pode ser só "localhost" em produção).
@@ -34,6 +57,14 @@ export function resolvePublicBaseUrlForWebhooks(req: NextRequest): string | null
 
 export function isLikelyLocalhostWebhookBase(baseUrl: string): boolean {
   return /^(https?:\/\/)(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(baseUrl.trim());
+}
+
+/**
+ * Instância mestre pode registrar o webhook de chat na criação.
+ * Defina EVOLUTION_WEBHOOK_SKIP_MASTER=true para criar só no banco (sem webhook na Evolution).
+ */
+export function shouldConfigureMasterChatWebhook(): boolean {
+  return process.env.EVOLUTION_WEBHOOK_SKIP_MASTER !== 'true';
 }
 
 /**

@@ -608,7 +608,7 @@ export default function ChatPage() {
   useEffect(() => {
     if (!userId) return;
     setChannelsLoading(true);
-    fetch('/api/chat/channels?require_webhook=1', { headers: authHeaders() })
+    fetch('/api/chat/channels', { headers: authHeaders() })
       .then((r) => r.json())
       .then((result) => {
         if (result.success && result.data) {
@@ -654,7 +654,7 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (!userId || channelsLoading || !pendingEvolutionInstanceIdForGate) return;
-    const params = `instance_id=${pendingEvolutionInstanceIdForGate}&sync_from_evolution=1`;
+    const params = `instance_id=${pendingEvolutionInstanceIdForGate}`;
     fetch(`/api/chat/conversations?${params}`, { headers: authHeaders() })
       .then((r) => r.json())
       .then((res) => {
@@ -704,7 +704,7 @@ export default function ChatPage() {
       try {
         const params =
           selectedChannel.type === 'evolution'
-            ? `instance_id=${selectedChannel.id}&sync_from_evolution=1`
+            ? `instance_id=${selectedChannel.id}`
             : `whatsapp_config_id=${selectedChannel.id}`;
 
         const response = await fetch(`/api/chat/conversations?${params}`, { headers: authHeaders() });
