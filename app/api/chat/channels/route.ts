@@ -43,7 +43,43 @@ export type ChannelWhatsAppOfficial = {
   phone_number_id: string;
 };
 
-async function buildEvolutionChannels(userId: string): Promise<EvolutionChannelRow[]> {
+async function buildEvolutionChannels(
+  userId: string,
+  userStatus: string
+): Promise<EvolutionChannelRow[]> {
+  const normalizedStatus = (userStatus || '').trim().toLowerCase();
+
+  // Consultor pode acessar instâncias que estão vinculadas a ele para atendimento.
+  if (normalizedStatus === 'consultor') {
+    const { data: assignments } = await supabaseServiceRole
+      .from('atendimento_chat_assignments')
+      .select('evolution_instance_id')
+      .eq('consultor_user_id', userId);
+
+    const assignedInstanceIds = Array.from(
+      new Set(
+        (assignments || [])
+          .map((assignment) => assignment.evolution_instance_id)
+          .filter((instanceId): instanceId is string => typeof instanceId === 'string' && instanceId.length > 0)
+      )
+    );
+
+    if (assignedInstanceIds.length === 0) return [];
+
+    const { data: rows } = await supabaseServiceRole
+      .from('evolution_instances')
+      .select('id, instance_name, status, created_at, is_master, is_chat_instance')
+      .in('id', assignedInstanceIds)
+      .eq('is_active', true)
+      .order('created_at', { ascending: false });
+
+    return ((rows || []) as EvolutionChannelRow[]).map((r) => ({
+      ...r,
+      is_master: !!r.is_master,
+      is_chat_instance: !!r.is_chat_instance,
+    }));
+  }
+
   const { data: rows } = await supabaseServiceRole
     .from('evolution_instances')
     .select('id, instance_name, status, created_at, is_master, is_chat_instance')
@@ -107,7 +143,7 @@ export async function GET(req: NextRequest) {
     const userStatus = (profile as { status?: string } | null)?.status || 'user';
 
     const [evolutionInstances, waOfficialConfigs] = await Promise.all([
-      buildEvolutionChannels(userId),
+      buildEvolutionChannels(userId, userStatus),
       buildWhatsAppOfficialChannels(userId, userStatus),
     ]);
 
