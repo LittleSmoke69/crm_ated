@@ -178,8 +178,7 @@ export class ChatService {
     // PGRST116 = no rows returned (ignoreDuplicates suprimiu o INSERT)
     // 23505 = unique_violation (fallback de segurança)
     if (error?.code === 'PGRST116' || error?.code === '23505') {
-      console.debug(`[Zaploto Chat] saveMessage: duplicata ignorada (${normalized.message_id})`);
-      return null;
+      return null; // duplicata esperada — sem log
     }
     if (error) throw error;
     if (!msg) return null;

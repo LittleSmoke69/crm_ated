@@ -1,9 +1,14 @@
 /**
  * POST /api/chat/webhook-events/process-pending
- * Puxa da tabela webhook_events os eventos ainda não processados (processed_at IS NULL),
- * trata cada raw_payload e organiza em chat_conversations e chat_messages.
- * Usado para mostrar conversas antigas: eventos que já estavam salvos passam a gerar
- * conversas e mensagens no chat.
+ * Processa eventos da tabela webhook_events e organiza em chat_conversations + chat_messages.
+ *
+ * Comportamento:
+ * - reprocess_all: false (padrão) → apenas events com processed_at IS NULL
+ * - reprocess_all: true → todos os eventos (incluindo já processados); útil para sincronizar
+ *   histórico completo na primeira abertura do chat ou após reset.
+ *
+ * Paginação: use offset + limit para processar em lotes.
+ * O processamento é idempotente (upsert com ignoreDuplicates nas mensagens).
  */
 
 import { NextRequest } from 'next/server';
@@ -13,22 +18,40 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { processMetaPayloadToChat, WHATSAPP_OFFICIAL_TOKEN_ERROR_MSG } from '@/lib/services/whatsapp-official-webhook-processor';
 
 const SOURCE = 'whatsapp_official';
-const DEFAULT_LIMIT = 100;
+const DEFAULT_LIMIT = 200;
+const MAX_LIMIT = 1000;
 
 export async function POST(req: NextRequest) {
   try {
     await requireAuth(req);
 
-    const body = await req.json().catch(() => ({}));
-    const limit = Math.min(500, Math.max(1, parseInt((body as { limit?: number }).limit as unknown as string, 10) || DEFAULT_LIMIT));
-    const reprocessAll = (body as { reprocess_all?: boolean }).reprocess_all === true;
+    const body = await req.json().catch(() => ({})) as {
+      limit?: number;
+      offset?: number;
+      reprocess_all?: boolean;
+    };
+
+    const limit = Math.min(MAX_LIMIT, Math.max(1, Number(body.limit) || DEFAULT_LIMIT));
+    const offset = Math.max(0, Number(body.offset) || 0);
+    const reprocessAll = body.reprocess_all === true;
+
+    // Contagem total para informar ao cliente se há mais páginas
+    const countQuery = supabaseServiceRole
+      .from('webhook_events')
+      .select('id', { count: 'exact', head: true })
+      .eq('source', SOURCE);
+
+    if (!reprocessAll) {
+      countQuery.is('processed_at', null);
+    }
+    const { count: totalCount } = await countQuery;
 
     const query = supabaseServiceRole
       .from('webhook_events')
       .select('id, raw_payload, created_at')
       .eq('source', SOURCE)
       .order('created_at', { ascending: true })
-      .limit(limit);
+      .range(offset, offset + limit - 1);
 
     if (!reprocessAll) {
       query.is('processed_at', null);
@@ -75,9 +98,16 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    const hasMore = offset + list.length < (totalCount ?? 0);
+
     return successResponse(
       {
+        total_count: totalCount ?? 0,
         total_fetched: list.length,
+        offset,
+        limit,
+        has_more: hasMore,
+        next_offset: hasMore ? offset + list.length : null,
         processed,
         errors: errors.length > 0 ? errors : undefined,
         ...(tokenAlert && { token_alert: true, token_alert_message: tokenAlertMessage }),

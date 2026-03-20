@@ -116,30 +116,34 @@ async function resolveAndStoreMedia(
   const mediaApiUrl = `https://graph.facebook.com/v${version}/${mediaId}`;
   const metaRes = await fetch(mediaApiUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
   if (!metaRes.ok) {
-    await metaRes.text(); // consumir body para não vazar detalhes no log
+    await metaRes.text(); // consumir body
     // 401: token inválido — lança para o caller sinalizar tokenAlert
     if (metaRes.status === 401) {
       throw new Error(`[Zaploto Chat] ${WHATSAPP_OFFICIAL_TOKEN_ERROR_MSG}`);
     }
-    // 403, 404, 5xx: loga e retorna null (mensagem é salva sem mídia, processamento continua)
-    console.warn(`[Zaploto Chat] Meta Media API ${metaRes.status} para mídia ${mediaId}; mensagem será salva sem mídia.`);
+    // 400/404: mídia expirada ou indisponível (comum após 24h) — silencioso
+    // 5xx inesperado: loga como warn
+    if (metaRes.status >= 500) {
+      console.warn(`[Zaploto Chat] Meta Media API ${metaRes.status} para mídia ${mediaId}; salva sem mídia.`);
+    }
     return null;
   }
   let metaJson: { url?: string; mime_type?: string };
   try {
     metaJson = (await metaRes.json()) as { url?: string; mime_type?: string };
   } catch {
-    console.warn('[Zaploto Chat] Meta Media API: resposta inválida para mídia', mediaId);
+    // resposta malformada — raro, sem log de warn para não poluir
     return null;
   }
   const tempUrl = metaJson?.url;
   if (!tempUrl || typeof tempUrl !== 'string') {
-    console.warn('[Zaploto Chat] Meta Media API não retornou url para mídia', mediaId);
-    return null;
+    return null; // sem url — silencioso
   }
   const downloadRes = await fetch(tempUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
   if (!downloadRes.ok) {
-    console.warn(`[Zaploto Chat] Falha ao baixar mídia ${mediaId}: ${downloadRes.status}`);
+    if (downloadRes.status >= 500) {
+      console.warn(`[Zaploto Chat] Falha ao baixar mídia ${mediaId}: ${downloadRes.status}`);
+    }
     return null;
   }
   const buffer = Buffer.from(await downloadRes.arrayBuffer());

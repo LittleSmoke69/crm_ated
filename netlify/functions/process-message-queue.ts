@@ -392,7 +392,10 @@ async function processMessageJob(job: any, workerId: string): Promise<{ success:
       console.log(`${logPrefix} 📷 [REQUEST] URL completa: ${url}`);
       console.log(`${logPrefix} 📷 [REQUEST] Body:`, JSON.stringify(requestBody, null, 2));
     } else {
-      // Texto puro
+      // Texto puro — bloqueia disparo se conteúdo estiver vazio (evita mensagem fantasma)
+      if (!messageContent) {
+        throw new Error('Conteúdo da mensagem está vazio — disparo cancelado para evitar mensagem fantasma');
+      }
       requestType = 'texto';
       url = `${normalizedBaseUrl}/message/sendText/${instance_name}`;
       requestBody = {
@@ -400,18 +403,18 @@ async function processMessageJob(job: any, workerId: string): Promise<{ success:
         text: messageContent,
         ...(isMentionAll && { mentionsEveryOne: true }),
       };
-      
+
       console.log(`${logPrefix} 💬 [REQUEST] Tipo: TEXTO`);
       console.log(`${logPrefix} 💬 [REQUEST] Endpoint: sendText`);
       console.log(`${logPrefix} 💬 [REQUEST] URL completa: ${url}`);
       console.log(`${logPrefix} 💬 [REQUEST] Mensagem:`, {
-        content: messageContent || '(mensagem vazia)',
+        content: messageContent,
         content_length: messageContent.length,
         mention_all: isMentionAll,
       });
       console.log(`${logPrefix} 💬 [REQUEST] Body:`, {
         number: group_id,
-        text: messageContent || '(mensagem vazia)',
+        text: messageContent,
         mentionsEveryone: isMentionAll,
       });
     }

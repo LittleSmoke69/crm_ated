@@ -9,6 +9,10 @@ import { useToast } from '@/hooks/useToast';
 import ToastContainer from '@/components/Toast/ToastContainer';
 import { FlowCanvasWithSelection } from '@/components/Flows/FlowCanvasWithSelection';
 import {
+  WEBHOOK_EVENT_OPTIONS,
+  webhookEventPresetFromStored,
+} from '@/lib/flows/webhook-event-labels';
+import {
   Save,
   X,
   Loader2,
@@ -25,10 +29,21 @@ import {
   Database,
   Trash2,
   Bot,
+  MessageCircle,
   Play,
   RefreshCw,
   GripVertical,
+  ChevronLeft,
+  ChevronRight,
+  PanelLeftClose,
+  PanelLeftOpen,
   Info,
+  Music,
+  Film,
+  Timer,
+  Globe,
+  SplitSquareHorizontal,
+  Upload,
 } from 'lucide-react';
 import { Node, Edge } from 'reactflow';
 
@@ -50,10 +65,10 @@ const NODE_TEMPLATES = {
     type: 'webhookTrigger',
     position: { x: 100, y: 100 },
     data: {
-      label: 'Webhook Event',
+      label: 'Gatilho Webhook',
       config: {
         filters: {
-          event_type: '',
+          event_type: 'MESSAGES_UPSERT',
           instance: null,
           action: null,
         },
@@ -64,7 +79,7 @@ const NODE_TEMPLATES = {
     type: 'switch',
     position: { x: 400, y: 100 },
     data: {
-      label: 'Switch',
+      label: 'Condição',
       config: {
         rules: [
           {
@@ -79,9 +94,42 @@ const NODE_TEMPLATES = {
     type: 'randomPicker',
     position: { x: 700, y: 100 },
     data: {
-      label: 'Random Picker',
+      label: 'Seletor Aleatório',
       config: {
         messages: ['Mensagem 1', 'Mensagem 2'],
+      },
+    },
+  },
+  condition: {
+    type: 'condition',
+    position: { x: 400, y: 200 },
+    data: {
+      label: 'Condição',
+      config: {
+        condition: "{{$json.normalized.action}} equals 'add'",
+      },
+    },
+  },
+  delay: {
+    type: 'delay',
+    position: { x: 700, y: 200 },
+    data: {
+      label: 'Delay',
+      config: {
+        seconds: 3,
+      },
+    },
+  },
+  httpRequest: {
+    type: 'httpRequest',
+    position: { x: 1000, y: 500 },
+    data: {
+      label: 'HTTP Request',
+      config: {
+        url: '',
+        method: 'POST',
+        headers: {},
+        body: '',
       },
     },
   },
@@ -89,12 +137,59 @@ const NODE_TEMPLATES = {
     type: 'sendMessage',
     position: { x: 1000, y: 100 },
     data: {
-      label: 'Send Message',
+      label: 'Enviar mensagem (direto ou grupo)',
       config: {
+        destination_type: 'grupo',
         instance_name: '',
         group_jid: '{{$json.normalized.groupId}}',
-        message: '{{$json.randomPicker.selected}}',
+        number: '',
+        message: '',
         mentioned: '',
+      },
+    },
+  },
+  sendImage: {
+    type: 'sendImage',
+    position: { x: 1000, y: 200 },
+    data: {
+      label: 'Enviar Imagem',
+      config: {
+        destination_type: 'grupo',
+        instance_name: '',
+        group_jid: '{{$json.normalized.groupId}}',
+        number: '',
+        image_url: '',
+        caption: '',
+      },
+    },
+  },
+  sendAudio: {
+    type: 'sendAudio',
+    position: { x: 1000, y: 300 },
+    data: {
+      label: 'Enviar Áudio',
+      config: {
+        destination_type: 'grupo',
+        instance_name: '',
+        group_jid: '{{$json.normalized.groupId}}',
+        number: '',
+        audio_url: '',
+        ptt: true,
+      },
+    },
+  },
+  sendVideo: {
+    type: 'sendVideo',
+    position: { x: 1000, y: 400 },
+    data: {
+      label: 'Enviar Vídeo',
+      config: {
+        destination_type: 'grupo',
+        instance_name: '',
+        group_jid: '{{$json.normalized.groupId}}',
+        number: '',
+        video_url: '',
+        caption: '',
       },
     },
   },
@@ -102,7 +197,7 @@ const NODE_TEMPLATES = {
     type: 'generateImage',
     position: { x: 100, y: 300 },
     data: {
-      label: 'Generate Image',
+      label: 'Gerar Imagem',
       config: {
         prompt: '',
         aspectRatio: '1:1',
@@ -114,7 +209,7 @@ const NODE_TEMPLATES = {
     type: 'generateVideo',
     position: { x: 400, y: 300 },
     data: {
-      label: 'Generate Video',
+      label: 'Gerar Vídeo',
       config: {
         prompt: '',
         aspectRatio: '16:9',
@@ -126,7 +221,7 @@ const NODE_TEMPLATES = {
     type: 'waitVideo',
     position: { x: 700, y: 300 },
     data: {
-      label: 'Wait Video',
+      label: 'Aguardar Vídeo',
       config: {
         job_id: '{{$json.generateVideo.job_id}}',
         maxWaitSeconds: 300,
@@ -138,7 +233,7 @@ const NODE_TEMPLATES = {
     type: 'saveToDataset',
     position: { x: 1000, y: 300 },
     data: {
-      label: 'Save to Dataset',
+      label: 'Salvar em Dataset',
       config: {
         asset_id: '{{$json.generateImage.asset_id}}',
         title: '',
@@ -148,11 +243,27 @@ const NODE_TEMPLATES = {
       },
     },
   },
+  pergunta: {
+    type: 'pergunta',
+    position: { x: 500, y: 420 },
+    data: {
+      label: 'Pergunta',
+      config: {
+        question_text: 'Quais modalidades de Loterias você joga?',
+        delay_seconds: 0,
+        limit_value: 5,
+        unit: 'seconds',
+        instance_name: '',
+        group_jid: '{{$json.normalized.groupId}}',
+        mentioned: '',
+      },
+    },
+  },
   agentIA: {
     type: 'agentIA',
     position: { x: 400, y: 500 },
     data: {
-      label: 'Agent IA',
+      label: 'Agente IA',
       config: {
         system_prompt: '',
         persona_tone: 'gentil',
@@ -195,8 +306,38 @@ function FlowEditorPageContent() {
   const [completedNodes, setCompletedNodes] = useState<Set<string>>(new Set());
   const [failedNodes, setFailedNodes] = useState<Set<string>>(new Set());
   const [testing, setTesting] = useState(false);
+  const [nodesPanelCollapsed, setNodesPanelCollapsed] = useState(false);
+  const [configPanelWidth, setConfigPanelWidth] = useState(320);
+  const [isResizingConfig, setIsResizingConfig] = useState(false);
+  const configResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
 
   const isNew = flowId === 'new';
+
+  // Resize do painel de config do nó
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!isResizingConfig || !configResizeRef.current) return;
+      const delta = configResizeRef.current.startX - e.clientX;
+      const next = configResizeRef.current.startWidth + delta;
+      setConfigPanelWidth(Math.max(280, Math.min(window.innerWidth * 0.6, next)));
+    };
+    const onUp = () => {
+      setIsResizingConfig(false);
+      configResizeRef.current = null;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    if (isResizingConfig) {
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    }
+    return () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+  }, [isResizingConfig]);
 
   // Apenas SuperAdmin pode acessar Flows
   useEffect(() => {
@@ -389,87 +530,115 @@ function FlowEditorPageContent() {
     );
   }
 
+  // Status badge color
+  const statusConfig = {
+    active:   { label: 'Ativo',     cls: 'bg-green-500/20 text-green-400 border-green-500/30' },
+    inactive: { label: 'Inativo',   cls: 'bg-gray-500/20 text-gray-400 border-gray-500/30' },
+    draft:    { label: 'Rascunho',  cls: 'bg-amber-500/20 text-amber-400 border-amber-500/30' },
+  };
+  const currentStatus = statusConfig[(flow?.status as keyof typeof statusConfig) || 'draft'];
+
   return (
     <Layout onSignOut={handleSignOut}>
-      {/* Toast Container */}
       <ToastContainer toasts={toasts} onClose={removeToast} />
-      
-      <div className="h-screen flex flex-col">
-        {/* Header - Compacto */}
-        <div className="px-6 py-4 border-b border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a]">
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex-1 min-w-0">
-              <input
-                type="text"
-                value={flow?.name || ''}
-                onChange={(e) => setFlow({ ...flow!, name: e.target.value })}
-                placeholder="Nome do Flow"
-                className="text-xl font-bold text-gray-900 dark:text-gray-100 bg-transparent border-none outline-none w-full"
-              />
-              <input
-                type="text"
-                value={flow?.description || ''}
-                onChange={(e) => setFlow({ ...flow!, description: e.target.value })}
-                placeholder="Descrição (opcional)"
-                className="text-sm text-gray-600 dark:text-gray-400 bg-transparent border-none outline-none w-full mt-0.5"
-              />
-            </div>
-            <div className="flex items-center gap-3 flex-shrink-0">
-              <select
-                value={flow?.status || 'draft'}
-                onChange={(e) => setFlow({ ...flow!, status: e.target.value as any })}
-                className="px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
-              >
-                <option value="draft">Rascunho</option>
-                <option value="inactive">Inativo</option>
-                <option value="active">Ativo</option>
-              </select>
-              <button
-                onClick={handleSave}
-                disabled={saving}
-                className="flex items-center gap-2 px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7CC845] transition font-medium disabled:opacity-50"
-              >
-                {saving ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Salvando...
-                  </>
-                ) : (
-                  <>
-                    <Save className="w-4 h-4" />
-                    Salvar
-                  </>
-                )}
-              </button>
-              <button
-                onClick={() => setShowTestPanel(!showTestPanel)}
-                className="px-4 py-2 bg-purple-100 dark:bg-purple-900/40 hover:bg-purple-200 dark:hover:bg-purple-900/60 text-purple-700 dark:text-purple-300 rounded-lg text-sm font-medium transition flex items-center gap-2"
-              >
-                <Play className="w-4 h-4" />
-                Testar Flow
-              </button>
-              <button
-                onClick={() => router.push(`/admin/flows/${flowId}/executions`)}
-                className="px-4 py-2 bg-blue-100 dark:bg-blue-900/40 hover:bg-blue-200 dark:hover:bg-blue-900/60 text-blue-700 dark:text-blue-300 rounded-lg text-sm font-medium transition"
-              >
-                Ver Execuções
-              </button>
-              <button
-                onClick={() => router.push('/admin/flows')}
-                className="p-2 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+
+      {/* Flow Editor — tela cheia */}
+      <div className="flex flex-col h-full bg-[#0d0d0d] overflow-hidden">
+
+        {/* ── TOP BAR ── */}
+        <div className="h-12 flex items-center gap-3 px-3 border-b border-[#222] bg-[#111] flex-shrink-0 z-20">
+          {/* Voltar */}
+          <button
+            onClick={() => router.push('/admin/flows')}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-gray-400 hover:text-gray-200 hover:bg-white/5 transition text-sm"
+          >
+            <X className="w-4 h-4" />
+          </button>
+          <div className="w-px h-5 bg-[#333]" />
+
+          {/* Nome */}
+          <input
+            type="text"
+            value={flow?.name || ''}
+            onChange={(e) => setFlow({ ...flow!, name: e.target.value })}
+            placeholder="Nome do Flow"
+            className="text-sm font-semibold text-gray-100 bg-transparent border-none outline-none placeholder:text-gray-600 min-w-0 max-w-[220px]"
+          />
+
+          {/* Status pill */}
+          <div className="relative">
+            <select
+              value={flow?.status || 'draft'}
+              onChange={(e) => setFlow({ ...flow!, status: e.target.value as any })}
+              className={`appearance-none text-xs font-medium px-2.5 py-1 rounded-full border cursor-pointer bg-transparent focus:outline-none ${currentStatus.cls}`}
+            >
+              <option value="draft">Rascunho</option>
+              <option value="inactive">Inativo</option>
+              <option value="active">Ativo</option>
+            </select>
           </div>
+
+          {/* Spacer */}
+          <div className="flex-1" />
+
+          {/* Executing banner */}
+          {testing && (
+            <div className="flex items-center gap-2 px-3 py-1 bg-green-500/20 border border-green-500/30 rounded-full text-green-400 text-xs font-medium animate-pulse">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              Executando...
+            </div>
+          )}
+
+          {/* Action buttons */}
+          <button
+            onClick={() => setShowTestPanel(!showTestPanel)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition ${showTestPanel ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'}`}
+          >
+            <Play className="w-3.5 h-3.5" />
+            Testar
+          </button>
+          <button
+            onClick={() => router.push(`/admin/flows/${flowId}/executions`)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium text-gray-400 hover:text-gray-200 hover:bg-white/5 transition"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            Execuções
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-[#8CD955] hover:bg-[#7CC845] text-black rounded-md text-xs font-semibold transition disabled:opacity-50"
+          >
+            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+            {saving ? 'Salvando...' : 'Salvar'}
+          </button>
         </div>
 
-        {/* Canvas e Sidebar */}
+        {/* ── BODY: sidebar + canvas + panels ── */}
         <div className="flex-1 flex overflow-hidden">
-          {/* Sidebar de Nodes */}
-          <div className="w-64 bg-gray-50 dark:bg-[#1f1f1f] border-r border-gray-200 dark:border-[#404040] p-5 overflow-y-auto flex-shrink-0">
-            <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-5 text-sm uppercase tracking-wide">Adicionar Node</h3>
-            <div className="space-y-2.5">
+
+          {/* ── LEFT SIDEBAR ── */}
+          <div className={`bg-[#111] border-r border-[#222] flex flex-col overflow-hidden flex-shrink-0 select-none transition-all duration-200 ${nodesPanelCollapsed ? 'w-10' : 'w-52'}`}>
+            {/* Collapse toggle */}
+            <div className={`h-10 flex items-center border-b border-[#222] flex-shrink-0 ${nodesPanelCollapsed ? 'justify-center' : 'justify-between px-3'}`}>
+              {!nodesPanelCollapsed && (
+                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Nodes</span>
+              )}
+              <button
+                onClick={() => setNodesPanelCollapsed(!nodesPanelCollapsed)}
+                className="p-1 text-gray-500 hover:text-gray-300 hover:bg-white/5 rounded transition"
+                title={nodesPanelCollapsed ? 'Expandir painel' : 'Recolher painel'}
+              >
+                {nodesPanelCollapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
+              </button>
+            </div>
+            {/* Scroll area */}
+            <div className={`flex-1 overflow-y-auto px-2 py-3 space-y-1 ${nodesPanelCollapsed ? 'hidden' : ''}`}>
+            <p className="text-[10px] font-bold text-gray-600 uppercase tracking-widest px-1 mb-2">Nodes</p>
+
+            {/* Seção: Gatilhos */}
+            <p className="text-[9px] text-gray-600 uppercase tracking-widest px-1 pt-1 pb-1">Gatilhos</p>
+            <div className="space-y-0.5 mb-2">
               <div
                 draggable
                 onDragStart={(e) => {
@@ -477,15 +646,19 @@ function FlowEditorPageContent() {
                   e.dataTransfer.effectAllowed = 'move';
                 }}
                 onClick={() => handleAddNode('webhookTrigger')}
-                className="w-full flex items-center gap-3 p-3.5 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-lg hover:bg-gray-50 dark:hover:bg-[#333] hover:border-gray-300 dark:hover:border-[#555] transition text-left cursor-grab active:cursor-grabbing"
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md bg-transparent hover:bg-white/5 border border-transparent hover:border-[#333] transition text-left cursor-grab active:cursor-grabbing group"
               >
-                <Workflow className="w-5 h-5 text-blue-600" />
+                <Workflow className="w-4 h-4 text-blue-500 shrink-0" />
                 <div>
-                  <div className="font-medium text-sm text-gray-900 dark:text-gray-100">Webhook Trigger</div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400">Gatilho de evento</div>
+                  <div className="font-medium text-xs text-gray-300 group-hover:text-gray-100 transition">Gatilho Webhook</div>
+                  <div className="text-[10px] text-gray-600 group-hover:text-gray-500 transition">Escolha o evento (ex.: mensagens)</div>
                 </div>
               </div>
+            </div>
 
+            {/* Seção: Lógica */}
+            <p className="text-[9px] text-gray-600 uppercase tracking-widest px-1 pt-3 pb-1">Lógica</p>
+            <div className="space-y-0.5 mb-2">
               <div
                 draggable
                 onDragStart={(e) => {
@@ -493,12 +666,28 @@ function FlowEditorPageContent() {
                   e.dataTransfer.effectAllowed = 'move';
                 }}
                 onClick={() => handleAddNode('switch')}
-                className="w-full flex items-center gap-3 p-3.5 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-lg hover:bg-gray-50 dark:hover:bg-[#333] hover:border-gray-300 dark:hover:border-[#555] transition text-left cursor-grab active:cursor-grabbing"
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md bg-transparent hover:bg-white/5 border border-transparent hover:border-[#333] transition text-left cursor-grab active:cursor-grabbing group"
               >
-                <GitBranch className="w-5 h-5 text-purple-600" />
+                <GitBranch className="w-4 h-4 text-purple-500 shrink-0" />
                 <div>
-                  <div className="font-medium text-sm text-gray-900 dark:text-gray-100">Switch</div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400">Condição/Ramificação</div>
+                  <div className="font-medium text-xs text-gray-300 group-hover:text-gray-100 transition">Condição (Switch)</div>
+                  <div className="text-[10px] text-gray-600 group-hover:text-gray-500 transition">Multi-condição / ramificação</div>
+                </div>
+              </div>
+
+              <div
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData('application/reactflow', 'condition');
+                  e.dataTransfer.effectAllowed = 'move';
+                }}
+                onClick={() => handleAddNode('condition')}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md bg-transparent hover:bg-white/5 border border-transparent hover:border-[#333] transition text-left cursor-grab active:cursor-grabbing group"
+              >
+                <SplitSquareHorizontal className="w-4 h-4 text-purple-400 shrink-0" />
+                <div>
+                  <div className="font-medium text-xs text-gray-300 group-hover:text-gray-100 transition">Condição</div>
+                  <div className="text-[10px] text-gray-600 group-hover:text-gray-500 transition">Verdadeiro / Falso</div>
                 </div>
               </div>
 
@@ -509,14 +698,51 @@ function FlowEditorPageContent() {
                   e.dataTransfer.effectAllowed = 'move';
                 }}
                 onClick={() => handleAddNode('randomPicker')}
-                className="w-full flex items-center gap-3 p-3.5 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-lg hover:bg-gray-50 dark:hover:bg-[#333] hover:border-gray-300 dark:hover:border-[#555] transition text-left cursor-grab active:cursor-grabbing"
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md bg-transparent hover:bg-white/5 border border-transparent hover:border-[#333] transition text-left cursor-grab active:cursor-grabbing group"
               >
-                <Shuffle className="w-5 h-5 text-orange-600" />
+                <Shuffle className="w-4 h-4 text-orange-500 shrink-0" />
                 <div>
-                  <div className="font-medium text-sm text-gray-900 dark:text-gray-100">Random Picker</div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400">Escolhe mensagem aleatória</div>
+                  <div className="font-medium text-xs text-gray-300 group-hover:text-gray-100 transition">Seletor Aleatório</div>
+                  <div className="text-[10px] text-gray-600 group-hover:text-gray-500 transition">Escolhe mensagem aleatória</div>
                 </div>
               </div>
+
+              <div
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData('application/reactflow', 'delay');
+                  e.dataTransfer.effectAllowed = 'move';
+                }}
+                onClick={() => handleAddNode('delay')}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md bg-transparent hover:bg-white/5 border border-transparent hover:border-[#333] transition text-left cursor-grab active:cursor-grabbing group"
+              >
+                <Timer className="w-4 h-4 text-gray-500 shrink-0" />
+                <div>
+                  <div className="font-medium text-xs text-gray-300 group-hover:text-gray-100 transition">Atraso (Delay)</div>
+                  <div className="text-[10px] text-gray-600 group-hover:text-gray-500 transition">Pausa N segundos</div>
+                </div>
+              </div>
+
+              <div
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData('application/reactflow', 'httpRequest');
+                  e.dataTransfer.effectAllowed = 'move';
+                }}
+                onClick={() => handleAddNode('httpRequest')}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md bg-transparent hover:bg-white/5 border border-transparent hover:border-[#333] transition text-left cursor-grab active:cursor-grabbing group"
+              >
+                <Globe className="w-4 h-4 text-cyan-500 shrink-0" />
+                <div>
+                  <div className="font-medium text-xs text-gray-300 group-hover:text-gray-100 transition">Requisição HTTP</div>
+                  <div className="text-[10px] text-gray-600 group-hover:text-gray-500 transition">Chama API externa</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Seção: Mensagens */}
+            <p className="text-[9px] text-gray-600 uppercase tracking-widest px-1 pt-3 pb-1">Mensagens</p>
+            <div className="space-y-0.5 mb-2">
 
               <div
                 draggable
@@ -525,19 +751,87 @@ function FlowEditorPageContent() {
                   e.dataTransfer.effectAllowed = 'move';
                 }}
                 onClick={() => handleAddNode('sendMessage')}
-                className="w-full flex items-center gap-3 p-3.5 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-lg hover:bg-gray-50 dark:hover:bg-[#333] hover:border-gray-300 dark:hover:border-[#555] transition text-left cursor-grab active:cursor-grabbing"
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md bg-transparent hover:bg-white/5 border border-transparent hover:border-[#333] transition text-left cursor-grab active:cursor-grabbing group"
               >
-                <Send className="w-5 h-5 text-green-600" />
+                <Send className="w-4 h-4 text-green-500 shrink-0" />
                 <div>
-                  <div className="font-medium text-sm text-gray-900 dark:text-gray-100">Send Message</div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400">Envia mensagem</div>
+                  <div className="font-medium text-xs text-gray-300 group-hover:text-gray-100 transition">Enviar mensagem</div>
+                  <div className="text-[10px] text-gray-600 group-hover:text-gray-500 transition">Direto ou grupo (WhatsApp)</div>
+                </div>
+              </div>
+
+              <div
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData('application/reactflow', 'sendImage');
+                  e.dataTransfer.effectAllowed = 'move';
+                }}
+                onClick={() => handleAddNode('sendImage')}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md bg-transparent hover:bg-white/5 border border-transparent hover:border-[#333] transition text-left cursor-grab active:cursor-grabbing group"
+              >
+                <Image className="w-4 h-4 text-violet-500 shrink-0" />
+                <div>
+                  <div className="font-medium text-xs text-gray-300 group-hover:text-gray-100 transition">Enviar Imagem</div>
+                  <div className="text-[10px] text-gray-600 group-hover:text-gray-500 transition">Envia imagem via URL</div>
+                </div>
+              </div>
+
+              <div
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData('application/reactflow', 'sendAudio');
+                  e.dataTransfer.effectAllowed = 'move';
+                }}
+                onClick={() => handleAddNode('sendAudio')}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md bg-transparent hover:bg-white/5 border border-transparent hover:border-[#333] transition text-left cursor-grab active:cursor-grabbing group"
+              >
+                <Music className="w-4 h-4 text-amber-500 shrink-0" />
+                <div>
+                  <div className="font-medium text-xs text-gray-300 group-hover:text-gray-100 transition">Enviar Áudio</div>
+                  <div className="text-[10px] text-gray-600 group-hover:text-gray-500 transition">Envia áudio / PTT</div>
+                </div>
+              </div>
+
+              <div
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData('application/reactflow', 'sendVideo');
+                  e.dataTransfer.effectAllowed = 'move';
+                }}
+                onClick={() => handleAddNode('sendVideo')}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md bg-transparent hover:bg-white/5 border border-transparent hover:border-[#333] transition text-left cursor-grab active:cursor-grabbing group"
+              >
+                <Film className="w-4 h-4 text-rose-500 shrink-0" />
+                <div>
+                  <div className="font-medium text-xs text-gray-300 group-hover:text-gray-100 transition">Enviar Vídeo</div>
+                  <div className="text-[10px] text-gray-600 group-hover:text-gray-500 transition">Envia vídeo via URL</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Seção: Interação (pergunta com timeout) */}
+            <p className="text-[9px] text-gray-600 uppercase tracking-widest px-1 pt-3 pb-1">Interação</p>
+            <div className="space-y-0.5 mb-2">
+              <div
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData('application/reactflow', 'pergunta');
+                  e.dataTransfer.effectAllowed = 'move';
+                }}
+                onClick={() => handleAddNode('pergunta')}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md bg-transparent hover:bg-white/5 border border-transparent hover:border-[#333] transition text-left cursor-grab active:cursor-grabbing group"
+              >
+                <MessageCircle className="w-4 h-4 text-fuchsia-500 shrink-0" />
+                <div>
+                  <div className="font-medium text-xs text-gray-300 group-hover:text-gray-100 transition">Pergunta</div>
+                  <div className="text-[10px] text-gray-600 group-hover:text-gray-500 transition">Envia pergunta e aguarda resposta ou tempo esgotado</div>
                 </div>
               </div>
             </div>
 
             {/* Seção: Integração IA */}
-            <div className="mt-8 pt-6 border-t border-gray-300 dark:border-[#404040]">
-              <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-5 text-sm uppercase tracking-wide">Integração IA</h3>
+            <div>
+              <p className="text-[9px] text-gray-600 uppercase tracking-widest px-1 pt-3 pb-1">Integração IA</p>
               <div className="space-y-2.5">
                 <div
                   draggable
@@ -546,12 +840,12 @@ function FlowEditorPageContent() {
                     e.dataTransfer.effectAllowed = 'move';
                   }}
                   onClick={() => handleAddNode('generateImage')}
-                  className="w-full flex items-center gap-3 p-3.5 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-lg hover:bg-gray-50 dark:hover:bg-[#333] hover:border-gray-300 dark:hover:border-[#555] transition text-left cursor-grab active:cursor-grabbing"
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md bg-transparent hover:bg-white/5 border border-transparent hover:border-[#333] transition text-left cursor-grab active:cursor-grabbing group"
                 >
                   <Image className="w-5 h-5 text-pink-600" />
                   <div>
-                  <div className="font-medium text-sm text-gray-900 dark:text-gray-100">Generate Image</div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400">Gera imagem (Imagen)</div>
+                  <div className="font-medium text-xs text-gray-300 group-hover:text-gray-100 transition">Gerar Imagem</div>
+                  <div className="text-[10px] text-gray-600 group-hover:text-gray-500 transition">Gera imagem (Imagen)</div>
                   </div>
                 </div>
 
@@ -562,12 +856,12 @@ function FlowEditorPageContent() {
                     e.dataTransfer.effectAllowed = 'move';
                   }}
                   onClick={() => handleAddNode('generateVideo')}
-                  className="w-full flex items-center gap-3 p-3.5 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-lg hover:bg-gray-50 dark:hover:bg-[#333] hover:border-gray-300 dark:hover:border-[#555] transition text-left cursor-grab active:cursor-grabbing"
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md bg-transparent hover:bg-white/5 border border-transparent hover:border-[#333] transition text-left cursor-grab active:cursor-grabbing group"
                 >
                   <Video className="w-5 h-5 text-indigo-600" />
                   <div>
-                  <div className="font-medium text-sm text-gray-900 dark:text-gray-100">Generate Video</div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400">Gera vídeo (Veo)</div>
+                  <div className="font-medium text-xs text-gray-300 group-hover:text-gray-100 transition">Gerar Vídeo</div>
+                  <div className="text-[10px] text-gray-600 group-hover:text-gray-500 transition">Gera vídeo (Veo)</div>
                   </div>
                 </div>
 
@@ -578,12 +872,12 @@ function FlowEditorPageContent() {
                     e.dataTransfer.effectAllowed = 'move';
                   }}
                   onClick={() => handleAddNode('waitVideo')}
-                  className="w-full flex items-center gap-3 p-3.5 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-lg hover:bg-gray-50 dark:hover:bg-[#333] hover:border-gray-300 dark:hover:border-[#555] transition text-left cursor-grab active:cursor-grabbing"
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md bg-transparent hover:bg-white/5 border border-transparent hover:border-[#333] transition text-left cursor-grab active:cursor-grabbing group"
                 >
                   <Clock className="w-5 h-5 text-yellow-600" />
                   <div>
-                  <div className="font-medium text-sm text-gray-900 dark:text-gray-100">Wait Video</div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400">Aguarda conclusão do vídeo</div>
+                  <div className="font-medium text-xs text-gray-300 group-hover:text-gray-100 transition">Aguardar Vídeo</div>
+                  <div className="text-[10px] text-gray-600 group-hover:text-gray-500 transition">Aguarda conclusão do vídeo</div>
                   </div>
                 </div>
 
@@ -594,12 +888,12 @@ function FlowEditorPageContent() {
                     e.dataTransfer.effectAllowed = 'move';
                   }}
                   onClick={() => handleAddNode('saveToDataset')}
-                  className="w-full flex items-center gap-3 p-3.5 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-lg hover:bg-gray-50 dark:hover:bg-[#333] hover:border-gray-300 dark:hover:border-[#555] transition text-left cursor-grab active:cursor-grabbing"
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md bg-transparent hover:bg-white/5 border border-transparent hover:border-[#333] transition text-left cursor-grab active:cursor-grabbing group"
                 >
                   <Database className="w-5 h-5 text-teal-600" />
                   <div>
-                  <div className="font-medium text-sm text-gray-900 dark:text-gray-100">Save to Dataset</div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400">Salva no dataset</div>
+                  <div className="font-medium text-xs text-gray-300 group-hover:text-gray-100 transition">Salvar em Dataset</div>
+                  <div className="text-[10px] text-gray-600 group-hover:text-gray-500 transition">Salva no dataset</div>
                   </div>
                 </div>
 
@@ -610,26 +904,21 @@ function FlowEditorPageContent() {
                     e.dataTransfer.effectAllowed = 'move';
                   }}
                   onClick={() => handleAddNode('agentIA')}
-                  className="w-full flex items-center gap-3 p-3.5 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-lg hover:bg-gray-50 dark:hover:bg-[#333] hover:border-gray-300 dark:hover:border-[#555] transition text-left cursor-grab active:cursor-grabbing"
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md bg-transparent hover:bg-white/5 border border-transparent hover:border-[#333] transition text-left cursor-grab active:cursor-grabbing group"
                 >
                   <Bot className="w-5 h-5 text-cyan-600" />
                   <div>
-                  <div className="font-medium text-sm text-gray-900 dark:text-gray-100">Agent IA</div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400">Agente IA com anti-spam</div>
+                  <div className="font-medium text-xs text-gray-300 group-hover:text-gray-100 transition">Agente IA</div>
+                  <div className="text-[10px] text-gray-600 group-hover:text-gray-500 transition">Agente IA com anti-spam</div>
                   </div>
                 </div>
               </div>
             </div>
-          </div>
+            </div>{/* end scroll area */}
+          </div>{/* end sidebar */}
 
-          {/* Canvas */}
-          <div className="flex-1 bg-gray-100 dark:bg-[#1a1a1a] relative">
-            {testing && (
-              <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 animate-pulse">
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span className="font-medium">Executando teste...</span>
-              </div>
-            )}
+          {/* ── CANVAS ── */}
+          <div className="flex-1 relative overflow-hidden">
             <FlowCanvasWithSelection
               initialNodes={nodes}
               initialEdges={edges}
@@ -644,40 +933,65 @@ function FlowEditorPageContent() {
             />
           </div>
 
-          {/* Painel de Configuração do Node */}
+          {/* ── CONFIG PANEL (overlay) ── */}
           {selectedNodeId && (() => {
             const selectedNode = nodes.find(n => n.id === selectedNodeId);
             if (!selectedNode) return null;
             return (
-              <div className="w-80 bg-white dark:bg-[#2a2a2a] border-l border-gray-200 dark:border-[#404040] p-5 overflow-y-auto flex-shrink-0">
-                <div className="flex items-center justify-between mb-5">
-                  <h3 className="font-semibold text-gray-900 dark:text-gray-100">Configurar Node</h3>
-                  <div className="flex items-center gap-2">
+              <div
+                className="bg-[#111] border-l border-[#222] flex flex-col overflow-hidden flex-shrink-0 relative"
+                style={{ width: `${configPanelWidth}px` }}
+              >
+                {/* Handle de resize */}
+                <div
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    configResizeRef.current = { startX: e.clientX, startWidth: configPanelWidth };
+                    setIsResizingConfig(true);
+                  }}
+                  className="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize z-10 group hover:bg-[#8CD955]/40 bg-transparent transition-colors"
+                  style={{ marginLeft: '-1px' }}
+                >
+                  <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <GripVertical className="w-4 h-4 text-gray-500" />
+                  </div>
+                </div>
+                {/* Panel header */}
+                <div className="h-10 flex items-center justify-between px-4 border-b border-[#222] flex-shrink-0">
+                  <span className="text-xs font-semibold text-gray-300 uppercase tracking-wide truncate">
+                    {selectedNode.data?.label || selectedNode.type}
+                  </span>
+                  <div className="flex items-center gap-1 shrink-0">
                     <button
                       onClick={() => handleDeleteNode(selectedNode.id)}
-                      className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition"
+                      className="p-1.5 text-red-500/60 hover:text-red-400 hover:bg-red-500/10 rounded transition"
                       title="Deletar node"
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Trash2 className="w-3.5 h-3.5" />
                     </button>
                     <button
                       onClick={() => setSelectedNodeId(null)}
-                      className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
+                      className="p-1.5 text-gray-600 hover:text-gray-300 hover:bg-white/5 rounded transition"
                       title="Fechar"
                     >
-                      <X className="w-4 h-4" />
+                      <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 </div>
-                <NodeConfigPanel
-                  node={selectedNode}
-                  onUpdate={(config) => handleUpdateNodeConfig(selectedNode.id, config)}
-                />
+                {/* Panel body */}
+                <div className="flex-1 overflow-y-auto p-4">
+                  <NodeConfigPanel
+                    node={selectedNode}
+                    flowId={flowId}
+                    userId={userId}
+                    onUpdate={(config) => handleUpdateNodeConfig(selectedNode.id, config)}
+                  />
+                </div>
               </div>
             );
           })()}
 
-          {/* Painel de Teste */}
+          {/* ── TEST PANEL (overlay) ── */}
           {showTestPanel && (
             <TestPanel
               flowId={flowId}
@@ -688,7 +1002,6 @@ function FlowEditorPageContent() {
                 setCompletedNodes(new Set());
                 setFailedNodes(new Set());
                 setTesting(false);
-                // Remove eventId da URL ao fechar
                 const url = new URL(window.location.href);
                 url.searchParams.delete('eventId');
                 router.replace(url.pathname + url.search);
@@ -702,8 +1015,8 @@ function FlowEditorPageContent() {
               initialEventId={searchParams?.get('eventId') || null}
             />
           )}
-        </div>
-      </div>
+        </div>{/* end body */}
+      </div>{/* end flow editor */}
     </Layout>
   );
 }
@@ -1391,6 +1704,11 @@ const VARIABLES_SENDMESSAGE = [
   { value: '{{$json.randomPicker.selected}}', label: 'Mensagem do Random Picker' },
 ];
 
+const VARIABLES_PERGUNTA = [
+  ...VARIABLES_SENDMESSAGE,
+  { value: '{{$question.reply}}', label: 'Resposta do usuário (após este nó)' },
+];
+
 function insertVariableAtCursor(
   el: HTMLInputElement | HTMLTextAreaElement,
   variable: string
@@ -1674,33 +1992,317 @@ const VariableChip: React.FC<{
   </span>
 );
 
+/** Seletor Grupo / Conversa direta para nós de envio (mensagem, imagem, áudio, vídeo). */
+const DestinoSelector: React.FC<{
+  nodeId: string;
+  value: 'grupo' | 'direto';
+  config: { group_jid?: string; number?: string };
+  onUpdate: (cfg: any) => void;
+  onDragOver?: (e: React.DragEvent) => void;
+  onDrop?: (e: React.DragEvent, field: 'group_jid' | 'number') => void;
+}> = ({ nodeId, value, config, onUpdate, onDragOver, onDrop }) => {
+  const handleDragOver = onDragOver ?? (() => {});
+  const handleDrop = onDrop ?? (() => {});
+  return (
+    <>
+      <div>
+        <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Destino do envio *</label>
+        <div className="flex flex-col gap-2">
+          <label className="flex items-start gap-3 cursor-pointer rounded-lg border border-gray-200 dark:border-[#444] px-3 py-2.5 has-[:checked]:border-[#8CD955] has-[:checked]:bg-[#8CD955]/10 dark:has-[:checked]:bg-[#8CD955]/15">
+            <input
+              type="radio"
+              name={`destino-${nodeId}`}
+              checked={value === 'grupo'}
+              onChange={() => onUpdate({ destination_type: 'grupo' })}
+              className="mt-1 text-[#8CD955] focus:ring-[#8CD955]"
+            />
+            <div>
+              <span className="text-sm font-medium text-gray-900 dark:text-gray-100">Grupo</span>
+              <p className="text-[10px] text-gray-500 dark:text-gray-400 leading-snug">Envia no grupo (JID). Ex: {'{{$json.normalized.groupId}}'}</p>
+            </div>
+          </label>
+          <label className="flex items-start gap-3 cursor-pointer rounded-lg border border-gray-200 dark:border-[#444] px-3 py-2.5 has-[:checked]:border-[#8CD955] has-[:checked]:bg-[#8CD955]/10 dark:has-[:checked]:bg-[#8CD955]/15">
+            <input
+              type="radio"
+              name={`destino-${nodeId}`}
+              checked={value === 'direto'}
+              onChange={() => onUpdate({ destination_type: 'direto' })}
+              className="mt-1 text-[#8CD955] focus:ring-[#8CD955]"
+            />
+            <div>
+              <span className="text-sm font-medium text-gray-900 dark:text-gray-100">Conversa direta</span>
+              <p className="text-[10px] text-gray-500 dark:text-gray-400 leading-snug">Envia só para o contato (número ou JID). Ex: {'{{$json.normalized.phoneNumber}}'}</p>
+            </div>
+          </label>
+        </div>
+      </div>
+      {value === 'grupo' ? (
+        <div>
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Grupo (JID) *</label>
+          <input
+            type="text"
+            value={config.group_jid || ''}
+            onChange={(e) => onUpdate({ group_jid: e.target.value })}
+            onDragOver={handleDragOver}
+            onDrop={(e) => handleDrop(e, 'group_jid')}
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm font-mono text-xs text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] focus:ring-2 focus:ring-blue-400 focus:border-blue-400"
+            placeholder="{{$json.normalized.groupId}}"
+          />
+          {config.group_jid && (
+            <div className="mt-2 px-3.5 py-2 border border-gray-200 dark:border-[#404040] rounded-lg text-sm bg-gray-50 dark:bg-[#1f1f1f]">
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Prévia:</p>
+              <div className="text-gray-900 dark:text-gray-200"><TextWithVariables text={config.group_jid} /></div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div>
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Número ou JID do contato *</label>
+          <input
+            type="text"
+            value={config.number || ''}
+            onChange={(e) => onUpdate({ number: e.target.value })}
+            onDragOver={handleDragOver}
+            onDrop={(e) => handleDrop(e, 'number')}
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm font-mono text-xs text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] focus:ring-2 focus:ring-blue-400 focus:border-blue-400"
+            placeholder="{{$json.normalized.phoneNumber}}"
+          />
+          <p className="mt-1 text-[10px] text-gray-500 dark:text-gray-400">DDD + número ou JID. Variáveis aceitas.</p>
+          {config.number && (
+            <div className="mt-2 px-3.5 py-2 border border-gray-200 dark:border-[#404040] rounded-lg text-sm bg-gray-50 dark:bg-[#1f1f1f]">
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Prévia:</p>
+              <div className="text-gray-900 dark:text-gray-200"><TextWithVariables text={config.number} /></div>
+            </div>
+          )}
+        </div>
+      )}
+    </>
+  );
+};
+
+/** Campo de upload de mídia + input de URL (como em criar mensagem para disparo) */
+const MediaUploadField: React.FC<{
+  flowId: string;
+  userId: string | null;
+  mediaType: 'image' | 'audio' | 'video';
+  value: string;
+  onChange: (url: string) => void;
+  acceptHint: string;
+  label: string;
+}> = ({ flowId, userId, mediaType, value, onChange, acceptHint, label }) => {
+  const { showToast } = useToast();
+  const [uploading, setUploading] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (value && (value.startsWith('http') || value.startsWith('blob:'))) {
+      setPreviewUrl(value);
+    } else {
+      setPreviewUrl(null);
+    }
+    return () => {
+      if (previewUrl && previewUrl.startsWith('blob:')) URL.revokeObjectURL(previewUrl);
+    };
+  }, [value]);
+
+  const handleFile = async (file: File) => {
+    if (!userId || !flowId || flowId === 'new') {
+      showToast('Salve o flow antes de enviar arquivos', 'error');
+      return;
+    }
+    const mime = file.type;
+    const valid = mediaType === 'image' ? mime.startsWith('image/') : mediaType === 'video' ? mime.startsWith('video/') : mime.startsWith('audio/');
+    if (!valid) {
+      showToast(`Formato não suportado para ${mediaType}. Use os formatos indicados.`, 'error');
+      return;
+    }
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.set('file', file);
+      fd.set('type', mediaType);
+      const res = await fetch(`/api/admin/flows/${flowId}/upload-media`, {
+        method: 'POST',
+        headers: { 'X-User-Id': userId },
+        body: fd,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Erro no upload');
+      if (data?.data?.url) {
+        onChange(data.data.url);
+        showToast('Arquivo enviado com sucesso', 'success');
+      }
+    } catch (e: any) {
+      console.error('[MediaUpload]', e);
+      showToast(e?.message || 'Erro ao enviar arquivo', 'error');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const onFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (f) handleFile(f);
+    e.target.value = '';
+  };
+
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const f = e.dataTransfer.files?.[0];
+    if (f) handleFile(f);
+  };
+
+  const removeFile = () => {
+    onChange('');
+    setPreviewUrl(null);
+  };
+
+  return (
+    <div className="space-y-2">
+      <label className="block text-sm font-medium text-gray-900 dark:text-gray-100">{label} *</label>
+      {!value ? (
+        <div
+          onClick={() => !uploading && fileInputRef.current?.click()}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={onDrop}
+          className={`border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors ${
+            dragOver ? 'border-[#8CD955] bg-[#8CD955]/10' : 'border-gray-300 dark:border-[#555] hover:border-[#8CD955]/60 hover:bg-[#8CD955]/5'
+          } ${uploading ? 'pointer-events-none opacity-70' : ''}`}
+        >
+          {uploading ? (
+            <Loader2 className="w-8 h-8 animate-spin text-[#8CD955] mx-auto mb-2" />
+          ) : (
+            <Upload className="w-8 h-8 text-gray-400 dark:text-gray-500 mx-auto mb-2" />
+          )}
+          <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">
+            {uploading ? 'Enviando...' : 'Arraste o arquivo ou clique aqui'}
+          </p>
+          <p className="text-xs text-gray-500 dark:text-gray-500">{acceptHint}</p>
+        </div>
+      ) : (
+        <div className="border border-gray-200 dark:border-[#404040] rounded-lg p-4 bg-gray-50 dark:bg-[#333]">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              {mediaType === 'image' && previewUrl && (
+                <img src={previewUrl} alt="Preview" className="max-w-full max-h-40 rounded object-contain" onError={() => setPreviewUrl(null)} />
+              )}
+              {mediaType === 'video' && previewUrl && (
+                <video src={previewUrl} controls className="max-w-full max-h-40 rounded" onError={() => setPreviewUrl(null)} />
+              )}
+              {mediaType === 'audio' && previewUrl && (
+                <div className="flex items-center gap-2">
+                  <Music className="w-5 h-5 text-amber-500" />
+                  <audio src={previewUrl} controls className="max-w-full" onError={() => setPreviewUrl(null)} />
+                </div>
+              )}
+            </div>
+            <button type="button" onClick={removeFile} className="shrink-0 p-1.5 text-red-500 hover:bg-red-500/10 rounded" title="Remover">
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="mt-2 w-full py-1.5 text-sm text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-[#555] rounded hover:bg-gray-100 dark:hover:bg-[#404040]"
+          >
+            Trocar arquivo
+          </button>
+        </div>
+      )}
+      <input ref={fileInputRef} type="file" className="hidden" accept={mediaType === 'image' ? 'image/*' : mediaType === 'video' ? 'video/*' : 'audio/*'} onChange={onFileSelect} />
+      <p className="text-xs text-gray-500 dark:text-gray-400">Ou informe a URL manualmente:</p>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm font-mono text-xs text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+        placeholder={mediaType === 'image' ? 'https://exemplo.com/imagem.jpg' : mediaType === 'video' ? 'https://exemplo.com/video.mp4' : 'https://exemplo.com/audio.mp3'}
+      />
+    </div>
+  );
+};
+
 // Componente de configuração de node
 const NodeConfigPanel: React.FC<{
   node: Node;
+  flowId: string;
+  userId: string | null;
   onUpdate: (config: any) => void;
-}> = ({ node, onUpdate }) => {
+}> = ({ node, flowId, userId, onUpdate }) => {
   const config = node.data.config || {};
 
   if (node.type === 'webhookTrigger') {
+    const storedEventType = config.filters?.event_type || '';
+    const eventPreset = webhookEventPresetFromStored(storedEventType);
+
     return (
       <div className="space-y-5">
         <div>
           <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
-            Tipo de Evento
+            Evento do webhook
           </label>
-          <input
-            type="text"
-            value={config.filters?.event_type || ''}
-            onChange={(e) => onUpdate({
-              filters: {
-                ...config.filters,
-                event_type: e.target.value,
-              },
-            })}
+          <select
+            value={eventPreset}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === '__custom__') {
+                onUpdate({
+                  filters: {
+                    ...config.filters,
+                    event_type: storedEventType && webhookEventPresetFromStored(storedEventType) === '__custom__'
+                      ? storedEventType
+                      : '',
+                  },
+                });
+                return;
+              }
+              onUpdate({
+                filters: {
+                  ...config.filters,
+                  event_type: v || null,
+                },
+              });
+            }}
             className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
-            placeholder="Ex: group-participants.update"
-          />
+          >
+            {WEBHOOK_EVENT_OPTIONS.map((opt) => (
+              <option key={opt.value || 'any'} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+            <option value="__custom__">Outro (valor manual)</option>
+          </select>
+          <p className="mt-2 text-xs text-gray-600 dark:text-gray-400">
+            O mesmo texto da opção aparece no nó <strong className="text-gray-800 dark:text-gray-300">Gatilho Webhook</strong> no canvas.{' '}
+            <strong className="text-gray-800 dark:text-gray-300">Mensagens (início):</strong> dispara quando chegam eventos de mensagens (Evolution:{' '}
+            <code className="text-[10px] bg-gray-100 dark:bg-[#333] px-1 rounded">MESSAGES_UPSERT</code> /{' '}
+            <code className="text-[10px] bg-gray-100 dark:bg-[#333] px-1 rounded">messages.upsert</code>) na{' '}
+            <strong>instância</strong> configurada abaixo (se vazia, aceita qualquer instância).
+          </p>
         </div>
+        {eventPreset === '__custom__' && (
+          <div>
+            <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+              Tipo de evento (manual)
+            </label>
+            <input
+              type="text"
+              value={storedEventType}
+              onChange={(e) => onUpdate({
+                filters: {
+                  ...config.filters,
+                  event_type: e.target.value,
+                },
+              })}
+              className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm font-mono text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333]"
+              placeholder="Ex: group-participants.update"
+            />
+          </div>
+        )}
         <div>
           <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Instância (opcional)
@@ -1896,20 +2498,24 @@ const NodeConfigPanel: React.FC<{
   }
 
   if (node.type === 'sendMessage') {
+    const destinationType = config.destination_type === 'direto' ? 'direto' : 'grupo';
+
     const handleDrop = (
-      e: React.DragEvent<HTMLInputElement | HTMLTextAreaElement>,
-      field: 'instance_name' | 'group_jid' | 'message' | 'mentioned'
+      e: React.DragEvent<Element>,
+      field: 'instance_name' | 'group_jid' | 'number' | 'message' | 'mentioned'
     ) => {
       e.preventDefault();
       e.stopPropagation();
       const variable = e.dataTransfer.getData(DRAG_VAR) || e.dataTransfer.getData('text/plain');
       if (!variable) return;
       const el = e.currentTarget;
-      const newVal = insertVariableAtCursor(el, variable);
-      onUpdate({ [field]: newVal });
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+        const newVal = insertVariableAtCursor(el, variable);
+        onUpdate({ [field]: newVal });
+      }
     };
 
-    const handleDragOver = (e: React.DragEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const handleDragOver = (e: React.DragEvent<Element>) => {
       e.preventDefault();
       e.stopPropagation();
       e.dataTransfer.dropEffect = 'copy';
@@ -1955,28 +2561,14 @@ const NodeConfigPanel: React.FC<{
             </div>
           )}
         </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
-            Grupo JID (ou número) *
-          </label>
-          <input
-            type="text"
-            value={config.group_jid || ''}
-            onChange={(e) => onUpdate({ group_jid: e.target.value })}
-            onDragOver={handleDragOver}
-            onDrop={(e) => handleDrop(e, 'group_jid')}
-            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm font-mono text-xs text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] focus:ring-2 focus:ring-blue-400 focus:border-blue-400"
-            placeholder="{{$json.normalized.groupId}}"
-          />
-          {config.group_jid && (
-            <div className="mt-2 px-3.5 py-2 border border-gray-200 dark:border-[#404040] rounded-lg text-sm bg-gray-50 dark:bg-[#1f1f1f]">
-              <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Prévia:</p>
-              <div className="text-gray-900 dark:text-gray-200">
-                <TextWithVariables text={config.group_jid} />
-              </div>
-            </div>
-          )}
-        </div>
+        <DestinoSelector
+          nodeId={node.id}
+          value={destinationType}
+          config={config}
+          onUpdate={onUpdate}
+          onDragOver={handleDragOver}
+          onDrop={handleDrop}
+        />
         <div>
           <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
             Mensagem *
@@ -1986,11 +2578,14 @@ const NodeConfigPanel: React.FC<{
             onChange={(newValue) => onUpdate({ message: newValue })}
             className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] focus:ring-2 focus:ring-blue-400 focus:border-blue-400"
             rows={6}
-            placeholder="Solte variáveis aqui. Ex: Tudo bom? {{numero}}, seja bem-vindo ao {{banca}}! Sou o {{nome}}."
+            placeholder="Texto livre, só variáveis ou os dois. Ex.: Olá {{nome}}! ou {{$json.randomPicker.selected}}"
             showPreview={true}
           />
           <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
             Arraste as variáveis para inserir no ponto exato da mensagem. Duplo clique na variável na prévia para deletar ou arraste para mover.
+          </p>
+          <p className="mt-2 text-xs text-blue-700 dark:text-blue-400/90">
+            O conteúdo é salvo exatamente como você digita (texto, <code className="font-mono text-[10px] px-1 rounded bg-blue-100/80 dark:bg-blue-950/50">{'{{variáveis}}'}</code> ou combinação). Cada flow pode usar este nó de forma diferente.
           </p>
         </div>
         <div>
@@ -2247,6 +2842,139 @@ const NodeConfigPanel: React.FC<{
     );
   }
 
+  if (node.type === 'pergunta') {
+    const handleDropPergunta = (
+      e: React.DragEvent<HTMLInputElement | HTMLTextAreaElement>,
+      field: 'instance_name' | 'group_jid' | 'mentioned'
+    ) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const variable = e.dataTransfer.getData(DRAG_VAR) || e.dataTransfer.getData('text/plain');
+      if (!variable) return;
+      const el = e.currentTarget;
+      const newVal = insertVariableAtCursor(el, variable);
+      onUpdate({ [field]: newVal });
+    };
+    const handleDragOverPergunta = (e: React.DragEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = 'copy';
+    };
+
+    return (
+      <div className="space-y-5">
+        <div className="bg-fuchsia-50 dark:bg-fuchsia-950/20 border border-fuchsia-200 dark:border-fuchsia-800 rounded-lg p-4">
+          <h4 className="text-sm font-semibold text-fuchsia-900 dark:text-fuchsia-300 mb-2">Saídas do nó</h4>
+          <ul className="text-xs text-fuchsia-800 dark:text-fuchsia-400 space-y-1 list-disc list-inside">
+            <li>
+              <span className="text-green-600 font-medium">Resposta</span> — usuário enviou mensagem antes do prazo
+            </li>
+            <li>
+              <span className="text-red-500 font-medium">Tempo esgotado</span> — prazo expirou. Configure chamadas ao endpoint de cron **a cada 1 segundo** (veja{' '}
+              <code className="text-[10px]">docs/FLOW_PERGUNTA_CRON.md</code> e variável{' '}
+              <code className="text-[10px]">FLOW_QUESTION_POLL_ENABLED</code>).
+            </li>
+          </ul>
+        </div>
+
+        <div className="flex flex-wrap gap-2 text-xs">
+          {VARIABLES_PERGUNTA.map((v) => (
+            <VariableChip key={v.value} value={v.value} label={v.label} />
+          ))}
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+            Texto da pergunta *
+          </label>
+          <VariableTextEditor
+            value={config.question_text || ''}
+            onChange={(newValue) => onUpdate({ question_text: newValue })}
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] focus:ring-2 focus:ring-fuchsia-400 focus:border-fuchsia-400"
+            rows={4}
+            placeholder="Quais modalidades você joga?"
+            showPreview={true}
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+              Atraso antes (seg)
+            </label>
+            <input
+              type="number"
+              min={0}
+              max={120}
+              value={config.delay_seconds ?? 0}
+              onChange={(e) => onUpdate({ delay_seconds: Math.min(120, Math.max(0, parseInt(e.target.value, 10) || 0)) })}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-sm bg-white dark:bg-[#333]"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+              Prazo para resposta
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="number"
+                min={1}
+                value={config.limit_value ?? 5}
+                onChange={(e) => onUpdate({ limit_value: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-sm bg-white dark:bg-[#333]"
+              />
+              <select
+                value={config.unit === 'minutes' ? 'minutes' : 'seconds'}
+                onChange={(e) => onUpdate({ unit: e.target.value })}
+                className="px-2 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-sm bg-white dark:bg-[#333]"
+              >
+                <option value="seconds">Segundos</option>
+                <option value="minutes">Minutos</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Instância *</label>
+          <input
+            type="text"
+            value={config.instance_name || ''}
+            onChange={(e) => onUpdate({ instance_name: e.target.value })}
+            onDragOver={handleDragOverPergunta}
+            onDrop={(e) => handleDropPergunta(e, 'instance_name')}
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm bg-white dark:bg-[#333]"
+            placeholder="{{$json.normalized.instanceName}}"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Grupo JID (ou número) *</label>
+          <input
+            type="text"
+            value={config.group_jid || ''}
+            onChange={(e) => onUpdate({ group_jid: e.target.value })}
+            onDragOver={handleDragOverPergunta}
+            onDrop={(e) => handleDropPergunta(e, 'group_jid')}
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm font-mono bg-white dark:bg-[#333]"
+            placeholder="{{$json.normalized.groupId}}"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Mencionados (opcional)</label>
+          <textarea
+            value={config.mentioned ?? ''}
+            onChange={(e) => onUpdate({ mentioned: e.target.value })}
+            onDragOver={handleDragOverPergunta}
+            onDrop={(e) => handleDropPergunta(e, 'mentioned')}
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm bg-white dark:bg-[#333]"
+            rows={2}
+            placeholder="JIDs para mencionar, um por linha"
+          />
+        </div>
+      </div>
+    );
+  }
+
   if (node.type === 'agentIA') {
     return (
       <div className="space-y-5">
@@ -2428,6 +3156,271 @@ const NodeConfigPanel: React.FC<{
               />
             </div>
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (node.type === 'condition') {
+    return (
+      <div className="space-y-5">
+        <div className="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-4">
+          <h4 className="text-sm font-semibold text-purple-900 dark:text-purple-300 mb-1 flex items-center gap-2">
+            <Info className="w-4 h-4" />
+            Condition — Verdadeiro / Falso
+          </h4>
+          <p className="text-xs text-purple-700 dark:text-purple-400">Avalia uma condição e roteia para a saída <strong>true</strong> ou <strong>false</strong>. Conecte dois caminhos diferentes nas saídas do node.</p>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Condição *</label>
+          <input
+            type="text"
+            value={config.condition || ''}
+            onChange={(e) => onUpdate({ condition: e.target.value })}
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm font-mono text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] focus:ring-2 focus:ring-purple-400 focus:border-purple-400"
+            placeholder="{{$json.normalized.action}} equals 'add'"
+          />
+          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Operadores: <code>equals</code>, <code>contains</code>. Exemplo: <code>{'{{$json.normalized.action}} equals \'add\''}</code></p>
+        </div>
+        <div className="flex gap-3">
+          <div className="flex-1 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+            <p className="text-xs font-semibold text-green-700 dark:text-green-400">✓ Saída TRUE</p>
+            <p className="text-xs text-green-600 dark:text-green-500 mt-1">Handle superior direito</p>
+          </div>
+          <div className="flex-1 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+            <p className="text-xs font-semibold text-red-700 dark:text-red-400">✗ Saída FALSE</p>
+            <p className="text-xs text-red-600 dark:text-red-500 mt-1">Handle inferior direito</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (node.type === 'delay') {
+    return (
+      <div className="space-y-5">
+        <div className="bg-gray-50 dark:bg-gray-900/20 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+          <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-300 mb-1 flex items-center gap-2">
+            <Info className="w-4 h-4" />
+            Delay — Pausa na execução
+          </h4>
+          <p className="text-xs text-gray-600 dark:text-gray-400">Aguarda N segundos antes de executar o próximo node. Útil para simular digitação ou espaçar mensagens. Máximo: 30s.</p>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Segundos *</label>
+          <input
+            type="number"
+            min={1}
+            max={30}
+            value={config.seconds ?? 3}
+            onChange={(e) => onUpdate({ seconds: Number(e.target.value) })}
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] focus:ring-2 focus:ring-gray-400"
+          />
+          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Entre 1 e 30 segundos.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (node.type === 'httpRequest') {
+    const headersObj = config.headers || {};
+    const headersStr = Object.entries(headersObj).map(([k, v]) => `${k}: ${v}`).join('\n');
+    return (
+      <div className="space-y-5">
+        <div className="bg-cyan-50 dark:bg-cyan-900/20 border border-cyan-200 dark:border-cyan-800 rounded-lg p-4">
+          <h4 className="text-sm font-semibold text-cyan-900 dark:text-cyan-300 mb-1 flex items-center gap-2">
+            <Info className="w-4 h-4" />
+            HTTP Request — Chamada externa
+          </h4>
+          <p className="text-xs text-cyan-700 dark:text-cyan-400">Chama qualquer API HTTP. O retorno fica disponível como <code>{'{{httpRequest_nodeId.data}}'}</code>.</p>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">URL *</label>
+          <input
+            type="text"
+            value={config.url || ''}
+            onChange={(e) => onUpdate({ url: e.target.value })}
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm font-mono text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] focus:ring-2 focus:ring-cyan-400"
+            placeholder="https://api.exemplo.com/endpoint"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Método</label>
+          <select
+            value={config.method || 'POST'}
+            onChange={(e) => onUpdate({ method: e.target.value })}
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] focus:ring-2 focus:ring-cyan-400"
+          >
+            {['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Headers (um por linha: <code>Key: Value</code>)</label>
+          <textarea
+            value={headersStr}
+            onChange={(e) => {
+              const parsed: Record<string, string> = {};
+              e.target.value.split('\n').forEach((line) => {
+                const idx = line.indexOf(':');
+                if (idx > 0) {
+                  parsed[line.substring(0, idx).trim()] = line.substring(idx + 1).trim();
+                }
+              });
+              onUpdate({ headers: parsed });
+            }}
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm font-mono text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] focus:ring-2 focus:ring-cyan-400"
+            rows={3}
+            placeholder={'Authorization: Bearer token\nX-Custom-Header: valor'}
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Body (JSON, suporta variáveis)</label>
+          <textarea
+            value={config.body || ''}
+            onChange={(e) => onUpdate({ body: e.target.value })}
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm font-mono text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] focus:ring-2 focus:ring-cyan-400"
+            rows={5}
+            placeholder={'{"phone": "{{$json.normalized.phoneNumber}}", "event": "join"}'}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (node.type === 'sendImage') {
+    const destType = config.destination_type === 'direto' ? 'direto' : 'grupo';
+    return (
+      <div className="space-y-5">
+        <div className="bg-violet-50 dark:bg-violet-900/20 border border-violet-200 dark:border-violet-800 rounded-lg p-4">
+          <h4 className="text-sm font-semibold text-violet-900 dark:text-violet-300 mb-1 flex items-center gap-2">
+            <Info className="w-4 h-4" />
+            Enviar Imagem
+          </h4>
+          <p className="text-xs text-violet-700 dark:text-violet-400">Envia imagem via URL. Formatos: .jpg, .png, .webp, .gif</p>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Instância *</label>
+          <input
+            type="text"
+            value={config.instance_name || ''}
+            onChange={(e) => onUpdate({ instance_name: e.target.value })}
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] focus:ring-2 focus:ring-violet-400 focus:border-violet-400"
+            placeholder="{{$json.normalized.instanceName}}"
+          />
+        </div>
+        <DestinoSelector nodeId={node.id} value={destType} config={config} onUpdate={onUpdate} />
+        <MediaUploadField
+          flowId={flowId}
+          userId={userId}
+          mediaType="image"
+          value={config.image_url || ''}
+          onChange={(url) => onUpdate({ image_url: url })}
+          acceptHint="Imagens: JPEG, PNG, GIF, WEBP"
+          label="URL da Imagem"
+        />
+        <div>
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Legenda (opcional)</label>
+          <textarea
+            value={config.caption || ''}
+            onChange={(e) => onUpdate({ caption: e.target.value })}
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] focus:ring-2 focus:ring-violet-400 focus:border-violet-400"
+            rows={3}
+            placeholder="Legenda da imagem..."
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (node.type === 'sendAudio') {
+    const destType = config.destination_type === 'direto' ? 'direto' : 'grupo';
+    return (
+      <div className="space-y-5">
+        <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
+          <h4 className="text-sm font-semibold text-amber-900 dark:text-amber-300 mb-1 flex items-center gap-2">
+            <Info className="w-4 h-4" />
+            Enviar Áudio
+          </h4>
+          <p className="text-xs text-amber-700 dark:text-amber-400">Envia áudio via URL. PTT = voz gravada; desativado = arquivo de áudio. Formatos: .mp3, .ogg, .m4a</p>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Instância *</label>
+          <input
+            type="text"
+            value={config.instance_name || ''}
+            onChange={(e) => onUpdate({ instance_name: e.target.value })}
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] focus:ring-2 focus:ring-amber-400 focus:border-amber-400"
+            placeholder="{{$json.normalized.instanceName}}"
+          />
+        </div>
+        <DestinoSelector nodeId={node.id} value={destType} config={config} onUpdate={onUpdate} />
+        <MediaUploadField
+          flowId={flowId}
+          userId={userId}
+          mediaType="audio"
+          value={config.audio_url || ''}
+          onChange={(url) => onUpdate({ audio_url: url })}
+          acceptHint="Áudios: MP3, WAV, OGG, WEBM"
+          label="URL do Áudio"
+        />
+        <div className="flex items-center gap-3">
+          <input
+            type="checkbox"
+            id="ptt-toggle"
+            checked={config.ptt !== false}
+            onChange={(e) => onUpdate({ ptt: e.target.checked })}
+            className="w-4 h-4 rounded border-gray-300 text-amber-600 focus:ring-amber-400"
+          />
+          <label htmlFor="ptt-toggle" className="text-sm font-medium text-gray-900 dark:text-gray-100">
+            Push-to-talk (PTT) — enviar como áudio de voz
+          </label>
+        </div>
+      </div>
+    );
+  }
+
+  if (node.type === 'sendVideo') {
+    const destType = config.destination_type === 'direto' ? 'direto' : 'grupo';
+    return (
+      <div className="space-y-5">
+        <div className="bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 rounded-lg p-4">
+          <h4 className="text-sm font-semibold text-rose-900 dark:text-rose-300 mb-1 flex items-center gap-2">
+            <Info className="w-4 h-4" />
+            Enviar Vídeo
+          </h4>
+          <p className="text-xs text-rose-700 dark:text-rose-400">Envia vídeo via URL. Formatos: .mp4, .avi, .mov</p>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Instância *</label>
+          <input
+            type="text"
+            value={config.instance_name || ''}
+            onChange={(e) => onUpdate({ instance_name: e.target.value })}
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] focus:ring-2 focus:ring-rose-400 focus:border-rose-400"
+            placeholder="{{$json.normalized.instanceName}}"
+          />
+        </div>
+        <DestinoSelector nodeId={node.id} value={destType} config={config} onUpdate={onUpdate} />
+        <MediaUploadField
+          flowId={flowId}
+          userId={userId}
+          mediaType="video"
+          value={config.video_url || ''}
+          onChange={(url) => onUpdate({ video_url: url })}
+          acceptHint="Vídeos: MP4, WEBM, OGG"
+          label="URL do Vídeo"
+        />
+        <div>
+          <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Legenda (opcional)</label>
+          <textarea
+            value={config.caption || ''}
+            onChange={(e) => onUpdate({ caption: e.target.value })}
+            className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] focus:ring-2 focus:ring-rose-400 focus:border-rose-400"
+            rows={3}
+            placeholder="Legenda do vídeo..."
+          />
         </div>
       </div>
     );

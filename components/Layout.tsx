@@ -279,9 +279,11 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
   };
 
   const isChat = pathname === '/chat' || pathname === '/chat-atendimento';
+  const isFlowEditor = typeof pathname === 'string' && /^\/admin\/flows\/[^/]+$/.test(pathname);
+  const isFullScreen = isChat || isFlowEditor;
 
   return (
-    <div className={`bg-gray-50 dark:bg-[#1a1a1a] flex flex-col lg:flex-row ${isChat ? 'h-screen overflow-hidden' : 'min-h-screen'}`}>
+    <div className={`bg-gray-50 dark:bg-[#1a1a1a] flex flex-col lg:flex-row ${isFullScreen ? 'h-screen overflow-hidden' : 'min-h-screen'}`}>
       {/* Header Mobile */}
       <header className="lg:hidden h-16 bg-white dark:bg-[#2a2a2a] border-b border-gray-200 dark:border-[#404040] flex items-center justify-between px-4 sticky top-0 z-30 shadow-sm">
         <div className="flex items-center gap-2">
@@ -299,12 +301,12 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
       <Sidebar onSignOut={onSignOut} />
 
       <main
-        className={`flex-1 transition-all duration-300 min-w-0 flex flex-col ${isChat ? 'overflow-hidden' : 'min-h-screen'}`}
+        className={`flex-1 transition-all duration-300 min-w-0 flex flex-col ${isFullScreen ? 'overflow-hidden' : 'min-h-screen'}`}
         style={{
           paddingLeft: isMobile ? '0px' : `${sidebarWidth}px`
         }}
       >
-        {isChat ? (
+        {isFullScreen ? (
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
             {children}
           </div>

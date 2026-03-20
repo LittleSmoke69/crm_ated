@@ -3,7 +3,7 @@ import { llmService } from './llm-service';
 
 export interface FlowNode {
   id: string;
-  type: 'webhookTrigger' | 'switch' | 'randomPicker' | 'sendMessage' | 'generateImage' | 'generateVideo' | 'waitVideo' | 'saveToDataset' | 'agentIA';
+  type: 'webhookTrigger' | 'switch' | 'condition' | 'randomPicker' | 'delay' | 'httpRequest' | 'sendMessage' | 'sendImage' | 'sendAudio' | 'sendVideo' | 'generateImage' | 'generateVideo' | 'waitVideo' | 'saveToDataset' | 'agentIA' | 'pergunta';
   position: { x: number; y: number };
   data: {
     label: string;
@@ -169,6 +169,8 @@ export class FlowExecutorService {
         
         // Executa o flow percorrendo os nodes
         const executionContext: Record<string, any> = {
+          __flowId: flowId,
+          __executionId: execution.id,
           $json: jsonData,
           json: jsonData, // Adiciona também sem prefixo para facilitar acesso
           $normalized: normalizedData,
@@ -196,6 +198,15 @@ export class FlowExecutorService {
           triggerNode.id,
           executionContext
         );
+
+        if (executionContext.__flowPaused) {
+          await this.finishExecution(execution.id, 'paused', null, {
+            pendingQuestionId: executionContext.__pendingQuestionId,
+            reason: 'awaiting_question_reply',
+          });
+          console.log(`⏸️ [FLOW EXECUTOR] Execução ${execution.id} pausada aguardando resposta à pergunta`);
+          return execution.id;
+        }
 
         await this.finishExecution(execution.id, 'success', null, outputData);
         console.log(`✅ [FLOW EXECUTOR] Execução ${execution.id} concluída com sucesso`);
@@ -290,6 +301,10 @@ export class FlowExecutorService {
     const executedNodes: string[] = [];
 
     const executeNode = async (nodeId: string): Promise<any> => {
+      if (context.__stopExecution) {
+        return context;
+      }
+
       if (visited.has(nodeId)) {
         return context;
       }
@@ -322,6 +337,13 @@ export class FlowExecutorService {
         // Para randomPicker, adiciona também em context.randomPicker para facilitar acesso
         if (node.type === 'randomPicker') {
           context.randomPicker = stepOutput;
+        }
+
+        // Pergunta: envia mensagem e pausa até resposta ou timeout (retomada via webhook/cron)
+        if (node.type === 'pergunta' && stepOutput?.awaitingReply) {
+          context.__flowPaused = true;
+          context.__pendingQuestionId = stepOutput.pendingId;
+          context.__stopExecution = true;
         }
         
         // Atualiza número do lead nas variáveis globais se disponível
@@ -383,12 +405,16 @@ export class FlowExecutorService {
 
       // Encontra próximos nodes (via edges)
       const nextEdges = graph.edges.filter(e => e.source === nodeId);
-      
+
+      if (context.__stopExecution) {
+        return context;
+      }
+
       for (const edge of nextEdges) {
-        // Para switch nodes, verifica se o output corresponde ao sourceHandle
-        if (node.type === 'switch' && edge.sourceHandle) {
-          const switchOutput = stepOutput?.output || stepOutput;
-          if (switchOutput !== edge.sourceHandle) {
+        // Para switch/condition/pergunta nodes, verifica se o output corresponde ao sourceHandle
+        if ((node.type === 'switch' || node.type === 'condition' || node.type === 'pergunta') && edge.sourceHandle) {
+          const nodeOutput = stepOutput?.output ?? stepOutput;
+          if (nodeOutput !== edge.sourceHandle) {
             continue; // Pula esta edge se não corresponde
           }
         }
@@ -433,11 +459,29 @@ export class FlowExecutorService {
       case 'switch':
         return await this.executeSwitchNode(node, input, context);
 
+      case 'condition':
+        return await this.executeConditionNode(node, input, context);
+
       case 'randomPicker':
         return await this.executeRandomPickerNode(node, input, context);
 
+      case 'delay':
+        return await this.executeDelayNode(node, input, context);
+
+      case 'httpRequest':
+        return await this.executeHttpRequestNode(node, input, context);
+
       case 'sendMessage':
         return await this.executeSendMessageNode(node, input, context);
+
+      case 'sendImage':
+        return await this.executeSendImageNode(node, input, context);
+
+      case 'sendAudio':
+        return await this.executeSendAudioNode(node, input, context);
+
+      case 'sendVideo':
+        return await this.executeSendVideoNode(node, input, context);
 
       case 'generateImage':
         return await this.executeGenerateImageNode(node, input, context);
@@ -453,6 +497,9 @@ export class FlowExecutorService {
 
       case 'agentIA':
         return await this.executeAgentIANode(node, input, context);
+
+      case 'pergunta':
+        return await this.executePerguntaNode(node, input, context);
 
       default:
         throw new Error(`Tipo de node desconhecido: ${(node as any).type}`);
@@ -481,6 +528,102 @@ export class FlowExecutorService {
     }
 
     return { output: 'default', matched: false };
+  }
+
+  /**
+   * Executa node Condition (condição inline true/false)
+   */
+  private async executeConditionNode(
+    node: FlowNode,
+    _input: any,
+    context: Record<string, any>
+  ): Promise<any> {
+    const config = node.data.config || {};
+    const condition = config.condition || '';
+    const result = this.evaluateCondition(condition, context);
+    const output = result ? 'true' : 'false';
+    return { result, output, condition };
+  }
+
+  /**
+   * Executa node Delay (pausa N segundos)
+   */
+  private async executeDelayNode(
+    node: FlowNode,
+    _input: any,
+    _context: Record<string, any>
+  ): Promise<any> {
+    const config = node.data.config || {};
+    const seconds = Math.min(Math.max(Number(config.seconds) || 2, 0.5), 30); // entre 0.5s e 30s
+    console.log(`⏱️ [FLOW EXECUTOR] Delay: aguardando ${seconds}s`);
+    await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+    return { delayed: true, seconds };
+  }
+
+  /**
+   * Executa node HTTP Request (chamada HTTP externa)
+   */
+  private async executeHttpRequestNode(
+    node: FlowNode,
+    _input: any,
+    context: Record<string, any>
+  ): Promise<any> {
+    const config = node.data.config || {};
+
+    const url = this.resolveVariables(config.url || '', context);
+    const method = (config.method || 'GET').toUpperCase();
+    const headersRaw: Record<string, string> = config.headers || {};
+    const bodyTemplate: string = config.body || '';
+
+    if (!url || url.includes('{{') || url.includes('$')) {
+      throw new Error(`URL do HTTP Request não resolvida: ${url}`);
+    }
+
+    // Resolve variáveis nos headers e body
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    for (const [k, v] of Object.entries(headersRaw)) {
+      headers[k] = this.resolveVariables(v, context);
+    }
+
+    const resolvedBody = bodyTemplate ? this.resolveVariables(bodyTemplate, context) : undefined;
+
+    console.log(`🌐 [FLOW EXECUTOR] HTTP Request: ${method} ${url}`);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+    try {
+      const fetchOptions: RequestInit = {
+        method,
+        headers,
+        signal: controller.signal,
+      };
+      if (method !== 'GET' && method !== 'HEAD' && resolvedBody) {
+        fetchOptions.body = resolvedBody;
+      }
+
+      const response = await fetch(url, fetchOptions);
+      clearTimeout(timeoutId);
+
+      let data: any = null;
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        data = await response.json().catch(() => null);
+      } else {
+        data = await response.text().catch(() => null);
+      }
+
+      console.log(`✅ [FLOW EXECUTOR] HTTP Request concluído: status=${response.status}`);
+      return {
+        status: response.status,
+        ok: response.ok,
+        data,
+      };
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+      if (err.name === 'AbortError') throw new Error(`HTTP Request timeout: ${url}`);
+      throw new Error(`HTTP Request falhou: ${err.message}`);
+    }
   }
 
   /**
@@ -592,48 +735,69 @@ export class FlowExecutorService {
       });
     }
     
-    let groupJid = this.resolveVariables(config.group_jid || '', context);
+    /** `grupo` = padrão legado (automações em grupo). `direto` = só conversa 1:1 (campo número). */
+    const destinationType = config.destination_type === 'direto' ? 'direto' : 'grupo';
+
+    let groupJid = '';
     let message = this.resolveVariables(config.message || '', context);
     let number = this.resolveVariables(config.number || '', context);
 
-    // Se groupJid ainda contém variáveis não resolvidas, tenta buscar do contexto normalizado
-    if (!groupJid || groupJid.includes('{{') || groupJid.includes('$')) {
-      // Prioriza data.id (ID do grupo) para eventos group-participants.update
-      groupJid = this.resolvePath(context, 'json.data.id') || // ID do grupo em data.id (ex: "120363423429846273@g.us")
-                 this.resolvePath(context, '$json.data.id') ||
-                 this.resolvePath(context, 'normalized.groupId') ||
-                 this.resolvePath(context, 'normalized.group_id') ||
-                 this.resolvePath(context, '$normalized.groupId') ||
-                 this.resolvePath(context, '$normalized.group_id') ||
-                 this.resolvePath(context, 'json.normalized.groupId') ||
-                 this.resolvePath(context, '$json.normalized.groupId') ||
-                 this.resolvePath(context, 'json.normalized.group_id') ||
-                 this.resolvePath(context, '$json.normalized.group_id') ||
-                 this.resolvePath(context, 'normalized.groupJid') ||
-                 this.resolvePath(context, '$normalized.groupJid') ||
-                 '';
+    const rawMessageConfigured = (config.message ?? '').toString().trim();
+    if (!rawMessageConfigured) {
+      throw new Error(
+        'Configure o texto da mensagem no nó Enviar Mensagem (texto, variáveis ou ambos — o campo não pode ficar vazio).'
+      );
     }
 
-    // Se number ainda contém variáveis não resolvidas, tenta buscar do contexto normalizado
-    if (!number || number.includes('{{') || number.includes('$')) {
-      // Prioriza participants[0].phoneNumber para eventos group-participants.update
-      number = this.resolvePath(context, 'json.data.participants[0].phoneNumber') || // phoneNumber do primeiro participante (ex: "62851784815372@s.whatsapp.net")
-               this.resolvePath(context, '$json.data.participants[0].phoneNumber') ||
-               this.resolvePath(context, 'json.data.participants.0.phoneNumber') || // Formato alternativo
-               this.resolvePath(context, '$json.data.participants.0.phoneNumber') ||
-               this.resolvePath(context, 'normalized.phoneNumber') ||
-               this.resolvePath(context, 'normalized.phone_number') ||
-               this.resolvePath(context, '$normalized.phoneNumber') ||
-               this.resolvePath(context, '$normalized.phone_number') ||
-               this.resolvePath(context, 'json.normalized.phoneNumber') ||
-               this.resolvePath(context, '$json.normalized.phoneNumber') ||
-               this.resolvePath(context, 'json.normalized.phone_number') ||
-               this.resolvePath(context, '$json.normalized.phone_number') ||
-               this.resolvePath(context, 'normalized.number') ||
-               this.resolvePath(context, '$normalized.number') ||
-               this.resolvePath(context, 'json.normalized.number') ||
-               this.resolvePath(context, '$json.normalized.number') ||
-               '';
+    const resolvePhoneFromContext = (): string =>
+      this.resolvePath(context, 'json.data.participants[0].phoneNumber') ||
+      this.resolvePath(context, '$json.data.participants[0].phoneNumber') ||
+      this.resolvePath(context, 'json.data.participants.0.phoneNumber') ||
+      this.resolvePath(context, '$json.data.participants.0.phoneNumber') ||
+      this.resolvePath(context, 'normalized.phoneNumber') ||
+      this.resolvePath(context, 'normalized.phone_number') ||
+      this.resolvePath(context, '$normalized.phoneNumber') ||
+      this.resolvePath(context, '$normalized.phone_number') ||
+      this.resolvePath(context, 'json.normalized.phoneNumber') ||
+      this.resolvePath(context, '$json.normalized.phoneNumber') ||
+      this.resolvePath(context, 'json.normalized.phone_number') ||
+      this.resolvePath(context, '$json.normalized.phone_number') ||
+      this.resolvePath(context, 'normalized.number') ||
+      this.resolvePath(context, '$normalized.number') ||
+      this.resolvePath(context, 'json.normalized.number') ||
+      this.resolvePath(context, '$json.normalized.number') ||
+      '';
+
+    if (destinationType === 'grupo') {
+      groupJid = this.resolveVariables(config.group_jid || '', context);
+
+      // Se groupJid ainda contém variáveis não resolvidas, tenta buscar do contexto normalizado
+      if (!groupJid || groupJid.includes('{{') || groupJid.includes('$')) {
+        groupJid =
+          this.resolvePath(context, 'json.data.id') ||
+          this.resolvePath(context, '$json.data.id') ||
+          this.resolvePath(context, 'normalized.groupId') ||
+          this.resolvePath(context, 'normalized.group_id') ||
+          this.resolvePath(context, '$normalized.groupId') ||
+          this.resolvePath(context, '$normalized.group_id') ||
+          this.resolvePath(context, 'json.normalized.groupId') ||
+          this.resolvePath(context, '$json.normalized.groupId') ||
+          this.resolvePath(context, 'json.normalized.group_id') ||
+          this.resolvePath(context, '$json.normalized.group_id') ||
+          this.resolvePath(context, 'normalized.groupJid') ||
+          this.resolvePath(context, '$normalized.groupJid') ||
+          '';
+      }
+
+      if (!number || number.includes('{{') || number.includes('$')) {
+        number = resolvePhoneFromContext();
+      }
+    } else {
+      // Direto: destinatário = apenas número/JID de contato (não usa grupo do evento)
+      if (!number || number.includes('{{') || number.includes('$')) {
+        number = resolvePhoneFromContext();
+      }
+      groupJid = '';
     }
 
     // Log detalhado do contexto para debug
@@ -641,6 +805,7 @@ export class FlowExecutorService {
       nodeId: node.id,
       config: {
         instance_name: config.instance_name,
+        destination_type: destinationType,
         group_jid: config.group_jid,
         number: config.number,
         message: config.message ? `${config.message.substring(0, 50)}...` : 'vazio',
@@ -671,14 +836,12 @@ export class FlowExecutorService {
       },
     });
 
-    // Valida se message ainda contém variáveis não resolvidas
-    // Mas primeiro tenta resolver novamente com paths alternativos
+    // Valida se ainda há placeholders {{...}} não resolvidos (resolveVariables devolve o match original).
+    // NÃO usar includes('$'): texto livre com "R$", "$5" etc. é válido após resolução.
     let finalMessage = message;
-    if (!message || message.includes('{{') || message.includes('$')) {
-      // Tenta resolver novamente com paths alternativos para randomPicker
+    if (!message || this.hasUnresolvedTemplateVariables(message)) {
       const retryMessage = this.resolveVariables(message, context);
-      if (retryMessage && !retryMessage.includes('{{') && !retryMessage.includes('$')) {
-        // Se conseguiu resolver, usa o valor resolvido
+      if (retryMessage && !this.hasUnresolvedTemplateVariables(retryMessage)) {
         finalMessage = retryMessage;
       } else {
         throw new Error(`Mensagem não pode conter variáveis não resolvidas: ${message}`);
@@ -691,10 +854,20 @@ export class FlowExecutorService {
       throw new Error(`Instance name não pode conter variáveis não resolvidas: ${instanceName}`);
     }
 
-    // Valida se groupJid ou number foram resolvidos
-    if ((!groupJid || groupJid.includes('{{') || groupJid.includes('$')) && 
-        (!number || number.includes('{{') || number.includes('$'))) {
-      throw new Error(`Group JID ou Number devem ser fornecidos e resolvidos. GroupJid: ${groupJid || 'não fornecido'}, Number: ${number || 'não fornecido'}`);
+    // Valida destinatário conforme o modo (grupo vs direto)
+    if (destinationType === 'direto') {
+      if (!number || number.includes('{{') || number.includes('$')) {
+        throw new Error(
+          `Envio direto: informe o número ou JID do contato (campo "Número / JID") e resolva as variáveis. Valor atual: ${number || 'vazio'}`
+        );
+      }
+    } else if (
+      (!groupJid || groupJid.includes('{{') || groupJid.includes('$')) &&
+      (!number || number.includes('{{') || number.includes('$'))
+    ) {
+      throw new Error(
+        `Group JID ou Number devem ser fornecidos e resolvidos. GroupJid: ${groupJid || 'não fornecido'}, Number: ${number || 'não fornecido'}`
+      );
     }
 
     // Usa finalMessage ao invés de message
@@ -753,9 +926,9 @@ export class FlowExecutorService {
     // Prepara URL e body no formato correto da Evolution API
     const baseUrl = evolutionApi.base_url.replace(/\/+$/, '').replace(/([^:]\/)\/+/g, '$1');
     
-    // Usa groupJid se disponível, caso contrário usa number
-    // IMPORTANTE: groupJid deve ser o ID do grupo (ex: "120363423904121305@g.us")
-    const recipient = groupJid || number || '';
+    // Grupo: prioriza group JID; direto: só número/JID de contato
+    const recipient =
+      destinationType === 'direto' ? number || '' : groupJid || number || '';
     
     // Valida se recipient foi resolvido corretamente
     if (!recipient || recipient.includes('{{') || recipient.includes('$')) {
@@ -827,6 +1000,7 @@ export class FlowExecutorService {
       },
       body: JSON.parse(JSON.stringify(body)), // Cria cópia limpa do body
       resolvedValues: {
+        destinationType,
         instanceName,
         groupJid: groupJid || 'não fornecido',
         number: number || 'não fornecido',
@@ -922,6 +1096,385 @@ export class FlowExecutorService {
       
       throw new Error(errorMsg);
     }
+  }
+
+  /**
+   * Serializa contexto para retomar após resposta/timeout (sem flags de controle da execução atual).
+   */
+  private serializeContextForSnapshot(context: Record<string, any>): Record<string, any> {
+    const skip = new Set(['__stopExecution', '__flowPaused', '__pendingQuestionId']);
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(context)) {
+      if (skip.has(k)) continue;
+      try {
+        out[k] = JSON.parse(JSON.stringify(v));
+      } catch {
+        /* ignora não serializável */
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Nó Pergunta: envia texto no WhatsApp e pausa o flow até resposta do usuário ou timeout.
+   * Saídas no grafo: sourceHandle `resposta` | `tempo_esgotado`.
+   */
+  private async executePerguntaNode(
+    node: FlowNode,
+    input: any,
+    context: Record<string, any>
+  ): Promise<any> {
+    const config = node.data.config || {};
+    const delaySeconds = Math.min(Math.max(Number(config.delay_seconds) || 0, 0), 120);
+    if (delaySeconds > 0) {
+      console.log(`⏱️ [FLOW EXECUTOR] Pergunta: atraso ${delaySeconds}s antes de enviar`);
+      await new Promise((r) => setTimeout(r, delaySeconds * 1000));
+    }
+
+    const questionRaw = (config.question_text ?? config.message ?? '').toString();
+    let resolvedQuestion = this.resolveVariables(questionRaw, context);
+    if (this.hasUnresolvedTemplateVariables(resolvedQuestion)) {
+      const retry = this.resolveVariables(resolvedQuestion, context);
+      if (retry && !this.hasUnresolvedTemplateVariables(retry)) {
+        resolvedQuestion = retry;
+      } else {
+        throw new Error(`Texto da pergunta contém variáveis não resolvidas: ${resolvedQuestion}`);
+      }
+    }
+    if (!resolvedQuestion?.trim()) {
+      throw new Error('Pergunta: preencha o texto da pergunta');
+    }
+
+    const sendNode: FlowNode = {
+      ...node,
+      type: 'sendMessage',
+      data: {
+        ...node.data,
+        config: {
+          instance_name: config.instance_name,
+          group_jid: config.group_jid,
+          number: config.number,
+          message: resolvedQuestion,
+          mentioned: config.mentioned,
+        },
+      },
+    };
+
+    await this.executeSendMessageNode(sendNode, input, context);
+
+    const unit = config.unit === 'minutes' ? 'minutes' : 'seconds';
+    const limitVal = Math.max(Number(config.limit_value) || 5, 1);
+    const timeoutMs = unit === 'minutes' ? limitVal * 60_000 : limitVal * 1000;
+    const maxMs = 24 * 60 * 60 * 1000;
+    const expiresAt = new Date(Date.now() + Math.min(timeoutMs, maxMs));
+
+    let instanceNameResolved = this.resolveVariables(config.instance_name || '', context);
+    if (!instanceNameResolved || instanceNameResolved.includes('{{')) {
+      instanceNameResolved =
+        this.resolvePath(context, 'normalized.instanceName') ||
+        this.resolvePath(context, '$json.normalized.instanceName') ||
+        this.resolvePath(context, '$json.instance') ||
+        instanceNameResolved;
+    }
+
+    const groupJid = this.resolveVariables(config.group_jid || '', context);
+    const recipient = groupJid || this.resolveVariables(config.number || '', context) || '';
+
+    const snapshot = this.serializeContextForSnapshot(context);
+    const flowId = context.__flowId;
+    const executionId = context.__executionId;
+    if (!flowId || !executionId) {
+      throw new Error('Pergunta: contexto interno incompleto (__flowId / __executionId)');
+    }
+
+    const { data: pendingRow, error: insErr } = await supabaseServiceRole
+      .from('flow_question_pending')
+      .insert({
+        flow_id: flowId,
+        user_id: String(context.$userId || ''),
+        node_id: node.id,
+        execution_id: executionId,
+        instance_name: instanceNameResolved || null,
+        remote_jid: String(recipient).trim(),
+        question_text: resolvedQuestion,
+        context_snapshot: snapshot,
+        status: 'waiting',
+        expires_at: expiresAt.toISOString(),
+      })
+      .select('id')
+      .single();
+
+    if (insErr || !pendingRow) {
+      console.error('❌ [FLOW EXECUTOR] Erro ao salvar flow_question_pending:', insErr);
+      throw new Error(`Pergunta: não foi possível registrar espera de resposta: ${insErr?.message || 'unknown'}`);
+    }
+
+    console.log(`❓ [FLOW EXECUTOR] Pergunta enviada; aguardando resposta até ${expiresAt.toISOString()} (pending=${pendingRow.id})`);
+
+    return {
+      awaitingReply: true,
+      pendingId: pendingRow.id,
+      question: resolvedQuestion,
+      expiresAt: expiresAt.toISOString(),
+    };
+  }
+
+  /**
+   * Helper: busca credenciais da instância Evolution no Supabase
+   */
+  private async fetchInstanceCredentials(instanceName: string): Promise<{ apikey: string; baseUrl: string; instance: any }> {
+    const { data: instance, error } = await supabaseServiceRole
+      .from('evolution_instances')
+      .select(`*, evolution_apis (id, base_url, api_key_global)`)
+      .eq('instance_name', instanceName)
+      .eq('is_active', true)
+      .single();
+
+    if (error || !instance) throw new Error(`Instância ${instanceName} não encontrada ou inativa`);
+    if (!instance.is_master) throw new Error(`Apenas instâncias mestre podem ser usadas em automações. A instância ${instanceName} não é mestre.`);
+    if (instance.status !== 'ok') throw new Error(`Instância ${instanceName} deve estar conectada (status: ok). Status atual: ${instance.status}`);
+
+    const evolutionApi = Array.isArray(instance.evolution_apis) ? instance.evolution_apis[0] : instance.evolution_apis;
+    if (!evolutionApi?.base_url) throw new Error(`Evolution API não configurada para instância ${instanceName}`);
+
+    const { data: instData } = await supabaseServiceRole.from('evolution_instances').select('apikey').eq('id', instance.id).single();
+    const apikey = instData?.apikey || evolutionApi.api_key_global;
+    if (!apikey) throw new Error(`API key não encontrada para instância ${instanceName}`);
+
+    const baseUrl = evolutionApi.base_url.replace(/\/+$/, '').replace(/([^:]\/)\/+/g, '$1');
+    return { apikey, baseUrl, instance };
+  }
+
+  /**
+   * Executa node Send Image
+   */
+  private async executeSendImageNode(node: FlowNode, _input: any, context: Record<string, any>): Promise<any> {
+    const config = node.data.config || {};
+    const destinationType = config.destination_type === 'direto' ? 'direto' : 'grupo';
+
+    let instanceName = this.resolveVariables(config.instance_name || '', context);
+    let groupJid = '';
+    let number = this.resolveVariables(config.number || '', context);
+    const imageUrl = this.resolveVariables(config.image_url || '', context);
+    const caption = config.caption ? this.resolveVariables(config.caption, context) : undefined;
+
+    if (!instanceName || instanceName.includes('{{') || instanceName.includes('$')) {
+      instanceName = this.resolvePath(context, 'normalized.instanceName') || this.resolvePath(context, '$json.normalized.instanceName') || instanceName;
+    }
+
+    const resolvePhone = () =>
+      this.resolvePath(context, '$json.data.participants[0].phoneNumber') ||
+      this.resolvePath(context, 'normalized.phoneNumber') ||
+      this.resolvePath(context, '$json.normalized.phoneNumber') ||
+      '';
+
+    if (destinationType === 'grupo') {
+      groupJid = this.resolveVariables(config.group_jid || '', context);
+      if (!groupJid || groupJid.includes('{{') || groupJid.includes('$')) {
+        groupJid = this.resolvePath(context, '$json.data.id') || this.resolvePath(context, 'normalized.groupId') || this.resolvePath(context, '$json.normalized.groupId') || '';
+      }
+      if (!number || number.includes('{{') || number.includes('$')) {
+        number = resolvePhone();
+      }
+    } else {
+      if (!number || number.includes('{{') || number.includes('$')) {
+        number = resolvePhone();
+      }
+    }
+
+    if (!instanceName || instanceName.includes('{{') || instanceName.includes('$')) {
+      throw new Error(`Instance name não resolvido: ${instanceName}`);
+    }
+    if (!imageUrl || imageUrl.includes('{{') || imageUrl.includes('$')) {
+      throw new Error(`URL da imagem não resolvida: ${imageUrl}`);
+    }
+    const recipient = destinationType === 'direto' ? number : groupJid || number;
+    if (!recipient || recipient.includes('{{') || recipient.includes('$')) {
+      throw new Error(`Recipient (group_jid/number) não resolvido: ${recipient || 'vazio'}`);
+    }
+
+    const { apikey, baseUrl } = await this.fetchInstanceCredentials(instanceName);
+    const url = `${baseUrl}/message/sendMedia/${instanceName}`;
+
+    const ext = imageUrl.split('?')[0].split('.').pop()?.toLowerCase() || 'jpg';
+    const mimeMap: Record<string, string> = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif' };
+    const mimetype = mimeMap[ext] || 'image/jpeg';
+
+    const body = { number: recipient, mediatype: 'image', mimetype, media: imageUrl, fileName: `image.${ext}`, ...(caption ? { caption } : {}) };
+
+    console.log(`📤 [FLOW EXECUTOR] sendImage request:`, JSON.stringify({ url, body }, null, 2));
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey },
+      body: JSON.stringify(body),
+    });
+    const responseData = await response.json().catch(() => ({ message: 'Erro ao parsear resposta' }));
+
+    if (!response.ok) {
+      const msg = responseData.message ?? responseData.error ?? `HTTP ${response.status}`;
+      throw new Error(`Erro ao enviar imagem: ${Array.isArray(msg) ? msg.join('; ') : msg}`);
+    }
+
+    console.log(`✅ [FLOW EXECUTOR] Imagem enviada com sucesso`);
+    return { success: true, messageId: responseData.key?.id, response: responseData };
+  }
+
+  /**
+   * Executa node Send Audio
+   */
+  private async executeSendAudioNode(node: FlowNode, _input: any, context: Record<string, any>): Promise<any> {
+    const config = node.data.config || {};
+    const destinationType = config.destination_type === 'direto' ? 'direto' : 'grupo';
+
+    let instanceName = this.resolveVariables(config.instance_name || '', context);
+    let groupJid = '';
+    let number = this.resolveVariables(config.number || '', context);
+    const audioUrl = this.resolveVariables(config.audio_url || '', context);
+    const ptt = config.ptt !== false; // default true
+
+    if (!instanceName || instanceName.includes('{{') || instanceName.includes('$')) {
+      instanceName = this.resolvePath(context, 'normalized.instanceName') || this.resolvePath(context, '$json.normalized.instanceName') || instanceName;
+    }
+
+    const resolvePhone = () =>
+      this.resolvePath(context, '$json.data.participants[0].phoneNumber') ||
+      this.resolvePath(context, 'normalized.phoneNumber') ||
+      this.resolvePath(context, '$json.normalized.phoneNumber') ||
+      '';
+
+    if (destinationType === 'grupo') {
+      groupJid = this.resolveVariables(config.group_jid || '', context);
+      if (!groupJid || groupJid.includes('{{') || groupJid.includes('$')) {
+        groupJid = this.resolvePath(context, '$json.data.id') || this.resolvePath(context, 'normalized.groupId') || this.resolvePath(context, '$json.normalized.groupId') || '';
+      }
+      if (!number || number.includes('{{') || number.includes('$')) {
+        number = resolvePhone();
+      }
+    } else {
+      if (!number || number.includes('{{') || number.includes('$')) {
+        number = resolvePhone();
+      }
+    }
+
+    if (!instanceName || instanceName.includes('{{') || instanceName.includes('$')) {
+      throw new Error(`Instance name não resolvido: ${instanceName}`);
+    }
+    if (!audioUrl || audioUrl.includes('{{') || audioUrl.includes('$')) {
+      throw new Error(`URL do áudio não resolvida: ${audioUrl}`);
+    }
+    const recipient = destinationType === 'direto' ? number : groupJid || number;
+    if (!recipient || recipient.includes('{{') || recipient.includes('$')) {
+      throw new Error(`Recipient (group_jid/number) não resolvido: ${recipient || 'vazio'}`);
+    }
+
+    const { apikey, baseUrl } = await this.fetchInstanceCredentials(instanceName);
+
+    let url: string;
+    let body: Record<string, any>;
+
+    if (ptt) {
+      url = `${baseUrl}/message/sendWhatsAppAudio/${instanceName}`;
+      body = { number: recipient, audio: audioUrl };
+    } else {
+      url = `${baseUrl}/message/sendMedia/${instanceName}`;
+      const ext = audioUrl.split('?')[0].split('.').pop()?.toLowerCase() || 'mp3';
+      const mimeMap: Record<string, string> = { mp3: 'audio/mpeg', ogg: 'audio/ogg', m4a: 'audio/mp4', wav: 'audio/wav' };
+      const mimetype = mimeMap[ext] || 'audio/mpeg';
+      body = { number: recipient, mediatype: 'audio', mimetype, media: audioUrl, fileName: `audio.${ext}` };
+    }
+
+    console.log(`📤 [FLOW EXECUTOR] sendAudio request (ptt=${ptt}):`, JSON.stringify({ url, body }, null, 2));
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey },
+      body: JSON.stringify(body),
+    });
+    const responseData = await response.json().catch(() => ({ message: 'Erro ao parsear resposta' }));
+
+    if (!response.ok) {
+      const msg = responseData.message ?? responseData.error ?? `HTTP ${response.status}`;
+      throw new Error(`Erro ao enviar áudio: ${Array.isArray(msg) ? msg.join('; ') : msg}`);
+    }
+
+    console.log(`✅ [FLOW EXECUTOR] Áudio enviado com sucesso`);
+    return { success: true, messageId: responseData.key?.id, response: responseData };
+  }
+
+  /**
+   * Executa node Send Video
+   */
+  private async executeSendVideoNode(node: FlowNode, _input: any, context: Record<string, any>): Promise<any> {
+    const config = node.data.config || {};
+    const destinationType = config.destination_type === 'direto' ? 'direto' : 'grupo';
+
+    let instanceName = this.resolveVariables(config.instance_name || '', context);
+    let groupJid = '';
+    let number = this.resolveVariables(config.number || '', context);
+    const videoUrl = this.resolveVariables(config.video_url || '', context);
+    const caption = config.caption ? this.resolveVariables(config.caption, context) : undefined;
+
+    if (!instanceName || instanceName.includes('{{') || instanceName.includes('$')) {
+      instanceName = this.resolvePath(context, 'normalized.instanceName') || this.resolvePath(context, '$json.normalized.instanceName') || instanceName;
+    }
+
+    const resolvePhone = () =>
+      this.resolvePath(context, '$json.data.participants[0].phoneNumber') ||
+      this.resolvePath(context, 'normalized.phoneNumber') ||
+      this.resolvePath(context, '$json.normalized.phoneNumber') ||
+      '';
+
+    if (destinationType === 'grupo') {
+      groupJid = this.resolveVariables(config.group_jid || '', context);
+      if (!groupJid || groupJid.includes('{{') || groupJid.includes('$')) {
+        groupJid = this.resolvePath(context, '$json.data.id') || this.resolvePath(context, 'normalized.groupId') || this.resolvePath(context, '$json.normalized.groupId') || '';
+      }
+      if (!number || number.includes('{{') || number.includes('$')) {
+        number = resolvePhone();
+      }
+    } else {
+      if (!number || number.includes('{{') || number.includes('$')) {
+        number = resolvePhone();
+      }
+    }
+
+    if (!instanceName || instanceName.includes('{{') || instanceName.includes('$')) {
+      throw new Error(`Instance name não resolvido: ${instanceName}`);
+    }
+    if (!videoUrl || videoUrl.includes('{{') || videoUrl.includes('$')) {
+      throw new Error(`URL do vídeo não resolvida: ${videoUrl}`);
+    }
+    const recipient = destinationType === 'direto' ? number : groupJid || number;
+    if (!recipient || recipient.includes('{{') || recipient.includes('$')) {
+      throw new Error(`Recipient (group_jid/number) não resolvido: ${recipient || 'vazio'}`);
+    }
+
+    const { apikey, baseUrl } = await this.fetchInstanceCredentials(instanceName);
+    const url = `${baseUrl}/message/sendMedia/${instanceName}`;
+
+    const ext = videoUrl.split('?')[0].split('.').pop()?.toLowerCase() || 'mp4';
+    const mimeMap: Record<string, string> = { mp4: 'video/mp4', avi: 'video/x-msvideo', mov: 'video/quicktime', mkv: 'video/x-matroska' };
+    const mimetype = mimeMap[ext] || 'video/mp4';
+
+    const body = { number: recipient, mediatype: 'video', mimetype, media: videoUrl, fileName: `video.${ext}`, ...(caption ? { caption } : {}) };
+
+    console.log(`📤 [FLOW EXECUTOR] sendVideo request:`, JSON.stringify({ url, body }, null, 2));
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey },
+      body: JSON.stringify(body),
+    });
+    const responseData = await response.json().catch(() => ({ message: 'Erro ao parsear resposta' }));
+
+    if (!response.ok) {
+      const msg = responseData.message ?? responseData.error ?? `HTTP ${response.status}`;
+      throw new Error(`Erro ao enviar vídeo: ${Array.isArray(msg) ? msg.join('; ') : msg}`);
+    }
+
+    console.log(`✅ [FLOW EXECUTOR] Vídeo enviado com sucesso`);
+    return { success: true, messageId: responseData.key?.id, response: responseData };
   }
 
   /**
@@ -1234,7 +1787,25 @@ export class FlowExecutorService {
       throw new Error(`API key não encontrada para instância ${instanceName}`);
     }
 
-    // 3) Compõe prompt final com persona
+    // 3) Carrega histórico de conversa (memória multi-turn)
+    let conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+    try {
+      const { data: memberData } = await supabaseServiceRole
+        .from('whatsapp_group_agent_members')
+        .select('conversation_history')
+        .eq('group_jid', groupJid)
+        .eq('user_phone', userPhone || '')
+        .maybeSingle();
+
+      if (memberData?.conversation_history && Array.isArray(memberData.conversation_history)) {
+        // Mantém as últimas 10 trocas (20 mensagens) para não explodir o contexto
+        conversationHistory = (memberData.conversation_history as any[]).slice(-20);
+      }
+    } catch {
+      // Coluna pode não existir ainda — continua sem histórico
+    }
+
+    // 4) Compõe prompt final com persona + contexto do usuário
     const personaTone = config.persona_tone || 'gentil';
     const personaRole = config.persona_role || 'consultor';
     const objective = config.objective || 'levar para deposito';
@@ -1250,13 +1821,26 @@ export class FlowExecutorService {
       gerente: 'Você é um gerente que toma decisões e lidera conversas.',
     };
 
+    // Contexto do usuário injetado no prompt
+    const nomeUsuario = context.$global?.nome || context.global?.nome || null;
+    const bancaNome = context.$global?.banca || context.global?.banca || null;
+    const phoneDisplay = userPhone ? String(userPhone).replace(/\D/g, '').replace(/@.*/, '') : null;
+    const userContextLines: string[] = [];
+    if (phoneDisplay) userContextLines.push(`Telefone do usuário: ${phoneDisplay}`);
+    if (nomeUsuario) userContextLines.push(`Nome da banca/loja: ${nomeUsuario}`);
+    if (bancaNome) userContextLines.push(`Nome da banca: ${bancaNome}`);
+
+    const userContextBlock = userContextLines.length > 0
+      ? `\nContexto do usuário:\n${userContextLines.join('\n')}`
+      : '';
+
     const finalSystemPrompt = `${systemPrompt}
 
 ${tonePrompts[personaTone] || tonePrompts.gentil}
 
 ${rolePrompts[personaRole] || rolePrompts.consultor}
 
-Objetivo principal: ${objective}
+Objetivo principal: ${objective}${userContextBlock}
 
 REGRAS ANTI-SPAM (OBRIGATÓRIO):
 - Você só responde se a mensagem for claramente uma PERGUNTA, ou contiver palavras-chave de intenção, ou mencionar o suporte/agente.
@@ -1264,18 +1848,22 @@ REGRAS ANTI-SPAM (OBRIGATÓRIO):
 - Você deve ser curto, direto, e sempre finalizar com uma pergunta simples para avançar.
 - No máximo 1 resposta por vez, sem textos longos.`;
 
-    // 4) Gera resposta usando LLM
+    // 5) Gera resposta usando LLM com histórico de conversa
     const userId = context.$userId || '';
-    const tenantId = userId; // Assumindo que userId = tenantId por enquanto
+    const tenantId = userId;
+
+    // Monta mensagens: system + histórico + mensagem atual
+    const llmMessages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+      { role: 'system', content: finalSystemPrompt },
+      ...conversationHistory,
+      { role: 'user', content: userMessage },
+    ];
 
     let llmResponse;
     try {
       llmResponse = await llmService.generate({
         tenantId,
-        messages: [
-          { role: 'system', content: finalSystemPrompt },
-          { role: 'user', content: userMessage },
-        ],
+        messages: llmMessages,
         temperature: 0.7,
         maxTokens: 500,
       });
@@ -1324,6 +1912,26 @@ REGRAS ANTI-SPAM (OBRIGATÓRIO):
 
       // 6) Atualiza contextos de anti-spam após enviar
       await this.updateAntiSpamContext(groupJid, userPhone, config);
+
+      // 6b) Salva histórico de conversa (memória multi-turn)
+      try {
+        const updatedHistory = [
+          ...conversationHistory,
+          { role: 'user' as const, content: userMessage },
+          { role: 'assistant' as const, content: agentResponse },
+        ].slice(-20); // mantém as últimas 20 mensagens
+
+        await supabaseServiceRole
+          .from('whatsapp_group_agent_members')
+          .upsert({
+            group_jid: groupJid,
+            user_phone: userPhone || '',
+            conversation_history: updatedHistory,
+            last_bot_reply_at: new Date().toISOString(),
+          }, { onConflict: 'group_jid,user_phone', ignoreDuplicates: false });
+      } catch {
+        // Coluna pode não existir ainda — ignora silenciosamente
+      }
 
       // 7) Log de uso (tokens)
       try {
@@ -1568,6 +2176,13 @@ REGRAS ANTI-SPAM (OBRIGATÓRIO):
   }
 
   /**
+   * Indica se ainda existem placeholders {{ ... }} não substituídos pelo resolveVariables.
+   */
+  private hasUnresolvedTemplateVariables(s: string): boolean {
+    return typeof s === 'string' && s.includes('{{');
+  }
+
+  /**
    * Resolve variáveis no formato {{$json.path}} ou {{$normalized.field}} ou {{numero}}, {{banca}}, {{nome}}
    */
   private resolveVariables(template: string, context: Record<string, any>): string {
@@ -1606,6 +2221,11 @@ REGRAS ANTI-SPAM (OBRIGATÓRIO):
       
       if (trimmedPath === 'nome') {
         return context.$global?.nome || context.global?.nome || '';
+      }
+
+      if (trimmedPath === '$question.reply' || trimmedPath === 'question.reply') {
+        const r = context.$question?.reply;
+        return r !== undefined && r !== null ? String(r) : '';
       }
       
       // Variáveis complexas (com $ ou .)
@@ -1783,7 +2403,7 @@ REGRAS ANTI-SPAM (OBRIGATÓRIO):
    */
   private async finishExecution(
     executionId: string,
-    status: 'success' | 'failed' | 'cancelled',
+    status: 'success' | 'failed' | 'cancelled' | 'paused',
     errorMessage: string | null,
     outputData: any
   ): Promise<void> {
@@ -1829,8 +2449,12 @@ REGRAS ANTI-SPAM (OBRIGATÓRIO):
         const config = triggerNode.data.config || {};
         const filters = config.filters || {};
 
-        // Verifica filtros
-        if (filters.event_type && filters.event_type !== eventType) continue;
+        // Verifica filtros (event_type com mesma normalização que matchesTrigger / findMatchingFlowInstances)
+        if (filters.event_type) {
+          const eventNorm = this.normalizeEventTypeForComparison(eventType);
+          const filterNorm = this.normalizeEventTypeForComparison(filters.event_type);
+          if (eventNorm !== filterNorm) continue;
+        }
         if (filters.instance && filters.instance !== instanceName) continue;
 
         if (filters.action) {
@@ -2069,6 +2693,234 @@ REGRAS ANTI-SPAM (OBRIGATÓRIO):
       console.error('❌ [FLOW EXECUTOR] Erro ao buscar flow_instances:', err);
       return [];
     }
+  }
+
+  /**
+   * Retoma o grafo a partir da edge `resposta` ou `tempo_esgotado` do nó pergunta.
+   */
+  async resumeContinuationFromPending(
+    pendingId: string,
+    branch: 'resposta' | 'tempo_esgotado',
+    resumeEventId: string | null,
+    replyText?: string
+  ): Promise<string | null> {
+    try {
+      const { data: pending, error: pErr } = await supabaseServiceRole
+        .from('flow_question_pending')
+        .select('*')
+        .eq('id', pendingId)
+        .eq('status', 'waiting')
+        .maybeSingle();
+
+      if (pErr || !pending) {
+        return null;
+      }
+
+      const sourceHandle = branch === 'resposta' ? 'resposta' : 'tempo_esgotado';
+
+      const { data: flow } = await supabaseServiceRole.from('flows').select('*').eq('id', pending.flow_id).single();
+      if (!flow || flow.status !== 'active') {
+        return null;
+      }
+
+      const graph = flow.graph_json as FlowGraph;
+      const edge = graph.edges.find((e) => e.source === pending.node_id && e.sourceHandle === sourceHandle);
+      if (!edge) {
+        console.error(`❌ [FLOW EXECUTOR] Edge "${sourceHandle}" não encontrada a partir do nó ${pending.node_id}`);
+        return null;
+      }
+
+      let inputData: any = { resumed: true, branch };
+      let ev: any = null;
+      if (resumeEventId) {
+        const { data: evRow } = await supabaseServiceRole.from('evolution_webhook_events').select('*').eq('id', resumeEventId).single();
+        ev = evRow;
+        if (ev) {
+          inputData = ev.payload_normalized || ev.payload || inputData;
+        }
+      }
+
+      const userId = pending.user_id;
+      const userInfo = await this.getUserInfoForVariables(userId);
+
+      const base = (pending.context_snapshot as Record<string, any>) || {};
+      const executionContext: Record<string, any> = {
+        ...base,
+        __flowId: pending.flow_id,
+        __executionId: undefined,
+        $userId: userId,
+        $global: {
+          ...(base.$global || {}),
+          numero: userInfo.numero || base.$global?.numero || '',
+          banca: userInfo.banca || base.$global?.banca || '',
+          nome: userInfo.nome || base.$global?.nome || '',
+        },
+        global: {
+          ...(base.global || {}),
+          numero: userInfo.numero || base.global?.numero || '',
+          banca: userInfo.banca || base.global?.banca || '',
+          nome: userInfo.nome || base.global?.nome || '',
+        },
+        $question: {
+          reply: replyText ?? '',
+          branch: sourceHandle,
+        },
+      };
+      delete executionContext.__stopExecution;
+      delete executionContext.__flowPaused;
+      delete executionContext.__pendingQuestionId;
+
+      executionContext[`pergunta_${pending.node_id}`] = {
+        output: sourceHandle,
+        replyText: replyText ?? '',
+        branch,
+      };
+
+      if (resumeEventId && inputData && typeof inputData === 'object') {
+        executionContext.$json = { ...base.$json, ...inputData, data: inputData.data ?? base.$json?.data };
+        executionContext.json = executionContext.$json;
+      }
+
+      if (resumeEventId) {
+        const { data: existingExec } = await supabaseServiceRole
+          .from('flow_executions')
+          .select('id')
+          .eq('flow_id', pending.flow_id)
+          .eq('trigger_event_id', resumeEventId)
+          .maybeSingle();
+        if (existingExec) {
+          console.log(`⚠️ [FLOW EXECUTOR] Retomada já processada para evento ${resumeEventId}`);
+          return existingExec.id;
+        }
+      }
+
+      const { data: execution, error: execError } = await supabaseServiceRole
+        .from('flow_executions')
+        .insert({
+          flow_id: pending.flow_id,
+          trigger_event_id: resumeEventId,
+          status: 'running',
+          input_data: inputData,
+          user_id: userId,
+          env: ev?.env === 'test' ? 'test' : 'prod',
+          instance_name: ev?.instance_name || pending.instance_name || null,
+        })
+        .select()
+        .single();
+
+      if (execError || !execution) {
+        console.error('❌ [FLOW EXECUTOR] Erro ao criar execução de retomada:', execError);
+        return null;
+      }
+
+      executionContext.__executionId = execution.id;
+
+      const outputData = await this.executeNodes(execution.id, graph, edge.target, executionContext);
+
+      await supabaseServiceRole
+        .from('flow_question_pending')
+        .update({
+          status: branch === 'resposta' ? 'answered' : 'timed_out',
+          answer_text: replyText ?? null,
+          answer_event_id: resumeEventId,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', pendingId);
+
+      if (executionContext.__flowPaused) {
+        await this.finishExecution(execution.id, 'paused', null, {
+          pendingQuestionId: executionContext.__pendingQuestionId,
+          reason: 'awaiting_question_reply',
+        });
+        return execution.id;
+      }
+
+      await this.finishExecution(execution.id, 'success', null, outputData);
+      console.log(`✅ [FLOW EXECUTOR] Retomada ${execution.id} concluída (branch=${branch})`);
+      return execution.id;
+    } catch (err: any) {
+      console.error('❌ [FLOW EXECUTOR] resumeContinuationFromPending:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Tenta retomar flow pausado em pergunta quando chega um evento de mensagem (Evolution).
+   */
+  async tryResumePendingQuestionFromWebhookEvent(eventId: string): Promise<boolean> {
+    try {
+      const { data: ev, error } = await supabaseServiceRole.from('evolution_webhook_events').select('*').eq('id', eventId).single();
+      if (error || !ev) return false;
+
+      const eventType = String(ev.event_type || '').toLowerCase();
+      if (!eventType.includes('message') && !eventType.includes('upsert')) {
+        return false;
+      }
+
+      const payload = ev.payload || {};
+      const d = payload.data || payload;
+      if (d?.key?.fromMe === true || payload?.data?.key?.fromMe === true) {
+        return false;
+      }
+
+      const key = d?.key || d?.message?.key;
+      const remoteJid = key?.remoteJid ? String(key.remoteJid) : null;
+      if (!remoteJid) return false;
+
+      const msg = d?.message || payload.message;
+      const text =
+        (msg?.conversation as string) ||
+        (msg?.extendedTextMessage?.text as string) ||
+        (msg?.imageMessage?.caption as string) ||
+        '';
+      if (!String(text).trim()) return false;
+
+      const instanceName = ev.instance_name ? String(ev.instance_name) : null;
+
+      const { data: pendings } = await supabaseServiceRole
+        .from('flow_question_pending')
+        .select('*')
+        .eq('status', 'waiting')
+        .gt('expires_at', new Date().toISOString())
+        .order('created_at', { ascending: true });
+
+      if (!pendings?.length) return false;
+
+      const norm = (j: string) => j.split('@')[0].replace(/\D/g, '');
+      const remoteNorm = norm(remoteJid);
+
+      const match = pendings.find((p: any) => {
+        if (instanceName && p.instance_name && String(p.instance_name) !== instanceName) return false;
+        const pr = String(p.remote_jid || '');
+        return pr === remoteJid || norm(pr) === remoteNorm;
+      });
+
+      if (!match) return false;
+
+      await this.resumeContinuationFromPending(match.id, 'resposta', eventId, String(text).trim());
+      return true;
+    } catch (err: any) {
+      console.error('❌ [FLOW EXECUTOR] tryResumePendingQuestionFromWebhookEvent:', err);
+      return false;
+    }
+  }
+
+  /**
+   * Processa pendências expiradas (tempo esgotado). Chamar via cron.
+   */
+  async processExpiredQuestionPendings(): Promise<number> {
+    const { data: rows } = await supabaseServiceRole
+      .from('flow_question_pending')
+      .select('id')
+      .eq('status', 'waiting')
+      .lt('expires_at', new Date().toISOString());
+
+    let n = 0;
+    for (const row of rows || []) {
+      const id = await this.resumeContinuationFromPending(row.id, 'tempo_esgotado', null, undefined);
+      if (id) n += 1;
+    }
+    return n;
   }
 }
 

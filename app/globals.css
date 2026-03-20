@@ -270,12 +270,21 @@ body {
 
 .dark .react-flow__edge path,
 [data-theme="dark"] .react-flow__edge path {
-  stroke: #666;
+  stroke: #8a8f98;
+  stroke-width: 2px;
 }
 
 .dark .react-flow__edge.selected path,
 [data-theme="dark"] .react-flow__edge.selected path {
   stroke: #8CD955;
+  stroke-width: 2.5px;
+}
+
+.dark .react-flow__connection-path,
+[data-theme="dark"] .react-flow__connection-path {
+  stroke: #8CD955 !important;
+  stroke-width: 2px;
+  stroke-dasharray: 6 4;
 }
 
 .dark .react-flow__edge-text,
@@ -294,10 +303,26 @@ body {
   color: #888;
 }
 
-.dark .react-flow__handle,
-[data-theme="dark"] .react-flow__handle {
+/* Handles estilizados — hit area e hover (Tailwind no componente) */
+.react-flow__handle.flow-handle {
+  pointer-events: all;
+  cursor: crosshair;
+}
+
+/* Handles sem classes flow-handle (fallback) */
+.dark .react-flow__handle:not(.flow-handle),
+[data-theme="dark"] .react-flow__handle:not(.flow-handle) {
   background-color: #555;
   border-color: #888;
+}
+
+/* Feedback ao arrastar conexão */
+.dark .react-flow__handle.connecting,
+[data-theme="dark"] .react-flow__handle.connecting,
+.dark .react-flow__handle.valid,
+[data-theme="dark"] .react-flow__handle.valid {
+  box-shadow: 0 0 0 3px rgba(140, 217, 85, 0.55);
+  transform: scale(1.15);
 }
 
 .dark .react-flow__nodesselection-rect,

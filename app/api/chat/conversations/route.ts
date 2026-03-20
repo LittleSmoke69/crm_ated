@@ -53,7 +53,6 @@ export async function GET(req: NextRequest) {
         .single();
 
       if (instError || !instance) {
-        console.log('[Zaploto Chat] conversations GET — instance_id:', instance_id, '| instância não encontrada');
         return errorResponse('Instância não encontrada', 404);
       }
 
@@ -131,12 +130,6 @@ export async function GET(req: NextRequest) {
         return errorResponse(`Erro ao buscar conversas: ${error.message}`);
       }
       const list = conversations ?? [];
-      console.log(
-        '[Zaploto Chat] conversations GET — canal=evolution',
-        'instance_id:', instance_id,
-        '| total:', list.length,
-        list.length > 0 ? `| ids: ${list.slice(0, 5).map((c: { id?: string }) => c.id).join(', ')}${list.length > 5 ? '...' : ''}` : ''
-      );
       return successResponse(list, evolutionSyncMeta ? { meta: evolutionSyncMeta } : undefined);
     }
 
@@ -148,7 +141,6 @@ export async function GET(req: NextRequest) {
       .single();
 
     if (configError || !config) {
-      console.log('[Zaploto Chat] conversations GET — whatsapp_config_id:', whatsapp_config_id, '| config não encontrada ou inativa');
       return errorResponse('Configuração WhatsApp Oficial não encontrada', 404);
     }
 
@@ -167,14 +159,6 @@ export async function GET(req: NextRequest) {
       return errorResponse(`Erro ao buscar conversas: ${error.message}`);
     }
     const list = conversations ?? [];
-    const preview = list.slice(0, 5).map((c: { id?: string; remote_jid?: string; title?: string }) => `${c.title ?? c.remote_jid ?? c.id}`);
-    console.log(
-      '[Zaploto Chat] conversations GET — canal=whatsapp_official',
-      'whatsapp_config_id:', whatsapp_config_id,
-      'phone_number_id:', (config as { phone_number_id?: string }).phone_number_id,
-      '| total:', list.length,
-      list.length > 0 ? `| preview: ${preview.join('; ')}${list.length > 5 ? '...' : ''}` : ''
-    );
     return successResponse(list);
   } catch (err: any) {
     return serverErrorResponse(err);

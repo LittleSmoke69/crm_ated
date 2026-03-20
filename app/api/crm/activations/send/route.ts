@@ -82,6 +82,12 @@ export async function POST(req: NextRequest) {
       return errorResponse('Mensagem não encontrada', 404);
     }
 
+    // Bloqueia disparo de mensagem de texto sem conteúdo (previne mensagem fantasma)
+    const isMediaOnly = message.message_type === 'audio' || message.message_type === 'ptv';
+    if (!isMediaOnly && (!message.content || !String(message.content).trim())) {
+      return errorResponse('Não é possível enviar uma mensagem sem conteúdo', 400);
+    }
+
     // Chamada interna do worker de campanhas em massa: sempre envia o lote de forma síncrona
     const useMassSend =
       !(forceSync === true && isCronProcess) &&
@@ -371,10 +377,13 @@ export async function POST(req: NextRequest) {
               requestBody.caption = messageContent;
             }
           } else {
-            // Texto puro
+            // Texto puro — bloqueia se conteúdo estiver vazio (evita mensagem fantasma)
+            if (!messageContent) {
+              throw new Error('Conteúdo da mensagem está vazio — disparo cancelado para evitar mensagem fantasma');
+            }
             url = `${normalizedBaseUrl}/message/sendText/${instanceName}`;
             url = url.replace(/([^:]\/)\/+/g, '$1');
-            
+
             requestBody = {
               number: groupId,
               text: messageContent,

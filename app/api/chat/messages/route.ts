@@ -111,3 +111,104 @@ export async function GET(req: NextRequest) {
     return serverErrorResponse(err);
   }
 }
+
+/**
+ * DELETE /api/chat/messages
+ * Apaga uma mensagem do banco e tenta deletar via Evolution API (para canais Evolution).
+ * Body: { message_id: string } — o ID interno da linha em chat_messages
+ */
+export async function DELETE(req: NextRequest) {
+  try {
+    const { userId } = await requireAuth(req);
+    const body = await req.json().catch(() => ({})) as { message_id?: string };
+    const message_id = body.message_id;
+
+    if (!message_id) {
+      return errorResponse('message_id é obrigatório', 400);
+    }
+
+    // 1. Buscar a mensagem e a conversa associada
+    const { data: message, error: msgError } = await supabaseServiceRole
+      .from('chat_messages')
+      .select('id, conversation_id, message_id, from_me, instance_id, whatsapp_config_id')
+      .eq('id', message_id)
+      .single();
+
+    if (msgError || !message) {
+      return errorResponse('Mensagem não encontrada', 404);
+    }
+
+    const { data: conversation, error: convError } = await supabaseServiceRole
+      .from('chat_conversations')
+      .select('instance_id, whatsapp_config_id, user_id, workspace_id')
+      .eq('id', message.conversation_id)
+      .single();
+
+    if (convError || !conversation) {
+      return errorResponse('Conversa não encontrada', 404);
+    }
+
+    // 2. Validar acesso
+    const { data: profile } = await supabaseServiceRole
+      .from('profiles')
+      .select('status, zaploto_id')
+      .eq('id', userId)
+      .single();
+
+    const isAdminOrSuporte =
+      profile?.status === 'admin' ||
+      profile?.status === 'super_admin' ||
+      profile?.status === 'suporte';
+
+    if (conversation.instance_id) {
+      if (!isAdminOrSuporte) {
+        const allowed = await canUserAccessEvolutionChatInstance(userId, profile || {}, conversation.instance_id);
+        if (!allowed) return errorResponse('Acesso negado.', 403);
+      }
+    } else if (conversation.whatsapp_config_id) {
+      if (!isAdminOrSuporte && conversation.workspace_id !== profile?.zaploto_id) {
+        return errorResponse('Acesso negado.', 403);
+      }
+    } else {
+      return errorResponse('Conversa sem canal.', 400);
+    }
+
+    // 3. Apagar do banco (realtime notifica o frontend automaticamente)
+    const { error: deleteError } = await supabaseServiceRole
+      .from('chat_messages')
+      .delete()
+      .eq('id', message_id);
+
+    if (deleteError) {
+      return errorResponse(`Erro ao apagar mensagem: ${deleteError.message}`, 500);
+    }
+
+    // 4. Para Evolution: tentar deletar via API (best-effort, não bloqueia)
+    if (conversation.instance_id && message.message_id) {
+      const { data: instance } = await supabaseServiceRole
+        .from('evolution_instances')
+        .select('instance_name, apikey, evolution_apis(base_url)')
+        .eq('id', conversation.instance_id)
+        .single();
+
+      if (instance) {
+        const evolutionApi = Array.isArray(instance.evolution_apis)
+          ? instance.evolution_apis[0]
+          : instance.evolution_apis;
+        const baseUrl = (evolutionApi as { base_url?: string } | null)?.base_url;
+        const apikey = instance.apikey;
+        if (baseUrl && apikey) {
+          fetch(`${baseUrl}/message/delete/${instance.instance_name}`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json', apikey },
+            body: JSON.stringify({ id: message.message_id, deleteMessage: true }),
+          }).catch(() => {});
+        }
+      }
+    }
+
+    return successResponse({ deleted: true });
+  } catch (err: any) {
+    return serverErrorResponse(err);
+  }
+}

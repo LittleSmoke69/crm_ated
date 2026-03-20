@@ -28,11 +28,8 @@ export async function canUserAccessEvolutionChatInstance(
 
   if (error || !instance) return false;
 
-  const isOwner = instance.user_id === userId;
-  const isOwnChatInstance = isOwner && instance.is_chat_instance === true;
-  const isOwnMasterInstance = isOwner && instance.is_master === true;
-
-  if (isOwnChatInstance || isOwnMasterInstance) {
+  // Dono da instância tem acesso irrestrito — independente de is_chat_instance
+  if (instance.user_id === userId) {
     return true;
   }
 

@@ -35,6 +35,9 @@ import {
   Play,
   Pause,
   Square,
+  Trash2,
+  RefreshCw,
+  Tag,
 } from 'lucide-react';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
@@ -456,7 +459,7 @@ export default function ChatPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [conversationFilter, setConversationFilter] = useState<ConversationFilter>('all');
   const [tagFilter, setTagFilter] = useState<string>(''); // nome da etiqueta para filtrar (vazio = todas)
-  const [tagOptions, setTagOptions] = useState<{ id: string; name: string }[]>([]);
+  const [tagOptions, setTagOptions] = useState<{ id: string; name: string; color?: string | null }[]>([]);
   const conversationListScrollRef = useRef<HTMLDivElement>(null);
 
   // Mensagens
@@ -483,6 +486,14 @@ export default function ChatPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Cache de conversas por canal — permite exibição imediata ao trocar de canal
   const conversationsCacheRef = useRef<Record<string, Conversation[]>>({});
+
+  // Sync de histórico WhatsApp Oficial — controla quais canais já foram sincronizados nesta sessão
+  const waSyncedChannelsRef = useRef<Set<string>>(new Set());
+  const [waHistorySyncing, setWaHistorySyncing] = useState(false);
+
+  // Sync de histórico Evolution — controla quais instâncias já foram sincronizadas nesta sessão
+  const evoSyncedChannelsRef = useRef<Set<string>>(new Set());
+  const [evoHistorySyncing, setEvoHistorySyncing] = useState(false);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const docInputRef = useRef<HTMLInputElement>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -505,6 +516,15 @@ export default function ChatPage() {
   const [updatingTags, setUpdatingTags] = useState(false);
   const [spellChecking, setSpellChecking] = useState(false);
   const [spellCheckBadge, setSpellCheckBadge] = useState<'fixed' | 'ok' | null>(null);
+
+  // Menu de conversa (MoreVertical)
+  const [showConvMenu, setShowConvMenu] = useState(false);
+  const convMenuRef = useRef<HTMLDivElement>(null);
+  const [reopeningConversation, setReopeningConversation] = useState(false);
+
+  // Deleção de mensagem
+  const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
+  const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null);
 
   // Navegação
   const [activeView, setActiveView] = useState<ActiveView>('chat');
@@ -559,9 +579,10 @@ export default function ChatPage() {
           const evo: ChannelEvolution[] = result.data.evolution || [];
           const wa: ChannelWhatsAppOfficial[] = result.data.whatsapp_official || [];
           setChannels({ evolution: evo, whatsapp_official: wa });
-          const firstChannel = evo.length > 0 ? evo[0] : wa.length > 0 ? wa[0] : null;
-          if (!selectedChannel && firstChannel) {
-            setSelectedChannel(firstChannel);
+          // Prioridade: WhatsApp Oficial > Evolution
+          const defaultChannel = wa.length > 0 ? wa[0] : evo.length > 0 ? evo[0] : null;
+          if (!selectedChannel && defaultChannel) {
+            setSelectedChannel(defaultChannel);
           }
           // Pré-carrega conversas de TODOS os canais em paralelo
           const allChannels: Array<{ id: string; type: 'evolution' | 'whatsapp_official' }> = [
@@ -629,10 +650,97 @@ export default function ChatPage() {
     [selectedChannel]
   );
 
+  // Sync paginado de todos os eventos da tabela webhook_events para chat_conversations/messages.
+  // Executa reprocess_all=true uma vez por canal por sessão para garantir histórico completo.
+  const syncWaHistoryFull = useCallback(
+    async (channelId: string) => {
+      if (waSyncedChannelsRef.current.has(channelId)) return;
+
+      setWaHistorySyncing(true);
+      const PAGE = 200;
+      let offset = 0;
+      let hasMore = true;
+
+      try {
+        while (hasMore) {
+          const res = await fetch('/api/chat/webhook-events/process-pending', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({ limit: PAGE, offset, reprocess_all: true }),
+          });
+          const json = await res.json();
+          if (!json.success) break;
+          hasMore = json.data?.has_more === true;
+          offset = json.data?.next_offset ?? offset + PAGE;
+
+          // Atualiza conversas já no meio do sync para mostrar resultados progressivamente
+          if (json.data?.processed > 0) {
+            loadConversationsFromApi(true);
+          }
+        }
+        waSyncedChannelsRef.current.add(channelId);
+      } catch (err) {
+        console.error('[Chat] syncWaHistoryFull:', err);
+      } finally {
+        setWaHistorySyncing(false);
+        loadConversationsFromApi(false);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [loadConversationsFromApi]
+  );
+
+  // Sync paginado de eventos Evolution da tabela evolution_webhook_events → chat
+  const syncEvolutionHistoryFull = useCallback(
+    async (channel: ChannelEvolution) => {
+      if (evoSyncedChannelsRef.current.has(channel.id)) return;
+
+      setEvoHistorySyncing(true);
+      const PAGE = 200;
+      let offset = 0;
+      let hasMore = true;
+
+      try {
+        while (hasMore) {
+          const res = await fetch('/api/chat/evolution-events/process-pending', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({ instance_name: channel.instance_name, limit: PAGE, offset, reprocess_all: true }),
+          });
+          const json = await res.json();
+          if (!json.success) break;
+          hasMore = json.data?.has_more === true;
+          offset = json.data?.next_offset ?? offset + PAGE;
+
+          if (json.data?.processed > 0) {
+            loadConversationsFromApi(true);
+          }
+        }
+        evoSyncedChannelsRef.current.add(channel.id);
+      } catch (err) {
+        console.error('[Chat] syncEvolutionHistoryFull:', err);
+      } finally {
+        setEvoHistorySyncing(false);
+        loadConversationsFromApi(false);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [loadConversationsFromApi]
+  );
+
   useEffect(() => {
     if (!selectedChannel) return;
-    loadConversationsFromApi(false);
-  }, [selectedChannel, loadConversationsFromApi]);
+
+    if (selectedChannel.type === 'whatsapp_official') {
+      // Primeira vez no canal desta sessão: sync completo de histórico (reprocess_all)
+      syncWaHistoryFull(selectedChannel.id);
+    } else if (selectedChannel.type === 'evolution') {
+      // Evolution: sync da tabela evolution_webhook_events + carrega conversas
+      syncEvolutionHistoryFull(selectedChannel as ChannelEvolution);
+    } else {
+      loadConversationsFromApi(false);
+    }
+  }, [selectedChannel, loadConversationsFromApi, syncWaHistoryFull, syncEvolutionHistoryFull]);
 
   // Etiquetas disponíveis (criadas pelo admin) para filtro e para marcar conversas
   useEffect(() => {
@@ -641,7 +749,7 @@ export default function ChatPage() {
       .then((r) => r.json())
       .then((data) => {
         if (data.success && Array.isArray(data.data)) {
-          setTagOptions(data.data.map((t: { id: string; name: string }) => ({ id: t.id, name: t.name })));
+          setTagOptions(data.data.map((t: { id: string; name: string; color?: string | null }) => ({ id: t.id, name: t.name, color: t.color })));
         }
       })
       .catch(() => {});
@@ -658,7 +766,7 @@ export default function ChatPage() {
           .then((r) => r.json())
           .then((data) => {
             if (data.success && Array.isArray(data.data)) {
-              setTagOptions(data.data.map((t: { id: string; name: string }) => ({ id: t.id, name: t.name })));
+              setTagOptions(data.data.map((t: { id: string; name: string; color?: string | null }) => ({ id: t.id, name: t.name, color: t.color })));
             }
           })
           .catch(() => {});
@@ -827,8 +935,26 @@ export default function ChatPage() {
   }, [selectedConversationId]);
 
   // ── Realtime: webhook_events (WhatsApp Oficial) ────────────────────────────
+  // Processa eventos brutos da tabela webhook_events em tempo real.
+  // Após processar, recarrega a lista de conversas para refletir novas mensagens.
   useEffect(() => {
     if (!selectedChannel || selectedChannel.type !== 'whatsapp_official' || !userId) return;
+
+    const processAndRefresh = (eventId: string) => {
+      fetch('/api/chat/webhook-events/process', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ event_id: eventId }),
+      })
+        .then((r) => r.json())
+        .then((res) => {
+          if (res.success && !res.data?.skipped) {
+            // Evento processado com sucesso — recarrega conversas
+            loadConversationsFromApi(true);
+          }
+        })
+        .catch((e) => console.error('[Chat] webhook_events process:', e));
+    };
 
     const channel = supabase
       .channel('webhook_events_whatsapp_official')
@@ -838,17 +964,61 @@ export default function ChatPage() {
         (payload) => {
           const row = payload.new as { id?: string };
           if (!row?.id) return;
-          fetch('/api/chat/webhook-events/process', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...authHeaders() },
-            body: JSON.stringify({ event_id: row.id }),
-          }).catch((e) => console.error('[Chat] webhook process:', e));
+          processAndRefresh(row.id);
         }
       )
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [selectedChannel, userId]);
+  }, [selectedChannel, userId, loadConversationsFromApi]);
+
+  // ── Realtime: evolution_webhook_events (Evolution) ─────────────────────────
+  // Processa eventos brutos da tabela evolution_webhook_events em tempo real.
+  // Espelha o comportamento do listener de webhook_events do WA Oficial.
+  useEffect(() => {
+    if (!selectedChannel || selectedChannel.type !== 'evolution' || !userId) return;
+    const evoChannel = selectedChannel as ChannelEvolution;
+
+    const processAndRefresh = (eventId: string) => {
+      fetch('/api/chat/evolution-events/process', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ event_id: eventId }),
+      })
+        .then((r) => r.json())
+        .then((res) => {
+          if (res.success && !res.data?.skipped) {
+            loadConversationsFromApi(true);
+          }
+        })
+        .catch(() => {});
+    };
+
+    const CHAT_EVENT_TYPES = ['MESSAGES_UPSERT', 'SEND_MESSAGE', 'MESSAGES_UPDATE', 'MESSAGES_DELETE'];
+
+    const channel = supabase
+      .channel(`evolution_webhook_events_${evoChannel.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'evolution_webhook_events',
+          filter: `instance_name=eq.${evoChannel.instance_name}`,
+        },
+        (payload) => {
+          const row = payload.new as { id?: string; event_type?: string };
+          if (!row?.id) return;
+          // Só processa eventos relevantes ao chat
+          if (CHAT_EVENT_TYPES.some((t) => row.event_type?.toUpperCase().includes(t.replace('_', '.')))) {
+            processAndRefresh(row.id);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [selectedChannel, userId, loadConversationsFromApi]);
 
   // ── Realtime: conversas ────────────────────────────────────────────────────
   useEffect(() => {
@@ -888,7 +1058,13 @@ export default function ChatPage() {
               const updated = prev.findIndex((c) => c.id === newConv.id) >= 0
                 ? prev.map((c) => (c.id === newConv.id ? newConv : c))
                 : [newConv, ...prev];
-              return sort24(updated);
+              const sorted = sort24(updated);
+              // Atualizar cache também
+              const cacheKey = filterVal;
+              if (conversationsCacheRef.current[cacheKey]) {
+                conversationsCacheRef.current[cacheKey] = sorted;
+              }
+              return sorted;
             });
 
             if (isNew && canNotify && typeof window !== 'undefined' && 'Notification' in window) {
@@ -1133,6 +1309,17 @@ export default function ChatPage() {
     return () => document.removeEventListener('mousedown', onOutside);
   }, [showTagsPopover]);
 
+  useEffect(() => {
+    if (!showConvMenu) return;
+    const onOutside = (e: MouseEvent) => {
+      if (convMenuRef.current && !convMenuRef.current.contains(e.target as Node)) {
+        setShowConvMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', onOutside);
+    return () => document.removeEventListener('mousedown', onOutside);
+  }, [showConvMenu]);
+
   const applyTagsToConversation = async (next: string[], closePopover = false) => {
     if (!selectedConversationId || updatingTags) return;
     const conv = conversations.find((c) => c.id === selectedConversationId);
@@ -1150,6 +1337,12 @@ export default function ChatPage() {
         setConversations((prev) =>
           prev.map((c) => (c.id === selectedConversationId ? { ...c, tags: next } : c))
         );
+        const cacheKey = selectedChannel?.id ?? '';
+        if (conversationsCacheRef.current[cacheKey]) {
+          conversationsCacheRef.current[cacheKey] = conversationsCacheRef.current[cacheKey].map(
+            (c) => (c.id === selectedConversationId ? { ...c, tags: next } : c)
+          );
+        }
       }
     } catch (e) {
       console.error('[Chat] Atualizar etiquetas:', e);
@@ -1187,18 +1380,66 @@ export default function ChatPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.success && data.data) {
-        setConversations((prev) =>
-          prev.map((c) =>
-            c.id === selectedConversationId
-              ? { ...c, attendance_status: 'resolvido' as const, resolved_at: data.data.resolved_at }
-              : c
-          )
-        );
+        const updated = { ...conv, attendance_status: 'resolvido' as const, resolved_at: data.data.resolved_at };
+        setConversations((prev) => prev.map((c) => c.id === selectedConversationId ? updated : c));
+        conversationsCacheRef.current[selectedChannel?.id ?? ''] = (conversationsCacheRef.current[selectedChannel?.id ?? ''] || []).map((c) => c.id === selectedConversationId ? updated : c);
       }
     } catch (e) {
       console.error('[Chat] Resolver conversa:', e);
     } finally {
       setResolvingConversation(false);
+    }
+  };
+
+  const handleReopenConversation = async () => {
+    if (!selectedConversationId || reopeningConversation) return;
+    const conv = conversations.find((c) => c.id === selectedConversationId);
+    if (!conv || conv.attendance_status !== 'resolvido') return;
+    setReopeningConversation(true);
+    setShowConvMenu(false);
+    try {
+      const res = await fetch('/api/chat/conversations', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          conversation_id: selectedConversationId,
+          attendance_status: 'pendente',
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success && data.data) {
+        const updated = { ...conv, attendance_status: 'pendente' as const, resolved_at: null };
+        setConversations((prev) => prev.map((c) => c.id === selectedConversationId ? updated : c));
+        conversationsCacheRef.current[selectedChannel?.id ?? ''] = (conversationsCacheRef.current[selectedChannel?.id ?? ''] || []).map((c) => c.id === selectedConversationId ? updated : c);
+      }
+    } catch (e) {
+      console.error('[Chat] Reabrir conversa:', e);
+    } finally {
+      setReopeningConversation(false);
+    }
+  };
+
+  const handleDeleteMessage = async (messageRowId: string) => {
+    if (deletingMessageId) return;
+    setDeletingMessageId(messageRowId);
+    try {
+      const res = await fetch('/api/chat/messages', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ message_id: messageRowId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        // Realtime já remove, mas removemos também localmente para UX imediata
+        setMessages((prev) => prev.filter((m) => m.id !== messageRowId));
+      } else {
+        console.error('[Chat] Apagar mensagem:', data.error || 'Erro desconhecido');
+      }
+    } catch (e) {
+      console.error('[Chat] Apagar mensagem:', e);
+    } finally {
+      setDeletingMessageId(null);
+      setHoveredMessageId(null);
     }
   };
 
@@ -1392,9 +1633,17 @@ export default function ChatPage() {
   };
 
   // ── Filtros e ordenação ────────────────────────────────────────────────────
-  // Todos = apenas conversas com janela 24h ativa (pendentes, não resolvidas)
-  // Minhas = atribuídas a mim
-  // Histórico = fora da janela 24h (template) ou já resolvidas
+  // isActiveConversation:
+  //   - WhatsApp Oficial: dentro da janela 24h E não resolvida
+  //   - Evolution: qualquer conversa não resolvida (sem conceito de janela 24h)
+  const isActiveConversation = (conv: Conversation): boolean => {
+    const resolved = conv.attendance_status === 'resolvido';
+    if (conv.whatsapp_config_id) {
+      return isWithin24hWindow(conv) && !resolved;
+    }
+    return !resolved;
+  };
+
   const filteredConversations = conversations.filter((conv) => {
     const term = (searchTerm || '').trim().toLowerCase();
     const matchesSearch =
@@ -1407,18 +1656,16 @@ export default function ChatPage() {
       const hasTag = (conv.tags || []).some((t) => t === tagFilter);
       if (!hasTag) return false;
     }
-    const in24h = isWithin24hWindow(conv);
-    const resolved = conv.attendance_status === 'resolvido';
     switch (conversationFilter) {
       case 'mine':
         return conv.user_id === userId;
       case 'unassigned':
-        // Histórico: template (fora 24h) ou resolvidas
-        return !in24h || resolved;
+        // Histórico: resolvidas, ou WA Oficial fora da janela 24h
+        return !isActiveConversation(conv);
       case 'all':
       default:
-        // Todos: só 24h ativas e não resolvidas (pendentes)
-        return in24h && !resolved;
+        // Todos: ativas e não resolvidas
+        return isActiveConversation(conv);
     }
   });
 
@@ -1436,13 +1683,9 @@ export default function ChatPage() {
   const displayedConversations = sortedConversations.slice(0, visibleConversationsCount);
   const hasMoreConversations = visibleConversationsCount < sortedConversations.length;
 
-  const allCount = conversations.filter(
-    (c) => isWithin24hWindow(c) && c.attendance_status !== 'resolvido'
-  ).length;
+  const allCount = conversations.filter((c) => isActiveConversation(c)).length;
   const mineCount = conversations.filter((c) => c.user_id === userId).length;
-  const historyCount = conversations.filter(
-    (c) => !isWithin24hWindow(c) || c.attendance_status === 'resolvido'
-  ).length;
+  const historyCount = conversations.filter((c) => !isActiveConversation(c)).length;
 
   useEffect(() => {
     setVisibleConversationsCount(CONVERSATIONS_PAGE_SIZE);
@@ -1784,6 +2027,12 @@ export default function ChatPage() {
                   }
                 }}
               >
+                {(waHistorySyncing || evoHistorySyncing) && conversations.length === 0 && (
+                  <div className="px-3 py-2 flex items-center gap-2 bg-[#8CD95510] border-b border-[#8CD95530] text-[#5a9e2f] dark:text-[#8CD955] text-xs">
+                    <Loader2 className="w-3 h-3 animate-spin flex-shrink-0" />
+                    <span>Sincronizando histórico de conversas...</span>
+                  </div>
+                )}
                 {conversationsLoading && conversations.length === 0 ? (
                   <div className="p-4 flex items-center justify-center gap-2 text-gray-500 dark:text-gray-400 text-sm">
                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -1857,14 +2106,19 @@ export default function ChatPage() {
                                     )}
                                   {(conv.tags || []).length > 0 && (
                                     <span className="flex-shrink-0 flex gap-0.5 flex-wrap">
-                                      {(conv.tags || []).map((tag) => (
-                                        <span
-                                          key={tag}
-                                          className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300"
-                                        >
-                                          {tag}
-                                        </span>
-                                      ))}
+                                      {(conv.tags || []).map((tag) => {
+                                        const tagMeta = tagOptions.find((t) => t.name === tag);
+                                        const bg = tagMeta?.color ?? '#3b82f6';
+                                        return (
+                                          <span
+                                            key={tag}
+                                            className="text-[10px] px-1.5 py-0.5 rounded text-white font-medium"
+                                            style={{ backgroundColor: bg }}
+                                          >
+                                            {tag}
+                                          </span>
+                                        );
+                                      })}
                                     </span>
                                   )}
                                 </h3>
@@ -2015,24 +2269,30 @@ export default function ChatPage() {
                               </p>
                             ) : (
                               <>
-                                {tagOptions.map((t) => (
-                                  <button
-                                    key={t.id}
-                                    type="button"
-                                    onClick={() => handleToggleTag(t.name)}
-                                    disabled={updatingTags}
-                                    className={`w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-[#333] ${
-                                      (selectedConversation.tags || []).includes(t.name)
-                                        ? 'text-[#8CD955] font-medium'
-                                        : 'text-gray-700 dark:text-gray-200'
-                                    }`}
-                                  >
-                                    <span className="w-4 h-4 rounded border flex items-center justify-center text-xs flex-shrink-0">
-                                      {(selectedConversation.tags || []).includes(t.name) ? '✓' : ''}
-                                    </span>
-                                    {t.name}
-                                  </button>
-                                ))}
+                                {tagOptions.map((t) => {
+                                  const isSelected = (selectedConversation.tags || []).includes(t.name);
+                                  const tagColor = t.color ?? '#3b82f6';
+                                  return (
+                                    <button
+                                      key={t.id}
+                                      type="button"
+                                      onClick={() => handleToggleTag(t.name)}
+                                      disabled={updatingTags}
+                                      className="w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-[#333] text-gray-700 dark:text-gray-200"
+                                    >
+                                      <span
+                                        className="w-4 h-4 rounded flex items-center justify-center text-xs flex-shrink-0 text-white font-bold"
+                                        style={{ backgroundColor: isSelected ? tagColor : 'transparent', border: `2px solid ${tagColor}` }}
+                                      >
+                                        {isSelected ? '✓' : ''}
+                                      </span>
+                                      <span className={isSelected ? 'font-medium' : ''}>{t.name}</span>
+                                      {isSelected && (
+                                        <span className="ml-auto w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: tagColor }} />
+                                      )}
+                                    </button>
+                                  );
+                                })}
                                 {(selectedConversation.tags || []).length > 0 && (
                                   <button
                                     type="button"
@@ -2055,8 +2315,7 @@ export default function ChatPage() {
                         <CheckCircle2 className="w-3.5 h-3.5" />
                         Resolvida
                       </span>
-                    ) : isWithin24hWindow(selectedConversation) &&
-                      (userStatus === 'suporte' || userStatus === 'admin' || userStatus === 'super_admin') ? (
+                    ) : (userStatus === 'suporte' || userStatus === 'admin' || userStatus === 'super_admin') ? (
                       <button
                         onClick={handleResolveConversation}
                         disabled={resolvingConversation}
@@ -2071,9 +2330,43 @@ export default function ChatPage() {
                         Resolver
                       </button>
                     ) : null}
-                    <button className="p-1.5 hover:bg-gray-100 dark:hover:bg-[#333] rounded-md text-gray-500 dark:text-gray-400" aria-label="Mais opções">
-                      <MoreVertical className="w-4 h-4" />
-                    </button>
+                    {/* ── Menu MoreVertical ── */}
+                    <div ref={convMenuRef} className="relative">
+                      <button
+                        type="button"
+                        onClick={() => setShowConvMenu((v) => !v)}
+                        className="p-1.5 hover:bg-gray-100 dark:hover:bg-[#333] rounded-md text-gray-500 dark:text-gray-400"
+                        aria-label="Mais opções"
+                      >
+                        <MoreVertical className="w-4 h-4" />
+                      </button>
+                      {showConvMenu && (
+                        <div className="absolute right-0 top-full mt-1 z-30 w-52 py-1 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-lg shadow-lg">
+                          {selectedConversation.attendance_status === 'resolvido' &&
+                            (userStatus === 'suporte' || userStatus === 'admin' || userStatus === 'super_admin') && (
+                            <button
+                              type="button"
+                              onClick={handleReopenConversation}
+                              disabled={reopeningConversation}
+                              className="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-[#333] text-gray-700 dark:text-gray-200 disabled:opacity-60"
+                            >
+                              {reopeningConversation ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                              Reabrir conversa
+                            </button>
+                          )}
+                          {(userStatus === 'suporte' || userStatus === 'admin' || userStatus === 'super_admin') && (
+                            <button
+                              type="button"
+                              onClick={() => { setShowTagsPopover(true); setShowConvMenu(false); }}
+                              className="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-[#333] text-gray-700 dark:text-gray-200"
+                            >
+                              <Tag className="w-4 h-4" />
+                              Gerenciar etiquetas
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
 
@@ -2116,6 +2409,9 @@ export default function ChatPage() {
                         index === 0 ||
                         new Date(msg.timestamp * 1000).toDateString() !==
                           new Date(messages[index - 1].timestamp * 1000).toDateString();
+                      const isHovered = hoveredMessageId === msg.id;
+                      const isDeleting = deletingMessageId === msg.id;
+                      const canDelete = userStatus === 'suporte' || userStatus === 'admin' || userStatus === 'super_admin';
 
                       return (
                         <React.Fragment key={msg.id}>
@@ -2127,7 +2423,11 @@ export default function ChatPage() {
                               })}
                             </div>
                           )}
-                          <div className={`flex ${msg.from_me ? 'justify-end' : 'justify-start'}`}>
+                          <div
+                            className={`flex ${msg.from_me ? 'justify-end' : 'justify-start'} group`}
+                            onMouseEnter={() => setHoveredMessageId(msg.id)}
+                            onMouseLeave={() => setHoveredMessageId(null)}
+                          >
                             {!msg.from_me && (
                               <div
                                 className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-semibold mr-2 flex-shrink-0"
@@ -2140,22 +2440,36 @@ export default function ChatPage() {
                                 {getInitials(msg.sender_jid || selectedConversation.title)}
                               </div>
                             )}
-                            <div
-                              className={`max-w-md px-4 py-2 rounded-lg ${
-                                msg.from_me
-                                  ? 'bg-[#8CD955] text-white rounded-br-none'
-                                  : 'bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 rounded-bl-none border border-gray-200 dark:border-[#404040]'
-                              }`}
-                            >
-                              <MessageContent msg={msg} fromMe={msg.from_me} onMediaClick={(url, type, caption) => setMediaModal({ url, type, caption })} />
+                            <div className={`flex items-end gap-1 ${msg.from_me ? 'flex-row-reverse' : 'flex-row'}`}>
                               <div
-                                className={`flex items-center justify-end gap-1 mt-1 ${
-                                  msg.from_me ? 'text-white/80' : 'text-gray-500 dark:text-gray-400'
-                                }`}
+                                className={`max-w-md px-4 py-2 rounded-lg ${
+                                  msg.from_me
+                                    ? 'bg-[#8CD955] text-white rounded-br-none'
+                                    : 'bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 rounded-bl-none border border-gray-200 dark:border-[#404040]'
+                                } ${isDeleting ? 'opacity-50' : ''}`}
                               >
-                                <span className="text-xs">{formatMessageTime(msg.timestamp)}</span>
-                                {msg.from_me && getStatusIcon(msg.status)}
+                                <MessageContent msg={msg} fromMe={msg.from_me} onMediaClick={(url, type, caption) => setMediaModal({ url, type, caption })} />
+                                <div
+                                  className={`flex items-center justify-end gap-1 mt-1 ${
+                                    msg.from_me ? 'text-white/80' : 'text-gray-500 dark:text-gray-400'
+                                  }`}
+                                >
+                                  <span className="text-xs">{formatMessageTime(msg.timestamp)}</span>
+                                  {msg.from_me && getStatusIcon(msg.status)}
+                                </div>
                               </div>
+                              {/* Botão apagar — aparece no hover */}
+                              {canDelete && (isHovered || isDeleting) && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteMessage(msg.id)}
+                                  disabled={isDeleting || !!deletingMessageId}
+                                  className="flex-shrink-0 mb-1 p-1 rounded-full bg-white dark:bg-[#333] border border-gray-200 dark:border-[#404040] text-gray-400 hover:text-red-500 hover:border-red-300 shadow-sm disabled:opacity-50 transition-colors"
+                                  title="Apagar mensagem"
+                                >
+                                  {isDeleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                                </button>
+                              )}
                             </div>
                           </div>
                         </React.Fragment>

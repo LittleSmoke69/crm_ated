@@ -11,6 +11,7 @@
 # process-activation-mass-send: processa campanhas de disparo em massa (evita timeout com muitos grupos)
 # process-group-fetch: processa busca de grupos em segundo plano (tempo longo, evita corte Netlify)
 # check-instances-status: roda a cada 5 minutos para verificar status das instâncias
+# flow-question-timeouts: melhor esforço no Netlify (mín. ~1/min). Para 1s use polling em instrumentation ou cron externo.
 [functions]
   [functions."process-campaign-queue"]
     schedule = "*/1 * * * *"
@@ -35,6 +36,8 @@
     # Timeout em segundos (máx. 26 no Netlify). Permite esperar a resposta da API que processa até 5 logs por run.
     timeout = 26
   [functions."maturation-tick"]
+    schedule = "*/1 * * * *"
+  [functions."flow-question-timeouts"]
     schedule = "*/1 * * * *"
   # [functions."maturation-scheduler"]
   #   schedule = "*/10 * * * *"

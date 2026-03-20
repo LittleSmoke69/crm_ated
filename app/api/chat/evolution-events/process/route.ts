@@ -1,20 +1,17 @@
 /**
- * POST /api/chat/webhook-events/process
- * Puxa um evento da tabela webhook_events (por id) e organiza os dados
- * em chat_conversations e chat_messages.
+ * POST /api/chat/evolution-events/process
  *
- * - Acionado pelo Supabase Realtime do frontend a cada INSERT em webhook_events.
- * - Idempotente: se processed_at já estiver preenchido, retorna sem reprocessar
- *   (a menos que force=true seja enviado no body).
+ * Processa um único evento da tabela evolution_webhook_events nas tabelas de chat.
+ * Acionado pelo Supabase Realtime do frontend quando um novo evento é inserido.
+ * Idempotente: se processed_at já estiver preenchido, retorna sem reprocessar
+ * (a menos que force=true seja enviado).
  */
 
 import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { processMetaPayloadToChat } from '@/lib/services/whatsapp-official-webhook-processor';
-
-const SOURCE = 'whatsapp_official';
+import { processEvolutionPayloadToChat } from '@/lib/services/evolution-webhook-processor';
 
 export async function POST(req: NextRequest) {
   try {
@@ -28,17 +25,15 @@ export async function POST(req: NextRequest) {
     }
 
     const { data: event, error: fetchError } = await supabaseServiceRole
-      .from('webhook_events')
-      .select('id, source, raw_payload, processed_at')
+      .from('evolution_webhook_events')
+      .select('id, event_type, payload, processed_at')
       .eq('id', event_id)
-      .eq('source', SOURCE)
       .single();
 
     if (fetchError || !event) {
-      return errorResponse('Evento não encontrado ou não é do canal whatsapp_official', 404);
+      return errorResponse('Evento não encontrado', 404);
     }
 
-    // Evita reprocessamento — a menos que force=true seja enviado explicitamente
     if (event.processed_at && !force) {
       return successResponse(
         { event_id, processed_at: event.processed_at, skipped: true },
@@ -46,22 +41,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const rawPayload = event.raw_payload as unknown;
+    const rawPayload = event.payload as unknown;
     if (!rawPayload || typeof rawPayload !== 'object') {
-      return errorResponse('Evento sem raw_payload válido', 400);
+      return errorResponse('Evento sem payload válido', 400);
     }
 
-    await processMetaPayloadToChat(rawPayload);
+    const result = await processEvolutionPayloadToChat(rawPayload);
 
     const processedAt = new Date().toISOString();
     await supabaseServiceRole
-      .from('webhook_events')
+      .from('evolution_webhook_events')
       .update({ processed_at: processedAt })
       .eq('id', event_id);
 
     return successResponse(
-      { event_id, processed_at: processedAt },
-      'Evento processado e organizado no chat com sucesso'
+      { event_id, processed_at: processedAt, skipped: result.skipped },
+      result.skipped ? 'Evento não relevante para o chat' : 'Evento processado com sucesso'
     );
   } catch (err) {
     return serverErrorResponse(err as Error);

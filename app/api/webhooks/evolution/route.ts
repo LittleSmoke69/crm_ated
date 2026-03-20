@@ -83,12 +83,12 @@ export async function POST(req: NextRequest) {
       .from('evolution_instances')
       .select('id, workspace_id, user_id')
       .eq('instance_name', instance)
-      .or('is_chat_instance.eq.true,is_master.eq.true')
+      .eq('is_active', true)
       .maybeSingle();
 
     if (instError || !dbInstance) {
       console.error(
-        `❌ [WEBHOOK] Instância "${instance}" não encontrada ou sem chat/mestre (is_chat_instance ou is_master)`,
+        `❌ [WEBHOOK] Instância "${instance}" não encontrada ou inativa`,
         { instError: instError?.message }
       );
       return new Response('Instance not found', { status: 404 });

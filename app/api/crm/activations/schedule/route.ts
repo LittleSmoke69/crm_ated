@@ -53,6 +53,12 @@ export async function POST(req: NextRequest) {
       return errorResponse('Mensagem não encontrada', 404);
     }
 
+    // Bloqueia agendamento de mensagens de texto sem conteúdo (previne disparo fantasma)
+    const isMediaOnly = message.message_type === 'audio' || message.message_type === 'ptv';
+    if (!isMediaOnly && (!message.content || !String(message.content).trim())) {
+      return errorResponse('Não é possível agendar uma mensagem sem conteúdo', 400);
+    }
+
     // Verifica se a instância existe e está ativa
     const { data: instance, error: instanceError } = await supabaseServiceRole
       .from('evolution_instances')

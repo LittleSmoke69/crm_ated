@@ -36,7 +36,7 @@ export async function PATCH(
     // Verifica se a mensagem existe e se o usuário tem permissão
     const { data: existingMessage, error: fetchError } = await supabaseServiceRole
       .from('messages')
-      .select('user_id')
+      .select('user_id, message_type')
       .eq('id', messageId)
       .single();
 
@@ -65,12 +65,17 @@ export async function PATCH(
 
     if (title !== undefined) updateData.title = title.trim();
     if (content !== undefined) {
-      // Permite conteúdo vazio para mensagens de áudio
-      updateData.content = content.trim();
+      const trimmedContent = content.trim();
+      // Conteúdo vazio só é permitido para áudio e PTV (mensagens de mídia sem texto)
+      const currentType = message_type ?? existingMessage.message_type;
+      if (!trimmedContent && currentType !== 'audio' && currentType !== 'ptv') {
+        return errorResponse('Conteúdo não pode estar vazio para este tipo de mensagem', 400);
+      }
+      updateData.content = trimmedContent;
       // Atualiza preview se não foi fornecido explicitamente
       if (preview === undefined) {
-        updateData.preview = content 
-          ? content.substring(0, 100) + (content.length > 100 ? '...' : '')
+        updateData.preview = trimmedContent
+          ? trimmedContent.substring(0, 100) + (trimmedContent.length > 100 ? '...' : '')
           : 'Mensagem de áudio';
       }
     }

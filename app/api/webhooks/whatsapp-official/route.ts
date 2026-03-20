@@ -2,17 +2,15 @@
  * Webhook WhatsApp Cloud API (Oficial)
  *
  * GET  — verificação (hub.verify_token / hub.challenge)
- * POST — eventos (mensagens recebidas, status updates)
+ * POST — receptor fino: salva o evento bruto em webhook_events e retorna 200 imediatamente.
  *
- * Sempre retorna 200 para a Meta (exige resposta < 5 s).
- * 1) Salva o evento em webhook_events (raw_payload).
- * 2) Processa o payload e organiza em chat_conversations + chat_messages.
- * 3) Marca processed_at no evento.
+ * O processamento (chat_conversations + chat_messages) é desacoplado e ocorre via:
+ *   - Supabase Realtime no frontend: INSERT em webhook_events → POST /api/chat/webhook-events/process
+ *   - Recuperação manual/cron: POST /api/chat/webhook-events/process-pending (eventos com processed_at IS NULL)
  */
 
 import { NextRequest } from 'next/server';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { processMetaPayloadToChat } from '@/lib/services/whatsapp-official-webhook-processor';
 
 const SOURCE = 'whatsapp_official';
 const EVENT_NAME = 'whatsapp_official';
@@ -54,14 +52,13 @@ export async function GET(req: NextRequest) {
 }
 
 // ---------------------------------------------------------------------------
-// POST — Eventos: salva em webhook_events e organiza no chat
+// POST — Receptor fino: persiste payload bruto e retorna 200
 // ---------------------------------------------------------------------------
 
 export async function POST(req: NextRequest) {
-  let payload: unknown;
-
   try {
     const rawBody = await req.text();
+    let payload: unknown;
     try {
       payload = rawBody ? JSON.parse(rawBody) : {};
     } catch {
@@ -72,44 +69,21 @@ export async function POST(req: NextRequest) {
       return new Response('OK', { status: 200 });
     }
 
-    // 1) Salvar evento na tabela webhook_events (fonte dos dados)
-    const { data: inserted, error: insertError } = await supabaseServiceRole
+    const { error: insertError } = await supabaseServiceRole
       .from('webhook_events')
       .insert({
         source: SOURCE,
         event_name: EVENT_NAME,
         raw_payload: payload as object,
-      })
-      .select('id')
-      .single();
+      });
 
     if (insertError) {
-      console.error('[Zaploto Chat] Erro ao inserir webhook_event:', insertError.message, insertError.details);
-      return new Response('OK', { status: 200 });
-    }
-
-    const eventId = inserted?.id as string | undefined;
-
-    // 2) Organizar dados do payload em chat_conversations e chat_messages (tempo real)
-    try {
-      await processMetaPayloadToChat(payload);
-    } catch (err) {
-      console.error('[Zaploto Chat] Erro ao processar payload para chat:', err);
-      // Não atualiza processed_at; evento pode ser reprocessado via API
-      return new Response('OK', { status: 200 });
-    }
-
-    // 3) Marcar evento como processado
-    if (eventId) {
-      await supabaseServiceRole
-        .from('webhook_events')
-        .update({ processed_at: new Date().toISOString() })
-        .eq('id', eventId);
+      console.error('[Zaploto Webhook] Erro ao inserir webhook_event:', insertError.message, insertError.details);
     }
 
     return new Response('OK', { status: 200 });
   } catch (err) {
-    console.error('[Zaploto Chat] Erro inesperado no webhook:', err);
+    console.error('[Zaploto Webhook] Erro inesperado:', err);
     return new Response('OK', { status: 200 });
   }
 }

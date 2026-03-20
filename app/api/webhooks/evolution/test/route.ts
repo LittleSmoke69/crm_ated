@@ -106,6 +106,12 @@ export async function POST(req: NextRequest) {
     // Dispara flows ativos que correspondem ao evento (assíncrono, não bloqueia)
     if (normalizedPayload) {
       const runFlows = async () => {
+        const resumed = await flowExecutorService.tryResumePendingQuestionFromWebhookEvent(event.id);
+        if (resumed) {
+          console.log('✅ [WEBHOOK TEST] Flow retomado (nó Pergunta — resposta)');
+          return;
+        }
+
         const np = normalizedPayload;
         
         // Extrai groupJid de múltiplos caminhos possíveis
