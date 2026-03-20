@@ -267,7 +267,7 @@ export async function POST(req: NextRequest) {
       const createdConversation = await chatService.upsertConversation({
         instance_id,
         whatsapp_config_id: null,
-        workspace_id: (instance as { workspace_id?: string | null }).workspace_id ?? null,
+        workspace_id: (instance as { workspace_id?: string | null }).workspace_id ?? undefined,
         user_id: userId,
         remote_jid: remoteJid,
         title,
