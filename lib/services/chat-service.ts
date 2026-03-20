@@ -35,6 +35,7 @@ export interface ChatConversation {
   whatsapp_config_id?: string | null;
   remote_jid: string;
   title?: string;
+  profile_pic_url?: string | null;
   is_group: boolean;
   last_message_at?: string;
   last_message_preview?: string;
@@ -66,13 +67,26 @@ export class ChatService {
   ) {
     const { instance_name, apikey, base_url } = instance;
     const baseUrl = base_url.replace(/\/+$/, '');
+    const outboundNumber = payload.remoteJid.endsWith('@s.whatsapp.net')
+      ? payload.remoteJid.replace(/@s\.whatsapp\.net$/i, '')
+      : payload.remoteJid;
 
     let endpoint = '';
-    let body: Record<string, unknown> = { number: payload.remoteJid };
+    let body: Record<string, unknown> = { number: outboundNumber };
+    let fallbackEndpoint: string | null = null;
 
     if (payload.type === 'text') {
       endpoint = `${baseUrl}/message/sendText/${instance_name}`;
       body.text = payload.text;
+    } else if (payload.mediatype === 'audio') {
+      // Endpoint oficial mais recente da Evolution para áudio
+      endpoint = `${baseUrl}/message/sendWhatsAppAudio/${instance_name}`;
+      // Compatibilidade com versões/instalações antigas
+      fallbackEndpoint = `${baseUrl}/message/sendAudio/${instance_name}`;
+      body = {
+        ...body,
+        audio: payload.media,
+      };
     } else {
       endpoint = `${baseUrl}/message/sendMedia/${instance_name}`;
       body = {
@@ -85,11 +99,17 @@ export class ChatService {
       };
     }
 
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', apikey },
-      body: JSON.stringify(body),
-    });
+    const doRequest = async (url: string) =>
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey },
+        body: JSON.stringify(body),
+      });
+
+    let response = await doRequest(endpoint);
+    if (!response.ok && fallbackEndpoint && (response.status === 404 || response.status === 405)) {
+      response = await doRequest(fallbackEndpoint);
+    }
 
     if (!response.ok) {
       const errorText = await response.text();

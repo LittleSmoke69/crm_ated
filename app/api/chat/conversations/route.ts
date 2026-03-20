@@ -11,6 +11,17 @@ import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { canUserAccessEvolutionChatInstance } from '@/lib/services/atendimento-chat-access';
 import { syncEvolutionDirectoryToChatConversations } from '@/lib/server/evolution-chat-directory-sync';
+import { chatService } from '@/lib/services/chat-service';
+
+function normalizeToBrWhatsappPhone(rawPhone: string): string {
+  const digits = String(rawPhone || '').replace(/\D/g, '');
+  if (!digits) return '';
+  // Entrada local BR sem DDI (DDD + número) -> prefixa 55
+  if (!digits.startsWith('55') && (digits.length === 10 || digits.length === 11)) {
+    return `55${digits}`;
+  }
+  return digits;
+}
 
 /**
  * GET /api/chat/conversations
@@ -160,6 +171,137 @@ export async function GET(req: NextRequest) {
     }
     const list = conversations ?? [];
     return successResponse(list);
+  } catch (err: any) {
+    return serverErrorResponse(err);
+  }
+}
+
+/**
+ * POST /api/chat/conversations
+ * Cria (ou retorna) uma conversa manualmente a partir de um telefone.
+ * Body: { instance_id?: string, whatsapp_config_id?: string, phone: string, title?: string }
+ */
+export async function POST(req: NextRequest) {
+  try {
+    const { userId } = await requireAuth(req);
+    const body = (await req.json().catch(() => ({}))) as {
+      instance_id?: string;
+      whatsapp_config_id?: string;
+      phone?: string;
+      title?: string;
+    };
+
+    const instance_id = body.instance_id?.trim();
+    const whatsapp_config_id = body.whatsapp_config_id?.trim();
+    const rawPhone = String(body.phone || '');
+    const normalizedPhone = normalizeToBrWhatsappPhone(rawPhone);
+    const title = (body.title || normalizedPhone).trim();
+
+    if (instance_id && whatsapp_config_id) {
+      return errorResponse('Informe apenas instance_id ou whatsapp_config_id', 400);
+    }
+    if (!instance_id && !whatsapp_config_id) {
+      return errorResponse('instance_id ou whatsapp_config_id é obrigatório', 400);
+    }
+    if (!normalizedPhone || normalizedPhone.length < 10 || normalizedPhone.length > 15) {
+      return errorResponse('Telefone inválido. Use apenas números (10 a 15 dígitos).', 400);
+    }
+
+    const remoteJid = `${normalizedPhone}@s.whatsapp.net`;
+    const { data: profile } = await supabaseServiceRole
+      .from('profiles')
+      .select('status, zaploto_id')
+      .eq('id', userId)
+      .single();
+
+    const isAdminOrSuporte =
+      profile?.status === 'admin' ||
+      profile?.status === 'super_admin' ||
+      profile?.status === 'suporte';
+
+    if (instance_id) {
+      const { data: instance, error: instError } = await supabaseServiceRole
+        .from('evolution_instances')
+        .select('id, workspace_id, user_id')
+        .eq('id', instance_id)
+        .single();
+
+      if (instError || !instance) {
+        return errorResponse('Instância não encontrada', 404);
+      }
+
+      if (!isAdminOrSuporte) {
+        const allowed = await canUserAccessEvolutionChatInstance(userId, profile || {}, instance_id);
+        if (!allowed) {
+          return errorResponse('Acesso negado.', 403);
+        }
+      }
+
+      const { data: existingConversation } = await supabaseServiceRole
+        .from('chat_conversations')
+        .select('*')
+        .eq('instance_id', instance_id)
+        .eq('remote_jid', remoteJid)
+        .maybeSingle();
+
+      if (existingConversation) {
+        return successResponse(existingConversation, 'Conversa já existente');
+      }
+
+      const createdConversation = await chatService.upsertConversation({
+        instance_id,
+        whatsapp_config_id: null,
+        workspace_id: (instance as { workspace_id?: string | null }).workspace_id ?? undefined,
+        user_id: userId,
+        remote_jid: remoteJid,
+        title,
+        is_group: false,
+        last_message_at: new Date().toISOString(),
+        last_message_preview: 'Conversa iniciada manualmente',
+      });
+
+      return successResponse(createdConversation, 'Conversa criada com sucesso');
+    }
+
+    const { data: config, error: configError } = await supabaseServiceRole
+      .from('whatsapp_official_configs')
+      .select('id, zaploto_id')
+      .eq('id', whatsapp_config_id)
+      .eq('is_active', true)
+      .single();
+
+    if (configError || !config) {
+      return errorResponse('Configuração WhatsApp Oficial não encontrada', 404);
+    }
+
+    if (!isAdminOrSuporte && config.zaploto_id !== profile?.zaploto_id) {
+      return errorResponse('Acesso negado.', 403);
+    }
+
+    const { data: existingConversation } = await supabaseServiceRole
+      .from('chat_conversations')
+      .select('*')
+      .eq('whatsapp_config_id', whatsapp_config_id)
+      .eq('remote_jid', remoteJid)
+      .maybeSingle();
+
+    if (existingConversation) {
+      return successResponse(existingConversation, 'Conversa já existente');
+    }
+
+    const createdConversation = await chatService.upsertConversation({
+      whatsapp_config_id,
+      instance_id: null,
+      workspace_id: profile?.zaploto_id ?? null,
+      user_id: userId,
+      remote_jid: remoteJid,
+      title,
+      is_group: false,
+      last_message_at: new Date().toISOString(),
+      last_message_preview: 'Conversa iniciada manualmente',
+    });
+
+    return successResponse(createdConversation, 'Conversa criada com sucesso');
   } catch (err: any) {
     return serverErrorResponse(err);
   }
