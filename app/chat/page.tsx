@@ -613,6 +613,17 @@ type UserStatus = 'super_admin' | 'admin' | 'suporte' | string | null;
 const CONVERSATIONS_PAGE_SIZE = 10;
 const MESSAGES_PAGE_SIZE = 50;
 
+/** Alinhado a app/api/chat/send — instância Evolution indisponível ao enviar. */
+const EVOLUTION_INSTANCE_UNREACHABLE_CODE = 'EVOLUTION_INSTANCE_UNREACHABLE';
+
+type EvolutionSendApiResult = {
+  success?: boolean;
+  error?: string;
+  message?: string;
+  code?: string;
+  data?: unknown;
+};
+
 // ─── ChatPage ─────────────────────────────────────────────────────────────────
 
 export default function ChatPage() {
@@ -626,6 +637,8 @@ export default function ChatPage() {
     whatsapp_official: ChannelWhatsAppOfficial[];
   }>({ evolution: [], whatsapp_official: [] });
   const [selectedChannel, setSelectedChannel] = useState<Channel | null>(null);
+  /** Aviso global quando a instância Evolution cai no envio (ex.: Connection Closed). */
+  const [evolutionInstanceNotice, setEvolutionInstanceNotice] = useState<string | null>(null);
 
   // Conversas
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -1959,11 +1972,23 @@ export default function ChatPage() {
   };
 
   // ── Envio de mensagem ──────────────────────────────────────────────────────
+  const resetChannelAfterEvolutionFailure = (notice: string) => {
+    setSendError(null);
+    setEvolutionInstanceNotice(notice);
+    if (canSelectChannel) {
+      setSelectedChannel(null);
+      setSelectedConversationId('');
+      setConversations([]);
+      setMessages([]);
+      setChatSidebarOpen(true);
+    }
+  };
+
   const getSendErrorMessage = (status: number, bodyError?: string): string => {
     if (bodyError && bodyError.trim()) return bodyError;
     switch (status) {
       case 502: return 'Serviço temporariamente indisponível. Tente novamente.';
-      case 503: return 'Serviço em manutenção. Tente novamente em instantes.';
+      case 503: return 'Serviço temporariamente indisponível. Selecione outra instância ou aguarde.';
       case 504: return 'Tempo esgotado. A Meta pode estar lenta. Tente reenviar.';
       case 401: return 'Token inválido ou expirado. Renove em Admin > WhatsApp Oficial.';
       case 403: return 'Sem permissão para enviar. Verifique o canal e a janela de 24h.';
@@ -1996,15 +2021,37 @@ export default function ChatPage() {
           body: JSON.stringify({
             instance_id: selectedChannel.id,
             remoteJid: conversation.remote_jid,
-            type: 'text',
-            text: messageText,
+            ...(hasMedia
+              ? {
+                  type: 'media',
+                  media: attachedMedia!.url,
+                  mimetype: attachedMedia!.mimetype || 'audio/ogg',
+                  mediatype: attachedMedia!.type,
+                  caption: hasText ? messageText.trim() : undefined,
+                  fileName: attachedMedia!.name,
+                }
+              : {
+                  type: 'text',
+                  text: messageText,
+                }),
           }),
         });
-        let result: { success?: boolean; error?: string; message?: string } = {};
-        try { result = await response.json(); } catch { result = {}; }
+        let result: EvolutionSendApiResult = {};
+        try {
+          result = (await response.json()) as EvolutionSendApiResult;
+        } catch {
+          result = {};
+        }
         if (response.ok && result.success) {
+          if (attachedMedia?.preview) URL.revokeObjectURL(attachedMedia.preview);
           setMessageText('');
+          setAttachedMedia(null);
           if (textareaRef.current) textareaRef.current.style.height = 'auto';
+        } else if (result.code === EVOLUTION_INSTANCE_UNREACHABLE_CODE) {
+          resetChannelAfterEvolutionFailure(
+            result.error ||
+              'A conexão da instância WhatsApp foi encerrada. Selecione outra instância ou reconecte em Instâncias WhatsApp.'
+          );
         } else {
           setSendError(getSendErrorMessage(response.status, result.error || result.message));
         }
@@ -2309,6 +2356,24 @@ export default function ChatPage() {
           </div>
         )}
 
+        {evolutionInstanceNotice && (
+          <div
+            className="flex-shrink-0 flex items-start gap-3 px-4 py-3 bg-amber-500/15 dark:bg-amber-500/20 border-b border-amber-500/40 text-amber-900 dark:text-amber-100"
+            role="alert"
+          >
+            <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+            <p className="text-sm font-medium flex-1 min-w-0">{evolutionInstanceNotice}</p>
+            <button
+              type="button"
+              onClick={() => setEvolutionInstanceNotice(null)}
+              className="flex-shrink-0 p-1.5 rounded-lg hover:bg-amber-500/20 transition-colors"
+              aria-label="Fechar aviso"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {/* 3 Painéis — coluna Zaploto Chat oculta por padrão; botão abre/fecha */}
         <div className="flex flex-1 min-h-0 overflow-hidden bg-gray-50 dark:bg-[#1e1e1e]">
           {!(isMobile && selectedConversationId) && (
@@ -2399,6 +2464,7 @@ export default function ChatPage() {
                   value={selectedChannel ? `${selectedChannel.type}:${selectedChannel.id}` : ''}
                   onChange={(e) => {
                     const v = e.target.value;
+                    setEvolutionInstanceNotice(null);
                     if (!v) { setSelectedChannel(null); setSelectedConversationId(''); return; }
                     const [type, id] = v.split(':');
                     if (type === 'evolution') {
