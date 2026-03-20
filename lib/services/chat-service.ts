@@ -73,10 +73,20 @@ export class ChatService {
 
     let endpoint = '';
     let body: Record<string, unknown> = { number: outboundNumber };
+    let fallbackEndpoint: string | null = null;
 
     if (payload.type === 'text') {
       endpoint = `${baseUrl}/message/sendText/${instance_name}`;
       body.text = payload.text;
+    } else if (payload.mediatype === 'audio') {
+      // Endpoint oficial mais recente da Evolution para áudio
+      endpoint = `${baseUrl}/message/sendWhatsAppAudio/${instance_name}`;
+      // Compatibilidade com versões/instalações antigas
+      fallbackEndpoint = `${baseUrl}/message/sendAudio/${instance_name}`;
+      body = {
+        ...body,
+        audio: payload.media,
+      };
     } else {
       endpoint = `${baseUrl}/message/sendMedia/${instance_name}`;
       body = {
@@ -89,11 +99,17 @@ export class ChatService {
       };
     }
 
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', apikey },
-      body: JSON.stringify(body),
-    });
+    const doRequest = async (url: string) =>
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey },
+        body: JSON.stringify(body),
+      });
+
+    let response = await doRequest(endpoint);
+    if (!response.ok && fallbackEndpoint && (response.status === 404 || response.status === 405)) {
+      response = await doRequest(fallbackEndpoint);
+    }
 
     if (!response.ok) {
       const errorText = await response.text();

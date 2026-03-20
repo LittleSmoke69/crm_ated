@@ -556,10 +556,12 @@ export default function ChatPage() {
   const [creatingConversation, setCreatingConversation] = useState(false);
   const [startConversationError, setStartConversationError] = useState<string | null>(null);
   const [showResolveMenu, setShowResolveMenu] = useState(false);
+  const [showConversationMenu, setShowConversationMenu] = useState(false);
   const [resolvingConversation, setResolvingConversation] = useState(false);
   const [closingConversationId, setClosingConversationId] = useState<string | null>(null);
   const [showTagsPopover, setShowTagsPopover] = useState(false);
   const tagsPopoverRef = useRef<HTMLDivElement>(null);
+  const conversationMenuRef = useRef<HTMLDivElement>(null);
   const [updatingTags, setUpdatingTags] = useState(false);
   const [spellChecking, setSpellChecking] = useState(false);
   const [spellCheckBadge, setSpellCheckBadge] = useState<'fixed' | 'ok' | null>(null);
@@ -1092,22 +1094,56 @@ export default function ChatPage() {
   // ── Upload de arquivo ──────────────────────────────────────────────────────
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !selectedChannel || selectedChannel.type !== 'whatsapp_official') return;
+    if (!file || !selectedChannel) return;
     setUploading(true);
     e.target.value = '';
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('config_id', selectedChannel.id);
-      const res = await fetch('/api/chat/whatsapp-official/upload-media', {
-        method: 'POST',
-        body: formData,
-        headers: authHeaders(),
-      });
-      const data = await res.json();
-      if (!data.success) { alert(data.error || data.message || 'Falha no upload'); return; }
-      const preview = data.data.media_type === 'image' ? URL.createObjectURL(file) : undefined;
-      setAttachedMedia({ url: data.data.url, type: data.data.media_type, name: file.name, preview });
+      if (selectedChannel.type === 'evolution') {
+        const allowedEvolutionImage = ['image/jpeg', 'image/png', 'image/webp'];
+        const mimeType = (file.type || '').split(';')[0].trim().toLowerCase();
+        if (!allowedEvolutionImage.includes(mimeType)) {
+          alert('Na Evolution, apenas imagem (JPG, PNG, WEBP) é permitida neste envio.');
+          return;
+        }
+
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('instance_id', selectedChannel.id);
+        const res = await fetch('/api/chat/evolution/upload-media', {
+          method: 'POST',
+          body: formData,
+          headers: authHeaders(),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.success || !data.data?.url) {
+          alert(data.error || data.message || 'Falha no upload da imagem');
+          return;
+        }
+        const preview = URL.createObjectURL(file);
+        setAttachedMedia({
+          url: data.data.url,
+          type: 'image',
+          name: file.name,
+          preview,
+          mimetype: data.data?.mime_type || mimeType,
+        });
+        return;
+      }
+
+      if (selectedChannel.type === 'whatsapp_official') {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('config_id', selectedChannel.id);
+        const res = await fetch('/api/chat/whatsapp-official/upload-media', {
+          method: 'POST',
+          body: formData,
+          headers: authHeaders(),
+        });
+        const data = await res.json();
+        if (!data.success) { alert(data.error || data.message || 'Falha no upload'); return; }
+        const preview = data.data.media_type === 'image' ? URL.createObjectURL(file) : undefined;
+        setAttachedMedia({ url: data.data.url, type: data.data.media_type, name: file.name, preview });
+      }
     } catch (err) {
       console.error('[Chat] upload:', err);
       alert('Falha ao enviar arquivo');
@@ -1325,6 +1361,17 @@ export default function ChatPage() {
     return () => document.removeEventListener('mousedown', onOutside);
   }, [showTagsPopover]);
 
+  useEffect(() => {
+    if (!showConversationMenu) return;
+    const onOutside = (e: MouseEvent) => {
+      if (conversationMenuRef.current && !conversationMenuRef.current.contains(e.target as Node)) {
+        setShowConversationMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', onOutside);
+    return () => document.removeEventListener('mousedown', onOutside);
+  }, [showConversationMenu]);
+
   const applyTagsToConversation = async (next: string[], closePopover = false) => {
     if (!selectedConversationId || updatingTags) return;
     const conv = conversations.find((c) => c.id === selectedConversationId);
@@ -1392,6 +1439,11 @@ export default function ChatPage() {
     } finally {
       setResolvingConversation(false);
     }
+  };
+
+  const handleEditClientNameFromMenu = () => {
+    setShowConversationMenu(false);
+    openContactModal();
   };
 
   const handleResolveConversationFromList = async (conversationId: string) => {
@@ -1584,6 +1636,16 @@ export default function ChatPage() {
       const data = await res.json();
       if (data.success) {
         setConvContact(data.data);
+        const nextName = String(data.data?.name || '').trim();
+        if (nextName && selectedConversationId) {
+          setConversations((prev) =>
+            prev.map((c) =>
+              c.id === selectedConversationId
+                ? { ...c, title: nextName }
+                : c
+            )
+          );
+        }
         setShowContactModal(false);
       } else {
         setContactSaveError(data.error || 'Erro ao salvar contato');
@@ -2559,9 +2621,27 @@ export default function ChatPage() {
                         Resolver
                       </button>
                     ) : null}
-                    <button className="p-1.5 hover:bg-gray-100 dark:hover:bg-[#333] rounded-md text-gray-500 dark:text-gray-400" aria-label="Mais opções">
-                      <MoreVertical className="w-4 h-4" />
-                    </button>
+                    <div ref={conversationMenuRef} className="relative">
+                      <button
+                        type="button"
+                        onClick={() => setShowConversationMenu((v) => !v)}
+                        className="p-1.5 hover:bg-gray-100 dark:hover:bg-[#333] rounded-md text-gray-500 dark:text-gray-400"
+                        aria-label="Mais opções"
+                      >
+                        <MoreVertical className="w-4 h-4" />
+                      </button>
+                      {showConversationMenu && (
+                        <div className="absolute right-0 top-full mt-1 z-20 w-52 py-1.5 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-lg shadow-lg">
+                          <button
+                            type="button"
+                            onClick={handleEditClientNameFromMenu}
+                            className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333]"
+                          >
+                            Editar nome do cliente
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
 
@@ -2721,7 +2801,11 @@ export default function ChatPage() {
                     <button
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
-                      disabled={uploading || selectedChannel?.type !== 'whatsapp_official' || !canSendFreeMessage}
+                      disabled={
+                        uploading ||
+                        !selectedChannel ||
+                        (selectedChannel.type === 'whatsapp_official' && !canSendFreeMessage)
+                      }
                       className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-50"
                       title="Anexar"
                     >
@@ -2760,7 +2844,11 @@ export default function ChatPage() {
                       <button
                         type="button"
                         onClick={startRecording}
-                        disabled={uploading || !selectedChannel || !canSendFreeMessage}
+                        disabled={
+                          uploading ||
+                          !selectedChannel ||
+                          (selectedChannel.type === 'whatsapp_official' && !canSendFreeMessage)
+                        }
                         className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-50"
                         title="Gravar áudio"
                       >
@@ -2771,7 +2859,11 @@ export default function ChatPage() {
                     <button
                       type="button"
                       onClick={() => docInputRef.current?.click()}
-                      disabled={uploading || selectedChannel?.type !== 'whatsapp_official' || !canSendFreeMessage}
+                      disabled={
+                        uploading ||
+                        selectedChannel?.type !== 'whatsapp_official' ||
+                        !canSendFreeMessage
+                      }
                       className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-50"
                       title="Documento (PDF)"
                     >
@@ -2780,7 +2872,11 @@ export default function ChatPage() {
                     <button
                       type="button"
                       onClick={() => imageInputRef.current?.click()}
-                      disabled={uploading || selectedChannel?.type !== 'whatsapp_official' || !canSendFreeMessage}
+                      disabled={
+                        uploading ||
+                        !selectedChannel ||
+                        (selectedChannel.type === 'whatsapp_official' && !canSendFreeMessage)
+                      }
                       className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-50"
                       title="Imagem"
                     >
@@ -2806,14 +2902,17 @@ export default function ChatPage() {
                           }
                         }}
                         placeholder={
-                          !canSendFreeMessage
+                          selectedChannel?.type === 'whatsapp_official' && !canSendFreeMessage
                             ? 'Fora da janela 24h. Use template.'
                             : "Digite a mensagem. Shift+Enter = nova linha. '/' = resposta pronta."
                         }
                         rows={2}
                         className="w-full px-3 py-2.5 text-sm border border-gray-300 dark:border-[#404040] rounded-xl bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 resize-none overflow-y-auto focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] focus:outline-none"
                         style={{ minHeight: '44px', maxHeight: '160px' }}
-                        disabled={sending || !canSendFreeMessage}
+                        disabled={
+                          sending ||
+                          (selectedChannel?.type === 'whatsapp_official' && !canSendFreeMessage)
+                        }
                       />
                     </div>
                     <div className="flex flex-col gap-1.5 flex-shrink-0">
@@ -2829,8 +2928,16 @@ export default function ChatPage() {
                       </button>
                       <button
                         onClick={handleSendMessage}
-                        disabled={(!messageText.trim() && !attachedMedia) || sending || !canSendFreeMessage}
-                        title={!canSendFreeMessage ? 'Fora da janela 24h' : 'Enviar'}
+                        disabled={
+                          (!messageText.trim() && !attachedMedia) ||
+                          sending ||
+                          (selectedChannel?.type === 'whatsapp_official' && !canSendFreeMessage)
+                        }
+                        title={
+                          selectedChannel?.type === 'whatsapp_official' && !canSendFreeMessage
+                            ? 'Fora da janela 24h'
+                            : 'Enviar'
+                        }
                         className="px-3 py-2 text-white rounded-lg flex items-center justify-center gap-1.5 disabled:opacity-50 min-w-[44px] h-[38px]"
                         style={{ backgroundColor: '#8CD955' }}
                       >

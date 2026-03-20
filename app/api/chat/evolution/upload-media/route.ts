@@ -12,7 +12,9 @@ import { canUserAccessEvolutionChatInstance } from '@/lib/services/atendimento-c
 
 const CHAT_MEDIA_BUCKET = 'chat-media';
 const ALLOWED_AUDIO = ['audio/ogg', 'audio/mpeg', 'audio/webm', 'audio/mp4', 'audio/m4a', 'audio/x-m4a'] as const;
+const ALLOWED_IMAGE = ['image/jpeg', 'image/png', 'image/webp'] as const;
 const MAX_AUDIO = 16 * 1024 * 1024; // 16MB
+const MAX_IMAGE = 10 * 1024 * 1024; // 10MB
 
 export async function POST(req: NextRequest) {
   let userId: string | undefined;
@@ -35,10 +37,13 @@ export async function POST(req: NextRequest) {
     if (!instance_id || typeof instance_id !== 'string') return errorResponse('instance_id obrigatório', 400);
 
     const mimeType = (file.type || 'application/octet-stream').split(';')[0].trim().toLowerCase();
-    if (!ALLOWED_AUDIO.includes(mimeType as (typeof ALLOWED_AUDIO)[number])) {
-      return errorResponse(`Tipo de áudio não permitido: ${mimeType}`, 400);
+    const isAudio = ALLOWED_AUDIO.includes(mimeType as (typeof ALLOWED_AUDIO)[number]);
+    const isImage = ALLOWED_IMAGE.includes(mimeType as (typeof ALLOWED_IMAGE)[number]);
+    if (!isAudio && !isImage) {
+      return errorResponse(`Tipo de mídia não permitido: ${mimeType}`, 400);
     }
-    if (file.size > MAX_AUDIO) return errorResponse('Áudio muito grande. Máximo: 16MB', 400);
+    if (isAudio && file.size > MAX_AUDIO) return errorResponse('Áudio muito grande. Máximo: 16MB', 400);
+    if (isImage && file.size > MAX_IMAGE) return errorResponse('Imagem muito grande. Máximo: 10MB', 400);
 
     const { data: profile } = await supabaseServiceRole
       .from('profiles')
@@ -62,7 +67,7 @@ export async function POST(req: NextRequest) {
       .from(CHAT_MEDIA_BUCKET)
       .upload(storagePath, buffer, { contentType: mimeType, upsert: true });
 
-    if (uploadError) return errorResponse('Falha no upload do áudio', 500);
+    if (uploadError) return errorResponse('Falha no upload da mídia', 500);
 
     const { data: urlData } = supabaseServiceRole.storage
       .from(CHAT_MEDIA_BUCKET)
@@ -70,7 +75,7 @@ export async function POST(req: NextRequest) {
 
     return successResponse({
       url: urlData.publicUrl,
-      media_type: 'audio',
+      media_type: isImage ? 'image' : 'audio',
       mime_type: mimeType,
     });
   } catch (err: any) {
