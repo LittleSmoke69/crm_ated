@@ -105,7 +105,18 @@ function resolveMediaInfo(msg: WaMessage): { text: string; mediaType: string; ca
   return { text: '', mediaType: msg.type, caption: '' };
 }
 
-async function resolveAndStoreMedia(
+const MEDIA_FETCH_TIMEOUT_MS = 15_000;
+const MEDIA_DOWNLOAD_TIMEOUT_MS = 30_000;
+const MEDIA_MAX_RETRIES = 1;
+const MEDIA_RETRY_DELAY_MS = 2_000;
+
+function fetchWithTimeout(url: string, opts: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
+async function resolveAndStoreMediaOnce(
   mediaId: string,
   accessToken: string,
   graphVersion: string,
@@ -114,15 +125,16 @@ async function resolveAndStoreMedia(
 ): Promise<string | null> {
   const version = graphVersion.replace(/^v/, '');
   const mediaApiUrl = `https://graph.facebook.com/v${version}/${mediaId}`;
-  const metaRes = await fetch(mediaApiUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
+  const metaRes = await fetchWithTimeout(
+    mediaApiUrl,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+    MEDIA_FETCH_TIMEOUT_MS,
+  );
   if (!metaRes.ok) {
-    await metaRes.text(); // consumir body
-    // 401: token inválido — lança para o caller sinalizar tokenAlert
+    await metaRes.text();
     if (metaRes.status === 401) {
       throw new Error(`[Zaploto Chat] ${WHATSAPP_OFFICIAL_TOKEN_ERROR_MSG}`);
     }
-    // 400/404: mídia expirada ou indisponível (comum após 24h) — silencioso
-    // 5xx inesperado: loga como warn
     if (metaRes.status >= 500) {
       console.warn(`[Zaploto Chat] Meta Media API ${metaRes.status} para mídia ${mediaId}; salva sem mídia.`);
     }
@@ -132,14 +144,17 @@ async function resolveAndStoreMedia(
   try {
     metaJson = (await metaRes.json()) as { url?: string; mime_type?: string };
   } catch {
-    // resposta malformada — raro, sem log de warn para não poluir
     return null;
   }
   const tempUrl = metaJson?.url;
   if (!tempUrl || typeof tempUrl !== 'string') {
-    return null; // sem url — silencioso
+    return null;
   }
-  const downloadRes = await fetch(tempUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
+  const downloadRes = await fetchWithTimeout(
+    tempUrl,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+    MEDIA_DOWNLOAD_TIMEOUT_MS,
+  );
   if (!downloadRes.ok) {
     if (downloadRes.status >= 500) {
       console.warn(`[Zaploto Chat] Falha ao baixar mídia ${mediaId}: ${downloadRes.status}`);
@@ -159,6 +174,36 @@ async function resolveAndStoreMedia(
   }
   const { data: urlData } = supabaseServiceRole.storage.from(CHAT_MEDIA_BUCKET).getPublicUrl(storagePath);
   return urlData.publicUrl;
+}
+
+async function resolveAndStoreMedia(
+  mediaId: string,
+  accessToken: string,
+  graphVersion: string,
+  mimeType: string | undefined,
+  configId: string
+): Promise<string | null> {
+  for (let attempt = 0; attempt <= MEDIA_MAX_RETRIES; attempt++) {
+    try {
+      const url = await resolveAndStoreMediaOnce(mediaId, accessToken, graphVersion, mimeType, configId);
+      if (url) return url;
+      if (attempt < MEDIA_MAX_RETRIES) {
+        await new Promise((r) => setTimeout(r, MEDIA_RETRY_DELAY_MS));
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes(WHATSAPP_OFFICIAL_TOKEN_ERROR_MSG)) throw err;
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        console.warn(`[Zaploto Chat] Timeout ao baixar mídia ${mediaId} (tentativa ${attempt + 1})`);
+        if (attempt < MEDIA_MAX_RETRIES) {
+          await new Promise((r) => setTimeout(r, MEDIA_RETRY_DELAY_MS));
+        }
+        continue;
+      }
+      throw err;
+    }
+  }
+  return null;
 }
 
 async function handleInboundMessages(value: WaValue): Promise<boolean> {

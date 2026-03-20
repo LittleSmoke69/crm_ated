@@ -36,13 +36,18 @@ import {
   Pause,
   Square,
   Headphones,
+  Megaphone,
+  Plus,
+  Trash2,
+  ToggleLeft,
+  ToggleRight,
+  ChevronDown,
 } from 'lucide-react';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
 interface Message {
   id: string;
-  /** ID da mensagem no WhatsApp / Evolution (dedupe realtime vs envio) */
   message_id?: string | null;
   text: string | null;
   direction: 'in' | 'out';
@@ -54,6 +59,8 @@ interface Message {
   media_url?: string | null;
   caption?: string | null;
   sender_jid?: string | null;
+  whatsapp_config_id?: string | null;
+  provider?: 'evolution' | 'whatsapp_official' | null;
 }
 
 interface Conversation {
@@ -93,7 +100,50 @@ interface ChannelWhatsAppOfficial {
 
 type Channel = ChannelEvolution | ChannelWhatsAppOfficial;
 type ConversationFilter = 'mine' | 'unassigned';
-type ActiveView = 'chat' | 'contacts';
+type ActiveView = 'chat' | 'contacts' | 'broadcast' | 'agent';
+
+interface BroadcastJob {
+  id: string;
+  title: string;
+  instance_name: string;
+  total_count: number;
+  current_index: number;
+  delay_seconds: number;
+  status: 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  last_error: string | null;
+}
+
+interface BroadcastMessage {
+  id: string;
+  title: string;
+  content: string;
+  preview: string;
+  message_type: 'text_only' | 'audio' | 'ptv' | 'text_with_attachment';
+  attachment_url?: string | null;
+  has_attachment: boolean;
+}
+
+interface BroadcastContact {
+  phone: string;
+  name?: string;
+}
+
+interface FlowOption {
+  id: string;
+  name: string;
+  description?: string;
+  status: string;
+}
+
+interface InstanceFlowConfig {
+  id: string;
+  instance_id: string;
+  is_active: boolean;
+  flows: { id: string; name: string; description?: string; status: string } | null;
+}
 
 interface ChatContact {
   id: string;
@@ -209,6 +259,72 @@ function MediaModal({
           <p className="text-white/80 text-sm text-center max-w-lg">{caption}</p>
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── MediaRetryButton (retry download de mídia pendente) ─────────────────────
+
+function MediaRetryButton({
+  chatMessageId,
+  mediaType,
+  fromMe,
+  onResolved,
+}: {
+  chatMessageId: string;
+  mediaType: string;
+  fromMe: boolean;
+  onResolved: (url: string) => void;
+}) {
+  const [retrying, setRetrying] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const icons: Record<string, string> = { audio: '🎵', image: '📷', video: '🎬', document: '📄' };
+  const labels: Record<string, string> = { audio: 'Áudio', image: 'Imagem', video: 'Vídeo', document: 'Documento' };
+
+  const handleRetry = async () => {
+    setRetrying(true);
+    setError(null);
+    try {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') || '' : '';
+      const res = await fetch('/api/chat/messages/retry-media', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ chat_message_id: chatMessageId }),
+      });
+      const json = await res.json();
+      if (json.success && json.data?.media_url) {
+        onResolved(json.data.media_url);
+      } else {
+        setError(json.error || json.message || 'Não foi possível recuperar');
+      }
+    } catch {
+      setError('Erro de conexão');
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  const textClass = fromMe ? 'text-white/70' : 'text-gray-500 dark:text-gray-400';
+  const btnClass = fromMe
+    ? 'bg-white/20 hover:bg-white/30 text-white'
+    : 'bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500 text-gray-700 dark:text-gray-200';
+
+  return (
+    <div className="flex flex-col gap-1.5 min-w-[200px] max-w-[280px]">
+      <div className="flex items-center gap-2">
+        <span className="text-lg">{icons[mediaType] || '📎'}</span>
+        <span className={`text-sm italic ${textClass}`}>{labels[mediaType] || 'Mídia'} não carregado</span>
+      </div>
+      <button
+        type="button"
+        onClick={handleRetry}
+        disabled={retrying}
+        className={`text-xs px-3 py-1.5 rounded-lg transition-colors ${btnClass} disabled:opacity-50`}
+      >
+        {retrying ? 'Recuperando…' : 'Tentar baixar novamente'}
+      </button>
+      {error && <span className={`text-xs ${textClass}`}>{error}</span>}
     </div>
   );
 }
@@ -369,37 +485,86 @@ function MessageContent({
   msg,
   fromMe,
   onMediaClick,
+  onMediaResolved,
 }: {
   msg: Message;
   fromMe: boolean;
   onMediaClick: (url: string, type: 'image' | 'video', caption?: string | null) => void;
+  onMediaResolved?: (messageId: string, url: string) => void;
 }) {
+  const [resolvedUrl, setResolvedUrl] = useState<string | null>(null);
+  const [autoRetried, setAutoRetried] = useState(false);
+  const mediaUrl = resolvedUrl || msg.media_url;
   const textClass = fromMe ? 'text-white/90' : 'text-gray-600 dark:text-gray-300';
+
+  const handleMediaResolved = (url: string) => {
+    setResolvedUrl(url);
+    onMediaResolved?.(msg.id, url);
+  };
+
+  useEffect(() => {
+    if (mediaUrl || autoRetried) return;
+    if (msg.provider !== 'whatsapp_official') return;
+    if (!msg.media_type || msg.media_type === 'text') return;
+
+    const timer = setTimeout(async () => {
+      setAutoRetried(true);
+      try {
+        const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') || '' : '';
+        const res = await fetch('/api/chat/messages/retry-media', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ chat_message_id: msg.id }),
+        });
+        const json = await res.json();
+        if (json.success && json.data?.media_url) {
+          handleMediaResolved(json.data.media_url);
+        }
+      } catch {
+        // silencioso — o botão de retry manual continua disponível
+      }
+    }, 1500);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mediaUrl, autoRetried, msg.id, msg.provider, msg.media_type]);
+
+  const canRetry = msg.provider === 'whatsapp_official';
+
+  const retryFallback = (mediaType: string) =>
+    canRetry ? (
+      <MediaRetryButton
+        chatMessageId={msg.id}
+        mediaType={mediaType}
+        fromMe={fromMe}
+        onResolved={handleMediaResolved}
+      />
+    ) : null;
+
   return (
     <div className="space-y-1">
       {msg.media_type === 'image' && (
-        msg.media_url ? (
+        mediaUrl ? (
           <img
-            src={msg.media_url}
+            src={mediaUrl}
             alt={msg.caption ?? 'imagem'}
             className="rounded-lg max-w-xs max-h-64 object-cover cursor-pointer"
-            onClick={() => onMediaClick(msg.media_url!, 'image', msg.caption)}
+            onClick={() => onMediaClick(mediaUrl, 'image', msg.caption)}
           />
         ) : (
-          <span className={`text-sm italic ${textClass}`}>📷 Imagem não disponível</span>
+          retryFallback('image') || <span className={`text-sm italic ${textClass}`}>📷 Imagem não disponível</span>
         )
       )}
       {msg.media_type === 'audio' && (
-        msg.media_url ? (
-          <AudioMessagePlayer src={msg.media_url} fromMe={fromMe} />
+        mediaUrl ? (
+          <AudioMessagePlayer src={mediaUrl} fromMe={fromMe} />
         ) : (
-          <span className={`text-sm italic ${textClass}`}>🎵 Áudio não disponível</span>
+          retryFallback('audio') || <span className={`text-sm italic ${textClass}`}>🎵 Áudio não disponível</span>
         )
       )}
       {msg.media_type === 'video' && (
-        msg.media_url ? (
-          <div className="relative cursor-pointer group max-w-xs" onClick={() => onMediaClick(msg.media_url!, 'video', msg.caption)}>
-            <video src={msg.media_url} className="rounded-lg max-w-xs max-h-64 pointer-events-none" />
+        mediaUrl ? (
+          <div className="relative cursor-pointer group max-w-xs" onClick={() => onMediaClick(mediaUrl, 'video', msg.caption)}>
+            <video src={mediaUrl} className="rounded-lg max-w-xs max-h-64 pointer-events-none" />
             <div className="absolute inset-0 flex items-center justify-center bg-black/30 rounded-lg group-hover:bg-black/50 transition-colors">
               <div className="w-12 h-12 bg-white/90 rounded-full flex items-center justify-center">
                 <svg className="w-5 h-5 text-gray-800 ml-1" fill="currentColor" viewBox="0 0 24 24">
@@ -409,13 +574,13 @@ function MessageContent({
             </div>
           </div>
         ) : (
-          <span className={`text-sm italic ${textClass}`}>🎬 Vídeo não disponível</span>
+          retryFallback('video') || <span className={`text-sm italic ${textClass}`}>🎬 Vídeo não disponível</span>
         )
       )}
       {msg.media_type === 'document' && (
-        msg.media_url ? (
+        mediaUrl ? (
           <a
-            href={msg.media_url}
+            href={mediaUrl}
             target="_blank"
             rel="noopener noreferrer"
             className={`flex items-center gap-2 text-sm underline ${fromMe ? 'text-white/90' : 'text-blue-400'}`}
@@ -423,7 +588,7 @@ function MessageContent({
             <FileText size={16} /> {msg.caption ?? 'Documento'}
           </a>
         ) : (
-          <span className={`text-sm italic ${textClass}`}>📄 Documento não disponível</span>
+          retryFallback('document') || <span className={`text-sm italic ${textClass}`}>📄 Documento não disponível</span>
         )
       )}
       {msg.caption && msg.media_type && msg.media_type !== 'text' && msg.media_type !== 'video' && (
@@ -572,6 +737,39 @@ export default function ChatPage() {
   const [isMobile, setIsMobile] = useState(false);
   const [chatSidebarOpen, setChatSidebarOpen] = useState(false);
   const [conversationsListHidden, setConversationsListHidden] = useState(false);
+
+  // Disparo em Massa
+  const [broadcasts, setBroadcasts] = useState<BroadcastJob[]>([]);
+  const [broadcastsLoading, setBroadcastsLoading] = useState(false);
+  const [showBroadcastForm, setShowBroadcastForm] = useState(false);
+  const [broadcastTitle, setBroadcastTitle] = useState('');
+  const [broadcastDelay, setBroadcastDelay] = useState(60);
+  const [broadcastCreating, setBroadcastCreating] = useState(false);
+  const [broadcastError, setBroadcastError] = useState<string | null>(null);
+  // Templates de mensagem
+  const [broadcastMessages, setBroadcastMessages] = useState<BroadcastMessage[]>([]);
+  const [broadcastMessagesLoading, setBroadcastMessagesLoading] = useState(false);
+  const [broadcastSelectedMsgId, setBroadcastSelectedMsgId] = useState('');
+  // Contatos via CSV
+  const [broadcastContacts, setBroadcastContacts] = useState<BroadcastContact[]>([]);
+  const [broadcastContactsFileName, setBroadcastContactsFileName] = useState('');
+  const broadcastFileInputRef = useRef<HTMLInputElement>(null);
+  // Runner (execução em tempo real)
+  const broadcastRunnerRef = useRef<{ stop: boolean }>({ stop: false });
+  const [activeBroadcastJobId, setActiveBroadcastJobId] = useState<string | null>(null);
+  const [activeBroadcastProgress, setActiveBroadcastProgress] = useState<{
+    current: number; total: number; contact?: BroadcastContact; lastSent?: BroadcastContact;
+  } | null>(null);
+  const [activeBroadcastCountdown, setActiveBroadcastCountdown] = useState(0);
+  const [broadcastInstanceDown, setBroadcastInstanceDown] = useState(false);
+
+  // Agente de IA
+  const [instanceFlowConfig, setInstanceFlowConfig] = useState<InstanceFlowConfig | null | undefined>(undefined);
+  const [instanceFlowLoading, setInstanceFlowLoading] = useState(false);
+  const [availableFlows, setAvailableFlows] = useState<FlowOption[]>([]);
+  const [selectedFlowId, setSelectedFlowId] = useState<string>('');
+  const [savingFlowConfig, setSavingFlowConfig] = useState(false);
+  const [flowConfigError, setFlowConfigError] = useState<string | null>(null);
 
   // Contatos
   // undefined = não verificado ainda; null = não existe; ChatContact = existe
@@ -795,6 +993,298 @@ export default function ChatPage() {
     return () => document.removeEventListener('visibilitychange', onVisibilityChange);
   }, [selectedChannel, loadConversationsFromApi, userStatus]);
 
+  // ── Carregar Broadcasts ────────────────────────────────────────────────────
+  const loadBroadcasts = useCallback(async () => {
+    setBroadcastsLoading(true);
+    try {
+      const res = await fetch('/api/chat/broadcast', { headers: authHeaders() });
+      const result = await res.json();
+      if (result.success) setBroadcasts(result.data ?? []);
+    } catch { /* silent */ } finally {
+      setBroadcastsLoading(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  const loadBroadcastMessages = useCallback(async () => {
+    setBroadcastMessagesLoading(true);
+    try {
+      const res = await fetch('/api/crm/messages', { headers: authHeaders() });
+      const result = await res.json();
+      if (result.success) setBroadcastMessages(result.data ?? []);
+    } catch { /* silent */ } finally {
+      setBroadcastMessagesLoading(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  useEffect(() => {
+    if (activeView === 'broadcast') {
+      loadBroadcasts();
+      loadBroadcastMessages();
+    }
+  }, [activeView, loadBroadcasts, loadBroadcastMessages]);
+
+  // ── CSV Parser para contatos ───────────────────────────────────────────────
+  const parseBroadcastCSV = (raw: string): BroadcastContact[] => {
+    const firstLine = raw.split(/\r?\n/)[0] || '';
+    const delimiter = firstLine.includes(';') && !firstLine.includes(',') ? ';' : ',';
+    const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    if (lines.length === 0) return [];
+    const header = lines[0].split(delimiter).map((h) => h.trim().toLowerCase());
+    const phoneCandidates = ['telefone', 'phone', 'phone_number', 'number', 'celular', 'mobile', 'whatsapp', 'tel', 'fone'];
+    const nameCandidates = ['name', 'nome', 'full_name', 'fullname', 'contact_name', 'contact'];
+    const telIdx = header.findIndex((h) => phoneCandidates.includes(h));
+    const nameIdx = header.findIndex((h) => nameCandidates.includes(h));
+    // Se não tem header reconhecido, trata primeira coluna como telefone
+    const phoneCol = telIdx >= 0 ? telIdx : 0;
+    const nameCol = nameIdx >= 0 ? nameIdx : (phoneCol === 0 ? 1 : 0);
+    const start = telIdx >= 0 ? 1 : 0; // com header reconhecido, pula linha 0
+    const result: BroadcastContact[] = [];
+    for (let i = start; i < lines.length; i++) {
+      const cols = lines[i].split(delimiter);
+      const rawPhone = (cols[phoneCol] || '').replace(/\D/g, '');
+      if (rawPhone.length < 8) continue;
+      result.push({ phone: rawPhone, name: cols[nameCol]?.trim() || undefined });
+    }
+    return result;
+  };
+
+  const handleBroadcastFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBroadcastContactsFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target?.result as string;
+      const parsed = parseBroadcastCSV(text);
+      setBroadcastContacts(parsed);
+      if (parsed.length === 0) setBroadcastError('Nenhum contato válido encontrado no arquivo.');
+      else setBroadcastError(null);
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  // ── Runner do Disparo (loop cliente) ──────────────────────────────────────
+  const startBroadcastRunner = useCallback(async (jobId: string, delaySeconds: number) => {
+    broadcastRunnerRef.current.stop = false;
+    setBroadcastInstanceDown(false);
+    setActiveBroadcastJobId(jobId);
+    setActiveBroadcastProgress(null);
+    setActiveBroadcastCountdown(0);
+
+    const run = async (): Promise<void> => {
+      if (broadcastRunnerRef.current.stop) return;
+      let result: Record<string, unknown>;
+      try {
+        const res = await fetch(`/api/chat/broadcast/${jobId}/process-next`, {
+          method: 'POST',
+          headers: authHeaders(),
+        });
+        result = await res.json();
+      } catch {
+        // Rede offline — para o runner
+        setBroadcastInstanceDown(true);
+        setActiveBroadcastJobId(null);
+        loadBroadcasts();
+        return;
+      }
+
+      const data = result.data as {
+        done?: boolean; paused?: boolean; instanceDown?: boolean; skipped?: boolean;
+        current_index?: number; total_count?: number;
+        contact?: BroadcastContact; success?: boolean;
+      };
+
+      if (!result.success || data?.instanceDown) {
+        setBroadcastInstanceDown(true);
+        setActiveBroadcastJobId(null);
+        loadBroadcasts();
+        return;
+      }
+
+      if (data?.paused || data?.done) {
+        setActiveBroadcastJobId(null);
+        setActiveBroadcastProgress(null);
+        setActiveBroadcastCountdown(0);
+        loadBroadcasts();
+        return;
+      }
+
+      setActiveBroadcastProgress((prev) => ({
+        current: data.current_index ?? (prev?.current ?? 0),
+        total: data.total_count ?? (prev?.total ?? 0),
+        contact: data.contact ?? prev?.contact,
+        lastSent: data.success ? data.contact ?? prev?.contact : prev?.lastSent,
+      }));
+
+      if (data.done) {
+        setActiveBroadcastJobId(null);
+        setActiveBroadcastCountdown(0);
+        loadBroadcasts();
+        return;
+      }
+
+      // Countdown entre envios
+      for (let i = delaySeconds; i > 0; i--) {
+        if (broadcastRunnerRef.current.stop) return;
+        setActiveBroadcastCountdown(i);
+        await new Promise<void>((r) => setTimeout(r, 1000));
+      }
+      setActiveBroadcastCountdown(0);
+
+      if (!broadcastRunnerRef.current.stop) run();
+    };
+
+    run();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  const stopBroadcastRunner = () => {
+    broadcastRunnerRef.current.stop = true;
+    setActiveBroadcastJobId(null);
+    setActiveBroadcastProgress(null);
+    setActiveBroadcastCountdown(0);
+  };
+
+  // ── Criar Broadcast ────────────────────────────────────────────────────────
+  const handleCreateBroadcast = async () => {
+    if (!selectedChannel || selectedChannel.type !== 'evolution') return;
+    const selectedMsg = broadcastMessages.find((m) => m.id === broadcastSelectedMsgId);
+    if (!selectedMsg) { setBroadcastError('Selecione uma mensagem template'); return; }
+    if (broadcastContacts.length === 0) { setBroadcastError('Importe os contatos (CSV)'); return; }
+
+    // Monta message_config a partir do template
+    let message_config: { type: string; content?: string; attachment_url?: string; caption?: string };
+    if (selectedMsg.message_type === 'text_only') {
+      message_config = { type: 'text', content: selectedMsg.content };
+    } else if (selectedMsg.message_type === 'audio') {
+      message_config = { type: 'audio', attachment_url: selectedMsg.attachment_url ?? '' };
+    } else if (selectedMsg.message_type === 'ptv') {
+      message_config = { type: 'video', attachment_url: selectedMsg.attachment_url ?? '' };
+    } else {
+      // text_with_attachment — usa caption = content
+      message_config = { type: 'image', attachment_url: selectedMsg.attachment_url ?? '', caption: selectedMsg.content };
+    }
+
+    setBroadcastCreating(true);
+    setBroadcastError(null);
+    try {
+      const res = await fetch('/api/chat/broadcast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          instance_id: selectedChannel.id,
+          title: broadcastTitle || selectedMsg.title,
+          message_config,
+          contacts: broadcastContacts,
+          delay_seconds: broadcastDelay,
+        }),
+      });
+      const result = await res.json();
+      if (!result.success) { setBroadcastError(result.error ?? 'Erro ao criar disparo'); return; }
+      setShowBroadcastForm(false);
+      setBroadcastTitle('');
+      setBroadcastSelectedMsgId('');
+      setBroadcastContacts([]);
+      setBroadcastContactsFileName('');
+      setBroadcastDelay(60);
+      const newJob = result.data as BroadcastJob;
+      loadBroadcasts();
+      // Inicia o runner imediatamente
+      startBroadcastRunner(newJob.id, broadcastDelay);
+    } catch { setBroadcastError('Erro de rede'); } finally { setBroadcastCreating(false); }
+  };
+
+  const handleBroadcastAction = async (jobId: string, status: 'running' | 'paused' | 'cancelled', delaySeconds?: number) => {
+    if (status === 'paused' || status === 'cancelled') {
+      stopBroadcastRunner();
+    }
+    try {
+      await fetch(`/api/chat/broadcast/${jobId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ status }),
+      });
+      loadBroadcasts();
+      if (status === 'running') {
+        const job = broadcasts.find((b) => b.id === jobId);
+        startBroadcastRunner(jobId, delaySeconds ?? job?.delay_seconds ?? 60);
+      }
+    } catch { /* silent */ }
+  };
+
+  // ── Carregar Agente de IA ──────────────────────────────────────────────────
+  const loadInstanceFlowConfig = useCallback(async (instanceId: string) => {
+    setInstanceFlowLoading(true);
+    try {
+      const res = await fetch(`/api/chat/flow-config?instance_id=${instanceId}`, { headers: authHeaders() });
+      const result = await res.json();
+      if (result.success) {
+        setInstanceFlowConfig(result.data ?? null);
+        setSelectedFlowId(result.data?.flows?.id ?? '');
+      }
+    } catch { /* silent */ } finally { setInstanceFlowLoading(false); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  const loadAvailableFlows = useCallback(async () => {
+    try {
+      const res = await fetch('/api/flows', { headers: authHeaders() });
+      const result = await res.json();
+      if (result.success) setAvailableFlows(result.data ?? []);
+    } catch { /* silent */ }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  useEffect(() => {
+    if (activeView === 'agent' && selectedChannel?.type === 'evolution') {
+      loadInstanceFlowConfig(selectedChannel.id);
+      loadAvailableFlows();
+    }
+  }, [activeView, selectedChannel, loadInstanceFlowConfig, loadAvailableFlows]);
+
+  const handleSaveFlowConfig = async () => {
+    if (!selectedChannel || selectedChannel.type !== 'evolution') return;
+    setSavingFlowConfig(true);
+    setFlowConfigError(null);
+    try {
+      const res = await fetch('/api/chat/flow-config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          instance_id: selectedChannel.id,
+          flow_id: selectedFlowId || null,
+          is_active: true,
+        }),
+      });
+      const result = await res.json();
+      if (!result.success) { setFlowConfigError(result.error ?? 'Erro ao salvar'); return; }
+      setInstanceFlowConfig(result.data);
+    } catch { setFlowConfigError('Erro de rede'); } finally { setSavingFlowConfig(false); }
+  };
+
+  const handleToggleFlowActive = async () => {
+    if (!selectedChannel || selectedChannel.type !== 'evolution' || !instanceFlowConfig) return;
+    const newActive = !instanceFlowConfig.is_active;
+    setSavingFlowConfig(true);
+    setFlowConfigError(null);
+    try {
+      const res = await fetch('/api/chat/flow-config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          instance_id: selectedChannel.id,
+          flow_id: instanceFlowConfig.flows?.id ?? null,
+          is_active: newActive,
+        }),
+      });
+      const result = await res.json();
+      if (result.success) setInstanceFlowConfig(result.data);
+    } catch { /* silent */ } finally { setSavingFlowConfig(false); }
+  };
+
   // ── Carregar Mensagens (últimas 50 — mais recentes primeiro via DESC+reverse) ──
   useEffect(() => {
     if (!selectedConversationId) {
@@ -992,7 +1482,15 @@ export default function ChatPage() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...authHeaders() },
             body: JSON.stringify({ event_id: row.id }),
-          }).catch((e) => console.error('[Chat] webhook process:', e));
+          })
+            .then((r) => r.json())
+            .then((res) => {
+              if (res.data?.token_alert) {
+                setShowTokenAlert(true);
+                setTokenAlertMessage(res.data.token_alert_message || 'Token de acesso inválido ou expirado. Renove o token em Admin > WhatsApp Oficial.');
+              }
+            })
+            .catch((e) => console.error('[Chat] webhook process:', e));
         }
       )
       .subscribe();
@@ -1569,10 +2067,8 @@ export default function ChatPage() {
               config_id: selectedChannel.id,
               to,
               type: attachedMedia!.type,
-              // Para áudio gravado: usa meta_id (upload direto na Meta) — garante entrega
-              // Para outros tipos ou fallback: usa media_url (URL pública Supabase)
               ...(attachedMedia!.meta_id
-                ? { meta_id: attachedMedia!.meta_id }
+                ? { meta_id: attachedMedia!.meta_id, media_url: attachedMedia!.url || undefined }
                 : { media_url: attachedMedia!.url }),
               caption: hasText ? messageText.trim() : undefined,
             }
@@ -1591,7 +2087,14 @@ export default function ChatPage() {
           setAttachedMedia(null);
           if (textareaRef.current) textareaRef.current.style.height = 'auto';
         } else {
-          setSendError(getSendErrorMessage(response.status, result.error || result.message));
+          const errMsg = result.error || result.message || '';
+          setSendError(getSendErrorMessage(response.status, errMsg));
+          const isTokenError = response.status === 401 ||
+            (response.status === 502 && (errMsg.toLowerCase().includes('token') || errMsg.includes('190') || errMsg.includes('OAuthException')));
+          if (isTokenError) {
+            setShowTokenAlert(true);
+            setTokenAlertMessage('Token de acesso inválido ou expirado. Renove o token em Admin > WhatsApp Oficial.');
+          }
         }
       }
     } catch (error) {
@@ -2069,6 +2572,34 @@ export default function ChatPage() {
                   <BookUser className="w-5 h-5" />
                   Contatos
                 </button>
+                {selectedChannel?.type === 'evolution' && (
+                  <>
+                    <button
+                      onClick={() => setActiveView('broadcast')}
+                      className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm font-medium ${
+                        activeView === 'broadcast'
+                          ? 'text-white'
+                          : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333]'
+                      }`}
+                      style={activeView === 'broadcast' ? { backgroundColor: '#8CD955' } : {}}
+                    >
+                      <Megaphone className="w-5 h-5" />
+                      Disparo em Massa
+                    </button>
+                    <button
+                      onClick={() => setActiveView('agent')}
+                      className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm font-medium ${
+                        activeView === 'agent'
+                          ? 'text-white'
+                          : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333]'
+                      }`}
+                      style={activeView === 'agent' ? { backgroundColor: '#8CD955' } : {}}
+                    >
+                      <Bot className="w-5 h-5" />
+                      Agente de IA
+                    </button>
+                  </>
+                )}
               </div>
             </div>
 
@@ -2225,6 +2756,387 @@ export default function ChatPage() {
                         </div>
                       );
                     })
+                )}
+              </div>
+            </div>
+          ) : activeView === 'broadcast' ? (
+            /* Vista Disparo em Massa */
+            <div className="min-w-0 flex-1 md:w-80 md:flex-shrink-0 overflow-hidden bg-white dark:bg-[#2a2a2a] border-r border-gray-200 dark:border-[#404040] flex flex-col">
+              {/* Header */}
+              <div className="flex-shrink-0 p-3 border-b border-gray-200 dark:border-[#404040] flex items-center gap-2">
+                {!chatSidebarOpen && (
+                  <button type="button" onClick={() => setChatSidebarOpen(true)} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] text-gray-600 dark:text-gray-300 flex-shrink-0"><PanelLeft className="w-5 h-5" /></button>
+                )}
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Disparo em Massa</h3>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 truncate">Envios em lote para contatos</p>
+                </div>
+                {!showBroadcastForm && (
+                  <button
+                    type="button"
+                    onClick={() => { setShowBroadcastForm(true); setBroadcastError(null); loadBroadcastMessages(); }}
+                    className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] text-gray-600 dark:text-gray-300 flex-shrink-0"
+                    title="Novo disparo"
+                  >
+                    <Plus className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+
+              {/* Aviso instância offline */}
+              {broadcastInstanceDown && (
+                <div className="flex-shrink-0 mx-3 mt-3 p-2 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-300 dark:border-red-800 flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-medium text-red-700 dark:text-red-400">Instância offline</p>
+                    <p className="text-xs text-red-600 dark:text-red-500">O disparo foi pausado. Reconecte a instância e retome.</p>
+                  </div>
+                  <button type="button" onClick={() => setBroadcastInstanceDown(false)} className="text-red-400 hover:text-red-600 flex-shrink-0"><X className="w-3.5 h-3.5" /></button>
+                </div>
+              )}
+
+              {/* Runner ativo — progresso em tempo real */}
+              {activeBroadcastJobId && activeBroadcastProgress && (
+                <div className="flex-shrink-0 mx-3 mt-3 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-blue-700 dark:text-blue-300 flex items-center gap-1.5">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      Disparando em tempo real
+                    </span>
+                    <span className="text-xs text-blue-600 dark:text-blue-400">
+                      {activeBroadcastProgress.current}/{activeBroadcastProgress.total}
+                    </span>
+                  </div>
+                  <div className="h-1.5 bg-blue-200 dark:bg-blue-900 rounded-full">
+                    <div
+                      className="h-1.5 rounded-full transition-all"
+                      style={{
+                        width: `${activeBroadcastProgress.total > 0 ? Math.round((activeBroadcastProgress.current / activeBroadcastProgress.total) * 100) : 0}%`,
+                        backgroundColor: '#8CD955',
+                      }}
+                    />
+                  </div>
+                  {activeBroadcastProgress.lastSent && (
+                    <p className="text-xs text-blue-600 dark:text-blue-400 truncate">
+                      Enviado: {activeBroadcastProgress.lastSent.name || activeBroadcastProgress.lastSent.phone}
+                    </p>
+                  )}
+                  {activeBroadcastCountdown > 0 && (
+                    <p className="text-xs text-blue-500 dark:text-blue-400">
+                      Próximo envio em <span className="font-semibold">{activeBroadcastCountdown}s</span>
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Formulário de novo disparo */}
+              {showBroadcastForm && (
+                <div className="flex-shrink-0 overflow-y-auto border-b border-gray-200 dark:border-[#404040]">
+                  <div className="p-3 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-semibold text-gray-700 dark:text-gray-200">Novo Disparo</p>
+                      <button type="button" onClick={() => setShowBroadcastForm(false)} className="text-gray-400 hover:text-gray-600"><X className="w-3.5 h-3.5" /></button>
+                    </div>
+
+                    {/* Título */}
+                    <input
+                      type="text"
+                      placeholder="Título (opcional)"
+                      value={broadcastTitle}
+                      onChange={(e) => setBroadcastTitle(e.target.value)}
+                      className="w-full px-3 py-1.5 text-sm border rounded-lg bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040] focus:ring-2 focus:ring-[#8CD955]"
+                    />
+
+                    {/* Selecionar mensagem template */}
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Mensagem</label>
+                      {broadcastMessagesLoading ? (
+                        <div className="flex items-center gap-2 py-2"><Loader2 className="w-3.5 h-3.5 animate-spin text-gray-400" /><span className="text-xs text-gray-400">Carregando...</span></div>
+                      ) : broadcastMessages.length === 0 ? (
+                        <p className="text-xs text-gray-500 dark:text-gray-400 py-1">Nenhuma mensagem encontrada. Crie em CRM &gt; Mensagens.</p>
+                      ) : (
+                        <div className="space-y-1 max-h-36 overflow-y-auto border rounded-lg border-gray-200 dark:border-[#404040]">
+                          {broadcastMessages.map((msg) => {
+                            const typeLabel: Record<string, string> = {
+                              text_only: 'Texto',
+                              audio: 'Áudio',
+                              ptv: 'Vídeo (PTV)',
+                              text_with_attachment: 'Mídia',
+                            };
+                            return (
+                              <button
+                                key={msg.id}
+                                type="button"
+                                onClick={() => setBroadcastSelectedMsgId(msg.id)}
+                                className={`w-full text-left px-3 py-2 text-sm transition-colors ${
+                                  broadcastSelectedMsgId === msg.id
+                                    ? 'bg-[#8CD955] text-white'
+                                    : 'hover:bg-gray-50 dark:hover:bg-[#333] text-gray-900 dark:text-gray-100'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-1">
+                                  <span className="font-medium truncate">{msg.title}</span>
+                                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0 ${broadcastSelectedMsgId === msg.id ? 'bg-white/30 text-white' : 'bg-gray-100 dark:bg-[#444] text-gray-500'}`}>
+                                    {typeLabel[msg.message_type] ?? msg.message_type}
+                                  </span>
+                                </div>
+                                {msg.preview && (
+                                  <p className={`text-xs truncate mt-0.5 ${broadcastSelectedMsgId === msg.id ? 'text-white/80' : 'text-gray-500 dark:text-gray-400'}`}>{msg.preview}</p>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Upload CSV contatos */}
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Contatos (CSV)</label>
+                      <input
+                        ref={broadcastFileInputRef}
+                        type="file"
+                        accept=".csv,.txt"
+                        className="hidden"
+                        onChange={handleBroadcastFileUpload}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => broadcastFileInputRef.current?.click()}
+                        className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm border-2 border-dashed rounded-lg border-gray-300 dark:border-[#505050] text-gray-600 dark:text-gray-400 hover:border-[#8CD955] hover:text-[#8CD955] transition-colors"
+                      >
+                        <FileText className="w-4 h-4" />
+                        {broadcastContactsFileName ? broadcastContactsFileName : 'Importar CSV'}
+                      </button>
+                      {broadcastContacts.length > 0 && (
+                        <div className="mt-1.5">
+                          <div className="flex items-center justify-between mb-1">
+                            <p className="text-xs text-gray-600 dark:text-gray-400">
+                              <span className="font-semibold text-[#8CD955]">{broadcastContacts.length}</span> contatos carregados
+                            </p>
+                            <button type="button" onClick={() => { setBroadcastContacts([]); setBroadcastContactsFileName(''); }} className="text-xs text-red-500 hover:text-red-700">Limpar</button>
+                          </div>
+                          <div className="max-h-24 overflow-y-auto border rounded border-gray-200 dark:border-[#404040] divide-y divide-gray-100 dark:divide-[#404040]">
+                            {broadcastContacts.slice(0, 50).map((c, i) => (
+                              <div key={i} className="px-2 py-1 flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300">
+                                <span className="font-mono flex-shrink-0">{c.phone}</span>
+                                {c.name && <span className="truncate text-gray-500 dark:text-gray-400">{c.name}</span>}
+                              </div>
+                            ))}
+                            {broadcastContacts.length > 50 && (
+                              <div className="px-2 py-1 text-xs text-gray-400">... e mais {broadcastContacts.length - 50}</div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Intervalo */}
+                    <div className="flex items-center gap-3">
+                      <label className="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0">Intervalo entre envios:</label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min={10}
+                          max={300}
+                          value={broadcastDelay}
+                          onChange={(e) => setBroadcastDelay(Math.min(300, Math.max(10, Number(e.target.value))))}
+                          className="w-16 px-2 py-1 text-sm border rounded-lg bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040] text-center"
+                        />
+                        <span className="text-xs text-gray-500">seg</span>
+                      </div>
+                    </div>
+
+                    {broadcastError && (
+                      <div className="flex items-center gap-1.5 p-2 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
+                        <AlertCircle className="w-3.5 h-3.5 text-red-500 flex-shrink-0" />
+                        <p className="text-xs text-red-600 dark:text-red-400">{broadcastError}</p>
+                      </div>
+                    )}
+
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleCreateBroadcast}
+                        disabled={broadcastCreating || !broadcastSelectedMsgId || broadcastContacts.length === 0}
+                        className="flex-1 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-50 flex items-center justify-center gap-2"
+                        style={{ backgroundColor: '#8CD955' }}
+                      >
+                        {broadcastCreating ? <><Loader2 className="w-3.5 h-3.5 animate-spin" />Criando...</> : <><Megaphone className="w-3.5 h-3.5" />Criar e Iniciar</>}
+                      </button>
+                      <button type="button" onClick={() => { setShowBroadcastForm(false); setBroadcastError(null); }} className="px-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-[#404040] text-gray-700 dark:text-gray-200">Cancelar</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Lista de disparos */}
+              <div className="flex-1 overflow-y-auto">
+                {broadcastsLoading ? (
+                  <div className="p-6 text-center"><Loader2 className="w-5 h-5 animate-spin mx-auto text-gray-400" /></div>
+                ) : broadcasts.length === 0 ? (
+                  <div className="p-6 text-center text-sm text-gray-500 dark:text-gray-400">
+                    <Megaphone className="w-8 h-8 mx-auto mb-2 opacity-30" />
+                    Nenhum disparo encontrado.<br/>Clique em + para criar.
+                  </div>
+                ) : (
+                  broadcasts.map((job) => {
+                    const statusColor: Record<string, string> = {
+                      pending: 'text-yellow-600 dark:text-yellow-400',
+                      running: 'text-blue-600 dark:text-blue-400',
+                      paused: 'text-orange-600 dark:text-orange-400',
+                      completed: 'text-green-600 dark:text-green-400',
+                      failed: 'text-red-600 dark:text-red-400',
+                      cancelled: 'text-gray-500 dark:text-gray-400',
+                    };
+                    const statusLabel: Record<string, string> = {
+                      pending: 'Pendente', running: 'Rodando', paused: 'Pausado',
+                      completed: 'Concluído', failed: 'Falhou', cancelled: 'Cancelado',
+                    };
+                    const pct = job.total_count > 0 ? Math.round((job.current_index / job.total_count) * 100) : 0;
+                    const isActive = activeBroadcastJobId === job.id;
+                    return (
+                      <div key={job.id} className={`p-3 border-b border-gray-100 dark:border-[#404040] ${isActive ? 'bg-blue-50/50 dark:bg-blue-900/10' : ''}`}>
+                        <div className="flex items-start justify-between gap-2 mb-1">
+                          <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">{job.title}</p>
+                          <span className={`text-xs font-medium flex-shrink-0 ${statusColor[job.status] ?? ''}`}>{statusLabel[job.status] ?? job.status}</span>
+                        </div>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mb-1.5">
+                          {job.instance_name} · {job.current_index}/{job.total_count} · {job.delay_seconds}s
+                        </p>
+                        <div className="mb-2">
+                          <div className="h-1.5 bg-gray-200 dark:bg-[#444] rounded-full">
+                            <div className="h-1.5 rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: '#8CD955' }} />
+                          </div>
+                          <div className="flex justify-between mt-0.5">
+                            <span className="text-[10px] text-gray-400">{pct}%</span>
+                            {isActive && activeBroadcastCountdown > 0 && (
+                              <span className="text-[10px] text-blue-500">próximo: {activeBroadcastCountdown}s</span>
+                            )}
+                          </div>
+                        </div>
+                        {job.last_error && <p className="text-xs text-red-500 truncate mb-1">{job.last_error}</p>}
+                        {isActive && activeBroadcastProgress?.lastSent && (
+                          <p className="text-xs text-blue-600 dark:text-blue-400 truncate mb-1">
+                            Enviado: {activeBroadcastProgress.lastSent.name || activeBroadcastProgress.lastSent.phone}
+                          </p>
+                        )}
+                        <div className="flex gap-1.5">
+                          {job.status === 'pending' && !isActive && (
+                            <button type="button" onClick={() => handleBroadcastAction(job.id, 'running', job.delay_seconds)} className="px-2 py-0.5 text-[11px] rounded border border-blue-400 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 flex items-center gap-1"><Play className="w-3 h-3" />Iniciar</button>
+                          )}
+                          {(job.status === 'running' || isActive) && (
+                            <button type="button" onClick={() => handleBroadcastAction(job.id, 'paused')} className="px-2 py-0.5 text-[11px] rounded border border-orange-400 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 flex items-center gap-1"><Pause className="w-3 h-3" />Pausar</button>
+                          )}
+                          {job.status === 'paused' && !isActive && (
+                            <button type="button" onClick={() => handleBroadcastAction(job.id, 'running', job.delay_seconds)} className="px-2 py-0.5 text-[11px] rounded border border-blue-400 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 flex items-center gap-1"><Play className="w-3 h-3" />Retomar</button>
+                          )}
+                          {(job.status === 'pending' || job.status === 'running' || job.status === 'paused' || isActive) && (
+                            <button type="button" onClick={() => handleBroadcastAction(job.id, 'cancelled')} className="px-2 py-0.5 text-[11px] rounded border border-gray-300 dark:border-[#505050] text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#3a3a3a] flex items-center gap-1"><Square className="w-3 h-3" />Cancelar</button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          ) : activeView === 'agent' ? (
+            /* Vista Agente de IA */
+            <div className="min-w-0 flex-1 md:w-80 md:flex-shrink-0 overflow-hidden bg-white dark:bg-[#2a2a2a] border-r border-gray-200 dark:border-[#404040] flex flex-col">
+              <div className="flex-shrink-0 p-3 border-b border-gray-200 dark:border-[#404040] flex items-center gap-2">
+                {!chatSidebarOpen && (
+                  <button type="button" onClick={() => setChatSidebarOpen(true)} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] text-gray-600 dark:text-gray-300 flex-shrink-0"><PanelLeft className="w-5 h-5" /></button>
+                )}
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Agente de IA</h3>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 truncate">Automação por flow nesta instância</p>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                {selectedChannel?.type !== 'evolution' ? (
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Agente de IA disponível apenas para canais Evolution.</p>
+                ) : instanceFlowLoading ? (
+                  <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin text-gray-400" /></div>
+                ) : (
+                  <>
+                    {instanceFlowConfig?.flows && (
+                      <div className="p-3 rounded-lg border border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#333]">
+                        <div className="flex items-center justify-between mb-1">
+                          <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{instanceFlowConfig.flows.name}</p>
+                          <button
+                            type="button"
+                            onClick={handleToggleFlowActive}
+                            disabled={savingFlowConfig}
+                            className="flex-shrink-0 disabled:opacity-50"
+                            title={instanceFlowConfig.is_active ? 'Desativar agente' : 'Ativar agente'}
+                          >
+                            {instanceFlowConfig.is_active
+                              ? <ToggleRight className="w-7 h-7 text-[#8CD955]" />
+                              : <ToggleLeft className="w-7 h-7 text-gray-400" />
+                            }
+                          </button>
+                        </div>
+                        {instanceFlowConfig.flows.description && (
+                          <p className="text-xs text-gray-500 dark:text-gray-400">{instanceFlowConfig.flows.description}</p>
+                        )}
+                        <p className="text-xs mt-1">
+                          <span className={instanceFlowConfig.is_active ? 'text-green-600 dark:text-green-400' : 'text-gray-400'}>
+                            {instanceFlowConfig.is_active ? 'Ativo' : 'Inativo'}
+                          </span>
+                        </p>
+                      </div>
+                    )}
+
+                    <div className="space-y-2">
+                      <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">
+                        {instanceFlowConfig?.flows ? 'Trocar flow' : 'Vincular flow'}
+                      </label>
+                      <div className="relative">
+                        <select
+                          value={selectedFlowId}
+                          onChange={(e) => setSelectedFlowId(e.target.value)}
+                          className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040] focus:ring-2 focus:ring-[#8CD955] appearance-none pr-8"
+                        >
+                          <option value="">Nenhum</option>
+                          {availableFlows.map((f) => (
+                            <option key={f.id} value={f.id}>{f.name}</option>
+                          ))}
+                        </select>
+                        <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                      </div>
+                      {flowConfigError && <p className="text-xs text-red-500">{flowConfigError}</p>}
+                      <button
+                        type="button"
+                        onClick={handleSaveFlowConfig}
+                        disabled={savingFlowConfig}
+                        className="w-full py-2 text-sm font-medium text-white rounded-lg disabled:opacity-50"
+                        style={{ backgroundColor: '#8CD955' }}
+                      >
+                        {savingFlowConfig ? 'Salvando...' : 'Salvar configuração'}
+                      </button>
+                      {instanceFlowConfig?.flows && (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (!selectedChannel || selectedChannel.type !== 'evolution') return;
+                            setSavingFlowConfig(true);
+                            try {
+                              await fetch(`/api/chat/flow-config?instance_id=${selectedChannel.id}`, { method: 'DELETE', headers: authHeaders() });
+                              setInstanceFlowConfig(null);
+                              setSelectedFlowId('');
+                            } catch { /* silent */ } finally { setSavingFlowConfig(false); }
+                          }}
+                          disabled={savingFlowConfig}
+                          className="w-full py-1.5 text-sm text-red-600 dark:text-red-400 rounded-lg border border-red-300 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50 flex items-center justify-center gap-2"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          Remover agente
+                        </button>
+                      )}
+                    </div>
+                  </>
                 )}
               </div>
             </div>
@@ -2750,7 +3662,12 @@ export default function ChatPage() {
                                   : 'bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 rounded-bl-none border border-gray-200 dark:border-[#404040]'
                               }`}
                             >
-                              <MessageContent msg={msg} fromMe={msg.from_me} onMediaClick={(url, type, caption) => setMediaModal({ url, type, caption })} />
+                              <MessageContent
+                                msg={msg}
+                                fromMe={msg.from_me}
+                                onMediaClick={(url, type, caption) => setMediaModal({ url, type, caption })}
+                                onMediaResolved={(msgId, url) => setMessages((prev) => prev.map((m) => m.id === msgId ? { ...m, media_url: url } : m))}
+                              />
                               <div
                                 className={`flex items-center justify-end gap-1 mt-1 ${
                                   msg.from_me ? 'text-white/80' : 'text-gray-500 dark:text-gray-400'

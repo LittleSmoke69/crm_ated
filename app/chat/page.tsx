@@ -50,6 +50,7 @@ import {
 
 interface Message {
   id: string;
+  message_id?: string;
   text: string | null;
   direction: 'in' | 'out';
   status: string;
@@ -60,6 +61,8 @@ interface Message {
   media_url?: string | null;
   caption?: string | null;
   sender_jid?: string | null;
+  whatsapp_config_id?: string | null;
+  provider?: 'evolution' | 'whatsapp_official' | null;
 }
 
 interface Conversation {
@@ -266,6 +269,72 @@ function MediaModal({
   );
 }
 
+// ─── MediaRetryButton (retry download de mídia pendente) ─────────────────────
+
+function MediaRetryButton({
+  chatMessageId,
+  mediaType,
+  fromMe,
+  onResolved,
+}: {
+  chatMessageId: string;
+  mediaType: string;
+  fromMe: boolean;
+  onResolved: (url: string) => void;
+}) {
+  const [retrying, setRetrying] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const icons: Record<string, string> = { audio: '🎵', image: '📷', video: '🎬', document: '📄' };
+  const labels: Record<string, string> = { audio: 'Áudio', image: 'Imagem', video: 'Vídeo', document: 'Documento' };
+
+  const handleRetry = async () => {
+    setRetrying(true);
+    setError(null);
+    try {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') || '' : '';
+      const res = await fetch('/api/chat/messages/retry-media', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ chat_message_id: chatMessageId }),
+      });
+      const json = await res.json();
+      if (json.success && json.data?.media_url) {
+        onResolved(json.data.media_url);
+      } else {
+        setError(json.error || json.message || 'Não foi possível recuperar');
+      }
+    } catch {
+      setError('Erro de conexão');
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  const textClass = fromMe ? 'text-white/70' : 'text-gray-500 dark:text-gray-400';
+  const btnClass = fromMe
+    ? 'bg-white/20 hover:bg-white/30 text-white'
+    : 'bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500 text-gray-700 dark:text-gray-200';
+
+  return (
+    <div className="flex flex-col gap-1.5 min-w-[200px] max-w-[280px]">
+      <div className="flex items-center gap-2">
+        <span className="text-lg">{icons[mediaType] || '📎'}</span>
+        <span className={`text-sm italic ${textClass}`}>{labels[mediaType] || 'Mídia'} não carregado</span>
+      </div>
+      <button
+        type="button"
+        onClick={handleRetry}
+        disabled={retrying}
+        className={`text-xs px-3 py-1.5 rounded-lg transition-colors ${btnClass} disabled:opacity-50`}
+      >
+        {retrying ? 'Recuperando…' : 'Tentar baixar novamente'}
+      </button>
+      {error && <span className={`text-xs ${textClass}`}>{error}</span>}
+    </div>
+  );
+}
+
 // ─── AudioMessagePlayer (play, duração, waveform) ─────────────────────────────
 
 function AudioMessagePlayer({ src, fromMe }: { src: string; fromMe: boolean }) {
@@ -422,37 +491,87 @@ function MessageContent({
   msg,
   fromMe,
   onMediaClick,
+  onMediaResolved,
 }: {
   msg: Message;
   fromMe: boolean;
   onMediaClick: (url: string, type: 'image' | 'video', caption?: string | null) => void;
+  onMediaResolved?: (messageId: string, url: string) => void;
 }) {
+  const [resolvedUrl, setResolvedUrl] = useState<string | null>(null);
+  const [autoRetried, setAutoRetried] = useState(false);
+  const mediaUrl = resolvedUrl || msg.media_url;
   const textClass = fromMe ? 'text-white/90' : 'text-gray-600 dark:text-gray-300';
+
+  const handleMediaResolved = (url: string) => {
+    setResolvedUrl(url);
+    onMediaResolved?.(msg.id, url);
+  };
+
+  // Auto-retry: para mídia da API Oficial sem URL, tenta resolver automaticamente 1x ao montar
+  useEffect(() => {
+    if (mediaUrl || autoRetried) return;
+    if (msg.provider !== 'whatsapp_official') return;
+    if (!msg.media_type || msg.media_type === 'text') return;
+
+    const timer = setTimeout(async () => {
+      setAutoRetried(true);
+      try {
+        const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') || '' : '';
+        const res = await fetch('/api/chat/messages/retry-media', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ chat_message_id: msg.id }),
+        });
+        const json = await res.json();
+        if (json.success && json.data?.media_url) {
+          handleMediaResolved(json.data.media_url);
+        }
+      } catch {
+        // silencioso — o botão de retry manual continua disponível
+      }
+    }, 1500);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mediaUrl, autoRetried, msg.id, msg.provider, msg.media_type]);
+
+  const canRetry = msg.provider === 'whatsapp_official';
+
+  const retryFallback = (mediaType: string) =>
+    canRetry ? (
+      <MediaRetryButton
+        chatMessageId={msg.id}
+        mediaType={mediaType}
+        fromMe={fromMe}
+        onResolved={handleMediaResolved}
+      />
+    ) : null;
+
   return (
     <div className="space-y-1">
       {msg.media_type === 'image' && (
-        msg.media_url ? (
+        mediaUrl ? (
           <img
-            src={msg.media_url}
+            src={mediaUrl}
             alt={msg.caption ?? 'imagem'}
             className="rounded-lg max-w-xs max-h-64 object-cover cursor-pointer"
-            onClick={() => onMediaClick(msg.media_url!, 'image', msg.caption)}
+            onClick={() => onMediaClick(mediaUrl, 'image', msg.caption)}
           />
         ) : (
-          <span className={`text-sm italic ${textClass}`}>📷 Imagem não disponível</span>
+          retryFallback('image') || <span className={`text-sm italic ${textClass}`}>📷 Imagem não disponível</span>
         )
       )}
       {msg.media_type === 'audio' && (
-        msg.media_url ? (
-          <AudioMessagePlayer src={msg.media_url} fromMe={fromMe} />
+        mediaUrl ? (
+          <AudioMessagePlayer src={mediaUrl} fromMe={fromMe} />
         ) : (
-          <span className={`text-sm italic ${textClass}`}>🎵 Áudio não disponível</span>
+          retryFallback('audio') || <span className={`text-sm italic ${textClass}`}>🎵 Áudio não disponível</span>
         )
       )}
       {msg.media_type === 'video' && (
-        msg.media_url ? (
-          <div className="relative cursor-pointer group max-w-xs" onClick={() => onMediaClick(msg.media_url!, 'video', msg.caption)}>
-            <video src={msg.media_url} className="rounded-lg max-w-xs max-h-64 pointer-events-none" />
+        mediaUrl ? (
+          <div className="relative cursor-pointer group max-w-xs" onClick={() => onMediaClick(mediaUrl, 'video', msg.caption)}>
+            <video src={mediaUrl} className="rounded-lg max-w-xs max-h-64 pointer-events-none" />
             <div className="absolute inset-0 flex items-center justify-center bg-black/30 rounded-lg group-hover:bg-black/50 transition-colors">
               <div className="w-12 h-12 bg-white/90 rounded-full flex items-center justify-center">
                 <svg className="w-5 h-5 text-gray-800 ml-1" fill="currentColor" viewBox="0 0 24 24">
@@ -462,13 +581,13 @@ function MessageContent({
             </div>
           </div>
         ) : (
-          <span className={`text-sm italic ${textClass}`}>🎬 Vídeo não disponível</span>
+          retryFallback('video') || <span className={`text-sm italic ${textClass}`}>🎬 Vídeo não disponível</span>
         )
       )}
       {msg.media_type === 'document' && (
-        msg.media_url ? (
+        mediaUrl ? (
           <a
-            href={msg.media_url}
+            href={mediaUrl}
             target="_blank"
             rel="noopener noreferrer"
             className={`flex items-center gap-2 text-sm underline ${fromMe ? 'text-white/90' : 'text-blue-400'}`}
@@ -476,7 +595,7 @@ function MessageContent({
             <FileText size={16} /> {msg.caption ?? 'Documento'}
           </a>
         ) : (
-          <span className={`text-sm italic ${textClass}`}>📄 Documento não disponível</span>
+          retryFallback('document') || <span className={`text-sm italic ${textClass}`}>📄 Documento não disponível</span>
         )
       )}
       {msg.caption && msg.media_type && msg.media_type !== 'text' && msg.media_type !== 'video' && (
@@ -582,6 +701,7 @@ export default function ChatPage() {
   // Deleção de mensagem
   const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
   const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ messageId: string; isOfficialApi: boolean } | null>(null);
 
   // Navegação
   const [activeView, setActiveView] = useState<ActiveView>('chat');
@@ -1014,7 +1134,11 @@ export default function ChatPage() {
           hasMore = json.data?.has_more === true;
           offset = json.data?.next_offset ?? offset + PAGE;
 
-          // Atualiza conversas já no meio do sync para mostrar resultados progressivamente
+          if (json.data?.token_alert) {
+            setShowTokenAlert(true);
+            setTokenAlertMessage(json.data.token_alert_message || 'Token de acesso inválido ou expirado. Renove o token em Admin > WhatsApp Oficial.');
+          }
+
           if (json.data?.processed > 0) {
             loadConversationsFromApi(true);
           }
@@ -1290,8 +1414,11 @@ export default function ChatPage() {
         .then((r) => r.json())
         .then((res) => {
           if (res.success && !res.data?.skipped) {
-            // Evento processado com sucesso — recarrega conversas
             loadConversationsFromApi(true);
+          }
+          if (res.data?.token_alert) {
+            setShowTokenAlert(true);
+            setTokenAlertMessage(res.data.token_alert_message || 'Token de acesso inválido ou expirado. Renove o token em Admin > WhatsApp Oficial.');
           }
         })
         .catch((e) => console.error('[Chat] webhook_events process:', e));
@@ -1797,8 +1924,19 @@ export default function ChatPage() {
     }
   };
 
-  const handleDeleteMessage = async (messageRowId: string) => {
+  const requestDeleteMessage = (messageRowId: string) => {
     if (deletingMessageId) return;
+    const isOfficialApi = selectedChannel?.type === 'whatsapp_official';
+    if (isOfficialApi) {
+      setDeleteConfirm({ messageId: messageRowId, isOfficialApi: true });
+    } else {
+      executeDeleteMessage(messageRowId);
+    }
+  };
+
+  const executeDeleteMessage = async (messageRowId: string) => {
+    if (deletingMessageId) return;
+    setDeleteConfirm(null);
     setDeletingMessageId(messageRowId);
     try {
       const res = await fetch('/api/chat/messages', {
@@ -1808,7 +1946,6 @@ export default function ChatPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.success) {
-        // Realtime já remove, mas removemos também localmente para UX imediata
         setMessages((prev) => prev.filter((m) => m.id !== messageRowId));
       } else {
         console.error('[Chat] Apagar mensagem:', data.error || 'Erro desconhecido');
@@ -1881,10 +2018,8 @@ export default function ChatPage() {
               config_id: selectedChannel.id,
               to,
               type: attachedMedia!.type,
-              // Para áudio gravado: usa meta_id (upload direto na Meta) — garante entrega
-              // Para outros tipos ou fallback: usa media_url (URL pública Supabase)
               ...(attachedMedia!.meta_id
-                ? { meta_id: attachedMedia!.meta_id }
+                ? { meta_id: attachedMedia!.meta_id, media_url: attachedMedia!.url || undefined }
                 : { media_url: attachedMedia!.url }),
               caption: hasText ? messageText.trim() : undefined,
             }
@@ -1903,7 +2038,14 @@ export default function ChatPage() {
           setAttachedMedia(null);
           if (textareaRef.current) textareaRef.current.style.height = 'auto';
         } else {
-          setSendError(getSendErrorMessage(response.status, result.error || result.message));
+          const errMsg = result.error || result.message || '';
+          setSendError(getSendErrorMessage(response.status, errMsg));
+          const isTokenError = response.status === 401 ||
+            (response.status === 502 && (errMsg.toLowerCase().includes('token') || errMsg.includes('190') || errMsg.includes('OAuthException')));
+          if (isTokenError) {
+            setShowTokenAlert(true);
+            setTokenAlertMessage('Token de acesso inválido ou expirado. Renove o token em Admin > WhatsApp Oficial.');
+          }
         }
       }
     } catch (error) {
@@ -2103,6 +2245,42 @@ export default function ChatPage() {
           onClose={() => setMediaModal(null)}
         />
       )}
+
+      {deleteConfirm && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onClick={() => setDeleteConfirm(null)}>
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-2xl max-w-sm w-full mx-4 p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start gap-3 mb-4">
+              <div className="p-2 rounded-full bg-amber-100 dark:bg-amber-900/30">
+                <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-900 dark:text-gray-100 text-sm">Apagar mensagem</h3>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  A API Oficial do WhatsApp <strong>não suporta</strong> exclusão de mensagens já enviadas.
+                  A mensagem será removida apenas do chat da plataforma, mas <strong>continuará visível no WhatsApp do destinatário</strong>.
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-2 justify-end">
+              <button
+                type="button"
+                onClick={() => setDeleteConfirm(null)}
+                className="px-4 py-2 text-xs font-medium rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333] transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => executeDeleteMessage(deleteConfirm.messageId)}
+                className="px-4 py-2 text-xs font-medium rounded-lg bg-red-500 hover:bg-red-600 text-white transition-colors"
+              >
+                Apagar do chat
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
 
         {/* Token Alert */}
@@ -3219,7 +3397,12 @@ export default function ChatPage() {
                                     : 'bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 rounded-bl-none border border-gray-200 dark:border-[#404040]'
                                 } ${isDeleting ? 'opacity-50' : ''}`}
                               >
-                                <MessageContent msg={msg} fromMe={msg.from_me} onMediaClick={(url, type, caption) => setMediaModal({ url, type, caption })} />
+                                <MessageContent
+                                  msg={msg}
+                                  fromMe={msg.from_me}
+                                  onMediaClick={(url, type, caption) => setMediaModal({ url, type, caption })}
+                                  onMediaResolved={(msgId, url) => setMessages((prev) => prev.map((m) => m.id === msgId ? { ...m, media_url: url } : m))}
+                                />
                                 <div
                                   className={`flex items-center justify-end gap-1 mt-1 ${
                                     msg.from_me ? 'text-white/80' : 'text-gray-500 dark:text-gray-400'
@@ -3233,7 +3416,7 @@ export default function ChatPage() {
                               {canDelete && (isHovered || isDeleting) && (
                                 <button
                                   type="button"
-                                  onClick={() => handleDeleteMessage(msg.id)}
+                                  onClick={() => requestDeleteMessage(msg.id)}
                                   disabled={isDeleting || !!deletingMessageId}
                                   className="flex-shrink-0 mb-1 p-1 rounded-full bg-white dark:bg-[#333] border border-gray-200 dark:border-[#404040] text-gray-400 hover:text-red-500 hover:border-red-300 shadow-sm disabled:opacity-50 transition-colors"
                                   title="Apagar mensagem"

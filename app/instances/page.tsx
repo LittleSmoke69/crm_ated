@@ -411,27 +411,14 @@ const InstancesPage = () => {
       });
 
       const fetchData = await fetchResponse.json();
-      if (!fetchResponse.ok || !fetchData.data) {
-        showToast('Erro ao buscar grupos da API', 'error');
+      if (!fetchResponse.ok) {
+        showToast(fetchData.error || 'Erro ao buscar grupos da API', 'error');
         return;
       }
 
-      const groups = fetchData.data;
-
-      const syncResponse = await fetch('/api/groups/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-        body: JSON.stringify({ instanceName, groups }),
-      });
-
-      const syncData = await syncResponse.json();
-      if (syncResponse.ok && syncData.success) {
-        const { inserted = 0, updated = 0 } = syncData.data || {};
-        showToast(`${inserted + updated} grupo(s) sincronizado(s) com sucesso!`, 'success');
-        addLog(`${inserted + updated} grupos sincronizados da instância ${instanceName} (sem duplicatas)`, 'success');
-      } else {
-        showToast(syncData.error || 'Erro ao sincronizar grupos', 'error');
-      }
+      const groups = Array.isArray(fetchData.data) ? fetchData.data : [];
+      showToast(fetchData.message || `${groups.length} grupo(s) sincronizado(s) com sucesso!`, 'success');
+      addLog(`${groups.length} grupos sincronizados da instância ${instanceName}`, 'success');
     } catch (error) {
       showToast('Erro ao extrair grupos', 'error');
       addLog(`Erro ao extrair grupos: ${String(error)}`, 'error');
@@ -453,28 +440,17 @@ const InstancesPage = () => {
             body: JSON.stringify({ instanceName }),
           });
           const fetchData = await fetchResponse.json();
-          const groups = Array.isArray(fetchData.data) ? fetchData.data : fetchData.data ?? [];
+          setGroupsProcessingForInstance(null);
+
           if (!fetchResponse.ok) {
-            setGroupsProcessingForInstance(null);
             showToast(fetchData.error || 'Erro ao buscar grupos da API', 'error');
             addLog(`Erro ao buscar grupos da instância ${instanceName}`, 'error');
             return;
           }
 
-          const syncResponse = await fetch('/api/groups/sync', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-            body: JSON.stringify({ instanceName, groups }),
-          });
-          const syncData = await syncResponse.json();
-          setGroupsProcessingForInstance(null);
-          if (syncResponse.ok && syncData.success) {
-            const { inserted = 0, updated = 0 } = syncData.data || {};
-            showToast(`${inserted + updated} grupo(s) sincronizado(s)! Processamento em segundo plano concluído.`, 'success');
-            addLog(`${inserted + updated} grupos sincronizados da instância ${instanceName} (em segundo plano)`, 'success');
-          } else {
-            showToast(syncData.error || 'Erro ao sincronizar grupos', 'error');
-          }
+          const groups = Array.isArray(fetchData.data) ? fetchData.data : [];
+          showToast(fetchData.message || `${groups.length} grupo(s) sincronizado(s)! Processamento concluído.`, 'success');
+          addLog(`${groups.length} grupos sincronizados da instância ${instanceName} (em segundo plano)`, 'success');
         } catch (error) {
           setGroupsProcessingForInstance(null);
           showToast('Erro ao extrair grupos em segundo plano', 'error');
@@ -499,32 +475,20 @@ const InstancesPage = () => {
           body: JSON.stringify({ instanceName }),
         });
         const fetchData = await fetchResponse.json();
-        // Aceita sucesso com array (vazio ou não) — a API /api/groups/fetch retorna { data: [] } quando não há grupos
-        const groups = Array.isArray(fetchData.data) ? fetchData.data : fetchData.data ?? [];
-        if (!fetchResponse.ok) {
-          showToast(fetchData.error || 'Erro ao buscar grupos da API', 'error');
-          addLog(`Erro ao buscar grupos da instância ${instanceName}`, 'error');
-          setExtractGroupsModalExtracting(false);
-          setGroupsProcessingForInstance(null);
-          return;
-        }
-        const syncResponse = await fetch('/api/groups/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-          body: JSON.stringify({ instanceName, groups }),
-        });
-        const syncData = await syncResponse.json();
         setGroupsProcessingForInstance(null);
         setExtractGroupsModalExtracting(false);
         setShowExtractGroupsPrompt(false);
         setNewlyConnectedInstance(null);
-        if (syncResponse.ok && syncData.success) {
-          const { inserted = 0, updated = 0 } = syncData.data || {};
-          showToast(`${inserted + updated} grupo(s) salvos/sincronizados com sucesso!`, 'success');
-          addLog(`${inserted + updated} grupos da instância ${instanceName} extraídos e salvos`, 'success');
-        } else {
-          showToast(syncData.error || 'Erro ao sincronizar grupos', 'error');
+
+        if (!fetchResponse.ok) {
+          showToast(fetchData.error || 'Erro ao buscar grupos da API', 'error');
+          addLog(`Erro ao buscar grupos da instância ${instanceName}`, 'error');
+          return;
         }
+
+        const groups = Array.isArray(fetchData.data) ? fetchData.data : [];
+        showToast(fetchData.message || `${groups.length} grupo(s) salvos/sincronizados com sucesso!`, 'success');
+        addLog(`${groups.length} grupos da instância ${instanceName} extraídos e salvos`, 'success');
       } catch (error) {
         setExtractGroupsModalExtracting(false);
         setGroupsProcessingForInstance(null);

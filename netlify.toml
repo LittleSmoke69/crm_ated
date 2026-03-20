@@ -9,7 +9,6 @@
 # Maturador: maturation-tick roda a cada 1 minuto; maturation-scheduler desativado
 # process-campaign-queue e process-message-queue: rodam a cada 1 minuto para processar jobs das filas
 # process-activation-mass-send: processa campanhas de disparo em massa (evita timeout com muitos grupos)
-# process-group-fetch: processa busca de grupos em segundo plano (tempo longo, evita corte Netlify)
 # check-instances-status: roda a cada 5 minutos para verificar status das instâncias
 # flow-question-timeouts: melhor esforço no Netlify (mín. ~1/min). Para 1s use polling em instrumentation ou cron externo.
 [functions]
@@ -18,8 +17,6 @@
   [functions."process-message-queue"]
     schedule = "*/1 * * * *"
   [functions."process-activation-mass-send"]
-    schedule = "*/1 * * * *"
-  [functions."process-group-fetch"]
     schedule = "*/1 * * * *"
   [functions."check-instances-status"]
     schedule = "*/5 * * * *"

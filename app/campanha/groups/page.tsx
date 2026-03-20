@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import Layout from '@/components/Layout';
 import { useDashboardData, WhatsAppInstance, DbGroup, EvolutionGroup, Contact } from '@/hooks/useDashboardData';
@@ -76,8 +76,6 @@ const GroupsPage = () => {
   const [availGroupsSearch, setAvailGroupsSearch] = useState('');
   const [availGroupsPage, setAvailGroupsPage] = useState(1);
   const [availGroupsPerPage, setAvailGroupsPerPage] = useState(10);
-  const waitAbortedRef = useRef(false);
-
   useEffect(() => {
     if (userId) {
       loadInitialData();
@@ -212,7 +210,6 @@ const GroupsPage = () => {
     }
   };
 
-  // Um job por usuário+instância (API deduplica); cliente espera com /wait (poucas requisições)
   const handleLoadGroups = async () => {
     if (!userId || !selectedInstance) {
       showToast('Selecione uma instância', 'error');
@@ -223,86 +220,26 @@ const GroupsPage = () => {
       return;
     }
 
-    waitAbortedRef.current = false;
     setGroupsLoading(true);
     try {
+      showToast('Buscando grupos... Aguarde o retorno.', 'info');
+
       const response = await fetch('/api/groups/fetch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-        body: JSON.stringify({ instanceName: selectedInstance, background: true }),
+        body: JSON.stringify({ instanceName: selectedInstance }),
       });
 
       const data = (await parseJsonFromResponse(response)) as {
-        job_id?: string;
-        reused?: boolean;
         data?: unknown[];
+        message?: string;
         error?: string;
       };
 
-      if (response.status === 202 && data.job_id) {
-        const jobId = data.job_id as string;
-        showToast(
-          data.reused ? 'Continuando busca em andamento...' : 'Busca de grupos em andamento. Aguarde...',
-          'info'
-        );
-        const maxWaitRounds = 120;
-        let rounds = 0;
-
-        while (rounds < maxWaitRounds && !waitAbortedRef.current) {
-          const waitRes = await fetch(`/api/groups/fetch/jobs/${jobId}/wait`, {
-            headers: { 'X-User-Id': userId ?? '' },
-          });
-          const waitJson = (await parseJsonFromResponse(waitRes)) as {
-            success?: boolean;
-            data?: { status?: string; groups_count?: number; error_message?: string; done?: boolean };
-            error?: string;
-          };
-          if (!waitRes.ok || !waitJson.success) {
-            showToast(waitJson?.error || 'Erro ao aguardar job', 'error');
-            break;
-          }
-          const d = waitJson.data;
-          if (d?.status === 'completed') {
-            const count = d.groups_count ?? 0;
-            showToast(`${count} grupo(s) carregados e sincronizados.`, 'success');
-            await loadDbGroups();
-            const listRes = await fetch(`/api/groups?instanceName=${encodeURIComponent(selectedInstance)}`, {
-              headers: { 'X-User-Id': userId ?? '' },
-            });
-            const listJson = (await parseJsonFromResponse(listRes)) as {
-              success?: boolean;
-              data?: { group_id: string; group_subject?: string | null }[];
-            };
-            if (listRes.ok && listJson.success && Array.isArray(listJson.data)) {
-              setAvailableGroups(
-                listJson.data.map((g: { group_id: string; group_subject?: string | null }) => ({
-                  id: g.group_id,
-                  subject: g.group_subject ?? '',
-                  pictureUrl: undefined,
-                  size: undefined,
-                }))
-              );
-            }
-            break;
-          }
-          if (d?.status === 'failed') {
-            showToast(d.error_message || 'Falha ao buscar grupos', 'error');
-            break;
-          }
-          if (d?.done === true && d?.status !== 'pending' && d?.status !== 'processing') {
-            break;
-          }
-          rounds++;
-        }
-        if (rounds >= maxWaitRounds) {
-          showToast('A busca ainda está em andamento. Atualize a página em alguns minutos.', 'info');
-        }
-        return;
-      }
-
-      if (response.ok && data.data && Array.isArray(data.data)) {
+      if (response.ok && Array.isArray(data.data)) {
         setAvailableGroups(data.data as EvolutionGroup[]);
-        showToast(`${data.data.length} grupo(s) carregado(s)`, 'success');
+        showToast(data.message || `${data.data.length} grupo(s) carregado(s) e sincronizado(s)`, 'success');
+        await loadDbGroups();
       } else {
         showToast(data.error || 'Erro ao carregar grupos', 'error');
       }

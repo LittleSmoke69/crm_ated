@@ -87,8 +87,13 @@ function extractMediaUrl(message: any, rawPayload?: any): string | null {
   }
 
   const base64 = typeof message?.base64 === 'string' ? message.base64.trim() : '';
-  if (base64 && message?.imageMessage) {
-    const mime = message?.imageMessage?.mimetype || 'image/jpeg';
+  if (base64) {
+    const mime =
+      message?.imageMessage?.mimetype ||
+      message?.audioMessage?.mimetype ||
+      message?.videoMessage?.mimetype ||
+      message?.documentMessage?.mimetype ||
+      'application/octet-stream';
     return `data:${mime};base64,${base64}`;
   }
 

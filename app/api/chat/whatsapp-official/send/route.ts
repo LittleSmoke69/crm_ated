@@ -4,11 +4,52 @@
  */
 
 import { NextRequest } from 'next/server';
+import { after } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { chatService } from '@/lib/services/chat-service';
 import * as whatsappOfficial from '@/lib/services/whatsapp-official-service';
+
+const CHAT_MEDIA_BUCKET = 'chat-media';
+const MIME_TO_EXT: Record<string, string> = {
+  'audio/ogg': '.ogg', 'audio/mpeg': '.mp3', 'audio/mp4': '.m4a',
+  'audio/webm': '.webm', 'audio/aac': '.aac',
+};
+
+async function resolveMetaMediaInBackground(
+  metaId: string,
+  accessToken: string,
+  graphVersion: string,
+  configId: string,
+  chatMessageId: string,
+) {
+  try {
+    const version = graphVersion.replace(/^v/, '');
+    const metaRes = await fetch(`https://graph.facebook.com/v${version}/${metaId}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!metaRes.ok) return;
+    const { url: tempUrl, mime_type } = (await metaRes.json()) as { url?: string; mime_type?: string };
+    if (!tempUrl) return;
+    const downloadRes = await fetch(tempUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (!downloadRes.ok) return;
+    const buffer = Buffer.from(await downloadRes.arrayBuffer());
+    const ext = MIME_TO_EXT[mime_type?.toLowerCase() ?? ''] || '.ogg';
+    const storagePath = `${configId}/${metaId}${ext}`;
+    const { error } = await supabaseServiceRole.storage
+      .from(CHAT_MEDIA_BUCKET)
+      .upload(storagePath, buffer, { contentType: mime_type || 'audio/ogg', upsert: true });
+    if (error) return;
+    const { data } = supabaseServiceRole.storage.from(CHAT_MEDIA_BUCKET).getPublicUrl(storagePath);
+    await supabaseServiceRole
+      .from('chat_messages')
+      .update({ media_url: data.publicUrl })
+      .eq('id', chatMessageId);
+  } catch {
+    // background — falha silenciosa; o retry manual do frontend pode resolver depois
+  }
+}
 
 type SendType = 'text' | 'image' | 'audio' | 'video' | 'document';
 
@@ -182,6 +223,8 @@ export async function POST(req: NextRequest) {
 
     const conversation = await chatService.upsertConversation(conversationData);
 
+    const resolvedMediaUrl = sendType !== 'text' ? (media_url || undefined) : undefined;
+
     const messageData = {
       instance_id: null,
       whatsapp_config_id: config.id,
@@ -194,7 +237,7 @@ export async function POST(req: NextRequest) {
       sender_jid: config.phone_number_id,
       text: sendType === 'text' ? String(bodyText).trim() : '',
       media_type: sendType === 'text' ? 'text' : sendType,
-      media_url: sendType !== 'text' ? media_url ?? undefined : undefined,
+      media_url: resolvedMediaUrl,
       caption: (sendType === 'image' || sendType === 'video' || sendType === 'document') ? caption || '' : '',
       status: 'sent',
       timestamp: Math.floor(Date.now() / 1000),
@@ -202,6 +245,19 @@ export async function POST(req: NextRequest) {
     };
 
     const savedMessage = await chatService.saveMessage(messageData);
+
+    const savedId = savedMessage?.id;
+    if (sendType === 'audio' && !resolvedMediaUrl && meta_id && savedId) {
+      after(() =>
+        resolveMetaMediaInBackground(
+          meta_id,
+          config.access_token,
+          config.graph_version || 'v25.0',
+          config.id,
+          savedId,
+        )
+      );
+    }
 
     return successResponse(
       {

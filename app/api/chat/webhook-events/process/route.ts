@@ -12,16 +12,18 @@ import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { processMetaPayloadToChat } from '@/lib/services/whatsapp-official-webhook-processor';
+import { processMetaPayloadToChat, WHATSAPP_OFFICIAL_TOKEN_ERROR_MSG } from '@/lib/services/whatsapp-official-webhook-processor';
 
 const SOURCE = 'whatsapp_official';
 
 export async function POST(req: NextRequest) {
+  let event_id: string | undefined;
   try {
     await requireAuth(req);
 
     const body = await req.json().catch(() => ({})) as { event_id?: string; force?: boolean };
-    const { event_id, force = false } = body;
+    event_id = body.event_id;
+    const force = body.force ?? false;
 
     if (!event_id || typeof event_id !== 'string') {
       return errorResponse('event_id é obrigatório', 400);
@@ -51,7 +53,7 @@ export async function POST(req: NextRequest) {
       return errorResponse('Evento sem raw_payload válido', 400);
     }
 
-    await processMetaPayloadToChat(rawPayload);
+    const result = await processMetaPayloadToChat(rawPayload);
 
     const processedAt = new Date().toISOString();
     await supabaseServiceRole
@@ -60,10 +62,28 @@ export async function POST(req: NextRequest) {
       .eq('id', event_id);
 
     return successResponse(
-      { event_id, processed_at: processedAt },
+      {
+        event_id,
+        processed_at: processedAt,
+        ...(result.tokenAlert && {
+          token_alert: true,
+          token_alert_message: WHATSAPP_OFFICIAL_TOKEN_ERROR_MSG,
+        }),
+      },
       'Evento processado e organizado no chat com sucesso'
     );
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes(WHATSAPP_OFFICIAL_TOKEN_ERROR_MSG)) {
+      return successResponse(
+        {
+          event_id,
+          token_alert: true,
+          token_alert_message: WHATSAPP_OFFICIAL_TOKEN_ERROR_MSG,
+        },
+        'Evento processado com alerta de token'
+      );
+    }
     return serverErrorResponse(err as Error);
   }
 }

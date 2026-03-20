@@ -3,108 +3,32 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { checkInstanceAccess } from '@/lib/utils/instance-access';
+import { normalizeGroupId } from '@/lib/utils/group-utils';
 
-// Modo síncrono: limite curto; modo background usa job com tempo longo no process
-export const maxDuration = 25;
+export const maxDuration = 300;
+
+const FETCH_TIMEOUT_MS = 280_000;
 
 /**
- * POST /api/groups/fetch - Busca grupos da Evolution API
- * - background=true: cria job e processa em segundo plano (tempo ilimitado), retorna 202 + job_id. Sem verificação de acesso extra (request direto).
- * - background=false ou omitido: busca síncrona com timeout 22s e verificação de acesso.
+ * POST /api/groups/fetch
+ * Busca grupos diretamente da Evolution API, persiste no banco e retorna o resultado.
+ * Sem sistema de jobs — request direto com timeout longo.
  */
 export async function POST(req: NextRequest) {
   try {
     const { userId } = await requireAuth(req);
     const body = await req.json().catch(() => ({}));
-    const { instanceName, background } = body;
+    const { instanceName } = body;
 
     if (!instanceName) {
       return errorResponse('instanceName é obrigatório', 400);
     }
 
-    // Modo background: cria job e dispara processamento em segundo plano (sem timeout curto; Netlify não corta)
-    if (background === true) {
-      const { data: instance, error: instanceError } = await supabaseServiceRole
-        .from('evolution_instances')
-        .select('id')
-        .eq('instance_name', instanceName)
-        .eq('is_active', true)
-        .single();
-
-      if (instanceError || !instance) {
-        return errorResponse('Instância não encontrada ou inativa', 404);
-      }
-
-      const { data: existingJob } = await supabaseServiceRole
-        .from('group_fetch_jobs')
-        .select('id')
-        .eq('user_id', userId)
-        .eq('instance_name', instanceName)
-        .in('status', ['pending', 'processing'])
-        .order('created_at', { ascending: true })
-        .limit(1)
-        .maybeSingle();
-
-      let job = existingJob;
-      let reused = false;
-
-      if (job?.id) {
-        reused = true;
-        console.log(`[GROUPS] Reutilizando job existente ${job.id} (${instanceName})`);
-      } else {
-        const { data: inserted, error: jobError } = await supabaseServiceRole
-          .from('group_fetch_jobs')
-          .insert({
-            user_id: userId,
-            instance_name: instanceName,
-            status: 'pending',
-          })
-          .select('id')
-          .single();
-
-        if (jobError || !inserted) {
-          console.error('[GROUPS] Erro ao criar job de busca:', jobError);
-          return errorResponse('Erro ao criar job de busca. Tente novamente.', 500);
-        }
-        job = inserted;
-      }
-
-      const cronSecret = process.env.CRON_SECRET;
-      if (cronSecret) {
-        const base =
-          process.env.URL ||
-          process.env.NEXT_PUBLIC_SITE_URL ||
-          (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null);
-        const siteUrl = base ? base.replace(/\/$/, '') : null;
-        if (siteUrl) {
-          fetch(`${siteUrl}/api/groups/fetch/process`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-internal-cron-secret': cronSecret },
-          }).catch((err) => console.warn('[GROUPS] Trigger do process em background falhou:', err?.message));
-        }
-      }
-
-      return new Response(
-        JSON.stringify({
-          success: true,
-          job_id: job!.id,
-          background: true,
-          reused,
-          message: reused
-            ? 'Já existe uma busca em andamento para esta instância. Aguarde o retorno.'
-            : 'Busca de grupos em segundo plano. Aguarde o retorno.',
-        }),
-        { status: 202, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // Modo síncrono: verifica acesso e busca com timeout curto
     const hasAccess = await checkInstanceAccess(userId, instanceName);
     if (!hasAccess) {
       return errorResponse('Acesso negado. Você não tem permissão para acessar esta instância.', 403);
     }
 
-    // Busca a instância e sua Evolution API
     const { data: instance, error: instanceError } = await supabaseServiceRole
       .from('evolution_instances')
       .select(`
@@ -121,36 +45,30 @@ export async function POST(req: NextRequest) {
       .single();
 
     if (instanceError || !instance) {
-      console.error(`❌ [GROUPS] Instância não encontrada: ${instanceName}`, instanceError);
+      console.error(`[GROUPS] Instância não encontrada: ${instanceName}`, instanceError);
       return errorResponse('Instância não encontrada', 404);
     }
 
-    // CRÍTICO: Usa a apikey da instância (não a global)
     const instanceApikey = instance.apikey;
-    
     if (!instanceApikey) {
-      console.error(`❌ [GROUPS] Instância ${instanceName} não possui apikey`);
+      console.error(`[GROUPS] Instância ${instanceName} não possui apikey`);
       return errorResponse('Instância sem apikey configurada', 404);
     }
 
-    const evolutionApi = Array.isArray(instance.evolution_apis) 
-      ? instance.evolution_apis[0] 
+    const evolutionApi = Array.isArray(instance.evolution_apis)
+      ? instance.evolution_apis[0]
       : instance.evolution_apis;
 
     if (!evolutionApi?.base_url) {
       return errorResponse('Evolution API sem base_url configurada', 404);
     }
-    
-    console.log(`📋 [GROUPS] Buscando grupos da instância ${instanceName} usando apikey da instância`);
 
-    // Um único request aguardando o retorno completo.
-    // Instâncias com muitos grupos demoram mais — maxDuration=25 garante tempo suficiente.
-    const FETCH_TIMEOUT = 22_000; // 22s (dentro do maxDuration=25)
+    const baseUrl = evolutionApi.base_url.trim().replace(/\/+$/, '').replace(/([^:]\/)\/+/g, '$1');
+    const url = `${baseUrl}/group/fetchAllGroups/${instanceName}?getParticipants=false`;
+    console.log(`[GROUPS] Buscando grupos: ${url}`);
+
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
-
-    const url = `${evolutionApi.base_url}/group/fetchAllGroups/${instanceName}?getParticipants=false`;
-    console.log(`🔄 [GROUPS] Buscando grupos: ${url}`);
+    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
     let resp: Response;
     try {
@@ -165,20 +83,20 @@ export async function POST(req: NextRequest) {
       clearTimeout(timeoutId);
       const msg = err?.message ?? '';
       if (err.name === 'AbortError') {
-        console.error(`⏱️ [GROUPS] Timeout após ${FETCH_TIMEOUT}ms`);
+        console.error(`[GROUPS] Timeout após ${FETCH_TIMEOUT_MS}ms`);
         return errorResponse('Timeout ao buscar grupos. A instância pode ter muitos grupos — tente novamente.', 408);
       }
       const isNetwork = msg === 'fetch failed' || msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND');
-      console.error(`❌ [GROUPS] Erro na requisição:`, msg);
+      console.error(`[GROUPS] Erro na requisição:`, msg);
       return errorResponse(
         isNetwork ? 'Evolution API inacessível. Verifique a URL e a conectividade.' : (msg || 'Erro ao buscar grupos'),
-        503
+        503,
       );
     }
 
     if (!resp.ok) {
       const errorText = await resp.text().catch(() => '');
-      console.error(`❌ [GROUPS] Resposta não OK (${resp.status}): ${errorText.substring(0, 200)}`);
+      console.error(`[GROUPS] Resposta não OK (${resp.status}): ${errorText.substring(0, 200)}`);
 
       let responseData: any = {};
       try { responseData = JSON.parse(errorText); } catch {}
@@ -197,17 +115,14 @@ export async function POST(req: NextRequest) {
     const contentType = resp.headers.get('content-type');
     if (!contentType || !contentType.includes('application/json')) {
       const text = await resp.text();
-      console.error(`❌ [GROUPS] Resposta não é JSON. Content-Type: ${contentType}, Preview: ${text.substring(0, 200)}`);
+      console.error(`[GROUPS] Resposta não é JSON. Content-Type: ${contentType}, Preview: ${text.substring(0, 200)}`);
       return errorResponse('Resposta da API não é JSON válido', 502);
     }
 
     const json = await resp.json().catch((parseError) => {
-      console.error(`❌ [GROUPS] Erro ao parsear JSON:`, parseError);
+      console.error(`[GROUPS] Erro ao parsear JSON:`, parseError);
       throw parseError;
     });
-
-    const jsonKeys = typeof json === 'object' && json !== null ? Object.keys(json) : [];
-    console.log(`📥 [GROUPS] Resposta - tipo: ${Array.isArray(json) ? 'array' : typeof json}, keys: ${jsonKeys.join(', ') || '(nenhuma)'}, length: ${Array.isArray(json) ? json.length : 'N/A'}`);
 
     let groupsList: any[] = [];
     if (Array.isArray(json)) groupsList = json;
@@ -216,16 +131,74 @@ export async function POST(req: NextRequest) {
     else if (Array.isArray(json?.result)) groupsList = json.result;
     else if (json?.id && json?.subject) groupsList = [json];
 
-    if (groupsList.length > 0) {
-      console.log(`✅ [GROUPS] ${groupsList.length} grupo(s) encontrado(s)`);
-      return successResponse(groupsList, `${groupsList.length} grupo(s) encontrado(s)`);
+    const normalized = new Map<string, { id: string; subject?: string; pictureUrl?: string; size?: number }>();
+    for (const g of groupsList) {
+      const rawId = g.id ?? g.remoteJid ?? g.group_id ?? '';
+      const id = normalizeGroupId(rawId);
+      if (!id) continue;
+      if (!normalized.has(id)) {
+        normalized.set(id, {
+          id,
+          subject: g.subject ?? g.group_subject ?? null,
+          pictureUrl: g.pictureUrl ?? g.picture_url ?? null,
+          size: g.size ?? null,
+        });
+      }
+    }
+    const uniqueGroups = Array.from(normalized.values());
+
+    let inserted = 0;
+    let updated = 0;
+
+    for (const g of uniqueGroups) {
+      const { data: existing } = await supabaseServiceRole
+        .from('whatsapp_groups')
+        .select('id, group_subject, picture_url, size')
+        .eq('user_id', userId)
+        .eq('instance_name', instanceName)
+        .eq('group_id', g.id)
+        .limit(1)
+        .maybeSingle();
+
+      if (existing) {
+        const subjectChanged = (existing.group_subject ?? null) !== (g.subject ?? null);
+        const pictureChanged = (existing.picture_url ?? null) !== (g.pictureUrl ?? null);
+        const sizeChanged = (existing.size ?? null) !== (g.size ?? null);
+        if (subjectChanged || pictureChanged || sizeChanged) {
+          const { error: updateError } = await supabaseServiceRole
+            .from('whatsapp_groups')
+            .update({
+              group_subject: g.subject || null,
+              picture_url: g.pictureUrl || null,
+              size: g.size ?? null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', existing.id);
+          if (!updateError) updated++;
+        }
+      } else {
+        const { error: insertError } = await supabaseServiceRole
+          .from('whatsapp_groups')
+          .insert({
+            user_id: userId,
+            instance_name: instanceName,
+            group_id: g.id,
+            group_subject: g.subject || null,
+            picture_url: g.pictureUrl || null,
+            size: g.size ?? null,
+          });
+        if (!insertError) inserted++;
+        else if ((insertError as any).code === '23505') updated++;
+      }
     }
 
-    const sample = JSON.stringify(json).substring(0, 800);
-    console.warn(`⚠️ [GROUPS] Nenhum grupo mapeado. Amostra:`, sample);
-    return successResponse([], 'Nenhum grupo encontrado na instância.');
+    console.log(`[GROUPS] ${uniqueGroups.length} grupo(s), ${inserted} inseridos, ${updated} atualizados`);
+
+    return successResponse(
+      uniqueGroups,
+      `${uniqueGroups.length} grupo(s) encontrado(s). ${inserted} inseridos, ${updated} atualizados.`,
+    );
   } catch (err: any) {
     return serverErrorResponse(err);
   }
 }
-

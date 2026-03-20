@@ -49,17 +49,16 @@ function extractMetadata(payload: any) {
 async function processEventBackground(payload: any): Promise<void> {
   const { eventType, instanceName, messageId, remoteJid } = extractMetadata(payload);
   const evtNorm = String(eventType).toLowerCase().replace(/_/g, '-');
+  const isGroupParticipants =
+    evtNorm === 'group-participants.update' || evtNorm === 'group-participants-update';
+  const actionRaw = String(payload?.data?.action ?? payload?.action ?? '').toLowerCase();
 
-  // ── Deduplicação de group-participants (1 query, em background) ────────────
-  if (
-    (evtNorm === 'group-participants.update' || evtNorm === 'group-participants-update') &&
-    instanceName &&
-    remoteJid
-  ) {
-    const action = payload?.data?.action ?? payload?.action ?? '';
+  // ── Deduplicação pré-insert de group-participants ──────────────────────────
+  // Camada 1: fast-path — se já existe evento recente com mesmo fingerprint, descarta.
+  // Não filtra por env: protege contra double-trigger prod+test.
+  if (isGroupParticipants && actionRaw === 'add' && instanceName && remoteJid) {
     const participants: any[] = payload?.data?.participants ?? [];
     const firstParticipant = participants[0];
-    // Suporta tanto objetos ({ id, phoneNumber }) quanto strings JID diretas
     const firstParticipantId = String(
       firstParticipant?.id ??
       firstParticipant?.phoneNumber ??
@@ -67,14 +66,13 @@ async function processEventBackground(payload: any): Promise<void> {
       '',
     );
 
-    if (firstParticipantId && action === 'add') {
+    if (firstParticipantId) {
       const since = new Date(Date.now() - PARTICIPANT_DEDUP_WINDOW_MS).toISOString();
       const { data: existing } = await supabaseServiceRole
         .from('evolution_webhook_events')
         .select('id')
         .eq('instance_name', instanceName)
         .eq('remote_jid', remoteJid)
-        .eq('env', 'test')
         .in('event_type', ['group-participants.update', 'GROUP_PARTICIPANTS_UPDATE'])
         .gte('created_at', since)
         .limit(1)
@@ -82,7 +80,7 @@ async function processEventBackground(payload: any): Promise<void> {
 
       if (existing) {
         console.log(
-          `⚠️ [WEBHOOK TEST] group-participants duplicado — instância=${instanceName} grupo=${remoteJid}`,
+          `⚠️ [WEBHOOK TEST] group-participants duplicado (pré-insert) — instância=${instanceName} grupo=${remoteJid} participante=${firstParticipantId}`,
         );
         return;
       }
@@ -121,6 +119,32 @@ async function processEventBackground(payload: any): Promise<void> {
     return;
   }
 
+  // ── Dedup pós-insert para group-participants (protege contra race condition) ──
+  // Camada 2: quando dois webhooks chegam quase simultaneamente, ambos passam
+  // pela dedup pré-insert. Aqui verificamos qual foi o PRIMEIRO inserido na
+  // janela — apenas ele prossegue para executar o flow.
+  // Não filtra por env: protege também contra double-trigger prod+test.
+  if (isGroupParticipants && actionRaw === 'add' && instanceName && remoteJid) {
+    const dedupSince = new Date(Date.now() - PARTICIPANT_DEDUP_WINDOW_MS).toISOString();
+    const { data: firstEvent } = await supabaseServiceRole
+      .from('evolution_webhook_events')
+      .select('id')
+      .eq('instance_name', instanceName)
+      .eq('remote_jid', remoteJid)
+      .in('event_type', ['group-participants.update', 'GROUP_PARTICIPANTS_UPDATE'])
+      .gte('created_at', dedupSince)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    if (firstEvent && firstEvent.id !== event.id) {
+      console.log(
+        `⚠️ [WEBHOOK TEST] Post-insert dedup: evento ${event.id} ignorado (primeiro: ${firstEvent.id})`,
+      );
+      return;
+    }
+  }
+
   // ── Auditoria de saída de participantes ───────────────────────────────────
   if (
     eventType === participantExitAuditService.EVENT_TYPE &&
@@ -134,7 +158,6 @@ async function processEventBackground(payload: any): Promise<void> {
   }
 
   // ── Waiters do modo de teste (n8n-style) ─────────────────────────────────
-  // Notifica o primeiro waiter ativo sobre o evento recebido
   const { data: activeWaiters } = await supabaseServiceRole
     .from('evolution_webhook_test_waiters')
     .select('id')
@@ -180,8 +203,7 @@ async function processEventBackground(payload: any): Promise<void> {
 
   // group-participants.update → flow_instances
   if (
-    (evtNorm === 'group-participants.update' ||
-      String(eventType || '').toLowerCase().includes('participants')) &&
+    (isGroupParticipants || String(eventType || '').toLowerCase().includes('participants')) &&
     instanceName &&
     groupJid
   ) {
