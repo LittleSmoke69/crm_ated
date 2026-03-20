@@ -12,6 +12,7 @@ import {
   buildInternalChatWebhookUrl,
   EVOLUTION_CHAT_WEBHOOK_MESSAGE_EVENTS,
   resolvePublicBaseUrlForWebhooks,
+  shouldConfigureMasterChatWebhook,
 } from '@/lib/server/evolution-chat-webhook-config';
 
 /**

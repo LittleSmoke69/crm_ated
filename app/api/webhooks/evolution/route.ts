@@ -7,6 +7,7 @@
 import { NextRequest } from 'next/server';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { chatService } from '@/lib/services/chat-service';
+import { normalizeEvolutionChatWebhookEvent } from '@/lib/server/evolution-chat-webhook-config';
 
 function safeJsonPreview(input: any, maxLen: number = 2000) {
   try {
@@ -63,7 +64,14 @@ export async function POST(req: NextRequest) {
       return new Response('Invalid JSON', { status: 400 });
     }
 
-    const event = pickFirstString(payload?.event, payload?.eventType, payload?.type, payload?.data?.event);
+    const rawEvent = pickFirstString(
+      payload?.event,
+      payload?.eventType,
+      payload?.event_type,
+      payload?.type,
+      payload?.data?.event
+    );
+    const event = rawEvent ? normalizeEvolutionChatWebhookEvent(rawEvent) : '';
     const instance = pickFirstString(payload?.instance, payload?.instanceName, payload?.data?.instance, payload?.data?.instanceName);
     const data = payload?.data ?? payload;
 
@@ -88,8 +96,11 @@ export async function POST(req: NextRequest) {
 
     switch (event) {
       case 'MESSAGES_UPSERT':
+        await handleMessageUpsert(dbInstance, data, false);
+        break;
+
       case 'SEND_MESSAGE':
-        await handleMessageUpsert(dbInstance, data, event === 'SEND_MESSAGE');
+        await handleSendMessageWebhook(dbInstance, data);
         break;
 
       case 'MESSAGES_UPDATE':
@@ -136,6 +147,52 @@ export async function GET(req: NextRequest) {
       headers: { 'Content-Type': 'application/json' },
     }
   );
+}
+
+function pickSendWebhookStatus(data: any): unknown {
+  if (!data || typeof data !== 'object') return undefined;
+  return (
+    data.status ??
+    data.messageStatus ??
+    data.message?.status ??
+    data.message?.message?.status
+  );
+}
+
+/** PENDING em string ou 0 (proto Baileys / Evolution). */
+function isSendPendingStatus(raw: unknown): boolean {
+  if (raw === undefined || raw === null) return false;
+  if (typeof raw === 'number' && raw === 0) return true;
+  if (typeof raw === 'string') return raw.trim().toUpperCase() === 'PENDING';
+  return false;
+}
+
+/**
+ * SEND_MESSAGE / send.message: mensagem enviada pela API (ex.: tela chat-atendimento).
+ * POST /api/chat/send grava com status `pending`; ao receber o webhook com PENDING,
+ * confirmamos no WhatsApp e atualizamos para `sent` (Realtime reflete no cliente).
+ */
+async function handleSendMessageWebhook(instance: any, data: any) {
+  const message = data?.message ?? data;
+  const key = message?.key || data?.key || {};
+  const messageId = key?.id;
+  const sendStatus = pickSendWebhookStatus(data) ?? pickSendWebhookStatus(message);
+
+  if (messageId && isSendPendingStatus(sendStatus)) {
+    const { data: updatedRows, error } = await supabaseServiceRole
+      .from('chat_messages')
+      .update({ status: 'sent' })
+      .eq('instance_id', instance.id)
+      .eq('message_id', messageId)
+      .eq('status', 'pending')
+      .select('id');
+
+    if (!error && updatedRows && updatedRows.length > 0) {
+      return;
+    }
+  }
+
+  await handleMessageUpsert(instance, data, true);
 }
 
 async function handleMessageUpsert(instance: any, data: any, fromMe: boolean) {
@@ -255,3 +312,4 @@ function extractMediaUrl(message: any): string | null {
 function extractCaption(message: any): string {
   return message.imageMessage?.caption || message.videoMessage?.caption || message.documentMessage?.caption || '';
 }
+
