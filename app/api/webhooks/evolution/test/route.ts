@@ -51,11 +51,20 @@ async function processEventBackground(payload: any): Promise<void> {
   const evtNorm = String(eventType).toLowerCase().replace(/_/g, '-');
 
   // ── Deduplicação de group-participants (1 query, em background) ────────────
-  if (evtNorm === 'group-participants.update' && instanceName && remoteJid) {
+  if (
+    (evtNorm === 'group-participants.update' || evtNorm === 'group-participants-update') &&
+    instanceName &&
+    remoteJid
+  ) {
     const action = payload?.data?.action ?? payload?.action ?? '';
     const participants: any[] = payload?.data?.participants ?? [];
+    const firstParticipant = participants[0];
+    // Suporta tanto objetos ({ id, phoneNumber }) quanto strings JID diretas
     const firstParticipantId = String(
-      participants[0]?.id ?? participants[0]?.phoneNumber ?? '',
+      firstParticipant?.id ??
+      firstParticipant?.phoneNumber ??
+      (typeof firstParticipant === 'string' ? firstParticipant : '') ??
+      '',
     );
 
     if (firstParticipantId && action === 'add') {

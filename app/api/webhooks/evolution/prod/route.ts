@@ -56,11 +56,20 @@ async function processEventBackground(payload: any): Promise<void> {
   // ── Deduplicação de group-participants (1 query, em background) ────────────
   // Evita double-trigger de boas-vindas quando a Evolution retransmite o evento.
   // Feita aqui (background) para não atrasar o response 200.
-  if (evtNorm === 'group-participants.update' && instanceName && remoteJid) {
+  if (
+    (evtNorm === 'group-participants.update' || evtNorm === 'group-participants-update') &&
+    instanceName &&
+    remoteJid
+  ) {
     const action = payload?.data?.action ?? payload?.action ?? '';
     const participants: any[] = payload?.data?.participants ?? [];
+    const firstParticipant = participants[0];
+    // Suporta tanto objetos ({ id, phoneNumber }) quanto strings JID diretas
     const firstParticipantId = String(
-      participants[0]?.id ?? participants[0]?.phoneNumber ?? '',
+      firstParticipant?.id ??
+      firstParticipant?.phoneNumber ??
+      (typeof firstParticipant === 'string' ? firstParticipant : '') ??
+      '',
     );
 
     if (firstParticipantId && action === 'add') {
