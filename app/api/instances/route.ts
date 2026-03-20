@@ -8,11 +8,8 @@ import { getUserEvolutionApi } from '@/lib/services/evolution-api-helper';
 import { evolutionApiSelector } from '@/lib/services/evolution-api-selector';
 import { getSubordinates } from '@/lib/middleware/permissions';
 import {
-  assertEvolutionCanReachWebhookBase,
-  buildInternalChatWebhookUrl,
-  EVOLUTION_CHAT_WEBHOOK_MESSAGE_EVENTS,
-  resolvePublicBaseUrlForWebhooks,
-  shouldConfigureMasterChatWebhook,
+  EVOLUTION_INSTANCE_WEBHOOK_EVENTS,
+  ZAPLOTO_EVOLUTION_PROD_WEBHOOK_URL,
 } from '@/lib/server/evolution-chat-webhook-config';
 
 /**
@@ -154,6 +151,7 @@ export async function GET(req: NextRequest) {
           user_id: inst.user_id || userId, // Usa o user_id da instância, não do usuário logado
           proxy_id: inst.proxy_id || null,
           is_master: inst.is_master || false, // Indica se é instância mestre
+          webhook_configured: inst.webhook_configured === true,
           maturation_type: inst.maturation_type || 'maturado',
           maturation_status: inst.maturation_status || null,
           maturation_ends_at: inst.maturation_ends_at || null,
@@ -344,28 +342,12 @@ export async function POST(req: NextRequest) {
     const normalizedBaseUrl = normalizeBaseUrl(selectedApi.base_url);
 
     /**
-     * Instância mestre: webhook fixo no sistema (`/api/webhooks/evolution`) para gravar
-     * todas as mensagens (upsert/update/delete/envio) em chat_conversations / chat_messages.
-     * Não depende de webhook_events_config nem de /evolution/prod (que só loga em evolution_webhook_events).
+     * Instância mestre + checkbox no body: webhook sempre aponta para produção Zaploto
+     * (`/api/webhooks/evolution/prod`), independente de onde o app está rodando.
      */
     let masterChatWebhookUrl: string | null = null;
     if (isMaster === true && shouldConfigureChatWebhook) {
-      const publicBase = resolvePublicBaseUrlForWebhooks(req);
-      if (!publicBase) {
-        return errorResponse(
-          'Instância mestre exige URL pública do app para registrar o webhook. Defina NEXT_PUBLIC_APP_URL ou NEXT_PUBLIC_WEBHOOK_BASE_URL (ou equivalente).',
-          400
-        );
-      }
-      const reachErr = assertEvolutionCanReachWebhookBase(publicBase);
-      if (reachErr) {
-        return errorResponse(reachErr, 400);
-      }
-      const built = buildInternalChatWebhookUrl(publicBase);
-      if (!built.ok) {
-        return errorResponse(built.error, 500);
-      }
-      masterChatWebhookUrl = built.url;
+      masterChatWebhookUrl = ZAPLOTO_EVOLUTION_PROD_WEBHOOK_URL;
     }
 
     // Cria instância na Evolution API selecionada pelo balanceador
@@ -390,12 +372,12 @@ export async function POST(req: NextRequest) {
             integration: 'WHATSAPP-BAILEYS',
           };
 
-          // Instância mestre: webhook interno que persiste mensagens no banco (chat)
+          // Instância mestre: webhook prod Zaploto (MESSAGES_UPSERT + SEND_MESSAGE)
           if (this.isMaster && this.masterChatWebhookUrl) {
             requestBody.webhook = {
               enabled: true,
               url: this.masterChatWebhookUrl,
-              events: [...EVOLUTION_CHAT_WEBHOOK_MESSAGE_EVENTS],
+              events: [...EVOLUTION_INSTANCE_WEBHOOK_EVENTS],
               base64: true,
             };
           }

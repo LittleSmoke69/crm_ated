@@ -7,7 +7,6 @@
 import { NextRequest } from 'next/server';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { chatService } from '@/lib/services/chat-service';
-import { normalizeEvolutionChatWebhookEvent } from '@/lib/server/evolution-chat-webhook-config';
 
 function safeJsonPreview(input: any, maxLen: number = 2000) {
   try {
@@ -24,6 +23,20 @@ function pickFirstString(...values: any[]): string | null {
     if (typeof v === 'string' && v.trim()) return v.trim();
   }
   return null;
+}
+
+function pickProfilePicUrl(data: any): string | null {
+  const candidate = pickFirstString(
+    data?.profilePicUrl,
+    data?.profile_pic_url,
+    data?.contact?.profilePicUrl,
+    data?.contact?.profile_pic_url,
+    data?.sender?.profilePicUrl,
+    data?.sender?.profile_pic_url
+  );
+  if (!candidate) return null;
+  if (!/^https?:\/\//i.test(candidate)) return null;
+  return candidate;
 }
 
 /**
@@ -64,14 +77,7 @@ export async function POST(req: NextRequest) {
       return new Response('Invalid JSON', { status: 400 });
     }
 
-    const rawEvent = pickFirstString(
-      payload?.event,
-      payload?.eventType,
-      payload?.event_type,
-      payload?.type,
-      payload?.data?.event
-    );
-    const event = rawEvent ? normalizeEvolutionChatWebhookEvent(rawEvent) : '';
+    const event = pickFirstString(payload?.event, payload?.eventType, payload?.type, payload?.data?.event);
     const instance = pickFirstString(payload?.instance, payload?.instanceName, payload?.data?.instance, payload?.data?.instanceName);
     const data = payload?.data ?? payload;
 
@@ -96,11 +102,8 @@ export async function POST(req: NextRequest) {
 
     switch (event) {
       case 'MESSAGES_UPSERT':
-        await handleMessageUpsert(dbInstance, data, false);
-        break;
-
       case 'SEND_MESSAGE':
-        await handleSendMessageWebhook(dbInstance, data);
+        await handleMessageUpsert(dbInstance, data, event === 'SEND_MESSAGE', payload);
         break;
 
       case 'MESSAGES_UPDATE':
@@ -148,54 +151,7 @@ export async function GET(req: NextRequest) {
     }
   );
 }
-
-function pickSendWebhookStatus(data: any): unknown {
-  if (!data || typeof data !== 'object') return undefined;
-  return (
-    data.status ??
-    data.messageStatus ??
-    data.message?.status ??
-    data.message?.message?.status
-  );
-}
-
-/** PENDING em string ou 0 (proto Baileys / Evolution). */
-function isSendPendingStatus(raw: unknown): boolean {
-  if (raw === undefined || raw === null) return false;
-  if (typeof raw === 'number' && raw === 0) return true;
-  if (typeof raw === 'string') return raw.trim().toUpperCase() === 'PENDING';
-  return false;
-}
-
-/**
- * SEND_MESSAGE / send.message: mensagem enviada pela API (ex.: tela chat-atendimento).
- * POST /api/chat/send grava com status `pending`; ao receber o webhook com PENDING,
- * confirmamos no WhatsApp e atualizamos para `sent` (Realtime reflete no cliente).
- */
-async function handleSendMessageWebhook(instance: any, data: any) {
-  const message = data?.message ?? data;
-  const key = message?.key || data?.key || {};
-  const messageId = key?.id;
-  const sendStatus = pickSendWebhookStatus(data) ?? pickSendWebhookStatus(message);
-
-  if (messageId && isSendPendingStatus(sendStatus)) {
-    const { data: updatedRows, error } = await supabaseServiceRole
-      .from('chat_messages')
-      .update({ status: 'sent' })
-      .eq('instance_id', instance.id)
-      .eq('message_id', messageId)
-      .eq('status', 'pending')
-      .select('id');
-
-    if (!error && updatedRows && updatedRows.length > 0) {
-      return;
-    }
-  }
-
-  await handleMessageUpsert(instance, data, true);
-}
-
-async function handleMessageUpsert(instance: any, data: any, fromMe: boolean) {
+async function handleMessageUpsert(instance: any, data: any, fromMe: boolean, rawPayload?: any) {
   const message = data?.message || data;
   const key = message?.key || data?.key || {};
   const remoteJid = key?.remoteJid || data?.remoteJid;
@@ -213,6 +169,7 @@ async function handleMessageUpsert(instance: any, data: any, fromMe: boolean) {
     user_id: instance.user_id,
     remote_jid: remoteJid,
     title: data.pushName || remoteJid.split('@')[0],
+    profile_pic_url: pickProfilePicUrl(data) || undefined,
     is_group: remoteJid.endsWith('@g.us'),
     last_message_at: new Date().toISOString(),
     last_message_preview: extractText(message).substring(0, 100),
@@ -231,7 +188,7 @@ async function handleMessageUpsert(instance: any, data: any, fromMe: boolean) {
     sender_jid: key.participant || key.remoteJid || data.sender || remoteJid,
     text: extractText(message),
     media_type: extractMediaType(message),
-    media_url: extractMediaUrl(message) || undefined,
+    media_url: extractMediaUrl(message, rawPayload) || undefined,
     caption: extractCaption(message),
     status: (key.fromMe || fromMe) ? 'sent' : 'received',
     timestamp: data.messageTimestamp || Math.floor(Date.now() / 1000),
@@ -305,7 +262,39 @@ function extractMediaType(message: any): string {
   return 'text';
 }
 
-function extractMediaUrl(message: any): string | null {
+function extractMediaUrl(message: any, rawPayload?: any): string | null {
+  const absoluteUrl =
+    message?.imageMessage?.url ||
+    message?.videoMessage?.url ||
+    message?.audioMessage?.url ||
+    message?.documentMessage?.url ||
+    message?.stickerMessage?.url ||
+    null;
+
+  if (absoluteUrl && typeof absoluteUrl === 'string' && absoluteUrl.trim()) {
+    return absoluteUrl.trim();
+  }
+
+  const directPath =
+    message?.imageMessage?.directPath ||
+    message?.videoMessage?.directPath ||
+    message?.audioMessage?.directPath ||
+    message?.documentMessage?.directPath ||
+    message?.stickerMessage?.directPath ||
+    null;
+
+  if (typeof directPath === 'string' && directPath.trim()) {
+    const base = String(rawPayload?.server_url || '').replace(/\/+$/, '');
+    const path = directPath.startsWith('/') ? directPath : `/${directPath}`;
+    if (base) return `${base}${path}`;
+  }
+
+  const base64 = typeof message?.base64 === 'string' ? message.base64.trim() : '';
+  if (base64 && message?.imageMessage) {
+    const mime = message?.imageMessage?.mimetype || 'image/jpeg';
+    return `data:${mime};base64,${base64}`;
+  }
+
   return null;
 }
 

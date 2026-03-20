@@ -7,8 +7,8 @@ import { supabase } from '@/lib/supabase';
 import {
   MessageSquare,
   Send,
-  Check,
   CheckCheck,
+  BadgeCheck,
   Clock,
   Search,
   Users,
@@ -60,6 +60,7 @@ interface Conversation {
   id: string;
   remote_jid: string;
   title: string;
+  profile_pic_url?: string | null;
   last_message_preview: string;
   last_message_at: string;
   last_customer_message_at?: string | null;
@@ -90,7 +91,7 @@ interface ChannelWhatsAppOfficial {
 }
 
 type Channel = ChannelEvolution | ChannelWhatsAppOfficial;
-type ConversationFilter = 'all' | 'mine' | 'unassigned';
+type ConversationFilter = 'mine' | 'unassigned';
 type ActiveView = 'chat' | 'contacts';
 
 interface ChatContact {
@@ -505,7 +506,7 @@ export default function ChatPage() {
   const [conversationsLoading, setConversationsLoading] = useState(false);
   const [visibleConversationsCount, setVisibleConversationsCount] = useState(CONVERSATIONS_PAGE_SIZE);
   const [searchTerm, setSearchTerm] = useState('');
-  const [conversationFilter, setConversationFilter] = useState<ConversationFilter>('all');
+  const [conversationFilter, setConversationFilter] = useState<ConversationFilter>('mine');
   const [tagFilter, setTagFilter] = useState<string>(''); // nome da etiqueta para filtrar (vazio = todas)
   const [tagOptions, setTagOptions] = useState<{ id: string; name: string }[]>([]);
   const conversationListScrollRef = useRef<HTMLDivElement>(null);
@@ -527,6 +528,7 @@ export default function ChatPage() {
     url: string;
     type: 'image' | 'audio' | 'video' | 'document';
     name: string;
+    mimetype?: string;
     preview?: string;
     meta_id?: string; // ID do upload direto na Meta (para áudio gravado)
   } | null>(null);
@@ -549,8 +551,13 @@ export default function ChatPage() {
   // Alertas
   const [showTokenAlert, setShowTokenAlert] = useState(false);
   const [tokenAlertMessage, setTokenAlertMessage] = useState('');
+  const [showStartConversationModal, setShowStartConversationModal] = useState(false);
+  const [startConversationPhone, setStartConversationPhone] = useState('');
+  const [creatingConversation, setCreatingConversation] = useState(false);
+  const [startConversationError, setStartConversationError] = useState<string | null>(null);
   const [showResolveMenu, setShowResolveMenu] = useState(false);
   const [resolvingConversation, setResolvingConversation] = useState(false);
+  const [closingConversationId, setClosingConversationId] = useState<string | null>(null);
   const [showTagsPopover, setShowTagsPopover] = useState(false);
   const tagsPopoverRef = useRef<HTMLDivElement>(null);
   const [updatingTags, setUpdatingTags] = useState(false);
@@ -1126,8 +1133,8 @@ export default function ChatPage() {
   };
 
   const startRecording = async () => {
-    if (!selectedChannel || selectedChannel.type !== 'whatsapp_official') {
-      alert('Gravação de áudio disponível apenas para WhatsApp Oficial');
+    if (!selectedChannel) {
+      alert('Selecione um canal para gravar áudio');
       return;
     }
     if (!userId) {
@@ -1200,7 +1207,7 @@ export default function ChatPage() {
   };
 
   const uploadRecordedAudio = async (blob: Blob, mimeType: string) => {
-    if (!selectedChannel || selectedChannel.type !== 'whatsapp_official' || !userId) return;
+    if (!selectedChannel || !userId) return;
     setUploading(true);
     try {
       const baseType = mimeType.split(';')[0].trim().toLowerCase();
@@ -1210,6 +1217,29 @@ export default function ChatPage() {
       };
       const ext = extMap[baseType] ?? 'ogg';
       const fileName = `audio_${Date.now()}.${ext}`;
+
+      if (selectedChannel.type === 'evolution') {
+        const fd = new FormData();
+        fd.append('file', new File([blob], fileName, { type: baseType }));
+        fd.append('instance_id', selectedChannel.id);
+        const uploadRes = await fetch('/api/chat/evolution/upload-media', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: fd,
+        });
+        const uploadData = await uploadRes.json().catch(() => ({}));
+        if (!uploadRes.ok || !uploadData?.success || !uploadData?.data?.url) {
+          alert(uploadData?.error || 'Falha no upload do áudio. Tente novamente.');
+          return;
+        }
+        setAttachedMedia({
+          url: uploadData.data.url,
+          type: 'audio',
+          name: 'Áudio gravado',
+          mimetype: baseType,
+        });
+        return;
+      }
 
       // Dois uploads em paralelo:
       // 1. Meta  → media_id para envio confiável (independe de URL pública)
@@ -1241,7 +1271,7 @@ export default function ChatPage() {
         return;
       }
 
-      setAttachedMedia({ url, meta_id, type: 'audio', name: 'Áudio gravado' });
+      setAttachedMedia({ url, meta_id, type: 'audio', name: 'Áudio gravado', mimetype: baseType });
     } catch (e) {
       console.error('[Chat] upload áudio:', e);
       alert('Falha ao enviar áudio gravado. Tente novamente.');
@@ -1364,6 +1394,41 @@ export default function ChatPage() {
     }
   };
 
+  const handleResolveConversationFromList = async (conversationId: string) => {
+    if (!conversationId || closingConversationId) return;
+    const conv = conversations.find((c) => c.id === conversationId);
+    if (!conv || conv.attendance_status === 'resolvido') return;
+    setClosingConversationId(conversationId);
+    try {
+      const res = await fetch('/api/chat/conversations', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          conversation_id: conversationId,
+          attendance_status: 'resolvido',
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id === conversationId
+              ? {
+                  ...c,
+                  attendance_status: 'resolvido' as const,
+                  resolved_at: data.data?.resolved_at ?? c.resolved_at ?? new Date().toISOString(),
+                }
+              : c
+          )
+        );
+      }
+    } catch (e) {
+      console.error('[Chat] Resolver conversa (lista):', e);
+    } finally {
+      setClosingConversationId(null);
+    }
+  };
+
   // ── Envio de mensagem ──────────────────────────────────────────────────────
   const getSendErrorMessage = (status: number, bodyError?: string): string => {
     if (bodyError && bodyError.trim()) return bodyError;
@@ -1402,14 +1467,27 @@ export default function ChatPage() {
           body: JSON.stringify({
             instance_id: selectedChannel.id,
             remoteJid: conversation.remote_jid,
-            type: 'text',
-            text: messageText,
+            ...(hasMedia
+              ? {
+                  type: 'media',
+                  media: attachedMedia!.url,
+                  mimetype: attachedMedia!.mimetype || 'audio/ogg',
+                  mediatype: attachedMedia!.type,
+                  caption: hasText ? messageText.trim() : undefined,
+                  fileName: attachedMedia!.name,
+                }
+              : {
+                  type: 'text',
+                  text: messageText,
+                }),
           }),
         });
         let result: { success?: boolean; error?: string; message?: string } = {};
         try { result = await response.json(); } catch { result = {}; }
         if (response.ok && result.success) {
+          if (attachedMedia?.preview) URL.revokeObjectURL(attachedMedia.preview);
           setMessageText('');
+          setAttachedMedia(null);
           if (textareaRef.current) textareaRef.current.style.height = 'auto';
           const saved = (result as { data?: { message?: Message | null } }).data?.message;
           if (saved && saved.id) {
@@ -1517,6 +1595,53 @@ export default function ChatPage() {
     }
   };
 
+  const handleStartConversation = async () => {
+    if (!selectedChannel || creatingConversation) return;
+    const normalizedPhone = startConversationPhone.replace(/\D/g, '');
+    if (!normalizedPhone || normalizedPhone.length < 10 || normalizedPhone.length > 15) {
+      setStartConversationError('Número inválido. Use apenas números (10 a 15 dígitos).');
+      return;
+    }
+
+    setCreatingConversation(true);
+    setStartConversationError(null);
+    try {
+      const body =
+        selectedChannel.type === 'evolution'
+          ? { instance_id: selectedChannel.id, phone: normalizedPhone, title: normalizedPhone }
+          : { whatsapp_config_id: selectedChannel.id, phone: normalizedPhone, title: normalizedPhone };
+
+      const res = await fetch('/api/chat/conversations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success || !data?.data?.id) {
+        setStartConversationError(data?.error || 'Não foi possível abrir a conversa.');
+        return;
+      }
+
+      const newConversation = data.data as Conversation;
+      setConversations((prev) => {
+        const withoutCurrent = prev.filter((c) => c.id !== newConversation.id);
+        const next = [newConversation, ...withoutCurrent];
+        if (selectedChannel) {
+          conversationsCacheRef.current[selectedChannel.id] = next;
+        }
+        return next;
+      });
+      setSelectedConversationId(newConversation.id);
+      setActiveView('chat');
+      setShowStartConversationModal(false);
+      setStartConversationPhone('');
+    } catch {
+      setStartConversationError('Falha na conexão. Tente novamente.');
+    } finally {
+      setCreatingConversation(false);
+    }
+  };
+
   // ── Helpers ────────────────────────────────────────────────────────────────
   const formatTime = (timestamp: number | string) => {
     const date =
@@ -1549,7 +1674,7 @@ export default function ChatPage() {
 
   const getStatusIcon = (status: string) => {
     switch (status) {
-      case 'sent': return <Check className="w-4 h-4" />;
+      case 'sent': return <BadgeCheck className="w-4 h-4" />;
       case 'delivered': return <CheckCheck className="w-4 h-4" />;
       case 'read': return <CheckCheck className="w-4 h-4" style={{ color: '#8CD955' }} />;
       default: return <Clock className="w-4 h-4" />;
@@ -1570,8 +1695,7 @@ export default function ChatPage() {
   };
 
   // ── Filtros e ordenação ────────────────────────────────────────────────────
-  // Todos = apenas conversas com janela 24h ativa (pendentes, não resolvidas)
-  // Minhas = atribuídas a mim
+  // Todos = atribuídas a mim
   // Histórico = fora da janela 24h (template) ou já resolvidas
   const filteredConversations = conversations.filter((conv) => {
     const term = (searchTerm || '').trim().toLowerCase();
@@ -1589,14 +1713,11 @@ export default function ChatPage() {
     const resolved = conv.attendance_status === 'resolvido';
     switch (conversationFilter) {
       case 'mine':
-        return conv.user_id === userId;
+        return conv.user_id === userId && conv.attendance_status !== 'resolvido';
       case 'unassigned':
+      default:
         // Histórico: template (fora 24h) ou resolvidas
         return !in24h || resolved;
-      case 'all':
-      default:
-        // Todos: só 24h ativas e não resolvidas (pendentes)
-        return in24h && !resolved;
     }
   });
 
@@ -1614,9 +1735,6 @@ export default function ChatPage() {
   const displayedConversations = sortedConversations.slice(0, visibleConversationsCount);
   const hasMoreConversations = visibleConversationsCount < sortedConversations.length;
 
-  const allCount = conversations.filter(
-    (c) => isWithin24hWindow(c) && c.attendance_status !== 'resolvido'
-  ).length;
   const mineCount = conversations.filter((c) => c.user_id === userId).length;
   const historyCount = conversations.filter(
     (c) => !isWithin24hWindow(c) || c.attendance_status === 'resolvido'
@@ -1983,12 +2101,20 @@ export default function ChatPage() {
                           className="p-3 border-b border-gray-100 dark:border-[#404040] cursor-pointer hover:bg-gray-50 dark:hover:bg-[#333] transition-colors"
                         >
                           <div className="flex items-center gap-3">
-                            <div
-                              className="w-9 h-9 rounded-full flex items-center justify-center text-white text-xs font-semibold flex-shrink-0"
-                              style={{ backgroundColor: getConversationColor(conv.title || '') }}
-                            >
-                              {getInitials(conv.title || phone)}
-                            </div>
+                            {conv.profile_pic_url ? (
+                              <img
+                                src={conv.profile_pic_url}
+                                alt={conv.title || phone}
+                                className="w-9 h-9 rounded-full object-cover flex-shrink-0"
+                              />
+                            ) : (
+                              <div
+                                className="w-9 h-9 rounded-full flex items-center justify-center text-white text-xs font-semibold flex-shrink-0"
+                                style={{ backgroundColor: getConversationColor(conv.title || '') }}
+                              >
+                                {getInitials(conv.title || phone)}
+                              </div>
+                            )}
                             <div className="flex-1 min-w-0">
                               <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
                                 {conv.title || 'Sem nome'}
@@ -2049,18 +2175,21 @@ export default function ChatPage() {
                     </select>
                   </div>
                 )}
-                <div className="flex items-center gap-1 border-b border-gray-200 dark:border-[#404040] -mx-4 px-4">
-                  {/* Todos = janela 24h ativa (prioridade máxima) */}
+                <div className="mb-3">
                   <button
-                    onClick={() => setConversationFilter('all')}
-                    className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
-                      conversationFilter === 'all'
-                        ? 'border-[#8CD955] text-[#8CD955]'
-                        : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'
-                    }`}
+                    type="button"
+                    onClick={() => {
+                      setStartConversationError(null);
+                      setStartConversationPhone('');
+                      setShowStartConversationModal(true);
+                    }}
+                    disabled={!selectedChannel}
+                    className="w-full px-3 py-2 text-sm font-medium rounded-lg border border-gray-200 dark:border-[#404040] text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-[#333] hover:bg-gray-200 dark:hover:bg-[#3a3a3a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    Todos ({allCount})
+                    Chamar cliente por número
                   </button>
+                </div>
+                <div className="flex items-center gap-1 border-b border-gray-200 dark:border-[#404040] -mx-4 px-4">
                   <button
                     onClick={() => setConversationFilter('mine')}
                     className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
@@ -2069,7 +2198,7 @@ export default function ChatPage() {
                         : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'
                     }`}
                   >
-                    Minhas ({mineCount})
+                    Todos ({mineCount})
                   </button>
                   <button
                     onClick={() => setConversationFilter('unassigned')}
@@ -2107,11 +2236,9 @@ export default function ChatPage() {
                   <div className="p-4 text-center text-gray-500 dark:text-gray-400 text-sm">
                     {selectedChannel ? (
                       <>
-                        {conversationFilter === 'all'
-                          ? 'Nenhuma conversa com janela 24h ativa (pendente).'
-                          : conversationFilter === 'unassigned'
-                            ? 'Nenhuma conversa no histórico (template ou resolvidas).'
-                            : 'Nenhuma conversa encontrada.'}
+                        {conversationFilter === 'mine'
+                          ? 'Nenhuma conversa atribuída para você.'
+                          : 'Nenhuma conversa no histórico (template ou resolvidas).'}
                         {(userStatus === 'super_admin' ||
                           userStatus === 'admin' ||
                           userStatus === 'suporte' ||
@@ -2141,16 +2268,24 @@ export default function ChatPage() {
                           }`}
                         >
                           <div className="flex items-start gap-3">
-                            <div
-                              className="w-10 h-10 rounded-full flex items-center justify-center text-white text-xs font-semibold flex-shrink-0"
-                              style={{ backgroundColor: getConversationColor(conv.title || '') }}
-                            >
-                              {conv.is_group ? (
-                                <Users className="w-5 h-5" />
-                              ) : (
-                                <span>{getInitials(conv.title || '')}</span>
-                              )}
-                            </div>
+                            {conv.profile_pic_url && !conv.is_group ? (
+                              <img
+                                src={conv.profile_pic_url}
+                                alt={conv.title || 'Contato'}
+                                className="w-10 h-10 rounded-full object-cover flex-shrink-0"
+                              />
+                            ) : (
+                              <div
+                                className="w-10 h-10 rounded-full flex items-center justify-center text-white text-xs font-semibold flex-shrink-0"
+                                style={{ backgroundColor: getConversationColor(conv.title || '') }}
+                              >
+                                {conv.is_group ? (
+                                  <Users className="w-5 h-5" />
+                                ) : (
+                                  <span>{getInitials(conv.title || '')}</span>
+                                )}
+                              </div>
+                            )}
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center justify-between mb-1">
                                 <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate flex items-center gap-1.5 flex-wrap">
@@ -2194,6 +2329,25 @@ export default function ChatPage() {
                                 {conv.last_message_preview || '—'}
                               </p>
                               <div className="flex items-center justify-end">
+                                {conv.attendance_status !== 'resolvido' &&
+                                  (userStatus === 'suporte' ||
+                                    userStatus === 'admin' ||
+                                    userStatus === 'super_admin' ||
+                                    userStatus === 'gerente' ||
+                                    userStatus === 'consultor') && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleResolveConversationFromList(conv.id);
+                                      }}
+                                      disabled={closingConversationId === conv.id}
+                                      className="mr-2 px-2 py-0.5 text-[11px] font-medium rounded border border-gray-300 dark:border-[#505050] text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-[#3a3a3a] disabled:opacity-60"
+                                      title="Encerrar conversa"
+                                    >
+                                      {closingConversationId === conv.id ? 'Encerrando...' : 'Encerrar'}
+                                    </button>
+                                  )}
                                 {conv.unread_count > 0 && (
                                   <span
                                     className="text-xs font-bold text-white rounded-full px-2 py-0.5"
@@ -2255,16 +2409,24 @@ export default function ChatPage() {
                         )}
                       </button>
                     )}
-                    <div
-                      className="w-9 h-9 rounded-full flex items-center justify-center text-white text-xs font-semibold flex-shrink-0"
-                      style={{ backgroundColor: getConversationColor(selectedConversation.title) }}
-                    >
-                      {selectedConversation.is_group ? (
-                        <Users className="w-4 h-4" />
-                      ) : (
-                        <span>{getInitials(selectedConversation.title)}</span>
-                      )}
-                    </div>
+                    {selectedConversation.profile_pic_url && !selectedConversation.is_group ? (
+                      <img
+                        src={selectedConversation.profile_pic_url}
+                        alt={selectedConversation.title || 'Contato'}
+                        className="w-9 h-9 rounded-full object-cover flex-shrink-0"
+                      />
+                    ) : (
+                      <div
+                        className="w-9 h-9 rounded-full flex items-center justify-center text-white text-xs font-semibold flex-shrink-0"
+                        style={{ backgroundColor: getConversationColor(selectedConversation.title) }}
+                      >
+                        {selectedConversation.is_group ? (
+                          <Users className="w-4 h-4" />
+                        ) : (
+                          <span>{getInitials(selectedConversation.title)}</span>
+                        )}
+                      </div>
+                    )}
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5 flex-wrap gap-y-0.5">
                         <h2 className="font-semibold text-sm text-gray-900 dark:text-gray-100 truncate">
@@ -2598,7 +2760,7 @@ export default function ChatPage() {
                       <button
                         type="button"
                         onClick={startRecording}
-                        disabled={uploading || selectedChannel?.type !== 'whatsapp_official' || !canSendFreeMessage}
+                        disabled={uploading || !selectedChannel || !canSendFreeMessage}
                         className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-50"
                         title="Gravar áudio"
                       >
@@ -2790,6 +2952,74 @@ export default function ChatPage() {
                   <UserCheck className="w-4 h-4" />
                 )}
                 {savingContact ? 'Salvando...' : 'Salvar Contato'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showStartConversationModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                Chamar cliente
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  if (creatingConversation) return;
+                  setShowStartConversationModal(false);
+                }}
+                className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] text-gray-500"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Número do WhatsApp
+                </label>
+                <input
+                  type="text"
+                  value={startConversationPhone}
+                  onChange={(e) => setStartConversationPhone(e.target.value)}
+                  placeholder="Ex: 81995308525"
+                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] focus:outline-none"
+                />
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Digite apenas números com DDD e país, sem espaços.
+                </p>
+              </div>
+
+              {startConversationError && (
+                <div className="flex items-center gap-2 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                  <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
+                  <p className="text-sm text-red-700 dark:text-red-300">{startConversationError}</p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <button
+                type="button"
+                onClick={() => setShowStartConversationModal(false)}
+                disabled={creatingConversation}
+                className="flex-1 px-4 py-2.5 text-sm font-medium border border-gray-300 dark:border-[#404040] rounded-lg text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333] transition-colors disabled:opacity-60"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleStartConversation}
+                disabled={creatingConversation}
+                className="flex-1 px-4 py-2.5 text-sm font-medium text-white rounded-lg flex items-center justify-center gap-2 disabled:opacity-60 transition-colors"
+                style={{ backgroundColor: '#8CD955' }}
+              >
+                {creatingConversation ? <Loader2 className="w-4 h-4 animate-spin" /> : <MessageCircle className="w-4 h-4" />}
+                {creatingConversation ? 'Chamando...' : 'Abrir conversa'}
               </button>
             </div>
           </div>

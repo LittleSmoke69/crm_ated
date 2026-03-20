@@ -4,14 +4,14 @@
  */
 
 import { NextRequest } from 'next/server';
-import { requireStatus, canAccessUser } from '@/lib/middleware/permissions';
+import { requireStatus, canAccessUser, getSubordinates } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { createEvolutionChatInstance } from '@/lib/server/evolution-chat-instance-create';
 
 export async function GET(req: NextRequest) {
   try {
-    const { userId, profile } = await requireStatus(req, ['gerente', 'super_admin', 'admin']);
+    const { userId, profile } = await requireStatus(req, ['gerente', 'dono_banca', 'super_admin', 'admin']);
 
     let listQuery = supabaseServiceRole
       .from('atendimento_chat_assignments')
@@ -37,6 +37,15 @@ export async function GET(req: NextRequest) {
     const st = (profile.status || '').toLowerCase();
     if (st === 'gerente') {
       listQuery = listQuery.eq('gerente_user_id', userId);
+    } else if (st === 'dono_banca') {
+      const subordinates = await getSubordinates(userId);
+      const gerenteIds = subordinates
+        .filter((s) => (s.status || '').toLowerCase() === 'gerente')
+        .map((s) => s.id);
+      if (gerenteIds.length === 0) {
+        return successResponse([]);
+      }
+      listQuery = listQuery.in('gerente_user_id', gerenteIds);
     } else {
       const filterGerente = req.nextUrl.searchParams.get('gerente_id')?.trim();
       if (filterGerente) {
@@ -50,7 +59,33 @@ export async function GET(req: NextRequest) {
       return errorResponse(`Erro ao listar: ${error.message}`, 500);
     }
 
-    return successResponse(rows || []);
+    const baseRows = rows || [];
+    const consultorIds = [
+      ...new Set(
+        baseRows
+          .map((r: any) => r.consultor_user_id)
+          .filter((v: string | null) => !!v)
+      ),
+    ] as string[];
+
+    let consultorNameById = new Map<string, string>();
+    if (consultorIds.length > 0) {
+      const { data: consultores } = await supabaseServiceRole
+        .from('profiles')
+        .select('id, full_name, email')
+        .in('id', consultorIds);
+
+      consultorNameById = new Map(
+        (consultores || []).map((c: any) => [c.id, c.full_name || c.email || c.id])
+      );
+    }
+
+    const enrichedRows = baseRows.map((r: any) => ({
+      ...r,
+      consultor_name: r.consultor_user_id ? consultorNameById.get(r.consultor_user_id) || null : null,
+    }));
+
+    return successResponse(enrichedRows);
   } catch (err: unknown) {
     const msg = (err as Error)?.message || '';
     if (msg.includes('Acesso negado')) {
@@ -105,7 +140,6 @@ export async function POST(req: NextRequest) {
     }
 
     const maturationTypeValue = maturation_type === 'virgem' ? 'virgem' : 'maturado';
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || req.nextUrl.origin;
 
     const { data: gerenteProfile } = await supabaseServiceRole
       .from('profiles')
@@ -120,7 +154,6 @@ export async function POST(req: NextRequest) {
       workspaceId: workspace_id ?? null,
       maturationType: maturationTypeValue,
       zaplotoId: gerenteProfile?.zaploto_id ?? null,
-      appUrl,
     });
 
     if (!result.ok) {

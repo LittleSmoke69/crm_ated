@@ -26,6 +26,7 @@ import {
   Zap,
   Phone,
   Loader2,
+  UserPlus,
 } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import { supabase } from '@/lib/supabase';
@@ -82,6 +83,18 @@ const InstancesPage = () => {
   const [isReconnecting, setIsReconnecting] = useState(false); // Flag para diferenciar reconexão de criação
   const [isAdmin, setIsAdmin] = useState(false);
   const [isConsultor, setIsConsultor] = useState(false);
+  const [isGerente, setIsGerente] = useState(false);
+  const [isDonoBanca, setIsDonoBanca] = useState(false);
+  const [linkAtendimentoModalInstance, setLinkAtendimentoModalInstance] = useState<WhatsAppInstance | null>(null);
+  const [linkAtendimentoConsultores, setLinkAtendimentoConsultores] = useState<
+    { id: string; full_name: string | null; email: string | null }[]
+  >([]);
+  const [linkAtendimentoConsultorId, setLinkAtendimentoConsultorId] = useState('');
+  const [linkAtendimentoListLoading, setLinkAtendimentoListLoading] = useState(false);
+  const [linkAtendimentoSubmitting, setLinkAtendimentoSubmitting] = useState(false);
+  const [atendimentoAssignmentByInstanceId, setAtendimentoAssignmentByInstanceId] = useState<
+    Record<string, { assignmentId: string; consultorId: string | null; consultorName: string | null }>
+  >({});
   const [checkingInstance, setCheckingInstance] = useState<string | null>(null); // Instância sendo verificada
   const [showExtractGroupsPrompt, setShowExtractGroupsPrompt] = useState(false);
   const [newlyConnectedInstance, setNewlyConnectedInstance] = useState<string | null>(null);
@@ -186,9 +199,44 @@ const InstancesPage = () => {
         .single();
       setIsAdmin(data?.status === 'admin');
       setIsConsultor(data?.status === 'consultor');
+      setIsGerente(data?.status === 'gerente');
+      setIsDonoBanca(data?.status === 'dono_banca');
     };
     checkRole();
   }, [userId]);
+
+  const loadAtendimentoAssignments = useCallback(async () => {
+    if (!userId) return;
+    if (!isGerente) {
+      setAtendimentoAssignmentByInstanceId({});
+      return;
+    }
+    try {
+      const res = await fetch('/api/gerente/atendimento-chat/instances', { headers: { 'X-User-Id': userId } });
+      const json = await res.json();
+      if (!json.success || !Array.isArray(json.data)) {
+        setAtendimentoAssignmentByInstanceId({});
+        return;
+      }
+      const map: Record<string, { assignmentId: string; consultorId: string | null; consultorName: string | null }> = {};
+      for (const row of json.data) {
+        const instanceId = row?.evolution_instance_id;
+        if (!instanceId) continue;
+        map[instanceId] = {
+          assignmentId: row.id,
+          consultorId: row.consultor_user_id ?? null,
+          consultorName: row.consultor_name ?? null,
+        };
+      }
+      setAtendimentoAssignmentByInstanceId(map);
+    } catch {
+      setAtendimentoAssignmentByInstanceId({});
+    }
+  }, [userId, isGerente]);
+
+  useEffect(() => {
+    loadAtendimentoAssignments();
+  }, [loadAtendimentoAssignments]);
 
   const handleCreateInstance = async () => {
     if (!userId) { showToast('Sessão inválida', 'error'); return; }
@@ -649,6 +697,93 @@ const InstancesPage = () => {
       showToast('Erro ao salvar telefone', 'error');
     } finally {
       setIsSavingPhone(false);
+    }
+  };
+
+  const handleOpenLinkAtendimentoModal = async (inst: WhatsAppInstance) => {
+    if (!userId || !inst.id) {
+      showToast('Instância sem ID no sistema. Recarregue a página.', 'error');
+      return;
+    }
+    setLinkAtendimentoModalInstance(inst);
+    setLinkAtendimentoConsultorId('');
+    setLinkAtendimentoConsultores([]);
+    setLinkAtendimentoListLoading(true);
+    try {
+      const res = await fetch('/api/atendimento-chat/consultores', { headers: { 'X-User-Id': userId } });
+      const json = await res.json();
+      if (json.success && Array.isArray(json.data)) {
+        setLinkAtendimentoConsultores(json.data);
+        if (json.data.length === 0) {
+          showToast('Nenhum consultor encontrado na sua hierarquia.', 'info');
+        }
+      } else {
+        showToast(json.error || json.message || 'Não foi possível carregar consultores', 'error');
+      }
+    } catch {
+      showToast('Erro ao carregar consultores', 'error');
+    } finally {
+      setLinkAtendimentoListLoading(false);
+    }
+  };
+
+  const handleSubmitLinkAtendimento = async () => {
+    if (!userId || !linkAtendimentoModalInstance?.id) return;
+    if (!linkAtendimentoConsultorId) {
+      showToast('Selecione um consultor', 'error');
+      return;
+    }
+    setLinkAtendimentoSubmitting(true);
+    try {
+      const res = await fetch('/api/atendimento-chat/link-instance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({
+          evolution_instance_id: linkAtendimentoModalInstance.id,
+          consultor_user_id: linkAtendimentoConsultorId,
+        }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        showToast(
+          json.message ||
+            'Vínculo salvo. O consultor verá esta instância em Chat Atendimento após atualizar a página.',
+          'success'
+        );
+        setLinkAtendimentoModalInstance(null);
+        await loadAtendimentoAssignments();
+      } else {
+        showToast(json.error || json.message || 'Falha ao vincular', 'error');
+      }
+    } catch {
+      showToast('Erro ao vincular', 'error');
+    } finally {
+      setLinkAtendimentoSubmitting(false);
+    }
+  };
+
+  const handleUnlinkAtendimento = async (inst: WhatsAppInstance) => {
+    if (!userId || !inst.id) return;
+    const assignment = atendimentoAssignmentByInstanceId[inst.id];
+    if (!assignment?.assignmentId) return;
+    const label = assignment.consultorName || 'consultor atual';
+    if (!confirm(`Deseja desvincular a instância ${inst.instance_name} de ${label}?`)) return;
+
+    try {
+      const res = await fetch(`/api/gerente/atendimento-chat/instances/${assignment.assignmentId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({ consultor_user_id: null }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        showToast('Instância desvinculada do consultor com sucesso.', 'success');
+        await loadAtendimentoAssignments();
+      } else {
+        showToast(json.error || json.message || 'Falha ao desvincular', 'error');
+      }
+    } catch {
+      showToast('Erro ao desvincular consultor da instância', 'error');
     }
   };
 
@@ -1373,6 +1508,34 @@ const InstancesPage = () => {
                                 <span className="hidden sm:inline">{checkingInstance === inst.instance_name ? '...' : 'Verificar'}</span>
                               </button>
                             </div>
+                            {isGerente && inst.id && (inst as any).webhook_configured === true && (() => {
+                              const assignment = atendimentoAssignmentByInstanceId[inst.id];
+                              const hasConsultor = !!assignment?.consultorId;
+                              if (hasConsultor) {
+                                return (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUnlinkAtendimento(inst)}
+                                    className="w-full h-10 px-3 mt-2 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/35 border border-red-200 dark:border-red-800 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-2"
+                                    title="Remove o vínculo desta instância com o consultor no Chat Atendimento"
+                                  >
+                                    <UserPlus className="w-4 h-4 shrink-0" />
+                                    {`Desvincular do consultor (${assignment.consultorName || 'sem nome'})`}
+                                  </button>
+                                );
+                              }
+                              return (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenLinkAtendimentoModal(inst)}
+                                  className="w-full h-10 px-3 mt-2 bg-teal-50 dark:bg-teal-900/25 text-teal-800 dark:text-teal-200 hover:bg-teal-100 dark:hover:bg-teal-900/40 border border-teal-200 dark:border-teal-800 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-2"
+                                  title="Libera a instância para o consultor no Chat Atendimento"
+                                >
+                                  <UserPlus className="w-4 h-4 shrink-0" />
+                                  Vincular ao chat atendimento
+                                </button>
+                              );
+                            })()}
                           </div>
                         );
                       })}
@@ -1697,6 +1860,89 @@ const InstancesPage = () => {
                   </button>
                 </div>
               </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal: vincular instância ao consultor (Chat Atendimento) */}
+      {linkAtendimentoModalInstance && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !linkAtendimentoSubmitting) {
+              setLinkAtendimentoModalInstance(null);
+            }
+          }}
+        >
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
+          <div className="relative bg-white dark:bg-[#2a2a2a] rounded-xl shadow-2xl p-6 max-w-md w-full z-10 animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-[#404040]">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-semibold text-gray-800 dark:text-white flex items-center gap-2">
+                <UserPlus className="w-5 h-5 text-teal-600 dark:text-teal-400" />
+                Chat Atendimento
+              </h2>
+              <button
+                type="button"
+                onClick={() => !linkAtendimentoSubmitting && setLinkAtendimentoModalInstance(null)}
+                disabled={linkAtendimentoSubmitting}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg transition text-gray-500 dark:text-[#aaa] disabled:opacity-50"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-sm text-gray-600 dark:text-[#aaa] mb-4">
+              Instância <span className="font-medium text-gray-800 dark:text-white">{linkAtendimentoModalInstance.instance_name}</span>
+              . Escolha o consultor que poderá atender neste WhatsApp na página{' '}
+              <span className="font-medium">Chat Atendimento</span>.
+            </p>
+            {linkAtendimentoListLoading ? (
+              <div className="flex items-center justify-center py-8 gap-2 text-gray-500 dark:text-[#888]">
+                <Loader2 className="w-5 h-5 animate-spin" />
+                Carregando consultores…
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc]">Consultor</label>
+                <select
+                  value={linkAtendimentoConsultorId}
+                  onChange={(e) => setLinkAtendimentoConsultorId(e.target.value)}
+                  disabled={linkAtendimentoSubmitting || linkAtendimentoConsultores.length === 0}
+                  className="w-full px-3 py-2 border-2 border-gray-200 dark:border-[#404040] rounded-lg bg-white dark:bg-[#333] text-gray-800 dark:text-white focus:ring-2 focus:ring-teal-500 focus:border-teal-500 disabled:opacity-50"
+                >
+                  <option value="">Selecione…</option>
+                  {linkAtendimentoConsultores.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {[c.full_name, c.email].filter(Boolean).join(' · ') || c.id}
+                    </option>
+                  ))}
+                </select>
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setLinkAtendimentoModalInstance(null)}
+                    disabled={linkAtendimentoSubmitting}
+                    className="flex-1 py-2.5 bg-gray-100 dark:bg-[#404040] hover:bg-gray-200 dark:hover:bg-[#505050] text-gray-700 dark:text-white rounded-lg font-medium transition disabled:opacity-50"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSubmitLinkAtendimento}
+                    disabled={linkAtendimentoSubmitting || !linkAtendimentoConsultorId}
+                    className="flex-1 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-medium transition disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    {linkAtendimentoSubmitting ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Salvando…
+                      </>
+                    ) : (
+                      'Confirmar vínculo'
+                    )}
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         </div>

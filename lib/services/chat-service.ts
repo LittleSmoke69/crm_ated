@@ -35,6 +35,7 @@ export interface ChatConversation {
   whatsapp_config_id?: string | null;
   remote_jid: string;
   title?: string;
+  profile_pic_url?: string | null;
   is_group: boolean;
   last_message_at?: string;
   last_message_preview?: string;
@@ -66,9 +67,12 @@ export class ChatService {
   ) {
     const { instance_name, apikey, base_url } = instance;
     const baseUrl = base_url.replace(/\/+$/, '');
+    const outboundNumber = payload.remoteJid.endsWith('@s.whatsapp.net')
+      ? payload.remoteJid.replace(/@s\.whatsapp\.net$/i, '')
+      : payload.remoteJid;
 
     let endpoint = '';
-    let body: Record<string, unknown> = { number: payload.remoteJid };
+    let body: Record<string, unknown> = { number: outboundNumber };
 
     if (payload.type === 'text') {
       endpoint = `${baseUrl}/message/sendText/${instance_name}`;

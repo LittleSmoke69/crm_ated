@@ -1,6 +1,9 @@
 import { randomUUID } from 'crypto';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { EVOLUTION_CHAT_WEBHOOK_MESSAGE_EVENTS } from '@/lib/server/evolution-chat-webhook-config';
+import {
+  EVOLUTION_INSTANCE_WEBHOOK_EVENTS,
+  ZAPLOTO_EVOLUTION_PROD_WEBHOOK_URL,
+} from '@/lib/server/evolution-chat-webhook-config';
 
 export type CreateEvolutionChatInstanceInput = {
   evolutionApiId: string;
@@ -9,7 +12,6 @@ export type CreateEvolutionChatInstanceInput = {
   workspaceId?: string | null;
   maturationType: 'virgem' | 'maturado';
   zaplotoId?: string | null;
-  appUrl: string;
 };
 
 export type CreateEvolutionChatInstanceOk = {
@@ -41,7 +43,6 @@ export async function createEvolutionChatInstance(
     workspaceId,
     maturationType,
     zaplotoId,
-    appUrl,
   } = input;
 
   const { data: evolutionApi, error: apiError } = await supabaseServiceRole
@@ -85,26 +86,7 @@ export async function createEvolutionChatInstance(
     };
   }
 
-  const webhookToken = process.env.EVOLUTION_WEBHOOK_TOKEN;
-  if (!webhookToken) {
-    return { ok: false, error: 'EVOLUTION_WEBHOOK_TOKEN não configurado no ambiente', status: 500 };
-  }
-
-  const allowLocalhost = process.env.EVOLUTION_WEBHOOK_ALLOW_LOCALHOST === 'true';
-  const isLocalhost =
-    /^(http:\/\/localhost|http:\/\/127\.0\.0\.1|https:\/\/localhost|https:\/\/127\.0\.0\.1)/i.test(appUrl);
-  if (isLocalhost && !allowLocalhost) {
-    return {
-      ok: false,
-      error:
-        `NEXT_PUBLIC_APP_URL está apontando para "${appUrl}". Isso não é acessível pela Evolution API. ` +
-        `Use um domínio público (ex: produção) ou um túnel (ngrok/cloudflared). ` +
-        `Para permitir localhost apenas em dev, set EVOLUTION_WEBHOOK_ALLOW_LOCALHOST=true.`,
-      status: 400,
-    };
-  }
-
-  const webhookUrl = `${appUrl}/api/webhooks/evolution?token=${encodeURIComponent(webhookToken)}`;
+  const webhookUrl = ZAPLOTO_EVOLUTION_PROD_WEBHOOK_URL;
   const instanceToken = randomUUID();
 
   const createBody = {
@@ -115,7 +97,7 @@ export async function createEvolutionChatInstance(
     webhook: {
       enabled: true,
       url: webhookUrl,
-      events: [...EVOLUTION_CHAT_WEBHOOK_MESSAGE_EVENTS],
+      events: [...EVOLUTION_INSTANCE_WEBHOOK_EVENTS],
     },
   };
 
