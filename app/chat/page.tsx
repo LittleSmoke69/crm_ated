@@ -38,6 +38,12 @@ import {
   Trash2,
   RefreshCw,
   Tag,
+  Workflow,
+  Zap,
+  Upload,
+  StopCircle,
+  RotateCcw,
+  Radio,
 } from 'lucide-react';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
@@ -89,7 +95,58 @@ interface ChannelWhatsAppOfficial {
 
 type Channel = ChannelEvolution | ChannelWhatsAppOfficial;
 type ConversationFilter = 'all' | 'mine' | 'unassigned';
-type ActiveView = 'chat' | 'contacts';
+type ActiveView = 'chat' | 'contacts' | 'agente-ia' | 'broadcast';
+
+interface FlowOption {
+  id: string;
+  name: string;
+  description?: string;
+  status: string;
+}
+
+interface ChatInstanceFlow {
+  id: string;
+  instance_id: string;
+  is_active: boolean;
+  flows: FlowOption;
+}
+
+interface BroadcastContact {
+  phone: string;
+  name?: string;
+}
+
+interface BroadcastMessageConfig {
+  type: 'text' | 'audio' | 'video' | 'image' | 'document';
+  content?: string;
+  attachment_url?: string;
+  mimetype?: string;
+  caption?: string;
+  fileName?: string;
+}
+
+interface BroadcastJob {
+  id: string;
+  title: string;
+  instance_name: string;
+  total_count: number;
+  current_index: number;
+  delay_seconds: number;
+  status: 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
+  started_at?: string | null;
+  completed_at?: string | null;
+  last_error?: string | null;
+  created_at: string;
+}
+
+interface CrmMessage {
+  id: string;
+  title: string;
+  content?: string;
+  message_type?: string;
+  attachment_url?: string;
+  preview?: string;
+}
 
 interface ChatContact {
   id: string;
@@ -540,6 +597,34 @@ export default function ChatPage() {
   const [savingContact, setSavingContact] = useState(false);
   const [contactSaveError, setContactSaveError] = useState<string | null>(null);
 
+  // ── Agente IA ───────────────────────────────────────────────────────────────
+  const [availableFlows, setAvailableFlows] = useState<FlowOption[]>([]);
+  const [instanceFlow, setInstanceFlow] = useState<ChatInstanceFlow | null>(null);
+  const [loadingFlows, setLoadingFlows] = useState(false);
+  const [savingFlowConfig, setSavingFlowConfig] = useState(false);
+  const [selectedFlowId, setSelectedFlowId] = useState<string>('');
+
+  // ── Disparo em Massa ────────────────────────────────────────────────────────
+  const [broadcastJobs, setBroadcastJobs] = useState<BroadcastJob[]>([]);
+  const [broadcastJob, setBroadcastJob] = useState<BroadcastJob | null>(null);
+  const [broadcastRunning, setBroadcastRunning] = useState(false);
+  const broadcastAbortRef = useRef(false);
+  // Contatos para disparo
+  const [broadcastContacts, setBroadcastContacts] = useState<BroadcastContact[]>([]);
+  const [broadcastCsvFileName, setBroadcastCsvFileName] = useState('');
+  // Mensagem selecionada do CRM
+  const [crmMessages, setCrmMessages] = useState<CrmMessage[]>([]);
+  const [selectedCrmMessage, setSelectedCrmMessage] = useState<CrmMessage | null>(null);
+  const [loadingCrmMessages, setLoadingCrmMessages] = useState(false);
+  // Configuração do disparo
+  const [broadcastDelay, setBroadcastDelay] = useState(30);
+  const [broadcastTitle, setBroadcastTitle] = useState('');
+  const [broadcastCreating, setBroadcastCreating] = useState(false);
+  // Progresso em tempo real
+  const [broadcastProgress, setBroadcastProgress] = useState<{ current: number; total: number } | null>(null);
+  const [broadcastLog, setBroadcastLog] = useState<Array<{ phone: string; name?: string; success: boolean; error?: string }>>([]);
+  const broadcastLogRef = useRef<HTMLDivElement>(null);
+
   const authHeaders = (): Record<string, string> => (userId ? { 'X-User-Id': userId } : {});
   const canSelectChannel =
     userStatus === 'super_admin' || userStatus === 'admin' || userStatus === 'suporte';
@@ -553,6 +638,262 @@ export default function ChatPage() {
     }
     window.location.href = '/login';
   };
+
+  // ── Agente IA: carregar flows disponíveis quando abre o painel ──────────────
+  const loadFlowsForAI = useCallback(async () => {
+    if (!userId) return;
+    setLoadingFlows(true);
+    try {
+      const res = await fetch('/api/flows', { headers: authHeaders() });
+      const json = await res.json();
+      if (json.success) setAvailableFlows(json.data || []);
+    } catch { /* silencioso */ } finally {
+      setLoadingFlows(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  const loadInstanceFlow = useCallback(async (instanceId: string) => {
+    if (!userId || !instanceId) return;
+    try {
+      const res = await fetch(`/api/chat/flow-config?instance_id=${instanceId}`, { headers: authHeaders() });
+      const json = await res.json();
+      if (json.success && json.data) {
+        setInstanceFlow(json.data as ChatInstanceFlow);
+        setSelectedFlowId(json.data.flows?.id ?? '');
+      } else {
+        setInstanceFlow(null);
+        setSelectedFlowId('');
+      }
+    } catch { /* silencioso */ }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  const saveFlowConfig = useCallback(async () => {
+    if (!userId || !selectedChannel || selectedChannel.type !== 'evolution') return;
+    setSavingFlowConfig(true);
+    try {
+      const res = await fetch('/api/chat/flow-config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          instance_id: selectedChannel.id,
+          flow_id: selectedFlowId || null,
+          is_active: true,
+        }),
+      });
+      const json = await res.json();
+      if (json.success) setInstanceFlow(json.data);
+    } catch { /* silencioso */ } finally {
+      setSavingFlowConfig(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, selectedChannel, selectedFlowId]);
+
+  // ── Disparo em Massa: funções ────────────────────────────────────────────────
+  const loadCrmMessages = useCallback(async () => {
+    if (!userId) return;
+    setLoadingCrmMessages(true);
+    try {
+      const res = await fetch('/api/crm/messages', { headers: authHeaders() });
+      const json = await res.json();
+      if (json.success) setCrmMessages(json.data || []);
+    } catch { /* silencioso */ } finally {
+      setLoadingCrmMessages(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  const loadBroadcastJobs = useCallback(async () => {
+    if (!userId) return;
+    try {
+      const res = await fetch('/api/chat/broadcast', { headers: authHeaders() });
+      const json = await res.json();
+      if (json.success) setBroadcastJobs(json.data || []);
+    } catch { /* silencioso */ }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  const parseBroadcastCsv = useCallback((raw: string): BroadcastContact[] => {
+    const firstLine = raw.split(/\r?\n/)[0] || '';
+    const delimiter = firstLine.includes(';') && !firstLine.includes(',') ? ';' : ',';
+    const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
+    if (lines.length < 2) return [];
+    const header = lines[0].split(delimiter).map((h) => h.trim().toLowerCase());
+    const phoneCandidates = ['telefone','phone','phone_number','number','celular','mobile','whatsapp','tel','fone'];
+    const nameCandidates = ['name','nome','full_name','fullname','contact_name','contact'];
+    const telIdx = header.findIndex((h) => phoneCandidates.includes(h));
+    const nameIdx = header.findIndex((h) => nameCandidates.includes(h));
+    if (telIdx < 0) return [];
+    const contacts: BroadcastContact[] = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(delimiter);
+      const digits = (cols[telIdx] || '').replace(/\D/g, '');
+      if (!digits || digits.length < 8) continue;
+      contacts.push({ phone: digits, name: nameIdx >= 0 ? (cols[nameIdx] || '').trim() : undefined });
+    }
+    return contacts;
+  }, []);
+
+  const startBroadcast = useCallback(async () => {
+    if (!userId || !selectedChannel || selectedChannel.type !== 'evolution') return;
+    if (!selectedCrmMessage) return;
+    if (broadcastContacts.length === 0) return;
+    setBroadcastCreating(true);
+    try {
+      const msgConfig: BroadcastMessageConfig = {
+        type: (selectedCrmMessage.message_type as BroadcastMessageConfig['type']) || 'text',
+        content: selectedCrmMessage.content,
+        attachment_url: selectedCrmMessage.attachment_url,
+        caption: selectedCrmMessage.content?.substring(0, 100),
+      };
+      const res = await fetch('/api/chat/broadcast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          instance_id: selectedChannel.id,
+          title: broadcastTitle || `Disparo ${selectedCrmMessage.title}`,
+          message_config: msgConfig,
+          contacts: broadcastContacts,
+          delay_seconds: broadcastDelay,
+        }),
+      });
+      const json = await res.json();
+      if (json.success && json.data?.id) {
+        setBroadcastJob(json.data as BroadcastJob);
+        setBroadcastProgress({ current: 0, total: broadcastContacts.length });
+        setBroadcastLog([]);
+        broadcastAbortRef.current = false;
+        runBroadcast(json.data.id, broadcastContacts.length);
+      }
+    } catch { /* silencioso */ } finally {
+      setBroadcastCreating(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, selectedChannel, selectedCrmMessage, broadcastContacts, broadcastDelay, broadcastTitle]);
+
+  const runBroadcast = useCallback(async (jobId: string, totalCount: number) => {
+    setBroadcastRunning(true);
+    broadcastAbortRef.current = false;
+    // Marca como running
+    await fetch(`/api/chat/broadcast/${jobId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ status: 'running' }),
+    }).catch(() => {});
+
+    let instanceDownRetries = 0;
+    const MAX_DOWN_RETRIES = 5;
+
+    while (!broadcastAbortRef.current) {
+      try {
+        const res = await fetch(`/api/chat/broadcast/${jobId}/process-next`, {
+          method: 'POST',
+          headers: authHeaders(),
+        });
+        const json = await res.json();
+        const d = json.data as {
+          done?: boolean;
+          paused?: boolean;
+          instanceDown?: boolean;
+          skipped?: boolean;
+          success?: boolean;
+          contact?: { phone: string; name?: string };
+          current_index?: number;
+          total_count?: number;
+          error?: string;
+        };
+
+        if (d?.paused) { setBroadcastRunning(false); break; }
+        if (d?.done) {
+          setBroadcastProgress({ current: totalCount, total: totalCount });
+          setBroadcastRunning(false);
+          loadBroadcastJobs();
+          break;
+        }
+        if (d?.instanceDown) {
+          instanceDownRetries++;
+          setBroadcastLog((prev) => [...prev, { phone: '—', success: false, error: `Instância offline (tentativa ${instanceDownRetries})` }]);
+          if (instanceDownRetries >= MAX_DOWN_RETRIES) {
+            // Pausa após muitas tentativas com instância offline
+            await fetch(`/api/chat/broadcast/${jobId}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json', ...authHeaders() },
+              body: JSON.stringify({ status: 'paused' }),
+            }).catch(() => {});
+            setBroadcastRunning(false);
+            break;
+          }
+          // Espera 30s e tenta de novo
+          await new Promise((r) => setTimeout(r, 30000));
+          continue;
+        }
+
+        instanceDownRetries = 0;
+        if (d?.current_index !== undefined) {
+          setBroadcastProgress({ current: d.current_index, total: d.total_count ?? totalCount });
+        }
+        if (d?.contact || d?.skipped) {
+          setBroadcastLog((prev) => [
+            ...prev,
+            {
+              phone: d.contact?.phone ?? '—',
+              name: d.contact?.name,
+              success: d.success ?? false,
+              error: d.error,
+            },
+          ]);
+          // Auto-scroll do log
+          setTimeout(() => { broadcastLogRef.current?.scrollTo({ top: 99999, behavior: 'smooth' }); }, 50);
+        }
+        // Recarrega conversas para mostrar em tempo real no chat
+        if (d?.success) {
+          loadConversationsFromApi(false).catch(() => {});
+        }
+      } catch { /* falha de rede — continua */ }
+
+      if (!broadcastAbortRef.current) {
+        // Aguarda o delay configurado
+        await new Promise((r) => setTimeout(r, (broadcastDelay || 30) * 1000));
+      }
+    }
+    setBroadcastRunning(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [broadcastDelay, loadBroadcastJobs]);
+
+  const pauseBroadcast = useCallback(async () => {
+    if (!broadcastJob) return;
+    broadcastAbortRef.current = true;
+    await fetch(`/api/chat/broadcast/${broadcastJob.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ status: 'paused' }),
+    }).catch(() => {});
+    setBroadcastRunning(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [broadcastJob]);
+
+  const resumeBroadcast = useCallback(async () => {
+    if (!broadcastJob) return;
+    broadcastAbortRef.current = false;
+    setBroadcastRunning(true);
+    runBroadcast(broadcastJob.id, broadcastJob.total_count);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [broadcastJob, runBroadcast]);
+
+  const cancelBroadcast = useCallback(async () => {
+    if (!broadcastJob) return;
+    broadcastAbortRef.current = true;
+    await fetch(`/api/chat/broadcast/${broadcastJob.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ status: 'cancelled' }),
+    }).catch(() => {});
+    setBroadcastRunning(false);
+    setBroadcastJob(null);
+    loadBroadcastJobs();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [broadcastJob, loadBroadcastJobs]);
 
   // ── Perfil (sobrescreve status do auth; garante etiquetas mesmo antes do fetch) ──
   useEffect(() => {
@@ -1088,6 +1429,43 @@ export default function ChatPage() {
 
     return () => { supabase.removeChannel(channel); };
   }, [selectedChannel, userStatus]);
+
+  // ── Agente IA: carrega flows e config da instância ao abrir o painel ────────
+  useEffect(() => {
+    if (activeView !== 'agente-ia') return;
+    loadFlowsForAI();
+    if (selectedChannel?.type === 'evolution') loadInstanceFlow(selectedChannel.id);
+  }, [activeView, selectedChannel, loadFlowsForAI, loadInstanceFlow]);
+
+  // ── Disparo em Massa: carrega mensagens do CRM ao abrir o painel ─────────
+  useEffect(() => {
+    if (activeView !== 'broadcast') return;
+    loadCrmMessages();
+    loadBroadcastJobs();
+  }, [activeView, loadCrmMessages, loadBroadcastJobs]);
+
+  // ── Realtime: progresso do broadcast ────────────────────────────────────────
+  useEffect(() => {
+    if (!userId || !broadcastJob) return;
+    const ch = supabase
+      .channel(`chat_broadcast_${broadcastJob.id}`)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'chat_broadcasts',
+        filter: `id=eq.${broadcastJob.id}`,
+      }, (payload) => {
+        const updated = payload.new as BroadcastJob;
+        setBroadcastJob(updated);
+        setBroadcastProgress({ current: updated.current_index, total: updated.total_count });
+        if (updated.status === 'completed' || updated.status === 'cancelled') {
+          setBroadcastRunning(false);
+          loadBroadcastJobs();
+        }
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [userId, broadcastJob, loadBroadcastJobs]);
 
   // ── Permissão de notificação ───────────────────────────────────────────────
   useEffect(() => {
@@ -1795,6 +2173,41 @@ export default function ChatPage() {
                   <BookUser className="w-5 h-5" />
                   Contatos
                 </button>
+
+                {/* Agente IA — apenas Evolution */}
+                {selectedChannel?.type === 'evolution' && (
+                  <button
+                    onClick={() => setActiveView('agente-ia')}
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm font-medium ${
+                      activeView === 'agente-ia'
+                        ? 'text-white'
+                        : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333]'
+                    }`}
+                    style={activeView === 'agente-ia' ? { backgroundColor: '#8CD955' } : {}}
+                  >
+                    <Workflow className="w-5 h-5" />
+                    Agente IA
+                  </button>
+                )}
+
+                {/* Disparo em Massa — apenas Evolution */}
+                {selectedChannel?.type === 'evolution' && (
+                  <button
+                    onClick={() => setActiveView('broadcast')}
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm font-medium ${
+                      activeView === 'broadcast'
+                        ? 'text-white'
+                        : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333]'
+                    }`}
+                    style={activeView === 'broadcast' ? { backgroundColor: '#8CD955' } : {}}
+                  >
+                    <Radio className="w-5 h-5" />
+                    Disparo em Massa
+                    {broadcastRunning && (
+                      <span className="ml-auto w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+                    )}
+                  </button>
+                )}
               </div>
             </div>
 
@@ -1863,7 +2276,365 @@ export default function ChatPage() {
           )}
 
           {/* ── Painel Central (lista) — ocultável com botão no header da conversa ── */}
-          {!(conversationsListHidden && selectedConversationId) && (activeView === 'contacts' ? (
+          {!(conversationsListHidden && selectedConversationId) && (activeView === 'agente-ia' ? (
+            /* ── Vista Agente IA ── */
+            <div className="min-w-0 flex-1 md:w-80 md:flex-shrink-0 overflow-hidden bg-white dark:bg-[#2a2a2a] border-r border-gray-200 dark:border-[#404040] flex flex-col">
+              <div className="flex-shrink-0 p-4 border-b border-gray-200 dark:border-[#404040] flex items-center gap-2">
+                <Workflow className="w-5 h-5 text-[#8CD955]" />
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Agente IA</h3>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                {selectedChannel?.type !== 'evolution' ? (
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Disponível apenas para canais Evolution.</p>
+                ) : (
+                  <>
+                    <div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Instância atual</p>
+                      <p className="text-sm font-medium text-gray-800 dark:text-gray-100">{selectedChannel.instance_name}</p>
+                    </div>
+
+                    {instanceFlow && (
+                      <div className="p-3 rounded-lg border border-[#8CD955]/50 bg-[#8CD955]/10">
+                        <div className="flex items-center gap-2 mb-1">
+                          <Bot className="w-4 h-4 text-[#8CD955]" />
+                          <span className="text-xs font-semibold text-[#5a9e2f] dark:text-[#8CD955]">Flow ativo</span>
+                        </div>
+                        <p className="text-sm font-medium text-gray-800 dark:text-gray-100">{instanceFlow.flows?.name}</p>
+                        {instanceFlow.flows?.description && (
+                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{instanceFlow.flows.description}</p>
+                        )}
+                      </div>
+                    )}
+
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">
+                        Selecionar Flow
+                      </label>
+                      {loadingFlows ? (
+                        <div className="flex items-center gap-2 text-sm text-gray-400">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Carregando flows...
+                        </div>
+                      ) : (
+                        <select
+                          value={selectedFlowId}
+                          onChange={(e) => setSelectedFlowId(e.target.value)}
+                          className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040]"
+                        >
+                          <option value="">— Sem flow (desativar) —</option>
+                          {availableFlows.map((f) => (
+                            <option key={f.id} value={f.id}>{f.name}</option>
+                          ))}
+                        </select>
+                      )}
+                      {availableFlows.length === 0 && !loadingFlows && (
+                        <p className="text-xs text-gray-400 mt-1">Nenhum flow ativo encontrado.</p>
+                      )}
+                    </div>
+
+                    <button
+                      onClick={saveFlowConfig}
+                      disabled={savingFlowConfig}
+                      className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-white text-sm font-medium transition-colors disabled:opacity-60"
+                      style={{ backgroundColor: '#8CD955' }}
+                    >
+                      {savingFlowConfig ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                      {savingFlowConfig ? 'Salvando...' : 'Salvar configuração'}
+                    </button>
+
+                    <p className="text-xs text-gray-400 dark:text-gray-500">
+                      O flow selecionado será executado automaticamente quando mensagens chegarem nesta instância.
+                    </p>
+                  </>
+                )}
+              </div>
+            </div>
+          ) : activeView === 'broadcast' ? (
+            /* ── Vista Disparo em Massa ── */
+            <div className="min-w-0 flex-1 md:w-96 md:flex-shrink-0 overflow-hidden bg-white dark:bg-[#2a2a2a] border-r border-gray-200 dark:border-[#404040] flex flex-col">
+              <div className="flex-shrink-0 p-4 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Radio className="w-5 h-5 text-[#8CD955]" />
+                  <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Disparo em Massa</h3>
+                  {broadcastRunning && <span className="text-xs text-green-500 font-medium animate-pulse">• Executando</span>}
+                </div>
+                {broadcastJob && !broadcastRunning && broadcastJob.status !== 'completed' && broadcastJob.status !== 'cancelled' && (
+                  <button
+                    onClick={resumeBroadcast}
+                    className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg text-white"
+                    style={{ backgroundColor: '#8CD955' }}
+                  >
+                    <Play className="w-3 h-3" /> Retomar
+                  </button>
+                )}
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                {selectedChannel?.type !== 'evolution' ? (
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Disponível apenas para canais Evolution.</p>
+                ) : broadcastJob ? (
+                  /* ── Progresso do disparo ── */
+                  <div className="space-y-4">
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-medium text-gray-700 dark:text-gray-200">{broadcastJob.title}</span>
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                          broadcastJob.status === 'completed' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                          : broadcastJob.status === 'running' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+                          : broadcastJob.status === 'paused' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+                          : broadcastJob.status === 'cancelled' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+                          : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+                        }`}>
+                          {broadcastJob.status === 'completed' ? 'Concluído'
+                           : broadcastJob.status === 'running' ? 'Enviando...'
+                           : broadcastJob.status === 'paused' ? 'Pausado'
+                           : broadcastJob.status === 'cancelled' ? 'Cancelado'
+                           : 'Aguardando'}
+                        </span>
+                      </div>
+
+                      {/* Barra de progresso */}
+                      <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 mb-1">
+                        <div
+                          className="h-2 rounded-full transition-all duration-500"
+                          style={{
+                            width: `${broadcastJob.total_count > 0 ? Math.round(((broadcastProgress?.current ?? broadcastJob.current_index) / broadcastJob.total_count) * 100) : 0}%`,
+                            backgroundColor: '#8CD955',
+                          }}
+                        />
+                      </div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 text-right">
+                        {broadcastProgress?.current ?? broadcastJob.current_index} / {broadcastJob.total_count} enviados
+                      </p>
+                    </div>
+
+                    {/* Botões de controle */}
+                    <div className="flex gap-2">
+                      {broadcastRunning ? (
+                        <button
+                          onClick={pauseBroadcast}
+                          className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium"
+                        >
+                          <Pause className="w-4 h-4" /> Pausar
+                        </button>
+                      ) : broadcastJob.status !== 'completed' && broadcastJob.status !== 'cancelled' ? (
+                        <button
+                          onClick={resumeBroadcast}
+                          className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-white text-sm font-medium"
+                          style={{ backgroundColor: '#8CD955' }}
+                        >
+                          <Play className="w-4 h-4" /> Retomar
+                        </button>
+                      ) : null}
+                      {broadcastJob.status !== 'completed' && (
+                        <button
+                          onClick={cancelBroadcast}
+                          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500 text-white text-sm font-medium"
+                        >
+                          <StopCircle className="w-4 h-4" /> Cancelar
+                        </button>
+                      )}
+                      {(broadcastJob.status === 'completed' || broadcastJob.status === 'cancelled') && (
+                        <button
+                          onClick={() => { setBroadcastJob(null); setBroadcastLog([]); setBroadcastProgress(null); setBroadcastContacts([]); setSelectedCrmMessage(null); setBroadcastTitle(''); }}
+                          className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 text-sm font-medium"
+                        >
+                          <RotateCcw className="w-4 h-4" /> Novo disparo
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Log em tempo real */}
+                    <div>
+                      <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">Log de envio</p>
+                      <div ref={broadcastLogRef} className="h-48 overflow-y-auto rounded-lg border border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#1e1e1e] p-2 space-y-1 text-xs font-mono">
+                        {broadcastLog.length === 0 && (
+                          <p className="text-gray-400 text-center py-4">Nenhum envio ainda...</p>
+                        )}
+                        {broadcastLog.map((entry, i) => (
+                          <div key={i} className={`flex items-start gap-2 ${entry.success ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}`}>
+                            <span>{entry.success ? '✓' : '✗'}</span>
+                            <span className="truncate">{entry.name ? `${entry.name} (${entry.phone})` : entry.phone}</span>
+                            {entry.error && <span className="text-gray-400 truncate">— {entry.error}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  /* ── Formulário de criação de disparo ── */
+                  <div className="space-y-4">
+                    {/* Título */}
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">Título (opcional)</label>
+                      <input
+                        type="text"
+                        value={broadcastTitle}
+                        onChange={(e) => setBroadcastTitle(e.target.value)}
+                        placeholder="Ex: Promoção Black Friday"
+                        className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040]"
+                      />
+                    </div>
+
+                    {/* Mensagem do CRM */}
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">Mensagem</label>
+                      {loadingCrmMessages ? (
+                        <div className="flex items-center gap-2 text-sm text-gray-400">
+                          <Loader2 className="w-4 h-4 animate-spin" /> Carregando...
+                        </div>
+                      ) : (
+                        <select
+                          value={selectedCrmMessage?.id ?? ''}
+                          onChange={(e) => {
+                            const msg = crmMessages.find((m) => m.id === e.target.value) ?? null;
+                            setSelectedCrmMessage(msg);
+                          }}
+                          className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040]"
+                        >
+                          <option value="">— Selecione uma mensagem —</option>
+                          {crmMessages.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              [{m.message_type?.toUpperCase() ?? 'TEXTO'}] {m.title}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                      {selectedCrmMessage && (
+                        <div className="mt-2 p-2 rounded-lg bg-gray-50 dark:bg-[#333] border border-gray-200 dark:border-[#404040]">
+                          <p className="text-xs text-gray-500 dark:text-gray-400 mb-1 font-semibold">{selectedCrmMessage.title}</p>
+                          {selectedCrmMessage.attachment_url && (
+                            <div className="flex items-center gap-1 text-xs text-blue-500 mb-1">
+                              <Paperclip className="w-3 h-3" />
+                              <span>Mídia anexada</span>
+                            </div>
+                          )}
+                          <p className="text-xs text-gray-600 dark:text-gray-300 line-clamp-3">
+                            {selectedCrmMessage.preview || selectedCrmMessage.content}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Import de contatos via CSV */}
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">
+                        Contatos (.csv)
+                      </label>
+                      <label className="flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-gray-300 dark:border-[#404040] cursor-pointer hover:border-[#8CD955] transition-colors">
+                        <Upload className="w-4 h-4 text-gray-400" />
+                        <span className="text-sm text-gray-500 dark:text-gray-400 truncate">
+                          {broadcastCsvFileName || 'Selecionar arquivo CSV'}
+                        </span>
+                        <input
+                          type="file"
+                          accept=".csv"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            setBroadcastCsvFileName(file.name);
+                            const reader = new FileReader();
+                            reader.onload = (evt) => {
+                              const text = evt.target?.result?.toString() || '';
+                              const parsed = parseBroadcastCsv(text);
+                              setBroadcastContacts(parsed);
+                            };
+                            reader.readAsText(file);
+                            e.target.value = '';
+                          }}
+                        />
+                      </label>
+                      {broadcastContacts.length > 0 && (
+                        <p className="text-xs text-green-600 dark:text-green-400 mt-1">
+                          ✓ {broadcastContacts.length} contato(s) carregado(s)
+                        </p>
+                      )}
+                      <p className="text-xs text-gray-400 mt-1">
+                        CSV com colunas: <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">telefone</code> e <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">nome</code> (opcional)
+                      </p>
+                    </div>
+
+                    {/* Delay entre disparos */}
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">
+                        Intervalo entre disparos
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={broadcastDelay}
+                          onChange={(e) => setBroadcastDelay(Number(e.target.value))}
+                          className="flex-1 px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040]"
+                        >
+                          <option value={15}>15 segundos</option>
+                          <option value={30}>30 segundos</option>
+                          <option value={45}>45 segundos</option>
+                          <option value={60}>1 minuto</option>
+                          <option value={90}>1 min 30 seg</option>
+                          <option value={120}>2 minutos</option>
+                          <option value={180}>3 minutos</option>
+                          <option value={300}>5 minutos</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Botão iniciar */}
+                    <button
+                      onClick={startBroadcast}
+                      disabled={broadcastCreating || !selectedCrmMessage || broadcastContacts.length === 0}
+                      className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-white text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      style={{ backgroundColor: '#8CD955' }}
+                    >
+                      {broadcastCreating
+                        ? <><Loader2 className="w-4 h-4 animate-spin" /> Iniciando...</>
+                        : <><Send className="w-4 h-4" /> Iniciar disparo ({broadcastContacts.length} contatos)</>
+                      }
+                    </button>
+
+                    {/* Histórico de disparos */}
+                    {broadcastJobs.length > 0 && (
+                      <div>
+                        <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">Disparos anteriores</p>
+                        <div className="space-y-2 max-h-48 overflow-y-auto">
+                          {broadcastJobs.map((job) => (
+                            <div
+                              key={job.id}
+                              className="p-2.5 rounded-lg border border-gray-200 dark:border-[#404040] cursor-pointer hover:border-[#8CD955] transition-colors"
+                              onClick={() => {
+                                setBroadcastJob(job);
+                                setBroadcastProgress({ current: job.current_index, total: job.total_count });
+                                setBroadcastLog([]);
+                              }}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-medium text-gray-700 dark:text-gray-200 truncate">{job.title}</span>
+                                <span className={`text-xs ml-2 flex-shrink-0 ${
+                                  job.status === 'completed' ? 'text-green-500'
+                                  : job.status === 'running' ? 'text-blue-500'
+                                  : job.status === 'paused' ? 'text-amber-500'
+                                  : job.status === 'cancelled' ? 'text-red-500'
+                                  : 'text-gray-400'
+                                }`}>
+                                  {job.status === 'completed' ? '✓ Concluído'
+                                   : job.status === 'running' ? '⟳ Em execução'
+                                   : job.status === 'paused' ? '⏸ Pausado'
+                                   : job.status === 'cancelled' ? '✗ Cancelado'
+                                   : '○ Pendente'}
+                                </span>
+                              </div>
+                              <p className="text-xs text-gray-400 mt-0.5">
+                                {job.current_index}/{job.total_count} • {job.instance_name}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : activeView === 'contacts' ? (
             /* Vista Contatos */
             <div className="min-w-0 flex-1 md:w-80 md:flex-shrink-0 overflow-hidden bg-white dark:bg-[#2a2a2a] border-r border-gray-200 dark:border-[#404040] flex flex-col">
               <div className="flex-shrink-0 p-3 border-b border-gray-200 dark:border-[#404040] flex items-center gap-2">
