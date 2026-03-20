@@ -11,6 +11,18 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { chatService } from '@/lib/services/chat-service';
 import { canUserAccessEvolutionChatInstance } from '@/lib/services/atendimento-chat-access';
 
+function normalizeEvolutionRemoteJid(rawRemoteJid: string): string {
+  const input = String(rawRemoteJid || '').trim();
+  const isGroup = input.endsWith('@g.us');
+  const digits = input.replace(/@s\.whatsapp\.net$|@g\.us$/i, '').replace(/\D/g, '');
+  if (!digits) return input;
+  const normalizedNumber =
+    !digits.startsWith('55') && (digits.length === 10 || digits.length === 11)
+      ? `55${digits}`
+      : digits;
+  return `${normalizedNumber}${isGroup ? '@g.us' : '@s.whatsapp.net'}`;
+}
+
 /**
  * POST /api/chat/send
  * Envia mensagem via Evolution API e salva no banco
@@ -21,6 +33,7 @@ export async function POST(req: NextRequest) {
     
     const body = await req.json();
     const { instance_id, remoteJid, type, text, media, mimetype, mediatype, caption, fileName } = body;
+    const normalizedRemoteJid = normalizeEvolutionRemoteJid(remoteJid);
 
     if (!instance_id || !remoteJid || !type) {
       return errorResponse('instance_id, remoteJid e type são obrigatórios', 400);
@@ -79,7 +92,7 @@ export async function POST(req: NextRequest) {
           base_url: evolutionApi.base_url,
         },
         {
-          remoteJid,
+          remoteJid: normalizedRemoteJid,
           type,
           text,
           media,
@@ -90,19 +103,31 @@ export async function POST(req: NextRequest) {
         }
       );
 
+      const returnedMessageId =
+        evolutionRes?.key?.id ||
+        evolutionRes?.messageId ||
+        evolutionRes?.id ||
+        evolutionRes?.data?.key?.id ||
+        evolutionRes?.data?.messageId ||
+        null;
+
+      if (!returnedMessageId) {
+        throw new Error(`Resposta inválida da Evolution (sem message id): ${JSON.stringify(evolutionRes)}`);
+      }
+
       // 3. Salvar mensagem como "pendente/enviada" no banco
       // A confirmação final virá pelo webhook SEND_MESSAGE
-      const messageId = evolutionRes.key?.id || evolutionRes.messageId || `out_${Date.now()}`;
+      const messageId = returnedMessageId;
       
       // Buscar ou criar conversa
       const conversationData = {
         instance_id: instance.id,
         workspace_id: instance.workspace_id,
         user_id: instance.user_id,
-        remote_jid: remoteJid,
+        remote_jid: normalizedRemoteJid,
         last_message_at: new Date().toISOString(),
         last_message_preview: text || caption || (type === 'media' ? `Mídia: ${mediatype}` : ''),
-        is_group: remoteJid.endsWith('@g.us'),
+        is_group: normalizedRemoteJid.endsWith('@g.us'),
       };
       
       const conversation = await chatService.upsertConversation(conversationData);

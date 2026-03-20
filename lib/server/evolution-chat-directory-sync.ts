@@ -89,6 +89,19 @@ function pickPreview(entry: Record<string, unknown>): string | null {
   return null;
 }
 
+function pickProfilePicUrl(entry: Record<string, unknown>): string | null {
+  const candidate =
+    entry.profilePicUrl ??
+    entry.profile_pic_url ??
+    entry.pictureUrl ??
+    entry.picture_url ??
+    (entry.contact as Record<string, unknown> | undefined)?.profilePicUrl;
+  if (typeof candidate !== 'string' || !candidate.trim()) return null;
+  const url = candidate.trim();
+  if (!/^https?:\/\//i.test(url)) return null;
+  return url;
+}
+
 async function evolutionPostJson(
   baseUrl: string,
   apikey: string,
@@ -225,6 +238,7 @@ export async function syncEvolutionDirectoryToChatConversations(params: {
         user_id: instanceOwnerUserId ?? undefined,
         remote_jid: remoteJid,
         title,
+        profile_pic_url: pickProfilePicUrl(entry) ?? undefined,
         is_group: isGroup,
         last_message_at: fromEvolution ?? new Date().toISOString(),
         last_message_preview: preview ?? undefined,
@@ -244,6 +258,10 @@ export async function syncEvolutionDirectoryToChatConversations(params: {
         updates.last_message_at = fromEvolution;
         if (preview) updates.last_message_preview = preview;
       }
+    }
+    const nextProfilePicUrl = pickProfilePicUrl(entry);
+    if (nextProfilePicUrl) {
+      updates.profile_pic_url = nextProfilePicUrl;
     }
     if (Object.keys(updates).length > 0) {
       const { error: upErr } = await supabaseServiceRole

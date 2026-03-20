@@ -14,6 +14,19 @@ export const EVOLUTION_CHAT_WEBHOOK_MESSAGE_EVENTS = [
 ] as const;
 
 /**
+ * URL pública única do webhook Evolution em produção (independente do ambiente do app / NEXT_PUBLIC_*).
+ * @see https://zaploto.com/api/webhooks/evolution/prod
+ */
+export const ZAPLOTO_EVOLUTION_PROD_WEBHOOK_URL =
+  'https://zaploto.com/api/webhooks/evolution/prod' as const;
+
+/**
+ * Eventos registrados na Evolution em `/instance/create` (webhook).
+ * Apenas mensagens recebidas (upsert) e confirmação de envio — alinhado ao painel Evolution (MESSAGES_UPSERT / SEND_MESSAGE).
+ */
+export const EVOLUTION_INSTANCE_WEBHOOK_EVENTS = ['MESSAGES_UPSERT', 'SEND_MESSAGE'] as const;
+
+/**
  * Converte nomes de evento da Evolution (ex.: messages.upsert, MESSAGES_UPSERT) para o
  * formato canônico usado no switch do handler (MESSAGES_UPSERT).
  */

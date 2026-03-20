@@ -35,7 +35,6 @@ export async function POST(req: NextRequest) {
     }
 
     const maturationTypeValue = maturation_type === 'virgem' ? 'virgem' : 'maturado';
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || req.nextUrl.origin;
 
     const result = await createEvolutionChatInstance({
       evolutionApiId: evolution_api_id,
@@ -44,7 +43,6 @@ export async function POST(req: NextRequest) {
       workspaceId: workspace_id || null,
       maturationType: maturationTypeValue,
       zaplotoId: profile?.zaploto_id ?? null,
-      appUrl,
     });
 
     if (!result.ok) {
