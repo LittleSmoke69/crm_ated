@@ -5,6 +5,8 @@ export interface ApiResponse<T = any> {
   data?: T;
   error?: string;
   message?: string;
+  /** Código semântico para o cliente tratar (ex.: instância Evolution indisponível). */
+  code?: string;
   pagination?: any;
   meta?: any;
 }
@@ -38,12 +40,17 @@ export function successResponse<T>(
   );
 }
 
-export function errorResponse(error: string | Error, status: number = 400): NextResponse {
+export function errorResponse(
+  error: string | Error,
+  status: number = 400,
+  extra?: Record<string, unknown>
+): NextResponse {
   const errorMessage = error instanceof Error ? error.message : error;
   return NextResponse.json(
     {
       success: false,
       error: errorMessage,
+      ...(extra && typeof extra === 'object' ? extra : {}),
     } as ApiResponse,
     { status }
   );
