@@ -76,8 +76,10 @@ export interface Lead {
   original_consultant_id?: number | null;
   original_consultant_name?: string | null;
   original_consultant_email?: string | null;
-  /** Lead resolvido como “vinculado” após prazo (consultor converteu); exibir “Lead na carteira” no card */
+  /** Lead resolvido como "vinculado" após prazo (consultor converteu); exibir "Lead na carteira" no card */
   vinculado?: boolean;
+  /** Prazo em dias definido na transferência (admin_lead_transfer_logs.deadline_days). Sobrescreve a prop de coluna no LeadCard. */
+  transfer_deadline_days?: number | null;
 }
 
 export interface Column {
@@ -87,4 +89,3 @@ export interface Column {
   leads: Lead[];
   totalLeads?: number; // Total de leads disponíveis (para paginação)
 }
-

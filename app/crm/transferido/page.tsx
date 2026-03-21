@@ -237,6 +237,7 @@ const TransferidoContent = () => {
           lastInteractionAt: l.last_interaction || l.created_at,
           isFavorite: false,
           alertStatus: 'idle',
+          transfer_deadline_days: l.transfer_deadline_days ?? null,
         };
       };
 
@@ -903,7 +904,6 @@ const TransferidoContent = () => {
                     onLoadMore={handleLoadMore}
                     isLoadingMore={false}
                     compactCards
-                    transferDeadlineDays={10}
                     maxListHeight="700px"
                   />
                 </div>

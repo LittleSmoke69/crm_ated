@@ -833,6 +833,29 @@ export async function GET(req: NextRequest) {
 
     // Não filtra clientes fantasma na tela CRM transferido: o consultor deve ver todos os leads transferidos e vinculados à carteira dele.
 
+    // Busca deadline_days por lead (admin_lead_transfer_logs) para exibir prazo correto no card
+    const bancaIdsForDeadline = listBancas.map((b) => b.id);
+    const batchLeadIds = filteredLeads.map((l: any) => String(l._originalId ?? l.id));
+    let deadlineByLeadId: Record<string, number> = {};
+    if (batchLeadIds.length > 0 && consultantEmail) {
+      const { data: entryDeadlines } = await supabaseServiceRole
+        .from('admin_lead_transfer_entries')
+        .select('lead_id, admin_lead_transfer_logs!inner(deadline_days)')
+        .eq('target_consultant_email', consultantEmail)
+        .in('banca_id', bancaIdsForDeadline)
+        .in('lead_id', batchLeadIds)
+        .not('resolution_status', 'in', '("repassado","devolvido","reversed")')
+        .order('created_at', { ascending: false });
+      if (entryDeadlines?.length) {
+        for (const row of entryDeadlines as any[]) {
+          const lid = String(row.lead_id);
+          if (!deadlineByLeadId[lid]) {
+            deadlineByLeadId[lid] = (row.admin_lead_transfer_logs as any)?.deadline_days ?? 10;
+          }
+        }
+      }
+    }
+
     // Busca tags (mesma lógica do /api/crm/leads: busca TODAS as associações do user, evita .in() e falhas de match)
     const toLeadExternalId = (l: any) =>
       l._bancaKey != null && l._originalId != null ? `${l._bancaKey}-${l._originalId}` : (l._originalId ?? l.id).toString();
@@ -946,6 +969,7 @@ export async function GET(req: NextRequest) {
         original_consultant_name: l.original_consultant_name ?? null,
         original_consultant_email: l.original_consultant_email ?? null,
         vinculado: vinculadoLeadIds.has(leadIdStr),
+        transfer_deadline_days: deadlineByLeadId[leadIdStr] ?? null,
       };
     });
 

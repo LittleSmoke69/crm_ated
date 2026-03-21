@@ -51,6 +51,22 @@ const MODAL_LEADS_PAGE_SIZE = 10;
 const SOLICITATION_PAGE_SIZE_DEFAULT = 500;
 /** Transferências na lista do modal Mover leads: itens por página */
 const MOVE_LEADS_LIST_PAGE_SIZE = 10;
+/** Ordenação dos badges de tipo (TF) no modal Mover leads */
+const MOVE_LEADS_TF_LABEL_ORDER = ['TF', 'TF1', 'TF2', 'TF3'] as const;
+function sortMoveLeadsTfLabels(types: Set<string>): string[] {
+  const order = MOVE_LEADS_TF_LABEL_ORDER as readonly string[];
+  return [...types].sort((a, b) => {
+    const ia = order.indexOf(a);
+    const ib = order.indexOf(b);
+    if (ia === -1 && ib === -1) return a.localeCompare(b);
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  });
+}
+/** Heurística: muitas transferências resolvidas em TF vs TF1 → recomendar filtro TF1 (próximo passo do funil). */
+const MOVE_LEADS_REC_MIN_TF_LOGS = 5;
+const MOVE_LEADS_REC_TF_OVER_TF1 = 3;
 /** Quantidade de transferências por chamada ao resolve-batch (evita timeout — cada log chama CRM externo) */
 const RESOLVE_BATCH_CHUNK_SIZE = 3;
 /** Valor de leadsPageSize quando o usuário escolhe "Personalizado" (input livre). */
@@ -543,6 +559,9 @@ export default function AdminLeadTransferPage() {
   const [moveLeadsModalOpen, setMoveLeadsModalOpen] = useState(false);
   /** Página atual na lista do modal Mover leads */
   const [moveLeadsListPage, setMoveLeadsListPage] = useState(1);
+  /** Modal Mover leads: pesquisa e filtro por tipo TF nas transferências resolvidas */
+  const [moveLeadsModalResolvedSearch, setMoveLeadsModalResolvedSearch] = useState('');
+  const [moveLeadsModalTfFilter, setMoveLeadsModalTfFilter] = useState<'all' | 'TF' | 'TF1' | 'TF2' | 'TF3'>('all');
   const [resolvedList, setResolvedList] = useState<
     Array<{
       log_id: string;
@@ -615,6 +634,24 @@ export default function AdminLeadTransferPage() {
     if (moveLeadsBlockedByRateLimit) return false;
     return true;
   }, [moveLeadsSelectedLog, loadingMoveLeadsEntries, loadingMoveLeadsConsultants, moveLeadsDestinationEmail, moveLeadsQtyToSend, moveLeadsBlockedByRateLimit]);
+
+  /** Contagem de logs por TF no mesmo recorte do modal (banca do histórico ou todas) + recomendação TF→TF1 */
+  const moveLeadsModalTfRecommendation = useMemo(() => {
+    const bancaIdFiltro = (historyBancaFilter || '').trim();
+    const list = bancaIdFiltro ? resolvedList.filter((r) => r.banca_id === bancaIdFiltro) : resolvedList;
+    const byType: Record<string, number> = {};
+    for (const r of list) {
+      const t = (r.transfer_type ?? 'TF').trim() || 'TF';
+      byType[t] = (byType[t] ?? 0) + 1;
+    }
+    const nTf = byType['TF'] ?? 0;
+    const nTf1 = byType['TF1'] ?? 0;
+    const suggestTf1Filter =
+      nTf1 >= 1 &&
+      nTf >= MOVE_LEADS_REC_MIN_TF_LOGS &&
+      nTf >= MOVE_LEADS_REC_TF_OVER_TF1 * nTf1;
+    return { byType, nTf, nTf1, suggestTf1Filter, scopedCount: list.length };
+  }, [resolvedList, historyBancaFilter]);
 
   const isTooManyAttemptsMessage = useCallback((message?: string | null, statusCode?: number | null) => {
     const msg = String(message ?? '').toLowerCase();
@@ -3057,6 +3094,12 @@ export default function AdminLeadTransferPage() {
     }
   }, [moveLeadsModalOpen, moveLeadsPreselectedLogId, resolvedList]);
 
+  /** Ao abrir o modal Mover leads, o filtro de tipo (TF) sempre inicia em "Todos os tipos" (sem aplicar TF1 automaticamente). */
+  useEffect(() => {
+    if (!moveLeadsModalOpen) return;
+    setMoveLeadsModalTfFilter('all');
+  }, [moveLeadsModalOpen]);
+
   /** Após abrir o formulário Mover leads, pré-seleciona a solicitação vinda da aprovação e preenche consultor destino. */
   useEffect(() => {
     if (!moveLeadsPreselectRequestId || !moveLeadsSelectedLog || loadingLeadRequests || loadingMoveLeadsConsultants) return;
@@ -3330,14 +3373,23 @@ export default function AdminLeadTransferPage() {
   }, [resolveBatchDetailLog, resolveBatchResult, loadResolveBatchDetailEntries, loadResolvedStats]);
 
   const pickBestResolvedLogForSource = useCallback(
-    (list: typeof resolvedList, sourceEmail: string, bancaId: string) => {
+    (
+      list: typeof resolvedList,
+      sourceEmail: string,
+      bancaId: string,
+      transferTypeFilter: 'all' | 'TF' | 'TF1' | 'TF2' | 'TF3' = 'all'
+    ) => {
       const norm = sourceEmail.trim().toLowerCase();
       if (!norm) return null;
-      const matches = list.filter(
+      let matches = list.filter(
         (r) =>
           (r.source_consultant_email ?? '').trim().toLowerCase() === norm &&
           (!bancaId.trim() || r.banca_id === bancaId.trim())
       );
+      if (transferTypeFilter !== 'all') {
+        const tf = transferTypeFilter;
+        matches = matches.filter((r) => (r.transfer_type ?? 'TF') === tf);
+      }
       if (matches.length === 0) return null;
       return matches.reduce((a, b) => (a.disponivel >= b.disponivel ? a : b));
     },
@@ -3369,16 +3421,18 @@ export default function AdminLeadTransferPage() {
     setLoadingMoveLeadsEntries(true);
     setLoadingMoveLeadsConsultants(true);
     try {
-      const [entriesRes, consultantsRes] = await Promise.all([
-        fetch(`/api/admin/crm/transfer-logs/entries?log_id=${encodeURIComponent(log.log_id)}&banca_id=${encodeURIComponent(log.banca_id)}`, { headers: headers() }),
-        fetch(`/api/admin/crm/consultants?banca_id=${encodeURIComponent(log.banca_id)}&hierarchy_only=1&verify_crm=1`, { headers: headers() }),
-      ]);
+      // Sequencial para não saturar o rate limit do CRM com requisições paralelas.
+      // entries chama o CRM (getIndicatedsByConsultant); consultants sem verify_crm é só banco.
+      const entriesRes = await fetch(`/api/admin/crm/transfer-logs/entries?log_id=${encodeURIComponent(log.log_id)}&banca_id=${encodeURIComponent(log.banca_id)}`, { headers: headers() });
       const entriesJson = await entriesRes.json();
-      const consultantsJson = await consultantsRes.json();
       const entries = (entriesRes.ok && entriesJson.success && Array.isArray(entriesJson.data))
         ? entriesJson.data.filter((e: { resolution_status?: string }) => e.resolution_status === 'disponivel_retransferencia')
         : [];
       setMoveLeadsEntries(entries);
+      setLoadingMoveLeadsEntries(false);
+
+      const consultantsRes = await fetch(`/api/admin/crm/consultants?banca_id=${encodeURIComponent(log.banca_id)}&hierarchy_only=1`, { headers: headers() });
+      const consultantsJson = await consultantsRes.json();
       if (consultantsRes.ok && consultantsJson.success && Array.isArray(consultantsJson.data?.consultants)) {
         setMoveLeadsConsultants(consultantsJson.data.consultants);
       }
@@ -3396,14 +3450,19 @@ export default function AdminLeadTransferPage() {
       const trimmed = sourceEmail.trim();
       setMoveLeadsSelectedSourceEmail(trimmed);
       if (!trimmed) return;
-      const best = pickBestResolvedLogForSource(resolvedList, trimmed, bancaIdForFilter);
+      const best = pickBestResolvedLogForSource(resolvedList, trimmed, bancaIdForFilter, moveLeadsModalTfFilter);
       if (!best) {
-        showToast('Nenhuma transferência encontrada para esse consultor de origem nesta banca.', 'info');
+        showToast(
+          moveLeadsModalTfFilter !== 'all'
+            ? 'Nenhuma transferência resolvida deste tipo (TF) para esse consultor nesta banca.'
+            : 'Nenhuma transferência encontrada para esse consultor de origem nesta banca.',
+          'info'
+        );
         return;
       }
       await openMoveLeadsForm(best, { keepRequest: !!keepRequest });
     },
-    [resolvedList, pickBestResolvedLogForSource, openMoveLeadsForm]
+    [resolvedList, pickBestResolvedLogForSource, openMoveLeadsForm, moveLeadsModalTfFilter]
   );
 
   /** Modal Aprovar → "Ir para leads expirados…": abre Mover leads já no formulário, com o doador escolhido e a transferência resolvida correspondente. */
@@ -3433,6 +3492,8 @@ export default function AdminLeadTransferPage() {
     setMoveLeadsSelectedSourceEmail('');
     setMoveLeadsEnterFormDirectly(false);
     setHistoryBancaFilter(bancaIdSolicitacao);
+    setMoveLeadsModalResolvedSearch('');
+    setMoveLeadsModalTfFilter('all');
     setMoveLeadsModalOpen(true);
     closeApproveModal();
     setActiveTab('history');
@@ -3474,9 +3535,6 @@ export default function AdminLeadTransferPage() {
       return;
     }
     const allLeadIds = moveLeadsEntries.map((e) => e.lead_id).filter(Boolean);
-    // #region agent log
-    fetch('http://127.0.0.1:7901/ingest/0ef4209d-37f6-4cbb-b28d-8cf53becc342',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37d7e0'},body:JSON.stringify({sessionId:'37d7e0',runId:'post-fix',hypothesisId:'H-A-B-C-D',location:'page.tsx:runMoveLeads:start',message:'Início runMoveLeads',data:{log_id:moveLeadsSelectedLog.log_id,banca_id:moveLeadsSelectedLog.banca_id,source_email:moveLeadsSelectedLog.target_consultant_email,target_email:targetEmail,transfer_type:moveLeadsTransferType,allLeadIdsCount:allLeadIds.length,leadIdSample:allLeadIds.slice(0,5),leadIdTypes:[...new Set(allLeadIds.slice(0,5).map(id=>typeof id))],entriesStatuses:[...moveLeadsEntries.slice(0,10).map(e=>e.resolution_status)]},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     if (allLeadIds.length === 0) {
       showToast('Nenhum lead disponível para repasse.', 'info');
       return;
@@ -3532,9 +3590,6 @@ export default function AdminLeadTransferPage() {
         }),
       });
       const json = await res.json();
-      // #region agent log
-      fetch('http://127.0.0.1:7901/ingest/0ef4209d-37f6-4cbb-b28d-8cf53becc342',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37d7e0'},body:JSON.stringify({sessionId:'37d7e0',runId:'post-fix',hypothesisId:'H-A-E',location:'page.tsx:runMoveLeads:response',message:'Resposta redistribute-leads',data:{status:res.status,ok:res.ok,success:json.success,error:json.error??null,count:json.data?.count??null,transfer_log_id:json.data?.transfer_log_id??null,crm_count:json.data?.crm_count??null,message:json.data?.message??null,leadIdsCount:leadIds.length,source_transfer_log_id:moveLeadsSelectedLog?.log_id??null},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       if (isTooManyAttemptsMessage(json?.error ?? json?.message ?? json?.data?.message, res.status)) {
         setMoveLeadsBlockedByRateLimit(true);
         showToast('Muitas tentativas no CRM. Tente novamente em alguns segundos.', 'error');
@@ -3545,34 +3600,42 @@ export default function AdminLeadTransferPage() {
         const movedCount = Number.isFinite(Number(json?.data?.count)) ? Number(json?.data?.count) : leadIds.length;
         const moveTransferLogId = json?.data?.transfer_log_id ?? null;
         if (moveLeadsSelectedRequest?.id && userId) {
-          const sourceConsultant = moveLeadsConsultants.find((c) => c.email?.toLowerCase() === moveLeadsSelectedLog?.target_consultant_email?.toLowerCase());
+          const donorEmail = (
+            moveLeadsSelectedLog?.target_consultant_email ?? moveLeadsSelectedRequest.source_consultant_email ?? ''
+          )
+            .toString()
+            .trim();
+          const sourceConsultant = moveLeadsConsultants.find(
+            (c) => c.email?.toLowerCase() === moveLeadsSelectedLog?.target_consultant_email?.toLowerCase()
+          );
           const sourceConsultantId = (
             sourceConsultant?.id
             ?? approveFormSourceConsultantId
             ?? moveLeadsSelectedRequest.source_consultant_id
             ?? ''
-          ).toString().trim();
+          )
+            .toString()
+            .trim();
           const transferFiltersSnapshot = {
             moved_from_resolved: true,
             source_transfer_log_id: moveLeadsSelectedLog?.log_id ?? null,
             transfer_log_id: moveTransferLogId,
             transfer_type: moveLeadsTransferType,
             transfer_deadline_days: moveLeadsDeadlineDays,
-            source_consultant_email: moveLeadsSelectedLog?.target_consultant_email ?? moveLeadsSelectedRequest.source_consultant_email ?? null,
+            source_consultant_email: donorEmail || null,
             target_consultant_email: targetEmail,
             moved_count: movedCount,
             moved_lead_ids: leadIds,
             selected_log_banca_id: moveLeadsSelectedLog?.banca_id ?? moveLeadsSelectedRequest.banca_id ?? null,
           };
           try {
-            if (sourceConsultantId) {
             const approveRes = await fetch(`/api/admin/crm/lead-requests/${moveLeadsSelectedRequest.id}`, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json', ...headers() },
               body: JSON.stringify({
                 status: 'approved',
-                source_consultant_id: sourceConsultantId,
-                source_consultant_email: moveLeadsSelectedLog?.target_consultant_email ?? moveLeadsSelectedRequest.source_consultant_email ?? null,
+                ...(sourceConsultantId ? { source_consultant_id: sourceConsultantId } : {}),
+                ...(donorEmail ? { source_consultant_email: donorEmail } : {}),
                 banca_id: moveLeadsSelectedLog?.banca_id ?? moveLeadsSelectedRequest.banca_id ?? null,
                 consultores: moveLeadsSelectedRequest.consultores?.map((c) => ({ consultor_id: c.consultor_id, quantity: c.quantity })) ?? [],
                 leads_transferred_count: movedCount,
@@ -3586,10 +3649,10 @@ export default function AdminLeadTransferPage() {
               showToast(`Transferência concluída e solicitação aprovada. ${movedCount} lead(s) repassado(s).`, 'success');
               loadLeadRequests();
             } else {
-              showToast(json?.data?.message ?? `${movedCount} lead(s) repassado(s).`, 'success');
-            }
-            } else {
-              showToast(json?.data?.message ?? `${movedCount} lead(s) repassado(s).`, 'success');
+              showToast(
+                `${movedCount} lead(s) repassado(s). A solicitação não foi atualizada: ${approveJson?.error ?? approveJson?.message ?? 'erro desconhecido'}`,
+                'info',
+              );
             }
           } catch {
             showToast(json?.data?.message ?? `${movedCount} lead(s) repassado(s).`, 'success');
@@ -3614,9 +3677,6 @@ export default function AdminLeadTransferPage() {
         }
         loadResolvedList();
         loadResolvedStats();
-        // #region agent log
-        fetch('http://127.0.0.1:7901/ingest/0ef4209d-37f6-4cbb-b28d-8cf53becc342',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37d7e0'},body:JSON.stringify({sessionId:'37d7e0',runId:'verify-flow',hypothesisId:'H-FLOW',location:'page.tsx:runMoveLeads:afterSuccess',message:'Transfer OK - recarregando histórico',data:{movedLogId,movedCount,moveTransferLogId,enviadosTodos,historyBancaFilter,leadIdsCount:leadIds.length},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
         loadTransferLogs(historyBancaFilter);
         loadTransferStats(historyBancaFilter);
       } else {
@@ -4770,6 +4830,8 @@ export default function AdminLeadTransferPage() {
                                             setMoveLeadsPreselectRequestId(null);
                                             setMoveLeadsSelectedSourceEmail('');
                                             setMoveLeadsPreselectedLogId(r.log_id);
+                                            setMoveLeadsModalResolvedSearch('');
+                                            setMoveLeadsModalTfFilter('all');
                                             setMoveLeadsModalOpen(true);
                                             loadResolvedList();
                                             loadLeadRequests();
@@ -4850,6 +4912,8 @@ export default function AdminLeadTransferPage() {
                             setMoveLeadsFixedRecipient(null);
                             setMoveLeadsPreselectRequestId(null);
                             setMoveLeadsSelectedSourceEmail('');
+                            setMoveLeadsModalResolvedSearch('');
+                            setMoveLeadsModalTfFilter('all');
                             setMoveLeadsModalOpen(true);
                             loadResolvedList();
                             loadLeadRequests();
@@ -4990,6 +5054,8 @@ export default function AdminLeadTransferPage() {
                       setMoveLeadsFixedRecipient(null);
                       setMoveLeadsPreselectRequestId(null);
                       setMoveLeadsSelectedSourceEmail('');
+                      setMoveLeadsModalResolvedSearch('');
+                      setMoveLeadsModalTfFilter('all');
                     }
                   }}
                 >
@@ -5008,6 +5074,8 @@ export default function AdminLeadTransferPage() {
                           setMoveLeadsSelectedSourceEmail('');
                           setMoveLeadsSelectedRequest(null);
                           setMoveLeadsTargetEmail('');
+                          setMoveLeadsModalResolvedSearch('');
+                          setMoveLeadsModalTfFilter('all');
                         }}
                         className="p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-[#404040] text-gray-600 dark:text-gray-300"
                       >
@@ -5019,12 +5087,13 @@ export default function AdminLeadTransferPage() {
                         <div className="space-y-4">
                           <div className="rounded-xl border border-emerald-500/30 bg-emerald-50/30 dark:bg-emerald-950/20 p-4">
                             <p className="text-sm font-semibold text-emerald-800 dark:text-emerald-200 mb-1">Transferência {moveLeadsSelectedLog.log_id.slice(0, 8)}… • {moveLeadsSelectedLog.disponivel} lead(s) • {moveLeadsSelectedLog.transfer_type}</p>
-                            {(moveLeadsFixedRecipient?.email?.trim() || moveLeadsSelectedRequest?.consultores?.[0]?.consultor_email?.trim()) ? (
+                            {(moveLeadsFixedRecipient?.email?.trim() || moveLeadsSelectedRequest?.consultores?.[0]?.consultor_email?.trim() || (moveLeadsSelectedRequest && moveLeadsTargetEmail.trim())) ? (
                               <>
                                 <p className="text-xs font-semibold text-emerald-800 dark:text-emerald-200 mb-0.5">Consultor que receberá os leads (solicitação)</p>
                                 <p className="text-xs text-emerald-700 dark:text-emerald-300 break-all">
                                   {moveLeadsFixedRecipient?.email?.trim() ||
-                                    moveLeadsSelectedRequest?.consultores?.[0]?.consultor_email?.trim()}
+                                    moveLeadsSelectedRequest?.consultores?.[0]?.consultor_email?.trim() ||
+                                    moveLeadsTargetEmail.trim()}
                                   {(moveLeadsFixedRecipient?.name || moveLeadsSelectedRequest?.consultores?.[0]?.consultor_name)?.trim()
                                     ? ` · ${(moveLeadsFixedRecipient?.name || moveLeadsSelectedRequest?.consultores?.[0]?.consultor_name)?.trim()}`
                                     : ''}
@@ -5073,17 +5142,30 @@ export default function AdminLeadTransferPage() {
                                 '-';
                               const byKey = new Map<
                                 string,
-                                { email: string; totalDisponivel: number; logCount: number; sourceConsultantName: string | null }
+                                {
+                                  email: string;
+                                  totalDisponivel: number;
+                                  logCount: number;
+                                  sourceConsultantName: string | null;
+                                  transferTypes: Set<string>;
+                                }
                               >();
-                              for (const r of resolvedList.filter((row) => row.banca_id === bancaId)) {
+                              let listForBanca = resolvedList.filter((row) => row.banca_id === bancaId);
+                              if (moveLeadsModalTfFilter !== 'all') {
+                                const tf = moveLeadsModalTfFilter;
+                                listForBanca = listForBanca.filter((row) => (row.transfer_type ?? 'TF') === tf);
+                              }
+                              for (const r of listForBanca) {
                                 const email = (r.source_consultant_email ?? '').trim();
                                 if (!email) continue;
                                 const key = email.toLowerCase();
                                 const nm = (r.source_consultant_name ?? '').trim();
+                                const tfLabel = r.transfer_type ?? 'TF';
                                 const cur = byKey.get(key);
                                 if (cur) {
                                   cur.totalDisponivel += r.disponivel;
                                   cur.logCount += 1;
+                                  cur.transferTypes.add(tfLabel);
                                   if (!cur.sourceConsultantName && nm) cur.sourceConsultantName = nm;
                                 } else {
                                   byKey.set(key, {
@@ -5091,6 +5173,7 @@ export default function AdminLeadTransferPage() {
                                     totalDisponivel: r.disponivel,
                                     logCount: 1,
                                     sourceConsultantName: nm || null,
+                                    transferTypes: new Set([tfLabel]),
                                   });
                                 }
                               }
@@ -5110,6 +5193,10 @@ export default function AdminLeadTransferPage() {
                                     const titleLine = displayName
                                       ? `${displayName} · ${row.email} · ${bancaLabel}`
                                       : `${row.email} · ${bancaLabel}`;
+                                    const tfBadgesInner =
+                                      moveLeadsModalTfFilter === 'all' && row.transferTypes.size > 0
+                                        ? sortMoveLeadsTfLabels(row.transferTypes)
+                                        : [];
                                     return (
                                       <button
                                         key={row.email}
@@ -5117,9 +5204,20 @@ export default function AdminLeadTransferPage() {
                                         onClick={() => void handleMoveLeadsPickSource(row.email, bancaId, !!moveLeadsSelectedRequest)}
                                         className={`w-full flex flex-col items-start px-4 py-3 text-left hover:bg-emerald-100/50 dark:hover:bg-emerald-900/30 transition-colors rounded-lg ${isSelected ? 'bg-emerald-100/70 dark:bg-emerald-900/40 ring-2 ring-emerald-500/60' : 'hover:ring-1 hover:ring-emerald-500/30'}`}
                                       >
-                                        <span className="text-sm font-semibold text-gray-900 dark:text-white break-all">
-                                          {titleLine}
-                                        </span>
+                                        <div className="flex flex-wrap items-center gap-1.5 w-full">
+                                          <span className="text-sm font-semibold text-gray-900 dark:text-white break-all">
+                                            {titleLine}
+                                          </span>
+                                          {tfBadgesInner.map((tf) => (
+                                            <span
+                                              key={tf}
+                                              className="text-[10px] font-semibold tabular-nums px-1.5 py-0.5 rounded border border-teal-500/35 bg-teal-500/10 text-teal-800 dark:text-teal-200 shrink-0"
+                                              title="Tipo de transferência (TF)"
+                                            >
+                                              {tf}
+                                            </span>
+                                          ))}
+                                        </div>
                                         <span className="text-xs text-gray-600 dark:text-gray-400 mt-0.5">
                                           {row.totalDisponivel} lead(s) disponível(is)
                                           {row.logCount > 1 && (
@@ -5135,6 +5233,14 @@ export default function AdminLeadTransferPage() {
                               );
                             })()}
                           </div>
+                          {(loadingMoveLeadsEntries || loadingMoveLeadsConsultants) && (
+                            <div className="mb-4 flex items-center gap-2.5 rounded-lg border border-emerald-500/30 bg-emerald-50/40 dark:bg-emerald-950/20 px-4 py-3">
+                              <Loader2 className="w-4 h-4 animate-spin text-emerald-500 flex-shrink-0" />
+                              <p className="text-sm text-emerald-700 dark:text-emerald-300">
+                                Carregando leads disponíveis… Aguarde para confirmar a transferência.
+                              </p>
+                            </div>
+                          )}
                           {moveLeadsSelectedRequest && (() => {
                             const totalRequested = (moveLeadsSelectedRequest.consultores ?? []).reduce((s, c) => s + c.quantity, 0);
                             const faltam = moveLeadsSelectedRequest.leads_still_needed ?? totalRequested;
@@ -5143,25 +5249,36 @@ export default function AdminLeadTransferPage() {
                             const restantes = disponiveis - qtyToComplete;
                             return (
                               <div className="mb-4 p-3 rounded-lg border border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20 dark:border-amber-500/20">
-                                <p className="text-xs text-amber-800 dark:text-amber-200 mb-2">
-                                  Esta transferência tem <strong>{disponiveis}</strong> lead(s). A solicitação precisa de <strong>{faltam}</strong> para completar.
-                                </p>
-                                <label className="flex items-center gap-2 cursor-pointer">
-                                  <input
-                                    type="checkbox"
-                                    checked={moveLeadsOnlyQtyToComplete}
-                                    onChange={(e) => setMoveLeadsOnlyQtyToComplete(e.target.checked)}
-                                    className="rounded border-gray-400 text-emerald-600 focus:ring-emerald-500"
-                                  />
-                                  <span className="text-sm font-medium text-gray-800 dark:text-gray-200">
-                                    Enviar apenas <strong>{qtyToComplete}</strong> para completar a solicitação
-                                    {restantes > 0 && (
-                                      <span className="block text-amber-700 dark:text-amber-300 mt-0.5 text-[11px] font-normal">
-                                        ({restantes} lead(s) restam para mover para outra pessoa depois)
+                                {loadingMoveLeadsEntries ? (
+                                  <div className="flex items-center gap-2 py-1">
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-500 flex-shrink-0" />
+                                    <p className="text-xs text-amber-700 dark:text-amber-300">
+                                      Contando leads disponíveis… (a solicitação precisa de <strong>{faltam}</strong>)
+                                    </p>
+                                  </div>
+                                ) : (
+                                  <>
+                                    <p className="text-xs text-amber-800 dark:text-amber-200 mb-2">
+                                      Esta transferência tem <strong>{disponiveis}</strong> lead(s). A solicitação precisa de <strong>{faltam}</strong> para completar.
+                                    </p>
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                      <input
+                                        type="checkbox"
+                                        checked={moveLeadsOnlyQtyToComplete}
+                                        onChange={(e) => setMoveLeadsOnlyQtyToComplete(e.target.checked)}
+                                        className="rounded border-gray-400 text-emerald-600 focus:ring-emerald-500"
+                                      />
+                                      <span className="text-sm font-medium text-gray-800 dark:text-gray-200">
+                                        Enviar apenas <strong>{qtyToComplete}</strong> para completar a solicitação
+                                        {restantes > 0 && (
+                                          <span className="block text-amber-700 dark:text-amber-300 mt-0.5 text-[11px] font-normal">
+                                            ({restantes} lead(s) restam para mover para outra pessoa depois)
+                                          </span>
+                                        )}
                                       </span>
-                                    )}
-                                  </span>
-                                </label>
+                                    </label>
+                                  </>
+                                )}
                               </div>
                             );
                           })()}
@@ -5200,8 +5317,28 @@ export default function AdminLeadTransferPage() {
                             >
                               Voltar
                             </button>
-                            <button type="button" onClick={() => runMoveLeads()} disabled={!canConfirmMoveLeads || moveLeadsMoving} className="px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500 text-white hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
-                              {moveLeadsMoving ? <><Loader2 className="w-4 h-4 animate-spin inline-block mr-1.5" /> Repassando…</> : 'Confirmar transferência'}
+                            <button
+                              type="button"
+                              onClick={() => runMoveLeads()}
+                              disabled={!canConfirmMoveLeads || moveLeadsMoving}
+                              title={
+                                (loadingMoveLeadsEntries || loadingMoveLeadsConsultants)
+                                  ? 'Aguarde o carregamento dos leads...'
+                                  : !moveLeadsDestinationEmail.trim()
+                                  ? 'Informe o consultor destino'
+                                  : moveLeadsQtyToSend <= 0
+                                  ? 'Nenhum lead disponível para transferir'
+                                  : ''
+                              }
+                              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500 text-white hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                            >
+                              {moveLeadsMoving ? (
+                                <><Loader2 className="w-4 h-4 animate-spin" /> Repassando…</>
+                              ) : (loadingMoveLeadsEntries || loadingMoveLeadsConsultants) ? (
+                                <><Loader2 className="w-4 h-4 animate-spin" /> Carregando…</>
+                              ) : (
+                                'Confirmar transferência'
+                              )}
                             </button>
                           </div>
                           {moveLeadsBlockedByRateLimit && (
@@ -5289,6 +5426,39 @@ export default function AdminLeadTransferPage() {
                           ) : (
                             (() => {
                               const bancaIdFiltro = (historyBancaFilter || '').trim();
+                              const { suggestTf1Filter, nTf, nTf1 } = moveLeadsModalTfRecommendation;
+                              const recoBanner =
+                                suggestTf1Filter && moveLeadsModalTfFilter !== 'TF1' ? (
+                                  <div className="mb-3 rounded-lg border border-teal-500/45 bg-teal-500/[0.12] px-3 py-2.5 dark:bg-teal-950/30 dark:border-teal-500/35">
+                                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                      <p className="text-xs text-teal-950 dark:text-teal-100">
+                                        <span className="font-semibold">Recomendação do funil:</span> há{' '}
+                                        <strong>{nTf}</strong> transferência(ões) em <strong>TF</strong> e <strong>{nTf1}</strong> em{' '}
+                                        <strong>TF1</strong> neste recorte (banca do histórico ou todas). TF está acumulado em relação a TF1 —{' '}
+                                        <span className="whitespace-nowrap">priorize o próximo passo: <strong>TF1</strong>.</span>
+                                      </p>
+                                      <button
+                                        type="button"
+                                        onClick={() => setMoveLeadsModalTfFilter('TF1')}
+                                        className="shrink-0 rounded-lg border border-teal-600/50 bg-teal-600/90 px-3 py-1.5 text-xs font-semibold text-white hover:bg-teal-500 dark:border-teal-400/40 dark:bg-teal-700/90 dark:hover:bg-teal-600 transition-colors"
+                                      >
+                                        Filtrar TF1
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : suggestTf1Filter && moveLeadsModalTfFilter === 'TF1' ? (
+                                  <div className="mb-3 rounded-lg border border-teal-500/35 bg-teal-500/[0.08] px-3 py-2.5 text-[11px] leading-relaxed text-teal-900 dark:text-teal-100/95 dark:border-teal-500/30">
+                                    <p className="font-semibold text-teal-950 dark:text-teal-50 mb-1">
+                                      Filtro TF1 ativo — recomendação do funil
+                                    </p>
+                                    <p className="text-teal-800 dark:text-teal-200/90">
+                                      No fluxo, <strong>TF1</strong> é a etapa <em>depois</em> de <strong>TF</strong>: leads que já avançaram um nível. Esta lista mostra só transferências resolvidas nesse tipo — para você repassar sem misturar com a etapa anterior.
+                                    </p>
+                                    <p className="mt-1.5 text-[10px] text-teal-700/95 dark:text-teal-300/85 border-t border-teal-500/25 pt-1.5">
+                                      Panorama neste recorte (contagem de transferências): <strong>{nTf}</strong> em TF · <strong>{nTf1}</strong> em TF1. TF segue com volume maior que TF1; priorizar TF1 aqui alinha o trabalho ao próximo passo do funil.
+                                    </p>
+                                  </div>
+                                ) : null;
                               // Banca da solicitação selecionada para destaque neon
                               const selectedReqBancaId = moveLeadsSelectedRequest?.banca_id?.trim() || '';
                               const sourceMap = new Map<
@@ -5298,22 +5468,29 @@ export default function AdminLeadTransferPage() {
                                   totalDisponivel: number;
                                   logCount: number;
                                   bancas: Set<string>;
+                                  transferTypes: Set<string>;
                                   sourceConsultantName: string | null;
                                 }
                               >();
-                              const baseList = bancaIdFiltro
+                              let baseList = bancaIdFiltro
                                 ? resolvedList.filter((r) => r.banca_id === bancaIdFiltro)
                                 : resolvedList;
+                              if (moveLeadsModalTfFilter !== 'all') {
+                                const tf = moveLeadsModalTfFilter;
+                                baseList = baseList.filter((r) => (r.transfer_type ?? 'TF') === tf);
+                              }
                               for (const r of baseList) {
                                 const email = (r.source_consultant_email ?? '').trim();
                                 if (!email) continue;
                                 const key = email.toLowerCase();
                                 const nm = (r.source_consultant_name ?? '').trim();
                                 const cur = sourceMap.get(key);
+                                const tfLabel = r.transfer_type ?? 'TF';
                                 if (cur) {
                                   cur.totalDisponivel += r.disponivel;
                                   cur.logCount += 1;
                                   if (r.banca_id) cur.bancas.add(r.banca_id);
+                                  cur.transferTypes.add(tfLabel);
                                   if (!cur.sourceConsultantName && nm) cur.sourceConsultantName = nm;
                                 } else {
                                   sourceMap.set(key, {
@@ -5321,22 +5498,93 @@ export default function AdminLeadTransferPage() {
                                     totalDisponivel: r.disponivel,
                                     logCount: 1,
                                     bancas: new Set(r.banca_id ? [r.banca_id] : []),
+                                    transferTypes: new Set([tfLabel]),
                                     sourceConsultantName: nm || null,
                                   });
                                 }
                               }
                               const allRows = [...sourceMap.values()].sort((a, b) => a.email.localeCompare(b.email));
+                              const searchNorm = moveLeadsModalResolvedSearch.trim().toLowerCase();
+                              let filteredRows = allRows;
+                              if (searchNorm) {
+                                filteredRows = allRows.filter((row) => {
+                                  const nameFromConsultants =
+                                    moveLeadsConsultants.find(
+                                      (c) => (c.email ?? '').trim().toLowerCase() === row.email.toLowerCase()
+                                    )?.full_name?.trim() ?? '';
+                                  const hay = `${row.email} ${row.sourceConsultantName ?? ''} ${nameFromConsultants}`.toLowerCase();
+                                  return hay.includes(searchNorm);
+                                });
+                              }
+
+                              const toolbar = (
+                                <div className="mb-3 flex flex-col sm:flex-row gap-2 sm:items-end">
+                                  <div className="relative flex-1 min-w-0">
+                                    <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500 dark:text-gray-400" />
+                                    <input
+                                      type="search"
+                                      value={moveLeadsModalResolvedSearch}
+                                      onChange={(e) => setMoveLeadsModalResolvedSearch(e.target.value)}
+                                      placeholder="Buscar por e-mail ou nome…"
+                                      className="w-full rounded-lg border border-emerald-500/35 bg-white py-2 pl-9 pr-3 text-sm text-gray-900 placeholder:text-gray-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 dark:border-emerald-700/50 dark:bg-gray-900/80 dark:text-white dark:placeholder:text-gray-500"
+                                      aria-label="Buscar consultor de origem nas transferências resolvidas"
+                                    />
+                                  </div>
+                                  <div className="flex min-w-[140px] flex-col gap-0.5 sm:shrink-0">
+                                    <label htmlFor="move-leads-modal-tf-filter" className="text-[10px] font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                                      Tipo (TF)
+                                    </label>
+                                    <select
+                                      id="move-leads-modal-tf-filter"
+                                      value={moveLeadsModalTfFilter}
+                                      onChange={(e) =>
+                                        setMoveLeadsModalTfFilter(e.target.value as 'all' | 'TF' | 'TF1' | 'TF2' | 'TF3')
+                                      }
+                                      className="rounded-lg border border-emerald-500/35 bg-white px-3 py-2 text-sm text-gray-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 dark:border-emerald-700/50 dark:bg-gray-900/80 dark:text-white"
+                                    >
+                                      <option value="all">Todos os tipos</option>
+                                      <option value="TF">TF</option>
+                                      <option value="TF1">TF1</option>
+                                      <option value="TF2">TF2</option>
+                                      <option value="TF3">TF3</option>
+                                    </select>
+                                  </div>
+                                </div>
+                              );
+
                               if (allRows.length === 0) {
-                                return <p className="text-sm text-gray-500 dark:text-gray-400 py-4 text-center">Nenhum consultor de origem encontrado para o filtro atual.</p>;
+                                return (
+                                  <div>
+                                    {recoBanner}
+                                    {toolbar}
+                                    <p className="text-sm text-gray-500 dark:text-gray-400 py-4 text-center">
+                                      {moveLeadsModalTfFilter !== 'all'
+                                        ? 'Nenhuma transferência resolvida deste tipo (TF) com leads disponíveis para o filtro atual.'
+                                        : 'Nenhum consultor de origem encontrado para o filtro atual.'}
+                                    </p>
+                                  </div>
+                                );
+                              }
+
+                              if (filteredRows.length === 0) {
+                                return (
+                                  <div>
+                                    {recoBanner}
+                                    {toolbar}
+                                    <p className="text-sm text-gray-500 dark:text-gray-400 py-4 text-center">
+                                      Nenhum consultor corresponde à pesquisa. Limpe o campo ou ajuste o termo.
+                                    </p>
+                                  </div>
+                                );
                               }
 
                               // Se há solicitação selecionada com banca, separar em destaque e outros
                               const highlightedRows = selectedReqBancaId
-                                ? allRows.filter((row) => row.bancas.has(selectedReqBancaId))
+                                ? filteredRows.filter((row) => row.bancas.has(selectedReqBancaId))
                                 : [];
                               const otherRows = selectedReqBancaId
-                                ? allRows.filter((row) => !row.bancas.has(selectedReqBancaId))
-                                : allRows;
+                                ? filteredRows.filter((row) => !row.bancas.has(selectedReqBancaId))
+                                : filteredRows;
 
                               const renderRow = (row: typeof allRows[0], isNeon: boolean) => {
                                 let bancaHint: string;
@@ -5358,6 +5606,10 @@ export default function AdminLeadTransferPage() {
                                 const titleLine = displayName
                                   ? `${displayName} · ${row.email}`
                                   : row.email;
+                                const tfBadges =
+                                  moveLeadsModalTfFilter === 'all' && row.transferTypes.size > 0
+                                    ? sortMoveLeadsTfLabels(row.transferTypes)
+                                    : [];
 
                                 return (
                                   <button
@@ -5377,6 +5629,19 @@ export default function AdminLeadTransferPage() {
                                       <span className={`text-[11px] px-1.5 py-0.5 rounded-md font-medium ${isNeon ? 'bg-[#8CD955]/20 text-[#8CD955]' : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400'}`}>
                                         {bancaHint}
                                       </span>
+                                      {tfBadges.map((tf) => (
+                                        <span
+                                          key={tf}
+                                          className={`text-[10px] font-semibold tabular-nums px-1.5 py-0.5 rounded border ${
+                                            isNeon
+                                              ? 'border-[#8CD955]/50 bg-[#8CD955]/10 text-[#8CD955]'
+                                              : 'border-teal-500/35 bg-teal-500/10 text-teal-800 dark:text-teal-200'
+                                          }`}
+                                          title="Tipo de transferência (TF)"
+                                        >
+                                          {tf}
+                                        </span>
+                                      ))}
                                     </div>
                                     <span className={`text-xs mt-0.5 ${isNeon ? 'text-[#8CD955]/80' : 'text-gray-600 dark:text-gray-400'}`}>
                                       {row.totalDisponivel} lead(s) disponível(is){row.logCount > 1 ? ` em ${row.logCount} transferências resolvidas` : ' em 1 transferência resolvida'}
@@ -5387,6 +5652,8 @@ export default function AdminLeadTransferPage() {
 
                               return (
                                 <div>
+                                  {recoBanner}
+                                  {toolbar}
                                   {/* Header label */}
                                   <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
                                     Transferências resolvidas — selecione o consultor de origem

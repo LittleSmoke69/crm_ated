@@ -3,6 +3,7 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { checkInstanceAccess } from '@/lib/utils/instance-access';
+import { FlowTemplatesService } from '@/lib/services/flow-templates-service';
 
 /**
  * GET /api/flow-instances
@@ -64,12 +65,82 @@ export async function GET(req: NextRequest) {
         }
       }
     }
-    const enriched = list.map((i: any) => ({
-      ...i,
-      group_subject: groupSubjectMap[i.group_jid] || null,
-    }));
+    // Boas-vindas: detecta várias ativações no mesmo (instância, grupo) — ex.: admin + usuário (só uma aparecia no front)
+    const welcomeName = FlowTemplatesService.WELCOME_TEMPLATE_NAME;
+    const welcomeType = FlowTemplatesService.WELCOME_TEMPLATE_TYPE;
 
-    return successResponse(enriched);
+    const { data: welcomeFlows } = await supabaseServiceRole
+      .from('flows')
+      .select('id')
+      .eq('name', welcomeName)
+      .eq('type', welcomeType);
+
+    const welcomeFlowIds = (welcomeFlows || []).map((f) => f.id).filter(Boolean);
+    let welcomePeerByPair = new Map<string, { id: string; user_id: string; flow_id: string }[]>();
+
+    if (welcomeFlowIds.length > 0) {
+      const { data: allWelcomeInstances } = await supabaseServiceRole
+        .from('flow_instances')
+        .select('id, user_id, flow_id, instance_name, group_jid')
+        .in('flow_id', welcomeFlowIds)
+        .eq('is_active', true);
+
+      for (const row of allWelcomeInstances || []) {
+        const k = `${row.instance_name}\t${row.group_jid}`;
+        if (!welcomePeerByPair.has(k)) welcomePeerByPair.set(k, []);
+        welcomePeerByPair.get(k)!.push({
+          id: row.id,
+          user_id: row.user_id,
+          flow_id: row.flow_id,
+        });
+      }
+    }
+
+    const enriched = list.map((i: any) => {
+      const k = `${i.instance_name}\t${i.group_jid}`;
+      const peers = welcomePeerByPair.get(k) || [];
+      const isWelcomeFlow =
+        i.flows?.name === welcomeName && i.flows?.type === welcomeType;
+
+      return {
+        ...i,
+        group_subject: groupSubjectMap[i.group_jid] || null,
+        welcome_parallel_active:
+          isWelcomeFlow && peers.length > 1 ? peers.length : undefined,
+        welcome_peer_user_ids:
+          isWelcomeFlow && peers.length > 1
+            ? [...new Set(peers.filter((p) => p.user_id !== userId).map((p) => p.user_id))]
+            : undefined,
+      };
+    });
+
+    const duplicateWelcomeGroups: Array<{
+      instance_name: string;
+      group_jid: string;
+      active_count: number;
+      activation_ids: string[];
+    }> = [];
+
+    for (const [pairKey, peers] of welcomePeerByPair) {
+      if (peers.length <= 1) continue;
+      const [instance_name, group_jid] = pairKey.split('\t');
+      const userTouched = list.some(
+        (r: any) => r.instance_name === instance_name && r.group_jid === group_jid,
+      );
+      if (!userTouched) continue;
+      duplicateWelcomeGroups.push({
+        instance_name,
+        group_jid,
+        active_count: peers.length,
+        activation_ids: peers.map((p) => p.id),
+      });
+    }
+
+    return successResponse(enriched, {
+      meta: {
+        welcome_duplicate_groups: duplicateWelcomeGroups,
+      },
+    });
   } catch (err: any) {
     return errorResponse(err.message || 'Erro ao buscar instâncias de flows', 401);
   }

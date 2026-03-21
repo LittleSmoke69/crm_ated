@@ -244,8 +244,32 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     }
 
     if (status === 'approved') {
-      if (!sourceConsultantId || typeof sourceConsultantId !== 'string' || !sourceConsultantId.trim()) {
-        return errorResponse('Ao aprovar, informe o consultor doador (source_consultant_id).', 400);
+      const idFromBody =
+        typeof sourceConsultantId === 'string' && sourceConsultantId.trim() ? sourceConsultantId.trim() : '';
+      const emailFromBody =
+        sourceConsultantEmail != null && String(sourceConsultantEmail).trim()
+          ? String(sourceConsultantEmail).trim()
+          : '';
+      const emailFromExisting = (existing.source_consultant_email ?? '').toString().trim();
+      const candidateEmail = emailFromBody || emailFromExisting;
+
+      let resolvedSourceId = idFromBody;
+      if (!resolvedSourceId && candidateEmail) {
+        const { data: profByEmail } = await supabaseServiceRole
+          .from('profiles')
+          .select('id')
+          .ilike('email', candidateEmail)
+          .maybeSingle();
+        if (profByEmail?.id) {
+          resolvedSourceId = String(profByEmail.id);
+        }
+      }
+
+      if (!resolvedSourceId) {
+        return errorResponse(
+          'Ao aprovar, informe o consultor doador (source_consultant_id) ou um e-mail válido (source_consultant_email) para localizar o perfil.',
+          400,
+        );
       }
 
       const approvedAtIso = new Date().toISOString();
@@ -264,9 +288,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         status: 'approved',
         approved_by_user_id: userId,
         approved_at: approvedAtIso,
-        source_consultant_id: sourceConsultantId.trim(),
+        source_consultant_id: resolvedSourceId,
       };
-      if (sourceConsultantEmail != null) updatePayload.source_consultant_email = String(sourceConsultantEmail).trim() || null;
+      updatePayload.source_consultant_email = candidateEmail || null;
       if (bancaId != null) updatePayload.banca_id = bancaId === '' ? null : bancaId;
 
       if (leadType != null) {
@@ -337,8 +361,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         updatePayload.approval_snapshot = {
           approved_at_iso: approvedAtIso,
           approved_by_user_id: userId,
-          source_consultant_id: sourceConsultantId.trim(),
-          source_consultant_email: sourceConsultantEmail != null ? String(sourceConsultantEmail).trim() || null : null,
+          source_consultant_id: resolvedSourceId,
+          source_consultant_email: candidateEmail || null,
           banca_id: bancaId != null ? (bancaId === '' ? null : bancaId) : null,
           leads_transferred_count: cumulativeTransferred,
           total_leads_transferred: cumulativeTransferred,

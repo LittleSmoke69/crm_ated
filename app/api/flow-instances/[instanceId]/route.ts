@@ -3,6 +3,7 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { checkInstanceAccess } from '@/lib/utils/instance-access';
+import { getUserProfile, getSubordinates } from '@/lib/middleware/permissions';
 
 /**
  * PUT /api/flow-instances/[instanceId]
@@ -79,16 +80,35 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     const { userId } = await requireAuth(req);
     const { instanceId } = await params;
 
-    // Verifica se a instância pertence ao usuário
     const { data: existing, error: checkError } = await supabaseServiceRole
       .from('flow_instances')
-      .select('id')
+      .select('id, user_id')
       .eq('id', instanceId)
-      .eq('user_id', userId)
-      .single();
+      .maybeSingle();
 
     if (checkError || !existing) {
-      return errorResponse('Instância não encontrada ou sem permissão', 404);
+      return errorResponse('Instância não encontrada', 404);
+    }
+
+    const profile = await getUserProfile(userId);
+    const isAdmin = profile?.status === 'super_admin' || profile?.status === 'admin';
+    const isDonoBanca = profile?.status === 'dono_banca';
+    const isOwner = existing.user_id === userId;
+
+    let canDelete = isOwner;
+    if (!canDelete && isAdmin) {
+      canDelete = true;
+    }
+    if (!canDelete && isDonoBanca) {
+      const subs = await getSubordinates(userId);
+      canDelete = [userId, ...subs.map((s) => s.id)].includes(existing.user_id);
+    }
+
+    if (!canDelete) {
+      return errorResponse(
+        'Sem permissão para remover esta ativação (pertence a outro usuário). Use um admin ou a mesma conta que criou.',
+        403,
+      );
     }
 
     const { error } = await supabaseServiceRole

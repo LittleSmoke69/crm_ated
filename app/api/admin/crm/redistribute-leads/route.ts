@@ -294,9 +294,6 @@ export async function POST(req: NextRequest) {
     }
 
     console.log(`${LOG_PREFIX} POST audit log inserted: banca_id=${ctx.bancaId}, performed_by=${ctx.userId}, count=${count}`);
-    // #region agent log
-    fetch('http://127.0.0.1:7901/ingest/0ef4209d-37f6-4cbb-b28d-8cf53becc342',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37d7e0'},body:JSON.stringify({sessionId:'37d7e0',runId:'verify-flow',hypothesisId:'H-FLOW',location:'redistribute-leads/route.ts:logInserted',message:'Log inserido no banco',data:{transfer_log_id:insertedLog?.id??null,banca_id:ctx.bancaId,source_consultant_email,target_consultant_email,count,normalizedLeadIds_count:normalizedLeadIds.length,source_transfer_log_id:source_transfer_log_id??null},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     if (insertedLog?.id && normalizedLeadIds.length > 0) {
       const entries = normalizedLeadIds.map((leadId) => {
         const sid = String(leadId);
@@ -346,9 +343,6 @@ export async function POST(req: NextRequest) {
     // Marca as entries da transferência de origem como 'repassado' (remove da lista Mover leads)
     if (source_transfer_log_id && normalizedLeadIds.length > 0) {
       const leadIdStrings = normalizedLeadIds.map((id) => String(id));
-    // #region agent log
-    fetch('http://127.0.0.1:7901/ingest/0ef4209d-37f6-4cbb-b28d-8cf53becc342',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37d7e0'},body:JSON.stringify({sessionId:'37d7e0',runId:'post-fix',hypothesisId:'H-A-E',location:'redistribute-leads/route.ts:markRepassado',message:'Marcando entries como repassado',data:{source_transfer_log_id,banca_id:ctx.bancaId,leadIdStrings_count:leadIdStrings.length,leadIdStrings_sample:leadIdStrings.slice(0,5),leadIdStrings_types:[...new Set(leadIdStrings.slice(0,5).map(id=>typeof id))]},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
       const { error: updateSourceError, count: updatedCount } = await supabaseServiceRole
         .from('admin_lead_transfer_entries')
         .update({
@@ -359,9 +353,6 @@ export async function POST(req: NextRequest) {
         .eq('banca_id', ctx.bancaId)
         .in('lead_id', leadIdStrings)
         .eq('resolution_status', 'disponivel_retransferencia');
-    // #region agent log
-    fetch('http://127.0.0.1:7901/ingest/0ef4209d-37f6-4cbb-b28d-8cf53becc342',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37d7e0'},body:JSON.stringify({sessionId:'37d7e0',runId:'post-fix',hypothesisId:'H-A-E',location:'redistribute-leads/route.ts:markRepassadoResult',message:'Resultado markRepassado',data:{updateSourceError:updateSourceError??null,updatedCount:updatedCount??null,source_transfer_log_id,banca_id:ctx.bancaId},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
       if (updateSourceError) {
         console.warn(`${LOG_PREFIX} POST update source entries to repassado (optional):`, updateSourceError);
       } else {

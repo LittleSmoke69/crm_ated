@@ -181,16 +181,21 @@ export class CrmRedistributionClient {
 
   /**
    * Wrapper de fetch com retry automático em caso de 429 (rate limit).
-   * Aguarda backoff exponencial: 1s, 2s, 4s entre tentativas.
+   * Backoff agressivo com jitter para evitar thundering herd: ~3s, ~8s, ~20s, ~45s.
    */
   private async fetch<T>(
     path: string,
     init: RequestInit & { method?: string; body?: string } = {}
   ): Promise<{ data: T; status: number }> {
-    const MAX_RETRIES = 3;
+    const MAX_RETRIES = 4;
+    // Base delays: 3s, 8s, 20s, 45s — suficiente para o CRM liberar o rate limit
+    const BASE_DELAYS = [3000, 8000, 20000, 45000];
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       if (attempt > 0) {
-        const delay = Math.min(1000 * Math.pow(2, attempt - 1), 8000); // 1s, 2s, 4s
+        const base = BASE_DELAYS[attempt - 1] ?? 45000;
+        // Jitter ±20% para evitar thundering herd entre requisições paralelas
+        const jitter = base * 0.2 * (Math.random() * 2 - 1);
+        const delay = Math.round(base + jitter);
         console.log(`${LOG_PREFIX} 429 rate limit — aguardando ${delay}ms antes de retry ${attempt}/${MAX_RETRIES}`);
         await new Promise<void>((resolve) => setTimeout(resolve, delay));
       }

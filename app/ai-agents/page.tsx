@@ -88,6 +88,15 @@ export default function AIAgentsPage() {
   const [flowAgents, setFlowAgents] = useState<FlowAgent[]>([]);
   const [flows, setFlows] = useState<any[]>([]);
   const [flowInstances, setFlowInstances] = useState<any[]>([]);
+  /** Meta da API (ex.: grupos com mais de uma ativação de boas-vindas) */
+  const [flowInstancesMeta, setFlowInstancesMeta] = useState<{
+    welcome_duplicate_groups?: Array<{
+      instance_name: string;
+      group_jid: string;
+      active_count: number;
+      activation_ids: string[];
+    }>;
+  } | null>(null);
   const [instances, setInstances] = useState<WhatsAppInstance[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -191,7 +200,10 @@ export default function AIAgentsPage() {
         const flowInstancesResult = await flowInstancesResponse.json();
         if (flowInstancesResult.success) {
           setFlowInstances(flowInstancesResult.data || []);
+          setFlowInstancesMeta(flowInstancesResult.meta || null);
         }
+      } else {
+        setFlowInstancesMeta(null);
       }
     } catch (err) {
       console.error('Erro ao carregar dados:', err);
@@ -589,6 +601,23 @@ export default function AIAgentsPage() {
                   )}
                 </div>
                 
+                {flowInstancesMeta?.welcome_duplicate_groups &&
+                  flowInstancesMeta.welcome_duplicate_groups.length > 0 && (
+                    <div className="bg-amber-50 dark:bg-amber-900/25 border border-amber-300 dark:border-amber-700/50 rounded-lg p-4 mb-6">
+                      <p className="text-amber-900 dark:text-amber-100 text-sm font-medium mb-1">
+                        Mais de uma automação de boas-vindas no mesmo grupo
+                      </p>
+                      <p className="text-amber-800 dark:text-amber-200/90 text-sm leading-relaxed">
+                        O sistema encontrou{' '}
+                        <strong>{flowInstancesMeta.welcome_duplicate_groups.length}</strong> grupo(s) com
+                        várias ativações ativas do template de boas-vindas (por exemplo admin e usuário no
+                        mesmo grupo). Isso gera <strong>duas mensagens</strong> por entrada. Remova as
+                        ativações extras em <strong>Agentes IA</strong> (como admin, se necessário) ou rode a
+                        migration <code className="text-xs bg-amber-100 dark:bg-amber-950/50 px-1 rounded">deduplicate_welcome_flow_instances.sql</code>.
+                      </p>
+                    </div>
+                  )}
+
                 {instances.length === 0 && (
                   <div className="bg-yellow-50 dark:bg-amber-900/20 border border-yellow-200 dark:border-amber-700/50 rounded-lg p-4 mb-6">
                     <p className="text-yellow-800 dark:text-amber-200 text-sm">
@@ -625,7 +654,7 @@ export default function AIAgentsPage() {
                                         <h3 className="font-semibold text-lg text-gray-900 dark:text-white mb-1.5">
                                           {flow?.name || 'Automação'}
                                         </h3>
-                                        <div className="flex items-center gap-2">
+                                        <div className="flex items-center gap-2 flex-wrap">
                                           <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
                                             inst.is_active
                                               ? 'bg-green-100 dark:bg-[#8CD955]/20 text-green-700 dark:text-[#8CD955]'
@@ -633,6 +662,15 @@ export default function AIAgentsPage() {
                                           }`}>
                                             {inst.is_active ? 'Ativo' : 'Inativo'}
                                           </span>
+                                          {typeof inst.welcome_parallel_active === 'number' &&
+                                            inst.welcome_parallel_active > 1 && (
+                                              <span
+                                                className="px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-100 dark:bg-amber-900/40 text-amber-900 dark:text-amber-200"
+                                                title="Várias ativações de boas-vindas neste mesmo grupo (outra conta ou admin)"
+                                              >
+                                                {inst.welcome_parallel_active} ativações no grupo
+                                              </span>
+                                            )}
                                         </div>
                                       </div>
                                     </div>
