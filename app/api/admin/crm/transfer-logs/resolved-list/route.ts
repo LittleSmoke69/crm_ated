@@ -16,6 +16,8 @@ import { isTransferExpired } from '@/lib/server/crm/resolveTransferLog';
 
 const DEFAULT_DEADLINE_DAYS = 10;
 const IN_BATCH_SIZE = 150;
+/** Linhas por página ao paginar entries — evita o limite padrão de 1000 do cliente Supabase. */
+const ENTRIES_PAGE_SIZE = 1000;
 
 function chunkArray<T>(arr: T[], size: number): T[][] {
   const chunks: T[][] = [];
@@ -60,28 +62,34 @@ export async function GET(req: NextRequest) {
     if (expiredLogs.length === 0) return successResponse([]);
 
     const logIds = expiredLogs.map((l) => l.id);
-    type EntryRow = { transfer_log_id: string; resolution_status?: string | null };
-    const allEntries: EntryRow[] = [];
+
+    /**
+     * Busca apenas entries com disponivel_retransferencia usando paginação explícita.
+     * O cliente Supabase retorna no máximo 1000 linhas por query por padrão; sem paginação
+     * a query truncava os resultados antes de chegar nas entries disponíveis, causando
+     * o modal "Mover leads" vazio mesmo com dados no dashboard.
+     */
+    const disponivelByLogId = new Map<string, number>();
     for (const chunk of chunkArray(logIds, IN_BATCH_SIZE)) {
-      const { data } = await supabaseServiceRole
-        .from('admin_lead_transfer_entries')
-        .select('transfer_log_id, resolution_status')
-        .in('transfer_log_id', chunk);
-      if (Array.isArray(data)) allEntries.push(...(data as EntryRow[]));
+      let offset = 0;
+      while (true) {
+        const { data } = await supabaseServiceRole
+          .from('admin_lead_transfer_entries')
+          .select('transfer_log_id')
+          .in('transfer_log_id', chunk)
+          .eq('resolution_status', 'disponivel_retransferencia')
+          .range(offset, offset + ENTRIES_PAGE_SIZE - 1);
+        if (!Array.isArray(data) || data.length === 0) break;
+        for (const e of data as { transfer_log_id: string }[]) {
+          disponivelByLogId.set(e.transfer_log_id, (disponivelByLogId.get(e.transfer_log_id) ?? 0) + 1);
+        }
+        if (data.length < ENTRIES_PAGE_SIZE) break;
+        offset += ENTRIES_PAGE_SIZE;
+      }
     }
 
-    const pendingByLogId = new Map<string, boolean>();
-    const disponivelByLogId = new Map<string, number>();
-    allEntries.forEach((e: EntryRow) => {
-      const logId = e.transfer_log_id;
-      if (e.resolution_status === 'pending') pendingByLogId.set(logId, true);
-      if (e.resolution_status === 'disponivel_retransferencia') {
-        disponivelByLogId.set(logId, (disponivelByLogId.get(logId) ?? 0) + 1);
-      }
-    });
-
     const list = expiredLogs
-      .filter((log) => !pendingByLogId.has(log.id) && (disponivelByLogId.get(log.id) ?? 0) > 0)
+      .filter((log) => (disponivelByLogId.get(log.id) ?? 0) > 0)
       .map((log) => ({
         log_id: log.id,
         banca_id: log.banca_id,

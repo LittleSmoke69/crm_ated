@@ -31,10 +31,15 @@ export type ResolveContext = {
 export function isTransferExpired(createdAt: string | null | undefined, deadlineDays?: number | null): boolean {
   if (!createdAt) return true;
   const days = deadlineDays != null && deadlineDays >= 1 ? deadlineDays : DEFAULT_DEADLINE_DAYS;
-  const transferredAt = new Date(createdAt);
+  const createdDate = new Date(createdAt);
+  if (Number.isNaN(createdDate.getTime())) return true;
+  // Usa apenas a parte da data (UTC) para corresponder ao SQL:
+  // (CURRENT_DATE - created_at::date) >= deadline_days
+  // Evita que transferências criadas no final do dia precisem de 10×24h completos.
+  const createdUTC = Date.UTC(createdDate.getUTCFullYear(), createdDate.getUTCMonth(), createdDate.getUTCDate());
   const now = new Date();
-  const diffMs = now.getTime() - transferredAt.getTime();
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  const nowUTC = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const diffDays = Math.round((nowUTC - createdUTC) / (1000 * 60 * 60 * 24));
   return diffDays >= days;
 }
 

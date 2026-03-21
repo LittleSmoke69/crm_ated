@@ -1,4 +1,5 @@
 import { supabaseServiceRole } from './supabase-service';
+import { extractGroupParticipantAction } from '@/lib/utils/group-participants-payload';
 
 /** Evita logar HTML de páginas de erro (ex.: Cloudflare 522) nos logs. */
 function sanitizeErrorForLog(error: unknown): string {
@@ -357,14 +358,22 @@ export class NormalizationService {
    * Aplica normalizações comuns automaticamente (fallback quando não há regras)
    */
   private applyCommonNormalizations(normalized: any, originalPayload: any, eventType: string): any {
-    // Para eventos group-participants.update, normaliza campos comuns
-    if (eventType === 'group-participants.update' || eventType?.includes('participants')) {
-      // Extrai action se não estiver normalizado
+    // Para eventos group-participants (qualquer casing / underscore da Evolution), normaliza campos comuns
+    const et = String(eventType || '').toLowerCase();
+    if (et === 'group-participants.update' || et.includes('participants')) {
+      // Extrai action se não estiver normalizado — nunca assumir 'add' (remove viraria boas-vindas)
       if (!normalized.action) {
-        normalized.action = this.getValueFromPath(originalPayload, 'data.action') ||
-                          this.getValueFromPath(originalPayload, 'action') ||
-                          this.getValueFromPath(originalPayload, 'data.update.action') ||
-                          'add'; // Padrão é 'add'
+        const fromPaths =
+          this.getValueFromPath(originalPayload, 'data.action') ??
+          this.getValueFromPath(originalPayload, 'action') ??
+          this.getValueFromPath(originalPayload, 'data.update.action');
+        const extracted =
+          fromPaths != null && String(fromPaths).trim() !== ''
+            ? String(fromPaths).trim().toLowerCase()
+            : extractGroupParticipantAction(originalPayload);
+        if (extracted) {
+          normalized.action = extracted;
+        }
       }
 
       // Extrai groupId se não estiver normalizado

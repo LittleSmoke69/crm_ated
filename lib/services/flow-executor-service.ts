@@ -1,5 +1,7 @@
 import { supabaseServiceRole } from './supabase-service';
 import { llmService } from './llm-service';
+import { extractGroupParticipantAction } from '@/lib/utils/group-participants-payload';
+import { FlowTemplatesService } from './flow-templates-service';
 
 export interface FlowNode {
   id: string;
@@ -273,15 +275,18 @@ export class FlowExecutorService {
       return false;
     }
 
-    // Filtro por action (no payload normalizado; comparação case-insensitive)
+    // Filtro por action (payload normalizado + raw do evento Evolution; comparação case-insensitive)
     if (filters.action) {
-      const action = this.resolvePath(inputData, 'normalized.action') ||
-                     this.resolvePath(inputData, 'action') ||
-                     this.resolvePath(inputData, 'data.action') ||
-                     this.resolvePath(inputData, 'data.update.action') ||
-                     this.resolvePath(inputData, '$normalized.action') ||
-                     this.resolvePath(inputData, '$json.data.action') ||
-                     this.resolvePath(inputData, '$json.action');
+      const action =
+        this.resolvePath(inputData, 'normalized.action') ||
+        this.resolvePath(inputData, 'action') ||
+        this.resolvePath(inputData, 'data.action') ||
+        this.resolvePath(inputData, 'data.update.action') ||
+        this.resolvePath(inputData, '$normalized.action') ||
+        this.resolvePath(inputData, '$json.data.action') ||
+        this.resolvePath(inputData, '$json.action') ||
+        extractGroupParticipantAction(event?.payload) ||
+        extractGroupParticipantAction(inputData);
       const actionStr = action != null ? String(action).toLowerCase() : '';
       const filterActionStr = String(filters.action).toLowerCase();
       if (actionStr !== filterActionStr) return false;
@@ -2460,8 +2465,15 @@ REGRAS ANTI-SPAM (OBRIGATÓRIO):
         if (filters.instance && filters.instance !== instanceName) continue;
 
         if (filters.action) {
-          const action = normalizedPayload?.action || normalizedPayload?.normalized?.action;
-          if (action !== filters.action) continue;
+          const action =
+            normalizedPayload?.action ||
+            normalizedPayload?.normalized?.action ||
+            normalizedPayload?.data?.action ||
+            normalizedPayload?.data?.update?.action ||
+            extractGroupParticipantAction(normalizedPayload);
+          const actionStr = action != null ? String(action).toLowerCase() : '';
+          const filterActionStr = String(filters.action).toLowerCase();
+          if (actionStr !== filterActionStr) continue;
         }
 
         matchingFlows.push(flow as Flow);
@@ -2560,6 +2572,8 @@ REGRAS ANTI-SPAM (OBRIGATÓRIO):
           settings_json,
           flows:flow_id (
             id,
+            name,
+            type,
             status,
             graph_json
           )
@@ -2588,6 +2602,8 @@ REGRAS ANTI-SPAM (OBRIGATÓRIO):
             settings_json,
             flows:flow_id (
               id,
+              name,
+              type,
               status,
               graph_json
             )
@@ -2636,8 +2652,12 @@ REGRAS ANTI-SPAM (OBRIGATÓRIO):
         normalizedPayload?.action ??
         normalizedPayload?.normalized?.action ??
         normalizedPayload?.data?.action ??
-        normalizedPayload?.data?.update?.action;
+        normalizedPayload?.data?.update?.action ??
+        extractGroupParticipantAction(normalizedPayload);
+
       const result: Array<{ flow_id: string; user_id: string; settings_json?: any }> = [];
+      const seenFlowIds = new Set<string>();
+      let welcomeBoasVindasScheduled = false;
 
       for (const fi of instances) {
         const raw = (fi as any).flows;
@@ -2683,8 +2703,42 @@ REGRAS ANTI-SPAM (OBRIGATÓRIO):
           }
         }
 
-        result.push({ 
-          flow_id: fi.flow_id, 
+        // Gatilho group-participants sem filtro de action: não executar em remove (evita automações “neutras” dispararem na saída)
+        const evtNorm = this.normalizeEventTypeForComparison(eventType);
+        const isGroupParticipantsEvt =
+          evtNorm === 'group.participants.update' ||
+          String(eventType || '').toLowerCase().includes('participants');
+        if (isGroupParticipantsEvt && !filters.action) {
+          const actionStr = action != null ? String(action).toLowerCase() : '';
+          if (actionStr === 'remove' || actionStr === 'leave') {
+            console.log(
+              `⚠️ [FLOW EXECUTOR] Flow ${flow.id} ignorado: evento de participante sem filtro action e action=${actionStr}`,
+            );
+            continue;
+          }
+        }
+
+        if (seenFlowIds.has(fi.flow_id)) {
+          continue;
+        }
+
+        const flowName = (flow as Flow).name;
+        const isWelcomeTemplateFlow =
+          flowName === FlowTemplatesService.WELCOME_TEMPLATE_NAME &&
+          String(filters.action || '').toLowerCase() === 'add';
+        if (isWelcomeTemplateFlow) {
+          if (welcomeBoasVindasScheduled) {
+            console.log(
+              `⚠️ [FLOW EXECUTOR] Ignorando boas-vindas duplicada no mesmo grupo (flow ${flow.id}); mantendo apenas uma execução por evento`,
+            );
+            continue;
+          }
+          welcomeBoasVindasScheduled = true;
+        }
+
+        seenFlowIds.add(fi.flow_id);
+        result.push({
+          flow_id: fi.flow_id,
           user_id: fi.user_id,
           settings_json: (fi as any).settings_json || {},
         });

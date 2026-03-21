@@ -127,18 +127,24 @@ export async function POST(req: NextRequest) {
       return errorResponse('A instância deve estar conectada (status: ok) para ser usada em automações', 400);
     }
 
-    // Verifica se já existe instância para este flow + instância + grupo do usuário
-    const { data: existing } = await supabaseServiceRole
+    // Uma linha por (flow_id, instance_name, group_jid) no banco — evita duplicar boas-vindas
+    // quando admin, super_admin e usuário ativam o mesmo flow no mesmo grupo
+    const { data: existingGlobal } = await supabaseServiceRole
       .from('flow_instances')
-      .select('id')
+      .select('id, user_id')
       .eq('flow_id', flow_id)
       .eq('instance_name', instance_name)
       .eq('group_jid', group_jid)
-      .eq('user_id', userId)
       .maybeSingle();
 
-    if (existing) {
-      return errorResponse('Esta automação já está configurada para este grupo', 400);
+    if (existingGlobal) {
+      if (existingGlobal.user_id === userId) {
+        return errorResponse('Esta automação já está configurada para este grupo', 400);
+      }
+      return errorResponse(
+        'Este flow já está ativado neste grupo por outro perfil. Remova a ativação duplicada ou use a mesma conta.',
+        409,
+      );
     }
 
     const { data: instance, error } = await supabaseServiceRole
