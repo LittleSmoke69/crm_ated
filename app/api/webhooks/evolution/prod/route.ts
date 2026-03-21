@@ -158,6 +158,13 @@ async function processEventBackground(payload: any): Promise<void> {
     .single();
 
   if (insertError || !event) {
+    // Violação de unique constraint: evento já foi inserido numa entrega anterior — comportamento esperado e idempotente.
+    if (insertError?.code === '23505') {
+      console.warn(
+        `⚠️ [WEBHOOK PROD] Evento duplicado ignorado (message_id=${messageId}, instance=${instanceName})`,
+      );
+      return;
+    }
     console.error('❌ [WEBHOOK PROD] Falha ao inserir evento:', insertError?.message);
     return;
   }

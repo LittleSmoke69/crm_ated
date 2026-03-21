@@ -32,6 +32,8 @@ const bodySchema = z.object({
   lead_snapshots: z.array(leadSnapshotSchema).optional(),
   /** ID do log de origem (ao mover do modal Mover leads). Marca entries como repassado para removê-las da lista. */
   source_transfer_log_id: z.string().uuid().optional(),
+  /** Email original do consultor doador (source do log de origem). Usado como fallback se o CRM retornar count=0 — indica que os leads ainda estão com o doador original. */
+  original_source_consultant_email: z.string().email().optional(),
 }).refine(
   (data) => data.source_consultant_email.toLowerCase() !== data.target_consultant_email.toLowerCase(),
   { message: 'Consultor origem e destino devem ser diferentes.', path: ['target_consultant_email'] }
@@ -93,7 +95,7 @@ export async function POST(req: NextRequest) {
       return errorResponse(msg, 400);
     }
 
-    let { banca_id, source_consultant_email, target_consultant_email, leads_ids, transfer_type, transfer_deadline_days, filters_snapshot, lead_snapshots, source_transfer_log_id } = parsed.data;
+    let { banca_id, source_consultant_email, target_consultant_email, leads_ids, transfer_type, transfer_deadline_days, filters_snapshot, lead_snapshots, source_transfer_log_id, original_source_consultant_email } = parsed.data;
     const ctx = await requireAdminLeadTransferContext(req, banca_id);
     console.log(`${LOG_PREFIX} POST context: userId=${ctx.userId}, bancaId=${ctx.bancaId}, crmBaseUrl=${ctx.crmBaseUrl}, bancaName=${ctx.bancaName ?? 'n/a'}`);
 
@@ -137,6 +139,18 @@ export async function POST(req: NextRequest) {
       return errorResponse('Nenhum lead_id válido para transferir. Informe leads_ids ou use um log que possua entries.', 400);
     }
 
+    // IDs para o CRM: extrai sufixo numérico de IDs compostos (ex: "uuid-28227" → 28227).
+    // IDs compostos são gerados no frontend para contextos multi-banca mas o CRM só aceita numéricos.
+    // normalizedLeadIds (IDs originais) é usado para operações no DB (mark repassado) para manter a correspondência.
+    const crmLeadIds = normalizedLeadIds.map((id) => {
+      if (typeof id === 'number') return id;
+      const s = String(id);
+      if (!s.includes('-')) return id;
+      const last = s.split('-').pop() ?? '';
+      const n = Number(last);
+      return Number.isFinite(n) && n > 0 ? n : id;
+    });
+
     const isDevolucao = fs != null && 'devolucao' in fs && 'log_origem_id' in fs;
     const isReverse = fs != null && 'reverse_devolucao' in fs;
     if (isDevolucao) {
@@ -168,15 +182,21 @@ export async function POST(req: NextRequest) {
       return errorResponse('Consultor destino não pertence à banca selecionada.', 400);
     }
 
-    console.log(`${LOG_PREFIX} POST calling CRM redistributeLeads: source=${source_consultant_email}, target=${target_consultant_email}, leads_ids=${normalizedLeadIds.length} items (sample: ${JSON.stringify(normalizedLeadIds.slice(0, 5))})`);
+    console.log(`${LOG_PREFIX} POST calling CRM redistributeLeads: source=${source_consultant_email}, target=${target_consultant_email}, leads_ids=${normalizedLeadIds.length} items (sample: ${JSON.stringify(normalizedLeadIds.slice(0, 5))}) crmIds sample: ${JSON.stringify(crmLeadIds.slice(0, 5))}`);
+    // #region agent log
+    fetch('http://127.0.0.1:7901/ingest/0ef4209d-37f6-4cbb-b28d-8cf53becc342',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37d7e0'},body:JSON.stringify({sessionId:'37d7e0',location:'redistribute-leads/route.ts:pre-crm',message:'CRM call params',data:{source:source_consultant_email,target:target_consultant_email,sameEmail:source_consultant_email===target_consultant_email,leadsCount:normalizedLeadIds.length,sample:normalizedLeadIds.slice(0,5),types:normalizedLeadIds.slice(0,3).map(id=>typeof id),crmSample:crmLeadIds.slice(0,5),bancaId:ctx.bancaId},timestamp:Date.now(),runId:'post-fix',hypothesisId:'A-B-C-D'})}).catch(()=>{});
+    // #endregion
     const client = createCrmRedistributionClient(ctx.crmBaseUrl);
     const result = await client.redistributeLeads({
       source_consultant_email,
       target_consultant_email,
-      leads_ids: normalizedLeadIds,
+      leads_ids: crmLeadIds,
     });
 
     console.log(`${LOG_PREFIX} POST CRM response: success=${result.success}, count=${result.count ?? result.data?.count ?? 'n/a'}, message=${result.message ?? 'n/a'}, fullResult=${JSON.stringify(result)}`);
+    // #region agent log
+    fetch('http://127.0.0.1:7901/ingest/0ef4209d-37f6-4cbb-b28d-8cf53becc342',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37d7e0'},body:JSON.stringify({sessionId:'37d7e0',location:'redistribute-leads/route.ts:post-crm',message:'CRM response',data:{success:result.success,count:result.count??result.data?.count??'n/a',message:result.message??'n/a',error:result.error??null,fullResult:result},timestamp:Date.now(),runId:'diag',hypothesisId:'C-D'})}).catch(()=>{});
+    // #endregion
 
     if (!result.success) {
       console.log(`${LOG_PREFIX} POST CRM error (400):`, { error: result.error, message: result.message, fullResult: result });
@@ -193,14 +213,44 @@ export async function POST(req: NextRequest) {
     }
     console.log(`${LOG_PREFIX} POST CRM success: count=${count}, message=${result.message ?? 'n/a'}`);
 
-    // Se o CRM retornou success=true mas count=0 numa transferência normal (não devolução/reverse)
-    // com leads enviados, os leads NÃO foram movidos no CRM. Retorna erro para evitar inconsistência.
+    // Se o CRM retornou success=true mas count=0 numa transferência normal (não devolução/reverse):
+    // Tenta fallback com o email do doador original (original_source_consultant_email) — os leads podem ainda estar
+    // com o consultor que os enviou originalmente se a transferência prévia não foi concluída no CRM.
     if (!isDevolucao && !isReverse && Number(count) === 0 && normalizedLeadIds.length > 0) {
-      console.warn(`${LOG_PREFIX} POST CRM count=0 com ${normalizedLeadIds.length} leads enviados — transferência ignorada para preservar integridade.`);
-      return errorResponse(
-        `CRM não redistribuiu nenhum lead (count=0). Os leads não foram movidos. Verifique se o consultor de origem ainda possui os leads na banca.`,
-        400
-      );
+      const fallbackSource = original_source_consultant_email?.trim();
+      if (
+        fallbackSource &&
+        fallbackSource.toLowerCase() !== source_consultant_email.toLowerCase() &&
+        fallbackSource.toLowerCase() !== target_consultant_email.toLowerCase()
+      ) {
+        console.warn(`${LOG_PREFIX} POST CRM count=0 com source=${source_consultant_email} — tentando fallback com original_source=${fallbackSource}`);
+        const fallbackResult = await client.redistributeLeads({
+          source_consultant_email: fallbackSource,
+          target_consultant_email,
+          leads_ids: crmLeadIds,
+        });
+        // #region agent log
+        fetch('http://127.0.0.1:7901/ingest/0ef4209d-37f6-4cbb-b28d-8cf53becc342',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37d7e0'},body:JSON.stringify({sessionId:'37d7e0',location:'redistribute-leads/route.ts:fallback',message:'fallback CRM result',data:{fallbackSource,count:fallbackResult.count??fallbackResult.data?.count??'n/a',success:fallbackResult.success,message:fallbackResult.message},timestamp:Date.now(),runId:'post-fix',hypothesisId:'D'})}).catch(()=>{});
+        // #endregion
+        const fallbackCount = Number(fallbackResult.count ?? fallbackResult.data?.count ?? 0);
+        if (fallbackResult.success && fallbackCount > 0) {
+          console.log(`${LOG_PREFIX} POST CRM fallback SUCCESS: source=${fallbackSource}, count=${fallbackCount}`);
+          count = fallbackCount;
+          source_consultant_email = fallbackSource;
+        } else {
+          console.warn(`${LOG_PREFIX} POST CRM fallback também retornou count=0 (source=${fallbackSource}). Leads não encontrados em nenhum dos consultores.`);
+          return errorResponse(
+            `CRM não redistribuiu nenhum lead. Os leads não estão com ${source_consultant_email} nem com ${fallbackSource} no CRM. Verifique a situação dos leads na banca.`,
+            400
+          );
+        }
+      } else {
+        console.warn(`${LOG_PREFIX} POST CRM count=0 com ${normalizedLeadIds.length} leads enviados — source=${source_consultant_email} — sem fallback disponível.`);
+        return errorResponse(
+          `CRM não redistribuiu nenhum lead (count=0). Verifique se o consultor de origem (${source_consultant_email}) ainda possui os leads na banca.`,
+          400
+        );
+      }
     }
 
     // Para devolução/reverse: buscar snapshots das entries existentes (mesma lógica da transferência normal)

@@ -3575,6 +3575,9 @@ export default function AdminLeadTransferPage() {
           total_saque: e.total_saque_snapshot != null ? Number(e.total_saque_snapshot) : null,
         };
       });
+      // #region agent log
+      fetch('http://127.0.0.1:7901/ingest/0ef4209d-37f6-4cbb-b28d-8cf53becc342',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37d7e0'},body:JSON.stringify({sessionId:'37d7e0',location:'lead-transfer/page.tsx:runMoveLeads',message:'payload before send',data:{banca_id:moveLeadsSelectedLog.banca_id,source:moveLeadsSelectedLog.target_consultant_email,target:targetEmail,sameEmail:moveLeadsSelectedLog.target_consultant_email===targetEmail,leadsCount:leadIds.length,sampleLeadIds:leadIds.slice(0,5),sampleTypes:leadIds.slice(0,3).map((id: unknown)=>typeof id),logSourceEmail:moveLeadsSelectedLog.source_consultant_email},timestamp:Date.now(),runId:'diag',hypothesisId:'A-B'})}).catch(()=>{});
+      // #endregion
       const res = await fetch('/api/admin/crm/redistribute-leads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...headers() },
@@ -3586,6 +3589,7 @@ export default function AdminLeadTransferPage() {
           transfer_type: moveLeadsTransferType,
           transfer_deadline_days: moveLeadsDeadlineDays,
           source_transfer_log_id: moveLeadsSelectedLog.log_id,
+          original_source_consultant_email: moveLeadsSelectedLog.source_consultant_email,
           lead_snapshots: leadSnapshots,
         }),
       });
