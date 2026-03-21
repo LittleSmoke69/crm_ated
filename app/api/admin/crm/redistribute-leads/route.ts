@@ -238,9 +238,29 @@ export async function POST(req: NextRequest) {
           count = fallbackCount;
           source_consultant_email = fallbackSource;
         } else {
-          console.warn(`${LOG_PREFIX} POST CRM fallback também retornou count=0 (source=${fallbackSource}). Leads não encontrados em nenhum dos consultores.`);
+          // Ambos os emails falharam — consultar DB para revelar o estado real das entries
+          let dbDiag = 'n/a';
+          if (source_transfer_log_id) {
+            try {
+              const { data: diagEntries } = await supabaseServiceRole
+                .from('admin_lead_transfer_entries')
+                .select('target_consultant_email, resolution_status')
+                .eq('transfer_log_id', source_transfer_log_id)
+                .eq('banca_id', ctx.bancaId)
+                .in('resolution_status', ['disponivel_retransferencia', 'pending']);
+              if (diagEntries && diagEntries.length > 0) {
+                const counts: Record<string, number> = {};
+                for (const e of diagEntries) {
+                  const key = `${e.target_consultant_email ?? 'null'}|${e.resolution_status ?? 'null'}`;
+                  counts[key] = (counts[key] ?? 0) + 1;
+                }
+                dbDiag = JSON.stringify(counts);
+              }
+            } catch { /* não bloquear o erro principal */ }
+          }
+          console.warn(`${LOG_PREFIX} POST CRM double-fallback failure. source=${source_consultant_email}, fallback=${fallbackSource}, target=${target_consultant_email}. DB entry distribution: ${dbDiag}`);
           return errorResponse(
-            `CRM não redistribuiu nenhum lead. Os leads não estão com ${source_consultant_email} nem com ${fallbackSource} no CRM. Verifique a situação dos leads na banca.`,
+            `CRM não redistribuiu nenhum lead. Os leads não estão com ${source_consultant_email} nem com ${fallbackSource} no CRM. Verifique a situação dos leads na banca. [diag: ${dbDiag}]`,
             400
           );
         }

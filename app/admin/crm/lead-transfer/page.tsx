@@ -3576,7 +3576,10 @@ export default function AdminLeadTransferPage() {
         };
       });
       // #region agent log
-      fetch('http://127.0.0.1:7901/ingest/0ef4209d-37f6-4cbb-b28d-8cf53becc342',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37d7e0'},body:JSON.stringify({sessionId:'37d7e0',location:'lead-transfer/page.tsx:runMoveLeads',message:'payload before send',data:{banca_id:moveLeadsSelectedLog.banca_id,source:moveLeadsSelectedLog.target_consultant_email,target:targetEmail,sameEmail:moveLeadsSelectedLog.target_consultant_email===targetEmail,leadsCount:leadIds.length,sampleLeadIds:leadIds.slice(0,5),sampleTypes:leadIds.slice(0,3).map((id: unknown)=>typeof id),logSourceEmail:moveLeadsSelectedLog.source_consultant_email},timestamp:Date.now(),runId:'diag',hypothesisId:'A-B'})}).catch(()=>{});
+      const _entryTargets = [...new Set((moveLeadsEntries as Array<Record<string,unknown>>).map(e=>String(e.target_consultant_email??'')))].filter(Boolean);
+      const _entrySources = [...new Set((moveLeadsEntries as Array<Record<string,unknown>>).map(e=>String(e.source_consultant_email??'')))].filter(Boolean);
+      const _sampleEntries = (moveLeadsEntries as Array<Record<string,unknown>>).slice(0,3).map(e=>({lead_id:e.lead_id,src:e.source_consultant_email,tgt:e.target_consultant_email,status:e.resolution_status}));
+      fetch('http://127.0.0.1:7901/ingest/0ef4209d-37f6-4cbb-b28d-8cf53becc342',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37d7e0'},body:JSON.stringify({sessionId:'37d7e0',location:'lead-transfer/page.tsx:runMoveLeads',message:'entries analysis',data:{logSource:moveLeadsSelectedLog.source_consultant_email,logTarget:moveLeadsSelectedLog.target_consultant_email,uniqueEntryTargets:_entryTargets,uniqueEntrySources:_entrySources,sampleEntries:_sampleEntries,leadsCount:leadIds.length},timestamp:Date.now(),runId:'diag2',hypothesisId:'E'})}).catch(()=>{});
       // #endregion
       const res = await fetch('/api/admin/crm/redistribute-leads', {
         method: 'POST',
