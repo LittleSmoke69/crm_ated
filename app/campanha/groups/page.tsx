@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import { supabase } from '@/lib/supabase';
+import { postGroupFetchAndResolve } from '@/lib/utils/group-fetch-client';
 
 /** Evita SyntaxError quando a API retorna HTML (404, 500, etc.) em vez de JSON. */
 async function parseJsonFromResponse(response: Response): Promise<unknown> {
@@ -222,27 +223,12 @@ const GroupsPage = () => {
 
     setGroupsLoading(true);
     try {
-      showToast('Buscando grupos... Aguarde o retorno.', 'info');
+      showToast('Buscando grupos... Pode levar alguns minutos se houver muitos grupos.', 'info');
 
-      const response = await fetch('/api/groups/fetch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-        body: JSON.stringify({ instanceName: selectedInstance }),
-      });
-
-      const data = (await parseJsonFromResponse(response)) as {
-        data?: unknown[];
-        message?: string;
-        error?: string;
-      };
-
-      if (response.ok && Array.isArray(data.data)) {
-        setAvailableGroups(data.data as EvolutionGroup[]);
-        showToast(data.message || `${data.data.length} grupo(s) carregado(s) e sincronizado(s)`, 'success');
-        await loadDbGroups();
-      } else {
-        showToast(data.error || 'Erro ao carregar grupos', 'error');
-      }
+      const { groups, message } = await postGroupFetchAndResolve(userId, selectedInstance);
+      setAvailableGroups(groups as EvolutionGroup[]);
+      showToast(message || `${groups.length} grupo(s) carregado(s) e sincronizado(s)`, 'success');
+      await loadDbGroups();
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Erro ao carregar grupos', 'error');
     } finally {

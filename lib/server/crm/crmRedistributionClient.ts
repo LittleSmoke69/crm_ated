@@ -129,7 +129,7 @@ export class CrmRedistributionClient {
     }
   }
 
-  private async fetch<T>(
+  private async fetchOnce<T>(
     path: string,
     init: RequestInit & { method?: string; body?: string } = {}
   ): Promise<{ data: T; status: number }> {
@@ -177,6 +177,32 @@ export class CrmRedistributionClient {
       }
       throw new Error('Erro inesperado ao comunicar com o CRM');
     }
+  }
+
+  /**
+   * Wrapper de fetch com retry automático em caso de 429 (rate limit).
+   * Aguarda backoff exponencial: 1s, 2s, 4s entre tentativas.
+   */
+  private async fetch<T>(
+    path: string,
+    init: RequestInit & { method?: string; body?: string } = {}
+  ): Promise<{ data: T; status: number }> {
+    const MAX_RETRIES = 3;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      if (attempt > 0) {
+        const delay = Math.min(1000 * Math.pow(2, attempt - 1), 8000); // 1s, 2s, 4s
+        console.log(`${LOG_PREFIX} 429 rate limit — aguardando ${delay}ms antes de retry ${attempt}/${MAX_RETRIES}`);
+        await new Promise<void>((resolve) => setTimeout(resolve, delay));
+      }
+      const result = await this.fetchOnce<T>(path, init);
+      if (result.status !== 429) return result;
+      if (attempt === MAX_RETRIES) {
+        console.log(`${LOG_PREFIX} 429 após ${MAX_RETRIES} tentativas, retornando erro`);
+        return result;
+      }
+    }
+    // eslint-disable-next-line @typescript-eslint/only-throw-error
+    throw new Error('Unreachable');
   }
 
   /**
@@ -304,7 +330,16 @@ export class CrmRedistributionClient {
     );
 
     if (status !== 200) {
-      const msg = (data as GetIndicatedsByConsultantResponse).error ?? (data as GetIndicatedsByConsultantResponse).message ?? `HTTP ${status}`;
+      const msg = String((data as GetIndicatedsByConsultantResponse).error ?? (data as GetIndicatedsByConsultantResponse).message ?? `HTTP ${status}`).trim();
+      if (status === 404 && /no indicateds found/i.test(msg)) {
+        console.log(`${LOG_PREFIX} getIndicatedsByConsultant 404 "No indicateds found" → sucesso com lista vazia (leads transferidos não encontrados)`);
+        return {
+          success: true,
+          data: [],
+          message: 'Leads transferidos não encontrados',
+          pagination: { total: 0, current_page: 1, per_page: perPage },
+        };
+      }
       console.log(`${LOG_PREFIX} getIndicatedsByConsultant failed: status=${status}, message=${msg}`, data);
       return { success: false, error: msg, message: msg };
     }

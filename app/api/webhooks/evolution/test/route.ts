@@ -8,6 +8,24 @@ import { participantExitAuditService } from '@/lib/services/participant-exit-aud
 const PARTICIPANT_DEDUP_WINDOW_MS = 15_000;
 
 /**
+ * Extrai o ID do primeiro participante do payload
+ */
+function extractFirstParticipantId(payload: any): string | null {
+  const participants: any[] = payload?.data?.participants ?? [];
+  const firstParticipant = participants[0];
+  if (!firstParticipant) return null;
+  
+  const participantId = String(
+    firstParticipant?.id ??
+    firstParticipant?.phoneNumber ??
+    (typeof firstParticipant === 'string' ? firstParticipant : '') ??
+    '',
+  ).trim();
+  
+  return participantId || null;
+}
+
+/**
  * Extrai os campos de metadata do payload Evolution de forma síncrona — sem DB.
  */
 function extractMetadata(payload: any) {
@@ -54,49 +72,57 @@ async function processEventBackground(payload: any): Promise<void> {
   const actionRaw = String(payload?.data?.action ?? payload?.action ?? '').toLowerCase();
 
   // ── Deduplicação pré-insert de group-participants ──────────────────────────
-  // Camada 1: fast-path — se já existe evento recente com mesmo fingerprint, descarta.
+  // Camada 1: fast-path — se já existe evento recente com mesmo fingerprint (instance + group + participant), descarta.
   // Não filtra por env: protege contra double-trigger prod+test.
   if (isGroupParticipants && actionRaw === 'add' && instanceName && remoteJid) {
-    const participants: any[] = payload?.data?.participants ?? [];
-    const firstParticipant = participants[0];
-    const firstParticipantId = String(
-      firstParticipant?.id ??
-      firstParticipant?.phoneNumber ??
-      (typeof firstParticipant === 'string' ? firstParticipant : '') ??
-      '',
-    );
+    const firstParticipantId = extractFirstParticipantId(payload);
 
     if (firstParticipantId) {
       const since = new Date(Date.now() - PARTICIPANT_DEDUP_WINDOW_MS).toISOString();
+      
+      // Busca evento duplicado considerando instance + group + participant
+      // Usa payload->data->participants[0] para comparar o participante
       const { data: existing } = await supabaseServiceRole
         .from('evolution_webhook_events')
-        .select('id')
+        .select('id, payload')
         .eq('instance_name', instanceName)
         .eq('remote_jid', remoteJid)
         .in('event_type', ['group-participants.update', 'GROUP_PARTICIPANTS_UPDATE'])
         .gte('created_at', since)
-        .limit(1)
-        .maybeSingle();
+        .order('created_at', { ascending: false })
+        .limit(10); // Busca últimos 10 para comparar participantes
 
-      if (existing) {
-        console.log(
-          `⚠️ [WEBHOOK TEST] group-participants duplicado (pré-insert) — instância=${instanceName} grupo=${remoteJid} participante=${firstParticipantId}`,
-        );
-        return;
+      if (existing && existing.length > 0) {
+        // Compara participantes dos eventos existentes
+        for (const evt of existing) {
+          const existingParticipantId = extractFirstParticipantId(evt.payload);
+          if (existingParticipantId && existingParticipantId === firstParticipantId) {
+            console.log(
+              `⚠️ [WEBHOOK TEST] group-participants duplicado (pré-insert) — instância=${instanceName} grupo=${remoteJid} participante=${firstParticipantId} (evento existente: ${evt.id})`,
+            );
+            return;
+          }
+        }
       }
     }
   }
 
   // ── Normalização ──────────────────────────────────────────────────────────
   let normalizedPayload: any = null;
+  let normalizationError: any = null;
   try {
     normalizedPayload = await normalizationService.normalizePayload(
       eventType,
       payload,
       instanceName || undefined,
     );
-  } catch {
-    // Continua sem normalização
+  } catch (err: any) {
+    normalizationError = err;
+    console.warn(
+      `⚠️ [WEBHOOK TEST] Falha na normalização (usando payload original como fallback):`,
+      err?.message || err,
+    );
+    // Continua sem normalização — usaremos payload original como fallback
   }
 
   // ── Insere no banco ────────────────────────────────────────────────────────
@@ -122,26 +148,37 @@ async function processEventBackground(payload: any): Promise<void> {
   // ── Dedup pós-insert para group-participants (protege contra race condition) ──
   // Camada 2: quando dois webhooks chegam quase simultaneamente, ambos passam
   // pela dedup pré-insert. Aqui verificamos qual foi o PRIMEIRO inserido na
-  // janela — apenas ele prossegue para executar o flow.
+  // janela para o MESMO participante — apenas ele prossegue para executar o flow.
   // Não filtra por env: protege também contra double-trigger prod+test.
   if (isGroupParticipants && actionRaw === 'add' && instanceName && remoteJid) {
-    const dedupSince = new Date(Date.now() - PARTICIPANT_DEDUP_WINDOW_MS).toISOString();
-    const { data: firstEvent } = await supabaseServiceRole
-      .from('evolution_webhook_events')
-      .select('id')
-      .eq('instance_name', instanceName)
-      .eq('remote_jid', remoteJid)
-      .in('event_type', ['group-participants.update', 'GROUP_PARTICIPANTS_UPDATE'])
-      .gte('created_at', dedupSince)
-      .order('created_at', { ascending: true })
-      .limit(1)
-      .maybeSingle();
+    const firstParticipantId = extractFirstParticipantId(payload);
+    
+    if (firstParticipantId) {
+      const dedupSince = new Date(Date.now() - PARTICIPANT_DEDUP_WINDOW_MS).toISOString();
+      // Busca eventos recentes do mesmo grupo
+      const { data: recentEvents } = await supabaseServiceRole
+        .from('evolution_webhook_events')
+        .select('id, payload')
+        .eq('instance_name', instanceName)
+        .eq('remote_jid', remoteJid)
+        .in('event_type', ['group-participants.update', 'GROUP_PARTICIPANTS_UPDATE'])
+        .gte('created_at', dedupSince)
+        .order('created_at', { ascending: true });
 
-    if (firstEvent && firstEvent.id !== event.id) {
-      console.log(
-        `⚠️ [WEBHOOK TEST] Post-insert dedup: evento ${event.id} ignorado (primeiro: ${firstEvent.id})`,
-      );
-      return;
+      if (recentEvents && recentEvents.length > 0) {
+        // Encontra o primeiro evento com o mesmo participante
+        for (const evt of recentEvents) {
+          if (evt.id === event.id) continue; // Pula o evento atual
+          
+          const evtParticipantId = extractFirstParticipantId(evt.payload);
+          if (evtParticipantId && evtParticipantId === firstParticipantId) {
+            console.log(
+              `⚠️ [WEBHOOK TEST] Post-insert dedup: evento ${event.id} ignorado (primeiro evento para participante ${firstParticipantId}: ${evt.id})`,
+            );
+            return;
+          }
+        }
+      }
     }
   }
 
@@ -179,7 +216,21 @@ async function processEventBackground(payload: any): Promise<void> {
   }
 
   // ── Flows ─────────────────────────────────────────────────────────────────
-  if (!normalizedPayload) return;
+  // Usa payload normalizado se disponível, senão usa payload original como fallback
+  const np = normalizedPayload || payload;
+  
+  if (!np) {
+    console.error('❌ [WEBHOOK TEST] Sem payload disponível (normalizado ou original) para processar flows');
+    return;
+  }
+
+  // Log quando usando fallback
+  if (!normalizedPayload && normalizationError) {
+    console.warn(
+      `⚠️ [WEBHOOK TEST] Processando flows com payload original (normalização falhou):`,
+      normalizationError?.message || 'Erro desconhecido',
+    );
+  }
 
   const resumed = await flowExecutorService.tryResumePendingQuestionFromWebhookEvent(event.id);
   if (resumed) {
@@ -187,9 +238,8 @@ async function processEventBackground(payload: any): Promise<void> {
     return;
   }
 
-  const np = normalizedPayload;
-
-  const groupJid =
+  // Extrai groupJid para flows de participantes
+  let groupJid =
     payload?.data?.id ??
     np?.data?.id ??
     np?.normalized?.groupId ??
@@ -200,6 +250,14 @@ async function processEventBackground(payload: any): Promise<void> {
     payload?.data?.groupJid ??
     (remoteJid && String(remoteJid).includes('@g.us') ? remoteJid : null) ??
     null;
+
+  // Valida se groupJid é realmente um grupo (deve terminar com @g.us)
+  if (groupJid && !String(groupJid).endsWith('@g.us')) {
+    console.warn(
+      `⚠️ [WEBHOOK TEST] groupJid extraído não é um grupo válido (não termina com @g.us): ${groupJid}. Ignorando processamento de flows de grupo.`,
+    );
+    groupJid = null;
+  }
 
   // group-participants.update → flow_instances
   if (

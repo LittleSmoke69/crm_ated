@@ -756,7 +756,7 @@ export default function ChatPage() {
   const [broadcastsLoading, setBroadcastsLoading] = useState(false);
   const [showBroadcastForm, setShowBroadcastForm] = useState(false);
   const [broadcastTitle, setBroadcastTitle] = useState('');
-  const [broadcastDelay, setBroadcastDelay] = useState(60);
+  const [broadcastDelay, setBroadcastDelay] = useState(120);
   const [broadcastCreating, setBroadcastCreating] = useState(false);
   const [broadcastError, setBroadcastError] = useState<string | null>(null);
   // Templates de mensagem
@@ -1097,6 +1097,22 @@ export default function ChatPage() {
     }
   }, [activeView, loadBroadcasts, loadBroadcastMessages]);
 
+  useEffect(() => {
+    if (selectedChannel?.type === 'evolution') {
+      loadBroadcasts();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedChannel]);
+
+  useEffect(() => {
+    if (!selectedChannel || selectedChannel.type !== 'evolution' || activeBroadcastJobId) return;
+    const running = broadcasts.find((b) => b.status === 'running');
+    if (running) {
+      startBroadcastRunner(running.id, running.delay_seconds || 120);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [broadcasts, selectedChannel]);
+
   // ── CSV Parser para contatos ───────────────────────────────────────────────
   const parseBroadcastCSV = (raw: string): BroadcastContact[] => {
     const firstLine = raw.split(/\r?\n/)[0] || '';
@@ -1261,11 +1277,11 @@ export default function ChatPage() {
       setBroadcastSelectedMsgId('');
       setBroadcastContacts([]);
       setBroadcastContactsFileName('');
-      setBroadcastDelay(60);
+      const savedDelay = broadcastDelay;
+      setBroadcastDelay(120);
       const newJob = result.data as BroadcastJob;
       loadBroadcasts();
-      // Inicia o runner imediatamente
-      startBroadcastRunner(newJob.id, broadcastDelay);
+      startBroadcastRunner(newJob.id, savedDelay);
     } catch { setBroadcastError('Erro de rede'); } finally { setBroadcastCreating(false); }
   };
 
@@ -1282,7 +1298,7 @@ export default function ChatPage() {
       loadBroadcasts();
       if (status === 'running') {
         const job = broadcasts.find((b) => b.id === jobId);
-        startBroadcastRunner(jobId, delaySeconds ?? job?.delay_seconds ?? 60);
+        startBroadcastRunner(jobId, delaySeconds ?? job?.delay_seconds ?? 120);
       }
     } catch { /* silent */ }
   };
@@ -3037,9 +3053,9 @@ export default function ChatPage() {
                         <input
                           type="number"
                           min={10}
-                          max={300}
+                          max={600}
                           value={broadcastDelay}
-                          onChange={(e) => setBroadcastDelay(Math.min(300, Math.max(10, Number(e.target.value))))}
+                          onChange={(e) => setBroadcastDelay(Math.min(600, Math.max(10, Number(e.target.value))))}
                           className="w-16 px-2 py-1 text-sm border rounded-lg bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040] text-center"
                         />
                         <span className="text-xs text-gray-500">seg</span>
@@ -3321,6 +3337,34 @@ export default function ChatPage() {
                 </div>
               </div>
 
+              {activeBroadcastJobId && activeBroadcastProgress && (
+                <div
+                  className="flex-shrink-0 mx-3 mt-2 mb-1 p-2 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors"
+                  onClick={() => setActiveView('broadcast')}
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <Megaphone className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" />
+                    <span className="text-xs font-medium text-blue-700 dark:text-blue-300">Disparo em andamento</span>
+                    <span className="ml-auto text-[10px] text-blue-500">
+                      {activeBroadcastProgress.current}/{activeBroadcastProgress.total}
+                    </span>
+                  </div>
+                  <div className="h-1 bg-blue-200 dark:bg-blue-900 rounded-full">
+                    <div
+                      className="h-1 rounded-full transition-all bg-blue-500"
+                      style={{ width: `${activeBroadcastProgress.total > 0 ? Math.round((activeBroadcastProgress.current / activeBroadcastProgress.total) * 100) : 0}%` }}
+                    />
+                  </div>
+                  {activeBroadcastCountdown > 0 && (
+                    <p className="text-[10px] text-blue-400 mt-0.5">Próximo envio: {activeBroadcastCountdown}s</p>
+                  )}
+                  {activeBroadcastProgress.lastSent && (
+                    <p className="text-[10px] text-blue-500 truncate mt-0.5">
+                      Enviado: {activeBroadcastProgress.lastSent.name || activeBroadcastProgress.lastSent.phone}
+                    </p>
+                  )}
+                </div>
+              )}
               {/* Lista com scroll infinito */}
               <div
                 ref={conversationListScrollRef}

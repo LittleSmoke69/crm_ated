@@ -162,6 +162,13 @@ export async function POST(
 
     // Salva a mensagem no chat (para aparecer em tempo real na conversa)
     try {
+      const mediaLabels: Record<string, string> = { audio: '🎵 Áudio', video: '🎬 Vídeo', image: '🖼️ Imagem', document: '📄 Documento' };
+      const previewText =
+        msgConfig.content?.substring(0, 100) ||
+        msgConfig.caption?.substring(0, 100) ||
+        mediaLabels[msgConfig.type] ||
+        '[Mídia]';
+
       const conversation = await chatService.upsertConversation({
         instance_id: instance.id,
         workspace_id: instance.workspace_id ?? undefined,
@@ -170,7 +177,7 @@ export async function POST(
         title: contact.name || remoteJid.replace('@s.whatsapp.net', ''),
         is_group: false,
         last_message_at: new Date().toISOString(),
-        last_message_preview: msgConfig.content?.substring(0, 100) || msgConfig.caption?.substring(0, 100) || '[Mídia]',
+        last_message_preview: previewText,
       });
 
       const returnedMessageId =
@@ -209,6 +216,7 @@ export async function POST(
       .from('chat_broadcasts')
       .update({
         current_index: nextIndex,
+        last_sent_at: new Date().toISOString(),
         status: isDone ? 'completed' : 'running',
         completed_at: isDone ? new Date().toISOString() : null,
         updated_at: new Date().toISOString(),

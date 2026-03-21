@@ -53,14 +53,13 @@ export async function POST(req: NextRequest) {
       delay_seconds?: number;
     };
 
-    const { instance_id, title, message_config, contacts, delay_seconds = 30 } = body;
+    const { instance_id, title, message_config, contacts, delay_seconds = 120 } = body;
 
     if (!instance_id) return errorResponse('instance_id é obrigatório', 400);
     if (!message_config?.type) return errorResponse('message_config.type é obrigatório', 400);
     if (!contacts || contacts.length === 0) return errorResponse('contacts não pode ser vazio', 400);
 
-    // Valida delay (mínimo 10s, máximo 300s)
-    const delaySeconds = Math.min(300, Math.max(10, Number(delay_seconds) || 30));
+    const delaySeconds = Math.min(600, Math.max(10, Number(delay_seconds) || 120));
 
     // Valida instância e acesso
     const { data: instance } = await supabaseServiceRole

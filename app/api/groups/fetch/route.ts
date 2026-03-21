@@ -3,22 +3,98 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { checkInstanceAccess } from '@/lib/utils/instance-access';
-import { normalizeGroupId } from '@/lib/utils/group-utils';
+import {
+  fetchGroupsFromEvolution,
+  persistWhatsappGroupsBatch,
+} from '@/lib/group-fetch/run-group-fetch-job';
 
+/** Vercel / ambientes com função longa; no Netlify o limite real costuma ser ~26s na rota Next. */
 export const maxDuration = 300;
 
-const FETCH_TIMEOUT_MS = 280_000;
+const SYNC_FETCH_TIMEOUT_MS = 280_000;
+
+/**
+ * Modo assíncrono só em ambiente Netlify (deploy ou `netlify dev`) e com segredo configurado.
+ * Em `next dev` puro permanece síncrono para não deixar jobs presos sem Background Function.
+ */
+function useNetlifyAsyncGroupFetch(): boolean {
+  const secret = !!process.env.GROUP_FETCH_JOB_SECRET?.trim();
+  const onNetlify =
+    process.env.NETLIFY === 'true' || process.env.NETLIFY_DEV === 'true';
+  return secret && onNetlify;
+}
+
+async function triggerBackgroundWorker(origin: string, jobId: string): Promise<{ ok: boolean; status?: number }> {
+  const secret = process.env.GROUP_FETCH_JOB_SECRET?.trim();
+  if (!secret) return { ok: false };
+
+  const url = `${origin.replace(/\/$/, '')}/.netlify/functions/groups-fetch-background`;
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), 12_000);
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-group-fetch-secret': secret,
+      },
+      body: JSON.stringify({ jobId }),
+      signal: controller.signal,
+    });
+    clearTimeout(t);
+    return { ok: res.ok || res.status === 202, status: res.status };
+  } catch {
+    clearTimeout(t);
+    return { ok: false };
+  }
+}
+
+/**
+ * GET /api/groups/fetch?jobId=...
+ * Status de um job assíncrono (Netlify).
+ */
+export async function GET(req: NextRequest) {
+  try {
+    const { userId } = await requireAuth(req);
+    const jobId = req.nextUrl.searchParams.get('jobId')?.trim();
+    if (!jobId) {
+      return errorResponse('jobId é obrigatório', 400);
+    }
+
+    const { data: job, error } = await supabaseServiceRole
+      .from('group_fetch_jobs')
+      .select(
+        'id, status, error_message, total_groups, inserted_count, updated_count, message, created_at, updated_at',
+      )
+      .eq('id', jobId)
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (error) {
+      return errorResponse(`Erro ao buscar job: ${error.message}`, 500);
+    }
+    if (!job) {
+      return errorResponse('Job não encontrado', 404);
+    }
+
+    return successResponse(job, 'Status do job');
+  } catch (err: unknown) {
+    return serverErrorResponse(err);
+  }
+}
 
 /**
  * POST /api/groups/fetch
- * Busca grupos diretamente da Evolution API, persiste no banco e retorna o resultado.
- * Sem sistema de jobs — request direto com timeout longo.
+ * - Netlify + GROUP_FETCH_JOB_SECRET: cria job e dispara Background Function (evita timeout).
+ * - Demais ambientes: request síncrono com persistência em lote.
+ * Body opcional: { forceSync: true } força modo síncrono (útil em dev).
  */
 export async function POST(req: NextRequest) {
   try {
     const { userId } = await requireAuth(req);
     const body = await req.json().catch(() => ({}));
-    const { instanceName } = body;
+    const { instanceName, forceSync } = body as { instanceName?: string; forceSync?: boolean };
 
     if (!instanceName) {
       return errorResponse('instanceName é obrigatório', 400);
@@ -29,16 +105,53 @@ export async function POST(req: NextRequest) {
       return errorResponse('Acesso negado. Você não tem permissão para acessar esta instância.', 403);
     }
 
+    const asyncMode = useNetlifyAsyncGroupFetch() && !forceSync;
+
+    if (asyncMode) {
+      const { data: inserted, error: insErr } = await supabaseServiceRole
+        .from('group_fetch_jobs')
+        .insert({
+          user_id: userId,
+          instance_name: instanceName,
+          status: 'pending',
+        })
+        .select('id')
+        .single();
+
+      if (insErr || !inserted?.id) {
+        console.error('[GROUPS] Erro ao criar job:', insErr);
+        return errorResponse('Não foi possível iniciar a busca em segundo plano.', 500);
+      }
+
+      const jobId = inserted.id as string;
+      const trigger = await triggerBackgroundWorker(req.nextUrl.origin, jobId);
+
+      return successResponse(
+        {
+          jobId,
+          async: true,
+          workerTriggered: trigger.ok,
+          message: trigger.ok
+            ? 'Busca iniciada. Use GET /api/groups/fetch?jobId=... até status completed.'
+            : 'Job criado; o processamento será retomado em até ~1 min (cron de fallback).',
+        },
+        trigger.ok ? 'Busca de grupos iniciada em segundo plano.' : 'Busca agendada (worker será reinvocado).',
+      );
+    }
+
+    // --- Modo síncrono ---
     const { data: instance, error: instanceError } = await supabaseServiceRole
       .from('evolution_instances')
-      .select(`
+      .select(
+        `
         *,
         evolution_apis!inner (
           id,
           base_url,
           is_active
         )
-      `)
+      `,
+      )
       .eq('instance_name', instanceName)
       .eq('is_active', true)
       .eq('evolution_apis.is_active', true)
@@ -55,142 +168,51 @@ export async function POST(req: NextRequest) {
       return errorResponse('Instância sem apikey configurada', 404);
     }
 
-    const evolutionApi = Array.isArray(instance.evolution_apis)
-      ? instance.evolution_apis[0]
-      : instance.evolution_apis;
+    const evolutionApi = Array.isArray(instance.evolution_apis) ? instance.evolution_apis[0] : instance.evolution_apis;
 
     if (!evolutionApi?.base_url) {
       return errorResponse('Evolution API sem base_url configurada', 404);
     }
 
     const baseUrl = evolutionApi.base_url.trim().replace(/\/+$/, '').replace(/([^:]\/)\/+/g, '$1');
-    const url = `${baseUrl}/group/fetchAllGroups/${instanceName}?getParticipants=false`;
-    console.log(`[GROUPS] Buscando grupos: ${url}`);
+    console.log(`[GROUPS] Buscando grupos (sync) instance=${instanceName}`);
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
-    let resp: Response;
+    let uniqueGroups;
     try {
-      resp = await fetch(url, {
-        method: 'GET',
-        headers: { apikey: instanceApikey },
-        signal: controller.signal,
-        cache: 'no-store',
-      });
-      clearTimeout(timeoutId);
-    } catch (err: any) {
-      clearTimeout(timeoutId);
-      const msg = err?.message ?? '';
-      if (err.name === 'AbortError') {
-        console.error(`[GROUPS] Timeout após ${FETCH_TIMEOUT_MS}ms`);
+      uniqueGroups = await fetchGroupsFromEvolution(
+        instanceName,
+        instanceApikey,
+        baseUrl,
+        SYNC_FETCH_TIMEOUT_MS,
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Timeout ao buscar grupos')) {
         return errorResponse('Timeout ao buscar grupos. A instância pode ter muitos grupos — tente novamente.', 408);
       }
       const isNetwork = msg === 'fetch failed' || msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND');
-      console.error(`[GROUPS] Erro na requisição:`, msg);
+      const isConnClosed = msg.toLowerCase().includes('connection closed');
+      if (isConnClosed) {
+        return errorResponse('A instância caiu (Connection Closed). Verifique o status da instância.', 503);
+      }
+      if (msg.startsWith('Evolution fetchAllGroups:')) {
+        return errorResponse(msg.replace(/^Evolution fetchAllGroups:\s*/, 'Erro da API: '), 502);
+      }
+      if (msg.includes('não é JSON')) {
+        return errorResponse('Resposta da API não é JSON válido', 502);
+      }
       return errorResponse(
-        isNetwork ? 'Evolution API inacessível. Verifique a URL e a conectividade.' : (msg || 'Erro ao buscar grupos'),
+        isNetwork ? 'Evolution API inacessível. Verifique a URL e a conectividade.' : msg || 'Erro ao buscar grupos',
         503,
       );
     }
 
-    if (!resp.ok) {
-      const errorText = await resp.text().catch(() => '');
-      console.error(`[GROUPS] Resposta não OK (${resp.status}): ${errorText.substring(0, 200)}`);
-
-      let responseData: any = {};
-      try { responseData = JSON.parse(errorText); } catch {}
-
-      const errorMsg = responseData?.response?.message || responseData?.message || responseData?.error || errorText || '';
-      const isConnectionClosed =
-        (typeof errorMsg === 'string' && errorMsg.toLowerCase().includes('connection closed')) ||
-        (typeof errorText === 'string' && errorText.toLowerCase().includes('connection closed'));
-
-      if (isConnectionClosed) {
-        return errorResponse('A instância caiu (Connection Closed). Verifique o status da instância.', 503);
-      }
-      return errorResponse(`Erro da API: ${resp.status}`, resp.status);
-    }
-
-    const contentType = resp.headers.get('content-type');
-    if (!contentType || !contentType.includes('application/json')) {
-      const text = await resp.text();
-      console.error(`[GROUPS] Resposta não é JSON. Content-Type: ${contentType}, Preview: ${text.substring(0, 200)}`);
-      return errorResponse('Resposta da API não é JSON válido', 502);
-    }
-
-    const json = await resp.json().catch((parseError) => {
-      console.error(`[GROUPS] Erro ao parsear JSON:`, parseError);
-      throw parseError;
-    });
-
-    let groupsList: any[] = [];
-    if (Array.isArray(json)) groupsList = json;
-    else if (Array.isArray(json?.groups)) groupsList = json.groups;
-    else if (Array.isArray(json?.data)) groupsList = json.data;
-    else if (Array.isArray(json?.result)) groupsList = json.result;
-    else if (json?.id && json?.subject) groupsList = [json];
-
-    const normalized = new Map<string, { id: string; subject?: string; pictureUrl?: string; size?: number }>();
-    for (const g of groupsList) {
-      const rawId = g.id ?? g.remoteJid ?? g.group_id ?? '';
-      const id = normalizeGroupId(rawId);
-      if (!id) continue;
-      if (!normalized.has(id)) {
-        normalized.set(id, {
-          id,
-          subject: g.subject ?? g.group_subject ?? null,
-          pictureUrl: g.pictureUrl ?? g.picture_url ?? null,
-          size: g.size ?? null,
-        });
-      }
-    }
-    const uniqueGroups = Array.from(normalized.values());
-
-    let inserted = 0;
-    let updated = 0;
-
-    for (const g of uniqueGroups) {
-      const { data: existing } = await supabaseServiceRole
-        .from('whatsapp_groups')
-        .select('id, group_subject, picture_url, size')
-        .eq('user_id', userId)
-        .eq('instance_name', instanceName)
-        .eq('group_id', g.id)
-        .limit(1)
-        .maybeSingle();
-
-      if (existing) {
-        const subjectChanged = (existing.group_subject ?? null) !== (g.subject ?? null);
-        const pictureChanged = (existing.picture_url ?? null) !== (g.pictureUrl ?? null);
-        const sizeChanged = (existing.size ?? null) !== (g.size ?? null);
-        if (subjectChanged || pictureChanged || sizeChanged) {
-          const { error: updateError } = await supabaseServiceRole
-            .from('whatsapp_groups')
-            .update({
-              group_subject: g.subject || null,
-              picture_url: g.pictureUrl || null,
-              size: g.size ?? null,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', existing.id);
-          if (!updateError) updated++;
-        }
-      } else {
-        const { error: insertError } = await supabaseServiceRole
-          .from('whatsapp_groups')
-          .insert({
-            user_id: userId,
-            instance_name: instanceName,
-            group_id: g.id,
-            group_subject: g.subject || null,
-            picture_url: g.pictureUrl || null,
-            size: g.size ?? null,
-          });
-        if (!insertError) inserted++;
-        else if ((insertError as any).code === '23505') updated++;
-      }
-    }
+    const { inserted, updated } = await persistWhatsappGroupsBatch(
+      supabaseServiceRole,
+      userId,
+      instanceName,
+      uniqueGroups,
+    );
 
     console.log(`[GROUPS] ${uniqueGroups.length} grupo(s), ${inserted} inseridos, ${updated} atualizados`);
 
@@ -198,7 +220,7 @@ export async function POST(req: NextRequest) {
       uniqueGroups,
       `${uniqueGroups.length} grupo(s) encontrado(s). ${inserted} inseridos, ${updated} atualizados.`,
     );
-  } catch (err: any) {
+  } catch (err: unknown) {
     return serverErrorResponse(err);
   }
 }

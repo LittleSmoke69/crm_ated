@@ -5,11 +5,34 @@ import { Node, Edge } from 'reactflow';
  * Serviço para gerenciar templates de flows
  */
 export class FlowTemplatesService {
+  /** Nome e tipo usados para identificar o template de boas-vindas (evita duplicação) */
+  static readonly WELCOME_TEMPLATE_NAME = 'Boas-vindas (quando entra no grupo)';
+  static readonly WELCOME_TEMPLATE_TYPE = 'template';
+
   /**
-   * Cria template de boas-vindas quando alguém entra no grupo
+   * Cria template de boas-vindas quando alguém entra no grupo.
+   * Se o usuário já possuir um template com esse nome, retorna o id existente (evita duplicação).
+   * @returns { flowId, alreadyExisted }
    */
-  async createWelcomeTemplate(userId: string): Promise<string | null> {
+  async createWelcomeTemplate(userId: string): Promise<{ flowId: string; alreadyExisted: boolean } | null> {
     try {
+      // Verifica se já existe template de boas-vindas para este usuário (evita duplicação)
+      const { data: existingList } = await supabaseServiceRole
+        .from('flows')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('name', FlowTemplatesService.WELCOME_TEMPLATE_NAME)
+        .eq('type', FlowTemplatesService.WELCOME_TEMPLATE_TYPE)
+        .order('created_at', { ascending: true })
+        .limit(1);
+
+      const existing = Array.isArray(existingList) && existingList.length > 0 ? existingList[0] : null;
+
+      if (existing?.id) {
+        console.log('✅ [FLOW TEMPLATES] Template de boas-vindas já existe, retornando id:', existing.id);
+        return { flowId: existing.id, alreadyExisted: true };
+      }
+
       // Define nodes do template
       const nodes: Node[] = [
         {
@@ -82,13 +105,13 @@ export class FlowTemplatesService {
         },
       ];
 
-      // Cria flow template
+      // Cria flow template (só chega aqui se não existir)
       const { data: flow, error } = await supabaseServiceRole
         .from('flows')
         .insert({
-          name: 'Boas-vindas (quando entra no grupo)',
+          name: FlowTemplatesService.WELCOME_TEMPLATE_NAME,
           description: 'Template de boas-vindas automático quando alguém entra no grupo. Envia uma mensagem aleatória de boas-vindas.',
-          type: 'template',
+          type: FlowTemplatesService.WELCOME_TEMPLATE_TYPE,
           status: 'inactive', // Template inativo por padrão (usuário deve ativar)
           graph_json: { nodes, edges },
           settings_json: {},
@@ -104,7 +127,7 @@ export class FlowTemplatesService {
       }
 
       console.log('✅ [FLOW TEMPLATES] Template de boas-vindas criado:', flow.id);
-      return flow.id;
+      return { flowId: flow.id, alreadyExisted: false };
     } catch (err: any) {
       console.error('❌ [FLOW TEMPLATES] Erro ao criar template:', err);
       return null;

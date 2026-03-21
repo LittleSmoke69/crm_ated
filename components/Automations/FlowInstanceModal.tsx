@@ -15,6 +15,7 @@ import {
   Plus,
   Tag,
 } from 'lucide-react';
+import { postGroupFetchAndResolve } from '@/lib/utils/group-fetch-client';
 
 interface WhatsAppInstance {
   id: string;
@@ -320,23 +321,14 @@ export default function FlowInstanceModal({
     if (!userId || !instanceName) return;
     try {
       setFetchingGroups(true);
-      const r = await fetch('/api/groups/fetch', {
-        method: 'POST',
-        headers: { 'X-User-Id': userId, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ instanceName }),
-      });
-      if (r.ok) {
-        const result = await r.json();
-        if (result.success) {
-          const fetched = (result.data || []).map((g: any) => ({
-            group_id: g.group_id || g.id || g.jid || '',
-            group_subject: g.group_subject || g.subject || g.name || g.group_id || 'Sem nome',
-          }));
-          const savedIds = new Set(savedGroups.map((g) => g.group_id));
-          const newGroups = fetched.filter((g: any) => !savedIds.has(g.group_id));
-          setAvailableGroups([...savedGroups, ...newGroups]);
-        }
-      }
+      const { groups: raw } = await postGroupFetchAndResolve(userId, instanceName);
+      const fetched = raw.map((g) => ({
+        group_id: g.id,
+        group_subject: g.subject || g.id || 'Sem nome',
+      }));
+      const savedIds = new Set(savedGroups.map((g) => g.group_id));
+      const newGroups = fetched.filter((g) => !savedIds.has(g.group_id));
+      setAvailableGroups([...savedGroups, ...newGroups]);
     } catch {
       alert('Erro ao buscar grupos da instância');
     } finally {

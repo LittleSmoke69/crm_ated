@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Search, Check, Send, Loader2, Plus } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { deduplicateGroupsById } from '@/lib/utils/group-utils';
+import { postGroupFetchAndResolve } from '@/lib/utils/group-fetch-client';
 import SendMessageChoiceModal from './SendMessageChoiceModal';
 import ScheduleMessageModal from './ScheduleMessageModal';
 import { useToast } from '@/hooks/useToast';
@@ -85,32 +86,18 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
     }
     setFetchingAll(true);
     try {
-      const response = await fetch('/api/groups/fetch', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-User-Id': userId
-        },
-        body: JSON.stringify({ instanceName: selectedInstance }),
-      });
-
-      const data = await response.json();
-      if (data.success) {
-        const evoGroups = (data.data || []).map((g: any) => ({
-          id: g.id || g.remoteJid,
-          subject: g.subject
-        }));
-        setGroups(prev => {
-          const byId = new Map<string, Group>(prev.map(p => [p.id, p]));
-          evoGroups.forEach((g: Group) => { if (!byId.has(g.id)) byId.set(g.id, g); });
-          return Array.from(byId.values()).sort((a, b) => a.subject.localeCompare(b.subject));
+      const { groups: evoRaw, message } = await postGroupFetchAndResolve(userId, selectedInstance);
+      const evoGroups = evoRaw.map((g) => ({ id: g.id, subject: g.subject || '' }));
+      setGroups((prev) => {
+        const byId = new Map<string, Group>(prev.map((p) => [p.id, p]));
+        evoGroups.forEach((g: Group) => {
+          if (!byId.has(g.id)) byId.set(g.id, g);
         });
-        showToast(`${evoGroups.length} grupos sincronizados da instância!`, 'success');
-      } else {
-        showToast(`Erro ao buscar grupos: ${data.error || 'Erro desconhecido'}`, 'error');
-      }
-    } catch (error: any) {
-      showToast('Erro ao buscar grupos da Evolution. Tente novamente.', 'error');
+        return Array.from(byId.values()).sort((a, b) => a.subject.localeCompare(b.subject));
+      });
+      showToast(message || `${evoGroups.length} grupos sincronizados da instância!`, 'success');
+    } catch (error: unknown) {
+      showToast(error instanceof Error ? error.message : 'Erro ao buscar grupos da Evolution. Tente novamente.', 'error');
     } finally {
       setFetchingAll(false);
     }

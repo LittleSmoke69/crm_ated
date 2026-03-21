@@ -81,7 +81,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       .single();
 
     if (fetchReqError || !requestRow) return errorResponse('Solicitação não encontrada.', 404);
-    if (requestRow.status !== 'pending') return errorResponse('Esta solicitação já foi processada.', 400);
+    if (requestRow.status !== 'pending' && requestRow.status !== 'partial') return errorResponse('Esta solicitação já foi processada.', 400);
 
     const bancaId = (bancaIdParam ?? requestRow.banca_id)?.trim();
     if (!bancaId) return errorResponse('Banca não definida na solicitação. Selecione a banca no modal.', 400);

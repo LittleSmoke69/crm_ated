@@ -8,6 +8,7 @@ import { deduplicateGroupsByInstance, normalizeGroupId } from '@/lib/utils/group
  * GET /api/groups - Lista grupos salvos do usuário
  * - Sem params ou instanceName: deduplica por (instance_name, group_id); retorna { group_id, group_subject } (compat).
  * - allInstances=1: retorna todos os grupos em todas as instâncias: { group_id, group_subject, instance_name }[].
+ * - evolutionShape=1 + instanceName: retorna { id, subject, pictureUrl, size }[] (após sync / fetch assíncrono).
  */
 export async function GET(req: NextRequest) {
   try {
@@ -15,6 +16,32 @@ export async function GET(req: NextRequest) {
     const { searchParams } = req.nextUrl;
     const instanceName = searchParams.get('instanceName');
     const allInstances = searchParams.get('allInstances') === '1';
+    const evolutionShape = searchParams.get('evolutionShape') === '1';
+
+    if (evolutionShape) {
+      if (!instanceName || allInstances) {
+        return errorResponse('evolutionShape=1 requer instanceName (e não combina com allInstances=1)', 400);
+      }
+      const { data, error } = await supabaseServiceRole
+        .from('whatsapp_groups')
+        .select('group_id, group_subject, picture_url, size')
+        .eq('user_id', userId)
+        .eq('instance_name', instanceName)
+        .order('group_subject', { ascending: true });
+
+      if (error) {
+        return errorResponse(`Erro ao buscar grupos: ${error.message}`);
+      }
+
+      const shaped = (data || []).map((row: { group_id: string; group_subject: string | null; picture_url: string | null; size: number | null }) => ({
+        id: row.group_id,
+        subject: row.group_subject ?? '',
+        pictureUrl: row.picture_url ?? undefined,
+        size: row.size ?? undefined,
+      }));
+
+      return successResponse(shaped, 'Grupos (formato Evolution)');
+    }
 
     let query = supabaseServiceRole
       .from('whatsapp_groups')

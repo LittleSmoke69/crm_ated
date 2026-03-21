@@ -381,6 +381,7 @@ export default function AdminLeadTransferPage() {
   const [loadingLeads, setLoadingLeads] = useState(false);
   const [enrichmentLoading, setEnrichmentLoading] = useState(false);
   const loadLeadsIdRef = useRef(0);
+  const consultantIndicatedsAbortRef = useRef<AbortController | null>(null);
   const [hasSearchedLeads, setHasSearchedLeads] = useState(false);
   const [leadSearchQuery, setLeadSearchQuery] = useState('');
   const [leadFilterStatus, setLeadFilterStatus] = useState<string>('');
@@ -531,9 +532,27 @@ export default function AdminLeadTransferPage() {
   const [moveLeadsModalOpen, setMoveLeadsModalOpen] = useState(false);
   /** Página atual na lista do modal Mover leads */
   const [moveLeadsListPage, setMoveLeadsListPage] = useState(1);
-  const [resolvedList, setResolvedList] = useState<Array<{ log_id: string; banca_id: string; transfer_type: string; disponivel: number; source_consultant_email: string; target_consultant_email: string }>>([]);
+  const [resolvedList, setResolvedList] = useState<
+    Array<{
+      log_id: string;
+      banca_id: string;
+      transfer_type: string;
+      disponivel: number;
+      source_consultant_email: string;
+      target_consultant_email: string;
+      source_consultant_name?: string | null;
+    }>
+  >([]);
   const [loadingResolvedList, setLoadingResolvedList] = useState(false);
-  const [moveLeadsSelectedLog, setMoveLeadsSelectedLog] = useState<{ log_id: string; banca_id: string; transfer_type: string; disponivel: number; source_consultant_email: string; target_consultant_email: string } | null>(null);
+  const [moveLeadsSelectedLog, setMoveLeadsSelectedLog] = useState<{
+    log_id: string;
+    banca_id: string;
+    transfer_type: string;
+    disponivel: number;
+    source_consultant_email: string;
+    target_consultant_email: string;
+    source_consultant_name?: string | null;
+  } | null>(null);
   /** log_id pré-selecionado ao abrir o modal Mover a partir do relatório detalhado (resolve batch) */
   const [moveLeadsPreselectedLogId, setMoveLeadsPreselectedLogId] = useState<string | null>(null);
   /** Abrir fluxo "Mover leads" direto (ex.: botão em aprovação): pula a tabela até escolher consultor de origem */
@@ -629,6 +648,11 @@ export default function AdminLeadTransferPage() {
   const [showConsultantOriginModal, setShowConsultantOriginModal] = useState(false);
   const [consultantOriginSearchQuery, setConsultantOriginSearchQuery] = useState('');
   const [consultantOriginPendingEmail, setConsultantOriginPendingEmail] = useState<string | null>(null);
+  /** Contagem de leads por e-mail do consultor no modal doador: null = carregando, number = contagem */
+  const [consultantOriginLeadCounts, setConsultantOriginLeadCounts] = useState<Map<string, number | null>>(new Map());
+  const consultantOriginLeadCountsAbortRef = useRef<AbortController | null>(null);
+  /** Cache persistente de contagens: chave = `${bancaId}:${email}`, valor = contagem (0 em caso de erro) */
+  const consultantOriginLeadCountsCacheRef = useRef<Map<string, number>>(new Map());
   /** Modal de seleção do consultor destino (passo Destino) */
   const [showConsultantDestinoModal, setShowConsultantDestinoModal] = useState(false);
   const [consultantDestinoSearchQuery, setConsultantDestinoSearchQuery] = useState('');
@@ -683,6 +707,8 @@ export default function AdminLeadTransferPage() {
   const [approveFormLeadTypes, setApproveFormLeadTypes] = useState<string[]>([]);
   const [approveFormConsultores, setApproveFormConsultores] = useState<{ consultor_id: string; quantity: number; consultor_name?: string }[]>([]);
   const [approveFormSourceConsultantId, setApproveFormSourceConsultantId] = useState<string>('');
+  const [approveModalDonorLeadCount, setApproveModalDonorLeadCount] = useState<number | null>(null);
+  const [loadingDonorLeadCount, setLoadingDonorLeadCount] = useState(false);
   const [approveSubmitting, setApproveSubmitting] = useState(false);
   const [approveRejecting, setApproveRejecting] = useState(false);
   /** Consultores da banca da solicitação (carregados ao abrir o modal de aprovar) */
@@ -709,6 +735,8 @@ export default function AdminLeadTransferPage() {
   const preserveTargetEmailFromSolicitationRef = useRef(false);
   /** ID da solicitação quando veio de "Ir para transferir" — ao confirmar a transferência, aprovar esta solicitação também */
   const transferFromSolicitationRequestIdRef = useRef<string | null>(null);
+  /** ID (UUID) do consultor doador quando veio de "Ir para transferir" — usado para PATCH de aprovação sem precisar re-buscar em consultants */
+  const transferFromSolicitationSourceIdRef = useRef<string | null>(null);
   /** ID da solicitação para a qual estamos carregando consultores no modal Aprovar (evita race condition) */
   const approveModalLoadingRequestIdRef = useRef<string | null>(null);
   /** Evita reprocessar params da URL mais de uma vez no mesmo carregamento */
@@ -984,6 +1012,8 @@ export default function AdminLeadTransferPage() {
     setApproveFormLeadTypes((req.lead_type ?? '').split(',').map((t) => t.trim()).filter(Boolean));
     setApproveFormConsultores([...(req.consultores || [])]);
     setApproveFormSourceConsultantId('');
+    setApproveModalDonorLeadCount(null);
+    setLoadingDonorLeadCount(false);
     setApproveModalConsultants([]);
     setApproveModalConsultantSearchApplied('');
     setApproveModalDonorSearchInputKey((k) => k + 1);
@@ -1021,9 +1051,14 @@ export default function AdminLeadTransferPage() {
     setApproveRejecting(false);
     setApproveModalConsultants([]);
     setApproveModalConsultantSearchApplied('');
+    setApproveModalDonorLeadCount(null);
+    setLoadingDonorLeadCount(false);
     setShowRejectConfirmModal(false);
     setRejectConfirmObservation('');
   };
+
+  /** Busca o total de leads do doador — desabilitada temporariamente (CRM retorna 429). */
+  // useEffect disabled
 
   const syncApproveModalDonorSearchFromInput = () => {
     const v = approveModalDonorSearchInputRef.current?.value ?? '';
@@ -1068,6 +1103,7 @@ export default function AdminLeadTransferPage() {
     transferFromSolicitationBancaIdRef.current = requestBancaId;
     preserveTargetEmailFromSolicitationRef.current = true;
     transferFromSolicitationRequestIdRef.current = selectedRequestForApprove.id;
+    transferFromSolicitationSourceIdRef.current = approveFormSourceConsultantId.trim() || null;
     setBancaId(requestBancaId);
     setBancaSearchQuery(bancaDisplayName);
     setDaysInactivePreset('90');
@@ -1182,6 +1218,25 @@ export default function AdminLeadTransferPage() {
     handleRejectRequest(rejectConfirmObservation);
   };
 
+  const [reconcilingRequests, setReconcilingRequests] = useState(false);
+  const handleReconcileRequests = async () => {
+    setReconcilingRequests(true);
+    try {
+      const res = await fetch('/api/admin/crm/lead-requests/reconcile', { method: 'POST', headers: headers() });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        showToast(json?.message ?? 'Reconciliação concluída.', 'success');
+        loadLeadRequests();
+      } else {
+        showToast(json?.error ?? 'Erro ao reconciliar', 'error');
+      }
+    } catch {
+      showToast('Erro ao reconciliar solicitações', 'error');
+    } finally {
+      setReconcilingRequests(false);
+    }
+  };
+
   const [reopeningRequestId, setReopeningRequestId] = useState<string | null>(null);
   const handleReopenRequest = async (requestId: string) => {
     setReopeningRequestId(requestId);
@@ -1228,6 +1283,9 @@ export default function AdminLeadTransferPage() {
     });
     return [...list].sort((a, b) => (a.full_name || a.email || '').localeCompare(b.full_name || b.email || '', 'pt-BR'));
   }, [consultants, consultantOriginSearchQuery]);
+
+  /** Contagem de leads por consultor — desabilitada temporariamente (CRM retorna 429 com muitas requisições). */
+  // useEffect disabled
 
   /** Consultores do modal Aprovar: lista filtrada só pelo termo aplicado (Enter ou blur no campo de busca). */
   const approveModalConsultantsSortedAndFiltered = React.useMemo(() => {
@@ -1562,6 +1620,9 @@ export default function AdminLeadTransferPage() {
     }
     loadLeadsIdRef.current += 1;
     const currentLoadId = loadLeadsIdRef.current;
+    consultantIndicatedsAbortRef.current?.abort();
+    consultantIndicatedsAbortRef.current = new AbortController();
+    const transferredFetchSignal = consultantIndicatedsAbortRef.current.signal;
     setLoadingLeads(true);
     setEnrichmentLoading(false);
     setLeads([]);
@@ -1599,7 +1660,10 @@ export default function AdminLeadTransferPage() {
           p.set('transferred_filter', 'yes');
           p.set('per_page', '5000');
           p.set('page', '1');
-          const resT = await fetch(`/api/admin/crm/consultant-indicateds?${p.toString()}`, { headers: headers() });
+          const resT = await fetch(`/api/admin/crm/consultant-indicateds?${p.toString()}`, {
+            headers: headers(),
+            signal: transferredFetchSignal,
+          });
           const jT = await resT.json();
           if (resT.ok && Array.isArray(jT?.data?.data)) {
             (jT.data.data as Array<{ id?: unknown }>).forEach((row) => {
@@ -1610,6 +1674,7 @@ export default function AdminLeadTransferPage() {
             showToast(`Falha ao verificar leads já transferidos no CRM: ${msg}`, 'error');
           }
         } catch (err) {
+          if (err instanceof Error && err.name === 'AbortError') return;
           const fallbackMessage = err instanceof Error ? err.message : null;
           const msg = normalizeCrmErrorMessage(fallbackMessage, null);
           showToast(`Falha ao verificar leads já transferidos no CRM: ${msg}`, 'error');
@@ -1967,7 +2032,7 @@ export default function AdminLeadTransferPage() {
         const requestIdToApprove = transferFromSolicitationRequestIdRef.current;
         if (requestIdToApprove) {
           const sourceConsultant = consultants.find((c) => (c.email ?? '').trim().toLowerCase() === (sourceEmail ?? '').trim().toLowerCase());
-          const sourceConsultantId = sourceConsultant?.id?.trim();
+          const sourceConsultantId = transferFromSolicitationSourceIdRef.current?.trim() || sourceConsultant?.id?.trim();
           const targetConsultant = consultants.find((c) => (c.email ?? '').trim().toLowerCase() === targetEmail.trim().toLowerCase());
           const targetConsultantId = targetConsultant?.id?.trim();
           try {
@@ -2004,6 +2069,7 @@ export default function AdminLeadTransferPage() {
             showToast(`${count} lead(s) transferido(s). Não foi possível aprovar a solicitação.`, 'info');
           }
           transferFromSolicitationRequestIdRef.current = null;
+          transferFromSolicitationSourceIdRef.current = null;
         } else {
           showToast(`${count} lead(s) transferido(s) de ${sourceEmail} para ${targetEmail}. Aba Histórico atualizada.`, 'success');
           if (Number(json?.data?.crm_count) === 0 && count > 0) {
@@ -2921,10 +2987,28 @@ export default function AdminLeadTransferPage() {
     async (
       overrideBancaId?: string,
       options?: { omitSourceConsultantFilter?: boolean }
-    ): Promise<Array<{ log_id: string; banca_id: string; transfer_type: string; disponivel: number; source_consultant_email: string; target_consultant_email: string }>> => {
+    ): Promise<
+      Array<{
+        log_id: string;
+        banca_id: string;
+        transfer_type: string;
+        disponivel: number;
+        source_consultant_email: string;
+        target_consultant_email: string;
+        source_consultant_name?: string | null;
+      }>
+    > => {
       if (!userId) return [];
       setLoadingResolvedList(true);
-      let nextList: Array<{ log_id: string; banca_id: string; transfer_type: string; disponivel: number; source_consultant_email: string; target_consultant_email: string }> = [];
+      let nextList: Array<{
+        log_id: string;
+        banca_id: string;
+        transfer_type: string;
+        disponivel: number;
+        source_consultant_email: string;
+        target_consultant_email: string;
+        source_consultant_name?: string | null;
+      }> = [];
       try {
         const params = new URLSearchParams();
         const bancaParaFiltro = overrideBancaId ?? historyBancaFilter;
@@ -3249,7 +3333,16 @@ export default function AdminLeadTransferPage() {
     []
   );
 
-  const openMoveLeadsForm = useCallback(async (log: { log_id: string; banca_id: string; transfer_type: string; disponivel: number; source_consultant_email: string; target_consultant_email: string }) => {
+  const openMoveLeadsForm = useCallback(
+    async (log: {
+      log_id: string;
+      banca_id: string;
+      transfer_type: string;
+      disponivel: number;
+      source_consultant_email: string;
+      target_consultant_email: string;
+      source_consultant_name?: string | null;
+    }) => {
     setMoveLeadsBlockedByRateLimit(false);
     setMoveLeadsSelectedLog(log);
     setMoveLeadsSelectedSourceEmail((log.source_consultant_email ?? '').trim());
@@ -4171,6 +4264,16 @@ export default function AdminLeadTransferPage() {
                         <option value={500}>500</option>
                       </select>
                     </div>
+                    <button
+                      type="button"
+                      onClick={handleReconcileRequests}
+                      disabled={reconcilingRequests || loadingLeadRequests}
+                      title="Reconciliar status de solicitações pendentes que já tiveram leads transferidos"
+                      className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50 transition-colors"
+                    >
+                      {reconcilingRequests ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                      Reconciliar status
+                    </button>
                   </div>
                 )}
               </div>
@@ -4861,17 +4964,27 @@ export default function AdminLeadTransferPage() {
                                 bancas.find((b) => b.id === bancaId)?.url ||
                                 bancaId ||
                                 '-';
-                              const byKey = new Map<string, { email: string; totalDisponivel: number; logCount: number }>();
+                              const byKey = new Map<
+                                string,
+                                { email: string; totalDisponivel: number; logCount: number; sourceConsultantName: string | null }
+                              >();
                               for (const r of resolvedList.filter((row) => row.banca_id === bancaId)) {
                                 const email = (r.source_consultant_email ?? '').trim();
                                 if (!email) continue;
                                 const key = email.toLowerCase();
+                                const nm = (r.source_consultant_name ?? '').trim();
                                 const cur = byKey.get(key);
                                 if (cur) {
                                   cur.totalDisponivel += r.disponivel;
                                   cur.logCount += 1;
+                                  if (!cur.sourceConsultantName && nm) cur.sourceConsultantName = nm;
                                 } else {
-                                  byKey.set(key, { email, totalDisponivel: r.disponivel, logCount: 1 });
+                                  byKey.set(key, {
+                                    email,
+                                    totalDisponivel: r.disponivel,
+                                    logCount: 1,
+                                    sourceConsultantName: nm || null,
+                                  });
                                 }
                               }
                               const rows = [...byKey.values()].sort((a, b) => a.email.localeCompare(b.email));
@@ -4883,10 +4996,13 @@ export default function AdminLeadTransferPage() {
                                 <div className="rounded-xl border-2 border-emerald-500/30 bg-emerald-50/30 dark:bg-emerald-950/20 dark:border-emerald-500/20 overflow-y-auto max-h-[200px] divide-y divide-emerald-200/50 dark:divide-emerald-800/30">
                                   {rows.map((row) => {
                                     const isSelected = currentSourceNorm === row.email.toLowerCase();
-                                    const nameFromList = moveLeadsConsultants.find(
+                                    const nameFromConsultants = moveLeadsConsultants.find(
                                       (c) => (c.email ?? '').trim().toLowerCase() === row.email.toLowerCase()
                                     )?.full_name?.trim();
-                                    const titlePrimary = nameFromList || row.email;
+                                    const displayName = (row.sourceConsultantName ?? '').trim() || nameFromConsultants || '';
+                                    const titleLine = displayName
+                                      ? `${displayName} · ${row.email} · ${bancaLabel}`
+                                      : `${row.email} · ${bancaLabel}`;
                                     return (
                                       <button
                                         key={row.email}
@@ -4894,11 +5010,11 @@ export default function AdminLeadTransferPage() {
                                         onClick={() => void handleMoveLeadsPickSource(row.email, bancaId)}
                                         className={`w-full flex flex-col items-start px-4 py-3 text-left hover:bg-emerald-100/50 dark:hover:bg-emerald-900/30 transition-colors rounded-lg ${isSelected ? 'bg-emerald-100/70 dark:bg-emerald-900/40 ring-2 ring-emerald-500/60' : 'hover:ring-1 hover:ring-emerald-500/30'}`}
                                       >
-                                        <span className="text-sm font-semibold text-gray-900 dark:text-white">
-                                          {titlePrimary} • {bancaLabel}
+                                        <span className="text-sm font-semibold text-gray-900 dark:text-white break-all">
+                                          {titleLine}
                                         </span>
-                                        <span className="text-xs text-gray-600 dark:text-gray-400 mt-0.5 break-all">
-                                          Origem: {row.email} ({row.totalDisponivel} lead(s) disponível(is))
+                                        <span className="text-xs text-gray-600 dark:text-gray-400 mt-0.5">
+                                          {row.totalDisponivel} lead(s) disponível(is)
                                           {row.logCount > 1 && (
                                             <span className="block mt-1 font-medium text-emerald-700 dark:text-emerald-400">
                                               {row.logCount} transferências resolvidas agregadas
@@ -4998,7 +5114,16 @@ export default function AdminLeadTransferPage() {
                           ) : (
                             (() => {
                               const bancaIdFiltro = (historyBancaFilter || '').trim();
-                              const sourceMap = new Map<string, { email: string; totalDisponivel: number; logCount: number; bancas: Set<string> }>();
+                              const sourceMap = new Map<
+                                string,
+                                {
+                                  email: string;
+                                  totalDisponivel: number;
+                                  logCount: number;
+                                  bancas: Set<string>;
+                                  sourceConsultantName: string | null;
+                                }
+                              >();
                               const baseList = bancaIdFiltro
                                 ? resolvedList.filter((r) => r.banca_id === bancaIdFiltro)
                                 : resolvedList;
@@ -5006,17 +5131,20 @@ export default function AdminLeadTransferPage() {
                                 const email = (r.source_consultant_email ?? '').trim();
                                 if (!email) continue;
                                 const key = email.toLowerCase();
+                                const nm = (r.source_consultant_name ?? '').trim();
                                 const cur = sourceMap.get(key);
                                 if (cur) {
                                   cur.totalDisponivel += r.disponivel;
                                   cur.logCount += 1;
                                   if (r.banca_id) cur.bancas.add(r.banca_id);
+                                  if (!cur.sourceConsultantName && nm) cur.sourceConsultantName = nm;
                                 } else {
                                   sourceMap.set(key, {
                                     email,
                                     totalDisponivel: r.disponivel,
                                     logCount: 1,
                                     bancas: new Set(r.banca_id ? [r.banca_id] : []),
+                                    sourceConsultantName: nm || null,
                                   });
                                 }
                               }
@@ -5027,9 +5155,25 @@ export default function AdminLeadTransferPage() {
                               return (
                                 <div className="rounded-xl border-2 border-emerald-500/30 bg-emerald-50/30 dark:bg-emerald-950/20 dark:border-emerald-500/20 overflow-y-auto max-h-[360px] divide-y divide-emerald-200/50 dark:divide-emerald-800/30">
                                   {sourceRows.map((row) => {
-                                    const bancaHint = bancaIdFiltro
-                                      ? (bancas.find((b) => b.id === bancaIdFiltro)?.name || bancas.find((b) => b.id === bancaIdFiltro)?.url || bancaIdFiltro)
-                                      : `${row.bancas.size} banca(s)`;
+                                    let bancaHint: string;
+                                    if (bancaIdFiltro) {
+                                      bancaHint = bancas.find((b) => b.id === bancaIdFiltro)?.name || bancas.find((b) => b.id === bancaIdFiltro)?.url || bancaIdFiltro;
+                                    } else {
+                                      const bancaNames = Array.from(row.bancas)
+                                        .map((bId) => {
+                                          const b = bancas.find((banca) => banca.id === bId);
+                                          return b?.name || b?.url || bId;
+                                        })
+                                        .filter(Boolean);
+                                      bancaHint = bancaNames.length > 0 ? bancaNames.join(', ') : `${row.bancas.size} banca(s)`;
+                                    }
+                                    const nameFromConsultants = moveLeadsConsultants.find(
+                                      (c) => (c.email ?? '').trim().toLowerCase() === row.email.toLowerCase()
+                                    )?.full_name?.trim();
+                                    const displayName = (row.sourceConsultantName ?? '').trim() || nameFromConsultants || '';
+                                    const titleLine = displayName
+                                      ? `${displayName} · ${row.email} · ${bancaHint}`
+                                      : `${row.email} · ${bancaHint}`;
                                     return (
                                       <button
                                         key={row.email}
@@ -5037,8 +5181,8 @@ export default function AdminLeadTransferPage() {
                                         onClick={() => void handleMoveLeadsPickSource(row.email, bancaIdFiltro)}
                                         className="w-full flex flex-col items-start px-4 py-3 text-left hover:bg-emerald-100/50 dark:hover:bg-emerald-900/30 transition-colors rounded-lg"
                                       >
-                                        <span className="text-sm font-semibold text-gray-900 dark:text-white">
-                                          {row.email} • {bancaHint}
+                                        <span className="text-sm font-semibold text-gray-900 dark:text-white break-all">
+                                          {titleLine}
                                         </span>
                                         <span className="text-xs text-gray-600 dark:text-gray-400 mt-0.5">
                                           {row.totalDisponivel} lead(s) disponível(is){row.logCount > 1 ? ` em ${row.logCount} transferências` : ''}
@@ -6335,7 +6479,7 @@ export default function AdminLeadTransferPage() {
               {currentStep === 2 && (
                 <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl border border-gray-200 dark:border-[#404040] p-5 shadow-sm ring-1 ring-gray-100 dark:ring-transparent space-y-4">
                   <label className="flex items-center gap-2 text-sm font-bold text-gray-800 dark:text-white"><User className="w-4 h-4 text-[#8CD955]" />Consultor origem</label>
-                  <p className="text-xs text-gray-500">Todos os usuários atribuídos à banca (cargo, gerente e consultores vinculados)</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Todos os usuários atribuídos à banca (cargo, gerente e consultores vinculados)</p>
                   <div className="flex flex-wrap gap-3 items-end">
                     <button
                       type="button"
@@ -6343,18 +6487,18 @@ export default function AdminLeadTransferPage() {
                       disabled={!bancaId || loadingConsultants}
                       className="flex items-center gap-2 min-w-[280px] max-w-full border border-gray-300 dark:border-[#555] rounded-xl px-3 py-2.5 text-sm text-left bg-white dark:bg-[#333] dark:text-white hover:bg-gray-50 dark:hover:bg-[#404040] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      <User className="w-4 h-4 text-gray-500 flex-shrink-0" />
-                      <span className="truncate text-gray-800">
+                      <User className="w-4 h-4 text-gray-500 dark:text-gray-400 flex-shrink-0" />
+                      <span className="truncate text-gray-800 dark:text-white">
                         {!bancaId ? 'Selecione a banca' : loadingConsultants ? 'Carregando...' : consultants.length === 0 ? 'Nenhum consultor na banca' : sourceEmail ? (consultants.find((c) => c.email === sourceEmail)?.full_name || sourceEmail) : 'Selecionar consultor doador'}
                       </span>
-                      <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0 ml-auto" />
+                      <ChevronDown className="w-4 h-4 text-gray-500 dark:text-gray-400 flex-shrink-0 ml-auto" />
                     </button>
                     <button type="button" onClick={loadTags} disabled={!sourceEmail?.trim() || loadingTags} className="px-3 py-2 rounded-xl border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 text-sm hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors">Carregar tags</button>
                   </div>
                   {tags.length > 0 && (
                     <div>
                       <span className="text-xs text-gray-600 dark:text-gray-400 mr-2">Filtrar por tag:</span>
-                      <select value={selectedTag} onChange={(e) => setSelectedTag(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1 text-sm text-gray-800">
+                      <select value={selectedTag} onChange={(e) => setSelectedTag(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1 text-sm text-gray-800 dark:text-white">
                         <option value="">Todas</option>
                         {tags.map((t) => <option key={t} value={t}>{t}</option>)}
                       </select>
@@ -6473,18 +6617,6 @@ export default function AdminLeadTransferPage() {
                       <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Valor mínimo (soma saldo) R$</label>
                       <input type="text" inputMode="decimal" placeholder="Ex: 100" value={minSumBalance} onChange={(e) => setMinSumBalance(e.target.value)} className="w-28 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Leads até somar este valor</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        id="show-only-not-transferred"
-                        checked={showOnlyNotTransferred}
-                        onChange={(e) => setShowOnlyNotTransferred(e.target.checked)}
-                        className="rounded border-gray-300 dark:border-[#555] text-[#8CD955] focus:ring-[#8CD955]"
-                      />
-                      <label htmlFor="show-only-not-transferred" className="text-xs font-semibold text-gray-700 dark:text-gray-300 cursor-pointer">
-                        Mostrar apenas não transferidos
-                      </label>
                     </div>
                     <div>
                       <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Auto-selecionar (N leads)</label>

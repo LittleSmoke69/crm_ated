@@ -3,7 +3,7 @@
  *
  * Lista transferências já resolvidas no banco com leads disponíveis para mover (sem filtro de período).
  * Query: banca_id? (opcional), source_consultant_email? (consultor doador). Retorna todas as transferências resolvidas das bancas permitidas.
- * Retorno: Array<{ log_id, banca_id, transfer_type, disponivel, source_consultant_email, target_consultant_email }>
+ * Retorno: Array<{ log_id, banca_id, transfer_type, disponivel, source_consultant_email, target_consultant_email, source_consultant_name? }>
  */
 
 import { NextRequest } from 'next/server';
@@ -91,7 +91,39 @@ export async function GET(req: NextRequest) {
         target_consultant_email: (log.target_consultant_email ?? '').trim(),
       }));
 
-    return successResponse(list);
+    /** Nome do consultor de origem (profiles.full_name) por e-mail, para identificação na UI */
+    const uniqueSourceEmails = [...new Set(list.map((l) => l.source_consultant_email).filter(Boolean))];
+    const nameByEmailLower = new Map<string, string>();
+    for (const chunk of chunkArray(uniqueSourceEmails, 80)) {
+      const { data: profs } = await supabaseServiceRole
+        .from('profiles')
+        .select('email, full_name')
+        .in('email', chunk);
+      for (const p of profs ?? []) {
+        const em = (p.email ?? '').trim();
+        const fn = (p.full_name ?? '').trim();
+        if (em && fn) nameByEmailLower.set(em.toLowerCase(), fn);
+      }
+    }
+    for (const em of uniqueSourceEmails) {
+      const low = em.toLowerCase();
+      if (nameByEmailLower.has(low)) continue;
+      const { data: one } = await supabaseServiceRole
+        .from('profiles')
+        .select('email, full_name')
+        .ilike('email', em)
+        .limit(1)
+        .maybeSingle();
+      const fn = (one?.full_name ?? '').trim();
+      if (fn) nameByEmailLower.set(low, fn);
+    }
+
+    const enriched = list.map((row) => ({
+      ...row,
+      source_consultant_name: nameByEmailLower.get(row.source_consultant_email.toLowerCase()) ?? null,
+    }));
+
+    return successResponse(enriched);
   } catch (err: unknown) {
     console.error('[admin][transfer-logs][resolved-list] GET error:', err);
     return serverErrorResponse(err as Error);

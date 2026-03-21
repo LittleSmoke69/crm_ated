@@ -20,6 +20,7 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import VerifyGroupsOverlay from '@/components/anti-spam/VerifyGroupsOverlay';
+import { postGroupFetchAndResolve } from '@/lib/utils/group-fetch-client';
 
 interface AntiSpamConfigRow {
   id: string;
@@ -330,33 +331,15 @@ export default function AdminAntiSpamPage() {
     }
     setFetchingGroups(true);
     try {
-      const res = await fetch('/api/groups/fetch', {
-        method: 'POST',
-        headers: { 'X-User-Id': userId, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ instanceName }),
-      });
-      const json = await res.json();
-      if (json.success && Array.isArray(json.data) && json.data.length > 0) {
-        const syncRes = await fetch('/api/groups/sync', {
-          method: 'POST',
-          headers: { 'X-User-Id': userId, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ instanceName, groups: json.data }),
-        });
-        const syncJson = await syncRes.json();
-        if (syncJson.success) {
-          showToast('success', 'Grupos buscados e salvos. Na próxima vez serão carregados do banco.');
-        } else {
-          showToast('success', 'Grupos buscados (falha ao salvar no banco).');
-        }
-        await loadSavedGroupsAll();
-      } else if (json.success) {
-        showToast('success', 'Nenhum grupo encontrado na instância.');
-        await loadSavedGroupsAll();
+      const { groups, message } = await postGroupFetchAndResolve(userId, instanceName);
+      if (groups.length > 0) {
+        showToast('success', message || 'Grupos buscados e salvos. Na próxima vez serão carregados do banco.');
       } else {
-        showToast('error', json.error || 'Erro ao buscar grupos');
+        showToast('success', 'Nenhum grupo encontrado na instância.');
       }
-    } catch (e: any) {
-      showToast('error', e?.message || 'Erro ao buscar grupos');
+      await loadSavedGroupsAll();
+    } catch (e: unknown) {
+      showToast('error', e instanceof Error ? e.message : 'Erro ao buscar grupos');
     } finally {
       setFetchingGroups(false);
     }

@@ -218,7 +218,10 @@ export default function FlowsPage() {
                   });
                   if (response.ok) {
                     const result = await response.json();
-                    if (result.success) {
+                    if (result.success && result.data?.flow_id) {
+                      if (result.data.already_existed) {
+                        alert('Template de boas-vindas já existe. Abrindo para edição.');
+                      }
                       router.push(`/admin/flows/${result.data.flow_id}`);
                     }
                   }

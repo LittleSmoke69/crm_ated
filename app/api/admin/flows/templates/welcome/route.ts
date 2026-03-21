@@ -11,13 +11,19 @@ export async function POST(req: NextRequest) {
   try {
     const { userId } = await requireAuth(req);
 
-    const flowId = await flowTemplatesService.createWelcomeTemplate(userId);
+    const result = await flowTemplatesService.createWelcomeTemplate(userId);
 
-    if (!flowId) {
+    if (!result) {
       return errorResponse('Erro ao criar template', 500);
     }
 
-    return successResponse({ flow_id: flowId }, 'Template de boas-vindas criado com sucesso');
+    const message = result.alreadyExisted
+      ? 'Template de boas-vindas já existia. Redirecionando para edição.'
+      : 'Template de boas-vindas criado com sucesso';
+    return successResponse(
+      { flow_id: result.flowId, already_existed: result.alreadyExisted },
+      message
+    );
   } catch (err: any) {
     return serverErrorResponse(err);
   }

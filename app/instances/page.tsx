@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import { supabase } from '@/lib/supabase';
+import { postGroupFetchAndResolve } from '@/lib/utils/group-fetch-client';
 
 const QR_WINDOW_SECONDS = 30;
 const STATUS_FETCH_TIMEOUT_MS = 20000; // 20s - evita travamento se o backend/Evolution estiver lento
@@ -404,20 +405,8 @@ const InstancesPage = () => {
       showToast('Extraindo grupos...', 'info');
       addLog(`Extraindo todos os grupos da instância ${instanceName}...`, 'info');
 
-      const fetchResponse = await fetch('/api/groups/fetch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-        body: JSON.stringify({ instanceName }),
-      });
-
-      const fetchData = await fetchResponse.json();
-      if (!fetchResponse.ok) {
-        showToast(fetchData.error || 'Erro ao buscar grupos da API', 'error');
-        return;
-      }
-
-      const groups = Array.isArray(fetchData.data) ? fetchData.data : [];
-      showToast(fetchData.message || `${groups.length} grupo(s) sincronizado(s) com sucesso!`, 'success');
+      const { groups, message } = await postGroupFetchAndResolve(userId, instanceName);
+      showToast(message || `${groups.length} grupo(s) sincronizado(s) com sucesso!`, 'success');
       addLog(`${groups.length} grupos sincronizados da instância ${instanceName}`, 'success');
     } catch (error) {
       showToast('Erro ao extrair grupos', 'error');
@@ -434,22 +423,10 @@ const InstancesPage = () => {
 
       (async () => {
         try {
-          const fetchResponse = await fetch('/api/groups/fetch', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-            body: JSON.stringify({ instanceName }),
-          });
-          const fetchData = await fetchResponse.json();
+          const { groups, message } = await postGroupFetchAndResolve(userId, instanceName);
           setGroupsProcessingForInstance(null);
 
-          if (!fetchResponse.ok) {
-            showToast(fetchData.error || 'Erro ao buscar grupos da API', 'error');
-            addLog(`Erro ao buscar grupos da instância ${instanceName}`, 'error');
-            return;
-          }
-
-          const groups = Array.isArray(fetchData.data) ? fetchData.data : [];
-          showToast(fetchData.message || `${groups.length} grupo(s) sincronizado(s)! Processamento concluído.`, 'success');
+          showToast(message || `${groups.length} grupo(s) sincronizado(s)! Processamento concluído.`, 'success');
           addLog(`${groups.length} grupos sincronizados da instância ${instanceName} (em segundo plano)`, 'success');
         } catch (error) {
           setGroupsProcessingForInstance(null);
@@ -469,25 +446,13 @@ const InstancesPage = () => {
       setGroupsProcessingForInstance(instanceName);
       addLog(`Extraindo grupos da instância ${instanceName} (modal)...`, 'info');
       try {
-        const fetchResponse = await fetch('/api/groups/fetch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-          body: JSON.stringify({ instanceName }),
-        });
-        const fetchData = await fetchResponse.json();
+        const { groups, message } = await postGroupFetchAndResolve(userId, instanceName);
         setGroupsProcessingForInstance(null);
         setExtractGroupsModalExtracting(false);
         setShowExtractGroupsPrompt(false);
         setNewlyConnectedInstance(null);
 
-        if (!fetchResponse.ok) {
-          showToast(fetchData.error || 'Erro ao buscar grupos da API', 'error');
-          addLog(`Erro ao buscar grupos da instância ${instanceName}`, 'error');
-          return;
-        }
-
-        const groups = Array.isArray(fetchData.data) ? fetchData.data : [];
-        showToast(fetchData.message || `${groups.length} grupo(s) salvos/sincronizados com sucesso!`, 'success');
+        showToast(message || `${groups.length} grupo(s) salvos/sincronizados com sucesso!`, 'success');
         addLog(`${groups.length} grupos da instância ${instanceName} extraídos e salvos`, 'success');
       } catch (error) {
         setExtractGroupsModalExtracting(false);
@@ -1472,7 +1437,7 @@ const InstancesPage = () => {
                                 <span className="hidden sm:inline">{checkingInstance === inst.instance_name ? '...' : 'Verificar'}</span>
                               </button>
                             </div>
-                            {isGerente && inst.id && (inst as any).webhook_configured === true && (() => {
+                            {isGerente && inst.id && (() => {
                               const assignment = atendimentoAssignmentByInstanceId[inst.id];
                               const hasConsultor = !!assignment?.consultorId;
                               if (hasConsultor) {

@@ -45,6 +45,25 @@ const HIDE_SMART_SEND = true;
 /** Timeout para upload (10 min) — evita travamento em conexões lentas com arquivos grandes. */
 const UPLOAD_XHR_TIMEOUT_MS = 10 * 60 * 1000;
 
+/** Faz parsing seguro do JSON de uma Response — evita crash quando o servidor retorna corpo vazio ou truncado. */
+async function safeResponseJson(response: Response): Promise<any> {
+  const text = await response.text();
+  if (!text || !text.trim()) {
+    return {
+      success: false,
+      error: `Servidor retornou resposta vazia (status ${response.status}). Verifique sua conexão e tente novamente.`,
+    };
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return {
+      success: false,
+      error: `Resposta inválida do servidor (status ${response.status}). Tente novamente.`,
+    };
+  }
+}
+
 /** Upload de arquivo para URL assinada com progresso real (evita gargalos e mostra % real). */
 function uploadFileWithProgress(
   signedUrl: string,
@@ -160,7 +179,7 @@ const ActivationsPage = () => {
         const response = await fetch('/api/admin/check', {
           headers: { 'X-User-Id': userId },
         });
-        const data = await response.json();
+        const data = await safeResponseJson(response);
         setIsAdmin(data.data?.isAdmin || false);
       } catch (error) {
         console.error('Erro ao verificar admin:', error);
@@ -177,7 +196,7 @@ const ActivationsPage = () => {
       const response = await fetch('/api/crm/messages', {
         headers: { 'X-User-Id': userId },
       });
-      const data = await response.json();
+      const data = await safeResponseJson(response);
       if (response.ok) {
         setMessages(data.data || []);
       } else {
@@ -204,7 +223,7 @@ const ActivationsPage = () => {
       const response = await fetch('/api/crm/activations/schedules', {
         headers: { 'X-User-Id': userId },
       });
-      const data = await response.json();
+      const data = await safeResponseJson(response);
       if (response.ok) {
         setSchedules(data.data || []);
       } else {
@@ -228,7 +247,7 @@ const ActivationsPage = () => {
     setLoadingMassSendJobs(true);
     try {
       const res = await fetch('/api/crm/activations/mass-send/jobs', { headers: { 'X-User-Id': userId } });
-      const data = await res.json();
+      const data = await safeResponseJson(res);
       if (data.success && Array.isArray(data.data)) setMassSendJobs(data.data);
       else setMassSendJobs([]);
     } catch {
@@ -253,7 +272,7 @@ const ActivationsPage = () => {
         method: 'POST',
         headers: { 'X-User-Id': userId },
       });
-      const data = await response.json();
+      const data = await safeResponseJson(response);
       if (response.ok) {
         showToast(data.message || 'Próximas execuções recalculadas.', 'success');
         loadSchedules();
@@ -364,7 +383,7 @@ const ActivationsPage = () => {
       if (response.ok) {
         await loadMessages();
       } else {
-        const data = await response.json();
+        const data = await safeResponseJson(response);
         showToast(`Erro: ${data.error || 'Erro ao atualizar favorito'}`, 'error');
       }
     } catch (error) {
@@ -522,7 +541,7 @@ const ActivationsPage = () => {
         }),
       });
 
-      const createData = await createResponse.json();
+      const createData = await safeResponseJson(createResponse);
       if (!createResponse.ok) {
         throw new Error(createData.error || 'Erro ao criar mensagem');
       }
@@ -555,7 +574,7 @@ const ActivationsPage = () => {
             }),
           });
 
-          const uploadUrlData = await uploadUrlResponse.json();
+          const uploadUrlData = await safeResponseJson(uploadUrlResponse);
           if (!uploadUrlResponse.ok) {
             throw new Error(uploadUrlData.error || 'Erro ao gerar URL de upload');
           }
@@ -598,7 +617,7 @@ const ActivationsPage = () => {
             }),
           });
 
-          const updateData = await updateResponse.json();
+          const updateData = await safeResponseJson(updateResponse);
           if (!updateResponse.ok) {
             throw new Error(updateData.error || 'Erro ao atualizar mensagem com mídia');
           }
@@ -615,7 +634,7 @@ const ActivationsPage = () => {
                 },
                 body: JSON.stringify({ messageId }),
               });
-              const importData = await importRes.json();
+              const importData = await safeResponseJson(importRes);
               if (!importRes.ok) {
                 throw new Error(importData.error || 'Erro ao armazenar vídeo no treinamento');
               }
@@ -730,7 +749,7 @@ const ActivationsPage = () => {
           }),
         });
 
-        const createData = await createResponse.json();
+        const createData = await safeResponseJson(createResponse);
         if (!createResponse.ok) {
           throw new Error(createData.error || 'Erro ao criar novo modelo de mensagem');
         }
@@ -754,7 +773,7 @@ const ActivationsPage = () => {
                 originalName: attachmentFile.name,
               }),
             });
-            const uploadUrlData = await uploadUrlResponse.json();
+            const uploadUrlData = await safeResponseJson(uploadUrlResponse);
             if (!uploadUrlResponse.ok) {
               throw new Error(uploadUrlData.error || 'Erro ao gerar URL de upload');
             }
@@ -785,7 +804,7 @@ const ActivationsPage = () => {
                 mediaType,
               }),
             });
-            const updateMediaData = await updateMediaResponse.json();
+            const updateMediaData = await safeResponseJson(updateMediaResponse);
             if (!updateMediaResponse.ok) {
               throw new Error(updateMediaData.error || 'Erro ao atualizar mídia do novo modelo');
             }
@@ -812,7 +831,7 @@ const ActivationsPage = () => {
           headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
           body: JSON.stringify({ message_id: newMessageId }),
         });
-        const patchData = await patchRes.json();
+        const patchData = await safeResponseJson(patchRes);
         if (!patchRes.ok) {
           throw new Error(patchData.error || 'Erro ao vincular agendamento ao novo modelo');
         }
@@ -864,7 +883,7 @@ const ActivationsPage = () => {
         }),
       });
 
-      const updateData = await updateResponse.json();
+      const updateData = await safeResponseJson(updateResponse);
       if (!updateResponse.ok) {
         throw new Error(updateData.error || 'Erro ao atualizar mensagem');
       }
@@ -893,7 +912,7 @@ const ActivationsPage = () => {
             }),
           });
 
-          const uploadUrlData = await uploadUrlResponse.json();
+          const uploadUrlData = await safeResponseJson(uploadUrlResponse);
           if (!uploadUrlResponse.ok) {
             throw new Error(uploadUrlData.error || 'Erro ao gerar URL de upload');
           }
@@ -934,7 +953,7 @@ const ActivationsPage = () => {
             }),
           });
 
-          const updateMediaData = await updateMediaResponse.json();
+          const updateMediaData = await safeResponseJson(updateMediaResponse);
           if (!updateMediaResponse.ok) {
             throw new Error(updateMediaData.error || 'Erro ao atualizar mensagem com mídia');
           }
@@ -998,7 +1017,7 @@ const ActivationsPage = () => {
         setOpenMenuId(null);
         showToast('Mensagem deletada com sucesso!', 'success');
       } else {
-        const data = await response.json();
+        const data = await safeResponseJson(response);
         showToast(`Erro: ${data.error || 'Erro ao deletar mensagem'}`, 'error');
       }
     } catch (error) {
@@ -1089,10 +1108,10 @@ const ActivationsPage = () => {
           'Content-Type': 'application/json',
           'X-User-Id': userId,
         },
-        body: JSON.stringify({ status: 'paused' }), // Usa 'paused' para pausar
+        body: JSON.stringify({ status: 'paused' }),
       });
 
-      const data = await response.json();
+      const data = await safeResponseJson(response);
       if (response.ok) {
         await loadSchedules();
         showToast('Agendamento pausado com sucesso', 'success');
@@ -1119,7 +1138,7 @@ const ActivationsPage = () => {
         body: JSON.stringify({ status: 'scheduled' }),
       });
 
-      const data = await response.json();
+      const data = await safeResponseJson(response);
       if (response.ok) {
         await loadSchedules();
         showToast('Agendamento retomado com sucesso', 'success');
@@ -1261,7 +1280,7 @@ const ActivationsPage = () => {
         headers: { 'X-User-Id': userId },
       });
 
-      const data = await response.json();
+      const data = await safeResponseJson(response);
       if (response.ok) {
         await loadSchedules();
         showToast('Agendamento excluído com sucesso', 'success');
@@ -2416,7 +2435,7 @@ const ActivationsPage = () => {
                                     method: 'DELETE',
                                     headers: { 'X-User-Id': userId ?? '' },
                                   });
-                                  const data = await res.json();
+                                  const data = await safeResponseJson(res);
                                   if (res.ok && data.success) {
                                     showToast('Campanha excluída.', 'success');
                                     loadMassSendJobs();
