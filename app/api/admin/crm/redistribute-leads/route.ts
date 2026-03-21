@@ -34,6 +34,8 @@ const bodySchema = z.object({
   source_transfer_log_id: z.string().uuid().optional(),
   /** Email original do consultor doador (source do log de origem). Usado como fallback se o CRM retornar count=0 — indica que os leads ainda estão com o doador original. */
   original_source_consultant_email: z.string().email().optional(),
+  /** Forçar apenas atualização do DB sem chamar o CRM (usado em casos de desync CRM↔DB confirmado pelo admin). */
+  force_db_only: z.boolean().optional().default(false),
 }).refine(
   (data) => data.source_consultant_email.toLowerCase() !== data.target_consultant_email.toLowerCase(),
   { message: 'Consultor origem e destino devem ser diferentes.', path: ['target_consultant_email'] }
@@ -95,7 +97,7 @@ export async function POST(req: NextRequest) {
       return errorResponse(msg, 400);
     }
 
-    let { banca_id, source_consultant_email, target_consultant_email, leads_ids, transfer_type, transfer_deadline_days, filters_snapshot, lead_snapshots, source_transfer_log_id, original_source_consultant_email } = parsed.data;
+    let { banca_id, source_consultant_email, target_consultant_email, leads_ids, transfer_type, transfer_deadline_days, filters_snapshot, lead_snapshots, source_transfer_log_id, original_source_consultant_email, force_db_only } = parsed.data;
     const ctx = await requireAdminLeadTransferContext(req, banca_id);
     console.log(`${LOG_PREFIX} POST context: userId=${ctx.userId}, bancaId=${ctx.bancaId}, crmBaseUrl=${ctx.crmBaseUrl}, bancaName=${ctx.bancaName ?? 'n/a'}`);
 
@@ -182,24 +184,23 @@ export async function POST(req: NextRequest) {
       return errorResponse('Consultor destino não pertence à banca selecionada.', 400);
     }
 
-    console.log(`${LOG_PREFIX} POST calling CRM redistributeLeads: source=${source_consultant_email}, target=${target_consultant_email}, leads_ids=${normalizedLeadIds.length} items (sample: ${JSON.stringify(normalizedLeadIds.slice(0, 5))}) crmIds sample: ${JSON.stringify(crmLeadIds.slice(0, 5))}`);
-    // #region agent log
-    fetch('http://127.0.0.1:7901/ingest/0ef4209d-37f6-4cbb-b28d-8cf53becc342',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37d7e0'},body:JSON.stringify({sessionId:'37d7e0',location:'redistribute-leads/route.ts:pre-crm',message:'CRM call params',data:{source:source_consultant_email,target:target_consultant_email,sameEmail:source_consultant_email===target_consultant_email,leadsCount:normalizedLeadIds.length,sample:normalizedLeadIds.slice(0,5),types:normalizedLeadIds.slice(0,3).map(id=>typeof id),crmSample:crmLeadIds.slice(0,5),bancaId:ctx.bancaId},timestamp:Date.now(),runId:'post-fix',hypothesisId:'A-B-C-D'})}).catch(()=>{});
-    // #endregion
+    console.log(`${LOG_PREFIX} POST calling CRM redistributeLeads: source=${source_consultant_email}, target=${target_consultant_email}, leads_ids=${normalizedLeadIds.length} items (sample: ${JSON.stringify(normalizedLeadIds.slice(0, 5))})`);
     const client = createCrmRedistributionClient(ctx.crmBaseUrl);
-    const result = await client.redistributeLeads({
-      source_consultant_email,
-      target_consultant_email,
-      leads_ids: crmLeadIds,
-    });
+    const result = force_db_only
+      ? (() => {
+          console.warn(`${LOG_PREFIX} POST [FORCE_DB_ONLY] Admin confirmou desync CRM↔DB. Pulando chamada ao CRM. source=${source_consultant_email}, target=${target_consultant_email}, leads=${normalizedLeadIds.length}`);
+          return { success: true as const, count: normalizedLeadIds.length, message: 'force_db_only — CRM skipped by admin' };
+        })()
+      : await client.redistributeLeads({
+          source_consultant_email,
+          target_consultant_email,
+          leads_ids: crmLeadIds,
+        });
 
-    console.log(`${LOG_PREFIX} POST CRM response: success=${result.success}, count=${result.count ?? result.data?.count ?? 'n/a'}, message=${result.message ?? 'n/a'}, fullResult=${JSON.stringify(result)}`);
-    // #region agent log
-    fetch('http://127.0.0.1:7901/ingest/0ef4209d-37f6-4cbb-b28d-8cf53becc342',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37d7e0'},body:JSON.stringify({sessionId:'37d7e0',location:'redistribute-leads/route.ts:post-crm',message:'CRM response',data:{success:result.success,count:result.count??result.data?.count??'n/a',message:result.message??'n/a',error:result.error??null,fullResult:result},timestamp:Date.now(),runId:'diag',hypothesisId:'C-D'})}).catch(()=>{});
-    // #endregion
+    console.log(`${LOG_PREFIX} POST CRM response: success=${result.success}, count=${result.count ?? ('data' in result ? result.data?.count : undefined) ?? 'n/a'}, message=${result.message ?? 'n/a'}, fullResult=${JSON.stringify(result)}`);
 
     if (!result.success) {
-      console.log(`${LOG_PREFIX} POST CRM error (400):`, { error: result.error, message: result.message, fullResult: result });
+      console.log(`${LOG_PREFIX} POST CRM error (400):`, { error: ('error' in result ? result.error : null), message: result.message, fullResult: result });
       const rawMessage = (result.error ?? result.message ?? 'Erro ao redistribuir leads no CRM').trim();
       const userMessage = rawMessage.toLowerCase() === 'consultant not found'
         ? 'Consultor Destino não cadastrado na banca'
@@ -207,7 +208,7 @@ export async function POST(req: NextRequest) {
       return errorResponse(userMessage, 400);
     }
 
-    let count = result.count ?? result.data?.count ?? normalizedLeadIds.length;
+    let count = result.count ?? ('data' in result ? result.data?.count : undefined) ?? normalizedLeadIds.length;
     if ((isDevolucao || isReverse) && normalizedLeadIds.length > 0 && (count == null || Number(count) === 0)) {
       count = normalizedLeadIds.length;
     }
@@ -229,9 +230,6 @@ export async function POST(req: NextRequest) {
           target_consultant_email,
           leads_ids: crmLeadIds,
         });
-        // #region agent log
-        fetch('http://127.0.0.1:7901/ingest/0ef4209d-37f6-4cbb-b28d-8cf53becc342',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'37d7e0'},body:JSON.stringify({sessionId:'37d7e0',location:'redistribute-leads/route.ts:fallback',message:'fallback CRM result',data:{fallbackSource,count:fallbackResult.count??fallbackResult.data?.count??'n/a',success:fallbackResult.success,message:fallbackResult.message},timestamp:Date.now(),runId:'post-fix',hypothesisId:'D'})}).catch(()=>{});
-        // #endregion
         const fallbackCount = Number(fallbackResult.count ?? fallbackResult.data?.count ?? 0);
         if (fallbackResult.success && fallbackCount > 0) {
           console.log(`${LOG_PREFIX} POST CRM fallback SUCCESS: source=${fallbackSource}, count=${fallbackCount}`);
@@ -260,8 +258,9 @@ export async function POST(req: NextRequest) {
           }
           console.warn(`${LOG_PREFIX} POST CRM double-fallback failure. source=${source_consultant_email}, fallback=${fallbackSource}, target=${target_consultant_email}. DB entry distribution: ${dbDiag}`);
           return errorResponse(
-            `CRM não redistribuiu nenhum lead. Os leads não estão com ${source_consultant_email} nem com ${fallbackSource} no CRM. Verifique a situação dos leads na banca. [diag: ${dbDiag}]`,
-            400
+            `Os leads não foram encontrados com nenhum dos consultores do chain no CRM. Isso indica um desync entre o sistema e o CRM (os leads podem ter sido movidos manualmente). Clique em "Forçar transferência" para registrar a transferência apenas no sistema, assumindo que o CRM já está correto.`,
+            409,
+            { code: 'CRM_DESYNC', diag: dbDiag }
           );
         }
       } else {
@@ -505,7 +504,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const crmReportedCount = result.count ?? result.data?.count ?? count;
+    const crmReportedCount = result.count ?? ('data' in result ? result.data?.count : undefined) ?? count;
     return successResponse(
       {
         count,
