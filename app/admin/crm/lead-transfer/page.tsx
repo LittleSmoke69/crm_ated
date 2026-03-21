@@ -642,10 +642,12 @@ export default function AdminLeadTransferPage() {
   }, [moveLeadsSelectedRequest]);
   const moveLeadsAvailableQty = useMemo(
     () => moveLeadsEntries
-      .filter((e: Record<string, unknown>) =>
-        e.resolution_status === 'disponivel_retransferencia' &&
-        !problematicLeadIds.has(String(e.lead_id))
-      )
+      .filter((e: Record<string, unknown>) => {
+        const st = String(e.resolution_status ?? 'pending');
+        // Excluir apenas status "finalizados" — pending e disponivel_retransferencia são válidos para mover
+        if (['repassado', 'vinculado', 'devolvido', 'revertido'].includes(st)) return false;
+        return !problematicLeadIds.has(String(e.lead_id));
+      })
       .length,
     [moveLeadsEntries, problematicLeadIds]
   );
@@ -821,6 +823,7 @@ export default function AdminLeadTransferPage() {
   /** Paginação da aba Solicitações */
   const [solicitationPage, setSolicitationPage] = useState(1);
   const [solicitationPageSize, setSolicitationPageSize] = useState(SOLICITATION_PAGE_SIZE_DEFAULT);
+  const [solicitationBancaFilter, setSolicitationBancaFilter] = useState<string>('all');
   /** Filtro de status na aba Solicitações: all | pending | approved | partial | rejected */
   const [solicitationStatusFilter, setSolicitationStatusFilter] = useState<string>('all');
 
@@ -1064,6 +1067,8 @@ export default function AdminLeadTransferPage() {
       const json = await res.json();
       if (res.ok && json.success && Array.isArray(json.data)) {
         setLeadRequests(json.data as GerenteLeadRequest[]);
+        setSolicitationBancaFilter('all');
+        setSolicitationPage(1);
       } else {
         showToast(json?.error ?? 'Erro ao carregar solicitações', 'error');
       }
@@ -1079,6 +1084,28 @@ export default function AdminLeadTransferPage() {
       loadLeadRequests();
     }
   }, [activeTab, loadLeadRequests]);
+
+  /** Bancas únicas presentes nas solicitações carregadas (para o filtro de banca). */
+  const solicitationBancaOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const r of leadRequests) {
+      if (r.banca_id && !seen.has(r.banca_id)) {
+        seen.set(r.banca_id, r.banca_name ?? r.banca_id);
+      }
+    }
+    return Array.from(seen.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [leadRequests]);
+
+  /** Solicitações após o filtro de banca (o filtro de status já é feito via API). */
+  const filteredLeadRequests = useMemo(
+    () =>
+      solicitationBancaFilter === 'all'
+        ? leadRequests
+        : leadRequests.filter((r) => r.banca_id === solicitationBancaFilter),
+    [leadRequests, solicitationBancaFilter],
+  );
 
   const openApproveModal = (req: GerenteLeadRequest) => {
     const requestId = req.id;
@@ -3565,10 +3592,11 @@ export default function AdminLeadTransferPage() {
     }
     // Filtrar apenas disponíveis, excluindo leads que já falharam nesta sessão
     const allLeadIds = moveLeadsEntries
-      .filter((e: Record<string, unknown>) =>
-        e.resolution_status === 'disponivel_retransferencia' &&
-        !problematicLeadIds.has(String(e.lead_id))
-      )
+      .filter((e: Record<string, unknown>) => {
+        const st = String(e.resolution_status ?? 'pending');
+        if (['repassado', 'vinculado', 'devolvido', 'revertido'].includes(st)) return false;
+        return !problematicLeadIds.has(String(e.lead_id));
+      })
       .map((e: Record<string, unknown>) => e.lead_id)
       .filter(Boolean);
     if (allLeadIds.length === 0) {
@@ -3724,40 +3752,20 @@ export default function AdminLeadTransferPage() {
         loadTransferLogs(historyBancaFilter);
         loadTransferStats(historyBancaFilter);
       } else {
-        // Falha permanente (não rate-limit, não desync) → marcar lead IDs como problemáticos e trocar automaticamente
+        // Falha permanente (não rate-limit): marcar lead IDs como problemáticos e mostrar banner de diagnóstico/força
         if (res.status !== 409 || json?.code !== 'CRM_DESYNC') {
           const failedLeadStringIds = leadIds.map(String);
           const failedSourceEmail = (moveLeadsSelectedLog.source_consultant_email ?? '').trim();
-          const failedBancaId = moveLeadsSelectedLog.banca_id ?? '';
 
-          // Marcar os lead IDs específicos como problemáticos
+          // Marcar os lead IDs específicos como problemáticos (ignorados nas próximas tentativas manuais)
           setProblematicLeadIds((prev) => new Set([...prev, ...failedLeadStringIds]));
           setProblematicCountBySource((prev) => ({
             ...prev,
             [failedSourceEmail.toLowerCase()]: (prev[failedSourceEmail.toLowerCase()] ?? 0) + failedLeadStringIds.length,
           }));
 
-          // Calcular quantos leads restam no log ATUAL após filtrar os problemáticos
-          const updatedProblematic = new Set([...problematicLeadIds, ...failedLeadStringIds]);
-          const remainingInCurrentLog = moveLeadsEntries.filter(
-            (e: Record<string, unknown>) =>
-              e.resolution_status === 'disponivel_retransferencia' &&
-              !updatedProblematic.has(String(e.lead_id))
-          ).length;
-
-          if (remainingInCurrentLog > 0) {
-            // Ainda há leads no log atual — permanecer e tentar com os próximos
-            showToast(`${failedLeadStringIds.length} lead(s) com problema marcados. Restam ${remainingInCurrentLog} lead(s) disponíveis neste lote.`, 'info');
-          } else {
-            // Log atual esgotado — tentar próximo log para o mesmo consultor
-            const nextLog = pickBestResolvedLogForSource(resolvedList, failedSourceEmail, failedBancaId, moveLeadsModalTfFilter);
-            if (nextLog) {
-              showToast(`${failedLeadStringIds.length} lead(s) com problema. Trocando automaticamente para próximo lote disponível.`, 'info');
-              openMoveLeadsForm(nextLog, { keepRequest: true });
-            } else {
-              showToast(json?.error ?? `${failedLeadStringIds.length} lead(s) com problema. Nenhuma outra transferência disponível para este consultor.`, 'error');
-            }
-          }
+          // Mostrar o banner de desync/força — igual ao CRM_DESYNC — para que o admin decida
+          setMoveLeadsCrmDesyncPending(true);
         }
       }
     } catch {
@@ -3765,7 +3773,7 @@ export default function AdminLeadTransferPage() {
     } finally {
       setMoveLeadsMoving(false);
     }
-  }, [moveLeadsSelectedLog, moveLeadsDestinationEmail, moveLeadsEntries, moveLeadsSelectedRequest, moveLeadsOnlyQtyToComplete, moveLeadsConsultants, moveLeadsTransferType, moveLeadsDeadlineDays, userId, loadResolvedList, loadResolvedStats, loadLeadRequests, historyBancaFilter, isTooManyAttemptsMessage, problematicLeadIds, problematicCountBySource, pickBestResolvedLogForSource, resolvedList, moveLeadsModalTfFilter, openMoveLeadsForm]);
+  }, [moveLeadsSelectedLog, moveLeadsDestinationEmail, moveLeadsEntries, moveLeadsSelectedRequest, moveLeadsOnlyQtyToComplete, moveLeadsConsultants, moveLeadsTransferType, moveLeadsDeadlineDays, userId, loadResolvedList, loadResolvedStats, loadLeadRequests, historyBancaFilter, isTooManyAttemptsMessage, problematicLeadIds, problematicCountBySource]);
 
   const runResolveBatch = useCallback(async () => {
     if (!userId) return;
@@ -4423,6 +4431,21 @@ export default function AdminLeadTransferPage() {
                         <option value="rejected">Rejeitado</option>
                       </select>
                     </div>
+                    {solicitationBancaOptions.length > 1 && (
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs font-semibold text-gray-600 dark:text-gray-400">Banca:</label>
+                        <select
+                          value={solicitationBancaFilter}
+                          onChange={(e) => { setSolicitationBancaFilter(e.target.value); setSolicitationPage(1); }}
+                          className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                        >
+                          <option value="all">Todas</option>
+                          {solicitationBancaOptions.map((b) => (
+                            <option key={b.id} value={b.id}>{b.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                     <div className="flex items-center gap-2">
                       <label className="text-xs font-semibold text-gray-600 dark:text-gray-400">Itens por página:</label>
                       <select
@@ -4472,7 +4495,7 @@ export default function AdminLeadTransferPage() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-200 dark:divide-[#404040]">
-                        {leadRequests
+                        {filteredLeadRequests
                           .slice((solicitationPage - 1) * solicitationPageSize, solicitationPage * solicitationPageSize)
                           .map((req) => {
                         const consultoresPendentes = req.consultores ?? [];
@@ -4544,10 +4567,13 @@ export default function AdminLeadTransferPage() {
                       </tbody>
                     </table>
                   </div>
-                  {leadRequests.length > solicitationPageSize && (
+                  {filteredLeadRequests.length > solicitationPageSize && (
                     <div className="flex flex-wrap items-center justify-between gap-2 mt-3 pt-3 border-t border-gray-200 dark:border-[#404040]">
                       <p className="text-sm text-gray-600 dark:text-gray-400">
-                        Exibindo {(solicitationPage - 1) * solicitationPageSize + 1} a {Math.min(solicitationPage * solicitationPageSize, leadRequests.length)} de {leadRequests.length} solicitações
+                        Exibindo {(solicitationPage - 1) * solicitationPageSize + 1} a {Math.min(solicitationPage * solicitationPageSize, filteredLeadRequests.length)} de {filteredLeadRequests.length} solicitações
+                        {solicitationBancaFilter !== 'all' && leadRequests.length !== filteredLeadRequests.length && (
+                          <span className="ml-1 text-gray-400">(filtrado de {leadRequests.length} total)</span>
+                        )}
                       </p>
                       <div className="flex items-center gap-2">
                         <button
@@ -4560,12 +4586,12 @@ export default function AdminLeadTransferPage() {
                           <ChevronLeft className="w-5 h-5" />
                         </button>
                         <span className="text-sm font-medium text-gray-700 dark:text-gray-200 min-w-[100px] text-center">
-                          Página {solicitationPage} de {Math.ceil(leadRequests.length / solicitationPageSize)}
+                          Página {solicitationPage} de {Math.ceil(filteredLeadRequests.length / solicitationPageSize)}
                         </span>
                         <button
                           type="button"
-                          onClick={() => setSolicitationPage((p) => Math.min(Math.ceil(leadRequests.length / solicitationPageSize), p + 1))}
-                          disabled={solicitationPage >= Math.ceil(leadRequests.length / solicitationPageSize)}
+                          onClick={() => setSolicitationPage((p) => Math.min(Math.ceil(filteredLeadRequests.length / solicitationPageSize), p + 1))}
+                          disabled={solicitationPage >= Math.ceil(filteredLeadRequests.length / solicitationPageSize)}
                           className="p-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50 disabled:cursor-not-allowed"
                           aria-label="Próxima página"
                         >
@@ -5165,6 +5191,128 @@ export default function AdminLeadTransferPage() {
                     <div className="flex-1 overflow-y-auto p-4">
                       {moveLeadsSelectedLog ? (
                         <div className="space-y-4">
+                          {/* Banner de problema na transferência — exibido no topo para visibilidade imediata */}
+                          {moveLeadsCrmDesyncPending && (
+                            <div className="rounded-xl border-2 border-amber-400 bg-amber-50 dark:bg-amber-950/40 p-4 space-y-3 shadow-md">
+                              <div className="flex items-start gap-3">
+                                <span className="text-xl leading-none mt-0.5">⚠️</span>
+                                <div>
+                                  <p className="text-sm font-bold text-amber-800 dark:text-amber-200">
+                                    Transferência com problema — ação necessária
+                                  </p>
+                                  <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
+                                    O CRM não localizou os leads no consultor esperado.
+                                    {Object.values(problematicCountBySource).reduce((a, b) => a + b, 0) > 0 && (
+                                      <span className="block mt-1 font-semibold">
+                                        {Object.values(problematicCountBySource).reduce((a, b) => a + b, 0)} lead(s) marcados como problemáticos — serão ignorados nas próximas tentativas.
+                                      </span>
+                                    )}
+                                    <span className="block mt-1">
+                                      Use &ldquo;Ver histórico&rdquo; para rastrear onde estão, ou &ldquo;Forçar registro&rdquo; se você já confirmou a situação no CRM.
+                                    </span>
+                                  </p>
+                                </div>
+                              </div>
+                              {/* Painel de rastreamento */}
+                              {moveLeadsTraceData && (
+                                <div className="rounded-lg border border-amber-300/50 bg-white/80 dark:bg-gray-900/50 p-3 space-y-3 text-xs">
+                                  {moveLeadsTraceData.current_holders.length > 0 && (
+                                    <div>
+                                      <p className="font-semibold text-gray-700 dark:text-gray-300 mb-1">📍 Onde estão os leads agora (no sistema):</p>
+                                      <div className="space-y-1">
+                                        {moveLeadsTraceData.current_holders.map((h) => (
+                                          <div key={h.email} className="flex items-center justify-between gap-2 bg-gray-50 dark:bg-gray-800 rounded px-2 py-1">
+                                            <span className="font-mono text-gray-800 dark:text-gray-200 truncate">{h.email}</span>
+                                            <span className="shrink-0 text-gray-500">{h.count} lead(s)</span>
+                                            <span className="shrink-0 text-gray-400 italic">{h.statuses.join(', ')}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                  <div>
+                                    <p className="font-semibold text-gray-700 dark:text-gray-300 mb-1">📋 Timeline de transferências (mais recente primeiro):</p>
+                                    <div className="space-y-1 max-h-48 overflow-y-auto pr-1">
+                                      {moveLeadsTraceData.timeline.map((t) => (
+                                        <div key={t.log_id} className="rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60 px-2 py-1.5">
+                                          <div className="flex items-center gap-1 flex-wrap">
+                                            <span className="font-medium text-gray-600 dark:text-gray-300">
+                                              {t.created_at ? new Date(t.created_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}
+                                            </span>
+                                            <span className="text-gray-400">·</span>
+                                            <span className="font-mono text-blue-700 dark:text-blue-300 truncate max-w-[120px]">{t.source_consultant_email?.split('@')[0] ?? '?'}</span>
+                                            <span className="text-gray-400">→</span>
+                                            <span className="font-mono text-emerald-700 dark:text-emerald-300 truncate max-w-[120px]">{t.target_consultant_email?.split('@')[0] ?? '?'}</span>
+                                            <span className="text-gray-400 ml-auto">{t.transfer_type ?? 'TF'}</span>
+                                          </div>
+                                          {Object.keys(t.status_breakdown).length > 0 && (
+                                            <div className="flex gap-2 mt-1 flex-wrap">
+                                              {Object.entries(t.status_breakdown).map(([st, qty]) => (
+                                                <span key={st} className={`px-1 rounded text-[10px] font-medium ${st === 'repassado' ? 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400' : st === 'disponivel_retransferencia' ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300' : st === 'vinculado' ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700' : 'bg-blue-100 dark:bg-blue-900/40 text-blue-700'}`}>
+                                                  {qty} {st === 'disponivel_retransferencia' ? 'disponível' : st === 'repassado' ? 'repassado' : st === 'vinculado' ? 'vinculado' : st}
+                                                </span>
+                                              ))}
+                                            </div>
+                                          )}
+                                        </div>
+                                      ))}
+                                      {moveLeadsTraceData.timeline.length === 0 && (
+                                        <p className="text-gray-500 italic">Nenhuma transferência registrada no sistema para esses leads.</p>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                              <div className="flex gap-2 flex-wrap">
+                                <button
+                                  type="button"
+                                  onClick={() => { setMoveLeadsCrmDesyncPending(false); setMoveLeadsTraceData(null); }}
+                                  className="px-3 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                                >
+                                  Cancelar
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={moveLeadsTraceLoading}
+                                  onClick={async () => {
+                                    if (!moveLeadsSelectedLog) return;
+                                    setMoveLeadsTraceLoading(true);
+                                    try {
+                                      const sampleIds = (moveLeadsEntries as Array<Record<string, unknown>>)
+                                        .filter((e) => e.resolution_status === 'disponivel_retransferencia')
+                                        .slice(0, 10)
+                                        .map((e) => String(e.lead_id));
+                                      const params = new URLSearchParams({
+                                        banca_id: moveLeadsSelectedLog.banca_id,
+                                        consultant_email: moveLeadsSelectedLog.target_consultant_email ?? '',
+                                      });
+                                      if (sampleIds.length > 0) params.set('lead_ids', sampleIds.join(','));
+                                      const res = await fetch(`/api/admin/crm/transfer-logs/lead-trace?${params.toString()}`, { headers: headers() });
+                                      const json = await res.json();
+                                      if (res.ok && json.success) setMoveLeadsTraceData(json.data);
+                                    } finally {
+                                      setMoveLeadsTraceLoading(false);
+                                    }
+                                  }}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-blue-400 text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 font-medium transition-colors disabled:opacity-50"
+                                >
+                                  {moveLeadsTraceLoading ? <><Loader2 className="w-3 h-3 animate-spin" /> Rastreando…</> : '🔍 Ver histórico'}
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={moveLeadsMoving}
+                                  onClick={async () => {
+                                    setMoveLeadsCrmDesyncPending(false);
+                                    setMoveLeadsTraceData(null);
+                                    await runMoveLeads(true);
+                                  }}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-amber-500 hover:bg-amber-400 text-white font-medium transition-colors disabled:opacity-50"
+                                >
+                                  {moveLeadsMoving ? <><Loader2 className="w-3 h-3 animate-spin" /> Registrando…</> : 'Forçar registro (apenas sistema)'}
+                                </button>
+                              </div>
+                            </div>
+                          )}
                           <div className="rounded-xl border border-emerald-500/30 bg-emerald-50/30 dark:bg-emerald-950/20 p-4">
                             <p className="text-sm font-semibold text-emerald-800 dark:text-emerald-200 mb-1">Transferência {moveLeadsSelectedLog.log_id.slice(0, 8)}… • {moveLeadsSelectedLog.disponivel} lead(s) • {moveLeadsSelectedLog.transfer_type}</p>
                             {(moveLeadsFixedRecipient?.email?.trim() || moveLeadsSelectedRequest?.consultores?.[0]?.consultor_email?.trim() || (moveLeadsSelectedRequest && moveLeadsTargetEmail.trim())) ? (
@@ -5425,116 +5573,6 @@ export default function AdminLeadTransferPage() {
                             <p className="text-xs text-amber-700 dark:text-amber-300 mt-2">
                               Muitas tentativas no CRM. Tente novamente em alguns segundos para liberar a confirmação.
                             </p>
-                          )}
-                          {moveLeadsCrmDesyncPending && (
-                            <div className="mt-3 rounded-xl border border-amber-400/50 bg-amber-50 dark:bg-amber-950/30 p-4 space-y-3">
-                              <div>
-                                <p className="text-sm font-semibold text-amber-800 dark:text-amber-300 mb-1">
-                                  ⚠️ Desincronização detectada entre CRM e sistema
-                                </p>
-                                <p className="text-xs text-amber-700 dark:text-amber-400">
-                                  Os leads não foram encontrados com nenhum dos consultores esperados no CRM. Isso ocorre quando os leads foram movidos manualmente no CRM. Clique em &ldquo;Ver histórico&rdquo; para rastrear onde esses leads estão, ou em &ldquo;Forçar registro&rdquo; se você já confirmou que o CRM está correto.
-                                </p>
-                              </div>
-                              {/* Painel de rastreamento */}
-                              {moveLeadsTraceData && (
-                                <div className="rounded-lg border border-amber-300/40 bg-white/70 dark:bg-gray-900/40 p-3 space-y-3 text-xs">
-                                  {moveLeadsTraceData.current_holders.length > 0 && (
-                                    <div>
-                                      <p className="font-semibold text-gray-700 dark:text-gray-300 mb-1">📍 Onde estão os leads agora (no sistema):</p>
-                                      <div className="space-y-1">
-                                        {moveLeadsTraceData.current_holders.map((h) => (
-                                          <div key={h.email} className="flex items-center justify-between gap-2 bg-gray-50 dark:bg-gray-800 rounded px-2 py-1">
-                                            <span className="font-mono text-gray-800 dark:text-gray-200 truncate">{h.email}</span>
-                                            <span className="shrink-0 text-gray-500">{h.count} lead(s)</span>
-                                            <span className="shrink-0 text-gray-400 italic">{h.statuses.join(', ')}</span>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  )}
-                                  <div>
-                                    <p className="font-semibold text-gray-700 dark:text-gray-300 mb-1">📋 Timeline de transferências (mais recente primeiro):</p>
-                                    <div className="space-y-1 max-h-48 overflow-y-auto pr-1">
-                                      {moveLeadsTraceData.timeline.map((t) => (
-                                        <div key={t.log_id} className="rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60 px-2 py-1.5">
-                                          <div className="flex items-center gap-1 flex-wrap">
-                                            <span className="font-medium text-gray-600 dark:text-gray-300">
-                                              {t.created_at ? new Date(t.created_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}
-                                            </span>
-                                            <span className="text-gray-400">·</span>
-                                            <span className="font-mono text-blue-700 dark:text-blue-300 truncate max-w-[120px]">{t.source_consultant_email?.split('@')[0] ?? '?'}</span>
-                                            <span className="text-gray-400">→</span>
-                                            <span className="font-mono text-emerald-700 dark:text-emerald-300 truncate max-w-[120px]">{t.target_consultant_email?.split('@')[0] ?? '?'}</span>
-                                            <span className="text-gray-400 ml-auto">{t.transfer_type ?? 'TF'}</span>
-                                          </div>
-                                          {Object.keys(t.status_breakdown).length > 0 && (
-                                            <div className="flex gap-2 mt-1 flex-wrap">
-                                              {Object.entries(t.status_breakdown).map(([st, qty]) => (
-                                                <span key={st} className={`px-1 rounded text-[10px] font-medium ${st === 'repassado' ? 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400' : st === 'disponivel_retransferencia' ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300' : st === 'vinculado' ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700' : 'bg-blue-100 dark:bg-blue-900/40 text-blue-700'}`}>
-                                                  {qty} {st === 'disponivel_retransferencia' ? 'disponível' : st === 'repassado' ? 'repassado' : st === 'vinculado' ? 'vinculado' : st}
-                                                </span>
-                                              ))}
-                                            </div>
-                                          )}
-                                        </div>
-                                      ))}
-                                      {moveLeadsTraceData.timeline.length === 0 && (
-                                        <p className="text-gray-500 italic">Nenhuma transferência registrada no sistema para esses leads.</p>
-                                      )}
-                                    </div>
-                                  </div>
-                                </div>
-                              )}
-                              <div className="flex gap-2 flex-wrap">
-                                <button
-                                  type="button"
-                                  onClick={() => { setMoveLeadsCrmDesyncPending(false); setMoveLeadsTraceData(null); }}
-                                  className="px-3 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-                                >
-                                  Cancelar
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={moveLeadsTraceLoading}
-                                  onClick={async () => {
-                                    if (!moveLeadsSelectedLog) return;
-                                    setMoveLeadsTraceLoading(true);
-                                    try {
-                                      const sampleIds = (moveLeadsEntries as Array<Record<string, unknown>>)
-                                        .filter((e) => e.resolution_status === 'disponivel_retransferencia')
-                                        .slice(0, 10)
-                                        .map((e) => String(e.lead_id));
-                                      const params = new URLSearchParams({
-                                        banca_id: moveLeadsSelectedLog.banca_id,
-                                        consultant_email: moveLeadsSelectedLog.target_consultant_email ?? '',
-                                      });
-                                      if (sampleIds.length > 0) params.set('lead_ids', sampleIds.join(','));
-                                      const res = await fetch(`/api/admin/crm/transfer-logs/lead-trace?${params.toString()}`, { headers: headers() });
-                                      const json = await res.json();
-                                      if (res.ok && json.success) setMoveLeadsTraceData(json.data);
-                                    } finally {
-                                      setMoveLeadsTraceLoading(false);
-                                    }
-                                  }}
-                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-blue-400 text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 font-medium transition-colors disabled:opacity-50"
-                                >
-                                  {moveLeadsTraceLoading ? <><Loader2 className="w-3 h-3 animate-spin" /> Rastreando…</> : '🔍 Ver histórico'}
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={moveLeadsMoving}
-                                  onClick={async () => {
-                                    setMoveLeadsCrmDesyncPending(false);
-                                    setMoveLeadsTraceData(null);
-                                    await runMoveLeads(true);
-                                  }}
-                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-amber-500 hover:bg-amber-400 text-white font-medium transition-colors disabled:opacity-50"
-                                >
-                                  {moveLeadsMoving ? <><Loader2 className="w-3 h-3 animate-spin" /> Registrando…</> : 'Forçar registro (apenas sistema)'}
-                                </button>
-                              </div>
-                            </div>
                           )}
                         </div>
                       ) : (

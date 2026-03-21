@@ -265,7 +265,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         }
       }
 
-      if (!resolvedSourceId) {
+      // Exige ao menos email OU id do doador; source_consultant_id pode ser null se o perfil não existir no Supabase
+      if (!resolvedSourceId && !candidateEmail) {
         return errorResponse(
           'Ao aprovar, informe o consultor doador (source_consultant_id) ou um e-mail válido (source_consultant_email) para localizar o perfil.',
           400,
@@ -277,7 +278,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         status: string;
         approved_by_user_id: string;
         approved_at: string;
-        source_consultant_id: string;
+        source_consultant_id: string | null;
         source_consultant_email?: string | null;
         banca_id?: string | null;
         lead_type?: string;
@@ -288,7 +289,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         status: 'approved',
         approved_by_user_id: userId,
         approved_at: approvedAtIso,
-        source_consultant_id: resolvedSourceId,
+        source_consultant_id: resolvedSourceId || null,
       };
       updatePayload.source_consultant_email = candidateEmail || null;
       if (bancaId != null) updatePayload.banca_id = bancaId === '' ? null : bancaId;
