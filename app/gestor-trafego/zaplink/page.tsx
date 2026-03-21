@@ -11,7 +11,6 @@ import {
   Check,
   Copy,
   ExternalLink,
-  UserPlus,
   Loader2,
   AlertCircle,
   ArrowRightLeft,
@@ -98,16 +97,10 @@ export default function GestorTrafegoZaplinkPage() {
   const [activeTab, setActiveTab] = useState<'forms' | 'submissions' | 'requests'>('forms');
   const [submissionsFilter, setSubmissionsFilter] = useState<'pending' | 'assigned'>('pending');
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
-  const [assignModal, setAssignModal] = useState<Submission | null>(null);
-  const [assignSubmissionIds, setAssignSubmissionIds] = useState<string[]>([]);
-  const [assignBanca, setAssignBanca] = useState('');
-  const [assignGerente, setAssignGerente] = useState('');
-  const [assigning, setAssigning] = useState(false);
   const [reassignModal, setReassignModal] = useState<Submission | null>(null);
   const [reassignBanca, setReassignBanca] = useState('');
   const [reassignGerente, setReassignGerente] = useState('');
   const [reassigning, setReassigning] = useState(false);
-  const [selectedPendingIds, setSelectedPendingIds] = useState<string[]>([]);
   const [consultantRequests, setConsultantRequests] = useState<ConsultantRequest[]>([]);
   const [consultantRequestsLoading, setConsultantRequestsLoading] = useState(false);
   const [showCreateFormModal, setShowCreateFormModal] = useState(false);
@@ -148,8 +141,7 @@ export default function GestorTrafegoZaplinkPage() {
       if (bancasJson.success) {
         const data = bancasJson.data ?? [];
         setBancas(data);
-        if (data.length > 0 && !assignBanca && !reassignBanca) {
-          setAssignBanca(data[0].id);
+        if (data.length > 0 && !reassignBanca) {
           setReassignBanca(data[0].id);
         }
       }
@@ -216,54 +208,8 @@ export default function GestorTrafegoZaplinkPage() {
   }, [activeTab, userId, loadConsultantRequests]);
 
   useEffect(() => {
-    if (assignModal && assignBanca) loadGerentesForBanca(assignBanca);
-  }, [assignModal, assignBanca, loadGerentesForBanca]);
-
-  useEffect(() => {
     if (reassignModal && reassignBanca) loadGerentesForBanca(reassignBanca);
   }, [reassignModal, reassignBanca, loadGerentesForBanca]);
-
-  const handleAssign = async () => {
-    const ids = assignSubmissionIds.length > 0 ? assignSubmissionIds : (assignModal ? [assignModal.id] : []);
-    if (ids.length === 0 || !assignBanca || !assignGerente) {
-      showToast('error', 'Selecione banca e gerente');
-      return;
-    }
-    setAssigning(true);
-    let ok = 0;
-    let lastError = '';
-    try {
-      for (const submissionId of ids) {
-        const res = await fetch(`/api/gestor-trafego/zaplink/submissions/${submissionId}/assign`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId! },
-          body: JSON.stringify({ banca_id: assignBanca, gerente_id: assignGerente }),
-        });
-        const json = await res.json();
-        if (json.success) ok += 1;
-        else lastError = json.error || 'Erro ao atribuir';
-      }
-      if (ok === ids.length) {
-        showToast('success', ok === 1 ? 'Atribuído com sucesso' : `${ok} submissões atribuídas com sucesso.`);
-        setAssignModal(null);
-        setAssignSubmissionIds([]);
-        setAssignBanca(bancas[0]?.id || '');
-        setAssignGerente('');
-        setSelectedPendingIds((prev) => prev.filter((id) => !ids.includes(id)));
-        loadData();
-      } else if (ok > 0) {
-        showToast('error', `${ok} de ${ids.length} atribuídas. Último erro: ${lastError}`);
-        setSelectedPendingIds((prev) => prev.filter((id) => !ids.includes(id)));
-        loadData();
-      } else {
-        showToast('error', lastError || 'Erro ao atribuir');
-      }
-    } catch {
-      showToast('error', 'Erro ao atribuir');
-    } finally {
-      setAssigning(false);
-    }
-  };
 
   const handleReassign = async () => {
     if (!reassignModal || !reassignBanca || !reassignGerente) {
@@ -522,7 +468,6 @@ export default function GestorTrafegoZaplinkPage() {
                 onClick={() => {
                   setSubmissionsPage(1);
                   setSubmissionsFilter('assigned');
-                  setSelectedPendingIds([]);
                 }}
                 className={`px-4 py-2 rounded-lg font-medium text-sm transition ${
                   submissionsFilter === 'assigned'
@@ -542,83 +487,32 @@ export default function GestorTrafegoZaplinkPage() {
                 </div>
               ) : submissionsFilter === 'pending' ? (
                 <>
-                  {selectedPendingIds.length > 0 && (
-                    <div className="flex items-center gap-3 px-4 py-2 bg-green-50 dark:bg-green-900/20 border-b border-gray-200 dark:border-[#404040]">
-                      <span className="text-sm font-medium text-gray-700 dark:text-[#ccc]">
-                        {selectedPendingIds.length} selecionado(s)
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setAssignSubmissionIds([...selectedPendingIds]);
-                          setAssignModal(null);
-                          setAssignBanca(bancas[0]?.id || '');
-                          setAssignGerente('');
-                          if (bancas[0]?.id) loadGerentesForBanca(bancas[0].id);
-                        }}
-                        className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium"
-                      >
-                        <UserPlus className="w-4 h-4" />
-                        Atribuir selecionados
-                      </button>
-                      <button type="button" onClick={() => setSelectedPendingIds([])} className="text-sm text-gray-600 dark:text-[#888] hover:underline">
-                        Limpar
-                      </button>
-                    </div>
-                  )}
                   <table className="w-full">
                     <thead className="bg-gray-50 dark:bg-[#333]">
                       <tr>
-                        <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc] w-10">
-                          <input
-                            type="checkbox"
-                            checked={submissions.length > 0 && submissions.every((s) => selectedPendingIds.includes(s.id))}
-                            onChange={(e) => {
-                              if (e.target.checked) setSelectedPendingIds(submissions.map((s) => s.id));
-                              else setSelectedPendingIds([]);
-                            }}
-                            className="rounded border-gray-300 dark:border-[#555]"
-                          />
-                        </th>
                         <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Nome</th>
                         <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">E-mail</th>
                         <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Telefone</th>
                         <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Formulário</th>
+                        <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Slug</th>
                         <th className="text-right p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Ações</th>
                       </tr>
                     </thead>
                     <tbody>
                       {submissions.map((s) => (
                         <tr key={s.id} className="border-t border-gray-100 dark:border-[#404040]">
-                          <td className="p-3">
-                            <input
-                              type="checkbox"
-                              checked={selectedPendingIds.includes(s.id)}
-                              onChange={(e) => {
-                                if (e.target.checked) setSelectedPendingIds((prev) => [...prev, s.id]);
-                                else setSelectedPendingIds((prev) => prev.filter((id) => id !== s.id));
-                              }}
-                              className="rounded border-gray-300 dark:border-[#555]"
-                            />
-                          </td>
                           <td className="p-3">{s.full_name}</td>
                           <td className="p-3">{s.email}</td>
                           <td className="p-3">{s.phone}</td>
                           <td className="p-3 text-sm">{s.zaplink_forms?.name || '—'}</td>
+                          <td className="p-3 text-sm">
+                            {s.zaplink_forms?.slug ? (
+                              <span className="bg-gray-100 dark:bg-[#333] text-gray-600 dark:text-[#aaa] font-mono px-1.5 py-0.5 rounded text-xs">
+                                form/{s.zaplink_forms.slug}
+                              </span>
+                            ) : '—'}
+                          </td>
                           <td className="p-3 text-right">
-                            <button
-                              onClick={() => {
-                                setAssignModal(s);
-                                setAssignSubmissionIds([s.id]);
-                                setAssignBanca(bancas[0]?.id || '');
-                                setAssignGerente('');
-                                if (bancas[0]?.id) loadGerentesForBanca(bancas[0].id);
-                              }}
-                              className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm mr-1"
-                            >
-                              <UserPlus className="w-4 h-4" />
-                              Atribuir
-                            </button>
                             <button
                               onClick={() => handleDeletePending(s)}
                               className="flex items-center gap-1 px-3 py-1.5 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm"
@@ -640,6 +534,7 @@ export default function GestorTrafegoZaplinkPage() {
                       <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">E-mail</th>
                       <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Telefone</th>
                       <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Formulário</th>
+                      <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Slug</th>
                       <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Banca / Gerente</th>
                       <th className="text-right p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Ação</th>
                     </tr>
@@ -651,6 +546,13 @@ export default function GestorTrafegoZaplinkPage() {
                         <td className="p-3">{s.email}</td>
                         <td className="p-3">{s.phone}</td>
                         <td className="p-3 text-sm">{s.zaplink_forms?.name || '—'}</td>
+                        <td className="p-3 text-sm">
+                          {s.zaplink_forms?.slug ? (
+                            <span className="bg-gray-100 dark:bg-[#333] text-gray-600 dark:text-[#aaa] font-mono px-1.5 py-0.5 rounded text-xs">
+                            form/{s.zaplink_forms.slug}
+                          </span>
+                        ) : '—'}
+                        </td>
                         <td className="p-3 text-sm">{s.banca_name ?? '—'} / {s.gerente_name ?? '—'}</td>
                         <td className="p-3 text-right">
                           <button
@@ -742,81 +644,6 @@ export default function GestorTrafegoZaplinkPage() {
                 </tbody>
               </table>
             )}
-          </div>
-        )}
-
-        {/* Modal Atribuir */}
-        {(assignModal || assignSubmissionIds.length > 0) && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-xl max-w-md w-full p-6">
-              <h2 className="text-lg font-semibold mb-4">
-                {assignSubmissionIds.length > 1 ? `Atribuir ${assignSubmissionIds.length} leads` : 'Atribuir consultor'}
-              </h2>
-              {assignModal ? (
-                <p className="text-sm text-gray-600 dark:text-[#aaa] mb-4">
-                  {assignModal.full_name} — {assignModal.email} — {assignModal.phone}
-                </p>
-              ) : assignSubmissionIds.length > 0 ? (
-                <p className="text-sm text-gray-600 dark:text-[#aaa] mb-4">
-                  {assignSubmissionIds.length} lead(s) serão atribuídos à mesma banca e gerente.
-                </p>
-              ) : null}
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium mb-1">Sua banca</label>
-                  <select
-                    value={assignBanca}
-                    onChange={(e) => {
-                      const id = e.target.value;
-                      setAssignBanca(id);
-                      setAssignGerente('');
-                      if (id) loadGerentesForBanca(id);
-                    }}
-                    className="w-full px-3 py-2 border rounded-lg dark:bg-[#333] dark:border-[#555]"
-                  >
-                    {bancas.map((b) => (
-                      <option key={b.id} value={b.id}>{b.name}</option>
-                    ))}
-                  </select>
-                  {bancas.length === 1 && assignBanca && (
-                    <p className="text-xs text-gray-500 dark:text-[#888] mt-1">
-                      Banca em que você está: {bancas.find((b) => b.id === assignBanca)?.name ?? '—'}
-                    </p>
-                  )}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Gerente da banca</label>
-                  {gerentesLoading && (
-                    <p className="text-sm text-amber-600 dark:text-amber-400 mb-1 flex items-center gap-2">
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Buscando gerentes...
-                    </p>
-                  )}
-                  <select
-                    value={assignGerente}
-                    onChange={(e) => setAssignGerente(e.target.value)}
-                    disabled={gerentesLoading}
-                    className="w-full px-3 py-2 border rounded-lg dark:bg-[#333] dark:border-[#555] disabled:opacity-70"
-                  >
-                    <option value="">{gerentesLoading ? 'Carregando...' : 'Selecione o gerente'}</option>
-                    {gerentes.map((g) => (
-                      <option key={g.id} value={g.id}>
-                        {g.full_name || g.email}{g.telefone ? ` — ${g.telefone}` : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-              <div className="flex gap-2 justify-end mt-6">
-                <button type="button" onClick={() => { setAssignModal(null); setAssignSubmissionIds([]); }} className="px-4 py-2 border rounded-lg dark:border-[#555]">
-                  Cancelar
-                </button>
-                <button onClick={handleAssign} disabled={assigning} className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2">
-                  {assigning && <Loader2 className="w-4 h-4 animate-spin" />}
-                  {assignSubmissionIds.length > 1 ? `Atribuir ${assignSubmissionIds.length}` : 'Atribuir'}
-                </button>
-              </div>
-            </div>
           </div>
         )}
 

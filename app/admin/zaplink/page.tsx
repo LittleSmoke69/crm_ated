@@ -924,6 +924,7 @@ export default function AdminZaplinkPage() {
                         <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Telefone</th>
                         <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Instagram</th>
                         <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Formulário</th>
+                        <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Slug</th>
                         <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Data</th>
                         <th className="text-right p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Ações</th>
                       </tr>
@@ -950,6 +951,13 @@ export default function AdminZaplinkPage() {
                           <td className="p-3">{s.phone}</td>
                           <td className="p-3 text-sm">{s.instagram_handle || '—'}</td>
                           <td className="p-3 text-sm">{s.zaplink_forms?.name || s.zaplink_form_id}</td>
+                          <td className="p-3 text-sm">
+                            {s.zaplink_forms?.slug ? (
+                              <span className="bg-gray-100 dark:bg-[#333] text-gray-600 dark:text-[#aaa] font-mono px-1.5 py-0.5 rounded text-xs">
+                                form/{s.zaplink_forms.slug}
+                              </span>
+                            ) : '—'}
+                          </td>
                           <td className="p-3 text-sm text-gray-500">{new Date(s.created_at).toLocaleDateString()}</td>
                           <td className="p-3 text-right">
                             <div className="flex items-center justify-end gap-1">
@@ -991,6 +999,7 @@ export default function AdminZaplinkPage() {
                       <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Telefone</th>
                       <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Instagram</th>
                       <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Formulário</th>
+                      <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Slug</th>
                       <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Banca</th>
                       <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Gerente</th>
                       <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Data</th>
@@ -1005,6 +1014,13 @@ export default function AdminZaplinkPage() {
                         <td className="p-3">{s.phone}</td>
                         <td className="p-3 text-sm">{s.instagram_handle || '—'}</td>
                         <td className="p-3 text-sm">{s.zaplink_forms?.name || s.zaplink_form_id}</td>
+                        <td className="p-3 text-sm">
+                          {s.zaplink_forms?.slug ? (
+                            <span className="bg-gray-100 dark:bg-[#333] text-gray-600 dark:text-[#aaa] font-mono px-1.5 py-0.5 rounded text-xs">
+                            form/{s.zaplink_forms.slug}
+                          </span>
+                        ) : '—'}
+                        </td>
                         <td className="p-3 text-sm">{s.banca_name ?? '—'}</td>
                         <td className="p-3 text-sm">{s.gerente_name ?? '—'}</td>
                         <td className="p-3 text-sm text-gray-500">

@@ -56,8 +56,12 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { userId } = await requireGestorTrafego(req);
+    const { profile } = await requireGestorTrafego(req);
     const { id: submissionId } = await params;
+
+    if (profile.status !== 'admin' && profile.status !== 'super_admin') {
+      return errorResponse('Apenas admin e super_admin podem atribuir submissões', 403);
+    }
 
     const body = await req.json().catch(() => ({}));
     const bancaId = typeof body.banca_id === 'string' ? body.banca_id.trim() : '';
@@ -81,11 +85,10 @@ export async function POST(
       .from('zaplink_forms')
       .select('id')
       .eq('id', submission.zaplink_form_id)
-      .eq('gestor_trafego_user_id', userId)
       .single();
 
     if (!form) {
-      return errorResponse('Submissão não pertence aos seus formulários', 403);
+      return errorResponse('Formulário associado não encontrado', 404);
     }
 
     if (submission.status !== 'pending') {
