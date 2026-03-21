@@ -381,7 +381,7 @@ export default function GestorTrafegoZaplinkPage() {
         </div>
 
         {activeTab === 'forms' && (
-          <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] overflow-hidden">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] overflow-x-auto">
             <div className="flex justify-end p-3 border-b border-gray-200 dark:border-[#404040]">
               <button
                 type="button"
@@ -399,7 +399,7 @@ export default function GestorTrafegoZaplinkPage() {
                 Nenhum formulário ainda. Crie um novo com o botão acima ou o admin pode transferir formulários para você em Admin → Zaplink.
               </div>
             ) : (
-              <table className="w-full">
+              <table className="w-full min-w-[700px]">
                 <thead className="bg-gray-50 dark:bg-[#333]">
                   <tr>
                     <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Slug</th>
@@ -478,7 +478,7 @@ export default function GestorTrafegoZaplinkPage() {
                 Atribuídos
               </button>
             </div>
-            <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] overflow-hidden">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] overflow-x-auto">
               {loading ? (
                 <div className="p-8 text-center text-gray-500">Carregando...</div>
               ) : submissions.length === 0 ? (
@@ -487,7 +487,7 @@ export default function GestorTrafegoZaplinkPage() {
                 </div>
               ) : submissionsFilter === 'pending' ? (
                 <>
-                  <table className="w-full">
+                  <table className="w-full min-w-[700px]">
                     <thead className="bg-gray-50 dark:bg-[#333]">
                       <tr>
                         <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Nome</th>
@@ -527,7 +527,7 @@ export default function GestorTrafegoZaplinkPage() {
                   </table>
                 </>
               ) : (
-                <table className="w-full">
+                <table className="w-full min-w-[700px]">
                   <thead className="bg-gray-50 dark:bg-[#333]">
                     <tr>
                       <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Nome</th>
@@ -604,13 +604,13 @@ export default function GestorTrafegoZaplinkPage() {
         )}
 
         {activeTab === 'requests' && (
-          <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] overflow-hidden">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] overflow-x-auto">
             {consultantRequestsLoading ? (
               <div className="p-8 text-center text-gray-500">Carregando...</div>
             ) : consultantRequests.length === 0 ? (
               <div className="p-8 text-center text-gray-500">Nenhuma solicitação de consultor (de gerentes que receberam leads dos seus formulários).</div>
             ) : (
-              <table className="w-full">
+              <table className="w-full min-w-[700px]">
                 <thead className="bg-gray-50 dark:bg-[#333]">
                   <tr>
                     <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Gerente</th>

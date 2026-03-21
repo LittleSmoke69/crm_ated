@@ -653,13 +653,13 @@ export default function AdminZaplinkPage() {
                 Novo link
               </button>
             </div>
-            <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] overflow-hidden">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] overflow-x-auto">
               {loading ? (
                 <div className="p-8 text-center text-gray-500">Carregando...</div>
               ) : links.length === 0 ? (
                 <div className="p-8 text-center text-gray-500">Nenhum link cadastrado</div>
               ) : (
-                <table className="w-full">
+                <table className="w-full min-w-[700px]">
                   <thead className="bg-gray-50 dark:bg-[#333]">
                     <tr>
                       <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Slug</th>
@@ -738,13 +738,13 @@ export default function AdminZaplinkPage() {
                 Novo formulário
               </button>
             </div>
-            <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] overflow-hidden">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] overflow-x-auto">
               {loading ? (
                 <div className="p-8 text-center text-gray-500">Carregando...</div>
               ) : forms.length === 0 ? (
                 <div className="p-8 text-center text-gray-500">Nenhum formulário cadastrado</div>
               ) : (
-                <table className="w-full">
+                <table className="w-full min-w-[700px]">
                   <thead className="bg-gray-50 dark:bg-[#333]">
                     <tr>
                       <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Slug</th>
@@ -864,7 +864,7 @@ export default function AdminZaplinkPage() {
                 </button>
               </div>
             </div>
-            <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] overflow-hidden">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] overflow-x-auto">
               {loading ? (
                 <div className="p-8 text-center text-gray-500">Carregando...</div>
               ) : submissions.length === 0 ? (
@@ -902,7 +902,7 @@ export default function AdminZaplinkPage() {
                       </button>
                     </div>
                   )}
-                  <table className="w-full">
+                  <table className="w-full min-w-[700px]">
                     <thead className="bg-gray-50 dark:bg-[#333]">
                       <tr>
                         <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc] w-10">
@@ -991,7 +991,7 @@ export default function AdminZaplinkPage() {
                   </table>
                 </>
               ) : (
-                <table className="w-full">
+                <table className="w-full min-w-[700px]">
                   <thead className="bg-gray-50 dark:bg-[#333]">
                     <tr>
                       <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Nome</th>
@@ -1082,13 +1082,13 @@ export default function AdminZaplinkPage() {
         {/* Solicitações de consultor */}
         {activeTab === 'requests' && (
           <div className="space-y-4">
-            <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] overflow-hidden">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] overflow-x-auto">
               {consultantRequestsLoading ? (
                 <div className="p-8 text-center text-gray-500">Carregando...</div>
               ) : consultantRequests.length === 0 ? (
                 <div className="p-8 text-center text-gray-500">Nenhuma solicitação de consultor.</div>
               ) : (
-                <table className="w-full">
+                <table className="w-full min-w-[700px]">
                   <thead className="bg-gray-50 dark:bg-[#333]">
                     <tr>
                       <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Gerente</th>
