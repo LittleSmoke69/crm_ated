@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
       .single();
 
     const userStatus = profile?.status;
-    const isAdmin = userStatus === 'admin';
+    const isAdmin = userStatus === 'admin' || userStatus === 'super_admin';
     const isDonoBanca = userStatus === 'dono_banca';
     const isGerente = userStatus === 'gerente';
 

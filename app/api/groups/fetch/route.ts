@@ -24,15 +24,23 @@ function useNetlifyAsyncGroupFetch(): boolean {
   return secret && onNetlify;
 }
 
+function resolveNetlifySiteUrl(requestOrigin: string): string {
+  const envUrl = (process.env.URL || process.env.SITE_URL || '').replace(/\/$/, '');
+  if (envUrl) return envUrl;
+  return requestOrigin.replace(/\/$/, '');
+}
+
 async function triggerBackgroundWorker(origin: string, jobId: string): Promise<{ ok: boolean; status?: number }> {
   const secret = process.env.GROUP_FETCH_JOB_SECRET?.trim();
   if (!secret) return { ok: false };
 
-  const url = `${origin.replace(/\/$/, '')}/.netlify/functions/groups-fetch-background`;
+  const siteUrl = resolveNetlifySiteUrl(origin);
+  const url = `${siteUrl}/.netlify/functions/groups-fetch-background`;
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), 12_000);
 
   try {
+    console.log(`[GROUPS] Triggering background worker: ${url} jobId=${jobId}`);
     const res = await fetch(url, {
       method: 'POST',
       headers: {
@@ -43,9 +51,14 @@ async function triggerBackgroundWorker(origin: string, jobId: string): Promise<{
       signal: controller.signal,
     });
     clearTimeout(t);
-    return { ok: res.ok || res.status === 202, status: res.status };
-  } catch {
+    const ok = res.ok || res.status === 202;
+    if (!ok) {
+      console.warn(`[GROUPS] Background trigger failed: HTTP ${res.status}`);
+    }
+    return { ok, status: res.status };
+  } catch (err) {
     clearTimeout(t);
+    console.warn(`[GROUPS] Background trigger error:`, err instanceof Error ? err.message : err);
     return { ok: false };
   }
 }
@@ -124,7 +137,8 @@ export async function POST(req: NextRequest) {
       }
 
       const jobId = inserted.id as string;
-      const trigger = await triggerBackgroundWorker(req.nextUrl.origin, jobId);
+      const requestOrigin = req.nextUrl.origin || req.headers.get('origin') || '';
+      const trigger = await triggerBackgroundWorker(requestOrigin, jobId);
 
       return successResponse(
         {

@@ -1,10 +1,16 @@
 /**
  * Netlify Background Function: processa um job de group_fetch_jobs.
- * Timeout longo (~15 min); invocado pela API Next após criar o job.
+ * O sufixo "-background" no nome do arquivo faz o Netlify tratar como Background Function
+ * com timeout de até 15 min (retorna 202 imediatamente ao chamador).
+ *
+ * IMPORTANTE: Imports do diretório lib/ devem usar caminhos relativos (sem @/ alias)
+ * pois o bundler do Netlify (esbuild) não resolve paths do tsconfig.json.
  */
 
 import { createClient } from '@supabase/supabase-js';
 import { claimGroupFetchJob, executeGroupFetchJob } from '../../lib/group-fetch/run-group-fetch-job';
+
+const LOG = '[groups-fetch-background]';
 
 interface HandlerEvent {
   httpMethod?: string;
@@ -59,6 +65,7 @@ export const handler = async (event: HandlerEvent): Promise<HandlerResponse> => 
 
   const claimed = await claimGroupFetchJob(supabase, jobId);
   if (!claimed) {
+    console.log(`${LOG} Job ${jobId} already claimed or not pending — skipping`);
     return {
       statusCode: 200,
       body: JSON.stringify({ ok: true, skipped: true, reason: 'already_claimed_or_not_pending' }),
@@ -66,10 +73,16 @@ export const handler = async (event: HandlerEvent): Promise<HandlerResponse> => 
     };
   }
 
+  console.log(`${LOG} Starting execution for jobId=${jobId}`);
+  const startMs = Date.now();
+
   try {
     await executeGroupFetchJob(supabase, jobId);
+    const elapsed = Date.now() - startMs;
+    console.log(`${LOG} Completed jobId=${jobId} in ${elapsed}ms`);
   } catch (e: unknown) {
-    console.error('[groups-fetch-background]', jobId, e);
+    const elapsed = Date.now() - startMs;
+    console.error(`${LOG} Failed jobId=${jobId} after ${elapsed}ms:`, e);
     return {
       statusCode: 500,
       body: JSON.stringify({ error: e instanceof Error ? e.message : String(e) }),

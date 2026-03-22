@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { normalizeGroupId } from '@/lib/utils/group-utils';
+import { normalizeGroupId } from '../utils/group-utils';
 
 /** Timeout da chamada HTTP à Evolution dentro do worker (background Netlify ~15 min). */
 export const EVOLUTION_GROUP_FETCH_TIMEOUT_MS = 840_000;
