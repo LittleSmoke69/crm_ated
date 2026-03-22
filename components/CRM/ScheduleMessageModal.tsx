@@ -420,12 +420,12 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
   return (
     <>
       <ToastContainer toasts={toasts} onClose={removeToast} />
-      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
-      <div className="bg-gray-100 dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center z-[100] p-0 sm:p-4 overflow-y-auto overscroll-contain">
+      <div className="bg-gray-100 dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-t-2xl sm:rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[95vh] sm:max-h-[90vh] min-h-0">
         {/* Header */}
-        <div className="p-6 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between bg-white dark:bg-[#333]">
-          <div>
-            <h2 className="text-gray-800 dark:text-white font-bold text-lg">Selecione os grupos para agendamento</h2>
+        <div className="p-4 sm:p-6 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between bg-white dark:bg-[#333] flex-shrink-0">
+          <div className="min-w-0 pr-2">
+            <h2 className="text-gray-800 dark:text-white font-bold text-base sm:text-lg truncate">Selecione os grupos para agendamento</h2>
           </div>
           <button 
             onClick={onClose}
@@ -436,8 +436,8 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
         </div>
 
         {/* Progress Steps */}
-        <div className="p-6 bg-white dark:bg-[#333] border-b border-gray-200 dark:border-[#404040]">
-          <div className="flex items-center justify-between mb-4">
+        <div className="p-4 sm:p-6 bg-white dark:bg-[#333] border-b border-gray-200 dark:border-[#404040] flex-shrink-0">
+          <div className="flex items-center justify-between mb-4 overflow-x-auto">
             <div className="flex items-center gap-2">
               <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${
                 currentStep >= 1 ? 'bg-[#8CD955] text-white' : 'bg-gray-300 dark:bg-[#404040] text-gray-600 dark:text-gray-400'

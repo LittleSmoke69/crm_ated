@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { AlertCircle, RefreshCw } from 'lucide-react';
 
 interface ErrorProps {
@@ -8,20 +8,34 @@ interface ErrorProps {
   reset: () => void;
 }
 
-/**
- * Captura erros no segmento (página/rota) e exibe fallback em vez de tela branca.
- * Reduz "exceção no lado do cliente" ao aplicar filtros, carregar página ou outras ações.
- */
-const isDomHydrationError = (msg: string) =>
-  /removeChild|Hydration|not a child of this node/i.test(msg);
+const isDomMutationError = (msg: string) =>
+  /removeChild|Hydration|not a child of this node|insertBefore|Failed to execute.*on.*Node/i.test(msg);
+
+const isExtensionError = (msg: string) =>
+  /translate|notranslate|google.*translate|__NEXT|chrome-extension/i.test(msg);
+
+const MAX_AUTO_RETRIES = 2;
 
 export default function Error({ error, reset }: ErrorProps) {
-  useEffect(() => {
-    console.error('[Zaploto Error Boundary]', error?.message, error?.digest, error);
-  }, [error]);
+  const retryCount = useRef(0);
 
   const message = error?.message ?? '';
-  const showFriendlyDomMessage = isDomHydrationError(message);
+  const isBrowserDomError = isDomMutationError(message);
+  const isExtRelated = isExtensionError(message);
+  const shouldAutoRetry = isBrowserDomError && retryCount.current < MAX_AUTO_RETRIES;
+
+  useEffect(() => {
+    console.error('[Zaploto Error Boundary]', error?.message, error?.digest, error);
+
+    if (shouldAutoRetry) {
+      retryCount.current += 1;
+      const delay = retryCount.current * 500;
+      const timer = setTimeout(() => reset(), delay);
+      return () => clearTimeout(timer);
+    }
+  }, [error, reset, shouldAutoRetry]);
+
+  if (shouldAutoRetry) return null;
 
   return (
     <div className="min-h-[40vh] flex items-center justify-center p-6 bg-background">
@@ -35,22 +49,22 @@ export default function Error({ error, reset }: ErrorProps) {
           Algo deu errado
         </h2>
         <p className="text-sm text-muted-foreground">
-          {showFriendlyDomMessage
-            ? 'Houve um problema ao atualizar esta parte da página. Recarregue a página para continuar.'
+          {isBrowserDomError
+            ? 'Houve um problema ao atualizar esta parte da página. Isso pode ser causado por extensões do navegador (como tradutores automáticos). Desative extensões de tradução e recarregue.'
             : 'Ocorreu um erro ao carregar esta parte da página. Você pode tentar novamente.'}
         </p>
-        {!showFriendlyDomMessage && (
+        {!isBrowserDomError && !isExtRelated && (
           <p className="text-xs text-muted-foreground font-mono truncate" title={message}>
             {message}
           </p>
         )}
         <button
           type="button"
-          onClick={() => (showFriendlyDomMessage ? window.location.reload() : reset())}
+          onClick={() => (isBrowserDomError ? window.location.reload() : reset())}
           className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--zaploto-green)] text-white hover:opacity-90 transition-opacity"
         >
           <RefreshCw className="w-4 h-4" />
-          {showFriendlyDomMessage ? 'Recarregar página' : 'Tentar novamente'}
+          {isBrowserDomError ? 'Recarregar página' : 'Tentar novamente'}
         </button>
       </div>
     </div>

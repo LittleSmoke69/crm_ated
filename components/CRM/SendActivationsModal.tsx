@@ -21,6 +21,8 @@ interface SendActivationsModalProps {
   messageId: string;
   messageTitle: string;
   userId: string;
+  /** Quando true, pula o modal de escolha e abre direto em modo campanha em massa */
+  defaultToMassSend?: boolean;
 }
 
 const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
@@ -29,6 +31,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
   messageId,
   messageTitle,
   userId,
+  defaultToMassSend = false,
 }) => {
   const [loading, setLoading] = useState(false);
   const [groups, setGroups] = useState<Group[]>([]);
@@ -131,18 +134,24 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
     }
   };
 
-  // Quando o modal abre, mostra primeiro o modal de escolha e reseta força campanha em massa
+  // Quando o modal abre: defaultToMassSend pula escolha e força campanha em massa
   useEffect(() => {
     if (isOpen && userId) {
-      setForceMassSend(false);
-      if (!showChoiceModal && !showScheduleModal) {
-        setShowChoiceModal(true);
+      if (defaultToMassSend) {
+        setForceMassSend(true);
+        setShowChoiceModal(false);
+        setShowScheduleModal(false);
+      } else {
+        setForceMassSend(false);
+        if (!showChoiceModal && !showScheduleModal) {
+          setShowChoiceModal(true);
+        }
       }
     } else {
       setShowChoiceModal(false);
       setShowScheduleModal(false);
     }
-  }, [isOpen, userId]);
+  }, [isOpen, userId, defaultToMassSend]);
 
   // Carrega instâncias e grupos do banco ao abrir (apenas quando for enviar agora)
   useEffect(() => {

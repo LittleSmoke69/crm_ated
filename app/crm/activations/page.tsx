@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { Activity, Heart, Search, Plus, MoreVertical, Paperclip, X, Trash2, Edit2, Star, Info, Upload, ArrowLeft, Video, Phone, MoreVertical as MoreVerticalIcon, Smile, Camera, Mic, Check, CheckCheck, Send, Calendar, Clock, Play, Pause, Eye, Trash, Music, Megaphone } from 'lucide-react';
+import { Activity, Heart, Search, Plus, MoreVertical, Paperclip, X, Trash2, Edit2, Star, Info, Upload, ArrowLeft, Video, Phone, MoreVertical as MoreVerticalIcon, Smile, Camera, Mic, Check, CheckCheck, Send, Calendar, Clock, Play, Pause, Eye, Trash, Music, Megaphone, Image, CircleDot } from 'lucide-react';
 import SendActivationsModal from '@/components/CRM/SendActivationsModal';
 import ScheduleDetailsModal from '@/components/CRM/ScheduleDetailsModal';
 import { useToast } from '@/hooks/useToast';
@@ -44,6 +44,14 @@ const HIDE_SMART_SEND = true;
 
 /** Timeout para upload (10 min) — evita travamento em conexões lentas com arquivos grandes. */
 const UPLOAD_XHR_TIMEOUT_MS = 10 * 60 * 1000;
+
+/** Formata tamanho de arquivo em KB, MB ou GB de forma legível. */
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
 
 /** Faz parsing seguro do JSON de uma Response — evita crash quando o servidor retorna corpo vazio ou truncado. */
 async function safeResponseJson(response: Response): Promise<any> {
@@ -103,7 +111,8 @@ const ActivationsPage = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedMessages, setSelectedMessages] = useState<Set<string>>(new Set());
+  const [messagesPage, setMessagesPage] = useState(1);
+  const [messagesPerPage] = useState(12);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
@@ -112,6 +121,8 @@ const ActivationsPage = () => {
   // Envio de ativações
   const [showSendModal, setShowSendModal] = useState(false);
   const [messageToSend, setMessageToSend] = useState<Message | null>(null);
+  const [sendModalDefaultMassSend, setSendModalDefaultMassSend] = useState(false);
+  const [massSendSelectedMessageId, setMassSendSelectedMessageId] = useState<string>('');
 
   /** Ao editar mensagem "para este grupo" no card: salvar cria novo modelo e atualiza só esse agendamento */
   const [editingForScheduleId, setEditingForScheduleId] = useState<string | null>(null);
@@ -139,6 +150,9 @@ const ActivationsPage = () => {
   // Preview de mídia
   const [mediaPreviewUrl, setMediaPreviewUrl] = useState<string | null>(null);
   const [mediaType, setMediaType] = useState<'image' | 'video' | 'audio' | null>(null);
+
+  // Modal de preview da mídia no card (imagem, vídeo, áudio, PTV)
+  const [previewingCardMessage, setPreviewingCardMessage] = useState<Message | null>(null);
   
   // Loading de upload
   const [isUploading, setIsUploading] = useState(false);
@@ -287,17 +301,24 @@ const ActivationsPage = () => {
     }
   };
 
-  // Filtra mensagens por pesquisa
+  // Filtra mensagens por título
   const filteredMessages = messages.filter(msg => {
     if (!searchQuery.trim()) return true;
-    const query = searchQuery.toLowerCase();
-    return (
-      msg.title.toLowerCase().includes(query) ||
-      msg.content.toLowerCase().includes(query) ||
-      msg.preview?.toLowerCase().includes(query) ||
-      msg.category.toLowerCase().includes(query)
-    );
+    const query = searchQuery.toLowerCase().trim();
+    return msg.title.toLowerCase().includes(query);
   });
+
+  // Paginação das mensagens filtradas
+  const totalPages = Math.max(1, Math.ceil(filteredMessages.length / messagesPerPage));
+  const paginatedMessages = filteredMessages.slice(
+    (messagesPage - 1) * messagesPerPage,
+    messagesPage * messagesPerPage
+  );
+
+  // Reset da página ao mudar a pesquisa
+  useEffect(() => {
+    setMessagesPage(1);
+  }, [searchQuery]);
 
   // Filtra agendamentos por título, data de criação, status e tipo
   const filteredSchedules = schedules.filter((schedule) => {
@@ -347,25 +368,6 @@ const ActivationsPage = () => {
     key,
     schedules: list,
   }));
-
-  // Seleção
-  const handleSelectAll = () => {
-    if (selectedMessages.size === filteredMessages.length) {
-      setSelectedMessages(new Set());
-    } else {
-      setSelectedMessages(new Set(filteredMessages.map(m => m.id)));
-    }
-  };
-
-  const handleSelectMessage = (messageId: string) => {
-    const newSelected = new Set(selectedMessages);
-    if (newSelected.has(messageId)) {
-      newSelected.delete(messageId);
-    } else {
-      newSelected.add(messageId);
-    }
-    setSelectedMessages(newSelected);
-  };
 
   // Toggle favorito
   const handleToggleFavorite = async (messageId: string, currentFavorite: boolean) => {
@@ -442,8 +444,7 @@ const ActivationsPage = () => {
     };
 
     if (file.size > MAX_SIZES[detectedType]) {
-      const maxMB = MAX_SIZES[detectedType] / (1024 * 1024);
-      showToast(`${detectedType === 'image' ? 'Imagem' : detectedType === 'video' ? 'Vídeo' : 'Áudio'} muito grande. Máximo: ${maxMB}MB`, 'error');
+      showToast(`${detectedType === 'image' ? 'Imagem' : detectedType === 'video' ? 'Vídeo' : 'Áudio'} muito grande. Máximo: ${formatFileSize(MAX_SIZES[detectedType])}`, 'error');
       return;
     }
 
@@ -1318,12 +1319,12 @@ const ActivationsPage = () => {
           </div>
         </div>
 
-        {/* Tabs */}
+        {/* Tabs - scroll horizontal no mobile para exibir todas */}
         <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-md border border-gray-200 dark:border-[#404040] overflow-hidden">
-          <div className="flex border-b border-gray-200 dark:border-[#404040]">
+          <div className="flex border-b border-gray-200 dark:border-[#404040] overflow-x-auto overflow-y-hidden min-w-0 [&::-webkit-scrollbar]:h-1 [&::-webkit-scrollbar-thumb]:rounded [&::-webkit-scrollbar-thumb]:bg-gray-300 dark:[&::-webkit-scrollbar-thumb]:bg-gray-600">
             <button
               onClick={() => setActiveTab('messages')}
-              className={`flex-1 px-6 py-4 font-medium transition-colors ${
+              className={`flex-shrink-0 px-4 sm:px-6 py-4 font-medium transition-colors whitespace-nowrap ${
                 activeTab === 'messages'
                   ? 'text-[#8CD955] border-b-2 border-[#8CD955] bg-[#8CD955]/5 dark:bg-[#8CD955]/10'
                   : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-[#333]'
@@ -1333,7 +1334,7 @@ const ActivationsPage = () => {
             </button>
             <button
               onClick={() => setActiveTab('schedules')}
-              className={`flex-1 px-6 py-4 font-medium transition-colors ${
+              className={`flex-shrink-0 px-4 sm:px-6 py-4 font-medium transition-colors whitespace-nowrap ${
                 activeTab === 'schedules'
                   ? 'text-[#8CD955] border-b-2 border-[#8CD955] bg-[#8CD955]/5 dark:bg-[#8CD955]/10'
                   : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-[#333]'
@@ -1343,14 +1344,15 @@ const ActivationsPage = () => {
             </button>
             <button
               onClick={() => setActiveTab('mass_send')}
-              className={`flex-1 px-6 py-4 font-medium transition-colors flex items-center justify-center gap-2 ${
+              className={`flex-shrink-0 px-4 sm:px-6 py-4 font-medium transition-colors flex items-center justify-center gap-2 whitespace-nowrap ${
                 activeTab === 'mass_send'
                   ? 'text-[#8CD955] border-b-2 border-[#8CD955] bg-[#8CD955]/5 dark:bg-[#8CD955]/10'
                   : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-[#333]'
               }`}
             >
-              <Megaphone className="w-4 h-4" />
-              Campanhas de disparo
+              <Megaphone className="w-4 h-4 flex-shrink-0" />
+              <span className="hidden sm:inline">Campanhas de disparo</span>
+              <span className="sm:hidden">Disparo</span>
             </button>
           </div>
         </div>
@@ -1360,35 +1362,42 @@ const ActivationsPage = () => {
           <>
             {/* Barra de ações e pesquisa */}
             <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-md p-4 border border-gray-200 dark:border-[#404040]">
-          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-            {/* Selecionar todos e pesquisa */}
-            <div className="flex items-center gap-4 flex-1 w-full md:w-auto">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={filteredMessages.length > 0 && selectedMessages.size === filteredMessages.length}
-                  onChange={handleSelectAll}
-                  className="w-5 h-5 text-[#8CD955] rounded focus:ring-[#8CD955]"
-                />
-                <span className="text-sm text-gray-700 dark:text-gray-300 font-medium">Selecionar todos</span>
-              </label>
-
-              <div className="relative flex-1 md:flex-initial md:w-80">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 w-5 h-5" />
+          <div className="flex flex-col gap-4">
+            {/* Linha 1: Pesquisa */}
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
+              <div className="relative flex-1 min-w-0">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-5 h-5 flex-shrink-0" />
                 <input
                   type="text"
-                  placeholder="Pesquisar mensagens..."
+                  placeholder="Pesquisar por título..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400"
+                  className={`w-full min-w-0 pl-10 py-2.5 bg-white dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400 text-sm sm:text-base ${searchQuery ? 'pr-10' : 'pr-4'}`}
                 />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-0.5"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
               </div>
             </div>
 
-            {/* Contador e botão nova mensagem */}
-            <div className="flex items-center gap-4">
-              <span className="text-sm text-gray-600 dark:text-gray-400 font-medium">
-                {filteredMessages.length} mensagem{filteredMessages.length !== 1 ? 's' : ''}
+            {/* Linha 2: Contador e botão nova mensagem */}
+            <div className="flex items-center justify-between gap-4">
+              <span className="text-sm text-gray-600 dark:text-gray-400 font-medium flex-shrink-0">
+                {filteredMessages.length > 0 ? (
+                  totalPages > 1 ? (
+                    <>{(messagesPage - 1) * messagesPerPage + 1}-{Math.min(messagesPage * messagesPerPage, filteredMessages.length)} de {filteredMessages.length}</>
+                  ) : (
+                    <>{filteredMessages.length} mensagem{filteredMessages.length !== 1 ? 's' : ''}</>
+                  )
+                ) : (
+                  <>0 mensagens</>
+                )}
               </span>
               <button
                 onClick={() => {
@@ -1408,7 +1417,7 @@ const ActivationsPage = () => {
                   handleRemoveFile();
                   setShowCreateModal(true);
                 }}
-                className="flex items-center gap-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white px-4 py-2 rounded-lg font-medium transition-colors shadow-md"
+                className="flex items-center gap-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white px-4 py-2.5 rounded-lg font-medium transition-colors shadow-md flex-shrink-0 whitespace-nowrap"
               >
                 <Plus className="w-5 h-5" />
                 Nova mensagem
@@ -1429,21 +1438,14 @@ const ActivationsPage = () => {
               <p className="text-gray-500 dark:text-gray-400">Nenhuma mensagem encontrada</p>
             </div>
           ) : (
+            <>
             <div className="divide-y divide-gray-100">
-              {filteredMessages.map((message) => (
+              {paginatedMessages.map((message) => (
                 <div
                   key={message.id}
                   className="p-4 bg-white dark:bg-[#333] hover:bg-[#8CD95515] dark:hover:bg-[#8CD955]/10 transition-colors relative group border-b border-gray-200 dark:border-[#404040] last:border-b-0"
                 >
                   <div className="flex items-start gap-4">
-                    {/* Checkbox */}
-                    <input
-                      type="checkbox"
-                      checked={selectedMessages.has(message.id)}
-                      onChange={() => handleSelectMessage(message.id)}
-                      className="w-5 h-5 text-[#8CD955] rounded focus:ring-[#8CD955] mt-1 flex-shrink-0"
-                    />
-
                     {/* Ícone de favorito */}
                     <button
                       onClick={() => handleToggleFavorite(message.id, message.is_favorite)}
@@ -1526,19 +1528,41 @@ const ActivationsPage = () => {
                         </div>
                       </div>
 
-                      {/* Preview */}
+                      {/* Preview do texto */}
                       {message.preview && (
                         <div className="mt-2">
                           <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Preview:</span>
-                          <p className="text-sm text-gray-700 dark:text-gray-300 mt-1">{message.preview}</p>
+                          <p className="text-sm text-gray-700 dark:text-gray-300 mt-1 line-clamp-2">{message.preview}</p>
                         </div>
                       )}
 
-                      {/* Anexo */}
+                      {/* Tipo de arquivo e botão Preview */}
                       {message.has_attachment && (
-                        <div className="mt-2 flex items-center gap-1 text-gray-500 dark:text-gray-400">
-                          <Paperclip className="w-4 h-4" />
-                          <span className="text-xs">Anexo</span>
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          {(() => {
+                            const isPtv = message.message_type === 'ptv';
+                            const attType = message.attachment_type;
+                            const typeLabel = isPtv ? 'Vídeo (bolinha)' : attType === 'image' ? 'Imagem' : attType === 'video' ? 'Vídeo' : attType === 'audio' ? 'Áudio' : 'Anexo';
+                            const TypeIcon = isPtv ? CircleDot : attType === 'image' ? Image : attType === 'video' ? Video : attType === 'audio' ? Music : Paperclip;
+                            return (
+                              <>
+                                <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-gray-100 dark:bg-[#404040] text-gray-700 dark:text-gray-300 text-xs font-medium">
+                                  <TypeIcon className="w-3.5 h-3.5" />
+                                  {typeLabel}
+                                </span>
+                                {message.attachment_url && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setPreviewingCardMessage(message)}
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#8CD955]/20 hover:bg-[#8CD955]/30 text-[#6AB83D] dark:text-[#8CD955] text-xs font-medium transition-colors"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                    Preview
+                                  </button>
+                                )}
+                              </>
+                            );
+                          })()}
                         </div>
                       )}
                     </div>
@@ -1546,16 +1570,42 @@ const ActivationsPage = () => {
                 </div>
               ))}
             </div>
+
+            {/* Paginação */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between gap-4 px-4 py-3 border-t border-gray-200 dark:border-[#404040] bg-white dark:bg-[#333] flex-wrap">
+                <span className="text-sm text-gray-600 dark:text-gray-400">
+                  Página {messagesPage} de {totalPages}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setMessagesPage(p => Math.max(1, p - 1))}
+                    disabled={messagesPage <= 1}
+                    className="px-3 py-1.5 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium transition-colors"
+                  >
+                    Anterior
+                  </button>
+                  <button
+                    onClick={() => setMessagesPage(p => Math.min(totalPages, p + 1))}
+                    disabled={messagesPage >= totalPages}
+                    className="px-3 py-1.5 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium transition-colors"
+                  >
+                    Próxima
+                  </button>
+                </div>
+              </div>
+            )}
+            </>
           )}
         </div>
 
         {/* Modal de criar/editar mensagem */}
         {showCreateModal && (
-          <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4 overflow-y-auto">
-            <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-2xl w-full max-w-7xl my-8 border border-gray-200 dark:border-[#404040]">
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-end sm:items-center justify-center z-50 p-0 sm:p-4 overflow-y-auto overscroll-contain">
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-t-2xl sm:rounded-2xl shadow-2xl w-full max-w-7xl sm:my-8 border border-gray-200 dark:border-[#404040] flex flex-col max-h-[95vh] sm:max-h-[90vh] min-h-0">
               {/* Header */}
-              <div className="flex justify-between items-center p-6 border-b border-gray-200 dark:border-[#404040]">
-                <h2 className="text-xl font-bold text-gray-800 dark:text-white">
+              <div className="flex justify-between items-center p-4 sm:p-6 border-b border-gray-200 dark:border-[#404040] flex-shrink-0">
+                <h2 className="text-lg sm:text-xl font-bold text-gray-800 dark:text-white truncate pr-2">
                   {editingForScheduleId
                     ? 'Editar mensagem (só para este grupo)'
                     : editingMessage
@@ -1587,9 +1637,10 @@ const ActivationsPage = () => {
                 </button>
               </div>
 
-              <div className="flex flex-col lg:flex-row h-[calc(100vh-200px)] max-h-[800px]">
-                {/* Coluna Esquerda - Formulário */}
-                <div className="flex-1 p-6 overflow-y-auto border-r border-gray-200 dark:border-[#404040]">
+              {/* Mobile: scroll único (form + preview). Desktop: colunas com scroll no form */}
+              <div className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden overscroll-contain lg:overflow-hidden flex flex-col lg:flex-row">
+                {/* Coluna Esquerda - Formulário (altura natural no mobile, scroll no desktop) */}
+                <div className="flex-shrink-0 lg:flex-1 lg:min-h-0 lg:overflow-y-auto p-4 sm:p-6 pb-8 lg:pb-6 min-w-0 lg:border-r border-gray-200 dark:border-[#404040]">
                   {/* 1. Informações gerais */}
                   <div className="mb-6">
                     <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">1. Informações gerais</h3>
@@ -1723,13 +1774,29 @@ const ActivationsPage = () => {
                           {!attachmentFile && !mediaPreviewUrl ? (
                             <div
                               onClick={() => fileInputRef.current?.click()}
-                              className="border-2 border-dashed border-gray-300 dark:border-[#555] rounded-lg p-8 text-center cursor-pointer hover:border-[#8CD955] hover:bg-[#8CD95515] dark:hover:bg-[#8CD955]/10 transition-colors"
+                              onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('border-[#8CD955]', 'bg-[#8CD955]/10'); }}
+                              onDragLeave={(e) => { e.currentTarget.classList.remove('border-[#8CD955]', 'bg-[#8CD955]/10'); }}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                e.currentTarget.classList.remove('border-[#8CD955]', 'bg-[#8CD955]/10');
+                                const file = e.dataTransfer.files?.[0];
+                                if (file) {
+                                  const input = fileInputRef.current;
+                                  if (input) {
+                                    const dt = new DataTransfer();
+                                    dt.items.add(file);
+                                    input.files = dt.files;
+                                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                                  }
+                                }
+                              }}
+                              className="border-2 border-dashed border-gray-300 dark:border-[#555] rounded-xl p-6 sm:p-8 text-center cursor-pointer hover:border-[#8CD955] hover:bg-[#8CD955]/10 dark:hover:bg-[#8CD955]/10 active:scale-[0.99] transition-all min-h-[120px] flex flex-col items-center justify-center"
                             >
-                              <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
-                              <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">
-                                Arraste o arquivo ou clique aqui
+                              <Upload className="w-10 h-10 sm:w-8 sm:h-8 text-gray-400 dark:text-gray-500 mx-auto mb-2 flex-shrink-0" />
+                              <p className="text-sm text-gray-600 dark:text-gray-400 mb-1 font-medium">
+                                Arraste o arquivo ou toque aqui
                               </p>
-                              <p className="text-xs text-gray-500 dark:text-gray-500">
+                              <p className="text-xs text-gray-500 dark:text-gray-400">
                                 {formData.message_type === 'audio' 
                                   ? 'Formatos: MP3, WAV, OGG' 
                                   : formData.message_type === 'video' || formData.message_type === 'ptv'
@@ -1763,12 +1830,12 @@ const ActivationsPage = () => {
                                     />
                                     {attachmentFile && (
                                       <p className="text-xs text-gray-500 text-center">
-                                        {attachmentFile.name} ({(attachmentFile.size / (1024 * 1024)).toFixed(2)} MB)
+                                        {attachmentFile.name} ({formatFileSize(attachmentFile.size)})
                                       </p>
                                     )}
                                     {!attachmentFile && editingMessage?.attachment_size && (
                                       <p className="text-xs text-gray-500 text-center">
-                                        Mídia existente ({(editingMessage.attachment_size / (1024 * 1024)).toFixed(2)} MB)
+                                        Mídia existente ({editingMessage.attachment_size ? formatFileSize(editingMessage.attachment_size) : '—'})
                                       </p>
                                     )}
                                   </div>
@@ -1795,12 +1862,12 @@ const ActivationsPage = () => {
                                     />
                                     {attachmentFile && (
                                       <p className="text-xs text-gray-500 text-center">
-                                        {attachmentFile.name} ({(attachmentFile.size / (1024 * 1024)).toFixed(2)} MB)
+                                        {attachmentFile.name} ({formatFileSize(attachmentFile.size)})
                                       </p>
                                     )}
                                     {!attachmentFile && editingMessage?.attachment_size && (
                                       <p className="text-xs text-gray-500 text-center">
-                                        Mídia existente ({(editingMessage.attachment_size / (1024 * 1024)).toFixed(2)} MB)
+                                        Mídia existente ({editingMessage.attachment_size ? formatFileSize(editingMessage.attachment_size) : '—'})
                                       </p>
                                     )}
                                   </div>
@@ -1836,7 +1903,7 @@ const ActivationsPage = () => {
                                       <div className="text-center">
                                         <p className="text-xs text-gray-500">
                                           <span className="font-medium">{attachmentFile.name}</span>
-                                          <span className="ml-2">({(attachmentFile.size / (1024 * 1024)).toFixed(2)} MB)</span>
+                                          <span className="ml-2">({formatFileSize(attachmentFile.size)})</span>
                                         </p>
                                       </div>
                                     )}
@@ -1844,7 +1911,7 @@ const ActivationsPage = () => {
                                       <div className="text-center">
                                         <p className="text-xs text-gray-500">
                                           <span className="font-medium">Mídia existente</span>
-                                          <span className="ml-2">({(editingMessage.attachment_size / (1024 * 1024)).toFixed(2)} MB)</span>
+                                          <span className="ml-2">({editingMessage.attachment_size ? formatFileSize(editingMessage.attachment_size) : '—'})</span>
                                         </p>
                                       </div>
                                     )}
@@ -1881,11 +1948,11 @@ const ActivationsPage = () => {
                 </div>
 
                 {/* Coluna Direita - Preview do Celular */}
-                <div className="lg:w-96 p-6 bg-gray-50 dark:bg-[#333] overflow-y-auto">
+                <div className="flex-shrink-0 lg:w-96 p-4 sm:p-6 pb-8 lg:pb-6 bg-gray-50 dark:bg-[#333] border-t lg:border-t-0 lg:border-l border-gray-200 dark:border-[#404040]">
                   <div className="w-full max-w-[280px] mx-auto">
-                    <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">3. Preview:</h3>
-                    {/* Mockup do celular */}
-                    <div className="bg-gray-900 rounded-[2.5rem] p-2 shadow-2xl">
+                    <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3 sm:mb-4">3. Preview</h3>
+                    {/* Mockup do celular - compacto em mobile */}
+                    <div className="bg-gray-900 rounded-[2rem] sm:rounded-[2.5rem] p-1.5 sm:p-2 shadow-2xl max-w-[220px] sm:max-w-[280px] mx-auto">
                       <div className="bg-white dark:bg-[#2a2a2a] rounded-[2rem] overflow-hidden">
                         {/* Status bar */}
                         <div className="bg-gray-900 text-white text-xs px-4 py-1 flex justify-between items-center">
@@ -1917,8 +1984,8 @@ const ActivationsPage = () => {
                           </div>
                         </div>
 
-                        {/* Área de mensagens */}
-                        <div className="bg-gray-100 dark:bg-[#333] h-[400px] p-4 overflow-y-auto">
+                        {/* Área de mensagens - altura menor no mobile */}
+                        <div className="bg-gray-100 dark:bg-[#333] h-[220px] sm:h-[320px] lg:h-[400px] p-4 overflow-y-auto">
                           <div className="text-center text-xs text-gray-500 dark:text-gray-400 mb-4">HOJE</div>
                           
                           {/* Mensagem */}
@@ -2008,25 +2075,25 @@ const ActivationsPage = () => {
                 </div>
               </div>
 
-              {/* Footer com botões */}
-              <div className="flex flex-col gap-3 p-6 border-t border-gray-200 dark:border-[#404040]">
+              {/* Footer com botões - fixo na base do modal */}
+              <div className="flex flex-col gap-3 p-4 sm:p-6 border-t border-gray-200 dark:border-[#404040] flex-shrink-0 bg-white dark:bg-[#2a2a2a]">
                 {/* Barra de progresso de upload */}
                 {isUploading && (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-gray-600 dark:text-gray-400 font-medium">{uploadStatus || 'Enviando...'}</span>
-                      <span className="text-gray-500 dark:text-gray-400">{uploadProgress}%</span>
+                  <div className="space-y-2 animate-in fade-in duration-200">
+                    <div className="flex items-center justify-between text-sm gap-2">
+                      <span className="text-gray-600 dark:text-gray-400 font-medium truncate">{uploadStatus || 'Enviando...'}</span>
+                      <span className="text-[#8CD955] font-semibold tabular-nums flex-shrink-0">{uploadProgress}%</span>
                     </div>
-                    <div className="w-full bg-gray-200 dark:bg-[#404040] rounded-full h-2">
+                    <div className="w-full bg-gray-200 dark:bg-[#404040] rounded-full h-2.5 overflow-hidden">
                       <div
-                        className="bg-[#8CD955] h-2 rounded-full transition-all duration-300"
+                        className="bg-[#8CD955] h-full rounded-full transition-all duration-300 ease-out"
                         style={{ width: `${uploadProgress}%` }}
                       />
                     </div>
                   </div>
                 )}
                 
-                <div className="flex justify-end gap-3">
+                <div className="flex flex-col-reverse sm:flex-row justify-end gap-3">
                   <button
                     onClick={() => {
                       if (isUploading) return; // Não permite cancelar durante upload
@@ -2048,7 +2115,7 @@ const ActivationsPage = () => {
                       handleRemoveFile();
                     }}
                     disabled={isUploading}
-                    className="px-6 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-white bg-white dark:bg-[#333] hover:bg-gray-50 dark:hover:bg-[#404040] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="w-full sm:w-auto px-6 py-3 sm:py-2 border border-gray-300 dark:border-[#555] rounded-xl text-gray-700 dark:text-white bg-white dark:bg-[#333] hover:bg-gray-50 dark:hover:bg-[#404040] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Cancelar
                   </button>
@@ -2059,7 +2126,7 @@ const ActivationsPage = () => {
                       !formData.title.trim() || 
                       (formData.message_type !== 'audio' && formData.message_type !== 'ptv' && formData.message_type !== 'video' && !formData.content.trim())
                     }
-                    className="px-6 py-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition-colors shadow-md disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 min-w-[120px] justify-center"
+                    className="w-full sm:w-auto px-6 py-3 sm:py-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-xl font-medium transition-colors shadow-md disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 min-w-[120px] justify-center"
                   >
                     {isUploading ? (
                       <>
@@ -2083,11 +2150,55 @@ const ActivationsPage = () => {
             onClose={() => {
               setShowSendModal(false);
               setMessageToSend(null);
+              setSendModalDefaultMassSend(false);
             }}
             messageId={messageToSend.id}
             messageTitle={messageToSend.title}
+            defaultToMassSend={sendModalDefaultMassSend}
             userId={userId}
           />
+        )}
+
+        {/* Modal de preview da mídia (imagem, vídeo, áudio, PTV) */}
+        {previewingCardMessage && previewingCardMessage.attachment_url && (
+          <div
+            className="fixed inset-0 bg-black/80 flex items-center justify-center z-[110] p-4"
+            onClick={() => setPreviewingCardMessage(null)}
+          >
+            <div
+              className="relative max-w-[95vw] max-h-[95vh] bg-black rounded-xl overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                onClick={() => setPreviewingCardMessage(null)}
+                className="absolute top-2 right-2 z-10 p-2 rounded-full bg-black/50 hover:bg-black/70 text-white transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+              <div className="p-4 pt-12">
+                <p className="text-white text-sm font-medium mb-2 truncate">{previewingCardMessage.title}</p>
+                {(() => {
+                  const isPtv = previewingCardMessage.message_type === 'ptv';
+                  const attType = previewingCardMessage.attachment_type;
+                  const isVideo = isPtv || attType === 'video';
+                  const isImage = attType === 'image';
+                  const isAudio = attType === 'audio';
+                  const url = previewingCardMessage.attachment_url;
+                  if (isImage) {
+                    return <img src={url} alt="Preview" className="max-w-full max-h-[70vh] object-contain rounded-lg" />;
+                  }
+                  if (isVideo) {
+                    return <video src={url} controls autoPlay className="max-w-full max-h-[70vh] rounded-lg" />;
+                  }
+                  if (isAudio) {
+                    return <audio src={url} controls autoPlay className="w-full max-w-md" />;
+                  }
+                  return <p className="text-gray-400">Tipo de mídia não suportado para preview</p>;
+                })()}
+              </div>
+            </div>
+          </div>
         )}
           </>
         )}
@@ -2097,69 +2208,75 @@ const ActivationsPage = () => {
           <div className="space-y-4">
             {/* Barra de pesquisa e filtros */}
             <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-md border border-gray-200 dark:border-[#404040] p-4">
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="relative flex-1 min-w-[200px]">
+              <div className="flex flex-col gap-4">
+                {/* Linha 1: Busca full width */}
+                <div className="relative w-full min-w-0">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
                   <input
                     type="text"
                     placeholder="Buscar por título"
                     value={scheduleSearchTitle}
                     onChange={(e) => setScheduleSearchTitle(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400 text-sm"
+                    className="w-full pl-10 pr-4 py-2.5 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400 text-sm"
                   />
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">Criação:</span>
-                  <input
-                    type="date"
-                    value={scheduleFilterCreatedFrom}
-                    onChange={(e) => setScheduleFilterCreatedFrom(e.target.value)}
-                    className="px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333] text-sm"
-                  />
-                  <span className="text-gray-400 dark:text-gray-500">até</span>
-                  <input
-                    type="date"
-                    value={scheduleFilterCreatedTo}
-                    onChange={(e) => setScheduleFilterCreatedTo(e.target.value)}
-                    className="px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333] text-sm"
-                  />
-                </div>
-                <select
-                  value={scheduleFilterStatus}
-                  onChange={(e) => setScheduleFilterStatus(e.target.value as 'all' | 'sent' | 'failed')}
-                  className="px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333] text-sm"
-                >
-                  <option value="all">Todos os status</option>
-                  <option value="sent">Executado</option>
-                  <option value="failed">Falhou</option>
-                </select>
-                <select
-                  value={scheduleFilterType}
-                  onChange={(e) => setScheduleFilterType(e.target.value as 'all' | 'one_time' | 'recurring')}
-                  className="px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333] text-sm"
-                >
-                  <option value="all">Todos os tipos</option>
-                  <option value="one_time">Pontual</option>
-                  <option value="recurring">Recorrente</option>
-                </select>
-                {isAdmin && (
-                  <button
-                    type="button"
-                    onClick={handleRecalculateRecurring}
-                    disabled={recalculatingRecurring}
-                    className="px-3 py-2 rounded-lg bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700 text-sm font-medium hover:bg-amber-200 dark:hover:bg-amber-900/60 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
-                    title="Recalcula a data/hora da próxima execução de todos os agendamentos recorrentes (corrige dados antigos)"
+                {/* Linha 2: Filtros em grid responsivo */}
+                <div className="flex flex-col sm:flex-row flex-wrap gap-3">
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 min-w-0">
+                    <span className="text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">Criação:</span>
+                    <div className="flex items-center gap-2 min-w-0 flex-1 sm:flex-initial">
+                      <input
+                        type="date"
+                        value={scheduleFilterCreatedFrom}
+                        onChange={(e) => setScheduleFilterCreatedFrom(e.target.value)}
+                        className="flex-1 min-w-0 px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333] text-sm max-w-full"
+                      />
+                      <span className="text-gray-400 dark:text-gray-500 text-sm flex-shrink-0">até</span>
+                      <input
+                        type="date"
+                        value={scheduleFilterCreatedTo}
+                        onChange={(e) => setScheduleFilterCreatedTo(e.target.value)}
+                        className="flex-1 min-w-0 px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333] text-sm max-w-full"
+                      />
+                    </div>
+                  </div>
+                  <select
+                    value={scheduleFilterStatus}
+                    onChange={(e) => setScheduleFilterStatus(e.target.value as 'all' | 'sent' | 'failed')}
+                    className="w-full sm:w-auto min-w-0 px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333] text-sm"
                   >
-                    {recalculatingRecurring ? (
-                      <>
-                        <span className="inline-block w-4 h-4 border-2 border-amber-600 border-t-transparent rounded-full animate-spin" />
-                        Recalculando...
-                      </>
-                    ) : (
-                      <>Recalcular próximas execuções</>
-                    )}
-                  </button>
-                )}
+                    <option value="all">Todos os status</option>
+                    <option value="sent">Executado</option>
+                    <option value="failed">Falhou</option>
+                  </select>
+                  <select
+                    value={scheduleFilterType}
+                    onChange={(e) => setScheduleFilterType(e.target.value as 'all' | 'one_time' | 'recurring')}
+                    className="w-full sm:w-auto min-w-0 px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333] text-sm"
+                  >
+                    <option value="all">Todos os tipos</option>
+                    <option value="one_time">Pontual</option>
+                    <option value="recurring">Recorrente</option>
+                  </select>
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={handleRecalculateRecurring}
+                      disabled={recalculatingRecurring}
+                      className="px-3 py-2 rounded-lg bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700 text-sm font-medium hover:bg-amber-200 dark:hover:bg-amber-900/60 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
+                      title="Recalcula a data/hora da próxima execução de todos os agendamentos recorrentes (corrige dados antigos)"
+                    >
+                      {recalculatingRecurring ? (
+                        <>
+                          <span className="inline-block w-4 h-4 border-2 border-amber-600 border-t-transparent rounded-full animate-spin" />
+                          Recalculando...
+                        </>
+                      ) : (
+                        <>Recalcular próximas execuções</>
+                      )}
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -2359,6 +2476,46 @@ const ActivationsPage = () => {
         {/* Tab Campanhas de disparo em massa */}
         {activeTab === 'mass_send' && (
           <div className="space-y-4">
+            {/* Card: Criar disparo em massa */}
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-md border border-gray-200 dark:border-[#404040] p-4 sm:p-6">
+              <h3 className="text-base font-semibold text-gray-800 dark:text-white mb-3 flex items-center gap-2">
+                <Megaphone className="w-5 h-5 text-[#8CD955]" />
+                Criar disparo em massa
+              </h3>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                Selecione uma mensagem e envie para vários grupos de uma vez. O envio será processado em segundo plano.
+              </p>
+              <div className="flex flex-col sm:flex-row gap-3">
+                <select
+                  value={massSendSelectedMessageId}
+                  onChange={(e) => setMassSendSelectedMessageId(e.target.value)}
+                  className="flex-1 min-w-0 px-4 py-2.5 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] text-gray-900 dark:text-white text-sm"
+                >
+                  <option value="">Selecione uma mensagem</option>
+                  {messages.map((m) => (
+                    <option key={m.id} value={m.id}>{m.title}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => {
+                    const msg = messages.find(m => m.id === massSendSelectedMessageId);
+                    if (!msg) {
+                      showToast('Selecione uma mensagem primeiro', 'error');
+                      return;
+                    }
+                    setMessageToSend(msg);
+                    setSendModalDefaultMassSend(true);
+                    setShowSendModal(true);
+                  }}
+                  disabled={!massSendSelectedMessageId}
+                  className="px-4 py-2.5 bg-[#8CD955] hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2 whitespace-nowrap"
+                >
+                  <Megaphone className="w-4 h-4" />
+                  Iniciar campanha
+                </button>
+              </div>
+            </div>
+
             <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-md border border-gray-200 dark:border-[#404040] p-4">
               <p className="text-sm text-gray-600 dark:text-gray-400">
                 Campanhas criadas com muitos grupos são processadas em segundo plano. Acompanhe o progresso abaixo.
@@ -2376,8 +2533,8 @@ const ActivationsPage = () => {
                 <p className="text-sm text-gray-400 dark:text-gray-500 mt-2">Ao enviar para mais de 10 grupos, uma campanha é criada automaticamente.</p>
               </div>
             ) : (
-              <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-md border border-gray-200 dark:border-[#404040] overflow-hidden">
-                <table className="w-full">
+              <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-md border border-gray-200 dark:border-[#404040] overflow-x-auto">
+                <table className="w-full min-w-[600px]">
                   <thead className="bg-gray-50 dark:bg-[#333]">
                     <tr>
                       <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Mensagem</th>
