@@ -955,7 +955,7 @@ export default function AdminZaplinkPage() {
                         <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Instagram</th>
                         <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Formulário</th>
                         <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Slug</th>
-                        <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Data</th>
+                        <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Data de cadastro</th>
                         <th className="text-right p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Ações</th>
                       </tr>
                     </thead>
@@ -988,7 +988,9 @@ export default function AdminZaplinkPage() {
                               </span>
                             ) : '—'}
                           </td>
-                          <td className="p-3 text-sm text-gray-500">{new Date(s.created_at).toLocaleDateString()}</td>
+                          <td className="p-3 text-sm text-gray-500">
+                            {new Date(s.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                          </td>
                           <td className="p-3 text-right">
                             <div className="flex items-center justify-end gap-1">
                               <button
@@ -1032,7 +1034,7 @@ export default function AdminZaplinkPage() {
                       <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Slug</th>
                       <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Banca</th>
                       <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Gerente</th>
-                      <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Data</th>
+                      <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Data de cadastro</th>
                       <th className="text-right p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Ações</th>
                     </tr>
                   </thead>
@@ -1054,7 +1056,7 @@ export default function AdminZaplinkPage() {
                         <td className="p-3 text-sm">{s.banca_name ?? '—'}</td>
                         <td className="p-3 text-sm">{s.gerente_name ?? '—'}</td>
                         <td className="p-3 text-sm text-gray-500">
-                          {s.assigned_at ? new Date(s.assigned_at).toLocaleDateString() : new Date(s.created_at).toLocaleDateString()}
+                          {new Date(s.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                         </td>
                         <td className="p-3 text-right">
                           <button
