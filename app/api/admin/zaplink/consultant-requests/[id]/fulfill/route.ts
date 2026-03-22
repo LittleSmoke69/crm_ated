@@ -131,6 +131,17 @@ export async function POST(
         .eq('email', emailNorm)
         .maybeSingle();
       if (existingProfile) {
+        // Marca submissão como cadastrado para não aparecer mais na lista de pendentes
+        await supabaseServiceRole
+          .from('zaplink_form_submissions')
+          .update({
+            status: 'cadastrado',
+            banca_id: bancaId,
+            gerente_id: gerenteId,
+            consultor_user_id: (existingProfile as { id: string }).id,
+            assigned_at: new Date().toISOString(),
+          })
+          .eq('id', submissionId);
         skipped += 1;
         continue;
       }

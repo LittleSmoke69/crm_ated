@@ -30,6 +30,7 @@ export async function GET(req: NextRequest) {
       status,
       banca_id,
       gerente_id,
+      consultor_user_id,
       assigned_at,
       created_at,
       zaplink_forms ( slug, name, form_type ),
@@ -50,11 +51,23 @@ export async function GET(req: NextRequest) {
       return errorResponse(`Erro ao buscar submissões: ${error.message}`, 500);
     }
 
+    // Exclui submissões cujo consultor foi removido pelo gerente
+    let list = (rows ?? []) as { consultor_user_id?: string | null }[];
+    const consultantIds = list.map((r) => r.consultor_user_id).filter(Boolean) as string[];
+    if (consultantIds.length > 0) {
+      const { data: removals } = await supabaseServiceRole
+        .from('zaplink_consultant_removals')
+        .select('consultant_user_id')
+        .eq('gerente_id', userId)
+        .in('consultant_user_id', consultantIds);
+      const removedSet = new Set((removals ?? []).map((r: { consultant_user_id: string }) => r.consultant_user_id));
+      list = list.filter((r) => !r.consultor_user_id || !removedSet.has(r.consultor_user_id));
+    }
+
     type Row = {
       crm_bancas?: { name: string } | { name: string }[] | null;
       [key: string]: unknown;
     };
-    const list = (rows ?? []) as Row[];
     const data = list.map((r: Row) => {
       const { crm_bancas, ...rest } = r;
       const bancaName = Array.isArray(crm_bancas)

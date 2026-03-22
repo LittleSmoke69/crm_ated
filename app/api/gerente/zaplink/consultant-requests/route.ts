@@ -57,6 +57,18 @@ export async function GET(req: NextRequest) {
       .in('request_id', requestIds);
 
     const consultantIds = [...new Set((fulfillments ?? []).map((f: { consultant_user_id: string }) => f.consultant_user_id))];
+
+    // Exclui consultores removidos pelo gerente
+    let removedConsultantIds = new Set<string>();
+    if (consultantIds.length > 0) {
+      const { data: removals } = await supabaseServiceRole
+        .from('zaplink_consultant_removals')
+        .select('consultant_user_id')
+        .eq('gerente_id', userId)
+        .in('consultant_user_id', consultantIds);
+      removedConsultantIds = new Set((removals ?? []).map((r: { consultant_user_id: string }) => r.consultant_user_id));
+    }
+
     let profiles: { id: string; full_name: string | null; email: string; telefone: string | null }[] = [];
     if (consultantIds.length > 0) {
       const { data: p } = await supabaseServiceRole
@@ -69,6 +81,7 @@ export async function GET(req: NextRequest) {
 
     const byRequest = new Map<string, { consultant_user_id: string; sent_at: string; full_name: string | null; email: string; telefone: string | null }[]>();
     for (const f of fulfillments ?? []) {
+      if (removedConsultantIds.has(f.consultant_user_id)) continue;
       const arr = byRequest.get(f.request_id) ?? [];
       const prof = profileById[f.consultant_user_id];
       arr.push({

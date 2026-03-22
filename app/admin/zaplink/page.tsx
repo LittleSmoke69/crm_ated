@@ -21,6 +21,9 @@ import {
   AlertCircle,
   ArrowRightLeft,
   ClipboardList,
+  ChevronDown,
+  ChevronUp,
+  RefreshCw,
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
@@ -136,6 +139,10 @@ export default function AdminZaplinkPage() {
   const [chartByGerente, setChartByGerente] = useState<ByGerenteBancaRow[]>([]);
   const [consultantRequests, setConsultantRequests] = useState<ConsultantRequest[]>([]);
   const [consultantRequestsLoading, setConsultantRequestsLoading] = useState(false);
+  const [consultantRemovals, setConsultantRemovals] = useState<
+    { id: string; gerente_name: string | null; gerente_email: string | null; consultant_name: string | null; consultant_email: string | null; removed_at: string }[]
+  >([]);
+  const [consultantRemovalsLoading, setConsultantRemovalsLoading] = useState(false);
   const [gestores, setGestores] = useState<GestorOption[]>([]);
   const [transferFormId, setTransferFormId] = useState<string | null>(null);
   const [transferGestorId, setTransferGestorId] = useState('');
@@ -143,9 +150,11 @@ export default function AdminZaplinkPage() {
   const [fulfillModalRequest, setFulfillModalRequest] = useState<ConsultantRequest | null>(null);
   const [fulfillSubmissionIds, setFulfillSubmissionIds] = useState<string[]>([]);
   const [pendingSubmissionsForFulfill, setPendingSubmissionsForFulfill] = useState<
-    { id: string; full_name: string; email: string; phone?: string; instagram_handle?: string | null; form_name?: string | null; form_creator_name?: string | null }[]
+    { id: string; full_name: string; email: string; phone?: string; instagram_handle?: string | null; form_name?: string | null; form_creator_name?: string | null; created_at?: string }[]
   >([]);
   const [fulfillSubmitting, setFulfillSubmitting] = useState(false);
+  const [fulfillVerifying, setFulfillVerifying] = useState(false);
+  const [expandedConsultantsRequestId, setExpandedConsultantsRequestId] = useState<string | null>(null);
 
   const [linkForm, setLinkForm] = useState({ slug: '', target_url: '', title: '' });
   const [formForm, setFormForm] = useState({ slug: '', name: '', form_type: 'consultor' as 'consultor' | 'influenciador' });
@@ -274,9 +283,30 @@ export default function AdminZaplinkPage() {
     }
   }, [userId]);
 
+  const loadConsultantRemovals = useCallback(async () => {
+    if (!userId) return;
+    setConsultantRemovalsLoading(true);
+    try {
+      const res = await fetch('/api/admin/zaplink/consultant-removals?limit=50', { headers: { 'X-User-Id': userId } });
+      const json = await res.json();
+      if (json.success && Array.isArray(json.data)) {
+        setConsultantRemovals(json.data);
+      } else {
+        setConsultantRemovals([]);
+      }
+    } catch {
+      setConsultantRemovals([]);
+    } finally {
+      setConsultantRemovalsLoading(false);
+    }
+  }, [userId]);
+
   useEffect(() => {
-    if (activeTab === 'requests' && userId) loadConsultantRequests();
-  }, [activeTab, userId, loadConsultantRequests]);
+    if (activeTab === 'requests' && userId) {
+      loadConsultantRequests();
+      loadConsultantRemovals();
+    }
+  }, [activeTab, userId, loadConsultantRequests, loadConsultantRemovals]);
 
   useEffect(() => {
     if (assignModal && assignBanca) loadGerentesForBanca(assignBanca);
@@ -1127,10 +1157,10 @@ export default function AdminZaplinkPage() {
                                   setFulfillModalRequest(r);
                                   setFulfillSubmissionIds([]);
                                   try {
-                                    const res = await fetch(`/api/admin/zaplink/submissions?status=pending&limit=100`, { headers: { 'X-User-Id': userId! } });
+                                    const res = await fetch(`/api/admin/zaplink/submissions?status=pending&limit=100&exclude_registered=1&request_id=${r.id}`, { headers: { 'X-User-Id': userId! } });
                                     const json = await res.json();
                                     if (json.success && json.data?.data) {
-                                      const list = json.data.data as { id: string; full_name: string; email: string; phone?: string; instagram_handle?: string | null; form_name?: string | null; form_creator_name?: string | null }[];
+                                      const list = json.data.data as { id: string; full_name: string; email: string; phone?: string; instagram_handle?: string | null; form_name?: string | null; form_creator_name?: string | null; created_at?: string }[];
                                       setPendingSubmissionsForFulfill(Array.isArray(list) ? list : []);
                                     } else {
                                       setPendingSubmissionsForFulfill([]);
@@ -1145,16 +1175,37 @@ export default function AdminZaplinkPage() {
                                 Enviar consultores
                               </button>
                             ) : (r.consultants_sent && r.consultants_sent.length > 0) ? (
-                              <div className="text-right">
-                                <p className="text-xs font-medium text-gray-600 dark:text-[#aaa] mb-1">Consultores enviados:</p>
-                                <ul className="text-sm text-gray-800 dark:text-[#ccc] space-y-0.5">
-                                  {r.consultants_sent.map((c) => (
-                                    <li key={c.id} className="flex flex-col items-end">
-                                      <span className="font-medium">{c.full_name || '—'}</span>
-                                      <span className="text-xs text-gray-500 dark:text-[#888]">{c.email}</span>
-                                    </li>
+                              <div className="text-right max-w-[240px]">
+                                <div className="flex flex-wrap gap-1.5 justify-end">
+                                  {(expandedConsultantsRequestId === r.id ? r.consultants_sent : r.consultants_sent.slice(0, 4)).map((c) => (
+                                    <span
+                                      key={c.id}
+                                      className="inline-flex px-2 py-0.5 bg-gray-100 dark:bg-[#333] rounded-md text-xs text-gray-800 dark:text-[#ccc] truncate max-w-[150px]"
+                                      title={`${c.full_name || '—'} — ${c.email}`}
+                                    >
+                                      {c.full_name || c.email || '—'}
+                                    </span>
                                   ))}
-                                </ul>
+                                  {r.consultants_sent.length > 4 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setExpandedConsultantsRequestId((prev) => (prev === r.id ? null : r.id))}
+                                      className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-md text-xs font-medium text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20"
+                                    >
+                                      {expandedConsultantsRequestId === r.id ? (
+                                        <>
+                                          <ChevronUp className="w-3 h-3" />
+                                          Menos
+                                        </>
+                                      ) : (
+                                        <>
+                                          <ChevronDown className="w-3 h-3" />
+                                          +{r.consultants_sent.length - 4} mais
+                                        </>
+                                      )}
+                                    </button>
+                                  )}
+                                </div>
                               </div>
                             ) : null}
                           </td>
@@ -1163,6 +1214,54 @@ export default function AdminZaplinkPage() {
                     })}
                   </tbody>
                 </table>
+              )}
+            </div>
+
+            {/* Consultores removidos por gerentes */}
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] overflow-hidden">
+              <div className="p-4 border-b border-gray-200 dark:border-[#404040] flex items-center gap-2">
+                <Trash2 className="w-5 h-5 text-amber-500" />
+                <h3 className="font-semibold text-gray-900 dark:text-white">Consultores removidos por gerentes</h3>
+                <span className="text-sm text-gray-500 dark:text-[#888]">({consultantRemovals.length})</span>
+              </div>
+              {consultantRemovalsLoading ? (
+                <div className="p-8 text-center text-gray-500 dark:text-[#888]">
+                  <Loader2 className="w-8 h-8 animate-spin mx-auto mb-2 text-green-500" />
+                  Carregando...
+                </div>
+              ) : consultantRemovals.length === 0 ? (
+                <div className="p-6 text-center text-sm text-gray-500 dark:text-[#888]">
+                  Nenhum consultor removido pelos gerentes.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[500px]">
+                    <thead className="bg-gray-50 dark:bg-[#333]">
+                      <tr>
+                        <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Consultor</th>
+                        <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Gerente</th>
+                        <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Data da remoção</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {consultantRemovals.map((r) => (
+                        <tr key={r.id} className="border-t border-gray-100 dark:border-[#404040]">
+                          <td className="p-3">
+                            <span className="font-medium text-gray-900 dark:text-white">{r.consultant_name ?? '—'}</span>
+                            {r.consultant_email && <span className="block text-xs text-gray-500 dark:text-[#888]">{r.consultant_email}</span>}
+                          </td>
+                          <td className="p-3">
+                            <span className="text-sm text-gray-700 dark:text-[#ccc]">{r.gerente_name ?? '—'}</span>
+                            {r.gerente_email && <span className="block text-xs text-gray-500 dark:text-[#888]">{r.gerente_email}</span>}
+                          </td>
+                          <td className="p-3 text-sm text-gray-600 dark:text-[#aaa]">
+                            {new Date(r.removed_at).toLocaleString('pt-BR')}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
           </div>
@@ -1184,7 +1283,34 @@ export default function AdminZaplinkPage() {
                 <p className="text-sm text-gray-600 dark:text-[#aaa] mb-3">
                   Pedido: {fulfillModalRequest.quantity_requested} | Já enviados: {fulfillModalRequest.quantity_sent} | Faltam: {fulfillModalRequest.quantity_requested - fulfillModalRequest.quantity_sent}
                 </p>
-                <p className="text-sm font-medium text-gray-700 dark:text-[#ccc] mb-2">Selecione as submissões pendentes para aprovar e enviar ao gerente:</p>
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <p className="text-sm font-medium text-gray-700 dark:text-[#ccc]">Selecione as submissões pendentes para aprovar e enviar ao gerente:</p>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!userId || !fulfillModalRequest) return;
+                      setFulfillVerifying(true);
+                      try {
+                        const res = await fetch(`/api/admin/zaplink/submissions?status=pending&limit=100&exclude_registered=1&request_id=${fulfillModalRequest.id}`, { headers: { 'X-User-Id': userId } });
+                        const json = await res.json();
+                        if (json.success && json.data?.data) {
+                          const list = json.data.data as { id: string; full_name: string; email: string; phone?: string; instagram_handle?: string | null; form_name?: string | null; form_creator_name?: string | null; created_at?: string }[];
+                          setPendingSubmissionsForFulfill(Array.isArray(list) ? list : []);
+                          showToast('success', 'Lista atualizada. Pendentes já enviados ou cadastrados foram removidos.');
+                        }
+                      } catch {
+                        showToast('error', 'Erro ao verificar.');
+                      } finally {
+                        setFulfillVerifying(false);
+                      }
+                    }}
+                    disabled={fulfillVerifying}
+                    className="inline-flex items-center gap-1.5 px-2 py-1.5 text-sm font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition"
+                  >
+                    {fulfillVerifying ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                    Verificar pendentes
+                  </button>
+                </div>
                 <div className="space-y-2 max-h-64 overflow-y-auto border border-gray-200 dark:border-[#404040] rounded-lg p-2">
                   {pendingSubmissionsForFulfill.length === 0 ? (
                     <p className="text-sm text-gray-500 py-2">Nenhuma submissão pendente.</p>
@@ -1201,6 +1327,11 @@ export default function AdminZaplinkPage() {
                           <span className="text-sm font-medium text-gray-800 dark:text-[#ccc]">{s.full_name || s.email}</span>
                           <span className="text-xs text-gray-500 dark:text-[#888]">{s.email}</span>
                           {s.phone && <span className="text-xs text-gray-500 dark:text-[#888]">{s.phone}</span>}
+                          {s.created_at && (
+                            <span className="text-xs text-gray-500 dark:text-[#777]">
+                              Cadastro: {new Date(s.created_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          )}
                           {s.instagram_handle && <span className="text-xs text-pink-600 dark:text-pink-400">{s.instagram_handle}</span>}
                           {(s.form_name || s.form_creator_name) && (
                             <span className="text-xs text-blue-600 dark:text-blue-400 mt-0.5">

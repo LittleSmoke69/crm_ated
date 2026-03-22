@@ -18,6 +18,8 @@ export async function GET(req: NextRequest) {
 
     const status = req.nextUrl.searchParams.get('status') || 'pending';
     const formId = req.nextUrl.searchParams.get('form_id')?.trim() || null;
+    const excludeRegistered = req.nextUrl.searchParams.get('exclude_registered') === '1';
+    const requestId = req.nextUrl.searchParams.get('request_id')?.trim() || null;
     const page = Math.max(1, parseInt(req.nextUrl.searchParams.get('page') || '1', 10));
     const limit = Math.min(MAX_LIMIT, Math.max(1, parseInt(req.nextUrl.searchParams.get('limit') || String(DEFAULT_LIMIT), 10)));
 
@@ -56,10 +58,51 @@ export async function GET(req: NextRequest) {
 
     const from = (page - 1) * limit;
     const to = from + limit - 1;
-    const { data: rows, error, count } = await query.range(from, to);
+    let { data: rows, error, count } = await query.range(from, to);
 
     if (error) {
       return errorResponse(`Erro ao buscar submissões: ${error.message}`, 500);
+    }
+
+    // Exclui submissões já cadastradas e já enviadas à solicitação (para modal de fulfill)
+    if (excludeRegistered && status === 'pending' && rows && rows.length > 0) {
+      const emailsToExclude = new Set<string>();
+
+      // 1) E-mails já cadastrados em profiles
+      const emailsNorm = [...new Set((rows as { email?: string }[]).map((r) => (r.email || '').trim().toLowerCase()).filter(Boolean))];
+      if (emailsNorm.length > 0) {
+        const orFilter = emailsNorm.map((e) => `email.ilike.${e}`).join(',');
+        const { data: existingEmails } = await supabaseServiceRole
+          .from('profiles')
+          .select('email')
+          .or(orFilter);
+        (existingEmails ?? []).forEach((p: { email?: string }) => {
+          const e = (p.email || '').trim().toLowerCase();
+          if (e) emailsToExclude.add(e);
+        });
+      }
+
+      // 2) E-mails já enviados para esta solicitação (fulfillments do request_id)
+      if (requestId) {
+        const { data: fulfillments } = await supabaseServiceRole
+          .from('zaplink_consultant_request_fulfillments')
+          .select('consultant_user_id')
+          .eq('request_id', requestId);
+        const consultantIds = [...new Set((fulfillments ?? []).map((f: { consultant_user_id: string }) => f.consultant_user_id))];
+        if (consultantIds.length > 0) {
+          const { data: profiles } = await supabaseServiceRole
+            .from('profiles')
+            .select('email')
+            .in('id', consultantIds);
+          (profiles ?? []).forEach((p: { email?: string }) => {
+            const e = (p.email || '').trim().toLowerCase();
+            if (e) emailsToExclude.add(e);
+          });
+        }
+      }
+
+      const arr = rows as Array<{ email?: string } & Record<string, unknown>>;
+      rows = arr.filter((r) => !emailsToExclude.has((r.email || '').trim().toLowerCase())) as typeof rows;
     }
 
     type Row = {

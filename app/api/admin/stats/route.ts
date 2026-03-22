@@ -5,6 +5,13 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { rateLimitService } from '@/lib/services/rate-limit-service';
 import { getEffectiveZaplotoId } from '@/lib/tenant-context';
 
+/** Alinhado a app/instances e app/api/instances: DB pode armazenar ok; API expõe como "connected". */
+function isEvolutionInstanceConnected(row: { status?: string | null; is_active?: boolean | null }) {
+  if (row.is_active === false) return false;
+  const s = String(row.status ?? '').toLowerCase();
+  return s === 'ok' || s === 'connected' || s === 'open';
+}
+
 /**
  * GET /api/admin/stats - Retorna estatísticas gerais do sistema.
  * Acesso: super_admin, admin, dono_banca (requireAdmin).
@@ -103,8 +110,8 @@ export async function GET(req: NextRequest) {
     const totalFailed = campaignsData?.data?.reduce((sum, c) => sum + (c.failed_contacts || 0), 0) || 0;
     const totalAdded = campaignsData?.data?.reduce((sum, c) => sum + (c.total_contacts || 0), 0) || 0;
 
-    // Conta instâncias ativas e com status ok
-    const connectedInstances = instancesData?.data?.filter(i => i.is_active && i.status === 'ok').length || 0;
+    // Instâncias conectadas (status ok/connected/open; exclui só is_active === false)
+    const connectedInstances = instancesData?.data?.filter(isEvolutionInstanceConnected).length || 0;
     const pendingContacts = contactsData?.data?.filter(c => c.status === 'queued').length || 0;
     const addedContacts = contactsData?.data?.filter(c => c.status === "success").length || 0;
     const sentMessages = contactsData?.data?.filter(c => c.status === "asd").length || 0;
