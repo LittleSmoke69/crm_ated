@@ -90,9 +90,12 @@ export async function POST(req: NextRequest) {
     if (sendType === 'text' && (bodyText == null || String(bodyText).trim() === '')) {
       return errorResponse('text é obrigatório quando type=text', 400);
     }
-    // Para áudio: aceita meta_id (preferencial) ou media_url (fallback)
-    if (sendType === 'audio' && !meta_id && !media_url) {
-      return errorResponse('meta_id ou media_url é obrigatório para áudio', 400);
+    // Para áudio oficial, exige media_id da Meta para garantir compatibilidade de formato
+    if (sendType === 'audio' && !meta_id) {
+      return errorResponse(
+        'Para áudio na API oficial, envie primeiro em /api/chat/whatsapp-official/upload-audio-meta e use meta_id.',
+        400
+      );
     }
     if ((sendType === 'image' || sendType === 'video' || sendType === 'document') && (!media_url || typeof media_url !== 'string')) {
       return errorResponse('media_url é obrigatório para tipo de mídia', 400);
@@ -189,9 +192,13 @@ export async function POST(req: NextRequest) {
       } else {
         // meta_id = upload direto nos servidores da Meta (preferencial, garante entrega)
         // media_url = fallback via link público (pode falhar para audio/webm)
-        const audioMedia = meta_id
-          ? { id: meta_id }
-          : { link: media_url! };
+        const audioMedia = { id: meta_id! };
+        console.info('[WA Official][send route] audio send mode', {
+          config_id,
+          to: normalizedTo,
+          mode: 'media_id',
+          has_reply_to: Boolean(replyToMessageId),
+        });
         metaResponse = await whatsappOfficial.sendAudio(
           configForApi,
           normalizedTo,
@@ -201,6 +208,13 @@ export async function POST(req: NextRequest) {
       }
     } catch (err: unknown) {
       const e = err as Error & { name?: string };
+      console.error('[WA Official][send route] send error', {
+        config_id,
+        to: normalizedTo,
+        type: sendType,
+        error_name: e?.name,
+        error_message: e?.message,
+      });
       if (e?.name === 'AbortError') {
         return errorResponse('Timeout ao enviar mensagem para a API do WhatsApp', 502);
       }

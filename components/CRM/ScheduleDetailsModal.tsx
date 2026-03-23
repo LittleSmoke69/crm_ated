@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { X, Calendar, Clock, Users, MessageSquare, Edit2, ExternalLink, Save, Loader2, Plus, Trash2 } from 'lucide-react';
 import { useToast } from '@/hooks/useToast';
 import { supabase } from '@/lib/supabase';
+import { dateAtTimezoneToUTC } from '@/lib/utils/recurring-schedule';
 
 interface ScheduleDetailsModalProps {
   isOpen: boolean;
@@ -171,11 +172,17 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
 
     setSaving(true);
     try {
-      // Converter data/hora local para UTC
+      // Data/hora no timezone do agendamento (não no fuso do navegador)
       let scheduled_at_utc = null;
       if (formData.selectedDate && formData.selectedTime) {
-        const localDateTime = new Date(`${formData.selectedDate}T${formData.selectedTime}`);
-        scheduled_at_utc = localDateTime.toISOString();
+        const tz = schedule?.timezone || 'America/Sao_Paulo';
+        const [y, m, d] = formData.selectedDate.split('-').map((n) => parseInt(n, 10));
+        const [hh, mmPart] = formData.selectedTime.split(':');
+        const hhNum = parseInt(hh, 10);
+        const mmNum = parseInt(mmPart ?? '0', 10);
+        if (y && m && d && !Number.isNaN(hhNum) && !Number.isNaN(mmNum)) {
+          scheduled_at_utc = dateAtTimezoneToUTC(y, m, d, hhNum, mmNum, tz);
+        }
       }
 
       const response = await fetch(`/api/crm/activations/schedules/${schedule.id}`, {

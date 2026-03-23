@@ -55,6 +55,30 @@ async function fetchStatusWithTimeout(
   }
 }
 
+/** Resposta de GET/POST `/api/instances/[name]/status`: `status` = connected|disconnected (UI); `state`/`evolutionState` = estado bruto Evolution (ex.: connecting). */
+type InstanceStatusApiData = {
+  status?: string;
+  state?: string;
+  evolutionState?: string;
+  qrCode?: string | null;
+};
+
+function isEvolutionApiConnected(data: InstanceStatusApiData | undefined): boolean {
+  if (!data) return false;
+  const st = String(data.status ?? '').toLowerCase();
+  if (st === 'connected') return true;
+  const ev = String(data.evolutionState ?? data.state ?? '').toLowerCase();
+  return ev === 'connected' || ev === 'open' || ev === 'ready' || ev === 'online';
+}
+
+function isEvolutionApiConnecting(data: InstanceStatusApiData | undefined): boolean {
+  if (!data) return false;
+  const connectingSet = ['connecting', 'pairing', 'qrcode', 'qr', 'waiting_qr', 'waiting', 'pairing_code'];
+  const ev = String(data.evolutionState ?? data.state ?? '').toLowerCase();
+  const st = String(data.status ?? '').toLowerCase();
+  return connectingSet.includes(ev) || connectingSet.includes(st);
+}
+
 const InstancesPage = () => {
   const { checking } = useRequireAuth();
   const { isCollapsed, setIsCollapsed, isMobileOpen, setIsMobileOpen } = useSidebar();
@@ -249,40 +273,6 @@ const InstancesPage = () => {
       return;
     }
 
-    // Verifica limite de instâncias antes de criar (admins não têm limite)
-    if (!isAdmin) {
-      try {
-        const limitResponse = await fetch('/api/instances', {
-          method: 'GET',
-          headers: { 'X-User-Id': userId },
-        });
-        const limitData = await limitResponse.json();
-        
-        // Verifica se há informação de limite na resposta
-        // A propriedade __limit é não enumerável, então acessamos diretamente
-        const limitInfo = (limitData.data as any)?.__limit || limitData.data?.limit;
-        if (limitInfo) {
-          const { current, max, allowed } = limitInfo;
-          if (!allowed) {
-            showToast(`Limite de instâncias atingido! Você possui ${current} de ${max} instâncias permitidas.`, 'error');
-            addLog(`Limite de instâncias atingido: ${current}/${max}`, 'error');
-            return;
-          }
-        } else {
-          // Fallback: verifica usando o número de instâncias carregadas
-          // Se não conseguir obter o limite, usa o padrão de 20
-          if (instances.length >= 20) {
-            showToast(`Limite de instâncias atingido! Você possui ${instances.length} instâncias.`, 'error');
-            addLog(`Limite de instâncias atingido: ${instances.length}`, 'error');
-            return;
-          }
-        }
-      } catch (limitError) {
-        // Se falhar ao verificar limite, continua (a API também verifica)
-        console.warn('Erro ao verificar limite de instâncias:', limitError);
-      }
-    }
-
     setLoading(true);
     try {
       addLog(`Criando instância ${instanceName}...`, 'info');
@@ -380,14 +370,8 @@ const InstancesPage = () => {
       } else {
         const errorMsg = data.error || data.message || 'Erro ao criar instância';
         
-        // Verifica se é erro de limite atingido
-        if (response.status === 429 || errorMsg.includes('Limite de instâncias')) {
-          showToast(errorMsg, 'error');
-          addLog(`Limite de instâncias atingido: ${errorMsg}`, 'error');
-        } else {
-          showToast(errorMsg, 'error');
-          addLog(`Erro ao criar instância: ${errorMsg}`, 'error');
-        }
+        showToast(errorMsg, 'error');
+        addLog(`Erro ao criar instância: ${errorMsg}`, 'error');
         console.error('Erro na criação:', { response, data });
       }
     } catch (error) {
@@ -478,14 +462,16 @@ const InstancesPage = () => {
       const data = await response.json();
       
       if (data.success && data.data) {
-        const statusFromEvolution = data.data.status; // Status real da Evolution API
-        
+        const payload = data.data as InstanceStatusApiData;
         // Recarrega os dados do banco (que foram atualizados pela API)
         await loadInitialData();
         
         // Verifica se estava desconectada e agora conectou
-        const wasDisconnected = inst.status === 'disconnected' || inst.status === 'connecting';
-        const nowConnected = statusFromEvolution === 'connected';
+        const wasDisconnected =
+          inst.status === 'disconnected' ||
+          inst.status === 'connecting' ||
+          (inst.status !== 'connected' && inst.status !== 'ok');
+        const nowConnected = isEvolutionApiConnected(payload);
         
         // Se conectou, fecha o modal se estiver aberto
         if (nowConnected) {
@@ -499,10 +485,10 @@ const InstancesPage = () => {
           // Verifica se é nova instância conectada (não reconexão) e mostra modal apenas uma vez
           // handleCheckStatus é verificação manual, então não é nova instância
           showToast('Instância conectada!', 'success');
-        } else if (data.data.qrCode) {
+        } else if (payload.qrCode) {
           // Se tem QR code, abre o modal
           setQrExpired(false);
-          setQrCode(data.data.qrCode);
+          setQrCode(payload.qrCode);
           setCurrentConnectingInstance(inst.instance_name);
           setIsReconnecting(false); // Verificação manual não é reconexão
           setQrTimer(QR_WINDOW_SECONDS); // Define o timer primeiro
@@ -535,7 +521,8 @@ const InstancesPage = () => {
       const data = await response.json();
       
       if (data.success && data.data) {
-        if (data.data.status === 'connected') {
+        const payload = data.data as InstanceStatusApiData;
+        if (isEvolutionApiConnected(payload)) {
           // Se já está conectada, apenas atualiza
           setIsQRModalOpen(false);
           setQrCode('');
@@ -544,10 +531,10 @@ const InstancesPage = () => {
           setCurrentConnectingInstance(null);
           showToast('Instância já está conectada!', 'success');
           await loadInitialData();
-        } else if (data.data.qrCode) {
+        } else if (payload.qrCode) {
           // Se tem QR code, abre o modal para reconexão
           // O base64 já vem como data URL completo, não precisa processar
-          const qrCodeValue = data.data.qrCode;
+          const qrCodeValue = payload.qrCode;
           setQrExpired(false);
           setQrCode(qrCodeValue);
           setCurrentConnectingInstance(inst.instance_name);
@@ -832,7 +819,8 @@ const InstancesPage = () => {
           const data = await response.json();
           
           if (data.success && data.data) {
-            if (data.data.status === 'connected') {
+            const payload = data.data as InstanceStatusApiData;
+            if (isEvolutionApiConnected(payload)) {
               console.log(`✅ Instância ${currentConnectingInstance} conectou durante reconexão. Fechando modal.`);
               setIsQRModalOpen(false);
               setQrCode('');
@@ -881,7 +869,8 @@ const InstancesPage = () => {
           const data = await response.json();
           
           if (data.success && data.data) {
-            if (data.data.status === 'connected') {
+            const payload = data.data as InstanceStatusApiData;
+            if (isEvolutionApiConnected(payload)) {
               console.log(`✅ Instância ${currentConnectingInstance} já conectou. Fechando modal.`);
               setIsQRModalOpen(false);
               setQrCode('');
@@ -978,11 +967,9 @@ const InstancesPage = () => {
         const data = await response.json();
         
         if (data.success && data.data) {
-          const status = data.data.status; // Status real da Evolution API
-          
-          // Só fecha o modal se o status for EXATAMENTE 'connected' na Evolution API
-          // Não fecha para 'connecting' ou qualquer outro status
-          if (status === 'connected') {
+          const payload = data.data as InstanceStatusApiData;
+          // Fecha o modal só quando a Evolution está realmente conectada (open/ready/etc.)
+          if (isEvolutionApiConnected(payload)) {
             console.log(`✅ Instância ${currentConnectingInstance} conectou na Evolution API! Fechando modal QR code.`);
             
             setIsQRModalOpen(false);
@@ -998,11 +985,11 @@ const InstancesPage = () => {
             
             // Recarrega dados após conectar (o banco já foi atualizado pela API)
             await loadInitialData();
-          } else if (status === 'connecting' && data.data.qrCode && !isReconnecting) {
+          } else if (isEvolutionApiConnecting(payload) && payload.qrCode && !isReconnecting) {
             // Se ainda está conectando e tem novo QR code, atualiza APENAS se não for reconexão
             // Na reconexão, mantém o QR code original e não atualiza
             // Mas NÃO fecha o modal - continua aguardando
-            setQrCode(data.data.qrCode);
+            setQrCode(payload.qrCode);
             setQrTimer(QR_WINDOW_SECONDS); // Reseta o timer se houver novo QR
           }
           // Se for reconexão e tiver novo QR code, IGNORA - mantém o QR original
@@ -1291,7 +1278,6 @@ const InstancesPage = () => {
                     <>
                       {paginatedInstances.map(inst => {
                         const connected = inst.status === 'connected' || inst.status === 'ok';
-                        const connecting = inst.status === 'connecting';
                         // Verifica se a instância está bloqueada (API Evolution bloqueada para criação de instâncias)
                         const isBlocked = !!inst.is_blocked_for_instances;
                         
@@ -1346,12 +1332,10 @@ const InstancesPage = () => {
                                     className={`px-2 py-1 rounded text-xs font-medium flex-shrink-0 ${
                                       connected
                                         ? 'bg-[#8CD95515] dark:bg-[#00ff0015] text-[#6AB83D] dark:text-[#00ff00]'
-                                        : connecting
-                                        ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400'
                                         : 'bg-gray-100 dark:bg-[#404040] text-gray-600 dark:text-[#aaa]'
                                     }`}
                                   >
-                                    {connected ? 'Conectado' : connecting ? 'Conectando' : inst.status === 'disconnected' ? 'Desconectado' : inst.status}
+                                    {connected ? 'Conectado' : 'Desconectado'}
                                   </span>
                                 </div>
                                 {inst.number && (

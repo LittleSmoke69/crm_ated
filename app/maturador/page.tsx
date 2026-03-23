@@ -409,15 +409,18 @@ export default function MaturadorPage() {
       
       const data = await res.json();
       
-      // A API retorna o estado em data.data.status (successResponse) ou data.status
-      const state = data.data?.status ?? data.status ?? data.state;
-      const isConnected = state === 'connected' || state === 'connecting';
+      // `status` = UI (connected | disconnected); `state` = Evolution (ex.: connecting para QR)
+      const uiStatus = data.data?.status ?? data.status;
+      const evoState = data.data?.state ?? data.data?.evolutionState;
+      const isConnected = uiStatus === 'connected';
       
       // Refaz o carregamento da lista para trazer o status atualizado do banco (API já atualizou para 'ok')
       await loadData();
       
       if (isConnected) {
         alert(`✅ ${instanceName} está conectada!`);
+      } else if (evoState === 'connecting') {
+        alert(`⏳ ${instanceName} está aguardando leitura do QR (ainda não conectada).`);
       } else {
         alert(`❌ ${instanceName} está desconectada`);
       }

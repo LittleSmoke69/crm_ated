@@ -18,8 +18,9 @@ const GRAPH_BASE = 'https://graph.facebook.com';
 // Mapeia MIME types do browser para MIME aceito pela Meta
 function normalizeMimeForMeta(mimeType: string): string {
   const m = mimeType.toLowerCase().split(';')[0].trim();
-  // WebM com Opus → tenta como OGG (mesmo codec, container diferente — Meta aceita)
-  if (m === 'audio/webm') return 'audio/ogg';
+  // WebM com Opus → envia como OGG Opus (formato aceito pela Meta)
+  if (m === 'audio/webm') return 'audio/ogg; codecs=opus';
+  if (m === 'audio/ogg') return 'audio/ogg; codecs=opus';
   if (m === 'audio/x-m4a') return 'audio/mp4';
   if (m === 'audio/m4a') return 'audio/mp4';
   return m;
@@ -77,7 +78,7 @@ export async function POST(req: NextRequest) {
       : metaMime === 'audio/amr' ? 'amr'
       : 'ogg';
 
-    const version = String(config.graph_version).replace(/^v/, '');
+    const version = String(config.graph_version || 'v25.0').replace(/^v/, '');
     const uploadUrl = `${GRAPH_BASE}/v${version}/${config.phone_number_id}/media`;
 
     // Monta multipart para a Meta — reutiliza o blob com MIME normalizado
@@ -94,6 +95,14 @@ export async function POST(req: NextRequest) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30_000);
 
+    console.info('[upload-audio-meta] upload request', {
+      phone_number_id: config.phone_number_id,
+      graph_version: `v${version}`,
+      source_mime: rawMime,
+      normalized_mime: metaMime,
+      file_size: file.size,
+    });
+
     let metaRes: Response;
     try {
       metaRes = await fetch(uploadUrl, {
@@ -107,6 +116,11 @@ export async function POST(req: NextRequest) {
     }
 
     const metaJson = await metaRes.json().catch(() => ({}));
+    console.info('[upload-audio-meta] upload response', {
+      status: metaRes.status,
+      ok: metaRes.ok,
+      body: metaJson,
+    });
 
     if (!metaRes.ok || !metaJson.id) {
       console.error('[upload-audio-meta] Meta error:', metaRes.status, JSON.stringify(metaJson));

@@ -189,12 +189,12 @@ function AddToGroupPage() {
       const instancesToUse = multiInstancesMode ? instancesForAdd : [selectedInstance];
 
 
-      let target_contacts_per_group = Math.ceil(contactsToUse.length / groupsToUse.length);
-      // Prepara grupos (atualmente suporta 1 grupo, mas estrutura permite até 3)
-      const groups = groupsToUse.map(g => ({
+      const basePerGroup = Math.floor(contactsToUse.length / groupsToUse.length);
+      const remainder = contactsToUse.length % groupsToUse.length;
+      const groups = groupsToUse.map((g, idx) => ({
         jid: g.jid,
         subject: g.subject || '',
-        target_contacts: target_contacts_per_group, // Por enquanto, todos os contatos vão para o primeiro grupo
+        target_contacts: basePerGroup + (idx < remainder ? 1 : 0),
       }));
 
       // Prepara contatos

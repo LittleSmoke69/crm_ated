@@ -14,6 +14,7 @@
     "anti-spam:worker": "tsx scripts/anti-spam-worker.ts",
     "backfill:transfer-balances": "tsx scripts/backfill-transfer-balances.ts",
     "test:resolve-expired": "tsx scripts/test-resolve-expired.ts",
+    "test:wa-audio-official": "tsx scripts/test-whatsapp-official-audio.ts",
     "run:netlify-resolve-expired": "tsx scripts/run-netlify-resolve-expired.ts"
   },
   "dependencies": {

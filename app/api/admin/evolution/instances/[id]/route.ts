@@ -176,6 +176,18 @@ export async function DELETE(
       }
     }
 
+    // Remove configs de anti-spam que referenciam esta instância
+    // (FK: anti_spam_configs.master_instance_id -> evolution_instances.id)
+    const { error: antiSpamDeleteError } = await supabaseServiceRole
+      .from('anti_spam_configs')
+      .delete()
+      .eq('master_instance_id', id);
+
+    if (antiSpamDeleteError) {
+      console.error(`❌ [DELETE INSTANCE] Erro ao remover vínculos do anti-spam:`, antiSpamDeleteError);
+      return errorResponse(`Erro ao remover vínculos do anti-spam: ${antiSpamDeleteError.message}`);
+    }
+
     // Deleta na Evolution API (se houver API configurada)
     const evolutionApi = Array.isArray(instance.evolution_apis) 
       ? instance.evolution_apis[0] 

@@ -27,8 +27,16 @@ if (!supabaseUrl || !supabaseKey) {
 
 export const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Service Role para operações no backend
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || supabaseKey;
+// Service Role para operações no backend (nunca usar fallback para chave pública)
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!supabaseServiceRoleKey) {
+  const errorMessage = '❌ SUPABASE_SERVICE_ROLE_KEY não encontrada. Defina a chave service role no ambiente para operações de backend.';
+  if (process.env.NODE_ENV === 'development') {
+    console.error(errorMessage);
+  }
+  throw new Error(errorMessage);
+}
 
 const supabaseServiceRole = createClient(
   supabaseUrl,

@@ -5,6 +5,7 @@ import { X, Search, Check, Calendar, Clock, ArrowLeft, ArrowRight, Loader2, Plus
 import { supabase } from '@/lib/supabase';
 import { deduplicateGroupsById } from '@/lib/utils/group-utils';
 import { postGroupFetchAndResolve } from '@/lib/utils/group-fetch-client';
+import { dateAtTimezoneToUTC } from '@/lib/utils/recurring-schedule';
 import { useToast } from '@/hooks/useToast';
 import ToastContainer from '@/components/Toast/ToastContainer';
 
@@ -261,16 +262,18 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
     }
   };
 
-  // Converte data/hora local para UTC
+  /**
+   * Converte data + hora no timezone escolhido (ex.: America/Sao_Paulo) para ISO UTC.
+   * IMPORTANTE: não usar `new Date("YYYY-MM-DDTHH:mm")` — isso ignora o TZ do usuário e usa o fuso do navegador/servidor.
+   */
   const convertToUTC = (date: string, time: string, tz: string): string => {
     if (!date || !time) return '';
-    
-    // Cria data no timezone especificado
-    const localDateTime = `${date}T${time}`;
-    const dateObj = new Date(localDateTime);
-    
-    // Retorna em ISO (já está em UTC)
-    return dateObj.toISOString();
+    const [y, m, d] = date.split('-').map((n) => parseInt(n, 10));
+    const [hh, mmPart] = time.split(':');
+    const hhNum = parseInt(hh, 10);
+    const mmNum = parseInt(mmPart ?? '0', 10);
+    if (!y || !m || !d || Number.isNaN(hhNum) || Number.isNaN(mmNum)) return '';
+    return dateAtTimezoneToUTC(y, m, d, hhNum, mmNum, tz || 'America/Sao_Paulo');
   };
 
   // Calcula próximo horário para agendamento recorrente

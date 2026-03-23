@@ -43,7 +43,7 @@ export async function GET(req: NextRequest) {
         instList.map((i) => ({
           instance_name: i.instance_name,
           phone: i.phone_number || null,
-          status: i.status === 'ok' ? 'Conectada' : i.status === 'connecting' ? 'Conectando' : 'Desconectada',
+          status: i.status === 'ok' ? 'Conectada' : 'Desconectada',
           groups_count: 0,
         }))
       );
@@ -66,7 +66,7 @@ export async function GET(req: NextRequest) {
     const summary = instList.map((i) => ({
       instance_name: i.instance_name,
       phone: i.phone_number || null,
-      status: i.status === 'ok' ? 'Conectada' : i.status === 'connecting' ? 'Conectando' : 'Desconectada',
+      status: i.status === 'ok' ? 'Conectada' : 'Desconectada',
       groups_count: (groupsByInstance.get(i.instance_name) || []).length,
     }));
 

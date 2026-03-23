@@ -17,6 +17,8 @@ import {
   ChevronRight,
   ExternalLink,
   FileJson,
+  Activity,
+  AlertTriangle,
 } from 'lucide-react';
 import Layout from '@/components/Layout';
 
@@ -41,6 +43,30 @@ interface WebhookEventRow {
   event_name: string;
   raw_payload: Record<string, unknown> | null;
   created_at: string;
+}
+
+interface HealthRow {
+  config_id: string;
+  config_name: string;
+  phone_number_id: string;
+  graph_version: string;
+  is_active: boolean;
+  recent_events_1h: number;
+  pending_events: number;
+  oldest_pending_at: string | null;
+  processing_lag_seconds: number;
+  failed_audio_24h: number;
+}
+
+interface AudioFailureRow {
+  id: string;
+  message_id: string;
+  created_at: string;
+  config_name: string | null;
+  config_phone_number_id: string | null;
+  conversation_title: string | null;
+  conversation_remote_jid: string | null;
+  text: string | null;
 }
 
 const emptyForm = () => ({
@@ -74,6 +100,10 @@ export default function WhatsAppOfficialAdmin() {
   const [webhookUrlCopied, setWebhookUrlCopied] = useState(false);
   const [payloadModalEvent, setPayloadModalEvent] = useState<WebhookEventRow | null>(null);
   const [payloadCopied, setPayloadCopied] = useState(false);
+  const [healthRows, setHealthRows] = useState<HealthRow[]>([]);
+  const [healthLoading, setHealthLoading] = useState(false);
+  const [audioFailures, setAudioFailures] = useState<AudioFailureRow[]>([]);
+  const [audioFailuresLoading, setAudioFailuresLoading] = useState(false);
 
   const userId = typeof window !== 'undefined' ? (sessionStorage.getItem('user_id') || localStorage.getItem('profile_id')) : null;
   const headers = () => ({ 'Content-Type': 'application/json', 'X-User-Id': userId || '' });
@@ -113,8 +143,46 @@ export default function WhatsAppOfficialAdmin() {
     }
   };
 
+  const loadHealth = async () => {
+    setHealthLoading(true);
+    try {
+      const res = await fetch('/api/admin/whatsapp-official/health', { headers: headers() });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.data)) {
+        setHealthRows(data.data as HealthRow[]);
+      } else {
+        setHealthRows([]);
+      }
+    } catch (e) {
+      console.error(e);
+      setHealthRows([]);
+    } finally {
+      setHealthLoading(false);
+    }
+  };
+
+  const loadAudioFailures = async () => {
+    setAudioFailuresLoading(true);
+    try {
+      const res = await fetch('/api/admin/whatsapp-official/audio-failures?page=1&limit=25', { headers: headers() });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.data)) {
+        setAudioFailures(data.data as AudioFailureRow[]);
+      } else {
+        setAudioFailures([]);
+      }
+    } catch (e) {
+      console.error(e);
+      setAudioFailures([]);
+    } finally {
+      setAudioFailuresLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchConfigs();
+    loadHealth();
+    loadAudioFailures();
   }, []);
 
   useEffect(() => {
@@ -285,7 +353,12 @@ export default function WhatsAppOfficialAdmin() {
             </button>
             <button
               type="button"
-              onClick={fetchConfigs}
+              onClick={() => {
+                fetchConfigs();
+                loadWebhookEvents();
+                loadHealth();
+                loadAudioFailures();
+              }}
               className="p-2 text-[var(--muted-foreground)] hover:text-[var(--zaploto-green)] transition"
               title="Atualizar"
             >
@@ -631,6 +704,120 @@ export default function WhatsAppOfficialAdmin() {
                   >
                     <RefreshCw className="w-4 h-4" /> Atualizar
                   </button>
+                )}
+              </div>
+            </div>
+
+            {/* Card: Saúde por configuração (WhatsApp Oficial) */}
+            <div className="mt-6 rounded-xl border border-[var(--card-border)] bg-[var(--card)] overflow-hidden">
+              <div className="p-4 border-b border-[var(--card-border)] bg-[var(--muted)]/30 flex items-center justify-between">
+                <h3 className="font-semibold flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-[var(--zaploto-green)]" />
+                  Saúde do canal oficial
+                </h3>
+                <button
+                  type="button"
+                  onClick={loadHealth}
+                  className="text-sm text-[var(--zaploto-green)] hover:underline flex items-center gap-1"
+                >
+                  <RefreshCw className={`w-4 h-4 ${healthLoading ? 'animate-spin' : ''}`} />
+                  Atualizar
+                </button>
+              </div>
+              <div className="p-4">
+                {healthLoading ? (
+                  <div className="py-6 text-sm text-[var(--muted-foreground)]">Carregando saúde...</div>
+                ) : healthRows.length === 0 ? (
+                  <div className="py-6 text-sm text-[var(--muted-foreground)]">Nenhuma configuração encontrada.</div>
+                ) : (
+                  <div className="overflow-x-auto -mx-4 px-4">
+                    <table className="w-full text-left text-sm">
+                      <thead>
+                        <tr className="border-b border-[var(--card-border)]">
+                          <th className="py-2 pr-4 font-medium text-[var(--muted-foreground)]">Config</th>
+                          <th className="py-2 pr-4 font-medium text-[var(--muted-foreground)]">Eventos (1h)</th>
+                          <th className="py-2 pr-4 font-medium text-[var(--muted-foreground)]">Pendentes</th>
+                          <th className="py-2 pr-4 font-medium text-[var(--muted-foreground)]">Lag</th>
+                          <th className="py-2 pr-4 font-medium text-[var(--muted-foreground)]">Falhas áudio (24h)</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[var(--card-border)]">
+                        {healthRows.map((h) => (
+                          <tr key={h.config_id}>
+                            <td className="py-2 pr-4">
+                              <div className="font-medium">{h.config_name}</div>
+                              <div className="text-xs text-[var(--muted-foreground)]">{h.phone_number_id} · {h.graph_version}</div>
+                            </td>
+                            <td className="py-2 pr-4">{h.recent_events_1h}</td>
+                            <td className="py-2 pr-4">{h.pending_events}</td>
+                            <td className="py-2 pr-4">
+                              {h.pending_events > 0 ? `${h.processing_lag_seconds}s` : '0s'}
+                            </td>
+                            <td className="py-2 pr-4">{h.failed_audio_24h}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Card: Falhas recentes de áudio */}
+            <div className="mt-6 rounded-xl border border-[var(--card-border)] bg-[var(--card)] overflow-hidden">
+              <div className="p-4 border-b border-[var(--card-border)] bg-[var(--muted)]/30 flex items-center justify-between">
+                <h3 className="font-semibold flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-500" />
+                  Falhas recentes de áudio (oficial)
+                </h3>
+                <button
+                  type="button"
+                  onClick={loadAudioFailures}
+                  className="text-sm text-[var(--zaploto-green)] hover:underline flex items-center gap-1"
+                >
+                  <RefreshCw className={`w-4 h-4 ${audioFailuresLoading ? 'animate-spin' : ''}`} />
+                  Atualizar
+                </button>
+              </div>
+              <div className="p-4">
+                {audioFailuresLoading ? (
+                  <div className="py-6 text-sm text-[var(--muted-foreground)]">Carregando falhas...</div>
+                ) : audioFailures.length === 0 ? (
+                  <div className="py-6 text-sm text-[var(--muted-foreground)]">Nenhuma falha de áudio registrada.</div>
+                ) : (
+                  <div className="overflow-x-auto -mx-4 px-4">
+                    <table className="w-full text-left text-sm">
+                      <thead>
+                        <tr className="border-b border-[var(--card-border)]">
+                          <th className="py-2 pr-4 font-medium text-[var(--muted-foreground)]">Data/Hora</th>
+                          <th className="py-2 pr-4 font-medium text-[var(--muted-foreground)]">Config</th>
+                          <th className="py-2 pr-4 font-medium text-[var(--muted-foreground)]">Conversa</th>
+                          <th className="py-2 pr-4 font-medium text-[var(--muted-foreground)]">Mensagem</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[var(--card-border)]">
+                        {audioFailures.map((f) => (
+                          <tr key={f.id}>
+                            <td className="py-2 pr-4 whitespace-nowrap text-[var(--muted-foreground)]">
+                              {new Date(f.created_at).toLocaleString('pt-BR')}
+                            </td>
+                            <td className="py-2 pr-4">
+                              <div>{f.config_name ?? '—'}</div>
+                              <div className="text-xs text-[var(--muted-foreground)]">{f.config_phone_number_id ?? '—'}</div>
+                            </td>
+                            <td className="py-2 pr-4">
+                              <div>{f.conversation_title ?? '—'}</div>
+                              <div className="text-xs text-[var(--muted-foreground)]">{f.conversation_remote_jid ?? '—'}</div>
+                            </td>
+                            <td className="py-2 pr-4">
+                              <div className="font-mono text-xs">{f.message_id}</div>
+                              <div className="text-xs text-[var(--muted-foreground)]">{f.text || 'Áudio sem texto'}</div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
               </div>
             </div>

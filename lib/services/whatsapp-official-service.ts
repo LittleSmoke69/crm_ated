@@ -4,6 +4,7 @@
  */
 
 const SEND_TIMEOUT_MS = 20_000;
+const DEFAULT_GRAPH_VERSION = 'v25.0';
 
 export interface WhatsAppOfficialConfig {
   id: string;
@@ -15,8 +16,70 @@ export interface WhatsAppOfficialConfig {
 
 function buildUrl(config: WhatsAppOfficialConfig, path: string): string {
   const base = 'https://graph.facebook.com';
-  const version = config.graph_version.replace(/^v/, '');
+  const version = (config.graph_version || DEFAULT_GRAPH_VERSION).replace(/^v/, '');
   return `${base}/v${version}/${config.phone_number_id}${path}`;
+}
+
+function sanitizeMetaResponseText(text: string): string {
+  // Evita logs gigantes (HTML inteiro, payloads longos etc.)
+  return text.length > 2000 ? `${text.slice(0, 2000)}... [truncated]` : text;
+}
+
+async function postMessages(
+  config: WhatsAppOfficialConfig,
+  payload: Record<string, unknown>,
+  logContext: string
+): Promise<{ messages: Array<{ id: string }> }> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SEND_TIMEOUT_MS);
+  const url = buildUrl(config, '/messages');
+
+  // Log de request sem token
+  console.info(`[WA Official][${logContext}] request`, {
+    url,
+    phone_number_id: config.phone_number_id,
+    graph_version: config.graph_version || DEFAULT_GRAPH_VERSION,
+    payload,
+  });
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${config.access_token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  const rawText = await res.text();
+  const safeText = sanitizeMetaResponseText(rawText);
+  let parsed: unknown = null;
+  try {
+    parsed = rawText ? JSON.parse(rawText) : null;
+  } catch {
+    parsed = rawText || null;
+  }
+
+  console.info(`[WA Official][${logContext}] response`, {
+    status: res.status,
+    ok: res.ok,
+    body: parsed ?? safeText,
+  });
+
+  if (!res.ok) {
+    throw new Error(`WhatsApp API ${res.status}: ${safeText}`);
+  }
+
+  if (parsed && typeof parsed === 'object') {
+    return parsed as { messages: Array<{ id: string }> };
+  }
+  return { messages: [] };
 }
 
 export async function sendText(
@@ -27,6 +90,7 @@ export async function sendText(
 ): Promise<{ messages: Array<{ id: string }> }> {
   const body: Record<string, unknown> = {
     messaging_product: 'whatsapp',
+    recipient_type: 'individual',
     to: to.replace(/\D/g, ''),
     type: 'text',
     text: { body: text },
@@ -35,27 +99,7 @@ export async function sendText(
     body.context = { message_id: replyToMessageId };
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), SEND_TIMEOUT_MS);
-
-  const res = await fetch(buildUrl(config, '/messages'), {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${config.access_token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-    signal: controller.signal,
-  });
-
-  clearTimeout(timeout);
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`WhatsApp API ${res.status}: ${errText}`);
-  }
-
-  return res.json();
+  return postMessages(config, body, 'sendText');
 }
 
 export async function sendImage(
@@ -67,6 +111,7 @@ export async function sendImage(
 ): Promise<{ messages: Array<{ id: string }> }> {
   const body: Record<string, unknown> = {
     messaging_product: 'whatsapp',
+    recipient_type: 'individual',
     to: to.replace(/\D/g, ''),
     type: 'image',
     image: {
@@ -78,27 +123,7 @@ export async function sendImage(
     body.context = { message_id: replyToMessageId };
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), SEND_TIMEOUT_MS);
-
-  const res = await fetch(buildUrl(config, '/messages'), {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${config.access_token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-    signal: controller.signal,
-  });
-
-  clearTimeout(timeout);
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`WhatsApp API ${res.status}: ${errText}`);
-  }
-
-  return res.json();
+  return postMessages(config, body, 'sendImage');
 }
 
 export async function sendVideo(
@@ -110,6 +135,7 @@ export async function sendVideo(
 ): Promise<{ messages: Array<{ id: string }> }> {
   const body: Record<string, unknown> = {
     messaging_product: 'whatsapp',
+    recipient_type: 'individual',
     to: to.replace(/\D/g, ''),
     type: 'video',
     video: {
@@ -121,27 +147,7 @@ export async function sendVideo(
     body.context = { message_id: replyToMessageId };
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), SEND_TIMEOUT_MS);
-
-  const res = await fetch(buildUrl(config, '/messages'), {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${config.access_token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-    signal: controller.signal,
-  });
-
-  clearTimeout(timeout);
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`WhatsApp API ${res.status}: ${errText}`);
-  }
-
-  return res.json();
+  return postMessages(config, body, 'sendVideo');
 }
 
 export async function sendDocument(
@@ -154,6 +160,7 @@ export async function sendDocument(
 ): Promise<{ messages: Array<{ id: string }> }> {
   const body: Record<string, unknown> = {
     messaging_product: 'whatsapp',
+    recipient_type: 'individual',
     to: to.replace(/\D/g, ''),
     type: 'document',
     document: {
@@ -166,27 +173,7 @@ export async function sendDocument(
     body.context = { message_id: replyToMessageId };
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), SEND_TIMEOUT_MS);
-
-  const res = await fetch(buildUrl(config, '/messages'), {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${config.access_token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-    signal: controller.signal,
-  });
-
-  clearTimeout(timeout);
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`WhatsApp API ${res.status}: ${errText}`);
-  }
-
-  return res.json();
+  return postMessages(config, body, 'sendDocument');
 }
 
 export async function sendAudio(
@@ -197,6 +184,7 @@ export async function sendAudio(
 ): Promise<{ messages: Array<{ id: string }> }> {
   const body: Record<string, unknown> = {
     messaging_product: 'whatsapp',
+    recipient_type: 'individual',
     to: to.replace(/\D/g, ''),
     type: 'audio',
     audio: media,
@@ -205,25 +193,5 @@ export async function sendAudio(
     body.context = { message_id: replyToMessageId };
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), SEND_TIMEOUT_MS);
-
-  const res = await fetch(buildUrl(config, '/messages'), {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${config.access_token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-    signal: controller.signal,
-  });
-
-  clearTimeout(timeout);
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`WhatsApp API ${res.status}: ${errText}`);
-  }
-
-  return res.json();
+  return postMessages(config, body, `sendAudio:${'id' in media ? 'media_id' : 'link'}`);
 }

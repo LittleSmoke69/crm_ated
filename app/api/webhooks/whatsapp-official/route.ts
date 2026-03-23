@@ -2,15 +2,18 @@
  * Webhook WhatsApp Cloud API (Oficial)
  *
  * GET  — verificação (hub.verify_token / hub.challenge)
- * POST — receptor fino: salva o evento bruto em webhook_events e retorna 200 imediatamente.
+ * POST — receptor fino: salva o evento bruto em webhook_events, processa
+ *        imediatamente via after() (background) e retorna 200.
  *
- * O processamento (chat_conversations + chat_messages) é desacoplado e ocorre via:
- *   - Supabase Realtime no frontend: INSERT em webhook_events → POST /api/chat/webhook-events/process
- *   - Recuperação manual/cron: POST /api/chat/webhook-events/process-pending (eventos com processed_at IS NULL)
+ * O processamento (chat_conversations + chat_messages) ocorre:
+ *   1. Server-side via after() — logo após salvar o evento (não depende do frontend)
+ *   2. Supabase Realtime no frontend — duplicação é ignorada (saveMessage usa ignoreDuplicates)
+ *   3. Recuperação manual/cron — POST /api/chat/webhook-events/process-pending
  */
 
-import { NextRequest } from 'next/server';
+import { NextRequest, after } from 'next/server';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { processMetaPayloadToChat } from '@/lib/services/whatsapp-official-webhook-processor';
 
 const SOURCE = 'whatsapp_official';
 const EVENT_NAME = 'whatsapp_official';
@@ -52,7 +55,7 @@ export async function GET(req: NextRequest) {
 }
 
 // ---------------------------------------------------------------------------
-// POST — Receptor fino: persiste payload bruto e retorna 200
+// POST — Receptor fino: persiste payload bruto, processa em background
 // ---------------------------------------------------------------------------
 
 export async function POST(req: NextRequest) {
@@ -69,17 +72,39 @@ export async function POST(req: NextRequest) {
       return new Response('OK', { status: 200 });
     }
 
-    const { error: insertError } = await supabaseServiceRole
+    const { data: inserted, error: insertError } = await supabaseServiceRole
       .from('webhook_events')
       .insert({
         source: SOURCE,
         event_name: EVENT_NAME,
         raw_payload: payload as object,
-      });
+      })
+      .select('id')
+      .single();
 
     if (insertError) {
       console.error('[Zaploto Webhook] Erro ao inserir webhook_event:', insertError.message, insertError.details);
+      // Sem persistir o evento, perdemos a trilha de reprocessamento.
+      // Retornar 500 força retry da Meta em vez de confirmar recebimento com risco de perda.
+      return new Response('Webhook event persistence failed', { status: 500 });
     }
+
+    // Processa o evento imediatamente em background (após enviar 200)
+    const eventId = inserted?.id;
+    const savedPayload = payload;
+    after(async () => {
+      try {
+        await processMetaPayloadToChat(savedPayload);
+        if (eventId) {
+          await supabaseServiceRole
+            .from('webhook_events')
+            .update({ processed_at: new Date().toISOString() })
+            .eq('id', eventId);
+        }
+      } catch (err) {
+        console.error('[Zaploto Webhook] Erro no processamento background:', err instanceof Error ? err.message : err);
+      }
+    });
 
     return new Response('OK', { status: 200 });
   } catch (err) {

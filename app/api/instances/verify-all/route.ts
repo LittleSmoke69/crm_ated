@@ -62,7 +62,7 @@ async function checkOne(
     clearTimeout(timeoutId);
     const data = await res.json().catch(() => ({}));
     const state = extractState(data);
-    const newStatus = state === 'connected' ? 'ok' : state === 'connecting' ? 'connecting' : 'disconnected';
+    const newStatus = state === 'connected' ? 'ok' : 'disconnected';
     const updated = newStatus !== instance.status;
     if (updated) {
       await supabaseServiceRole
@@ -70,7 +70,7 @@ async function checkOne(
         .update({ status: newStatus, updated_at: new Date().toISOString() })
         .eq('id', instance.id);
     }
-    const statusLabel = newStatus === 'ok' ? 'Conectada' : newStatus === 'connecting' ? 'Conectando' : 'Desconectada';
+    const statusLabel = newStatus === 'ok' ? 'Conectada' : 'Desconectada';
     return {
       instance_name: instance.instance_name,
       phone: instance.phone_number || '-',

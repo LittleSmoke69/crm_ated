@@ -228,17 +228,15 @@ async function checkInstanceStatus(instance: any, workerId: string): Promise<{ s
     // Usa a mesma lógica do evolutionService.extractState()
     const state = extractState(evolutionData);
     
-    // Mapeia status da Evolution API para o banco (mesma lógica do endpoint /api/instances/[instanceName]/status)
-    // 'ok' no banco = somente quando WhatsApp está realmente conectado
-    // 'connecting' = QR code gerado, aguardando escanear
-    // 'disconnected' no banco = desconectado
+    // Mapeia status da Evolution API para o banco (alinhado a /api/instances/[instanceName]/status)
+    // 'ok' = conectado; aguardando QR (connecting na Evolution) = 'disconnected' na listagem
     let newStatus: string;
     const wasConnected = instance.status === 'ok';
 
     if (state === 'connected') {
       newStatus = 'ok';
     } else if (state === 'connecting') {
-      newStatus = 'connecting';
+      newStatus = 'disconnected';
     } else if (state === 'disconnected') {
       newStatus = 'disconnected';
     } else {

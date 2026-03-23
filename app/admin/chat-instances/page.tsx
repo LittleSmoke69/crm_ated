@@ -37,6 +37,8 @@ export default function ChatInstancesAdmin() {
   const [instances, setInstances] = useState<ChatInstance[]>([]);
   const [evolutionApis, setEvolutionApis] = useState<EvolutionApi[]>([]);
   const [isCreating, setIsCreating] = useState(false);
+  const [isDeletingDisconnected, setIsDeletingDisconnected] = useState(false);
+  const [isDeletingAllInstances, setIsDeletingAllInstances] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   
   // Form state
@@ -137,6 +139,103 @@ export default function ChatInstancesAdmin() {
     alert('Funcionalidade de exclusão em desenvolvimento');
   };
 
+  const handleDeleteDisconnected = async () => {
+    const disconnectedInstances = instances.filter((inst) => inst.status !== 'ok');
+    if (disconnectedInstances.length === 0) {
+      alert('Não há instâncias desconectadas para deletar.');
+      return;
+    }
+
+    const confirmed = confirm(
+      `Tem certeza que deseja deletar ${disconnectedInstances.length} instância(s) desconectada(s)? Esta ação não pode ser desfeita.`
+    );
+    if (!confirmed) return;
+
+    setIsDeletingDisconnected(true);
+    let deletedCount = 0;
+    let errorCount = 0;
+
+    try {
+      for (const instance of disconnectedInstances) {
+        try {
+          const response = await fetch(`/api/instances/${encodeURIComponent(instance.instance_name)}`, {
+            method: 'DELETE',
+            headers: { 'X-User-Id': userId || '' },
+          });
+
+          const result = await response.json();
+          if (response.ok && result?.success) {
+            deletedCount += 1;
+          } else {
+            errorCount += 1;
+          }
+        } catch {
+          errorCount += 1;
+        }
+      }
+
+      if (deletedCount > 0 && errorCount === 0) {
+        alert(`${deletedCount} instância(s) desconectada(s) deletada(s) com sucesso.`);
+      } else if (deletedCount > 0) {
+        alert(`${deletedCount} instância(s) deletada(s) e ${errorCount} falha(s) ao deletar.`);
+      } else {
+        alert('Não foi possível deletar as instâncias desconectadas.');
+      }
+
+      fetchData();
+    } finally {
+      setIsDeletingDisconnected(false);
+    }
+  };
+
+  const handleDeleteAllInstances = async () => {
+    if (instances.length === 0) {
+      alert('Não há instâncias para deletar.');
+      return;
+    }
+
+    const confirmed = confirm(
+      `Tem certeza que deseja deletar TODAS as ${instances.length} instância(s) da lista? Esta ação não pode ser desfeita.`
+    );
+    if (!confirmed) return;
+
+    setIsDeletingAllInstances(true);
+    let deletedCount = 0;
+    let errorCount = 0;
+
+    try {
+      for (const instance of instances) {
+        try {
+          const response = await fetch(`/api/instances/${encodeURIComponent(instance.instance_name)}`, {
+            method: 'DELETE',
+            headers: { 'X-User-Id': userId || '' },
+          });
+
+          const result = await response.json();
+          if (response.ok && result?.success) {
+            deletedCount += 1;
+          } else {
+            errorCount += 1;
+          }
+        } catch {
+          errorCount += 1;
+        }
+      }
+
+      if (deletedCount > 0 && errorCount === 0) {
+        alert(`${deletedCount} instância(s) deletada(s) com sucesso.`);
+      } else if (deletedCount > 0) {
+        alert(`${deletedCount} instância(s) deletada(s) e ${errorCount} falha(s) ao deletar.`);
+      } else {
+        alert('Não foi possível deletar as instâncias da lista.');
+      }
+
+      fetchData();
+    } finally {
+      setIsDeletingAllInstances(false);
+    }
+  };
+
   return (
     <div className="p-6 max-w-7xl mx-auto">
       <div className="flex justify-between items-center mb-8">
@@ -211,6 +310,31 @@ export default function ChatInstancesAdmin() {
         {/* Lista de Instâncias */}
         <div className="lg:col-span-2">
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between gap-3">
+              <p className="text-sm text-gray-500">
+                Desconectadas: {instances.filter((inst) => inst.status !== 'ok').length}
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleDeleteDisconnected}
+                  disabled={isDeletingDisconnected || isDeletingAllInstances || isLoading || instances.every((inst) => inst.status === 'ok')}
+                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500 text-white text-sm font-medium hover:bg-red-600 transition disabled:bg-gray-300 disabled:cursor-not-allowed"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  {isDeletingDisconnected ? 'Deletando desconectadas...' : 'Deletar desconectadas'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDeleteAllInstances}
+                  disabled={isDeletingAllInstances || isDeletingDisconnected || isLoading || instances.length === 0}
+                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-red-700 text-white text-sm font-medium hover:bg-red-800 transition disabled:bg-gray-300 disabled:cursor-not-allowed"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  {isDeletingAllInstances ? 'Deletando todas...' : 'Deletar todas'}
+                </button>
+              </div>
+            </div>
             <table className="w-full text-left">
               <thead className="bg-gray-50 border-b border-gray-100">
                 <tr>

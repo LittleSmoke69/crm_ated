@@ -3,7 +3,6 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { evolutionService } from '@/lib/services/evolution-service';
-import { rateLimitService } from '@/lib/services/rate-limit-service';
 import { getUserEvolutionApi } from '@/lib/services/evolution-api-helper';
 import { evolutionApiSelector } from '@/lib/services/evolution-api-selector';
 import { getSubordinates } from '@/lib/middleware/permissions';
@@ -77,7 +76,7 @@ export async function GET(req: NextRequest) {
 
     // Aplica filtro de user_id baseado no tipo de usuário
     // IMPORTANTE: Mostra TODAS as instâncias do Owner (user_id), independente de:
-    // - Status (conectada, desconectada, connecting)
+    // - Status (conectada ok / desconectada)
     // - API bloqueada ou não (is_blocked_for_instances)
     // - Apenas filtra por user_id/Owner para mostrar apenas as instâncias do usuário
     if (isAdmin) {
@@ -117,17 +116,13 @@ export async function GET(req: NextRequest) {
 
         // Mapeia status do banco para o frontend
         // 'ok' no banco = 'connected' no frontend (conectado)
-        // 'disconnected' no banco = pode ser 'disconnected' ou 'connecting' (aguardando QR)
-        // Para saber se está 'connecting', precisamos verificar se tem QR code pendente
+        // Qualquer outro estado (disconnected, connecting legado, creating, etc.) = 'disconnected' na UI
+        // até o WhatsApp estar realmente conectado — evita mostrar "Conectando" só por ter criado a instância.
         let frontendStatus: string;
         if (inst.status === 'ok') {
           frontendStatus = 'connected';
-        } else if (inst.status === 'disconnected') {
-          // Se está desconectado, pode estar aguardando QR code
-          // Por padrão, assumimos 'connecting' se foi criado recentemente
-          frontendStatus = 'connecting';
         } else {
-          frontendStatus = inst.status;
+          frontendStatus = 'disconnected';
         }
 
         // Processa informações do proxy
@@ -168,20 +163,6 @@ export async function GET(req: NextRequest) {
         return instanceData;
       });
     }
-
-    // Busca limite de instâncias do usuário
-    const instanceLimit = await rateLimitService.checkInstanceLimit(userId);
-
-    // Adiciona informação de limite como propriedade não enumerável para não quebrar código existente
-    Object.defineProperty(instances, '__limit', {
-      value: {
-        current: instanceLimit.current,
-        max: instanceLimit.max,
-        allowed: instanceLimit.allowed,
-      },
-      enumerable: false,
-      writable: false,
-    });
 
     return successResponse(instances, 'Instâncias carregadas com sucesso');
   } catch (err: any) {
@@ -278,23 +259,7 @@ export async function POST(req: NextRequest) {
     }
 
 
-    // Passo 4: Verifica limite de instâncias antes de criar (apenas para não-admins)
-    if (!isAdmin) {
-      try {
-        const instanceLimit = await rateLimitService.checkInstanceLimit(userId);
-        if (!instanceLimit.allowed) {
-          return errorResponse(
-            `Limite de instâncias atingido. Você possui ${instanceLimit.current} de ${instanceLimit.max} instâncias permitidas.`,
-            429
-          );
-        }
-      } catch (limitError: any) {
-        console.error('❌ [INSTÂNCIA] Erro ao verificar limite:', limitError);
-        return errorResponse('Erro ao verificar limite de instâncias', 500);
-      }
-    }
-
-    // Passo 5: SIMPLIFICADO: Sempre usa balanceamento automático para distribuir carga
+    // Passo 4: SIMPLIFICADO: Sempre usa balanceamento automático para distribuir carga
     // A atribuição de usuário é opcional e não é necessária
     
     let selectedApi;
@@ -656,7 +621,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Passo 8: Salva na nova tabela evolution_instances com user_id
-    // Status inicial deve ser 'disconnected' ou 'connecting' - NÃO 'ok' (que significa conectado)
+    // Status inicial: desconectado até o QR ser lido e a Evolution reportar conectado — NÃO 'ok'
     let savedInstance;
     let dbError;
     try {
@@ -712,11 +677,11 @@ export async function POST(req: NextRequest) {
     }
 
     // Retorna dados no formato compatível com o frontend (inclui QR code)
-    // Status deve ser 'connecting' pois ainda não foi escaneado o QR code
+    // Na UI a instância aparece como desconectada até conectar; o polling usa o estado real da Evolution em GET /status.
     const responseData = {
       id: savedInstance.id,
       instance_name: savedInstance.instance_name,
-      status: 'connecting', // Status inicial: aguardando QR code ser escaneado
+      status: 'disconnected',
       qr_code: qrCodeBase64,
       hash: evolutionData.hash,
       number: savedInstance.phone_number,

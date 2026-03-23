@@ -250,6 +250,7 @@ export default function AdminDashboard() {
   const [instancesCurrentPage, setInstancesCurrentPage] = useState(1);
   const instancesPerPage = 10;
   const [instancesSearch, setInstancesSearch] = useState('');
+  const [deletingDisconnectedInstances, setDeletingDisconnectedInstances] = useState(false);
 
   // Reset página quando busca mudar
   useEffect(() => {
@@ -570,6 +571,61 @@ export default function AdminDashboard() {
     } catch (error) {
       console.error('Erro ao excluir instância:', error);
       alert('Erro ao excluir instância');
+    }
+  };
+
+  const deleteInstancesInBatch = async (targets: { id: string; instance_name: string }[], modeLabel: string) => {
+    let deleted = 0;
+    let failed = 0;
+
+    for (const inst of targets) {
+      try {
+        const res = await fetch(`/api/admin/evolution/instances/${inst.id}`, {
+          method: 'DELETE',
+          headers: { 'X-User-Id': userId! },
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          deleted += 1;
+        } else {
+          failed += 1;
+        }
+      } catch {
+        failed += 1;
+      }
+    }
+
+    if (deleted > 0 && failed === 0) {
+      alert(`${deleted} instância(s) ${modeLabel} removida(s) com sucesso.`);
+    } else if (deleted > 0) {
+      alert(`${deleted} instância(s) removida(s) e ${failed} falha(s) ao remover.`);
+    } else {
+      alert(`Não foi possível remover as instâncias ${modeLabel}.`);
+    }
+
+    await loadInstances();
+    const totalPages = Math.ceil(Math.max(0, instances.length - deleted) / instancesPerPage);
+    if (instancesCurrentPage > totalPages && totalPages > 0) {
+      setInstancesCurrentPage(totalPages);
+    }
+  };
+
+  const handleDeleteDisconnectedInstances = async () => {
+    const disconnected = instances.filter((inst: any) => inst.status !== 'ok');
+    if (disconnected.length === 0) {
+      alert('Não há instâncias desconectadas para remover.');
+      return;
+    }
+
+    if (!confirm(`Tem certeza que deseja excluir ${disconnected.length} instância(s) desconectada(s)?`)) {
+      return;
+    }
+
+    setDeletingDisconnectedInstances(true);
+    try {
+      await deleteInstancesInBatch(disconnected, 'desconectadas');
+    } finally {
+      setDeletingDisconnectedInstances(false);
     }
   };
 
@@ -1182,8 +1238,18 @@ export default function AdminDashboard() {
                   <div className="absolute bottom-0 left-0 w-24 h-24 bg-[#8CD955]/5 dark:bg-[#8CD955]/5 rounded-full -ml-12 -mb-12"></div>
                   
                   <div className="relative z-10">
-                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
-                      <h2 className="text-lg sm:text-xl font-bold text-gray-800 dark:text-white">Lista de Instâncias</h2>
+                    <div className="flex flex-col gap-3 mb-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <h2 className="text-lg sm:text-xl font-bold text-gray-800 dark:text-white">Lista de Instâncias</h2>
+                        <div className="flex items-center gap-2 text-xs">
+                          <span className="px-2 py-1 rounded-md bg-gray-200 dark:bg-[#333] text-gray-700 dark:text-gray-200 font-medium">
+                            Total: {instances.length}
+                          </span>
+                          <span className="px-2 py-1 rounded-md bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 font-medium">
+                            Desconectadas: {instances.filter((inst: any) => inst.status !== 'ok').length}
+                          </span>
+                        </div>
+                      </div>
                       <div className="flex items-center gap-2 w-full sm:w-auto">
                         <div className="relative flex-1 sm:flex-initial">
                           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500" />
@@ -1207,6 +1273,16 @@ export default function AdminDashboard() {
                           <RefreshCw className={`w-4 h-4 ${loadingInstances ? 'animate-spin' : ''}`} />
                         </button>
                         <Settings className="w-5 h-5 text-[#8CD955] flex-shrink-0" />
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          onClick={handleDeleteDisconnectedInstances}
+                          disabled={loadingInstances || deletingDisconnectedInstances || instances.every((inst: any) => inst.status === 'ok')}
+                          className="inline-flex items-center gap-1.5 px-3 py-2 text-xs sm:text-sm font-medium rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          {deletingDisconnectedInstances ? 'Removendo desconectadas...' : 'Remover desconectadas'}
+                        </button>
                       </div>
                     </div>
                     {loadingInstances ? (

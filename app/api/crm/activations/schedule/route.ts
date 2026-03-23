@@ -3,12 +3,16 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { calculateNextRecurringRun } from '@/lib/utils/recurring-schedule';
+import { getSubordinates } from '@/lib/middleware/permissions';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
 
 /**
  * POST /api/crm/activations/schedule - Cria um agendamento de mensagem
+ *
+ * Execução: jobs em `message_schedules` são processados pela função agendada Netlify
+ * `process-message-queue` (netlify.toml, a cada 1 min). Sem esse cron, os disparos não saem.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -38,6 +42,13 @@ export async function POST(req: NextRequest) {
       return errorResponse('scheduledAtUTC é obrigatório para agendamento pontual', 400);
     }
 
+    if (scheduleType === 'once' && scheduledAtUTC) {
+      const ts = Date.parse(scheduledAtUTC);
+      if (Number.isNaN(ts)) {
+        return errorResponse('scheduledAtUTC inválido — use ISO 8600 (UTC) gerado a partir do fuso escolhido', 400);
+      }
+    }
+
     if (scheduleType === 'recurring' && (!cronExpr || !recurringDays || !recurringTime)) {
       return errorResponse('cronExpr, recurringDays e recurringTime são obrigatórios para agendamento recorrente', 400);
     }
@@ -59,14 +70,32 @@ export async function POST(req: NextRequest) {
       return errorResponse('Não é possível agendar uma mensagem sem conteúdo', 400);
     }
 
-    // Verifica se a instância existe e está ativa
-    const { data: instance, error: instanceError } = await supabaseServiceRole
+    // Mesma regra da listagem /api/instances: admin vê qualquer instância; dono/gerente inclui subordinados
+    const { data: profile } = await supabaseServiceRole
+      .from('profiles')
+      .select('status')
+      .eq('id', userId)
+      .single();
+
+    const userStatus = profile?.status;
+    const isAdmin = userStatus === 'admin' || userStatus === 'super_admin';
+    let allowedUserIds: string[] = [userId];
+    if (userStatus === 'dono_banca' || userStatus === 'gerente') {
+      const subordinates = await getSubordinates(userId);
+      allowedUserIds = [userId, ...subordinates.map((s) => s.id)];
+    }
+
+    let instanceQuery = supabaseServiceRole
       .from('evolution_instances')
       .select('id, instance_name, is_active, status')
       .eq('instance_name', instanceName)
-      .eq('user_id', userId)
-      .eq('is_active', true)
-      .single();
+      .eq('is_active', true);
+
+    if (!isAdmin) {
+      instanceQuery = instanceQuery.in('user_id', allowedUserIds);
+    }
+
+    const { data: instance, error: instanceError } = await instanceQuery.maybeSingle();
 
     if (instanceError || !instance) {
       return errorResponse('Instância não encontrada ou inativa', 404);
@@ -98,6 +127,13 @@ export async function POST(req: NextRequest) {
               recurringTime || ''
             ) || scheduledAtUTC
           : scheduledAtUTC;
+
+    if (!nextRunUTC || Number.isNaN(Date.parse(nextRunUTC))) {
+      return errorResponse(
+        'Não foi possível calcular next_run_utc. Verifique timezone, dias e horário do agendamento recorrente.',
+        400
+      );
+    }
 
     // Cria um registro de agendamento para cada grupo
     const schedules = groupIds.map((groupId: string) => ({

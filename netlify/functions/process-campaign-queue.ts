@@ -37,17 +37,20 @@ interface HandlerResponse {
 
 type Handler = (event: HandlerEvent, context: HandlerContext) => Promise<HandlerResponse>;
 
-// Cria cliente Supabase com service role key
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '';
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+// Cliente Supabase inicializado lazy dentro do handler para evitar throw no top-level.
+// Se env estiver faltando, o handler retorna 500 em vez de crashar o cold start inteiro.
+let _supabaseClient: any = null;
 
-if (!supabaseUrl || !supabaseServiceRoleKey) {
-  throw new Error('Variáveis de ambiente SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY são obrigatórias');
+function getSupabase(): any {
+  if (_supabaseClient) return _supabaseClient;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '';
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+  if (!url || !key) {
+    throw new Error('ENV AUSENTE: SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY são obrigatórias para process-campaign-queue');
+  }
+  _supabaseClient = createClient(url, key, { auth: { persistSession: false } });
+  return _supabaseClient;
 }
-
-const supabaseServiceRole = createClient(supabaseUrl, supabaseServiceRoleKey, {
-  auth: { persistSession: false },
-});
 
 // Configurações
 const BATCH_LIMIT = 20; // Máximo de jobs por execução
@@ -100,7 +103,7 @@ async function getAvailableInstances(
   }
 
   // Query base: instâncias ativas e conectadas
-  let query = supabaseServiceRole
+  let query = getSupabase()
     .from('evolution_instances')
     .select(`
       *,
@@ -120,13 +123,14 @@ async function getAvailableInstances(
 
   // Se preferUserBinding, tenta priorizar instâncias do usuário
   if (preferUserBinding && userId) {
-    const { data: userBindings } = await supabaseServiceRole
+    const { data: userBindings } = await getSupabase()
       .from('user_evolution_apis')
       .select('evolution_api_id')
       .eq('user_id', userId);
 
     if (userBindings && userBindings.length > 0) {
-      const userApiIds = userBindings.map(b => b.evolution_api_id);
+      const userApiIds = (userBindings as Array<{ evolution_api_id: string | number }>)
+        .map((b) => b.evolution_api_id);
       query = query.in('evolution_api_id', userApiIds);
     }
   }
@@ -212,18 +216,20 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
   const { id, campaign_id, campaign_group_id, phone, contact_id, user_id, attempts, position } = job;
   try {
     // Busca dados da campanha e grupo
-    const [campaignResult, groupResult] = await Promise.all([
-      supabaseServiceRole
+    const results = await Promise.all([
+      getSupabase()
         .from('campaigns')
         .select('strategy, instances, group_id')
         .eq('id', campaign_id)
         .single(),
-      supabaseServiceRole
+      getSupabase()
         .from('campaign_groups')
         .select('group_jid, group_subject')
         .eq('id', campaign_group_id)
         .single(),
     ]);
+    const campaignResult = results[0] as { data: any; error: { message?: string } | null };
+    const groupResult = results[1] as { data: any; error: { message?: string } | null };
 
     if (campaignResult.error || !campaignResult.data) {
       throw new Error(`Campanha não encontrada: ${campaignResult.error?.message}`);
@@ -263,7 +269,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
         // Se só tem uma instância e ela não está disponível, PAUSA a campanha
         console.warn(`[WORKER ${workerId}] ⏸️ Última instância da campanha não está disponível. Pausando campanha ${campaign_id}.`);
         
-        await supabaseServiceRole
+        await getSupabase()
           .from('campaigns')
           .update({
             status: 'paused',
@@ -273,7 +279,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
           .eq('id', campaign_id);
 
         // Marca job como failed - sem retry
-        await supabaseServiceRole
+        await getSupabase()
           .from('campaign_contacts')
           .update({
             status: 'failed',
@@ -288,7 +294,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
         // Múltiplas instâncias configuradas mas nenhuma disponível - PAUSA a campanha
         console.warn(`[WORKER ${workerId}] ⏸️ Todas as instâncias da campanha estão indisponíveis. Pausando campanha ${campaign_id}.`);
         
-        await supabaseServiceRole
+        await getSupabase()
           .from('campaigns')
           .update({
             status: 'paused',
@@ -298,7 +304,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
           .eq('id', campaign_id);
 
         // Marca job como failed - sem retry
-        await supabaseServiceRole
+        await getSupabase()
           .from('campaign_contacts')
           .update({
             status: 'failed',
@@ -384,7 +390,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
         console.warn(`[WORKER ${workerId}] Job ${id}: ⚠️ Contato não foi adicionado. Status: ${statusCode}`);
 
         // Marca como failed imediatamente - sem retry
-        await supabaseServiceRole
+        await getSupabase()
           .from('campaign_contacts')
           .update({
             status: 'failed',
@@ -396,7 +402,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
 
         // Atualiza contato na tabela searches
         if (contact_id) {
-          await supabaseServiceRole
+          await getSupabase()
             .from('searches')
             .update({
               status: 'erro',
@@ -409,7 +415,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
       }
       
       // Sucesso confirmado - atualiza job para success
-      await supabaseServiceRole
+      await getSupabase()
         .from('campaign_contacts')
         .update({
           status: 'success',
@@ -421,7 +427,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
 
       // Atualiza contato na tabela searches
       if (contact_id) {
-        await supabaseServiceRole
+        await getSupabase()
           .from('searches')
           .update({
             status_add_gp: true,
@@ -458,7 +464,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
 
           if (evolutionApi?.base_url) {
             // Busca api_key_global para verificar status
-            const { data: apiData } = await supabaseServiceRole
+            const { data: apiData } = await getSupabase()
               .from('evolution_apis')
               .select('api_key_global')
               .eq('id', evolutionApi.id)
@@ -500,7 +506,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
                   console.error(`[WORKER ${workerId}] 🔌 Status REAL confirmado: Instância ${instance.instance_name} está DESCONECTADA.`);
                   
                   // Desliga a instância que realmente caiu
-                  await supabaseServiceRole
+                  await getSupabase()
                     .from('evolution_instances')
                     .update({
                       status: 'disconnected',
@@ -513,7 +519,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
                   console.log(`[WORKER ${workerId}] ✅ Status REAL: Instância ${instance.instance_name} ainda está ${realState === 'connected' ? 'CONECTADA' : 'CONECTANDO'}. Não marcando como desconectada.`);
                   
                   // Marca job como failed - sem retry
-                  await supabaseServiceRole
+                  await getSupabase()
                     .from('campaign_contacts')
                     .update({
                       status: 'failed',
@@ -525,7 +531,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
 
                   // Atualiza contato na tabela searches
                   if (contact_id) {
-                    await supabaseServiceRole
+                    await getSupabase()
                       .from('searches')
                       .update({
                         status: 'erro',
@@ -545,7 +551,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
           console.log(`[WORKER ${workerId}] ⚠️ Não marcando como desconectada por segurança - pode ser erro temporário.`);
           
           // Marca job como failed - sem retry
-          await supabaseServiceRole
+          await getSupabase()
             .from('campaign_contacts')
             .update({
               status: 'failed',
@@ -557,7 +563,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
 
           // Atualiza contato na tabela searches
           if (contact_id) {
-            await supabaseServiceRole
+            await getSupabase()
               .from('searches')
               .update({
                 status: 'erro',
@@ -575,7 +581,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
 
         // Atualiza a campanha removendo a instância que caiu
         if (remainingInstances.length > 0) {
-          await supabaseServiceRole
+          await getSupabase()
             .from('campaigns')
             .update({
               instances: remainingInstances,
@@ -590,7 +596,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
             console.warn(`⏸️ [WORKER ${workerId}] Instância ${instance.instance_name} caiu. Pausando campanha automaticamente. Restam ${availableRemaining.length} instância(s) disponível(eis).`);
             
             // PAUSA a campanha automaticamente quando uma instância cai
-            await supabaseServiceRole
+            await getSupabase()
               .from('campaigns')
               .update({
                 status: 'paused',
@@ -600,7 +606,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
               .eq('id', campaign_id);
             
             // Marca job como failed - sem retry
-            await supabaseServiceRole
+            await getSupabase()
               .from('campaign_contacts')
               .update({
                 status: 'failed',
@@ -612,7 +618,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
 
             // Atualiza contato na tabela searches
             if (contact_id) {
-              await supabaseServiceRole
+              await getSupabase()
                 .from('searches')
                 .update({
                   status: 'erro',
@@ -629,7 +635,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
         if (remainingInstances.length === 0 || availableRemaining.length === 0) {
           console.warn(`⏸️ [WORKER ${workerId}] Última instância da campanha caiu. Pausando campanha ${campaign_id}`);
           
-          await supabaseServiceRole
+          await getSupabase()
             .from('campaigns')
             .update({
               status: 'paused',
@@ -641,7 +647,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
             .eq('id', campaign_id);
 
           // Marca job como failed - sem retry
-          await supabaseServiceRole
+          await getSupabase()
             .from('campaign_contacts')
             .update({
               status: 'failed',
@@ -653,7 +659,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
 
           // Atualiza contato na tabela searches
           if (contact_id) {
-            await supabaseServiceRole
+            await getSupabase()
               .from('searches')
               .update({
                 status: 'erro',
@@ -671,7 +677,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
 
           if (badRequest) {
             // Esgotou tentativas, marca como failed
-            await supabaseServiceRole
+            await getSupabase()
               .from('campaign_contacts')
               .update({
                 status: 'failed',
@@ -683,7 +689,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
 
             // Atualiza contato na tabela searches
             if (contact_id) {
-              await supabaseServiceRole
+              await getSupabase()
                 .from('searches')
                 .update({
                   status: 'erro',
@@ -700,7 +706,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
 
 
       // Marca como failed imediatamente - sem retry
-      await supabaseServiceRole
+      await getSupabase()
         .from('campaign_contacts')
         .update({
           status: 'failed',
@@ -712,7 +718,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
 
       // Atualiza contato na tabela searches
       if (contact_id) {
-        await supabaseServiceRole
+        await getSupabase()
           .from('searches')
           .update({
             status: 'erro',
@@ -738,7 +744,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
       console.warn(`[WORKER ${workerId}] ⚠️ Erro de conexão crítico no catch - Pausando campanha ${campaign_id}`);
       
       // ⏸️ Pausar a campanha (não falhar)
-      await supabaseServiceRole
+      await getSupabase()
         .from('campaigns')
         .update({
           status: 'paused',
@@ -748,7 +754,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
         .eq('id', campaign_id);
 
       // Marca job como failed - sem retry
-      await supabaseServiceRole
+      await getSupabase()
         .from('campaign_contacts')
         .update({
           status: 'failed',
@@ -760,7 +766,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
 
       // Atualiza contato na tabela searches
       if (contact_id) {
-        await supabaseServiceRole
+        await getSupabase()
           .from('searches')
           .update({
             status: 'erro',
@@ -773,7 +779,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
     }
 
     // Marca como failed imediatamente - sem retry
-    await supabaseServiceRole
+    await getSupabase()
       .from('campaign_contacts')
       .update({
         status: 'failed',
@@ -784,7 +790,7 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
       .eq('id', id);
 
     if (contact_id) {
-      await supabaseServiceRole
+      await getSupabase()
         .from('searches')
         .update({
           status: 'erro',
@@ -803,7 +809,7 @@ async function updateAggregates(campaignId: string, workerId: string): Promise<v
   try {
     // Busca TODOS os jobs da campanha diretamente do banco
     // Isso garante que as métricas sejam sempre precisas, mesmo se houver processamentos paralelos
-    const { data: jobStats, error: statsError } = await supabaseServiceRole
+    const { data: jobStats, error: statsError } = await getSupabase()
       .from('campaign_contacts')
       .select('status, campaign_group_id')
       .eq('campaign_id', campaignId);
@@ -815,7 +821,7 @@ async function updateAggregates(campaignId: string, workerId: string): Promise<v
 
     if (!jobStats || jobStats.length === 0) {
       // Se não há jobs, zera as métricas
-      await supabaseServiceRole
+      await getSupabase()
         .from('campaigns')
         .update({
           processed_contacts: 0,
@@ -860,7 +866,7 @@ async function updateAggregates(campaignId: string, workerId: string): Promise<v
 
     // Atualiza campaign_groups
     for (const [groupId, stats] of groupStats.entries()) {
-      const { error: groupError } = await supabaseServiceRole
+      const { error: groupError } = await getSupabase()
         .from('campaign_groups')
         .update({
           processed_contacts: stats.processed,
@@ -875,7 +881,7 @@ async function updateAggregates(campaignId: string, workerId: string): Promise<v
     }
 
     // Atualiza campaigns com os totais recalculados
-    const { error: campaignError } = await supabaseServiceRole
+    const { error: campaignError } = await getSupabase()
       .from('campaigns')
       .update({
         processed_contacts: totalProcessed,
@@ -891,7 +897,7 @@ async function updateAggregates(campaignId: string, workerId: string): Promise<v
     }
 
     // Verifica se deve finalizar campanha
-    const { data: finalizeResult, error: finalizeError } = await supabaseServiceRole.rpc(
+    const { data: finalizeResult, error: finalizeError } = await getSupabase().rpc(
       'finalizar_campaign_se_necessario',
       { p_campaign_id: campaignId }
     );
@@ -911,31 +917,12 @@ export const handler: Handler = async (event, context) => {
   const WORKER_ID = `netlify-worker-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   const startTime = new Date().toISOString();
 
-  // Valida e cria cliente Supabase dentro do handler
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '';
-  const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-
-  if (!supabaseUrl || !supabaseServiceRoleKey) {
-    const errorMsg = `Variáveis de ambiente obrigatórias não encontradas`;
-    console.error(`[WORKER ${WORKER_ID}] ❌ ${errorMsg}`);
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ 
-        error: errorMsg,
-        workerId: WORKER_ID,
-        timestamp: startTime,
-      }),
-    };
-  }
-
-  const supabaseServiceRole = createClient(supabaseUrl, supabaseServiceRoleKey, {
-    auth: { persistSession: false },
-  });
+  console.log(`[WORKER ${WORKER_ID}] ▶ Iniciando execução | ${startTime}`);
 
   try {
     // PASSO 0: Converte jobs com status 'retry' para 'failed' (migração)
     // Isso garante que jobs antigos com retry sejam marcados como failed
-    const { error: convertError } = await supabaseServiceRole
+    const { error: convertError } = await getSupabase()
       .from('campaign_contacts')
       .update({
         status: 'failed',
@@ -950,7 +937,7 @@ export const handler: Handler = async (event, context) => {
     }
 
     // PASSO 1: Busca campanhas ativas com status 'running'
-    const { data: activeCampaigns, error: campaignsError } = await supabaseServiceRole
+    const { data: activeCampaigns, error: campaignsError } = await getSupabase()
       .from('campaigns')
       .select('id')
       .eq('status', 'running');
@@ -979,12 +966,12 @@ export const handler: Handler = async (event, context) => {
       };
     }
 
-    const activeCampaignIds = activeCampaigns.map(c => c.id);
+    const activeCampaignIds = activeCampaigns.map((c: { id: string }) => c.id);
+    console.log(`[WORKER ${WORKER_ID}] Campanhas ativas: ${activeCampaignIds.length} | IDs: ${activeCampaignIds.join(', ')}`);
 
     // PASSO 2: Busca jobs devidos apenas das campanhas ativas
-    // Ordena por position para garantir processamento sequencial dos grupos
     const now = new Date().toISOString();
-    const { data: jobs, error: claimError } = await supabaseServiceRole
+    const { data: jobs, error: claimError } = await getSupabase()
       .from('campaign_contacts')
       .select(`*`)
       .eq('status', 'queued')
@@ -1018,6 +1005,7 @@ export const handler: Handler = async (event, context) => {
     }
 
     if (!jobs || jobs.length === 0) {
+      console.log(`[WORKER ${WORKER_ID}] Nenhum job devido (queued + scheduled_at <= ${now})`);
       return {
         statusCode: 200,
         body: JSON.stringify({ 
@@ -1030,6 +1018,8 @@ export const handler: Handler = async (event, context) => {
       };
     }
 
+    console.log(`[WORKER ${WORKER_ID}] Jobs devidos encontrados: ${jobs.length} | Campanhas: ${[...new Set(jobs.map((j: any) => j.campaign_id))].join(', ')}`);
+
     // Processa cada job
     const campaignIds = new Set<string>();
     const results = await Promise.allSettled(
@@ -1039,19 +1029,15 @@ export const handler: Handler = async (event, context) => {
       })
     );
 
-    // Log resultados
     const successCount = results.filter(r => r.status === 'fulfilled' && r.value.success).length;
     const failedCount = results.length - successCount;
     const endTime = new Date().toISOString();
     const duration = Date.now() - new Date(startTime).getTime();
 
-    // Log apenas se houver falhas
-    if (failedCount > 0) {
-      console.log(`[WORKER ${WORKER_ID}] ⚠️ Processados: ${successCount} sucessos, ${failedCount} falhas`);
-    }
+    console.log(`[WORKER ${WORKER_ID}] ◼ Concluído em ${duration}ms | ${successCount} ok, ${failedCount} falhas | campanhas: ${Array.from(campaignIds).join(', ')}`);
 
     // Atualiza agregados para cada campanha única
-    await Promise.all(Array.from(campaignIds).map(id => updateAggregates(id, WORKER_ID)));
+    await Promise.all(Array.from(campaignIds).map((id: string) => updateAggregates(id, WORKER_ID)));
 
     return {
       statusCode: 200,

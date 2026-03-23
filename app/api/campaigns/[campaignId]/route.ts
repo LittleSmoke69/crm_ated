@@ -4,6 +4,24 @@ import { canAccessUser, isAdmin } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
+const QUEUE_WORKER_URL = process.env.PROCESS_CAMPAIGN_QUEUE_URL || process.env.NEXT_PUBLIC_PROCESS_CAMPAIGN_QUEUE_URL || '';
+
+/**
+ * Dispara o worker da fila em fire-and-forget (fallback ao cron).
+ */
+function triggerQueueWorker(campaignId: string): void {
+  const url = QUEUE_WORKER_URL.trim();
+  if (!url || !url.startsWith('http')) return;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+
+  fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal })
+    .then(() => console.log(`[QUEUE-TRIGGER] Worker disparado após resume (campanha ${campaignId})`))
+    .catch(() => {})
+    .finally(() => clearTimeout(timeout));
+}
+
 /**
  * Função auxiliar para recalcular métricas de uma campanha
  * Busca diretamente do banco de dados para garantir precisão
@@ -484,11 +502,14 @@ export async function PATCH(
       console.log(`🔄 [API] Status alterado para ${status}. Recalculando métricas da campanha ${campaignId}...`);
       const metrics = await recalculateCampaignMetrics(campaignId);
 
-      // Atualiza os dados retornados com as métricas frescas
-      // (O banco já foi atualizado pelo recalculateCampaignMetrics)
       if (data) {
         data.processed_contacts = metrics.processed;
         data.failed_contacts = metrics.failed;
+      }
+
+      // Ao retomar para 'running', dispara o worker em background (fallback ao cron)
+      if (status === 'running') {
+        triggerQueueWorker(campaignId);
       }
     }
 

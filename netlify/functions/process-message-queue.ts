@@ -699,11 +699,11 @@ export const handler: Handler = async (event, context) => {
     
     console.log(`[WORKER ${WORKER_ID}] 🔍 [BUSCAR] Buscando jobs devidos (next_run_utc <= ${lookaheadISO})`);
     
+    // Apenas status 'scheduled' (pausados usam status 'paused' e não entram aqui)
     const { data: dueJobs, error: jobsError } = await supabaseServiceRole
       .from('message_schedules')
       .select('*')
       .eq('status', 'scheduled')
-      .neq('status', 'paused') // Garante que não processa agendamentos pausados
       .lte('next_run_utc', lookaheadISO)
       .order('next_run_utc', { ascending: true })
       .limit(BATCH_LIMIT * 2); // Busca mais para compensar os que podem estar travados

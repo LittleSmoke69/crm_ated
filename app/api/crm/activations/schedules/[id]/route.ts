@@ -73,6 +73,9 @@ export async function PATCH(
     }
 
     if (scheduled_at_utc !== undefined && schedule.schedule_type === 'once') {
+      if (scheduled_at_utc !== null && Number.isNaN(Date.parse(String(scheduled_at_utc)))) {
+        return errorResponse('scheduled_at_utc inválido — use ISO 8600 em UTC', 400);
+      }
       updateData.scheduled_at_utc = scheduled_at_utc;
       updateData.next_run_utc = scheduled_at_utc;
     }

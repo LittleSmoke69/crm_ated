@@ -5,11 +5,17 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { rateLimitService } from '@/lib/services/rate-limit-service';
 import { getEffectiveZaplotoId } from '@/lib/tenant-context';
 
-/** Alinhado a app/instances e app/api/instances: DB pode armazenar ok; API expõe como "connected". */
+/** Alinhado a app/instances e Evolution: DB pode armazenar ok; API às vezes usa connected/open/ready. */
 function isEvolutionInstanceConnected(row: { status?: string | null; is_active?: boolean | null }) {
   if (row.is_active === false) return false;
-  const s = String(row.status ?? '').toLowerCase();
-  return s === 'ok' || s === 'connected' || s === 'open';
+  const s = String(row.status ?? '').toLowerCase().trim();
+  return (
+    s === 'ok' ||
+    s === 'connected' ||
+    s === 'open' ||
+    s === 'ready' ||
+    s === 'online'
+  );
 }
 
 /**
@@ -42,6 +48,16 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    /**
+     * Escopo de instâncias alinhado ao isolamento por tenant:
+     * - evolution_instances.zaploto_id = tenant (principal após enforce_tenant_isolation)
+     * - OU user_id pertence a um perfil do tenant (legado / linhas sem zaploto_id)
+     *
+     * Antes só usávamos user_id IN (...), o que zerava totais quando havia instâncias com
+     * user_id nulo ou só zaploto_id preenchido — enquanto GET /api/admin/evolution/instances lista todas.
+     */
+    const instanceTenantOrFilter = `zaploto_id.eq.${zaplotoId},user_id.in.(${tenantUserIds.join(',')})`;
+
     // Busca todas as estatísticas (filtradas por tenant)
     const [
       usersResult,
@@ -60,7 +76,7 @@ export async function GET(req: NextRequest) {
       supabaseServiceRole.from('profiles').select('id', { count: 'exact', head: true }).or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`),
       supabaseServiceRole.from('campaigns').select('id', { count: 'exact', head: true }).in('user_id', tenantUserIds),
       supabaseServiceRole.from('searches').select('id', { count: 'exact', head: true }).in('user_id', tenantUserIds),
-      supabaseServiceRole.from('evolution_instances').select('id', { count: 'exact', head: true }).in('user_id', tenantUserIds),
+      supabaseServiceRole.from('evolution_instances').select('id', { count: 'exact', head: true }).or(instanceTenantOrFilter),
       supabaseServiceRole.from('whatsapp_groups').select('id', { count: 'exact', head: true }).in('user_id', tenantUserIds),
       supabaseServiceRole
         .from('campaigns')
@@ -69,7 +85,7 @@ export async function GET(req: NextRequest) {
       supabaseServiceRole
         .from('evolution_instances')
         .select('status, is_active')
-        .in('user_id', tenantUserIds),
+        .or(instanceTenantOrFilter),
       supabaseServiceRole
         .from('campaign_contacts')
         .select('status'),

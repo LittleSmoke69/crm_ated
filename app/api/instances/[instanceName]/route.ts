@@ -48,7 +48,7 @@ export async function GET(
     const formatted = {
       id: data.id,
       instance_name: data.instance_name,
-      status: data.status === 'ok' ? 'connected' : data.status === 'disconnected' ? 'disconnected' : 'connecting',
+      status: data.status === 'ok' ? 'connected' : 'disconnected',
       number: data.phone_number,
       created_at: data.created_at,
       updated_at: data.updated_at,

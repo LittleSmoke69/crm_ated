@@ -89,25 +89,23 @@ export async function GET(
 
     // Mapeia status da Evolution API para o banco
     // 'ok' no banco = somente quando WhatsApp está realmente conectado
-    // 'connecting' = QR code gerado, aguardando escanear
-    // 'disconnected' = desconectado
-    let newStatus: string;
+    // Qualquer outro estado (connecting, disconnected, unknown) = 'disconnected' no banco
+    // para a lista de instâncias sempre mostrar card "Desconectado" + Reconectar até conectar de fato.
     const wasConnected = instance.status === 'ok';
+    let newStatus: string;
 
     if (state === 'connected') {
       newStatus = 'ok';
       console.log(`✅ [STATUS] Instância ${instanceName} CONECTADA na Evolution API - atualizando status para 'ok' no banco`);
-    } else if (state === 'connecting') {
-      // QR code gerado ou aguardando escaneamento - NÃO marcar como ok até conectar de fato
-      newStatus = 'connecting';
-      console.log(`⏳ [STATUS] Instância ${instanceName} CONECTANDO (QR code) - mantendo status 'connecting' até o WhatsApp conectar`);
-    } else if (state === 'disconnected') {
-      newStatus = 'disconnected'; // Desconectado
-      console.log(`⚠️ [STATUS] Instância ${instanceName} DESCONECTADA na Evolution API - atualizando status para 'disconnected'`);
     } else {
-      // Estado desconhecido - mantém o atual
-      newStatus = instance.status;
-      console.log(`❓ [STATUS] Instância ${instanceName} estado desconhecido: ${state} - mantendo status atual: ${instance.status}`);
+      newStatus = 'disconnected';
+      if (state === 'connecting') {
+        console.log(`⏳ [STATUS] Instância ${instanceName} aguardando QR (Evolution: connecting) — persistindo como 'disconnected' no banco até conectar`);
+      } else if (state === 'disconnected') {
+        console.log(`⚠️ [STATUS] Instância ${instanceName} DESCONECTADA na Evolution API - atualizando status para 'disconnected'`);
+      } else {
+        console.log(`❓ [STATUS] Instância ${instanceName} estado Evolution: ${state} — persistindo como 'disconnected' no banco (evita ficar preso em "connecting")`);
+      }
     }
 
     // SEMPRE atualiza no banco (mesmo que seja o mesmo status, para garantir sincronização)
@@ -164,9 +162,12 @@ export async function GET(
       }).catch((err) => console.error('[STATUS] Aviso Loto desconexão:', err));
     }
 
+    // `status` = rótulo para cards/lista (connected | disconnected). `state` / `evolutionState` = estado bruto da Evolution (ex.: connecting) para polling/QR.
+    const uiStatus = state === 'connected' ? 'connected' : 'disconnected';
     const responseData = {
-      status: state,
-      state, // alias para compatibilidade com frontend que usa data.state
+      status: uiStatus,
+      state,
+      evolutionState: state,
       qrCode,
       raw: evolutionData,
     };
@@ -262,8 +263,8 @@ export async function POST(
     console.log(`📊 [POST /status] Estado extraído:`, state);
     console.log(`🔲 [POST /status] QR Code extraído (length: ${qrCode?.length || 0}):`, qrCode ? `${qrCode.substring(0, 50)}...` : 'null');
 
-    // Atualiza no banco: 'ok' só quando realmente conectado; 'connecting' quando QR gerado; senão 'disconnected'
-    const newStatus = state === 'connected' ? 'ok' : state === 'connecting' ? 'connecting' : 'disconnected';
+    // Atualiza no banco: 'ok' só quando realmente conectado; demais casos = 'disconnected' (lista mostra Reconectar)
+    const newStatus = state === 'connected' ? 'ok' : 'disconnected';
     await supabaseServiceRole
       .from('evolution_instances')
       .update({
@@ -272,8 +273,11 @@ export async function POST(
       })
       .eq('id', instance.id);
 
+    const uiStatus = state === 'connected' ? 'connected' : 'disconnected';
     const responseData = {
-      status: state,
+      status: uiStatus,
+      state,
+      evolutionState: state,
       qrCode,
       message: 'Reconexão solicitada',
       raw: evolutionData, // Inclui dados brutos para debug

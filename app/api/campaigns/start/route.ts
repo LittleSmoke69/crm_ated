@@ -19,6 +19,39 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { rateLimitService } from '@/lib/services/rate-limit-service';
 import { evolutionService } from '@/lib/services/evolution-service';
 
+const QUEUE_WORKER_URL = process.env.PROCESS_CAMPAIGN_QUEUE_URL || process.env.NEXT_PUBLIC_PROCESS_CAMPAIGN_QUEUE_URL || '';
+
+/**
+ * Dispara o worker da fila em fire-and-forget.
+ * Funciona como fallback ao cron do Netlify: se o cron estiver inativo,
+ * o worker é invocado diretamente após a criação da campanha.
+ * Timeout curto (5s) — não bloqueia a resposta ao frontend.
+ */
+function triggerQueueWorker(campaignId: string): void {
+  const url = QUEUE_WORKER_URL.trim();
+  if (!url || !url.startsWith('http')) return;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+
+  fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal: controller.signal,
+  })
+    .then(() => {
+      console.log(`[QUEUE-TRIGGER] Worker disparado com sucesso (campanha ${campaignId})`);
+    })
+    .catch((err: any) => {
+      if (err?.name === 'AbortError') {
+        console.log(`[QUEUE-TRIGGER] Timeout esperado (campanha ${campaignId}) — worker pode estar processando`);
+      } else {
+        console.warn(`[QUEUE-TRIGGER] Falha ao disparar worker (campanha ${campaignId}):`, err?.message || err);
+      }
+    })
+    .finally(() => clearTimeout(timeout));
+}
+
 // Função auxiliar para normalizar telefone - garante que sempre comece com 55
 function normalizePhoneNumber(phone: string): string {
   if (!phone) return '';
@@ -843,6 +876,10 @@ export async function POST(req: NextRequest) {
           });
       }
     }
+
+    // Fallback: dispara o worker da fila em background para não depender
+    // exclusivamente do cron do Netlify (que pode estar inativo/desconfigurado).
+    triggerQueueWorker(campaign.id);
 
     return successResponse(
       {

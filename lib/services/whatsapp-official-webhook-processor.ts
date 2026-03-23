@@ -27,6 +27,12 @@ interface WaMessage {
   audio?: { id?: string; mime_type?: string };
   video?: { id?: string; caption?: string; mime_type?: string };
   document?: { id?: string; caption?: string; mime_type?: string };
+  sticker?: { id?: string; mime_type?: string };
+  reaction?: { message_id?: string; emoji?: string };
+  location?: { latitude?: number; longitude?: number; name?: string; address?: string };
+  contacts?: unknown[];
+  button?: { text?: string; payload?: string };
+  interactive?: { type?: string; [key: string]: unknown };
 }
 
 interface WaMetadata {
@@ -59,6 +65,17 @@ export const WHATSAPP_OFFICIAL_TOKEN_ERROR_MSG =
 
 /** Reduz mensagem de erro para log: evita despejar HTML (ex.: página 502 Cloudflare/Supabase) no console. */
 function sanitizeErrorMessage(err: unknown): string {
+  if (err && typeof err === 'object') {
+    const maybe = err as { message?: unknown; code?: unknown; details?: unknown; hint?: unknown };
+    const parts: string[] = [];
+    if (typeof maybe.code === 'string' && maybe.code.trim()) parts.push(`code=${maybe.code}`);
+    if (typeof maybe.message === 'string' && maybe.message.trim()) parts.push(maybe.message);
+    if (typeof maybe.details === 'string' && maybe.details.trim()) parts.push(`details=${maybe.details}`);
+    if (typeof maybe.hint === 'string' && maybe.hint.trim()) parts.push(`hint=${maybe.hint}`);
+    if (parts.length > 0) {
+      return parts.join(' | ');
+    }
+  }
   const msg = err instanceof Error ? err.message : String(err);
   if (msg.length > 500 || /<!DOCTYPE\s+html/i.test(msg) || /<html/i.test(msg)) {
     if (/502|Bad gateway/i.test(msg)) return 'Supabase indisponível (502 Bad Gateway). Tente novamente em alguns minutos.';
@@ -66,6 +83,18 @@ function sanitizeErrorMessage(err: unknown): string {
     return `Erro de rede/servidor (resposta inválida ou muito longa).`;
   }
   return msg;
+}
+
+class WhatsAppOfficialProcessingError extends Error {
+  readonly tokenAlert: boolean;
+  readonly errors: string[];
+
+  constructor(errors: string[], tokenAlert = false) {
+    super(`Falhas no processamento do webhook oficial (${errors.length}): ${errors.join(' || ')}`);
+    this.name = 'WhatsAppOfficialProcessingError';
+    this.tokenAlert = tokenAlert;
+    this.errors = errors;
+  }
 }
 
 const MIME_TO_EXT: Record<string, string> = {
@@ -98,11 +127,21 @@ function parseWhatsAppPayload(value: WaValue): ParsedMessage | null {
 
 function resolveMediaInfo(msg: WaMessage): { text: string; mediaType: string; caption: string } {
   if (msg.type === 'text' && msg.text?.body) return { text: msg.text.body, mediaType: 'text', caption: '' };
-  if (msg.image) return { text: msg.image.caption || '', mediaType: 'image', caption: msg.image.caption || '' };
-  if (msg.audio) return { text: 'Áudio', mediaType: 'audio', caption: '' };
-  if (msg.video) return { text: msg.video.caption || 'Vídeo', mediaType: 'video', caption: msg.video.caption || '' };
-  if (msg.document) return { text: msg.document.caption || 'Documento', mediaType: 'document', caption: msg.document.caption || '' };
-  return { text: '', mediaType: msg.type, caption: '' };
+  if (msg.type === 'image' && msg.image) return { text: msg.image.caption || '', mediaType: 'image', caption: msg.image.caption || '' };
+  if (msg.type === 'audio' && msg.audio) return { text: 'Áudio', mediaType: 'audio', caption: '' };
+  if (msg.type === 'video' && msg.video) return { text: msg.video.caption || 'Vídeo', mediaType: 'video', caption: msg.video.caption || '' };
+  if (msg.type === 'document' && msg.document) return { text: msg.document.caption || 'Documento', mediaType: 'document', caption: msg.document.caption || '' };
+  if (msg.type === 'sticker') return { text: '🖼️ Figurinha', mediaType: 'image', caption: '' };
+  if (msg.type === 'reaction') return { text: msg.reaction?.emoji || '👍', mediaType: 'text', caption: '' };
+  if (msg.type === 'location') {
+    const loc = msg.location;
+    const label = loc?.name || loc?.address || `${loc?.latitude ?? 0},${loc?.longitude ?? 0}`;
+    return { text: `📍 ${label}`, mediaType: 'text', caption: '' };
+  }
+  if (msg.type === 'contacts') return { text: '👤 Contato compartilhado', mediaType: 'text', caption: '' };
+  if (msg.type === 'button') return { text: msg.button?.text || 'Botão', mediaType: 'text', caption: '' };
+  if (msg.type === 'interactive') return { text: 'Resposta interativa', mediaType: 'text', caption: '' };
+  return { text: `[${msg.type}]`, mediaType: 'text', caption: '' };
 }
 
 const MEDIA_FETCH_TIMEOUT_MS = 15_000;
@@ -206,12 +245,17 @@ async function resolveAndStoreMedia(
   return null;
 }
 
-async function handleInboundMessages(value: WaValue): Promise<boolean> {
+async function handleInboundMessages(value: WaValue): Promise<{ tokenAlert: boolean; errors: string[] }> {
   const messages = value.messages ?? [];
-  if (messages.length === 0) return false;
-  const parsed = parseWhatsAppPayload(value);
-  if (!parsed) return false;
-  const phoneNumberIdStr = String(parsed.phoneNumberId ?? '').trim();
+  if (messages.length === 0) return { tokenAlert: false, errors: [] };
+
+  const metadata = value.metadata;
+  const phoneNumberIdStr = String(metadata?.phone_number_id ?? '').trim();
+  if (!phoneNumberIdStr) {
+    console.warn('[Zaploto Chat] Evento sem phone_number_id no metadata, descartando.');
+    return { tokenAlert: false, errors: ['Evento sem phone_number_id no metadata'] };
+  }
+
   const { data: config, error: configError } = await supabaseServiceRole
     .from('whatsapp_official_configs')
     .select('id, zaploto_id, access_token, graph_version')
@@ -220,74 +264,116 @@ async function handleInboundMessages(value: WaValue): Promise<boolean> {
     .maybeSingle();
   if (configError) {
     console.error('[Zaploto Chat] Erro ao buscar config por phone_number_id:', configError.message);
-    return false;
+    return { tokenAlert: false, errors: [sanitizeErrorMessage(configError)] };
   }
   if (!config) {
     console.warn('[Zaploto Chat] Config não encontrada para phone_number_id:', phoneNumberIdStr);
-    return false;
+    return { tokenAlert: false, errors: [`Config não encontrada para phone_number_id: ${phoneNumberIdStr}`] };
   }
-  const remoteJid = `${parsed.contactId.replace(/\D/g, '')}@s.whatsapp.net`;
-  const title = parsed.contactName || remoteJid;
-  const conversation = await chatService.upsertConversation({
-    whatsapp_config_id: config.id,
-    instance_id: null,
-    workspace_id: config.zaploto_id,
-    remote_jid: remoteJid,
-    title,
-    is_group: false,
-  });
+
+  const contactsMap = new Map<string, string>();
+  for (const c of value.contacts ?? []) {
+    if (c.wa_id) contactsMap.set(c.wa_id, c.profile?.name ?? c.wa_id);
+  }
+
   const graphVersion = (config as { graph_version?: string }).graph_version || 'v25.0';
   const accessToken = (config as { access_token?: string }).access_token || '';
   let tokenAlert = false;
+  const errors: string[] = [];
+
+  // Agrupa mensagens por remetente para criar conversas corretas
+  const byContact = new Map<string, WaMessage[]>();
   for (const msg of messages) {
     const from = String(msg.from || '').replace(/\D/g, '');
-    const { text, mediaType, caption } = resolveMediaInfo(msg);
-    let mediaUrl: string | null = null;
-    if (['image', 'audio', 'video', 'document'].includes(msg.type)) {
-      const mediaObj = msg[msg.type as keyof WaMessage] as { id?: string; mime_type?: string } | undefined;
-      const mediaId = mediaObj?.id;
-      const mimeType = mediaObj?.mime_type;
-      if (mediaId && accessToken) {
-        try {
-          mediaUrl = await resolveAndStoreMedia(mediaId, accessToken, graphVersion, mimeType, config.id);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          if (msg.includes(WHATSAPP_OFFICIAL_TOKEN_ERROR_MSG)) {
-            tokenAlert = true;
-            console.warn('[Zaploto Chat] Token inválido/expirado ao baixar mídia; mensagem será salva sem mídia. Renove em Admin > WhatsApp Oficial.');
-          } else {
-            console.error('[Zaploto Chat] Falha ao resolver mídia:', mediaId, err);
+    if (!from) continue;
+    const list = byContact.get(from) ?? [];
+    list.push(msg);
+    byContact.set(from, list);
+  }
+
+  for (const [contactNumber, contactMessages] of byContact) {
+    const remoteJid = `${contactNumber}@s.whatsapp.net`;
+    const title = contactsMap.get(contactNumber) ?? contactNumber;
+
+    const latestTimestamp = Math.max(...contactMessages.map((m) => parseInt(m.timestamp, 10) || 0));
+    const lastMsgAt = latestTimestamp > 0
+      ? new Date(latestTimestamp * 1000).toISOString()
+      : new Date().toISOString();
+
+    let conversation: { id: string; unread_count?: number };
+    try {
+      conversation = await chatService.upsertConversation({
+        whatsapp_config_id: config.id,
+        instance_id: null,
+        workspace_id: config.zaploto_id,
+        remote_jid: remoteJid,
+        title,
+        is_group: false,
+        last_message_at: lastMsgAt,
+      });
+    } catch (err) {
+      errors.push(`Falha ao upsertConversation ${remoteJid}: ${sanitizeErrorMessage(err)}`);
+      continue;
+    }
+
+    for (const msg of contactMessages) {
+      const from = String(msg.from || '').replace(/\D/g, '');
+      const { text, mediaType, caption } = resolveMediaInfo(msg);
+      let mediaUrl: string | null = null;
+
+      if (['image', 'audio', 'video', 'document', 'sticker'].includes(msg.type)) {
+        const mediaObj = msg[msg.type as keyof WaMessage] as { id?: string; mime_type?: string } | undefined;
+        const mediaId = mediaObj?.id;
+        const mimeType = mediaObj?.mime_type;
+        if (mediaId && accessToken) {
+          try {
+            mediaUrl = await resolveAndStoreMedia(mediaId, accessToken, graphVersion, mimeType, config.id);
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            if (errMsg.includes(WHATSAPP_OFFICIAL_TOKEN_ERROR_MSG)) {
+              tokenAlert = true;
+              console.warn('[Zaploto Chat] Token inválido/expirado ao baixar mídia; mensagem será salva sem mídia.');
+            } else {
+              console.error('[Zaploto Chat] Falha ao resolver mídia:', mediaId, err);
+            }
           }
         }
       }
+
+      try {
+        await chatService.saveMessage({
+          instance_id: null,
+          whatsapp_config_id: config.id,
+          workspace_id: config.zaploto_id,
+          conversation_id: conversation.id,
+          message_id: msg.id,
+          direction: 'in',
+          from_me: false,
+          sender_jid: `${from}@s.whatsapp.net`,
+          text,
+          media_type: mediaType,
+          media_url: mediaUrl ?? undefined,
+          caption,
+          status: 'received',
+          timestamp: parseInt(msg.timestamp, 10),
+          provider: 'whatsapp_official',
+        });
+      } catch (err) {
+        errors.push(`Falha ao salvar mensagem ${msg.id}: ${sanitizeErrorMessage(err)}`);
+      }
     }
-    await chatService.saveMessage({
-      instance_id: null,
-      whatsapp_config_id: config.id,
-      workspace_id: config.zaploto_id,
-      conversation_id: conversation.id,
-      message_id: msg.id,
-      direction: 'in',
-      from_me: false,
-      sender_jid: `${from}@s.whatsapp.net`,
-      text,
-      media_type: mediaType,
-      media_url: mediaUrl ?? undefined,
-      caption,
-      status: 'received',
-      timestamp: parseInt(msg.timestamp, 10),
-      provider: 'whatsapp_official',
-    });
+
+    try {
+      await supabaseServiceRole.rpc('increment_unread_count', { conv_id: conversation.id });
+    } catch {
+      await supabaseServiceRole
+        .from('chat_conversations')
+        .update({ unread_count: (conversation.unread_count || 0) + contactMessages.length })
+        .eq('id', conversation.id);
+    }
   }
-  try {
-    await supabaseServiceRole.rpc('increment_unread_count', { conv_id: conversation.id });
-  } catch {
-    await supabaseServiceRole
-      .from('chat_conversations')
-      .update({ unread_count: (conversation.unread_count || 0) + messages.length })
-      .eq('id', conversation.id);
-  }
-  return tokenAlert;
+
+  return { tokenAlert, errors };
 }
 
 const STATUS_MAP: Record<string, string> = { sent: 'sent', delivered: 'delivered', read: 'read', failed: 'failed' };
@@ -318,6 +404,7 @@ export async function processMetaPayloadToChat(payload: unknown): Promise<{ toke
   if (!isWhatsAppOfficialPayload(payload)) return {};
   const entries = Array.isArray(payload.entry) ? payload.entry : [];
   let tokenAlert = false;
+  const processingErrors: string[] = [];
   for (const entry of entries) {
     const changes = Array.isArray((entry as { changes?: unknown[] }).changes) ? (entry as { changes: unknown[] }).changes : [];
     for (const change of changes) {
@@ -325,14 +412,20 @@ export async function processMetaPayloadToChat(payload: unknown): Promise<{ toke
       if (!value || typeof value !== 'object') continue;
       try {
         if (Array.isArray(value.messages)) {
-          const hadTokenError = await handleInboundMessages(value);
-          if (hadTokenError) tokenAlert = true;
+          const inboundResult = await handleInboundMessages(value);
+          if (inboundResult.tokenAlert) tokenAlert = true;
+          if (inboundResult.errors.length > 0) {
+            processingErrors.push(...inboundResult.errors);
+          }
         }
         if (Array.isArray(value.statuses)) await handleStatusUpdates(value);
       } catch (err) {
-        console.error('[Zaploto Chat] Erro ao processar entrada:', sanitizeErrorMessage(err));
+        processingErrors.push(sanitizeErrorMessage(err));
       }
     }
+  }
+  if (processingErrors.length > 0) {
+    throw new WhatsAppOfficialProcessingError(processingErrors, tokenAlert);
   }
   return tokenAlert ? { tokenAlert: true } : {};
 }
