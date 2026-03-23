@@ -9,6 +9,7 @@ import { getSubordinates } from '@/lib/middleware/permissions';
 import {
   EVOLUTION_INSTANCE_WEBHOOK_EVENTS,
   ZAPLOTO_EVOLUTION_PROD_WEBHOOK_URL,
+  shouldConfigureMasterChatWebhook,
 } from '@/lib/server/evolution-chat-webhook-config';
 
 /**
@@ -216,9 +217,9 @@ export async function POST(req: NextRequest) {
       return errorResponse('Erro ao processar dados da requisição', 400);
     }
 
-    const { instanceName, isMaster, maturationType, configureChatWebhook } = body;
-    /** Só registra webhook interno (/api/webhooks/evolution) quando o cliente marca explicitamente */
-    const shouldConfigureChatWebhook = configureChatWebhook === true;
+    const { instanceName, isMaster, maturationType } = body;
+    /** Instância mestre: webhook Zaploto (chat) sempre na criação, salvo EVOLUTION_WEBHOOK_SKIP_MASTER=true no servidor */
+    const shouldConfigureChatWebhook = isMaster === true && shouldConfigureMasterChatWebhook();
 
     if (!instanceName) {
       return errorResponse('instanceName é obrigatório', 400);
@@ -307,11 +308,11 @@ export async function POST(req: NextRequest) {
     const normalizedBaseUrl = normalizeBaseUrl(selectedApi.base_url);
 
     /**
-     * Instância mestre + checkbox no body: webhook sempre aponta para produção Zaploto
-     * (`/api/webhooks/evolution/prod`), independente de onde o app está rodando.
+     * Instância mestre: webhook aponta para produção Zaploto (`/api/webhooks/evolution/prod`),
+     * salvo skip por env (shouldConfigureChatWebhook).
      */
     let masterChatWebhookUrl: string | null = null;
-    if (isMaster === true && shouldConfigureChatWebhook) {
+    if (shouldConfigureChatWebhook) {
       masterChatWebhookUrl = ZAPLOTO_EVOLUTION_PROD_WEBHOOK_URL;
     }
 

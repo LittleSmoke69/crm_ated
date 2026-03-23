@@ -49,12 +49,61 @@ async function buildEvolutionChannels(
 ): Promise<EvolutionChannelRow[]> {
   const normalizedStatus = (userStatus || '').trim().toLowerCase();
 
+  // Gerente: instâncias da própria conta + qualquer instância já vinculada a ele em atendimento_chat_assignments
+  if (normalizedStatus === 'gerente') {
+    const { data: ownedRows } = await supabaseServiceRole
+      .from('evolution_instances')
+      .select('id, instance_name, status, created_at, is_master, is_chat_instance')
+      .eq('user_id', userId)
+      .eq('is_active', true);
+
+    const { data: assignRows } = await supabaseServiceRole
+      .from('atendimento_chat_assignments')
+      .select('evolution_instance_id')
+      .eq('gerente_user_id', userId);
+
+    const assignIds = Array.from(
+      new Set(
+        (assignRows || [])
+          .map((a) => a.evolution_instance_id)
+          .filter((id): id is string => typeof id === 'string' && id.length > 0)
+      )
+    );
+
+    const ownedIds = new Set((ownedRows || []).map((r) => r.id));
+    const extraIds = assignIds.filter((id) => !ownedIds.has(id));
+
+    let extraRows: EvolutionChannelRow[] = [];
+    if (extraIds.length > 0) {
+      const { data: fetched } = await supabaseServiceRole
+        .from('evolution_instances')
+        .select('id, instance_name, status, created_at, is_master, is_chat_instance')
+        .in('id', extraIds)
+        .eq('is_active', true);
+      extraRows = (fetched || []) as EvolutionChannelRow[];
+    }
+
+    const byId = new Map<string, EvolutionChannelRow>();
+    for (const r of [...(ownedRows || []), ...extraRows] as EvolutionChannelRow[]) {
+      byId.set(r.id, {
+        ...r,
+        is_master: !!r.is_master,
+        is_chat_instance: !!r.is_chat_instance,
+      });
+    }
+
+    return [...byId.values()].sort(
+      (a, b) =>
+        new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+    );
+  }
+
   // Consultor pode acessar instâncias que estão vinculadas a ele para atendimento.
   if (normalizedStatus === 'consultor') {
     const { data: assignments } = await supabaseServiceRole
       .from('atendimento_chat_assignments')
       .select('evolution_instance_id')
-      .eq('consultor_user_id', userId);
+      .contains('consultor_user_ids', [userId]);
 
     const assignedInstanceIds = Array.from(
       new Set(

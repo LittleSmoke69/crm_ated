@@ -5,9 +5,17 @@
 
 import { SupabaseClient } from '@supabase/supabase-js';
 
-const CLAIM_LIMIT = 5;
+/**
+ * Quantos steps são reivindicados por lote no RPC claim_maturation_steps.
+ * Aumentado para 10 para processar mais steps por tick em planos longos.
+ */
+const CLAIM_LIMIT = 10;
 const MAX_ATTEMPTS = 3;
-const FETCH_TIMEOUT_MS = 30000;
+/**
+ * Timeout por request à Evolution API. Mantido em 12s para caber no orçamento do tick.
+ * O cron-tick tem maxDuration=55s, então temos ~50s úteis para processar steps.
+ */
+const FETCH_TIMEOUT_MS = 12000;
 /** Steps travados em 'processing' por mais de X ms são resetados para 'pending' */
 const STUCK_PROCESSING_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutos
 const DEFAULT_MEDIA_BUCKET = 'maturation-videos';
@@ -232,19 +240,33 @@ async function processStep(supabase: SupabaseClient, step: any): Promise<void> {
   if (type === 'text') {
     result = await sendText({ baseUrl: base_url, instanceName: instance_name, apiKey: api_key, number: target_chat_id, text: payload_json?.text || '' });
   } else if (['video', 'image', 'audio'].includes(type)) {
-    const path = payload_json.media_path || payload_json.assetPath || payload_json.assetId;
-    const url = await getSignedUrl(supabase, path, DEFAULT_MEDIA_BUCKET);
-    if (!url) result = { success: false, error: 'Erro ao gerar URL assinada' };
+    // media_path → Supabase Storage (gera signed URL)
+    // media_url  → URL direta (usada quando o plano é criado via UI com URL externa)
+    // assetPath/assetId → legado
+    const storagePath = payload_json.media_path || payload_json.assetPath || payload_json.assetId;
+    const directUrl = payload_json.media_url as string | undefined;
+    let url: string | null = null;
+
+    if (storagePath) {
+      url = await getSignedUrl(supabase, storagePath, DEFAULT_MEDIA_BUCKET);
+    } else if (directUrl && directUrl.startsWith('http')) {
+      url = directUrl;
+    }
+
+    if (!url) result = { success: false, error: 'Erro ao obter URL da mídia (configure media_path ou media_url no step)' };
     else if (type === 'video') result = await sendMedia({ baseUrl: base_url, instanceName: instance_name, apiKey: api_key, number: target_chat_id, mediaUrl: url, mediaType: 'video', mimetype: 'video/mp4', caption: payload_json.caption });
     else if (type === 'image') result = await sendMedia({ baseUrl: base_url, instanceName: instance_name, apiKey: api_key, number: target_chat_id, mediaUrl: url, mediaType: 'image', mimetype: 'image/png', caption: payload_json.caption });
     else result = await sendAudio({ baseUrl: base_url, instanceName: instance_name, apiKey: api_key, number: target_chat_id, audioUrl: url });
   } else result = { success: false, error: 'Tipo desconhecido' };
 
   const typeLabel = type === 'text' ? 'Mensagem' : type === 'video' ? 'Vídeo' : type === 'image' ? 'Imagem' : 'Áudio';
+  // maturation_messages.type só aceita: 'text' | 'video' | 'info' | 'error' | 'retry'
+  // 'image' e 'audio' não existem na constraint → mapeamos para 'video' como mídia genérica
+  const msgType = (type === 'text' ? 'text' : 'video') as 'text' | 'video';
   if (result.success) {
     console.log(`${LOG_MANUAL} Step job=${job_id} step_index=${step_index} OK enviado (${result.latencyMs}ms)`);
     await supabase.from('maturation_steps').update({ status: 'sent', sent_at: new Date().toISOString(), latency_ms: result.latencyMs, http_status: result.httpStatus }).eq('id', id);
-    await createMessage(supabase, { jobId: job_id, stepId: id, direction: 'instance', instanceLabel: instance_name, type, title: `✅ ${typeLabel} enviado`, content: `${typeLabel} enviado pela instância ${instance_name}`, mediaUrl: result.mediaUrl, status: 'sent', latencyMs: result.latencyMs, httpStatus: result.httpStatus });
+    await createMessage(supabase, { jobId: job_id, stepId: id, direction: 'instance', instanceLabel: instance_name, type: msgType, title: `✅ ${typeLabel} enviado`, content: `${typeLabel} enviado pela instância ${instance_name}`, mediaUrl: result.mediaUrl, status: 'sent', latencyMs: result.latencyMs, httpStatus: result.httpStatus });
   } else {
     const newAttempts = (attempts || 0) + 1;
     console.log(`${LOG_MANUAL} Step job=${job_id} step_index=${step_index} FALHA tentativa=${newAttempts}/${MAX_ATTEMPTS} erro=${result.error}`);
@@ -276,36 +298,344 @@ async function updateJobProgress(supabase: SupabaseClient, jobId: string): Promi
 }
 
 /**
- * Auto maturador: instâncias com maturation_type='virgem' entram em maturação automática (5 dias).
- * Igual ao maturador manual (plano de mensagens com delays), mas disparado automaticamente para virgens.
- * Este tick apenas verifica e registra em log as instâncias virgem em maturação; o envio de mensagens
- * virgem pode ser feito por outro worker ou extensão futura.
+ * Auto maturador: instâncias com maturation_type='virgem' passam por um ciclo de 5 dias.
+ * Esta função:
+ * 1. Avança as fases conforme o tempo decorrido (state machine)
+ * 2. Para instâncias em fase de warmup (contact_warmup / repeating_cycle), garante que
+ *    há um job de maturação ativo disparando as mensagens configuradas.
  */
 async function processVirginMaturation(supabase: SupabaseClient): Promise<number> {
+  const now = new Date();
+
   const { data: virgins, error } = await supabase
     .from('evolution_instances')
-    .select('id, instance_name, maturation_status, maturation_started_at, maturation_ends_at, current_day, is_locked')
+    .select(`
+      id,
+      instance_name,
+      phone_number,
+      maturation_status,
+      maturation_started_at,
+      maturation_ends_at,
+      maturation_phase_started_at,
+      maturation_paused_at,
+      current_day,
+      is_locked,
+      evolution_api_id,
+      evolution_apis ( base_url, api_key_global )
+    `)
     .eq('maturation_type', 'virgem')
     .not('maturation_status', 'is', null)
-    .eq('is_active', true);
+    .not('maturation_status', 'in', '("completed","blocked")')
+    .eq('is_active', true)
+    .is('maturation_paused_at', null);
 
   if (error) {
     console.log(`${LOG_AUTO} Erro ao listar instâncias virgem: ${error.message}`);
     return 0;
   }
+
   const list = virgins || [];
   if (list.length === 0) {
-    console.log(`${LOG_AUTO} Nenhuma instância virgem em auto maturação no momento`);
+    console.log(`${LOG_AUTO} Nenhuma instância virgem em auto maturação ativa`);
     return 0;
   }
-  console.log(`${LOG_AUTO} ${list.length} instância(s) virgem em auto maturação:`);
+
+  console.log(`${LOG_AUTO} ${list.length} instância(s) virgem em auto maturação ativa`);
+  let processed = 0;
+
   for (const v of list) {
-    const status = (v as any).maturation_status || '?';
-    const day = (v as any).current_day ?? '?';
-    const endsAt = (v as any).maturation_ends_at ? new Date((v as any).maturation_ends_at).toLocaleString('pt-BR') : '?';
-    console.log(`${LOG_AUTO}   - ${(v as any).instance_name} status=${status} dia=${day} termina=${endsAt} locked=${!!(v as any).is_locked}`);
+    const inst = v as any;
+    const status: string = inst.maturation_status || 'waiting_connection_test';
+    const phaseStartedAt = inst.maturation_phase_started_at
+      ? new Date(inst.maturation_phase_started_at)
+      : inst.maturation_started_at
+        ? new Date(inst.maturation_started_at)
+        : now;
+
+    const elapsedMs = now.getTime() - phaseStartedAt.getTime();
+    const elapsedH = elapsedMs / (60 * 60 * 1000);
+
+    console.log(`${LOG_AUTO} Instância ${inst.instance_name}: status=${status} elapsed=${Math.floor(elapsedH)}h`);
+
+    // ─── State machine de fases ───────────────────────────────────────────────
+
+    if (status === 'waiting_connection_test') {
+      // Aguarda 24h, depois vai para contact_warmup
+      if (elapsedMs >= VIRGIN_CONNECTION_TEST_MS) {
+        console.log(`${LOG_AUTO} ${inst.instance_name}: avançando para contact_warmup`);
+        await supabase.from('evolution_instances').update({
+          maturation_status: 'contact_warmup',
+          maturation_phase_started_at: now.toISOString(),
+          updated_at: now.toISOString(),
+        }).eq('id', inst.id);
+        await supabase.from('virgin_maturation_logs').insert({
+          evolution_instance_id: inst.id,
+          event_type: 'phase_advance',
+          message: 'Fase avançada: waiting_connection_test → contact_warmup',
+          payload_json: { from: 'waiting_connection_test', to: 'contact_warmup' },
+        }).then(() => {});
+        processed++;
+      }
+      continue;
+    }
+
+    if (status === 'contact_warmup') {
+      // Envia mensagens de aquecimento por 2h, depois avança para group_warmup
+      await ensureVirginWarmupJob(supabase, inst, now);
+
+      if (elapsedMs >= VIRGIN_CONTACT_WARMUP_MS) {
+        console.log(`${LOG_AUTO} ${inst.instance_name}: avançando para group_warmup`);
+        await supabase.from('evolution_instances').update({
+          maturation_status: 'group_warmup',
+          maturation_phase_started_at: now.toISOString(),
+          updated_at: now.toISOString(),
+        }).eq('id', inst.id);
+        await supabase.from('virgin_maturation_logs').insert({
+          evolution_instance_id: inst.id,
+          event_type: 'phase_advance',
+          message: 'Fase avançada: contact_warmup → group_warmup',
+          payload_json: { from: 'contact_warmup', to: 'group_warmup' },
+        }).then(() => {});
+        processed++;
+      }
+      continue;
+    }
+
+    if (status === 'group_warmup') {
+      // Aguarda 24h (mensagens em grupo ou sem destino), depois vai para repeating_cycle
+      await ensureVirginWarmupJob(supabase, inst, now);
+
+      if (elapsedMs >= VIRGIN_GROUP_WARMUP_MS) {
+        const newDay = Math.min((inst.current_day || 1) + 1, 5);
+        const nextStatus = newDay >= 5 ? 'completed' : 'repeating_cycle';
+        console.log(`${LOG_AUTO} ${inst.instance_name}: avançando para ${nextStatus} (dia ${newDay})`);
+        await supabase.from('evolution_instances').update({
+          maturation_status: nextStatus,
+          maturation_phase_started_at: now.toISOString(),
+          current_day: newDay,
+          is_locked: nextStatus === 'completed' ? false : inst.is_locked,
+          updated_at: now.toISOString(),
+        }).eq('id', inst.id);
+        await supabase.from('virgin_maturation_logs').insert({
+          evolution_instance_id: inst.id,
+          event_type: 'phase_advance',
+          message: `Fase avançada: group_warmup → ${nextStatus} (dia ${newDay})`,
+          payload_json: { from: 'group_warmup', to: nextStatus, day: newDay },
+        }).then(() => {});
+        processed++;
+      }
+      continue;
+    }
+
+    if (status === 'repeating_cycle') {
+      // Ciclo repetido nos dias 2-5: 24h por dia
+      await ensureVirginWarmupJob(supabase, inst, now);
+
+      if (elapsedMs >= VIRGIN_GROUP_WARMUP_MS) {
+        const newDay = Math.min((inst.current_day || 2) + 1, 5);
+        const nextStatus = newDay >= 5 ? 'completed' : 'repeating_cycle';
+        console.log(`${LOG_AUTO} ${inst.instance_name}: ciclo avançando para ${nextStatus} (dia ${newDay})`);
+        await supabase.from('evolution_instances').update({
+          maturation_status: nextStatus,
+          maturation_phase_started_at: now.toISOString(),
+          current_day: newDay,
+          is_locked: nextStatus === 'completed' ? false : inst.is_locked,
+          updated_at: now.toISOString(),
+        }).eq('id', inst.id);
+        await supabase.from('virgin_maturation_logs').insert({
+          evolution_instance_id: inst.id,
+          event_type: nextStatus === 'completed' ? 'maturation_completed' : 'phase_advance',
+          message: nextStatus === 'completed'
+            ? `Maturação concluída após ${newDay} dias`
+            : `Ciclo avançado: dia ${inst.current_day || 2} → dia ${newDay}`,
+          payload_json: { from: 'repeating_cycle', to: nextStatus, day: newDay },
+        }).then(() => {});
+        processed++;
+      }
+      continue;
+    }
   }
+
   return list.length;
+}
+
+/**
+ * Garante que a instância virgem tem um job de maturação ativo (status='running').
+ * Se não tiver, cria um novo usando as mensagens configuradas em virgin_maturation_config.
+ * O destino das mensagens é uma instância mestre disponível (phone_number).
+ */
+async function ensureVirginWarmupJob(supabase: SupabaseClient, inst: any, now: Date): Promise<void> {
+  const instanceId = inst.id as string;
+
+  // Verifica se já existe uma entrada em master_instances para esta instância virgem
+  let { data: masterRow } = await supabase
+    .from('master_instances')
+    .select('id, is_locked')
+    .eq('evolution_instance_id', instanceId)
+    .maybeSingle();
+
+  // Se não existir, cria a entrada (a instância virgem entra no pool como sender)
+  if (!masterRow) {
+    const { data: inserted } = await supabase
+      .from('master_instances')
+      .insert({ evolution_instance_id: instanceId, is_active: true, is_locked: false })
+      .select('id, is_locked')
+      .single();
+    masterRow = inserted;
+  }
+
+  if (!masterRow) {
+    console.log(`${LOG_AUTO} ${inst.instance_name}: não foi possível registrar em master_instances`);
+    return;
+  }
+
+  const masterInstanceId = masterRow.id as string;
+
+  // Verifica se já há job running para este master
+  const { data: activeJob } = await supabase
+    .from('maturation_jobs')
+    .select('id')
+    .eq('master_instance_id', masterInstanceId)
+    .eq('status', 'running')
+    .maybeSingle();
+
+  if (activeJob) {
+    // Já há job ativo, não precisa criar outro
+    return;
+  }
+
+  // Busca mensagens configuradas para o auto-maturador
+  const { data: configRow } = await supabase
+    .from('virgin_maturation_config')
+    .select('value_json')
+    .eq('key', VIRGIN_CONFIG_KEY_MESSAGES)
+    .maybeSingle();
+
+  const rawMessages = configRow?.value_json;
+  const messages: VirginMessage[] = Array.isArray(rawMessages) && rawMessages.length > 0
+    ? rawMessages.filter((m: any) => m && (typeof m === 'string' || (typeof m === 'object' && m.type)))
+    : VIRGIN_MESSAGES_FALLBACK;
+
+  if (messages.length === 0) {
+    console.log(`${LOG_AUTO} ${inst.instance_name}: nenhuma mensagem configurada para warmup`);
+    return;
+  }
+
+  // Encontra um destino: phone_number de outra instância mestre disponível
+  const { data: targetInstance } = await supabase
+    .from('master_instances')
+    .select(`evolution_instances!inner ( phone_number )`)
+    .eq('is_active', true)
+    .eq('is_locked', false)
+    .neq('evolution_instance_id', instanceId)
+    .limit(1)
+    .maybeSingle();
+
+  const targetEv = (targetInstance as any)?.evolution_instances;
+  const targetPhone = Array.isArray(targetEv) ? targetEv[0]?.phone_number : targetEv?.phone_number;
+
+  if (!targetPhone) {
+    console.log(`${LOG_AUTO} ${inst.instance_name}: nenhuma instância mestre disponível como destino`);
+    return;
+  }
+
+  const targetChatId = `${String(targetPhone).replace(/\D/g, '')}@s.whatsapp.net`;
+
+  // Encontra um admin como dono do job
+  const { data: adminProfile } = await supabase
+    .from('profiles')
+    .select('id')
+    .eq('status', 'admin')
+    .limit(1)
+    .maybeSingle();
+
+  if (!adminProfile) {
+    console.log(`${LOG_AUTO} ${inst.instance_name}: nenhum admin encontrado para criar job`);
+    return;
+  }
+
+  // Busca o plano auto-maturador (UUID fixo)
+  const PLAN_ID_VIRGIN = 'a0000000-0000-0000-0000-000000000001';
+  const { data: plan } = await supabase
+    .from('maturation_plans')
+    .select('id')
+    .eq('id', PLAN_ID_VIRGIN)
+    .eq('is_active', true)
+    .maybeSingle();
+
+  const planId = plan?.id ?? PLAN_ID_VIRGIN;
+
+  // Cria os steps a partir das mensagens configuradas
+  const delaySec = 10;
+  const stepsToInsert: any[] = [];
+  let cumulativeDelay = 0;
+
+  for (const msg of messages) {
+    cumulativeDelay += delaySec;
+    const scheduledAt = new Date(now.getTime() + cumulativeDelay * 1000);
+    let type: string;
+    let payload: Record<string, unknown>;
+
+    if (msg.type === 'text') {
+      type = 'text';
+      payload = { text: msg.text };
+    } else if (msg.type === 'audio') {
+      type = 'audio';
+      payload = { media_path: msg.media_path };
+    } else {
+      type = msg.type;
+      payload = { media_path: msg.media_path };
+      if ('caption' in msg && msg.caption) payload.caption = msg.caption;
+    }
+
+    stepsToInsert.push({
+      step_index: stepsToInsert.length,
+      type,
+      payload_json: payload,
+      scheduled_at: scheduledAt.toISOString(),
+      status: 'pending',
+      target_chat_id: null, // usa target do job
+    });
+  }
+
+  // Cria o job
+  const { data: job, error: jobErr } = await supabase
+    .from('maturation_jobs')
+    .insert({
+      owner_user_id: adminProfile.id,
+      plan_id: planId,
+      master_instance_id: masterInstanceId,
+      target_chat_id: targetChatId,
+      status: 'running',
+      progress_total: stepsToInsert.length,
+      progress_done: 0,
+      started_at: now.toISOString(),
+    })
+    .select('id')
+    .single();
+
+  if (jobErr || !job) {
+    console.log(`${LOG_AUTO} ${inst.instance_name}: erro ao criar job - ${jobErr?.message}`);
+    return;
+  }
+
+  // Injeta job_id nos steps e salva
+  const stepsWithJob = stepsToInsert.map((s) => ({ ...s, job_id: job.id }));
+  await supabase.from('maturation_steps').insert(stepsWithJob);
+
+  // Bloqueia a instância mestre para este job
+  await supabase.from('master_instances')
+    .update({ is_locked: true, locked_job_id: job.id, locked_at: now.toISOString() })
+    .eq('id', masterInstanceId);
+
+  await supabase.from('virgin_maturation_logs').insert({
+    evolution_instance_id: instanceId,
+    event_type: 'warmup_job_created',
+    message: `Job de warmup criado: ${stepsToInsert.length} mensagens para ${targetChatId}`,
+    payload_json: { job_id: job.id, target: targetChatId, steps: stepsToInsert.length },
+  }).then(() => {});
+
+  console.log(`${LOG_AUTO} ${inst.instance_name}: job de warmup criado (${stepsToInsert.length} steps → ${targetChatId})`);
 }
 
 export type CatchUpResult = {
@@ -430,10 +760,21 @@ async function recoverStuckSteps(supabase: SupabaseClient): Promise<number> {
 
 export async function runMaturationTick(supabase: SupabaseClient): Promise<any> {
   const startTime = Date.now();
-  const MAX_RUNTIME_MS = 20000; // 20 segundos para evitar timeout de API
-  // Reserva margem de segurança: não inicia novo step se restar menos que este tempo
-  const STEP_TIME_BUDGET_MS = FETCH_TIMEOUT_MS + 2000; // 32s por step
+  /**
+   * Orçamento total do tick. O cron-tick tem maxDuration=55s; usamos 50s para processamento
+   * e deixamos 5s de margem para overhead de rede/DB.
+   * BUG FIX: antes estava 20000ms, que é menor que FETCH_TIMEOUT_MS (12000) + overhead,
+   * fazendo o loop nunca processar nenhum step.
+   */
+  const MAX_RUNTIME_MS = 50000; // 50 segundos
+  // Reserva de tempo por step: FETCH_TIMEOUT + 2s de overhead
+  const STEP_TIME_BUDGET_MS = FETCH_TIMEOUT_MS + 2000; // 14s por step
   let totalProcessed = 0;
+  /**
+   * true quando o loop saiu por limite de tempo (não por falta de steps).
+   * Indica que há mais steps pendentes para processar — o caller pode encadear outro tick.
+   */
+  let hasMorePending = false;
   const processedJobIds = new Set<string>();
 
   console.log(`${LOG_PREFIX} ========== Tick Maturador ==========`);
@@ -447,6 +788,7 @@ export async function runMaturationTick(supabase: SupabaseClient): Promise<any> 
     const elapsed = Date.now() - startTime;
     if (elapsed + STEP_TIME_BUDGET_MS > MAX_RUNTIME_MS) {
       console.log(`${LOG_MANUAL} Orçamento de tempo esgotado (${elapsed}ms/${MAX_RUNTIME_MS}ms), encerrando tick`);
+      hasMorePending = true; // Pode haver mais steps — sinaliza para encadeamento
       break;
     }
 
@@ -456,7 +798,43 @@ export async function runMaturationTick(supabase: SupabaseClient): Promise<any> 
       break;
     }
     if (!steps || steps.length === 0) {
-      console.log(`${LOG_MANUAL} Nenhum step pendente para processar`);
+      /**
+       * Nenhum step é devido AGORA. Verifica se há steps futuros de jobs running
+       * que vencem dentro do nosso orçamento de tempo restante.
+       *
+       * Isso resolve o caso de planos com muitos steps e delays curtos (ex: 5-30s):
+       * o tick aguarda o próximo step virar e o processa em vez de sair e esperar
+       * o cron de 1 minuto.
+       */
+      const elapsedNow = Date.now() - startTime;
+      const remainingMs = MAX_RUNTIME_MS - elapsedNow;
+
+      const { data: nextStep } = await supabase
+        .from('maturation_steps')
+        .select('scheduled_at')
+        .eq('status', 'pending')
+        .gt('scheduled_at', new Date().toISOString())
+        .order('scheduled_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+
+      if (!nextStep) {
+        console.log(`${LOG_MANUAL} Nenhum step pendente ou futuro para processar`);
+        break;
+      }
+
+      const waitMs = new Date((nextStep as any).scheduled_at).getTime() - Date.now();
+
+      if (waitMs > 0 && waitMs + STEP_TIME_BUDGET_MS < remainingMs) {
+        // Próximo step cabe no orçamento — aguarda e reprocessa
+        console.log(`${LOG_MANUAL} Próximo step em ${Math.ceil(waitMs / 1000)}s (orçamento restante ${Math.ceil(remainingMs / 1000)}s), aguardando...`);
+        await new Promise((r) => setTimeout(r, waitMs + 150)); // +150ms de margem para o clock
+        continue; // Tenta claim novamente
+      }
+
+      // Próximo step vence depois do nosso orçamento — encadeia outro tick
+      console.log(`${LOG_MANUAL} Próximo step em ${Math.ceil(waitMs / 1000)}s, fora do orçamento restante (${Math.ceil(remainingMs / 1000)}s). Sinaliza encadeamento.`);
+      hasMorePending = true;
       break;
     }
     console.log(`${LOG_MANUAL} ${steps.length} step(s) reivindicados para envio (Evolution API)`);
@@ -471,6 +849,7 @@ export async function runMaturationTick(supabase: SupabaseClient): Promise<any> 
           .update({ status: 'pending', locked_at: null, locked_by: null })
           .eq('id', step.id)
           .eq('status', 'processing');
+        hasMorePending = true;
         continue;
       }
       await processStep(supabase, step);
@@ -489,7 +868,7 @@ export async function runMaturationTick(supabase: SupabaseClient): Promise<any> 
   const virginCount = await processVirginMaturation(supabase);
 
   const elapsed = Date.now() - startTime;
-  console.log(`${LOG_PREFIX} ========== Fim do tick (${elapsed}ms) ==========`);
+  console.log(`${LOG_PREFIX} ========== Fim do tick (${elapsed}ms) hasMorePending=${hasMorePending} ==========`);
   console.log(`${LOG_PREFIX} Resumo: Maturador manual=${totalProcessed} steps processados, ${processedJobIds.size} job(s); Auto maturador=${virginCount} instância(s) virgem em maturação`);
-  return { processed: totalProcessed, virginCount, jobs: Array.from(processedJobIds) };
+  return { processed: totalProcessed, virginCount, jobs: Array.from(processedJobIds), hasMorePending };
 }

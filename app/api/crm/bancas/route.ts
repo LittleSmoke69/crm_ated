@@ -246,8 +246,9 @@ async function filtrarBancasComLeadDoConsultor(
 
 /**
  * Retorna as bancas em que o usuário está atribuído (user_bancas -> crm_bancas).
+ * Exportado para sync de contatos do chat e outros fluxos que devem respeitar só o cadastro explícito.
  */
-async function getBancasDoUsuario(userId: string): Promise<BancaRow[]> {
+export async function getBancasDoUsuario(userId: string): Promise<BancaRow[]> {
   const { data: row, error } = await supabaseServiceRole
     .from('user_bancas')
     .select('banca_ids')

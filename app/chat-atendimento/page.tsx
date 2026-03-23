@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import Layout from '@/components/Layout';
 import { supabase } from '@/lib/supabase';
@@ -42,6 +42,7 @@ import {
   ToggleLeft,
   ToggleRight,
   ChevronDown,
+  RefreshCw,
 } from 'lucide-react';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
@@ -145,11 +146,38 @@ interface InstanceFlowConfig {
   flows: { id: string; name: string; description?: string; status: string } | null;
 }
 
+interface CrmSnapshot {
+  kind?: string;
+  status?: string | null;
+  banca_name?: string | null;
+  crm_banca_id?: string | null;
+  temperature?: string | null;
+  total_depositado?: number | null;
+  total_apostado?: number | null;
+  last_interaction?: string | null;
+  tag_labels?: string[];
+  transferred_at?: string | null;
+  transfer_deadline_days?: number | null;
+  /** ISO — fim do prazo (transferred_at + dias). */
+  transfer_expires_at?: string | null;
+}
+
+function formatTransferExpiryDay(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
 interface ChatContact {
   id: string;
   name?: string | null;
   telefone: string;
   horario?: string | null;
+  crm_sync_kind?: string | null;
+  crm_external_id?: string | null;
+  crm_snapshot?: CrmSnapshot | null;
+  is_pinned_manual?: boolean | null;
+  updated_at?: string | null;
 }
 
 // ─── EmojiPicker ───────────────────────────────────────────────────────────────
@@ -678,6 +706,28 @@ export default function ChatPage() {
   const [atendimentoGateNotice, setAtendimentoGateNotice] = useState<string | null>(null);
   const [pendingAtendimentoChannel, setPendingAtendimentoChannel] = useState<Channel | null>(null);
   const [selectedChannel, setSelectedChannel] = useState<Channel | null>(null);
+  /** Gate: gerente — vínculos instância ↔ consultor (atendimento_chat_assignments) */
+  const [gerenteGateAssignmentByInstance, setGerenteGateAssignmentByInstance] = useState<
+    Record<
+      string,
+      {
+        id: string;
+        consultor_user_ids: string[];
+        consultor_name: string | null;
+        crm_banca_id: string | null;
+        crm_banca_name?: string | null;
+      }
+    >
+  >({});
+  const [gerenteGateBancas, setGerenteGateBancas] = useState<{ id?: string; name: string; url: string | null }[]>([]);
+  const [gerenteGateConsultoresByBanca, setGerenteGateConsultoresByBanca] = useState<
+    Record<string, { id: string; full_name?: string | null; email?: string | null }[]>
+  >({});
+  /** Seleção local de consultores por instância; persistida de uma vez ao clicar em «Entrar». */
+  const [gerenteGateConsultoresDraftByInstance, setGerenteGateConsultoresDraftByInstance] = useState<
+    Record<string, string[]>
+  >({});
+  const [gerenteGateSavingInstanceId, setGerenteGateSavingInstanceId] = useState<string | null>(null);
 
   // Conversas
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -791,14 +841,308 @@ export default function ChatPage() {
   const [contactForm, setContactForm] = useState({ name: '', phone: '', horario: '' });
   const [savingContact, setSavingContact] = useState(false);
   const [contactSaveError, setContactSaveError] = useState<string | null>(null);
+  /** Lista unificada (CRM kanban + transferidos + manuais) — consultores */
+  const [chatContactsList, setChatContactsList] = useState<ChatContact[]>([]);
+  const [chatContactsLoading, setChatContactsLoading] = useState(false);
+  /** Filtro da lista na vista Contatos (CRM): todos, só funil ou só transferidos. */
+  const [chatContactsKindFilter, setChatContactsKindFilter] = useState<'all' | 'kanban' | 'transferred'>('all');
+  const [crmSyncLoading, setCrmSyncLoading] = useState(false);
+  const [crmSyncMessage, setCrmSyncMessage] = useState<string | null>(null);
+
+  const chatContactsFiltered = useMemo(() => {
+    if (chatContactsKindFilter === 'all') return chatContactsList;
+    if (chatContactsKindFilter === 'kanban') {
+      return chatContactsList.filter((c) => (c.crm_sync_kind || 'manual') === 'kanban');
+    }
+    return chatContactsList.filter((c) => c.crm_sync_kind === 'transferred');
+  }, [chatContactsList, chatContactsKindFilter]);
 
   const authHeaders = (): Record<string, string> => (userId ? { 'X-User-Id': userId } : {});
+
+  const loadGerenteGateAtendimento = useCallback(async () => {
+    if (!userId || userStatus !== 'gerente') return;
+    try {
+      const h = { ...authHeaders(), credentials: 'include' as const };
+      const [r1, rBancas] = await Promise.all([
+        fetch('/api/gerente/atendimento-chat/instances', { headers: h }),
+        fetch('/api/user/bancas', { headers: h }),
+      ]);
+      const j1 = await r1.json();
+      const jB = await rBancas.json();
+      const map: Record<
+        string,
+        {
+          id: string;
+          consultor_user_ids: string[];
+          consultor_name: string | null;
+          crm_banca_id: string | null;
+          crm_banca_name?: string | null;
+        }
+      > = {};
+      if (j1.success && Array.isArray(j1.data)) {
+        for (const row of j1.data) {
+          const iid = row.evolution_instance_id as string | undefined;
+          if (!iid) continue;
+          const rawIds = row.consultor_user_ids;
+          const consultor_user_ids = Array.isArray(rawIds)
+            ? [...new Set(rawIds.map((x: string) => String(x).trim()).filter(Boolean))]
+            : [];
+          map[iid] = {
+            id: row.id,
+            consultor_user_ids,
+            consultor_name: row.consultor_name ?? null,
+            crm_banca_id: row.crm_banca_id ?? null,
+            crm_banca_name: row.crm_banca_name ?? null,
+          };
+        }
+      }
+      setGerenteGateAssignmentByInstance(map);
+      const draftFromServer: Record<string, string[]> = {};
+      for (const [iid, row] of Object.entries(map)) {
+        draftFromServer[iid] = [...row.consultor_user_ids];
+      }
+      setGerenteGateConsultoresDraftByInstance(draftFromServer);
+      if (jB.success && Array.isArray(jB.data)) {
+        setGerenteGateBancas(
+          jB.data.filter((b: { id?: string }) => !!b?.id).map((b: { id: string; name: string; url: string | null }) => b)
+        );
+      } else {
+        setGerenteGateBancas([]);
+      }
+
+      const bancaIdsToLoad = new Set<string>();
+      for (const row of Object.values(map)) {
+        if (row.crm_banca_id) bancaIdsToLoad.add(row.crm_banca_id);
+      }
+      if (bancaIdsToLoad.size === 0) {
+        setGerenteGateConsultoresByBanca({});
+      } else {
+        const entries = await Promise.all(
+          [...bancaIdsToLoad].map(async (bid) => {
+            const r = await fetch(`/api/gerente/consultores?banca_id=${encodeURIComponent(bid)}`, { headers: h });
+            const j = await r.json();
+            const list =
+              j.success && Array.isArray(j.data)
+                ? j.data.map((c: { id: string; full_name?: string; email?: string }) => ({
+                    id: c.id,
+                    full_name: c.full_name,
+                    email: c.email,
+                  }))
+                : [];
+            return [bid, list] as const;
+          })
+        );
+        setGerenteGateConsultoresByBanca(Object.fromEntries(entries));
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [userId, userStatus]);
+
+  const persistGerenteGateConsultores = useCallback(
+    async (
+      instanceId: string,
+      assignmentId: string | null | undefined,
+      consultorUserIds: string[],
+      crmBancaId: string | null | undefined
+    ): Promise<boolean> => {
+      if (!userId || userStatus !== 'gerente') return false;
+      if (!crmBancaId) {
+        setAtendimentoGateNotice('Selecione uma banca antes de escolher os consultores.');
+        return false;
+      }
+      setGerenteGateSavingInstanceId(instanceId);
+      setAtendimentoGateNotice(null);
+      try {
+        const headers: Record<string, string> = { ...authHeaders(), 'Content-Type': 'application/json' };
+        const fetchOpts: RequestInit = { headers, credentials: 'include' };
+        if (assignmentId) {
+          const res = await fetch(`/api/gerente/atendimento-chat/instances/${assignmentId}`, {
+            ...fetchOpts,
+            method: 'PATCH',
+            body: JSON.stringify({ consultor_user_ids: consultorUserIds }),
+          });
+          const j = await res.json();
+          if (!res.ok || !j.success) {
+            setAtendimentoGateNotice(j.error || 'Não foi possível atualizar os consultores.');
+            return false;
+          }
+        } else {
+          const res = await fetch('/api/gerente/atendimento-chat/instances', {
+            ...fetchOpts,
+            method: 'POST',
+            body: JSON.stringify({
+              link_existing: true,
+              evolution_instance_id: instanceId,
+              crm_banca_id: crmBancaId,
+              consultor_user_ids: consultorUserIds,
+            }),
+          });
+          const j = await res.json();
+          if (!res.ok || !j.success) {
+            setAtendimentoGateNotice(j.error || 'Não foi possível registrar o vínculo de atendimento.');
+            return false;
+          }
+        }
+        await loadGerenteGateAtendimento();
+        return true;
+      } catch {
+        setAtendimentoGateNotice('Falha de rede ao salvar consultores.');
+        return false;
+      } finally {
+        setGerenteGateSavingInstanceId(null);
+      }
+    },
+    [userId, userStatus, loadGerenteGateAtendimento]
+  );
+
+  const handleGerenteGateBancaChange = useCallback(
+    async (instanceId: string, assignmentId: string | null | undefined, crmBancaId: string | null) => {
+      if (!userId || userStatus !== 'gerente') return;
+      if (!assignmentId && !crmBancaId) return;
+      setGerenteGateSavingInstanceId(instanceId);
+      setAtendimentoGateNotice(null);
+      try {
+        const headers: Record<string, string> = { ...authHeaders(), 'Content-Type': 'application/json' };
+        const fetchOpts: RequestInit = { headers, credentials: 'include' };
+        if (assignmentId) {
+          const res = await fetch(`/api/gerente/atendimento-chat/instances/${assignmentId}`, {
+            ...fetchOpts,
+            method: 'PATCH',
+            body: JSON.stringify({ crm_banca_id: crmBancaId }),
+          });
+          const j = await res.json();
+          if (!res.ok || !j.success) {
+            setAtendimentoGateNotice(j.error || 'Não foi possível atualizar a banca.');
+            return;
+          }
+        } else if (crmBancaId) {
+          const res = await fetch('/api/gerente/atendimento-chat/instances', {
+            ...fetchOpts,
+            method: 'POST',
+            body: JSON.stringify({
+              link_existing: true,
+              evolution_instance_id: instanceId,
+              crm_banca_id: crmBancaId,
+              consultor_user_ids: [],
+            }),
+          });
+          const j = await res.json();
+          if (!res.ok || !j.success) {
+            setAtendimentoGateNotice(j.error || 'Não foi possível registrar o vínculo com a banca.');
+            return;
+          }
+        }
+        await loadGerenteGateAtendimento();
+      } finally {
+        setGerenteGateSavingInstanceId(null);
+      }
+    },
+    [userId, userStatus, loadGerenteGateAtendimento]
+  );
+
+  useEffect(() => {
+    if (atendimentoGatePassed || userStatus !== 'gerente' || !userId) return;
+    loadGerenteGateAtendimento();
+  }, [atendimentoGatePassed, userStatus, userId, loadGerenteGateAtendimento]);
+
   const canSelectChannel =
     userStatus === 'super_admin' ||
     userStatus === 'admin' ||
     userStatus === 'suporte' ||
     userStatus === 'gerente' ||
     userStatus === 'consultor';
+
+  /** Lista Contatos + sync CRM (kanban / transferidos) — consultor e gerente */
+  const crmChatContactsUser =
+    userStatus === 'consultor' || userStatus === 'gerente';
+
+  const refreshChatContacts = useCallback(async () => {
+    if (!userId || !crmChatContactsUser) return;
+    setChatContactsLoading(true);
+    try {
+      const r = await fetch('/api/chat/contacts?list=1', { headers: { 'X-User-Id': userId } });
+      const j = await r.json();
+      if (j.success && Array.isArray(j.data)) setChatContactsList(j.data as ChatContact[]);
+    } finally {
+      setChatContactsLoading(false);
+    }
+  }, [userId, crmChatContactsUser]);
+
+  const syncCrmNow = useCallback(async () => {
+    if (!userId || !crmChatContactsUser) return;
+    setCrmSyncLoading(true);
+    setCrmSyncMessage(null);
+    try {
+      const r = await fetch('/api/chat/contacts/sync-from-crm', {
+        method: 'POST',
+        headers: { 'X-User-Id': userId },
+      });
+      const j = await r.json();
+      if (!j.success) setCrmSyncMessage(j.error || 'Falha na sincronização CRM');
+      await refreshChatContacts();
+    } catch {
+      setCrmSyncMessage('Falha de rede ao sincronizar CRM.');
+    } finally {
+      setCrmSyncLoading(false);
+    }
+  }, [userId, crmChatContactsUser, refreshChatContacts]);
+
+  const openContactRow = useCallback(
+    (telefone: string) => {
+      const phone = String(telefone || '').replace(/\D/g, '');
+      if (!phone) return;
+      const conv = conversations.find(
+        (c) =>
+          !c.is_group &&
+          c.remote_jid.replace(/@s\.whatsapp\.net$/, '').replace(/\D/g, '') === phone
+      );
+      if (conv) {
+        setActiveView('chat');
+        setSelectedConversationId(conv.id);
+        return;
+      }
+      setStartConversationPhone(phone);
+      setShowStartConversationModal(true);
+      setActiveView('chat');
+    },
+    [conversations]
+  );
+
+  const CRM_CHAT_SYNC_THROTTLE_MS = 5 * 60 * 1000;
+
+  useEffect(() => {
+    if (activeView !== 'contacts' || !crmChatContactsUser || !userId) return;
+    let cancelled = false;
+    (async () => {
+      await refreshChatContacts();
+      if (cancelled) return;
+      if (typeof window === 'undefined') return;
+      const key = 'zaploto_chat_crm_sync_ts';
+      const last = parseInt(sessionStorage.getItem(key) || '0', 10);
+      const now = Date.now();
+      if (now - last < CRM_CHAT_SYNC_THROTTLE_MS) return;
+      sessionStorage.setItem(key, String(now));
+      setCrmSyncLoading(true);
+      setCrmSyncMessage(null);
+      try {
+        const r = await fetch('/api/chat/contacts/sync-from-crm', {
+          method: 'POST',
+          headers: { 'X-User-Id': userId },
+        });
+        const j = await r.json();
+        if (!j.success && !cancelled) setCrmSyncMessage(j.error || 'Sincronização CRM incompleta');
+        if (!cancelled) await refreshChatContacts();
+      } catch {
+        if (!cancelled) setCrmSyncMessage('Falha ao sincronizar com o CRM.');
+      } finally {
+        if (!cancelled) setCrmSyncLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeView, userId, crmChatContactsUser, refreshChatContacts]);
 
   const handleSignOut = async () => {
     if (typeof window !== 'undefined') {
@@ -890,9 +1234,21 @@ export default function ChatPage() {
 
   const channelPickerKey = (c: Channel) => `${c.type}:${c.id}`;
 
-  const openAtendimentoWithPendingChannel = () => {
+  const openAtendimentoWithPendingChannel = async () => {
     if (!pendingAtendimentoChannel) return;
     setAtendimentoGateNotice(null);
+    if (userStatus === 'gerente' && pendingAtendimentoChannel.type === 'evolution') {
+      const instId = pendingAtendimentoChannel.id;
+      const gRow = gerenteGateAssignmentByInstance[instId];
+      if (!gRow?.crm_banca_id) {
+        setAtendimentoGateNotice('Selecione a banca (CRM) desta instância antes de entrar.');
+        return;
+      }
+      const draftIds =
+        gerenteGateConsultoresDraftByInstance[instId] ?? gRow.consultor_user_ids ?? [];
+      const ok = await persistGerenteGateConsultores(instId, gRow.id, draftIds, gRow.crm_banca_id);
+      if (!ok) return;
+    }
     setSelectedChannel(pendingAtendimentoChannel);
     setAtendimentoGatePassed(true);
     setSelectedConversationId('');
@@ -1495,7 +1851,7 @@ export default function ChatPage() {
       .then((r) => r.json())
       .then((data) => setConvContact(data.success ? (data.data ?? null) : null))
       .catch(() => setConvContact(null));
-  }, [selectedConversationId, userId]);
+  }, [selectedConversationId, userId, conversations]);
 
   // ── Realtime: mensagens ────────────────────────────────────────────────────
   useEffect(() => {
@@ -2245,6 +2601,7 @@ export default function ChatPage() {
             )
           );
         }
+        if (crmChatContactsUser) void refreshChatContacts();
         setShowContactModal(false);
       } else {
         setContactSaveError(data.error || 'Erro ao salvar contato');
@@ -2455,7 +2812,9 @@ export default function ChatPage() {
                 Chat de Atendimento
               </h1>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                Selecione a instância WhatsApp para iniciar o atendimento
+                {userStatus === 'gerente'
+                  ? 'Suas instâncias aparecem abaixo. Vincule a banca e um ou mais consultores para eles acessarem esta instância no atendimento.'
+                  : 'Selecione a instância WhatsApp para iniciar o atendimento'}
               </p>
             </div>
 
@@ -2495,9 +2854,24 @@ export default function ChatPage() {
                     Nenhuma instância disponível
                   </p>
                   <p className="text-xs text-gray-500 dark:text-gray-400 max-w-xs">
-                    Você ainda não possui instâncias WhatsApp ativas. Crie uma em{' '}
-                    <a href="/instances" className="underline" style={{ color: '#8CD955' }}>Instâncias WhatsApp</a>
-                    {' '}ou peça ao gerente para atribuir uma instância de atendimento.
+                    {userStatus === 'gerente' ? (
+                      <>
+                        Nenhuma instância Evolution ativa na sua conta. Crie em{' '}
+                        <a href="/instances" className="underline" style={{ color: '#8CD955' }}>
+                          Instâncias WhatsApp
+                        </a>
+                        ; ao conectar, ela aparecerá aqui para você vincular um consultor.
+                      </>
+                    ) : (
+                      <>
+                        Você ainda não possui instâncias WhatsApp ativas. Crie uma em{' '}
+                        <a href="/instances" className="underline" style={{ color: '#8CD955' }}>
+                          Instâncias WhatsApp
+                        </a>
+                        {' '}
+                        ou peça ao gerente para atribuir uma instância de atendimento.
+                      </>
+                    )}
                   </p>
                 </div>
 
@@ -2515,62 +2889,162 @@ export default function ChatPage() {
                     {channels.evolution.map((ch) => {
                       const selected = pendingAtendimentoChannel && channelPickerKey(pendingAtendimentoChannel) === channelPickerKey(ch);
                       const sc = statusConfig(ch.status);
+                      const gRow = userStatus === 'gerente' ? gerenteGateAssignmentByInstance[ch.id] : undefined;
                       return (
-                        <button
+                        <div
                           key={channelPickerKey(ch)}
-                          type="button"
-                          onClick={() => setPendingAtendimentoChannel(ch)}
-                          className={`relative text-left rounded-xl border-2 p-4 transition-all duration-150 ${
+                          className={`relative text-left rounded-xl border-2 overflow-hidden transition-all duration-150 ${
                             selected
                               ? 'border-[#8CD955] bg-[#8CD955]/8 dark:bg-[#8CD955]/12 shadow-sm'
                               : 'border-gray-200 dark:border-[#3a3a3a] hover:border-[#8CD955]/50 hover:bg-gray-50 dark:hover:bg-[#333]'
                           }`}
                         >
-                          {/* Check mark quando selecionado */}
-                          {selected && (
-                            <span
-                              className="absolute top-3 right-3 w-5 h-5 rounded-full flex items-center justify-center"
-                              style={{ backgroundColor: '#8CD955' }}
-                            >
-                              <CheckCheck className="w-3 h-3 text-white" />
-                            </span>
-                          )}
+                          <button
+                            type="button"
+                            onClick={() => setPendingAtendimentoChannel(ch)}
+                            className="w-full text-left p-4"
+                          >
+                            {selected && (
+                              <span
+                                className="absolute top-3 right-3 w-5 h-5 rounded-full flex items-center justify-center z-[1]"
+                                style={{ backgroundColor: '#8CD955' }}
+                              >
+                                <CheckCheck className="w-3 h-3 text-white" />
+                              </span>
+                            )}
 
-                          {/* Avatar + nome */}
-                          <div className="flex items-center gap-3 mb-3">
-                            <div className="relative flex-shrink-0">
-                              <div className="w-10 h-10 rounded-full bg-gray-100 dark:bg-[#444] flex items-center justify-center">
-                                <MessageCircle className="w-5 h-5 text-gray-400 dark:text-gray-500" />
+                            <div className="flex items-center gap-3 mb-3">
+                              <div className="relative flex-shrink-0">
+                                <div className="w-10 h-10 rounded-full bg-gray-100 dark:bg-[#444] flex items-center justify-center">
+                                  <MessageCircle className="w-5 h-5 text-gray-400 dark:text-gray-500" />
+                                </div>
+                                <span
+                                  className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white dark:border-[#2a2a2a] ${sc.dot}`}
+                                />
                               </div>
-                              <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white dark:border-[#2a2a2a] ${sc.dot}`} />
+                              <div className="min-w-0 flex-1 pr-6">
+                                <p className="font-semibold text-sm text-gray-900 dark:text-gray-100 truncate">
+                                  {ch.instance_name}
+                                </p>
+                                <p className={`text-xs font-medium ${sc.text}`}>{sc.label}</p>
+                              </div>
                             </div>
-                            <div className="min-w-0 flex-1">
-                              <p className="font-semibold text-sm text-gray-900 dark:text-gray-100 truncate">
-                                {ch.instance_name}
-                              </p>
-                              <p className={`text-xs font-medium ${sc.text}`}>
-                                {sc.label}
-                              </p>
-                            </div>
-                          </div>
 
-                          {/* Badges */}
-                          <div className="flex flex-wrap gap-1">
-                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 border border-blue-200 dark:border-blue-800/50">
-                              Evolution
-                            </span>
-                            {ch.is_master && (
-                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 border border-amber-200 dark:border-amber-800/50">
-                                Mestre
+                            <div className="flex flex-wrap gap-1">
+                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 border border-blue-200 dark:border-blue-800/50">
+                                Evolution
                               </span>
-                            )}
-                            {ch.is_chat_instance && (
-                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 border border-purple-200 dark:border-purple-800/50">
-                                Chat
-                              </span>
-                            )}
-                          </div>
-                        </button>
+                              {ch.is_master && (
+                                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 border border-amber-200 dark:border-amber-800/50">
+                                  Mestre
+                                </span>
+                              )}
+                              {ch.is_chat_instance && (
+                                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 border border-purple-200 dark:border-purple-800/50">
+                                  Chat
+                                </span>
+                              )}
+                            </div>
+                          </button>
+
+                          {userStatus === 'gerente' && (
+                            <div className="px-4 py-3 border-t border-gray-100 dark:border-[#3a3a3a] bg-gray-50/90 dark:bg-[#252525] space-y-3">
+                              <div>
+                                <label className="text-[10px] font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 block mb-1.5">
+                                  Banca (CRM)
+                                </label>
+                                <div className="flex items-center gap-2">
+                                  <select
+                                    className="flex-1 min-w-0 text-sm rounded-lg border border-gray-200 dark:border-[#505050] bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 px-2 py-2"
+                                    disabled={gerenteGateSavingInstanceId === ch.id || gerenteGateBancas.length === 0}
+                                    value={gRow?.crm_banca_id || ''}
+                                    onClick={(e) => e.stopPropagation()}
+                                    onChange={(e) => {
+                                      const v = e.target.value === '' ? null : e.target.value;
+                                      handleGerenteGateBancaChange(ch.id, gRow?.id, v);
+                                    }}
+                                  >
+                                    <option value="">
+                                      {gerenteGateBancas.length === 0 ? 'Nenhuma banca atribuída' : 'Selecione a banca'}
+                                    </option>
+                                    {gerenteGateBancas.map((b) => (
+                                      <option key={b.id} value={b.id}>
+                                        {b.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  {gerenteGateSavingInstanceId === ch.id && (
+                                    <Loader2 className="w-4 h-4 animate-spin shrink-0 text-[#8CD955]" />
+                                  )}
+                                </div>
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 block mb-1.5">
+                                  Consultores no atendimento
+                                </label>
+                                {!gRow?.crm_banca_id ? (
+                                  <p className="text-xs text-gray-500 dark:text-gray-400 py-1">
+                                    Escolha uma banca primeiro
+                                  </p>
+                                ) : (
+                                  <>
+                                    <p className="text-[11px] text-gray-500 dark:text-gray-400 mb-1.5 leading-snug">
+                                      Marque um ou mais consultores; o vínculo é salvo de uma vez ao clicar em «Entrar».
+                                    </p>
+                                    <div
+                                      className="max-h-36 overflow-y-auto rounded-lg border border-gray-200 dark:border-[#505050] bg-white dark:bg-[#333] px-2 py-2 space-y-1.5"
+                                      onClick={(e) => e.stopPropagation()}
+                                      onKeyDown={(e) => e.stopPropagation()}
+                                    >
+                                      {(gerenteGateConsultoresByBanca[gRow.crm_banca_id] || []).length === 0 ? (
+                                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                                          Nenhum consultor nesta banca
+                                        </p>
+                                      ) : (
+                                        (gerenteGateConsultoresByBanca[gRow.crm_banca_id] || []).map((c) => {
+                                          const cur =
+                                            gerenteGateConsultoresDraftByInstance[ch.id] ??
+                                            gRow.consultor_user_ids ??
+                                            [];
+                                          const selected = cur.includes(c.id);
+                                          return (
+                                            <label
+                                              key={c.id}
+                                              className={`flex items-center gap-2 text-sm cursor-pointer rounded px-1 py-0.5 hover:bg-gray-100 dark:hover:bg-[#3a3a3a] ${
+                                                gerenteGateSavingInstanceId === ch.id
+                                                  ? 'opacity-50 pointer-events-none'
+                                                  : ''
+                                              }`}
+                                            >
+                                              <input
+                                                type="checkbox"
+                                                className="rounded border-gray-300 dark:border-[#505050]"
+                                                checked={selected}
+                                                disabled={gerenteGateSavingInstanceId === ch.id}
+                                                onChange={(e) => {
+                                                  setGerenteGateConsultoresDraftByInstance((prev) => {
+                                                    const base = prev[ch.id] ?? gRow.consultor_user_ids ?? [];
+                                                    const next = e.target.checked
+                                                      ? [...new Set([...base, c.id])]
+                                                      : base.filter((id) => id !== c.id);
+                                                    return { ...prev, [ch.id]: next };
+                                                  });
+                                                }}
+                                              />
+                                              <span className="text-gray-900 dark:text-gray-100 truncate">
+                                                {c.full_name || c.email || c.id}
+                                              </span>
+                                            </label>
+                                          );
+                                        })
+                                      )}
+                                    </div>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       );
                     })}
                   </div>
@@ -2579,12 +3053,28 @@ export default function ChatPage() {
                   <div className="px-4 pb-4 pt-2 border-t border-gray-100 dark:border-[#3a3a3a]">
                     <button
                       type="button"
-                      disabled={!pendingAtendimentoChannel}
-                      onClick={openAtendimentoWithPendingChannel}
+                      disabled={
+                        !pendingAtendimentoChannel ||
+                        (userStatus === 'gerente' &&
+                          pendingAtendimentoChannel.type === 'evolution' &&
+                          !gerenteGateAssignmentByInstance[pendingAtendimentoChannel.id]?.crm_banca_id) ||
+                        (userStatus === 'gerente' &&
+                          pendingAtendimentoChannel.type === 'evolution' &&
+                          gerenteGateSavingInstanceId === pendingAtendimentoChannel.id)
+                      }
+                      onClick={() => {
+                        void openAtendimentoWithPendingChannel();
+                      }}
                       className="w-full py-3 rounded-xl text-white font-semibold text-sm disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
                       style={{ backgroundColor: '#8CD955' }}
                     >
-                      <Headphones className="w-4 h-4" />
+                      {userStatus === 'gerente' &&
+                      pendingAtendimentoChannel?.type === 'evolution' &&
+                      gerenteGateSavingInstanceId === pendingAtendimentoChannel.id ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Headphones className="w-4 h-4" />
+                      )}
                       {pendingAtendimentoChannel
                         ? `Entrar com ${(pendingAtendimentoChannel as ChannelEvolution).instance_name}`
                         : 'Selecione uma instância'}
@@ -2813,12 +3303,135 @@ export default function ChatPage() {
                 <div className="min-w-0 flex-1">
                   <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Contatos do Chat</h3>
                   <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                    Clique em um contato para abrir a conversa.
+                    {crmChatContactsUser
+                      ? 'Sincronização em lotes (como no CRM). Use o filtro abaixo e o botão de atualizar.'
+                      : 'Clique em um contato para abrir a conversa.'}
                   </p>
                 </div>
+                {crmChatContactsUser && (
+                  <button
+                    type="button"
+                    onClick={() => syncCrmNow()}
+                    disabled={crmSyncLoading || !userId}
+                    className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] text-gray-600 dark:text-gray-300 flex-shrink-0 disabled:opacity-50"
+                    title="Sincronizar agora com o CRM"
+                  >
+                    {crmSyncLoading ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="w-5 h-5" />
+                    )}
+                  </button>
+                )}
               </div>
+              {crmChatContactsUser && crmSyncMessage && (
+                <div className="flex-shrink-0 px-3 py-2 text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800/40">
+                  {crmSyncMessage}
+                </div>
+              )}
+              {crmChatContactsUser && (
+                <div className="flex-shrink-0 px-3 py-2 border-b border-gray-200 dark:border-[#404040] flex gap-1 flex-wrap">
+                  {(
+                    [
+                      { id: 'all' as const, label: 'Todos' },
+                      { id: 'kanban' as const, label: 'Kanban' },
+                      { id: 'transferred' as const, label: 'Transferido' },
+                    ] as const
+                  ).map((tab) => {
+                    const active = chatContactsKindFilter === tab.id;
+                    return (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setChatContactsKindFilter(tab.id)}
+                        className={`text-xs font-medium px-2.5 py-1 rounded-md transition-colors ${
+                          active
+                            ? 'bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900'
+                            : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-[#333] dark:text-gray-300 dark:hover:bg-[#404040]'
+                        }`}
+                      >
+                        {tab.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
               <div className="flex-1 overflow-y-auto">
-                {conversations.length === 0 ? (
+                {crmChatContactsUser ? (
+                  chatContactsLoading && chatContactsList.length === 0 ? (
+                    <div className="p-6 flex justify-center text-gray-500 dark:text-gray-400">
+                      <Loader2 className="w-6 h-6 animate-spin" />
+                    </div>
+                  ) : chatContactsFiltered.length === 0 ? (
+                    <div className="p-6 text-center text-gray-500 dark:text-gray-400 text-sm">
+                      {chatContactsList.length === 0
+                        ? 'Nenhum contato. Use o botão de sincronizar ou aguarde o CRM.'
+                        : 'Nenhum contato neste filtro. Escolha outra aba ou Todos.'}
+                    </div>
+                  ) : (
+                    chatContactsFiltered.map((row) => {
+                      const kind = row.crm_sync_kind || 'manual';
+                      const badgeClass =
+                        kind === 'kanban'
+                          ? 'bg-emerald-100 text-emerald-900 dark:bg-emerald-900/40 dark:text-emerald-200'
+                          : kind === 'transferred'
+                            ? 'bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200'
+                            : 'bg-gray-100 text-gray-700 dark:bg-[#404040] dark:text-gray-200';
+                      const badgeLabel =
+                        kind === 'kanban' ? 'Kanban' : kind === 'transferred' ? 'Transferido' : 'Manual';
+                      const expiresIso = row.crm_snapshot?.transfer_expires_at;
+                      const expired =
+                        !!expiresIso && !Number.isNaN(new Date(expiresIso).getTime()) && new Date(expiresIso) < new Date();
+                      return (
+                        <div
+                          key={row.id}
+                          onClick={() => openContactRow(row.telefone)}
+                          className="p-3 border-b border-gray-100 dark:border-[#404040] cursor-pointer hover:bg-gray-50 dark:hover:bg-[#333] transition-colors"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div
+                              className="w-9 h-9 rounded-full flex items-center justify-center text-white text-xs font-semibold flex-shrink-0"
+                              style={{ backgroundColor: getConversationColor(row.name || row.telefone) }}
+                            >
+                              {getInitials(row.name || row.telefone)}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+                                  {row.name?.trim() || row.telefone}
+                                </p>
+                                <span
+                                  className={`text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded flex-shrink-0 ${badgeClass}`}
+                                >
+                                  {badgeLabel}
+                                </span>
+                              </div>
+                              <p className="text-xs text-gray-500 dark:text-gray-400">{row.telefone}</p>
+                              {row.crm_snapshot?.status && (
+                                <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 truncate">
+                                  Status CRM: {row.crm_snapshot.status}
+                                  {row.crm_snapshot.banca_name ? ` · ${row.crm_snapshot.banca_name}` : ''}
+                                </p>
+                              )}
+                              {kind === 'transferred' && expiresIso && (
+                                <p
+                                  className={`text-[11px] mt-0.5 font-semibold ${
+                                    expired
+                                      ? 'text-red-700 dark:text-red-400'
+                                      : 'text-red-600 dark:text-red-400'
+                                  }`}
+                                >
+                                  Expira em {formatTransferExpiryDay(expiresIso)}
+                                  {expired ? ' · prazo vencido' : ''}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )
+                ) : conversations.length === 0 ? (
                   <div className="p-6 text-center text-gray-500 dark:text-gray-400 text-sm">
                     Nenhuma conversa encontrada.
                   </div>
@@ -3843,6 +4456,106 @@ export default function ChatPage() {
                     </button>
                   </div>
                 )}
+
+                {/* Card resumo CRM (consultor / gerente) */}
+                {crmChatContactsUser &&
+                  selectedConversation &&
+                  convContact &&
+                  convContact.crm_snapshot &&
+                  typeof convContact.crm_snapshot === 'object' && (
+                    <div className="flex-shrink-0 mx-3 mb-2 p-3 rounded-xl border border-gray-200 dark:border-[#404040] bg-gradient-to-br from-gray-50 to-white dark:from-[#333] dark:to-[#2a2a2a] shadow-sm">
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                            Cliente no CRM
+                          </p>
+                          <p className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">
+                            {convContact.name?.trim() || selectedConversation.title || 'Contato'}
+                          </p>
+                        </div>
+                        {convContact.crm_sync_kind && (
+                          <span
+                            className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full flex-shrink-0 ${
+                              convContact.crm_sync_kind === 'kanban'
+                                ? 'bg-emerald-100 text-emerald-900 dark:bg-emerald-900/50 dark:text-emerald-100'
+                                : convContact.crm_sync_kind === 'transferred'
+                                  ? 'bg-amber-100 text-amber-900 dark:bg-amber-900/50 dark:text-amber-100'
+                                  : 'bg-gray-200 text-gray-800 dark:bg-[#444] dark:text-gray-100'
+                            }`}
+                          >
+                            {convContact.crm_sync_kind === 'kanban'
+                              ? 'Kanban'
+                              : convContact.crm_sync_kind === 'transferred'
+                                ? 'Transferido'
+                                : 'Manual'}
+                          </span>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-gray-700 dark:text-gray-300">
+                        {convContact.crm_snapshot.status != null && convContact.crm_snapshot.status !== '' && (
+                          <span>
+                            <span className="text-gray-500 dark:text-gray-400">Status:</span>{' '}
+                            {convContact.crm_snapshot.status}
+                          </span>
+                        )}
+                        {convContact.crm_snapshot.temperature != null &&
+                          convContact.crm_snapshot.temperature !== '' && (
+                            <span>
+                              <span className="text-gray-500 dark:text-gray-400">Temperatura:</span>{' '}
+                              {convContact.crm_snapshot.temperature}
+                            </span>
+                          )}
+                        {convContact.crm_snapshot.banca_name != null &&
+                          convContact.crm_snapshot.banca_name !== '' && (
+                            <span className="col-span-2 truncate">
+                              <span className="text-gray-500 dark:text-gray-400">Banca:</span>{' '}
+                              {convContact.crm_snapshot.banca_name}
+                            </span>
+                          )}
+                        {convContact.crm_snapshot.total_depositado != null && (
+                          <span>
+                            <span className="text-gray-500 dark:text-gray-400">Depositado:</span>{' '}
+                            {Number(convContact.crm_snapshot.total_depositado).toLocaleString('pt-BR', {
+                              style: 'currency',
+                              currency: 'BRL',
+                            })}
+                          </span>
+                        )}
+                        {convContact.crm_snapshot.total_apostado != null && (
+                          <span>
+                            <span className="text-gray-500 dark:text-gray-400">Apostado:</span>{' '}
+                            {Number(convContact.crm_snapshot.total_apostado).toLocaleString('pt-BR', {
+                              style: 'currency',
+                              currency: 'BRL',
+                            })}
+                          </span>
+                        )}
+                        {convContact.crm_sync_kind === 'transferred' &&
+                          convContact.crm_snapshot.transfer_expires_at != null &&
+                          convContact.crm_snapshot.transfer_expires_at !== '' && (
+                            <span className="col-span-2 font-semibold text-red-600 dark:text-red-400">
+                              <span className="text-gray-500 dark:text-gray-400 font-normal">Prazo:</span>{' '}
+                              {formatTransferExpiryDay(convContact.crm_snapshot.transfer_expires_at)}
+                              {new Date(convContact.crm_snapshot.transfer_expires_at) < new Date()
+                                ? ' (vencido)'
+                                : ''}
+                            </span>
+                          )}
+                      </div>
+                      {convContact.crm_snapshot.tag_labels && convContact.crm_snapshot.tag_labels.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {convContact.crm_snapshot.tag_labels.map((t) => (
+                            <span
+                              key={t}
+                              className="text-[10px] px-1.5 py-0.5 rounded bg-[#8CD955]/20 text-gray-800 dark:text-gray-100"
+                            >
+                              {t}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                 {/* ── Barra de mensagem ────────────────────────────────── */}
                 <div className="flex-shrink-0 w-full bg-white dark:bg-[#2a2a2a] border-t border-gray-200 dark:border-[#404040] px-3 py-3">

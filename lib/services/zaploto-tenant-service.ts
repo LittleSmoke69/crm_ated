@@ -122,7 +122,8 @@ export async function getSidebarItemsForRole(
         href,
         icon_name,
         parent_code,
-        sort_order
+        sort_order,
+        is_active
       )
     `)
     .eq('role_id', role.id)
@@ -133,6 +134,7 @@ export async function getSidebarItemsForRole(
   const items = roleSidebar
     .map((r: any) => r.zaploto_sidebar_items)
     .filter(Boolean)
+    .filter((si: any) => si.is_active !== false)
     .map((si: any) => {
       let href = si.href;
       if (roleCode === 'gerente' && si.code === 'zaplink') {

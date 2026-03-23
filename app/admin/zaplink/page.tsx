@@ -24,6 +24,7 @@ import {
   ChevronDown,
   ChevronUp,
   RefreshCw,
+  Search,
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
@@ -134,6 +135,8 @@ export default function AdminZaplinkPage() {
   const [submissionsFilter, setSubmissionsFilter] = useState<'pending' | 'assigned'>('pending');
   const [submissionsPage, setSubmissionsPage] = useState(1);
   const [submissionsTotal, setSubmissionsTotal] = useState(0);
+  const [submissionsSearch, setSubmissionsSearch] = useState('');
+  const [submissionsSearchDebounced, setSubmissionsSearchDebounced] = useState('');
   const SUBMISSIONS_LIMIT = 20;
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [chartByGerente, setChartByGerente] = useState<ByGerenteBancaRow[]>([]);
@@ -190,15 +193,25 @@ export default function AdminZaplinkPage() {
     }
   };
 
+  // Debounce da busca de submissões (400ms)
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setSubmissionsSearchDebounced(submissionsSearch);
+      setSubmissionsPage(1);
+    }, 400);
+    return () => clearTimeout(t);
+  }, [submissionsSearch]);
+
   const loadData = useCallback(async () => {
     if (!userId) return;
     setLoading(true);
     try {
+      const searchParam = submissionsSearchDebounced.length >= 2 ? `&search=${encodeURIComponent(submissionsSearchDebounced)}` : '';
       const [linksRes, formsRes, subsRes, metricsRes, bancasRes, byGerenteRes, gestoresRes] = await Promise.all([
         fetch('/api/admin/zaplink/links', { headers: { 'X-User-Id': userId } }),
         fetch('/api/admin/zaplink/forms', { headers: { 'X-User-Id': userId } }),
         fetch(
-          `/api/admin/zaplink/submissions?status=${submissionsFilter}&page=${submissionsPage}&limit=${SUBMISSIONS_LIMIT}`,
+          `/api/admin/zaplink/submissions?status=${submissionsFilter}&page=${submissionsPage}&limit=${SUBMISSIONS_LIMIT}${searchParam}`,
           { headers: { 'X-User-Id': userId } }
         ),
         fetch('/api/admin/zaplink/metrics', { headers: { 'X-User-Id': userId } }),
@@ -236,7 +249,7 @@ export default function AdminZaplinkPage() {
     } finally {
       setLoading(false);
     }
-  }, [userId, submissionsFilter, submissionsPage]);
+  }, [userId, submissionsFilter, submissionsPage, submissionsSearchDebounced]);
 
   const loadGerentesForBanca = useCallback(async (bancaId: string) => {
     if (!userId || !bancaId) return;
@@ -864,7 +877,7 @@ export default function AdminZaplinkPage() {
         {activeTab === 'submissions' && (
           <div className="space-y-4">
             <div className="flex gap-2 flex-wrap items-center justify-between">
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap items-center">
                 <button
                   onClick={() => {
                     setSubmissionsPage(1);
@@ -892,6 +905,26 @@ export default function AdminZaplinkPage() {
                 >
                   Atribuídos
                 </button>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-gray-400" />
+                  <input
+                    type="text"
+                    value={submissionsSearch}
+                    onChange={(e) => setSubmissionsSearch(e.target.value)}
+                    placeholder="Pesquisar por nome ou telefone..."
+                    className={`pl-9 py-2 rounded-lg border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 text-sm min-w-[220px] focus:ring-2 focus:ring-green-500/50 focus:border-green-500 ${submissionsSearch ? 'pr-8' : 'pr-3'}`}
+                  />
+                  {submissionsSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setSubmissionsSearch('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+                      aria-label="Limpar busca"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
             <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] overflow-x-auto">

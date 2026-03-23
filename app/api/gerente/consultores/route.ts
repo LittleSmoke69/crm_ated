@@ -4,6 +4,7 @@ import { getEffectiveDonoIdForGestor } from '@/lib/middleware/gestor-owner';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { getConsultorsByManager, isInHierarchy } from '@/lib/utils/hierarchy';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { userHasCrmBanca } from '@/lib/utils/user-bancas';
 
 function normalizeBancaUrl(url: string | null | undefined): string {
   if (!url) return '';
@@ -48,8 +49,27 @@ export async function GET(req: NextRequest) {
       effectiveManagerId = effectiveGerenteId;
     }
 
+    const bancaIdFilter = req.nextUrl.searchParams.get('banca_id')?.trim() || null;
+
     // Busca consultores diretos
-    const consultores = await getConsultorsByManager(effectiveManagerId);
+    let consultores = await getConsultorsByManager(effectiveManagerId);
+
+    if (bancaIdFilter) {
+      const owns = await userHasCrmBanca(effectiveManagerId, bancaIdFilter);
+      if (!owns) {
+        return errorResponse('Banca não disponível para este gerente.', 403);
+      }
+      if (consultores.length > 0) {
+        const ids = consultores.map((c) => c.id);
+        const { data: ubRows } = await supabaseServiceRole
+          .from('user_bancas')
+          .select('user_id')
+          .in('user_id', ids)
+          .filter('banca_ids', 'cs', JSON.stringify([bancaIdFilter]));
+        const allowed = new Set((ubRows || []).map((r: { user_id: string }) => r.user_id));
+        consultores = consultores.filter((c) => allowed.has(c.id));
+      }
+    }
 
     // Para cada consultor, busca métricas
     const consultoresComMetricas = await Promise.all(

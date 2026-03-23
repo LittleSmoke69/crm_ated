@@ -1,4 +1,5 @@
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { normalizeConsultorUserIdsColumn } from '@/lib/utils/atendimento-consultores';
 
 export type AtendimentoChatProfile = {
   status?: string | null;
@@ -35,12 +36,15 @@ export async function canUserAccessEvolutionChatInstance(
 
   const { data: row } = await supabaseServiceRole
     .from('atendimento_chat_assignments')
-    .select('gerente_user_id, consultor_user_id')
+    .select('gerente_user_id, consultor_user_ids')
     .eq('evolution_instance_id', instanceId)
     .maybeSingle();
 
   if (!row) return false;
   if (row.gerente_user_id === userId) return true;
-  if (row.consultor_user_id === userId) return true;
+  const consultores = normalizeConsultorUserIdsColumn(
+    (row as { consultor_user_ids?: unknown }).consultor_user_ids
+  );
+  if (consultores.includes(userId)) return true;
   return false;
 }

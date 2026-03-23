@@ -1,13 +1,14 @@
 /**
  * POST /api/atendimento-chat/link-instance
- * Cria ou atualiza vínculo em atendimento_chat_assignments para liberar a instância no chat-atendimento
- * (gerente/dono na linha gerente_user_id; consultor opcional na prática aqui é obrigatório no body).
+ * Cria ou atualiza vínculo em atendimento_chat_assignments (acrescenta consultor(es) à lista).
  */
 
 import { NextRequest } from 'next/server';
 import { requireStatus, canAccessUser, getUserProfile } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { normalizeConsultorUserIdsColumn, parseConsultorUserIdsPatch } from '@/lib/utils/atendimento-consultores';
+import { validateConsultorIdsForAtendimentoAssignment } from '@/lib/server/atendimento-assignment-consultores';
 
 export async function POST(req: NextRequest) {
   try {
@@ -21,17 +22,18 @@ export async function POST(req: NextRequest) {
     const body = (await req.json().catch(() => ({}))) as {
       evolution_instance_id?: string;
       consultor_user_id?: string;
+      consultor_user_ids?: string[];
       gerente_user_id?: string | null;
     };
 
     const instanceId = body.evolution_instance_id?.trim();
-    const consultorId = body.consultor_user_id?.trim();
+    const toAdd = parseConsultorUserIdsPatch(body);
 
     if (!instanceId) {
       return errorResponse('evolution_instance_id é obrigatório', 400);
     }
-    if (!consultorId) {
-      return errorResponse('consultor_user_id é obrigatório', 400);
+    if (toAdd.length === 0) {
+      return errorResponse('Informe consultor_user_id ou consultor_user_ids.', 400);
     }
 
     const st = (profile.status || '').toLowerCase();
@@ -66,27 +68,19 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const canPickConsultor =
-      st === 'super_admin' || st === 'admin'
-        ? true
-        : await canAccessUser(userId, consultorId);
+    for (const consultorId of toAdd) {
+      const canPickConsultor =
+        st === 'super_admin' || st === 'admin'
+          ? true
+          : await canAccessUser(userId, consultorId);
 
-    if (!canPickConsultor) {
-      return errorResponse('Consultor fora da sua hierarquia', 403);
+      if (!canPickConsultor) {
+        return errorResponse('Consultor fora da sua hierarquia', 403);
+      }
     }
 
-    const { data: consultorProfile, error: cpErr } = await supabaseServiceRole
-      .from('profiles')
-      .select('id, status')
-      .eq('id', consultorId)
-      .maybeSingle();
-
-    if (cpErr || !consultorProfile) {
-      return errorResponse('Consultor não encontrado', 404);
-    }
-    if ((consultorProfile.status || '').toLowerCase() !== 'consultor') {
-      return errorResponse('O usuário informado não é um consultor', 400);
-    }
+    const val = await validateConsultorIdsForAtendimentoAssignment(assignmentGerenteId, toAdd, null);
+    if (!val.ok) return errorResponse(val.message, val.status);
 
     if (st === 'super_admin' || st === 'admin') {
       const gProf = await getUserProfile(assignmentGerenteId);
@@ -97,7 +91,7 @@ export async function POST(req: NextRequest) {
 
     const { data: existingAssignment, error: existingErr } = await supabaseServiceRole
       .from('atendimento_chat_assignments')
-      .select('id, consultor_user_id')
+      .select('id, gerente_user_id, consultor_user_ids')
       .eq('evolution_instance_id', instanceId)
       .maybeSingle();
 
@@ -105,21 +99,23 @@ export async function POST(req: NextRequest) {
       return errorResponse(`Falha ao validar vínculo atual: ${existingErr.message}`, 500);
     }
 
-    if (
-      existingAssignment?.consultor_user_id &&
-      existingAssignment.consultor_user_id !== consultorId
-    ) {
+    if (existingAssignment && existingAssignment.gerente_user_id !== assignmentGerenteId) {
       return errorResponse(
-        'Esta instância já está vinculada a outro consultor. Remova o vínculo atual antes de trocar.',
+        'Esta instância já possui vínculo de atendimento com outro gerente.',
         409
       );
     }
+
+    const prev = normalizeConsultorUserIdsColumn(
+      (existingAssignment as { consultor_user_ids?: unknown } | null)?.consultor_user_ids
+    );
+    const next = [...new Set([...prev, ...toAdd])];
 
     const { error: upsertErr } = await supabaseServiceRole.from('atendimento_chat_assignments').upsert(
       {
         evolution_instance_id: instanceId,
         gerente_user_id: assignmentGerenteId,
-        consultor_user_id: consultorId,
+        consultor_user_ids: next,
         updated_at: new Date().toISOString(),
       },
       { onConflict: 'evolution_instance_id' }
@@ -129,7 +125,10 @@ export async function POST(req: NextRequest) {
       return errorResponse(`Falha ao salvar vínculo: ${upsertErr.message}`, 500);
     }
 
-    return successResponse({ evolution_instance_id: instanceId, consultor_user_id: consultorId }, 'Instância vinculada ao consultor');
+    return successResponse(
+      { evolution_instance_id: instanceId, consultor_user_ids: next },
+      'Instância vinculada ao(s) consultor(es)'
+    );
   } catch (err: unknown) {
     const msg = (err as Error)?.message || '';
     if (msg.includes('Acesso negado')) {

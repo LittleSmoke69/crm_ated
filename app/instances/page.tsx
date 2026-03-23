@@ -95,8 +95,6 @@ const InstancesPage = () => {
 
   const [instanceName, setInstanceName] = useState('');
   const [isMaster, setIsMaster] = useState(false);
-  /** Webhook interno Zaploto (chat): só enviado à API se marcado; padrão desmarcado */
-  const [configureChatWebhook, setConfigureChatWebhook] = useState(false);
   const [maturationType, setMaturationType] = useState<'virgem' | 'maturado'>('maturado');
   const [qrCode, setQrCode] = useState('');
   const [qrTimer, setQrTimer] = useState(0);
@@ -114,11 +112,14 @@ const InstancesPage = () => {
   const [linkAtendimentoConsultores, setLinkAtendimentoConsultores] = useState<
     { id: string; full_name: string | null; email: string | null }[]
   >([]);
-  const [linkAtendimentoConsultorId, setLinkAtendimentoConsultorId] = useState('');
+  const [linkAtendimentoConsultorIds, setLinkAtendimentoConsultorIds] = useState<string[]>([]);
   const [linkAtendimentoListLoading, setLinkAtendimentoListLoading] = useState(false);
   const [linkAtendimentoSubmitting, setLinkAtendimentoSubmitting] = useState(false);
   const [atendimentoAssignmentByInstanceId, setAtendimentoAssignmentByInstanceId] = useState<
-    Record<string, { assignmentId: string; consultorId: string | null; consultorName: string | null }>
+    Record<
+      string,
+      { assignmentId: string; consultorIds: string[]; consultorLabel: string | null }
+    >
   >({});
   const [checkingInstance, setCheckingInstance] = useState<string | null>(null); // Instância sendo verificada
   const [showExtractGroupsPrompt, setShowExtractGroupsPrompt] = useState(false);
@@ -197,13 +198,6 @@ const InstancesPage = () => {
     }
   }, [instances.length, isLoadingInstances]);
 
-  // Modal de criação: webhook do chat sempre começa desmarcado
-  useEffect(() => {
-    if (isCreateModalOpen) {
-      setConfigureChatWebhook(false);
-    }
-  }, [isCreateModalOpen]);
-
   // Mostra botão "Fechar e continuar em segundo plano" no modal de extração após 6 segundos
   useEffect(() => {
     if (!extractGroupsModalExtracting) {
@@ -243,14 +237,21 @@ const InstancesPage = () => {
         setAtendimentoAssignmentByInstanceId({});
         return;
       }
-      const map: Record<string, { assignmentId: string; consultorId: string | null; consultorName: string | null }> = {};
+      const map: Record<
+        string,
+        { assignmentId: string; consultorIds: string[]; consultorLabel: string | null }
+      > = {};
       for (const row of json.data) {
         const instanceId = row?.evolution_instance_id;
         if (!instanceId) continue;
+        const raw = row.consultor_user_ids;
+        const consultorIds = Array.isArray(raw)
+          ? [...new Set(raw.map((x: string) => String(x).trim()).filter(Boolean))]
+          : [];
         map[instanceId] = {
           assignmentId: row.id,
-          consultorId: row.consultor_user_id ?? null,
-          consultorName: row.consultor_name ?? null,
+          consultorIds,
+          consultorLabel: row.consultor_name ?? null,
         };
       }
       setAtendimentoAssignmentByInstanceId(map);
@@ -284,7 +285,6 @@ const InstancesPage = () => {
           instanceName,
           isMaster,
           maturationType,
-          configureChatWebhook: isMaster && configureChatWebhook,
         }),
       });
 
@@ -622,7 +622,7 @@ const InstancesPage = () => {
       return;
     }
     setLinkAtendimentoModalInstance(inst);
-    setLinkAtendimentoConsultorId('');
+    setLinkAtendimentoConsultorIds([]);
     setLinkAtendimentoConsultores([]);
     setLinkAtendimentoListLoading(true);
     try {
@@ -645,8 +645,8 @@ const InstancesPage = () => {
 
   const handleSubmitLinkAtendimento = async () => {
     if (!userId || !linkAtendimentoModalInstance?.id) return;
-    if (!linkAtendimentoConsultorId) {
-      showToast('Selecione um consultor', 'error');
+    if (linkAtendimentoConsultorIds.length === 0) {
+      showToast('Selecione pelo menos um consultor', 'error');
       return;
     }
     setLinkAtendimentoSubmitting(true);
@@ -656,7 +656,7 @@ const InstancesPage = () => {
         headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
         body: JSON.stringify({
           evolution_instance_id: linkAtendimentoModalInstance.id,
-          consultor_user_id: linkAtendimentoConsultorId,
+          consultor_user_ids: linkAtendimentoConsultorIds,
         }),
       });
       const json = await res.json();
@@ -682,14 +682,14 @@ const InstancesPage = () => {
     if (!userId || !inst.id) return;
     const assignment = atendimentoAssignmentByInstanceId[inst.id];
     if (!assignment?.assignmentId) return;
-    const label = assignment.consultorName || 'consultor atual';
+    const label = assignment.consultorLabel || 'consultor(es) atual(is)';
     if (!confirm(`Deseja desvincular a instância ${inst.instance_name} de ${label}?`)) return;
 
     try {
       const res = await fetch(`/api/gerente/atendimento-chat/instances/${assignment.assignmentId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-        body: JSON.stringify({ consultor_user_id: null }),
+        body: JSON.stringify({ consultor_user_ids: [] }),
       });
       const json = await res.json();
       if (json.success) {
@@ -1423,17 +1423,17 @@ const InstancesPage = () => {
                             </div>
                             {isGerente && inst.id && (() => {
                               const assignment = atendimentoAssignmentByInstanceId[inst.id];
-                              const hasConsultor = !!assignment?.consultorId;
+                              const hasConsultor = (assignment?.consultorIds?.length ?? 0) > 0;
                               if (hasConsultor) {
                                 return (
                                   <button
                                     type="button"
                                     onClick={() => handleUnlinkAtendimento(inst)}
                                     className="w-full h-10 px-3 mt-2 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/35 border border-red-200 dark:border-red-800 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-2"
-                                    title="Remove o vínculo desta instância com o consultor no Chat Atendimento"
+                                    title="Remove o vínculo desta instância com os consultores no Chat Atendimento"
                                   >
                                     <UserPlus className="w-4 h-4 shrink-0" />
-                                    {`Desvincular do consultor (${assignment.consultorName || 'sem nome'})`}
+                                    {`Desvincular consultores (${assignment.consultorLabel || 'vínculo ativo'})`}
                                   </button>
                                 );
                               }
@@ -1563,7 +1563,6 @@ const InstancesPage = () => {
                       onClick={() => {
                         if (!loading) {
                           setIsMaster(true);
-                          setConfigureChatWebhook(false);
                         }
                       }}
                       className={`border-2 rounded-lg p-3 transition flex items-center gap-3 min-h-[64px] ${
@@ -1581,7 +1580,8 @@ const InstancesPage = () => {
                           <span className="font-semibold text-gray-800 dark:text-white text-sm">Instância Mestre</span>
                         </div>
                         <p className="text-xs text-gray-600 dark:text-[#aaa] leading-snug">
-                          Mensagens, Agentes IA, Anti-Spam e Boas-Vindas. Sem proxy automático. Instâncias mestres ilimitadas.
+                          Mensagens, Agentes IA, Anti-Spam e Boas-Vindas. Webhook do Zaploto (chat) é registrado
+                          automaticamente na Evolution. Sem proxy automático. Instâncias mestres ilimitadas.
                         </p>
                       </div>
                     </div>
@@ -1589,7 +1589,6 @@ const InstancesPage = () => {
                       onClick={() => {
                         if (!loading) {
                           setIsMaster(false);
-                          setConfigureChatWebhook(false);
                         }
                       }}
                       className={`border-2 rounded-lg p-3 cursor-pointer transition flex items-center gap-3 min-h-[64px] ${
@@ -1657,31 +1656,6 @@ const InstancesPage = () => {
                   </div>
                 </div>
               </div>
-
-              {/* Webhook do chat (opcional, padrão desmarcado) — só para instância mestre */}
-              {isMaster && (
-                <div className="rounded-lg border-2 border-gray-200 dark:border-[#555] bg-gray-50/80 dark:bg-[#333]/60 px-4 py-3">
-                  <label className="flex items-start gap-3 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={configureChatWebhook}
-                      onChange={(e) => setConfigureChatWebhook(e.target.checked)}
-                      disabled={loading}
-                      className="mt-1 h-4 w-4 shrink-0 rounded border-gray-300 text-[#8CD955] focus:ring-[#8CD955] dark:border-[#555] dark:bg-[#2a2a2a] disabled:opacity-50"
-                    />
-                    <span className="text-sm text-gray-700 dark:text-[#ddd] leading-snug">
-                      <span className="font-semibold text-gray-800 dark:text-white block mb-0.5">
-                        Registrar webhook do Zaploto (chat)
-                      </span>
-                      Ao marcar, a Evolution envia mensagens para o sistema e elas são gravadas no banco (chat
-                      interno / atendimento). Exige{' '}
-                      <code className="text-xs bg-gray-200 dark:bg-[#444] px-1 rounded">NEXT_PUBLIC_APP_URL</code> e{' '}
-                      <code className="text-xs bg-gray-200 dark:bg-[#444] px-1 rounded">EVOLUTION_WEBHOOK_TOKEN</code>{' '}
-                      configurados. Padrão: desmarcado.
-                    </span>
-                  </label>
-                </div>
-              )}
 
               {/* Botão Criar */}
               <button
@@ -1806,7 +1780,7 @@ const InstancesPage = () => {
             </div>
             <p className="text-sm text-gray-600 dark:text-[#aaa] mb-4">
               Instância <span className="font-medium text-gray-800 dark:text-white">{linkAtendimentoModalInstance.instance_name}</span>
-              . Escolha o consultor que poderá atender neste WhatsApp na página{' '}
+              . Escolha um ou mais consultores que poderão atender neste WhatsApp na página{' '}
               <span className="font-medium">Chat Atendimento</span>.
             </p>
             {linkAtendimentoListLoading ? (
@@ -1816,20 +1790,39 @@ const InstancesPage = () => {
               </div>
             ) : (
               <div className="space-y-3">
-                <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc]">Consultor</label>
-                <select
-                  value={linkAtendimentoConsultorId}
-                  onChange={(e) => setLinkAtendimentoConsultorId(e.target.value)}
-                  disabled={linkAtendimentoSubmitting || linkAtendimentoConsultores.length === 0}
-                  className="w-full px-3 py-2 border-2 border-gray-200 dark:border-[#404040] rounded-lg bg-white dark:bg-[#333] text-gray-800 dark:text-white focus:ring-2 focus:ring-teal-500 focus:border-teal-500 disabled:opacity-50"
-                >
-                  <option value="">Selecione…</option>
-                  {linkAtendimentoConsultores.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {[c.full_name, c.email].filter(Boolean).join(' · ') || c.id}
-                    </option>
-                  ))}
-                </select>
+                <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc]">Consultores</label>
+                <div className="max-h-48 overflow-y-auto rounded-lg border-2 border-gray-200 dark:border-[#404040] bg-white dark:bg-[#333] px-3 py-2 space-y-2">
+                  {linkAtendimentoConsultores.length === 0 ? (
+                    <p className="text-sm text-gray-500 dark:text-[#888]">Nenhum consultor na hierarquia.</p>
+                  ) : (
+                    linkAtendimentoConsultores.map((c) => {
+                      const label = [c.full_name, c.email].filter(Boolean).join(' · ') || c.id;
+                      const checked = linkAtendimentoConsultorIds.includes(c.id);
+                      return (
+                        <label
+                          key={c.id}
+                          className="flex items-center gap-2 text-sm text-gray-800 dark:text-white cursor-pointer"
+                        >
+                          <input
+                            type="checkbox"
+                            className="rounded border-gray-300 dark:border-[#505050]"
+                            checked={checked}
+                            disabled={linkAtendimentoSubmitting}
+                            onChange={(e) => {
+                              setLinkAtendimentoConsultorIds((prev) => {
+                                if (e.target.checked) {
+                                  return [...new Set([...prev, c.id])];
+                                }
+                                return prev.filter((id) => id !== c.id);
+                              });
+                            }}
+                          />
+                          <span>{label}</span>
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
                 <div className="flex gap-3 pt-2">
                   <button
                     type="button"
@@ -1842,7 +1835,7 @@ const InstancesPage = () => {
                   <button
                     type="button"
                     onClick={handleSubmitLinkAtendimento}
-                    disabled={linkAtendimentoSubmitting || !linkAtendimentoConsultorId}
+                    disabled={linkAtendimentoSubmitting || linkAtendimentoConsultorIds.length === 0}
                     className="flex-1 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-medium transition disabled:opacity-50 flex items-center justify-center gap-2"
                   >
                     {linkAtendimentoSubmitting ? (

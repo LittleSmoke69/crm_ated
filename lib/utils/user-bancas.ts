@@ -53,6 +53,25 @@ export async function getUserBancas(userId: string): Promise<BancaInfo[]> {
   return bancas;
 }
 
+/** True se `crmBancaId` (crm_bancas.id) está entre as bancas retornadas por getUserBancas (inclui user_bancas com id). */
+export async function userHasCrmBanca(userId: string, crmBancaId: string): Promise<boolean> {
+  if (!crmBancaId) return false;
+  const bancas = await getUserBancas(userId);
+  return bancas.some((b) => b.id === crmBancaId);
+}
+
+/** True se o consultor tem `crmBancaId` em user_bancas.banca_ids. */
+export async function consultorHasCrmBanca(consultorId: string, crmBancaId: string): Promise<boolean> {
+  if (!consultorId || !crmBancaId) return false;
+  const { data } = await supabaseServiceRole
+    .from('user_bancas')
+    .select('user_id')
+    .eq('user_id', consultorId)
+    .filter('banca_ids', 'cs', JSON.stringify([crmBancaId]))
+    .maybeSingle();
+  return !!data;
+}
+
 /**
  * Salva as bancas escolhidas pelo usuário na tabela user_bancas.
  */

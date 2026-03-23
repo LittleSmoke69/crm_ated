@@ -73,7 +73,7 @@ export function isLikelyLocalhostWebhookBase(baseUrl: string): boolean {
 }
 
 /**
- * Instância mestre pode registrar o webhook de chat na criação.
+ * Instância mestre registra o webhook de chat na criação por padrão (POST /api/instances).
  * Defina EVOLUTION_WEBHOOK_SKIP_MASTER=true para criar só no banco (sem webhook na Evolution).
  */
 export function shouldConfigureMasterChatWebhook(): boolean {

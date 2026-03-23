@@ -26,12 +26,12 @@ export function useRequireAuth() {
     const id = sessionStorage.getItem('user_id')
       || sessionStorage.getItem('profile_id')
       || localStorage.getItem('profile_id');
-    const status = sessionStorage.getItem('profile_status');
+    const statusFromStorage = sessionStorage.getItem('profile_status')?.trim() || null;
 
     // Se estiver numa rota pública (incluindo vitrine da Academy), não redireciona para login
     if (publicPaths.includes(pathname) || isAcademyPublic) {
       if (id) setUserId(id);
-      setUserStatus(status);
+      setUserStatus(statusFromStorage);
       setChecking(false);
       return;
     }
@@ -42,7 +42,54 @@ export function useRequireAuth() {
     }
 
     setUserId(id);
-    setUserStatus(status);
+
+    // Sessões sem profile_status (login antigo, impersonação, outra aba) — alinhar com /api/user/profile
+    if (!statusFromStorage) {
+      let cancelled = false;
+      (async () => {
+        try {
+          const res = await fetch('/api/user/profile', {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-User-Id': id,
+            },
+            credentials: 'include',
+          });
+          const text = await res.text();
+          if (cancelled) return;
+          if (res.ok && text.trim()) {
+            try {
+              const json = JSON.parse(text) as { success?: boolean; data?: { status?: string | null } };
+              const st = json.success && json.data?.status != null ? String(json.data.status).trim() : null;
+              if (st) {
+                setUserStatus(st);
+                try {
+                  sessionStorage.setItem('profile_status', st);
+                } catch {
+                  /* ignore */
+                }
+              } else {
+                setUserStatus(null);
+              }
+            } catch {
+              setUserStatus(null);
+            }
+          } else {
+            setUserStatus(null);
+          }
+        } catch {
+          if (!cancelled) setUserStatus(null);
+        } finally {
+          if (!cancelled) setChecking(false);
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setUserStatus(statusFromStorage);
     setChecking(false);
   }, [router, pathname]);
 

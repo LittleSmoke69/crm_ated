@@ -152,12 +152,42 @@ export default function MaturadorPage() {
 
   // Polling: atualiza a lista de jobs enquanto houver algum rodando (para refletir steps e conclusão)
   const hasRunningJobs = jobs.some((j) => j.status === 'running');
+  /** Ref que espelha o estado jobs — permite acesso correto dentro do setInterval */
+  const jobsRef = useRef<MaturationJob[]>(jobs);
+  useEffect(() => { jobsRef.current = jobs; }, [jobs]);
+  /** Ref para evitar múltiplos process-now simultâneos */
+  const processingNowRef = useRef(false);
   useEffect(() => {
     loadDataRef.current = loadData;
   });
   useEffect(() => {
     if (!canAccess || !userId || !hasRunningJobs) return;
-    const interval = setInterval(() => loadDataRef.current?.(), 3500);
+    const interval = setInterval(async () => {
+      await loadDataRef.current?.();
+
+      // Auto-dispara process-now se algum job running tiver steps atrasados ou pendentes
+      // Garante continuidade mesmo que o cron de 1 min não esteja ativo ou o tick anterior tenha encadeado
+      if (processingNowRef.current) return;
+      const currentJobs = jobsRef.current;
+      const hasWorkToDo = currentJobs.some(
+        (j) =>
+          j.status === 'running' &&
+          j.progress_done < j.progress_total &&
+          (j.next_scheduled_at == null ||
+            new Date(j.next_scheduled_at).getTime() <= Date.now() + 5000) // ≤5s para antecipar
+      );
+      if (hasWorkToDo) {
+        processingNowRef.current = true;
+        fetch('/api/maturation/process-now', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId || '' },
+        })
+          .catch(() => {})
+          .finally(() => {
+            setTimeout(() => { processingNowRef.current = false; }, 8000); // cooldown de 8s
+          });
+      }
+    }, 3500);
     return () => clearInterval(interval);
   }, [canAccess, userId, hasRunningJobs]);
 

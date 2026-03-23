@@ -142,7 +142,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const iconMap: Record<string, any> = {
     LayoutDashboard, MessageSquare, Rocket, Users, Plus, Shield, Webhook, Workflow, Bot, Layout,
     Kanban, Activity, BarChart3, Briefcase, Settings, FlaskConical, User, ListOrdered, ClipboardList,
-    ArrowLeftToLine, ExternalLink, ArrowRightLeft, BookOpen, Link2, UserPlus,
+    ArrowLeftToLine, ExternalLink, ArrowRightLeft, BookOpen, Link2, UserPlus, Headphones,
   };
 
   useEffect(() => {
@@ -259,13 +259,11 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const itemAgentesIA: MenuItem = { href: '/ai-agents', icon: Bot, label: 'Agentes IA' };
   const itemChatInterno: MenuItem = { href: '/chat', icon: MessageSquare, label: 'Chat Interno' };
   const itemChatAtendimento: MenuItem = { href: '/chat-atendimento', icon: Headphones, label: 'Chat Atendimento' };
-  const itemGerenteAtendimentoChat: MenuItem = {
-    href: '/gerente/atendimento-chat',
-    icon: MessageSquare,
-    label: 'Instâncias atendimento',
+  const itemGestaoChat: MenuItem = {
+    href: '/admin/chat-gestao',
+    icon: BarChart3,
+    label: 'Gestão do Chat',
   };
-  const itemRelatorioChat: MenuItem = { href: '/admin/chat-report', icon: Headphones, label: 'Relatório Chat' };
-  const itemEtiquetasChat: MenuItem = { href: '/admin/chat-tags', icon: MessageSquare, label: 'Etiquetas Chat' };
   const itemCRM: MenuItem = {
     label: 'CRM',
     icon: Layout,
@@ -337,8 +335,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemFlows,
         itemAgentesIAAdmin,
         itemChatInterno,
-        itemRelatorioChat,
-        itemEtiquetasChat,
+        itemGestaoChat,
         itemCRM,
         itemCampanhas,
         itemContatosAtivos,
@@ -369,8 +366,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemZaplink,
         itemAcademy,
         itemAgentesIAAdmin,
-        itemRelatorioChat,
-        itemEtiquetasChat,
+        itemGestaoChat,
         itemCRM,
         itemCampanhas,
         itemContatosAtivos,
@@ -468,7 +464,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemDashboard,
         itemInstances,
         itemChatAtendimento,
-        itemGerenteAtendimentoChat,
+        itemGestaoChat,
         itemAgentesIA,
         itemAcademyPublic,
         itemCRM,
@@ -538,6 +534,14 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
     // Para /admin, só destaca se for exatamente /admin (não /admin/...)
     if (href === '/admin') {
       return pathname === '/admin';
+    }
+    // Para /gerente, só destaca na página principal (não em /gerente/zaplink, etc.)
+    if (href === '/gerente') {
+      return pathname === '/gerente';
+    }
+    // Para /gestor-trafego, só destaca na página principal (não em /gestor-trafego/zaplink, etc.)
+    if (href === '/gestor-trafego') {
+      return pathname === '/gestor-trafego';
     }
     // Para outros paths, verifica se começa com o href
     return pathname?.startsWith(href);

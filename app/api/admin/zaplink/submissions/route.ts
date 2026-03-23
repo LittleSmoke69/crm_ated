@@ -20,6 +20,7 @@ export async function GET(req: NextRequest) {
     const formId = req.nextUrl.searchParams.get('form_id')?.trim() || null;
     const excludeRegistered = req.nextUrl.searchParams.get('exclude_registered') === '1';
     const requestId = req.nextUrl.searchParams.get('request_id')?.trim() || null;
+    const search = req.nextUrl.searchParams.get('search')?.trim() || null;
     const page = Math.max(1, parseInt(req.nextUrl.searchParams.get('page') || '1', 10));
     const limit = Math.min(MAX_LIMIT, Math.max(1, parseInt(req.nextUrl.searchParams.get('limit') || String(DEFAULT_LIMIT), 10)));
 
@@ -54,6 +55,10 @@ export async function GET(req: NextRequest) {
     }
     if (formId) {
       query = query.eq('zaplink_form_id', formId);
+    }
+    if (search && search.length >= 2) {
+      const term = `%${search}%`;
+      query = query.or(`full_name.ilike.${term},phone.ilike.${term}`);
     }
 
     const from = (page - 1) * limit;
