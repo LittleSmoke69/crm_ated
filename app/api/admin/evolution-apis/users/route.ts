@@ -3,6 +3,31 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
+const PROFILES_PAGE_SIZE = 1000;
+
+async function fetchAllProfilesBasic(): Promise<{ data: { id: string; email: string | null; full_name: string | null }[]; error: { message: string } | null }> {
+  const list: { id: string; email: string | null; full_name: string | null }[] = [];
+  let offset = 0;
+  for (;;) {
+    const { data: batch, error } = await supabaseServiceRole
+      .from('profiles')
+      .select('id, email, full_name')
+      .order('created_at', { ascending: false })
+      .range(offset, offset + PROFILES_PAGE_SIZE - 1);
+
+    if (error) {
+      return { data: [], error };
+    }
+    const rows = batch || [];
+    list.push(...rows);
+    if (rows.length < PROFILES_PAGE_SIZE) {
+      break;
+    }
+    offset += PROFILES_PAGE_SIZE;
+  }
+  return { data: list, error: null };
+}
+
 /**
  * GET /api/admin/evolution-apis/users - Lista usuários e suas APIs atribuídas
  */
@@ -22,11 +47,7 @@ export async function GET(req: NextRequest) {
       return errorResponse('Acesso negado. Apenas administradores podem acessar.', 403);
     }
 
-    // Busca todos os usuários
-    const { data: users, error: usersError } = await supabaseServiceRole
-      .from('profiles')
-      .select('id, email, full_name')
-      .order('created_at', { ascending: false });
+    const { data: users, error: usersError } = await fetchAllProfilesBasic();
 
     if (usersError) {
       return errorResponse(`Erro ao buscar usuários: ${usersError.message}`);
