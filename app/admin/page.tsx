@@ -1537,6 +1537,8 @@ export default function AdminDashboard() {
               onRetryLoad={loadData}
               isSuperAdmin={isSuperAdmin}
               zaplotoRoles={zaplotoRoles}
+              getTenantHeader={getTenantHeader}
+              adminUserId={userId}
             />
           )}
 
@@ -2145,7 +2147,9 @@ const UsersSection = ({
   usersLoadError,
   onRetryLoad,
   isSuperAdmin = false,
-  zaplotoRoles
+  zaplotoRoles,
+  getTenantHeader,
+  adminUserId,
 }: { 
   users: User[]; 
   onUserSelect: (userId: string | null) => void; 
@@ -2155,6 +2159,8 @@ const UsersSection = ({
   onRetryLoad?: () => Promise<void>;
   isSuperAdmin?: boolean;
   zaplotoRoles?: ZaplotoRole[];
+  getTenantHeader?: () => Record<string, string>;
+  adminUserId?: string | null;
 }) => {
   const roleList: ZaplotoRole[] = Array.isArray(zaplotoRoles) ? zaplotoRoles : [];
   const [editingUser, setEditingUser] = useState<string | null>(null);
@@ -2247,12 +2253,12 @@ const UsersSection = ({
       password: '',
     });
 
-    const currentUserId = getStoredUserId() || userId;
+    const currentUserId = getStoredUserId() || adminUserId || null;
     if (!currentUserId) return;
 
     try {
       const res = await fetch(`/api/admin/users/${encodeURIComponent(user.id)}`, {
-        headers: { ...getTenantHeader(), 'X-User-Id': currentUserId },
+        headers: { ...(getTenantHeader?.() ?? {}), 'X-User-Id': currentUserId },
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok || !json.success || !json.data?.user || !json.data?.settings) {
