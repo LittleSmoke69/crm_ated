@@ -4,20 +4,44 @@ import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils
 import { getHierarchyTree, getHierarchyStats } from '@/lib/utils/hierarchy';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
+const PROFILES_PAGE_SIZE = 1000;
+
+async function fetchAllProfilesForHierarchy(): Promise<{ data: any[]; error: { message: string } | null }> {
+  const list: any[] = [];
+  let offset = 0;
+  for (;;) {
+    const { data: batch, error } = await supabaseServiceRole
+      .from('profiles')
+      .select('id, email, full_name, status, enroller, banca_name, banca_url, created_at')
+      .order('created_at', { ascending: false })
+      .range(offset, offset + PROFILES_PAGE_SIZE - 1);
+
+    if (error) {
+      return { data: [], error };
+    }
+    const rows = batch || [];
+    list.push(...rows);
+    if (rows.length < PROFILES_PAGE_SIZE) {
+      break;
+    }
+    offset += PROFILES_PAGE_SIZE;
+  }
+  return { data: list, error: null };
+}
+
 /**
  * GET /api/admin/users/hierarchy - Retorna árvore hierárquica completa
  */
 export async function GET(req: NextRequest) {
   try {
-    const { userId } = await requireAdminOrSuporte(req);
+    await requireAdminOrSuporte(req);
 
-    // Busca todos os usuários para construir a árvore completa
-    const { data: allUsers } = await supabaseServiceRole
-      .from('profiles')
-      .select('id, email, full_name, status, enroller, banca_name, banca_url, created_at')
-      .order('created_at', { ascending: false });
+    const { data: allUsers, error: profilesError } = await fetchAllProfilesForHierarchy();
+    if (profilesError) {
+      return errorResponse(`Erro ao buscar usuários: ${profilesError.message}`);
+    }
 
-    if (!allUsers) {
+    if (!allUsers?.length) {
       return successResponse([]);
     }
 

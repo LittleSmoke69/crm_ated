@@ -2232,7 +2232,7 @@ const UsersSection = ({
     }
   };
 
-  const handleEdit = (user: User) => {
+  const handleEdit = async (user: User) => {
     setEditingUser(user.id);
     setEditFormData({
       status: user.status,
@@ -2244,8 +2244,48 @@ const UsersSection = ({
       fullName: user.full_name,
       bancaName: user.banca_name || '',
       bancaUrl: user.banca_url || '',
-      password: ''
+      password: '',
     });
+
+    const currentUserId = getStoredUserId() || userId;
+    if (!currentUserId) return;
+
+    try {
+      const res = await fetch(`/api/admin/users/${encodeURIComponent(user.id)}`, {
+        headers: { ...getTenantHeader(), 'X-User-Id': currentUserId },
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.success || !json.data?.user || !json.data?.settings) {
+        return;
+      }
+      const u = json.data.user as {
+        status: string;
+        enroller: string | null;
+        email: string;
+        full_name: string | null;
+        banca_name?: string | null;
+        banca_url?: string | null;
+      };
+      const s = json.data.settings as {
+        max_leads_per_day: number;
+        max_instances: number;
+        is_active: boolean;
+      };
+      setEditFormData({
+        status: u.status,
+        enroller: u.enroller,
+        maxLeadsPerDay: s.max_leads_per_day,
+        maxInstances: s.max_instances,
+        isActive: s.is_active,
+        email: u.email,
+        fullName: u.full_name ?? '',
+        bancaName: u.banca_name || '',
+        bancaUrl: u.banca_url || '',
+        password: '',
+      });
+    } catch (e) {
+      console.error('Erro ao carregar detalhe do usuário para edição:', e);
+    }
   };
 
   const handleCancel = () => {
