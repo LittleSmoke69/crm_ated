@@ -61,6 +61,23 @@ const LOG_PREFIX = '[MATURATION]';
 const LOG_MANUAL = '[MATURADOR]';
 /** Logs do auto maturador (instâncias virgem em maturação automática). */
 const LOG_AUTO = '[AUTO-MATURADOR]';
+const VERBOSE_EVOLUTION_LOGS = process.env.MATURATION_VERBOSE_EVOLUTION_LOGS === 'true';
+
+function extractErrorMessage(responseText: string, fallback: string): string {
+  try {
+    const data = JSON.parse(responseText);
+    const raw = data?.response?.message ?? data?.message ?? data?.error;
+    if (Array.isArray(raw)) return raw.join('; ');
+    if (typeof raw === 'string') return raw;
+    if (raw && typeof raw === 'object') return JSON.stringify(raw);
+  } catch {}
+  return fallback;
+}
+
+function isConnectionClosedError(params: { error?: string; httpStatus?: number }): boolean {
+  const msg = (params.error || '').toLowerCase();
+  return msg.includes('connection closed') || msg.includes('conexão fechada') || msg.includes('connection is closed');
+}
 
 async function sendText(params: {
   baseUrl: string;
@@ -73,8 +90,10 @@ async function sendText(params: {
   const numberNorm = normalizeNumberForEvolution(number);
   const url = `${normalizeBaseUrl(baseUrl)}/message/sendText/${instanceName}`;
   const body = { number: numberNorm, text };
-  console.log(`${LOG_PREFIX} [Evolution API] sendText - URL: ${url}`);
-  console.log(`${LOG_PREFIX} [Evolution API] sendText - Body: number=${numberNorm}, text=${text?.substring(0, 50)}${text?.length > 50 ? '...' : ''}`);
+  if (VERBOSE_EVOLUTION_LOGS) {
+    console.log(`${LOG_PREFIX} [Evolution API] sendText - URL: ${url}`);
+    console.log(`${LOG_PREFIX} [Evolution API] sendText - Body: number=${numberNorm}, text=${text?.substring(0, 50)}${text?.length > 50 ? '...' : ''}`);
+  }
   const startTime = Date.now();
   try {
     const controller = new AbortController();
@@ -91,11 +110,7 @@ async function sendText(params: {
     console.log(`${LOG_PREFIX} [Evolution API] sendText - Response: HTTP ${response.status}, latency=${latencyMs}ms`);
     if (!response.ok) console.log(`${LOG_PREFIX} [Evolution API] sendText - Error body: ${responseText?.substring(0, 200)}`);
     if (response.ok) return { success: true, latencyMs, httpStatus: response.status };
-    let errorMsg = `HTTP ${response.status}`;
-    try {
-      const data = JSON.parse(responseText);
-      errorMsg = data?.message || data?.error || errorMsg;
-    } catch {}
+    const errorMsg = extractErrorMessage(responseText, `HTTP ${response.status}`);
     return { success: false, latencyMs, httpStatus: response.status, error: errorMsg };
   } catch (error: any) {
     const latencyMs = Date.now() - startTime;
@@ -118,8 +133,10 @@ async function sendMedia(params: {
   const url = `${normalizeBaseUrl(baseUrl)}/message/sendMedia/${instanceName}`;
   const body: any = { number: numberNorm, mediatype: mediaType, mimetype, media: mediaUrl, fileName: mediaType === 'image' ? 'image.png' : 'file' };
   if (caption) body.caption = caption;
-  console.log(`${LOG_PREFIX} [Evolution API] sendMedia - URL: ${url}`);
-  console.log(`${LOG_PREFIX} [Evolution API] sendMedia - Body: number=${numberNorm}, mediaType=${mediaType}, mediaUrl=${mediaUrl?.substring(0, 80)}...`);
+  if (VERBOSE_EVOLUTION_LOGS) {
+    console.log(`${LOG_PREFIX} [Evolution API] sendMedia - URL: ${url}`);
+    console.log(`${LOG_PREFIX} [Evolution API] sendMedia - Body: number=${numberNorm}, mediaType=${mediaType}, mediaUrl=${mediaUrl?.substring(0, 80)}...`);
+  }
   const startTime = Date.now();
   try {
     const controller = new AbortController();
@@ -136,11 +153,7 @@ async function sendMedia(params: {
     console.log(`${LOG_PREFIX} [Evolution API] sendMedia - Response: HTTP ${response.status}, latency=${latencyMs}ms`);
     if (!response.ok) console.log(`${LOG_PREFIX} [Evolution API] sendMedia - Error body: ${responseText?.substring(0, 200)}`);
     if (response.ok) return { success: true, latencyMs, httpStatus: response.status, mediaUrl };
-    let errorMsg = `HTTP ${response.status}`;
-    try {
-      const data = JSON.parse(responseText);
-      errorMsg = data?.message || data?.error || errorMsg;
-    } catch {}
+    const errorMsg = extractErrorMessage(responseText, `HTTP ${response.status}`);
     return { success: false, latencyMs, httpStatus: response.status, error: errorMsg, mediaUrl };
   } catch (error: any) {
     const latencyMs = Date.now() - startTime;
@@ -159,8 +172,10 @@ async function sendAudio(params: {
   const numberNorm = normalizeNumberForEvolution(number);
   const url = `${normalizeBaseUrl(baseUrl)}/message/sendWhatsAppAudio/${instanceName}`;
   const body = { number: numberNorm, audio: audioUrl };
-  console.log(`${LOG_PREFIX} [Evolution API] sendWhatsAppAudio - URL: ${url}`);
-  console.log(`${LOG_PREFIX} [Evolution API] sendWhatsAppAudio - Body: number=${numberNorm}, audioUrl=${audioUrl?.substring(0, 80)}...`);
+  if (VERBOSE_EVOLUTION_LOGS) {
+    console.log(`${LOG_PREFIX} [Evolution API] sendWhatsAppAudio - URL: ${url}`);
+    console.log(`${LOG_PREFIX} [Evolution API] sendWhatsAppAudio - Body: number=${numberNorm}, audioUrl=${audioUrl?.substring(0, 80)}...`);
+  }
   const startTime = Date.now();
   try {
     const controller = new AbortController();
@@ -177,11 +192,7 @@ async function sendAudio(params: {
     console.log(`${LOG_PREFIX} [Evolution API] sendWhatsAppAudio - Response: HTTP ${response.status}, latency=${latencyMs}ms`);
     if (!response.ok) console.log(`${LOG_PREFIX} [Evolution API] sendWhatsAppAudio - Error body: ${responseText?.substring(0, 200)}`);
     if (response.ok) return { success: true, latencyMs, httpStatus: response.status };
-    let errorMsg = `HTTP ${response.status}`;
-    try {
-      const data = JSON.parse(responseText);
-      errorMsg = data?.message || data?.error || errorMsg;
-    } catch {}
+    const errorMsg = extractErrorMessage(responseText, `HTTP ${response.status}`);
     return { success: false, latencyMs, httpStatus: response.status, error: errorMsg };
   } catch (error: any) {
     const latencyMs = Date.now() - startTime;
@@ -268,6 +279,46 @@ async function processStep(supabase: SupabaseClient, step: any): Promise<void> {
     await supabase.from('maturation_steps').update({ status: 'sent', sent_at: new Date().toISOString(), latency_ms: result.latencyMs, http_status: result.httpStatus }).eq('id', id);
     await createMessage(supabase, { jobId: job_id, stepId: id, direction: 'instance', instanceLabel: instance_name, type: msgType, title: `✅ ${typeLabel} enviado`, content: `${typeLabel} enviado pela instância ${instance_name}`, mediaUrl: result.mediaUrl, status: 'sent', latencyMs: result.latencyMs, httpStatus: result.httpStatus });
   } else {
+    if (isConnectionClosedError({ error: result.error, httpStatus: result.httpStatus })) {
+      const nowIso = new Date().toISOString();
+      const pauseReason = `Instância ${instance_name} desconectada (Connection Closed). Job pausado temporariamente até reconexão da instância.`;
+      const { data: pausedRows } = await supabase
+        .from('maturation_jobs')
+        .update({ status: 'paused', updated_at: nowIso })
+        .eq('id', job_id)
+        .eq('status', 'running')
+        .select('id');
+
+      // Devolve o step atual para pending sem penalizar tentativas:
+      // o usuário pode retomar o job quando a instância voltar.
+      await supabase
+        .from('maturation_steps')
+        .update({
+          status: 'pending',
+          locked_at: null,
+          locked_by: null,
+          error: pauseReason,
+        })
+        .eq('id', id)
+        .eq('status', 'processing');
+
+      if ((pausedRows?.length || 0) > 0) {
+        console.log(`${LOG_MANUAL} Job ${job_id} pausado automaticamente por instância offline (${instance_name})`);
+        await createMessage(supabase, {
+          jobId: job_id,
+          stepId: id,
+          direction: 'system',
+          type: 'error',
+          title: '⚠️ Instância desconectada',
+          content: `${pauseReason} Reconecte a instância e retome o job.`,
+          status: 'failed',
+          httpStatus: result.httpStatus,
+          error: result.error,
+        });
+      }
+      return;
+    }
+
     const newAttempts = (attempts || 0) + 1;
     console.log(`${LOG_MANUAL} Step job=${job_id} step_index=${step_index} FALHA tentativa=${newAttempts}/${MAX_ATTEMPTS} erro=${result.error}`);
     if (newAttempts < MAX_ATTEMPTS) {

@@ -52,6 +52,7 @@ SUPABASE_SERVICE_ROLE_KEY=sua_chave_service_role
 MATURATION_MIN_HEALTH_SCORE=80
 MATURATION_MAX_HOURS_SINCE_LAST_JOB=24
 MATURATION_DEFAULT_PLAN_ID=uuid-do-plano-padrao
+MATURATION_VERBOSE_EVOLUTION_LOGS=false
 ```
 
 ### Netlify Functions
@@ -165,6 +166,7 @@ Após 3 tentativas (configurável via `max_attempts`), o step é marcado como `f
 - Verifique se a instância está conectada
 - Verifique se a API key está correta
 - Verifique logs em `maturation_messages` para detalhes do erro
+- Quando ocorrer `Connection Closed`, o job agora é pausado automaticamente (`status='paused'`) para evitar tempestade de retries/logs. Após reconectar a instância, retome via `PATCH /api/maturation/jobs/[jobId]` com `status: "running"`.
 
 ## Próximos Passos
 
