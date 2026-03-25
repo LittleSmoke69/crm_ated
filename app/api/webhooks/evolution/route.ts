@@ -186,6 +186,7 @@ async function handleMessageUpsert(
         eventType,
         rawPayload,
         instance.instance_name,
+        { ruleFetchMaxAttempts: 1 },
       );
     } catch {
       // Continua sem normalização

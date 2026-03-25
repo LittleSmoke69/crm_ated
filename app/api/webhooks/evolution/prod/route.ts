@@ -7,6 +7,19 @@ import { participantExitAuditService } from '@/lib/services/participant-exit-aud
 /** Janela de deduplicação de eventos group-participants: 30 segundos */
 const PARTICIPANT_DEDUP_WINDOW_MS = 30_000;
 
+/** Evita payloads enormes (memória + parse) sem tocar o banco. */
+const MAX_WEBHOOK_BODY_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Dedup pós-insert: sem limite, uma janela de 30s com muitos eventos no mesmo grupo
+ * puxava milhares de linhas e derrubava o Postgres / estourava tempo da função (500).
+ */
+const POST_INSERT_DEDUP_LIMIT = 120;
+
+export const runtime = 'nodejs';
+/** Dá tempo ao `after()` terminar inserts/flows sem a plataforma matar a invocação com 500. */
+export const maxDuration = 60;
+
 /**
  * Extrai o ID do primeiro participante do payload
  */
@@ -132,6 +145,7 @@ async function processEventBackground(payload: any): Promise<void> {
       eventType,
       payload,
       instanceName || undefined,
+      { ruleFetchMaxAttempts: 1 },
     );
   } catch (err: any) {
     normalizationError = err;
@@ -187,7 +201,8 @@ async function processEventBackground(payload: any): Promise<void> {
         .eq('remote_jid', remoteJid)
         .in('event_type', ['group-participants.update', 'GROUP_PARTICIPANTS_UPDATE'])
         .gte('created_at', dedupSince)
-        .order('created_at', { ascending: true });
+        .order('created_at', { ascending: true })
+        .limit(POST_INSERT_DEDUP_LIMIT);
 
       if (recentEvents && recentEvents.length > 0) {
         // Encontra o primeiro evento com o mesmo participante
@@ -317,19 +332,26 @@ export async function POST(req: NextRequest) {
   try {
     let payload: any;
     try {
-      payload = await req.json();
+      const buf = await req.arrayBuffer();
+      if (buf.byteLength > MAX_WEBHOOK_BODY_BYTES) {
+        return new Response(JSON.stringify({ ok: false, error: 'Payload muito grande' }), {
+          status: 413,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      const text = new TextDecoder().decode(buf);
+      payload = text ? JSON.parse(text) : {};
     } catch {
       return new Response('Invalid JSON', { status: 400 });
     }
 
-    // Agenda processamento para DEPOIS do response (after = Next.js 15+)
-    after(async () => {
-      try {
-        await processEventBackground(payload);
-      } catch (err: any) {
-        console.error('❌ [WEBHOOK PROD] Erro no processamento em background:', err?.message || err);
-      }
-    });
+    // Retorna a Promise para o Next manter a invocação até o fim do trabalho (evita 500 por corte prematuro).
+    after(() =>
+      processEventBackground(payload).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('❌ [WEBHOOK PROD] Erro no processamento em background:', msg);
+      }),
+    );
 
     return new Response(JSON.stringify({ ok: true }), {
       status: 200,

@@ -2933,12 +2933,20 @@ REGRAS ANTI-SPAM (OBRIGATÓRIO):
 
       const instanceName = ev.instance_name ? String(ev.instance_name) : null;
 
-      const { data: pendings } = await supabaseServiceRole
+      const nowIso = new Date().toISOString();
+      let pendingsQuery = supabaseServiceRole
         .from('flow_question_pending')
         .select('*')
         .eq('status', 'waiting')
-        .gt('expires_at', new Date().toISOString())
+        .gt('expires_at', nowIso)
         .order('created_at', { ascending: true });
+
+      if (instanceName) {
+        pendingsQuery = pendingsQuery.eq('instance_name', instanceName);
+      }
+
+      /** Sem limite, todo webhook de mensagem varria a tabela inteira — principal fonte de carga no banco. */
+      const { data: pendings } = await pendingsQuery.limit(200);
 
       if (!pendings?.length) return false;
 

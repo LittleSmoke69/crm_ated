@@ -50,13 +50,18 @@ export class NormalizationService {
   async normalizePayload(
     eventType: string,
     payload: any,
-    instanceName?: string
+    instanceName?: string,
+    options?: { ruleFetchMaxAttempts?: number }
   ): Promise<any> {
     try {
       // Busca regras ativas (com retry para falhas transitórias ex.: 522/timeout Supabase)
       let rules: NormalizationRule[] | null = null;
       let lastError: unknown = null;
-      const maxAttempts = 3;
+      /** Webhooks em alta frequência podem usar 1 tentativa para não multiplicar carga no banco em incidentes. */
+      const maxAttempts = Math.min(
+        3,
+        Math.max(1, options?.ruleFetchMaxAttempts ?? 3),
+      );
 
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         const { data, error } = await supabaseServiceRole

@@ -7,6 +7,12 @@ import { participantExitAuditService } from '@/lib/services/participant-exit-aud
 /** Janela de deduplicação de eventos group-participants no ambiente de teste: 15 segundos */
 const PARTICIPANT_DEDUP_WINDOW_MS = 15_000;
 
+const MAX_WEBHOOK_BODY_BYTES = 2 * 1024 * 1024;
+const POST_INSERT_DEDUP_LIMIT = 120;
+
+export const runtime = 'nodejs';
+export const maxDuration = 60;
+
 /**
  * Extrai o ID do primeiro participante do payload
  */
@@ -115,6 +121,7 @@ async function processEventBackground(payload: any): Promise<void> {
       eventType,
       payload,
       instanceName || undefined,
+      { ruleFetchMaxAttempts: 1 },
     );
   } catch (err: any) {
     normalizationError = err;
@@ -170,7 +177,8 @@ async function processEventBackground(payload: any): Promise<void> {
         .eq('remote_jid', remoteJid)
         .in('event_type', ['group-participants.update', 'GROUP_PARTICIPANTS_UPDATE'])
         .gte('created_at', dedupSince)
-        .order('created_at', { ascending: true });
+        .order('created_at', { ascending: true })
+        .limit(POST_INSERT_DEDUP_LIMIT);
 
       if (recentEvents && recentEvents.length > 0) {
         // Encontra o primeiro evento com o mesmo participante
@@ -316,18 +324,25 @@ export async function POST(req: NextRequest) {
   try {
     let payload: any;
     try {
-      payload = await req.json();
+      const buf = await req.arrayBuffer();
+      if (buf.byteLength > MAX_WEBHOOK_BODY_BYTES) {
+        return new Response(JSON.stringify({ ok: false, error: 'Payload muito grande' }), {
+          status: 413,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      const text = new TextDecoder().decode(buf);
+      payload = text ? JSON.parse(text) : {};
     } catch {
       return new Response('Invalid JSON', { status: 400 });
     }
 
-    after(async () => {
-      try {
-        await processEventBackground(payload);
-      } catch (err: any) {
-        console.error('❌ [WEBHOOK TEST] Erro no processamento em background:', err?.message || err);
-      }
-    });
+    after(() =>
+      processEventBackground(payload).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('❌ [WEBHOOK TEST] Erro no processamento em background:', msg);
+      }),
+    );
 
     return new Response(JSON.stringify({ ok: true }), {
       status: 200,

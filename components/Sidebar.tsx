@@ -74,21 +74,17 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   }, [pathname]);
 
   // Verifica se está nas páginas que devem mostrar o botão Sair
-  const shouldShowLogout = pathname === '/perfil' ||
-                          pathname === '/list-cleaning' ||
-                          pathname === '/crm/transferido' ||
-                          pathname === '/crm/avulsos' ||
-                          pathname === '/anti-spam' ||
-                          pathname?.startsWith('/admin/anti-spam') ||
-                          pathname?.startsWith('/admin/webhooks') ||
-                          pathname?.startsWith('/admin/whatsapp-official') ||
-                          pathname?.startsWith('/admin/meta') ||
-                          pathname?.startsWith('/admin/crm/lead-transfer') ||
-                          pathname?.startsWith('/admin/hierarchy') ||
-                          pathname?.startsWith('/admin/zaplink') ||
-                          pathname?.startsWith('/gerente/zaplink') ||
-                          pathname?.startsWith('/gestor-trafego/zaplink') ||
-                          onSignOut !== undefined;
+  const shouldShowLogout =
+    pathname === '/perfil' ||
+    pathname === '/list-cleaning' ||
+    pathname === '/crm/transferido' ||
+    pathname === '/crm/avulsos' ||
+    pathname === '/anti-spam' ||
+    pathname === '/admin' ||
+    pathname?.startsWith('/admin/') ||
+    pathname?.startsWith('/gerente/zaplink') ||
+    pathname?.startsWith('/gestor-trafego/zaplink') ||
+    onSignOut !== undefined;
 
   // Função de logout padrão
   const handleDefaultLogout = () => {
@@ -560,13 +556,13 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
       {/* Sidebar */}
       <aside
         className={`
-          fixed left-0 top-0 h-full bg-gray-100 dark:bg-[#2a2a2a] shadow-lg z-40 border-r border-gray-200 dark:border-[#404040]
+          fixed left-0 top-0 h-full max-h-[100dvh] bg-gray-100 dark:bg-[#2a2a2a] shadow-lg z-40 border-r border-gray-200 dark:border-[#404040]
           transform transition-all duration-300 ease-in-out
           ${isMobileOpen ? 'translate-x-0' : '-translate-x-full'}
           lg:translate-x-0
           w-64
           ${!isMobileOpen && isCollapsed ? 'lg:w-20' : 'lg:w-64'}
-          flex flex-col
+          flex flex-col min-h-0
         `}
         data-collapsed={isCollapsed}
       >
@@ -604,9 +600,12 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
           </button>
         </div>
 
-        {/* Navigation */}
-        <nav className="p-2 space-y-1 flex-1 flex flex-col overflow-y-auto">
-          <div className="flex-1">
+        {/* Corpo: menu rolável + rodapé sempre visível (Sair / Voltar admin) */}
+        <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
+          <nav
+            className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain p-2 space-y-1"
+            aria-label="Menu principal"
+          >
             {menuItems.map((item) => {
               const Icon = item.icon;
               const hasSubmenu = !!item.submenu;
@@ -728,11 +727,11 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
                 </Link>
               );
             })}
-          </div>
-          
+          </nav>
+
           {/* Voltar ao admin (quando está acessando conta de outro usuário) */}
           {isImpersonating && (
-            <div className="mt-auto pt-4 pb-2 border-t border-gray-200 dark:border-[#404040]">
+            <div className="flex-shrink-0 border-t border-gray-200 dark:border-[#404040] px-2 pt-3 pb-2">
               <button
                 onClick={() => {
                   setIsMobileOpen(false);
@@ -753,10 +752,12 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
               </button>
             </div>
           )}
-          
-          {/* Botão Sair no final da sidebar */}
+
+          {/* Botão Sair: fora do scroll do menu para ficar sempre visível em qualquer altura */}
           {shouldShowLogout && (
-            <div className="mt-auto pt-4 pb-2 border-t border-gray-200 dark:border-[#404040]">
+            <div
+              className="flex-shrink-0 border-t border-gray-200 dark:border-[#404040] px-2 pt-3 pb-[max(0.5rem,env(safe-area-inset-bottom,0px))]"
+            >
               <button
                 onClick={() => {
                   setIsMobileOpen(false);
@@ -776,7 +777,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
               </button>
             </div>
           )}
-        </nav>
+        </div>
       </aside>
     </>
   );
