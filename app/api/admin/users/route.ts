@@ -13,65 +13,82 @@ const DEFAULT_SETTINGS = {
   is_active: true,
 };
 
-/** Página ao buscar profiles: PostgREST limita ~1000 linhas por request sem range explícito. */
-const PROFILES_PAGE_SIZE = 1000;
-
-const EMPTY_USER_STATS = {
-  campaigns: 0,
-  instances: 0,
-  contacts: 0,
-  processed: 0,
-  failed: 0,
-};
-
-async function fetchAllProfilesForTenant(zaplotoId: string): Promise<{ data: any[]; error: Error | null }> {
-  const list: any[] = [];
-  let offset = 0;
-  for (;;) {
-    const { data: batch, error } = await supabaseServiceRole
-      .from('profiles')
-      .select('id, email, full_name, status, enroller, banca_name, banca_url, created_at, last_seen_at, total_online_time, total_crm_time, zaploto_id')
-      .or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`)
-      .order('created_at', { ascending: false })
-      .range(offset, offset + PROFILES_PAGE_SIZE - 1);
-
-    if (error) {
-      return { data: [], error: new Error(error.message) };
-    }
-    const rows = batch || [];
-    list.push(...rows);
-    if (rows.length < PROFILES_PAGE_SIZE) {
-      break;
-    }
-    offset += PROFILES_PAGE_SIZE;
-  }
-  return { data: list, error: null };
-}
-
 /**
- * GET /api/admin/users — Lista usuários apenas da tabela `profiles` (paginado no servidor).
- * `settings` e `stats` vêm com valores padrão / zerados para manter o contrato do painel;
- * dados reais de configuração e métricas: GET /api/admin/users/[userId].
+ * GET /api/admin/users - Lista todos os usuários com suas estatísticas.
+ * Usa consultas em lote (5 no total) para evitar timeout/502 com muitos usuários.
  */
 export async function GET(req: NextRequest) {
   try {
     const { profile } = await requireAdminOrSuporte(req);
     const zaplotoId = await getEffectiveZaplotoId(req, profile);
 
-    const { data: users, error: usersError } = await fetchAllProfilesForTenant(zaplotoId);
+    const { data: users, error: usersError } = await supabaseServiceRole
+      .from('profiles')
+      .select('id, email, full_name, status, enroller, banca_name, banca_url, created_at, last_seen_at, total_online_time, total_crm_time, zaploto_id')
+      .or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`)
+      .order('created_at', { ascending: false });
 
     if (usersError) {
       return errorResponse(`Erro ao buscar usuários: ${usersError.message}`);
     }
 
     const list = users || [];
-    const usersForList = list.map((user: any) => ({
+    if (list.length === 0) {
+      return successResponse([]);
+    }
+
+    const userIds = list.map((u: { id: string }) => u.id);
+
+    const [
+      { data: settingsRows },
+      { data: campaignsRows },
+      { data: instancesRows },
+      { data: searchesRows },
+    ] = await Promise.all([
+      supabaseServiceRole.from('user_settings').select('*').in('user_id', userIds),
+      supabaseServiceRole.from('campaigns').select('user_id, processed_contacts, failed_contacts').in('user_id', userIds),
+      supabaseServiceRole.from('whatsapp_instances').select('user_id').in('user_id', userIds),
+      supabaseServiceRole.from('searches').select('user_id').in('user_id', userIds),
+    ]);
+
+    const settingsByUser = new Map<string, any>();
+    (settingsRows || []).forEach((s: any) => settingsByUser.set(s.user_id, s));
+
+    const campaignsCountByUser = new Map<string, number>();
+    const processedByUser = new Map<string, number>();
+    const failedByUser = new Map<string, number>();
+    (campaignsRows || []).forEach((c: any) => {
+      const uid = c.user_id;
+      campaignsCountByUser.set(uid, (campaignsCountByUser.get(uid) || 0) + 1);
+      processedByUser.set(uid, (processedByUser.get(uid) || 0) + (c.processed_contacts || 0));
+      failedByUser.set(uid, (failedByUser.get(uid) || 0) + (c.failed_contacts || 0));
+    });
+
+    const instancesCountByUser = new Map<string, number>();
+    (instancesRows || []).forEach((i: any) => {
+      const uid = i.user_id;
+      instancesCountByUser.set(uid, (instancesCountByUser.get(uid) || 0) + 1);
+    });
+
+    const contactsCountByUser = new Map<string, number>();
+    (searchesRows || []).forEach((s: any) => {
+      const uid = s.user_id;
+      contactsCountByUser.set(uid, (contactsCountByUser.get(uid) || 0) + 1);
+    });
+
+    const usersWithStats = list.map((user: any) => ({
       ...user,
-      settings: { ...DEFAULT_SETTINGS },
-      stats: { ...EMPTY_USER_STATS },
+      settings: settingsByUser.get(user.id) || DEFAULT_SETTINGS,
+      stats: {
+        campaigns: campaignsCountByUser.get(user.id) || 0,
+        instances: instancesCountByUser.get(user.id) || 0,
+        contacts: contactsCountByUser.get(user.id) || 0,
+        processed: processedByUser.get(user.id) || 0,
+        failed: failedByUser.get(user.id) || 0,
+      },
     }));
 
-    return successResponse(usersForList);
+    return successResponse(usersWithStats);
   } catch (err: any) {
     return serverErrorResponse(err);
   }
@@ -207,4 +224,3 @@ export async function PATCH(req: NextRequest) {
     return serverErrorResponse(err);
   }
 }
-

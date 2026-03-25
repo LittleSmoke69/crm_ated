@@ -1,7 +1,8 @@
 /**
  * POST /api/gerente/zaplink/remove-consultant
  * Remove consultor da rede do gerente (sai da lista de vinculados).
- * Body: { consultant_user_id: string, request_id?: string }
+ * Body: { consultant_user_id?: string, zaplink_submission_id?: string, request_id?: string }
+ * (obrigatório um de: consultant_user_id ou zaplink_submission_id)
  */
 import { NextRequest } from 'next/server';
 import { requireStatus } from '@/lib/middleware/permissions';
@@ -14,21 +15,62 @@ export async function POST(req: NextRequest) {
   try {
     const { userId } = await requireStatus(req, ['gerente']);
     const body = await req.json().catch(() => ({}));
-    const consultantUserId = typeof body.consultant_user_id === 'string' ? body.consultant_user_id.trim() : '';
+    let consultantUserId = typeof body.consultant_user_id === 'string' ? body.consultant_user_id.trim() : '';
+    const submissionId = typeof body.zaplink_submission_id === 'string' ? body.zaplink_submission_id.trim() : '';
     const requestId = typeof body.request_id === 'string' ? body.request_id.trim() || null : null;
 
-    if (!consultantUserId) {
-      return errorResponse('consultant_user_id é obrigatório.', 400);
+    let authorizedViaSubmissionId = false;
+
+    if (submissionId) {
+      const { data: sub, error: subErr } = await supabaseServiceRole
+        .from('zaplink_form_submissions')
+        .select('id, gerente_id, consultor_user_id, email, status')
+        .eq('id', submissionId)
+        .maybeSingle();
+
+      if (subErr || !sub) {
+        return errorResponse('Submissão não encontrada.', 404);
+      }
+      if (sub.gerente_id !== userId) {
+        return errorResponse('Esta submissão não pertence à sua rede.', 403);
+      }
+      if (!['assigned', 'cadastrado'].includes(String(sub.status))) {
+        return errorResponse('Apenas leads já atribuídos podem ser removidos desta forma.', 400);
+      }
+
+      let cid = sub.consultor_user_id as string | null;
+      if (!cid && sub.email) {
+        const emailNorm = String(sub.email).trim().toLowerCase();
+        const { data: p } = await supabaseServiceRole
+          .from('profiles')
+          .select('id')
+          .eq('email', emailNorm)
+          .eq('enroller', userId)
+          .eq('status', 'consultor')
+          .maybeSingle();
+        cid = p?.id ?? null;
+      }
+      if (!cid) {
+        return errorResponse(
+          'Não foi possível identificar o usuário consultor deste lead. Contate o suporte ou reatribua pelo admin.',
+          400
+        );
+      }
+      consultantUserId = cid;
+      authorizedViaSubmissionId = true;
     }
 
-    // Verifica se o consultor pertence à rede do gerente (fulfillment ou submission)
+    if (!consultantUserId) {
+      return errorResponse('Informe consultant_user_id ou zaplink_submission_id.', 400);
+    }
+
     const submissionCheck = await supabaseServiceRole
       .from('zaplink_form_submissions')
       .select('id')
       .eq('gerente_id', userId)
       .eq('consultor_user_id', consultantUserId)
       .maybeSingle();
-    const isInSubmission = !!submissionCheck.data;
+    const isInSubmission = authorizedViaSubmissionId || !!submissionCheck.data;
 
     let validRequestId: string | null = null;
     let isInFulfillment = false;

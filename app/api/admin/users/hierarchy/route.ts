@@ -1,33 +1,8 @@
 import { NextRequest } from 'next/server';
 import { requireAdminOrSuporte } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
-import { getHierarchyTree, getHierarchyStats } from '@/lib/utils/hierarchy';
+import { getHierarchyStats } from '@/lib/utils/hierarchy';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-
-const PROFILES_PAGE_SIZE = 1000;
-
-async function fetchAllProfilesForHierarchy(): Promise<{ data: any[]; error: { message: string } | null }> {
-  const list: any[] = [];
-  let offset = 0;
-  for (;;) {
-    const { data: batch, error } = await supabaseServiceRole
-      .from('profiles')
-      .select('id, email, full_name, status, enroller, banca_name, banca_url, created_at')
-      .order('created_at', { ascending: false })
-      .range(offset, offset + PROFILES_PAGE_SIZE - 1);
-
-    if (error) {
-      return { data: [], error };
-    }
-    const rows = batch || [];
-    list.push(...rows);
-    if (rows.length < PROFILES_PAGE_SIZE) {
-      break;
-    }
-    offset += PROFILES_PAGE_SIZE;
-  }
-  return { data: list, error: null };
-}
 
 /**
  * GET /api/admin/users/hierarchy - Retorna árvore hierárquica completa
@@ -36,12 +11,12 @@ export async function GET(req: NextRequest) {
   try {
     await requireAdminOrSuporte(req);
 
-    const { data: allUsers, error: profilesError } = await fetchAllProfilesForHierarchy();
-    if (profilesError) {
-      return errorResponse(`Erro ao buscar usuários: ${profilesError.message}`);
-    }
+    const { data: allUsers } = await supabaseServiceRole
+      .from('profiles')
+      .select('id, email, full_name, status, enroller, banca_name, banca_url, created_at')
+      .order('created_at', { ascending: false });
 
-    if (!allUsers?.length) {
+    if (!allUsers) {
       return successResponse([]);
     }
 
@@ -93,4 +68,3 @@ export async function POST(req: NextRequest) {
     return errorResponse(err?.message || 'Erro ao buscar estatísticas', status);
   }
 }
-

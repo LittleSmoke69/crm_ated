@@ -1,8 +1,17 @@
 import { NextRequest } from 'next/server';
 import { requireAdminOrSuporte } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
-import { validateHierarchy, hasHierarchyCycle, getUserProfile } from '@/lib/middleware/permissions';
+import { validateHierarchy, hasHierarchyCycle } from '@/lib/middleware/permissions';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+
+interface ValidateHierarchyProfile {
+  id: string;
+  email: string;
+  full_name?: string | null;
+  status: string;
+  enroller: string | null;
+  created_at?: string;
+}
 
 /**
  * POST /api/admin/users/validate-hierarchy - Valida integridade da hierarquia
@@ -50,13 +59,15 @@ export async function GET(req: NextRequest) {
   try {
     await requireAdminOrSuporte(req);
 
-    const { data: allUsers } = await supabaseServiceRole
+    const { data: allUsersRaw } = await supabaseServiceRole
       .from('profiles')
       .select('id, email, full_name, status, enroller, created_at');
 
-    if (!allUsers) {
+    if (!allUsersRaw) {
       return successResponse({ issues: [], brokenHierarchies: [] });
     }
+
+    const allUsers = allUsersRaw as unknown as ValidateHierarchyProfile[];
 
     const issues: Array<{
       userId: string;
@@ -75,47 +86,39 @@ export async function GET(req: NextRequest) {
 
     // Valida cada usuário
     for (const user of allUsers) {
-      // Valida hierarquia
-      const validation = await validateHierarchy(
-        user.id,
-        user.status as any,
-        user.enroller
-      );
+      const validation = await validateHierarchy(user.id, user.status, user.enroller);
 
       if (!validation.valid) {
         issues.push({
           userId: user.id,
           email: user.email,
-          full_name: (user as any).full_name,
+          full_name: user.full_name ?? undefined,
           issue: validation.error || 'Hierarquia inválida',
         });
       }
 
-      // Verifica ciclos
       const hasCycle = await hasHierarchyCycle(user.id, user.enroller);
       if (hasCycle) {
         issues.push({
           userId: user.id,
           email: user.email,
-          full_name: (user as any).full_name,
+          full_name: user.full_name ?? undefined,
           issue: 'Ciclo detectado na hierarquia',
         });
       }
 
-      // Verifica se enroller existe (se não for null)
       if (user.enroller) {
         const enrollerExists = allUsers.some((u) => u.id === user.enroller);
         if (!enrollerExists) {
           issues.push({
             userId: user.id,
             email: user.email,
-            full_name: (user as any).full_name,
+            full_name: user.full_name ?? undefined,
             issue: `Enroller ${user.enroller} não encontrado`,
           });
         }
       }
 
-      // Verifica se Consultor tem Gerente como enroller
       if (user.status === 'consultor' && user.enroller) {
         const enroller = allUsers.find((u) => u.id === user.enroller);
         if (enroller && enroller.status !== 'gerente') {
@@ -129,10 +132,11 @@ export async function GET(req: NextRequest) {
         }
       }
 
-      // Verifica se Gerente tem enroller válido (dono_banca, gerente, admin ou super_admin)
       if (user.status === 'gerente' && user.enroller) {
         const enroller = allUsers.find((u) => u.id === user.enroller);
-        const validGerenteEnroller = ['dono_banca', 'gerente', 'admin', 'super_admin'].includes(enroller?.status ?? '');
+        const validGerenteEnroller = ['dono_banca', 'gerente', 'admin', 'super_admin'].includes(
+          enroller?.status ?? ''
+        );
         if (enroller && !validGerenteEnroller) {
           brokenHierarchies.push({
             userId: user.id,
@@ -155,4 +159,3 @@ export async function GET(req: NextRequest) {
     return serverErrorResponse(err);
   }
 }
-

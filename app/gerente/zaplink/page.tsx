@@ -44,6 +44,18 @@ interface ConsultantRequestItem {
   consultants_sent: ConsultantSent[];
 }
 
+/** Linha da tabela unificada (submissões atribuídas + consultores enviados por solicitação) */
+interface UnifiedConsultant {
+  id: string;
+  submissionId: string | null;
+  consultantUserId: string | null;
+  full_name: string;
+  phone: string | null;
+  email: string | null;
+  banca_name: string | null;
+  date: string;
+}
+
 export default function GerenteZaplinkPage() {
   const { checking, userId } = useRequireAuth();
   const [submissions, setSubmissions] = useState<Submission[]>([]);
@@ -65,7 +77,7 @@ export default function GerenteZaplinkPage() {
 
   const [consultantRequests, setConsultantRequests] = useState<ConsultantRequestItem[]>([]);
   const [consultantRequestsLoading, setConsultantRequestsLoading] = useState(false);
-  const [removingId, setRemovingId] = useState<string | null>(null);
+  const [removingRowId, setRemovingRowId] = useState<string | null>(null);
   const [requestsPage, setRequestsPage] = useState(1);
   const [requestsTotal, setRequestsTotal] = useState(0);
   const requestsLimit = 20;
@@ -217,14 +229,23 @@ export default function GerenteZaplinkPage() {
     return Array.from(byId.values());
   }, [consultantRequests]);
 
-  const handleRemoveConsultant = async (consultantUserId: string) => {
-    if (!userId || !consultantUserId) return;
-    setRemovingId(consultantUserId);
+  const handleRemoveConsultant = async (row: UnifiedConsultant) => {
+    if (!userId) return;
+    const payload: { consultant_user_id?: string; zaplink_submission_id?: string } = {};
+    if (row.consultantUserId) {
+      payload.consultant_user_id = row.consultantUserId;
+    } else if (row.submissionId) {
+      payload.zaplink_submission_id = row.submissionId;
+    } else {
+      showToast('error', 'Não é possível remover este registro.');
+      return;
+    }
+    setRemovingRowId(row.id);
     try {
       const res = await fetch('/api/gerente/zaplink/remove-consultant', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-        body: JSON.stringify({ consultant_user_id: consultantUserId }),
+        body: JSON.stringify(payload),
       });
       const json = await res.json();
       if (json.success) {
@@ -237,7 +258,7 @@ export default function GerenteZaplinkPage() {
     } catch {
       showToast('error', 'Falha na conexão.');
     } finally {
-      setRemovingId(null);
+      setRemovingRowId(null);
     }
   };
 
@@ -248,19 +269,10 @@ export default function GerenteZaplinkPage() {
     if (withDdi.length >= 12) window.open(`https://wa.me/${withDdi}`, '_blank');
   };
 
-  interface UnifiedConsultant {
-    id: string;
-    consultantUserId: string | null;
-    full_name: string;
-    phone: string | null;
-    email: string | null;
-    banca_name: string | null;
-    date: string;
-  }
-
   const unifiedList = useMemo<UnifiedConsultant[]>(() => {
     const fromSubmissions: UnifiedConsultant[] = submissions.map((s) => ({
       id: `sub-${s.id}`,
+      submissionId: s.id,
       consultantUserId: s.consultor_user_id || null,
       full_name: s.full_name || '—',
       phone: s.phone || null,
@@ -290,6 +302,7 @@ export default function GerenteZaplinkPage() {
       })
       .map((c) => ({
         id: `cons-${c.consultant_user_id}`,
+        submissionId: null,
         consultantUserId: c.consultant_user_id,
         full_name: c.full_name || c.email || '—',
         phone: c.telefone || null,
@@ -394,22 +407,27 @@ export default function GerenteZaplinkPage() {
                             <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24" aria-hidden><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.58 5.992L.057 24l6.305-1.654a9.86 9.86 0 005.26 1.51h.004c5.454 0 9.89-4.436 9.89-9.89a9.825 9.825 0 00-2.893-6.994z" /></svg>
                             Chamar
                           </button>
-                          {c.consultantUserId && (
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveConsultant(c.consultantUserId!)}
-                              disabled={removingId === c.consultantUserId}
-                              title="Remover da rede"
-                              className="inline-flex items-center gap-1 px-2 py-1.5 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition"
-                            >
-                              {removingId === c.consultantUserId ? (
-                                <Loader2 className="w-4 h-4 animate-spin" />
-                              ) : (
-                                <Trash2 className="w-4 h-4" />
-                              )}
-                              Remover
-                            </button>
-                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveConsultant(c)}
+                            disabled={
+                              removingRowId === c.id ||
+                              (!c.consultantUserId && !c.submissionId)
+                            }
+                            title={
+                              !c.consultantUserId && !c.submissionId
+                                ? 'Remoção indisponível para este registro'
+                                : 'Remover da rede Zaplink'
+                            }
+                            className="inline-flex items-center gap-1 px-2 py-1.5 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition"
+                          >
+                            {removingRowId === c.id ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="w-4 h-4" />
+                            )}
+                            Remover
+                          </button>
                         </div>
                       </td>
                     </tr>
