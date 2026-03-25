@@ -13,6 +13,18 @@ const DEFAULT_SETTINGS = {
   is_active: true,
 };
 
+const PAGE_SIZE = 1000;
+const USER_ID_CHUNK_SIZE = 500;
+
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  if (size <= 0) return [arr];
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
+}
+
 /**
  * GET /api/admin/users - Lista todos os usuários com suas estatísticas.
  * Usa consultas em lote (5 no total) para evitar timeout/502 com muitos usuários.
@@ -22,42 +34,67 @@ export async function GET(req: NextRequest) {
     const { profile } = await requireAdminOrSuporte(req);
     const zaplotoId = await getEffectiveZaplotoId(req, profile);
 
-    const { data: users, error: usersError } = await supabaseServiceRole
-      .from('profiles')
-      .select('id, email, full_name, status, enroller, banca_name, banca_url, created_at, last_seen_at, total_online_time, total_crm_time, zaploto_id')
-      .or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`)
-      .order('created_at', { ascending: false });
+    // Profiles com paginação explícita para evitar limite padrão (~1000 linhas) do PostgREST.
+    const list: any[] = [];
+    let from = 0;
+    while (true) {
+      const to = from + PAGE_SIZE - 1;
+      const { data, error } = await supabaseServiceRole
+        .from('profiles')
+        .select('id, email, full_name, status, enroller, banca_name, banca_url, created_at, last_seen_at, total_online_time, total_crm_time, zaploto_id')
+        .or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`)
+        .order('created_at', { ascending: false })
+        .range(from, to);
 
-    if (usersError) {
-      return errorResponse(`Erro ao buscar usuários: ${usersError.message}`);
+      if (error) {
+        return errorResponse(`Erro ao buscar usuários: ${error.message}`);
+      }
+
+      const batch = data || [];
+      list.push(...batch);
+
+      if (batch.length < PAGE_SIZE) break;
+      from += PAGE_SIZE;
     }
 
-    const list = users || [];
     if (list.length === 0) {
       return successResponse([]);
     }
 
     const userIds = list.map((u: { id: string }) => u.id);
+    const userIdChunks = chunkArray(userIds, USER_ID_CHUNK_SIZE);
 
-    const [
-      { data: settingsRows },
-      { data: campaignsRows },
-      { data: instancesRows },
-      { data: searchesRows },
-    ] = await Promise.all([
-      supabaseServiceRole.from('user_settings').select('*').in('user_id', userIds),
-      supabaseServiceRole.from('campaigns').select('user_id, processed_contacts, failed_contacts').in('user_id', userIds),
-      supabaseServiceRole.from('whatsapp_instances').select('user_id').in('user_id', userIds),
-      supabaseServiceRole.from('searches').select('user_id').in('user_id', userIds),
-    ]);
+    const settingsRows: any[] = [];
+    const campaignsRows: any[] = [];
+    const instancesRows: any[] = [];
+    const searchesRows: any[] = [];
+
+    for (const ids of userIdChunks) {
+      const [
+        { data: settingsBatch },
+        { data: campaignsBatch },
+        { data: instancesBatch },
+        { data: searchesBatch },
+      ] = await Promise.all([
+        supabaseServiceRole.from('user_settings').select('*').in('user_id', ids),
+        supabaseServiceRole.from('campaigns').select('user_id, processed_contacts, failed_contacts').in('user_id', ids),
+        supabaseServiceRole.from('whatsapp_instances').select('user_id').in('user_id', ids),
+        supabaseServiceRole.from('searches').select('user_id').in('user_id', ids),
+      ]);
+
+      if (settingsBatch) settingsRows.push(...settingsBatch);
+      if (campaignsBatch) campaignsRows.push(...campaignsBatch);
+      if (instancesBatch) instancesRows.push(...instancesBatch);
+      if (searchesBatch) searchesRows.push(...searchesBatch);
+    }
 
     const settingsByUser = new Map<string, any>();
-    (settingsRows || []).forEach((s: any) => settingsByUser.set(s.user_id, s));
+    settingsRows.forEach((s: any) => settingsByUser.set(s.user_id, s));
 
     const campaignsCountByUser = new Map<string, number>();
     const processedByUser = new Map<string, number>();
     const failedByUser = new Map<string, number>();
-    (campaignsRows || []).forEach((c: any) => {
+    campaignsRows.forEach((c: any) => {
       const uid = c.user_id;
       campaignsCountByUser.set(uid, (campaignsCountByUser.get(uid) || 0) + 1);
       processedByUser.set(uid, (processedByUser.get(uid) || 0) + (c.processed_contacts || 0));
@@ -65,13 +102,13 @@ export async function GET(req: NextRequest) {
     });
 
     const instancesCountByUser = new Map<string, number>();
-    (instancesRows || []).forEach((i: any) => {
+    instancesRows.forEach((i: any) => {
       const uid = i.user_id;
       instancesCountByUser.set(uid, (instancesCountByUser.get(uid) || 0) + 1);
     });
 
     const contactsCountByUser = new Map<string, number>();
-    (searchesRows || []).forEach((s: any) => {
+    searchesRows.forEach((s: any) => {
       const uid = s.user_id;
       contactsCountByUser.set(uid, (contactsCountByUser.get(uid) || 0) + 1);
     });

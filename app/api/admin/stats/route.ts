@@ -5,18 +5,13 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { rateLimitService } from '@/lib/services/rate-limit-service';
 import { getEffectiveZaplotoId } from '@/lib/tenant-context';
 
-/** Alinhado a app/instances e Evolution: DB pode armazenar ok; API às vezes usa connected/open/ready. */
-function isEvolutionInstanceConnected(row: { status?: string | null; is_active?: boolean | null }) {
-  if (row.is_active === false) return false;
-  const s = String(row.status ?? '').toLowerCase().trim();
-  return (
-    s === 'ok' ||
-    s === 'connected' ||
-    s === 'open' ||
-    s === 'ready' ||
-    s === 'online'
-  );
-}
+type EvolutionInstanceRow = {
+  id: string;
+  status: string | null;
+  user_id: string | null;
+  zaploto_id: string | null;
+  is_active: boolean | null;
+};
 
 /**
  * GET /api/admin/stats - Retorna estatísticas gerais do sistema.
@@ -48,25 +43,29 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    /**
-     * Escopo de instâncias alinhado ao isolamento por tenant:
-     * - evolution_instances.zaploto_id = tenant (principal após enforce_tenant_isolation)
-     * - OU user_id pertence a um perfil do tenant (legado / linhas sem zaploto_id)
-     *
-     * Antes só usávamos user_id IN (...), o que zerava totais quando havia instâncias com
-     * user_id nulo ou só zaploto_id preenchido — enquanto GET /api/admin/evolution/instances lista todas.
-     */
-    const instanceTenantOrFilter = `zaploto_id.eq.${zaplotoId},user_id.in.(${tenantUserIds.join(',')})`;
+    const { data: allInstancesRaw, error: allInstancesError } = await supabaseServiceRole
+      .from('evolution_instances')
+      .select('id, user_id, zaploto_id, status, is_active');
+    if (allInstancesError) {
+      console.error('[admin/stats] Falha ao buscar evolution_instances:', allInstancesError.message);
+    }
+    const allInstances = (allInstancesRaw || []) as EvolutionInstanceRow[];
+    const tenantUserIdsSet = new Set(tenantUserIds);
+    const tenantInstances = allInstances.filter((row) => {
+      if (row.zaploto_id === zaplotoId) return true;
+      return !row.zaploto_id && !!row.user_id && tenantUserIdsSet.has(row.user_id);
+    });
+    const totalInstances = tenantInstances.length;
+    // Card de conectadas: regra simples e fixa no banco
+    const connectedInstances = tenantInstances.filter((row) => row.status === 'ok').length;
 
     // Busca todas as estatísticas (filtradas por tenant)
     const [
       usersResult,
       campaignsResult,
       contactsResult,
-      instancesResult,
       groupsResult,
       campaignsData,
-      instancesData,
       contactsData,
       dispatchedTodayResult,
       nextExecutionsResult,
@@ -76,16 +75,11 @@ export async function GET(req: NextRequest) {
       supabaseServiceRole.from('profiles').select('id', { count: 'exact', head: true }).or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`),
       supabaseServiceRole.from('campaigns').select('id', { count: 'exact', head: true }).in('user_id', tenantUserIds),
       supabaseServiceRole.from('searches').select('id', { count: 'exact', head: true }).in('user_id', tenantUserIds),
-      supabaseServiceRole.from('evolution_instances').select('id', { count: 'exact', head: true }).or(instanceTenantOrFilter),
       supabaseServiceRole.from('whatsapp_groups').select('id', { count: 'exact', head: true }).in('user_id', tenantUserIds),
       supabaseServiceRole
         .from('campaigns')
         .select('status, processed_contacts, failed_contacts, total_contacts')
         .in('user_id', tenantUserIds),
-      supabaseServiceRole
-        .from('evolution_instances')
-        .select('status, is_active')
-        .or(instanceTenantOrFilter),
       supabaseServiceRole
         .from('campaign_contacts')
         .select('status'),
@@ -113,7 +107,6 @@ export async function GET(req: NextRequest) {
     const totalUsers = usersResult?.count || 0;
     const totalCampaigns = campaignsResult?.count || 0;
     const totalContacts = contactsResult?.count || 0;
-    const totalInstances = instancesResult?.count || 0;
     const totalGroups = groupsResult?.count || 0;
 
     // Calcula métricas
@@ -126,8 +119,6 @@ export async function GET(req: NextRequest) {
     const totalFailed = campaignsData?.data?.reduce((sum, c) => sum + (c.failed_contacts || 0), 0) || 0;
     const totalAdded = campaignsData?.data?.reduce((sum, c) => sum + (c.total_contacts || 0), 0) || 0;
 
-    // Instâncias conectadas (status ok/connected/open; exclui só is_active === false)
-    const connectedInstances = instancesData?.data?.filter(isEvolutionInstanceConnected).length || 0;
     const pendingContacts = contactsData?.data?.filter(c => c.status === 'queued').length || 0;
     const addedContacts = contactsData?.data?.filter(c => c.status === "success").length || 0;
     const sentMessages = contactsData?.data?.filter(c => c.status === "asd").length || 0;

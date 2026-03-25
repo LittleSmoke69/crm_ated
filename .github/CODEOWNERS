@@ -1,53 +1,32 @@
 # =============================================================================
 # ZaplotoV2 - CODEOWNERS
-# CORE: @LittleSmoke69 (owner único)
-# NON-CORE: modificável por devs externos com PR aprovado
+# Owner principal do core: @LittleSmoke69
 # =============================================================================
 
-# --- CORE: Proteção total (sempre requer aprovação do owner) ---
-
-# Autenticação e autorização
-/lib/middleware/                    @LittleSmoke69
-
-# Serviços de integração e lógica de negócio
-/lib/services/                     @LittleSmoke69
-
-# Supabase
-/lib/supabase/                     @LittleSmoke69
-/lib/supabase.ts                   @LittleSmoke69
-
-# Utils de acesso e hierarquia
-/lib/utils/instance-access.ts      @LittleSmoke69
-/lib/utils/hierarchy.ts            @LittleSmoke69
-/lib/utils/user-bancas.ts          @LittleSmoke69
-
-# API Routes (todas)
-/app/api/                          @LittleSmoke69
-
-# Netlify scheduled functions
-/netlify/                           @LittleSmoke69
+# Protecao total do core (sempre requer review do owner)
+/app/api/**                         @LittleSmoke69
+/lib/middleware/**                  @LittleSmoke69
+/lib/services/**                    @LittleSmoke69
+/lib/server/**                      @LittleSmoke69
+/lib/supabase/**                    @LittleSmoke69
+/lib/supabase.ts                    @LittleSmoke69
+/lib/tenant-context.ts              @LittleSmoke69
+/lib/utils/instance-access.ts       @LittleSmoke69
+/lib/utils/hierarchy.ts             @LittleSmoke69
+/lib/utils/user-bancas.ts           @LittleSmoke69
+/migrations/**                      @LittleSmoke69
+/netlify/**                         @LittleSmoke69
 /netlify.toml                       @LittleSmoke69
-
-# Migrações Supabase
-/migrations/                        @LittleSmoke69
-
-# Scripts operacionais
-/scripts/                           @LittleSmoke69
-
-# Configurações de build e deploy
+/scripts/**                         @LittleSmoke69
+/middleware.ts                      @LittleSmoke69
 /next.config.ts                     @LittleSmoke69
 /package.json                       @LittleSmoke69
+/package-lock.json                  @LittleSmoke69
 
-# --- NON-CORE: Pode ter ownership de equipe (opcional) ---
-# Descomente e ajuste @team-frontend conforme sua organização:
-#
-# /app/**/page.tsx                  @team-frontend
-# /components/                      @team-frontend
-# /contexts/                        @team-frontend
-# /hooks/                           @team-frontend
-# /utils/supaDebug.ts               @team-frontend
-# /utils/useRequireAuth.ts          @team-frontend
-# /app/globals.css                  @team-frontend
+# Blindagem de governanca e qualidade
+/.github/CODEOWNERS                @LittleSmoke69
+/.github/workflows/**              @LittleSmoke69
 
-# --- Root ---
-*.md                               @LittleSmoke69
+# Documentacao critica
+/docs/**                            @LittleSmoke69
+*.md                                @LittleSmoke69

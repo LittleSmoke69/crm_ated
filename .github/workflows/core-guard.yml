@@ -1,0 +1,101 @@
+name: Core Guard
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+      - edited
+      - labeled
+      - unlabeled
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  owner-approval-for-core:
+    runs-on: ubuntu-latest
+    env:
+      CORE_OWNER: LittleSmoke69
+      OWNER_OVERRIDE_LABEL: owner-approved
+    steps:
+      - name: Validate owner approval on core changes
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = process.env.CORE_OWNER.toLowerCase();
+            const overrideLabel = process.env.OWNER_OVERRIDE_LABEL.toLowerCase();
+            const coreMatchers = [
+              /^app\/api\//,
+              /^lib\/middleware\//,
+              /^lib\/services\//,
+              /^lib\/server\//,
+              /^lib\/supabase\//,
+              /^lib\/supabase\.ts$/,
+              /^lib\/tenant-context\.ts$/,
+              /^lib\/utils\/instance-access\.ts$/,
+              /^lib\/utils\/hierarchy\.ts$/,
+              /^lib\/utils\/user-bancas\.ts$/,
+              /^migrations\//,
+              /^netlify\//,
+              /^netlify\.toml$/,
+              /^scripts\//,
+              /^middleware\.ts$/,
+              /^next\.config\.ts$/,
+              /^package\.json$/,
+              /^package-lock\.json$/,
+              /^\.github\/CODEOWNERS$/,
+              /^\.github\/workflows\//,
+              /^docs\//,
+              /^.*\.md$/
+            ];
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100
+            });
+
+            const changedFiles = files.map((f) => f.filename);
+            const touchesCore = changedFiles.some((file) =>
+              coreMatchers.some((matcher) => matcher.test(file))
+            );
+
+            if (!touchesCore) {
+              core.notice("PR sem alteracao no core protegido. Liberado.");
+              return;
+            }
+
+            const labels = (context.payload.pull_request.labels || [])
+              .map((l) => (l.name || "").toLowerCase());
+            const hasOwnerOverrideLabel = labels.includes(overrideLabel);
+
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100
+            });
+
+            const ownerApproved = reviews.some(
+              (review) =>
+                (review.user?.login || "").toLowerCase() === owner &&
+                review.state === "APPROVED"
+            );
+
+            if (!ownerApproved && !hasOwnerOverrideLabel) {
+              core.setFailed(
+                `Alteracao em core detectada. Necessaria aprovacao de @${process.env.CORE_OWNER} ou label '${process.env.OWNER_OVERRIDE_LABEL}'.`
+              );
+              return;
+            }
+
+            core.notice(
+              `Core alterado e validado com autorizacao do owner (@${process.env.CORE_OWNER}).`
+            );
