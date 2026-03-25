@@ -45,11 +45,16 @@ export const handler = async (_event: HandlerEvent, _context: HandlerContext): P
     });
 
     const text = await res.text();
+    /** Resposta pode vir com espaços de heartbeat antes do JSON (evita Inactivity Timeout em proxies). */
+    const trimmed = text.trimStart();
+    const jsonStart = trimmed.indexOf('{');
     let body: unknown = text;
-    try {
-      body = JSON.parse(text);
-    } catch {
-      // mantém texto
+    if (jsonStart >= 0) {
+      try {
+        body = JSON.parse(trimmed.slice(jsonStart));
+      } catch {
+        // mantém texto
+      }
     }
 
     if (!res.ok) {

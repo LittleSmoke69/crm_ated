@@ -300,7 +300,8 @@ export default function DonoBancaHierarquia({
     return { dateFrom, dateTo };
   };
 
-  const BATCH_SIZE = 500;
+  /** Mesmo padrão da gestão de consultores: lotes pequenos para não estourar timeout/edge na Netlify. */
+  const BATCH_SIZE = 5;
 
   const checkAuthorization = async () => {
     if (!userId) return;
@@ -310,6 +311,7 @@ export default function DonoBancaHierarquia({
       setExternalMetricsError(null);
 
       const { dateFrom, dateTo } = getDateRange();
+      const rankByEmail = new Map<string, { name: string; value: number }>();
 
       const buildUrl = (offset: number, limit: number) => {
         const params = new URLSearchParams();
@@ -330,7 +332,25 @@ export default function DonoBancaHierarquia({
         const response = await fetch(url, {
           headers: { 'X-User-Id': userId as string }
         });
-        const result = await response.json();
+        const rawText = await response.text();
+        let result: {
+          success?: boolean;
+          data?: Record<string, unknown>;
+          error?: string;
+          message?: string;
+        };
+        try {
+          result = rawText.trim() ? (JSON.parse(rawText) as typeof result) : {};
+        } catch {
+          console.error('[Frontend] Resposta não-JSON do dashboard (timeout/edge):', rawText.slice(0, 160));
+          if (isFirstBatch) {
+            setIsAuthorized(false);
+            setExternalMetricsError(
+              'O servidor devolveu uma resposta inválida (muito provável timeout). Os dados foram divididos em lotes; tente atualizar ou reduzir o período.'
+            );
+          }
+          break;
+        }
 
         if (!response.ok || !result.success) {
           if (isFirstBatch) {
@@ -343,21 +363,37 @@ export default function DonoBancaHierarquia({
         const data = result.data;
         if (isFirstBatch) {
           setIsAuthorized(true);
-          setGerentes(data?.gerentes || []);
-          setTop5Consultants(data?.top5Consultants || []);
+          setGerentes((data?.gerentes as Gerente[]) || []);
           if (data?.externalMetrics) {
-            setExternalMetrics(data.externalMetrics);
+            setExternalMetrics(data.externalMetrics as ExternalMetrics);
             setExternalMetricsError(null);
           } else {
             setExternalMetrics(null);
-            if (data?.externalMetricsError) setExternalMetricsError(data.externalMetricsError);
+            if (data?.externalMetricsError) setExternalMetricsError(data.externalMetricsError as string);
           }
-          setBancaName(data?.bancaInfo?.name || null);
-          setBancaId(data?.bancaId || null);
+          setBancaName((data?.bancaInfo as { name?: string } | undefined)?.name || null);
+          setBancaId((data?.bancaId as string) || null);
           isFirstBatch = false;
         } else {
-          setGerentes((prev) => [...prev, ...(data?.gerentes || [])]);
+          setGerentes((prev) => [...prev, ...(((data?.gerentes as Gerente[]) || []) as Gerente[])]);
         }
+
+        const contributors = (data?.consultantRankContributors ?? []) as Array<{ email: string; name: string; value: number }>;
+        for (const row of contributors) {
+          const em = row.email?.trim();
+          if (!em) continue;
+          const prevVal = rankByEmail.get(em)?.value ?? 0;
+          rankByEmail.set(em, { name: row.name?.trim() || em, value: Math.max(prevVal, Number(row.value) || 0) });
+        }
+        let nextTop5 = Array.from(rankByEmail.values())
+          .filter((c) => c.value > 0)
+          .sort((a, b) => b.value - a.value)
+          .slice(0, 5);
+        if (nextTop5.length === 0 && Array.isArray(data?.top5Consultants)) {
+          const t5 = data.top5Consultants as Array<{ name: string; value: number }>;
+          if (t5.length > 0) nextTop5 = t5;
+        }
+        setTop5Consultants(nextTop5);
 
         hasMore = data?.hasMore === true;
         offset += BATCH_SIZE;

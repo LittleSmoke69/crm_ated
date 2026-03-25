@@ -12,6 +12,17 @@ const LEAD_TYPE_LABELS: Record<string, string> = {
 };
 
 const DEFAULT_DEADLINE_DAYS = 10;
+const PROFILE_IDS_CHUNK = 150;
+
+function chunkIds<T>(arr: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) chunks.push(arr.slice(i, i + size));
+  return chunks;
+}
+
+function isUuidLike(s: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s.trim());
+}
 
 /**
  * GET /api/admin/crm/lead-requests
@@ -68,15 +79,21 @@ export async function GET(req: NextRequest) {
     const namesById = new Map<string, string>();
     const emailsById = new Map<string, string>();
     if (ids.length > 0) {
-      const { data: profiles } = await supabaseServiceRole
-        .from('profiles')
-        .select('id, full_name, email')
-        .in('id', ids);
-      (profiles ?? []).forEach((p: { id: string; full_name: string | null; email: string | null }) => {
-        const name = (p.full_name ?? p.email ?? '').trim() || (p.email ?? p.id);
-        namesById.set(p.id, name);
-        if (p.email) emailsById.set(p.id, p.email.trim());
-      });
+      for (const batch of chunkIds(ids, PROFILE_IDS_CHUNK)) {
+        const { data: profiles, error: profErr } = await supabaseServiceRole
+          .from('profiles')
+          .select('id, full_name, email')
+          .in('id', batch);
+        if (profErr) {
+          console.error('[admin/crm/lead-requests] profiles chunk error:', profErr);
+          return errorResponse('Erro ao buscar perfis dos consultores.', 500);
+        }
+        (profiles ?? []).forEach((p: { id: string; full_name: string | null; email: string | null }) => {
+          const name = (p.full_name ?? p.email ?? '').trim() || (p.email ?? p.id);
+          namesById.set(p.id, name);
+          if (p.email) emailsById.set(p.id, p.email.trim());
+        });
+      }
     }
     const bancaIdsFromRequests = [...new Set(list.map((r: { banca_id?: string | null }) => r.banca_id).filter(Boolean))] as string[];
     const expiredAvailableByBanca = new Map<string, number>();
@@ -131,11 +148,31 @@ export async function GET(req: NextRequest) {
         ...r,
         lead_type_label,
         banca_name: banca_name ?? undefined,
-        consultores: (r.consultores ?? []).map((c: { consultor_id: string; quantity: number }) => ({
-          ...c,
-          consultor_name: namesById.get(c.consultor_id) ?? c.consultor_id,
-          consultor_email: emailsById.get(c.consultor_id) ?? '',
-        })),
+        consultores: (r.consultores ?? []).map((c: {
+          consultor_id: string;
+          quantity: number;
+          consultor_name?: string;
+          consultor_email?: string;
+        }) => {
+          const fromProfileName = namesById.get(c.consultor_id);
+          const fromProfileEmail = emailsById.get(c.consultor_id);
+          const storedName = (c.consultor_name ?? '').trim();
+          const storedEmail = (c.consultor_email ?? '').trim();
+          const usableStoredName =
+            storedName && storedName !== c.consultor_id && !isUuidLike(storedName) ? storedName : '';
+          const consultor_name =
+            fromProfileName
+            || usableStoredName
+            || fromProfileEmail
+            || storedEmail
+            || c.consultor_id;
+          const consultor_email = fromProfileEmail || storedEmail || '';
+          return {
+            ...c,
+            consultor_name,
+            consultor_email,
+          };
+        }),
         leads_transferred: leadsTransferred,
         leads_still_needed: leadsStillNeededForRequest,
         expired_available: expiredAvailable,

@@ -14,14 +14,30 @@ export const maxDuration = 300;
 const SYNC_FETCH_TIMEOUT_MS = 280_000;
 
 /**
- * Modo assíncrono só em ambiente Netlify (deploy ou `netlify dev`) e com segredo configurado.
- * Em `next dev` puro permanece síncrono para não deixar jobs presos sem Background Function.
+ * Modo assíncrono na Netlify com GROUP_FETCH_JOB_SECRET (Background Function + polling no cliente).
+ *
+ * Importante: `NETLIFY=true` existe no *build* da Netlify, mas não nas variáveis read-only do
+ * *runtime* das Functions (Next API routes). Lá a Netlify expõe SITE_ID, SITE_NAME e URL.
+ * Sem SITE_ID a rota caía no modo síncrono e estourava o limite (~26s) → 504.
+ *
+ * Em `next dev` puro permanece síncrono para não criar jobs órfãos (sem worker local).
  */
 function useNetlifyAsyncGroupFetch(): boolean {
   const secret = !!process.env.GROUP_FETCH_JOB_SECRET?.trim();
-  const onNetlify =
-    process.env.NETLIFY === 'true' || process.env.NETLIFY_DEV === 'true';
-  return secret && onNetlify;
+  if (!secret) return false;
+
+  const onNetlifyRuntime =
+    process.env.NETLIFY === 'true' ||
+    process.env.NETLIFY_DEV === 'true' ||
+    !!process.env.SITE_ID?.trim() ||
+    !!process.env.NETLIFY_SITE_ID?.trim();
+
+  const plainNextDev =
+    process.env.NODE_ENV === 'development' && process.env.NETLIFY_DEV !== 'true';
+
+  if (plainNextDev) return false;
+
+  return onNetlifyRuntime;
 }
 
 function resolveNetlifySiteUrl(requestOrigin: string): string {
@@ -30,12 +46,26 @@ function resolveNetlifySiteUrl(requestOrigin: string): string {
   return requestOrigin.replace(/\/$/, '');
 }
 
+function resolveGroupsFetchBackgroundUrl(origin: string): string {
+  const fnBase = (
+    process.env.NETLIFY_FUNCTIONS_URL ||
+    process.env.NEXT_PUBLIC_NETLIFY_FUNCTIONS_URL ||
+    ''
+  )
+    .trim()
+    .replace(/\/$/, '');
+  if (fnBase.startsWith('http://') || fnBase.startsWith('https://')) {
+    return `${fnBase}/groups-fetch-background`;
+  }
+  const siteUrl = resolveNetlifySiteUrl(origin);
+  return `${siteUrl}/.netlify/functions/groups-fetch-background`;
+}
+
 async function triggerBackgroundWorker(origin: string, jobId: string): Promise<{ ok: boolean; status?: number }> {
   const secret = process.env.GROUP_FETCH_JOB_SECRET?.trim();
   if (!secret) return { ok: false };
 
-  const siteUrl = resolveNetlifySiteUrl(origin);
-  const url = `${siteUrl}/.netlify/functions/groups-fetch-background`;
+  const url = resolveGroupsFetchBackgroundUrl(origin);
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), 12_000);
 
@@ -99,7 +129,7 @@ export async function GET(req: NextRequest) {
 
 /**
  * POST /api/groups/fetch
- * - Netlify + GROUP_FETCH_JOB_SECRET: cria job e dispara Background Function (evita timeout).
+ * - Netlify (SITE_ID no runtime ou netlify dev) + GROUP_FETCH_JOB_SECRET: job assíncrono + Background Function.
  * - Demais ambientes: request síncrono com persistência em lote.
  * Body opcional: { forceSync: true } força modo síncrono (útil em dev).
  */

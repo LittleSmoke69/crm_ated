@@ -9,6 +9,9 @@ export interface DonoBancaDashboardParams {
   metaActiveOnly?: boolean;
   /** Quando true, não busca Meta Ads. Use quando Meta será carregado em chamada separada. */
   skipMeta?: boolean;
+  /** Paginação de gerentes (Netlify). Omitir ambos = processar todos de uma vez (compatível com outras rotas). */
+  gerentesOffset?: number;
+  gerentesLimit?: number;
 }
 
 export interface DashboardByBancaParams {
@@ -18,6 +21,8 @@ export interface DashboardByBancaParams {
   metaActiveOnly?: boolean;
   /** Quando true, não busca Meta Ads. Use quando Meta será carregado em chamada separada. */
   skipMeta?: boolean;
+  gerentesOffset?: number;
+  gerentesLimit?: number;
 }
 
 /**
@@ -636,7 +641,15 @@ async function fetchDashboardMetrics(
   }
 }
 
-export async function getDonoBancaDashboardData({ userId, dateFrom, dateTo, metaActiveOnly = true, skipMeta = false }: DonoBancaDashboardParams) {
+export async function getDonoBancaDashboardData({
+  userId,
+  dateFrom,
+  dateTo,
+  metaActiveOnly = true,
+  skipMeta = false,
+  gerentesOffset: rawGerentesOffset,
+  gerentesLimit: rawGerentesLimit,
+}: DonoBancaDashboardParams) {
   // Busca informações do dono de banca (incluindo banca_url)
   const { data: donoProfile } = await supabaseServiceRole
     .from('profiles')
@@ -650,10 +663,17 @@ export async function getDonoBancaDashboardData({ userId, dateFrom, dateTo, meta
 
   const cleanBancaUrl = donoProfile.banca_url ? normalizeBancaUrl(donoProfile.banca_url) : null;
 
-  // Bancas + métricas + gerentes em paralelo (sem indicados ainda)
+  const paginateGerentes =
+    rawGerentesLimit !== undefined && rawGerentesLimit !== null && Number.isFinite(Number(rawGerentesLimit));
+  const goffset = Math.max(0, rawGerentesOffset ?? 0);
+  const glimit = paginateGerentes ? Math.min(Math.max(Number(rawGerentesLimit), 1), 1000) : Number.POSITIVE_INFINITY;
+
+  const loadHeaderMetrics = !paginateGerentes || goffset === 0;
+
+  // Bancas + métricas (só primeira página se paginado) + gerentes em paralelo (sem indicados ainda)
   const [bancasDono, externalMetricsRaw, gerentesResult] = await Promise.all([
     supabaseServiceRole.from('crm_bancas').select('id, url'),
-    cleanBancaUrl ? fetchDashboardMetrics(cleanBancaUrl, dateFrom, dateTo) : Promise.resolve(null),
+    loadHeaderMetrics && cleanBancaUrl ? fetchDashboardMetrics(cleanBancaUrl, dateFrom, dateTo) : Promise.resolve(null),
     supabaseServiceRole
       .from('profiles')
       .select('id, email, full_name')
@@ -662,14 +682,18 @@ export async function getDonoBancaDashboardData({ userId, dateFrom, dateTo, meta
   ]);
 
   const gerentes = gerentesResult.data || [];
-  // Mesma forma que o CRM: buscar indicados por consultant=email (um por consultor/gerente)
+  const totalGerentesCount = gerentes.length;
+  const gerentesPage = paginateGerentes ? gerentes.slice(goffset, goffset + glimit) : gerentes;
+  const hasMoreGerentes = paginateGerentes ? goffset + gerentesPage.length < totalGerentesCount : false;
+
+  // Mesma forma que o CRM: buscar indicados por consultant=email — apenas para gerentes desta página (evita timeout na Netlify)
   let indicatedsRaw: IndicatedLead[] = [];
-  if (cleanBancaUrl && gerentes.length > 0) {
+  if (cleanBancaUrl && gerentesPage.length > 0) {
     const consultantEmails: string[] = [];
-    for (const g of gerentes) {
+    for (const g of gerentesPage) {
       if (g.email?.trim()) consultantEmails.push(g.email.trim());
     }
-    const gerenteIds = gerentes.map((g: { id: string }) => g.id);
+    const gerenteIds = gerentesPage.map((g: { id: string }) => g.id);
     const { data: consultores } = await supabaseServiceRole
       .from('profiles')
       .select('id, email, full_name')
@@ -717,7 +741,7 @@ export async function getDonoBancaDashboardData({ userId, dateFrom, dateTo, meta
   }> = [];
 
   const gerentesComMetricas = await Promise.all(
-    (gerentes || []).map(async (gerente: any) => {
+    (gerentesPage || []).map(async (gerente: any) => {
       console.log(`[DonoBanca Service] 📊 TABELA GERENTES - Buscando métricas do gerente: ${gerente.email}`);
       
       // Busca consultores deste gerente (com nome completo)
@@ -814,20 +838,20 @@ export async function getDonoBancaDashboardData({ userId, dateFrom, dateTo, meta
     })
   );
 
-  // Total de depósitos (contagem) agregado de todos os consultores — usado no funil quando a API agregada não retorna
-  const sumTotalDepositosCount = gerentesComMetricas.reduce(
-    (acc, g) => acc + (g.metrics.externalKpis?.total_depositos_count ?? 0),
-    0
-  );
-  const agregadoDepositosCount = externalMetrics?.total_depositos_count ?? 0;
-  const usadoNoFunil = agregadoDepositosCount > 0 ? agregadoDepositosCount : sumTotalDepositosCount;
-  console.log('[DonoBanca Service] 📦 total_depositos_count (funil):', {
-    agregado_api: agregadoDepositosCount,
-    soma_consultores: sumTotalDepositosCount,
-    usado_no_funil: usadoNoFunil,
-  });
-  if (externalMetrics && (externalMetrics.total_depositos_count ?? 0) === 0 && sumTotalDepositosCount > 0) {
-    externalMetrics = { ...externalMetrics, total_depositos_count: sumTotalDepositosCount };
+  // Total de depósitos (contagem) — só com visão completa de gerentes; em páginas parciais o funil usa só o agregado da API
+  if (!paginateGerentes) {
+    const sumTotalDepositosCount = gerentesComMetricas.reduce(
+      (acc, g) => acc + (g.metrics.externalKpis?.total_depositos_count ?? 0),
+      0
+    );
+    const agregadoDepositosCount = externalMetrics?.total_depositos_count ?? 0;
+    console.log('[DonoBanca Service] 📦 total_depositos_count (funil):', {
+      agregado_api: agregadoDepositosCount,
+      soma_consultores: sumTotalDepositosCount,
+    });
+    if (externalMetrics && (externalMetrics.total_depositos_count ?? 0) === 0 && sumTotalDepositosCount > 0) {
+      externalMetrics = { ...externalMetrics, total_depositos_count: sumTotalDepositosCount };
+    }
   }
 
   // ============================================
@@ -835,14 +859,22 @@ export async function getDonoBancaDashboardData({ userId, dateFrom, dateTo, meta
   // ============================================
   console.log('[DonoBanca Service] 📊 Total de consultores coletados:', allConsultantsData.length);
   
-  const top5Consultants = allConsultantsData
-    .filter(c => c.total_deposited > 0) // Filtra apenas consultores com vendas
-    .sort((a, b) => b.total_deposited - a.total_deposited) // Ordena por vendas (maior para menor)
-    .slice(0, 5) // Pega apenas os top 5
-    .map(c => ({
-      name: c.name,
-      value: c.total_deposited,
-    }));
+  const consultantRankContributors = allConsultantsData.map((c) => ({
+    email: c.email,
+    name: c.name,
+    value: c.total_deposited,
+  }));
+
+  const top5Consultants = paginateGerentes
+    ? []
+    : allConsultantsData
+        .filter((c) => c.total_deposited > 0)
+        .sort((a, b) => b.total_deposited - a.total_deposited)
+        .slice(0, 5)
+        .map((c) => ({
+          name: c.name,
+          value: c.total_deposited,
+        }));
 
   console.log('[DonoBanca Service] 🏆 Top 5 Consultores por Vendas:', top5Consultants);
 
@@ -871,7 +903,7 @@ export async function getDonoBancaDashboardData({ userId, dateFrom, dateTo, meta
       (b: { url: string }) => normalizeBancaUrl(b.url) === normalizeBancaUrl(donoProfile?.banca_url ?? '')
     );
     bancaIdForMeta = bancaMatch?.id;
-    if (bancaIdForMeta && !skipMeta) {
+    if (bancaIdForMeta && !skipMeta && (!paginateGerentes || goffset === 0)) {
       [metaFunnel, metaCampaignsData] = await Promise.all([
         getMetaInsightsAggregated(bancaIdForMeta, dateFrom ?? undefined, dateTo ?? undefined, metaActiveOnly),
         getMetaCampaignsWithInsights(bancaIdForMeta, dateFrom ?? undefined, dateTo ?? undefined, metaActiveOnly),
@@ -889,11 +921,13 @@ export async function getDonoBancaDashboardData({ userId, dateFrom, dateTo, meta
     },
     chartData,
     externalMetrics: externalMetrics,
-    externalMetricsError: !externalMetrics && donoProfile?.banca_url ? 'Erro ao buscar métricas da API externa' : null,
+    externalMetricsError:
+      loadHeaderMetrics && !externalMetrics && donoProfile?.banca_url ? 'Erro ao buscar métricas da API externa' : null,
     gerentes: gerentesComMetricas,
     top5Consultants: top5Consultants,
-    metaFunnel,
-    metaCampaignsData,
+    ...(paginateGerentes ? { consultantRankContributors, totalGerentes: totalGerentesCount, hasMoreGerentes } : {}),
+    metaFunnel: !paginateGerentes || goffset === 0 ? metaFunnel : null,
+    metaCampaignsData: !paginateGerentes || goffset === 0 ? metaCampaignsData : [],
   };
 }
 
@@ -902,7 +936,15 @@ export async function getDonoBancaDashboardData({ userId, dateFrom, dateTo, meta
  * Se existir um dono com banca_url igual à URL da banca, usa a mesma lógica do dono (enroller = dono).
  * Caso contrário, usa usuários da banca em user_bancas (gerentes/consultores atribuídos).
  */
-export async function getDashboardDataByBancaId({ bancaId, dateFrom, dateTo, metaActiveOnly = true, skipMeta = false }: DashboardByBancaParams) {
+export async function getDashboardDataByBancaId({
+  bancaId,
+  dateFrom,
+  dateTo,
+  metaActiveOnly = true,
+  skipMeta = false,
+  gerentesOffset: rawGerentesOffset,
+  gerentesLimit: rawGerentesLimit,
+}: DashboardByBancaParams) {
   const { data: banca } = await supabaseServiceRole
     .from('crm_bancas')
     .select('id, url, name')
@@ -930,6 +972,8 @@ export async function getDashboardDataByBancaId({ bancaId, dateFrom, dateTo, met
       dateTo: dateTo ?? null,
       metaActiveOnly,
       skipMeta,
+      gerentesOffset: rawGerentesOffset,
+      gerentesLimit: rawGerentesLimit,
     });
     return { ...data, bancaId: data.bancaId ?? bancaId };
   }
@@ -974,20 +1018,6 @@ export async function getDashboardDataByBancaId({ bancaId, dateFrom, dateTo, met
   const consultoresInBanca = (profilesInBanca || []).filter((p: { status: string }) => p.status === 'consultor');
 
   const cleanBancaUrl = normalizeBancaUrl(bancaUrl);
-  const allConsultantsData: Array<{ id: string; email: string; name: string; total_deposited: number; total_leads: number; net_profit: number }> = [];
-
-  // Única fonte de dados: get-indicateds-by-consultant SEM consultant (banca + período). Preenche métricas e tabela de gerentes.
-  let indicateds: IndicatedLead[] = [];
-  let externalMetrics: ExternalMetricsShape | null = null;
-  let metricsByConsultantEmailBanca = new Map<string, ConsultantAggregatedMetrics>();
-  try {
-    indicateds = await fetchIndicatedsByPeriod(cleanBancaUrl, dateFrom, dateTo);
-    externalMetrics = computeExternalMetricsFromLeads(indicateds);
-    metricsByConsultantEmailBanca = aggregateIndicatedsByConsultant(indicateds);
-    console.log('[DonoBanca Service] getDashboardDataByBancaId - get-indicateds-by-consultant (banca/período):', indicateds.length, 'leads → métricas e agregado por consultor:', metricsByConsultantEmailBanca.size);
-  } catch (err: any) {
-    console.warn('[DonoBanca Service] getDashboardDataByBancaId - Erro ao buscar indicados:', err?.message);
-  }
 
   // Para bancas sem dono: incluir gerentes que têm consultores na banca (mesmo se gerente não estiver na banca)
   // e consultores sem gerente (sob "Consultores diretos")
@@ -1049,8 +1079,62 @@ export async function getDashboardDataByBancaId({ bancaId, dateFrom, dateTo, met
     }
   }
 
+  const paginateGerentes =
+    rawGerentesLimit !== undefined && rawGerentesLimit !== null && Number.isFinite(Number(rawGerentesLimit));
+  const goffset = Math.max(0, rawGerentesOffset ?? 0);
+  const glimit = paginateGerentes ? Math.min(Math.max(Number(rawGerentesLimit), 1), 1000) : Number.POSITIVE_INFINITY;
+  const totalGerentesCount = gerentesToShow.length;
+  const gerentesPageTuples = paginateGerentes ? gerentesToShow.slice(goffset, goffset + glimit) : gerentesToShow;
+  const hasMoreGerentes = paginateGerentes ? goffset + gerentesPageTuples.length < totalGerentesCount : false;
+
+  const allConsultantsData: Array<{ id: string; email: string; name: string; total_deposited: number; total_leads: number; net_profit: number }> = [];
+
+  let indicateds: IndicatedLead[] = [];
+  let externalMetrics: ExternalMetricsShape | null = null;
+  let metricsByConsultantEmailBanca = new Map<string, ConsultantAggregatedMetrics>();
+  const loadHeaderMetrics = !paginateGerentes || goffset === 0;
+
+  try {
+    if (!paginateGerentes) {
+      indicateds = await fetchIndicatedsByPeriod(cleanBancaUrl, dateFrom, dateTo);
+      externalMetrics = computeExternalMetricsFromLeads(indicateds);
+      metricsByConsultantEmailBanca = aggregateIndicatedsByConsultant(indicateds);
+      console.log(
+        '[DonoBanca Service] getDashboardDataByBancaId - get-indicateds-by-consultant (banca/período):',
+        indicateds.length,
+        'leads → agregado por consultor:',
+        metricsByConsultantEmailBanca.size
+      );
+    } else {
+      let uniqueEmails: string[] = [];
+      if (goffset === 0) {
+        externalMetrics = await fetchDashboardMetrics(cleanBancaUrl, dateFrom, dateTo);
+      }
+      const emails: string[] = [];
+      for (const { consultants: cons } of gerentesPageTuples) {
+        for (const c of cons ?? []) {
+          if ((c as { email?: string }).email?.trim()) emails.push(String((c as { email: string }).email).trim());
+        }
+      }
+      uniqueEmails = [...new Set(emails)];
+      if (uniqueEmails.length > 0) {
+        indicateds = await fetchIndicatedsByConsultants(cleanBancaUrl, dateFrom, dateTo, uniqueEmails).catch((err: any) => {
+          console.warn('[DonoBanca Service] getDashboardDataByBancaId (página) indicados:', err?.message);
+          return [] as IndicatedLead[];
+        });
+        metricsByConsultantEmailBanca = aggregateIndicatedsByConsultant(indicateds);
+      }
+      if (!externalMetrics && goffset === 0 && indicateds.length > 0) {
+        externalMetrics = computeExternalMetricsFromLeads(indicateds);
+      }
+      console.log('[DonoBanca Service] getDashboardDataByBancaId (paginado) consultants=', uniqueEmails.length, 'leads=', indicateds.length);
+    }
+  } catch (err: any) {
+    console.warn('[DonoBanca Service] getDashboardDataByBancaId - Erro ao buscar indicados:', err?.message);
+  }
+
   const gerentesComMetricas = await Promise.all(
-    gerentesToShow.map(async ({ gerente, consultants: gerenteConsultants }) => {
+    gerentesPageTuples.map(async ({ gerente, consultants: gerenteConsultants }) => {
       const consultorsCount = gerenteConsultants?.length || 0;
       let gerenteMetrics = { total_leads: 0, total_deposited: 0, total_bets: 0, total_prizes: 0, active_leads: 0, net_profit: 0, conversion_rate: 0, total_depositos_count: 0 };
 
@@ -1101,31 +1185,38 @@ export async function getDashboardDataByBancaId({ bancaId, dateFrom, dateTo, met
     })
   );
 
-  // Total de depósitos (contagem) agregado de todos os consultores — para o funil quando a API agregada não retorna
-  const sumTotalDepositosCount = gerentesComMetricas.reduce(
-    (acc, g) => acc + (g.metrics.externalKpis?.total_depositos_count ?? 0),
-    0
-  );
-  const agregadoDepositosCountBanca = externalMetrics?.total_depositos_count ?? 0;
-  const usadoNoFunilBanca = agregadoDepositosCountBanca > 0 ? agregadoDepositosCountBanca : sumTotalDepositosCount;
-  console.log('[DonoBanca Service] getDashboardDataByBancaId - total_depositos_count (funil):', {
-    agregado_api: agregadoDepositosCountBanca,
-    soma_consultores: sumTotalDepositosCount,
-    usado_no_funil: usadoNoFunilBanca,
-  });
-  if (externalMetrics && (externalMetrics.total_depositos_count ?? 0) === 0 && sumTotalDepositosCount > 0) {
-    externalMetrics = { ...externalMetrics, total_depositos_count: sumTotalDepositosCount };
+  if (!paginateGerentes) {
+    const sumTotalDepositosCount = gerentesComMetricas.reduce(
+      (acc, g) => acc + (g.metrics.externalKpis?.total_depositos_count ?? 0),
+      0
+    );
+    const agregadoDepositosCountBanca = externalMetrics?.total_depositos_count ?? 0;
+    console.log('[DonoBanca Service] getDashboardDataByBancaId - total_depositos_count (funil):', {
+      agregado_api: agregadoDepositosCountBanca,
+      soma_consultores: sumTotalDepositosCount,
+    });
+    if (externalMetrics && (externalMetrics.total_depositos_count ?? 0) === 0 && sumTotalDepositosCount > 0) {
+      externalMetrics = { ...externalMetrics, total_depositos_count: sumTotalDepositosCount };
+    }
   }
 
-  const top5Consultants = allConsultantsData
-    .filter((c) => c.total_deposited > 0)
-    .sort((a, b) => b.total_deposited - a.total_deposited)
-    .slice(0, 5)
-    .map((c) => ({ name: c.name, value: c.total_deposited }));
+  const consultantRankContributors = allConsultantsData.map((c) => ({
+    email: c.email,
+    name: c.name,
+    value: c.total_deposited,
+  }));
+
+  const top5Consultants = paginateGerentes
+    ? []
+    : allConsultantsData
+        .filter((c) => c.total_deposited > 0)
+        .sort((a, b) => b.total_deposited - a.total_deposited)
+        .slice(0, 5)
+        .map((c) => ({ name: c.name, value: c.total_deposited }));
 
   let metaFunnel = null;
   let metaCampaignsData: Awaited<ReturnType<typeof getMetaCampaignsWithInsights>> = [];
-  if (!skipMeta) {
+  if (!skipMeta && (!paginateGerentes || goffset === 0)) {
     try {
       [metaFunnel, metaCampaignsData] = await Promise.all([
         getMetaInsightsAggregated(bancaId, dateFrom ?? undefined, dateTo ?? undefined, metaActiveOnly),
@@ -1139,11 +1230,13 @@ export async function getDashboardDataByBancaId({ bancaId, dateFrom, dateTo, met
     bancaInfo: { name: bancaName, url: bancaUrl },
     chartData: {},
     externalMetrics,
-    externalMetricsError: !externalMetrics && bancaUrl ? 'Erro ao buscar métricas da API externa' : null,
+    externalMetricsError:
+      loadHeaderMetrics && !externalMetrics && bancaUrl ? 'Erro ao buscar métricas da API externa' : null,
     gerentes: gerentesComMetricas,
     top5Consultants,
-    metaFunnel,
-    metaCampaignsData,
+    ...(paginateGerentes ? { consultantRankContributors, totalGerentes: totalGerentesCount, hasMoreGerentes } : {}),
+    metaFunnel: !paginateGerentes || goffset === 0 ? metaFunnel : null,
+    metaCampaignsData: !paginateGerentes || goffset === 0 ? metaCampaignsData : [],
   };
 }
 

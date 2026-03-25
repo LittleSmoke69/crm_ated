@@ -59,13 +59,34 @@ export async function GET(req: NextRequest) {
 
     let rawList = Array.isArray(entries) ? entries : [];
 
+    /**
+     * Compatibilidade com dados inconsistentes:
+     * - `resolved-list` conta disponibilidade apenas por `transfer_log_id`
+     * - alguns admins podem ter `admin_lead_transfer_entries.banca_id` divergente do log
+     *
+     * Para esses casos, a query restrita por banca_id devolve lista vazia e o modal mostra 0.
+     * Fazemos fallback consultando apenas por `transfer_log_id`.
+     */
+    if (rawList.length === 0) {
+      const { data: entriesByLogOnly, error: entriesByLogOnlyErr } = await supabaseServiceRole
+        .from('admin_lead_transfer_entries')
+        .select('lead_id, had_balance, saldo_snapshot, source_consultant_email, target_consultant_email, transfer_type, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, resolution_status, resolved_at, current_total_depositado_at_resolution, current_total_apostado_at_resolution')
+        .eq('transfer_log_id', logId)
+        .order('lead_id', { ascending: true });
+
+      if (entriesByLogOnlyErr) {
+        console.error(`${LOG_PREFIX} Fallback query (entries by log only) error:`, entriesByLogOnlyErr);
+      } else {
+        rawList = Array.isArray(entriesByLogOnly) ? entriesByLogOnly : [];
+      }
+    }
+
     // Backfill: transferências antigas/expiradas podem ter apenas o log (leads_ids) sem entries; cria entries a partir do log.
     if (rawList.length === 0) {
       const { data: logRow, error: logError } = await supabaseServiceRole
         .from('admin_lead_transfer_logs')
         .select('id, banca_id, source_consultant_email, target_consultant_email, leads_ids, transfer_type')
         .eq('id', logId)
-        .eq('banca_id', resolved.bancaId)
         .single();
 
       if (!logError && logRow) {

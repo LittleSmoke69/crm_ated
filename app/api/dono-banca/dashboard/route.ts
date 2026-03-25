@@ -3,6 +3,9 @@ import { requireStatusOrSidebarPermission } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { getDonoBancaDashboardData, getDashboardDataByBancaId } from '@/lib/services/dashboard/dono-banca';
 
+/** Netlify/Vercel: dashboard agrega CRM por muitos consultores — precisa de limite alto para evitar 504/HTML de erro. */
+export const maxDuration = 300;
+
 /**
  * GET /api/dono-banca/dashboard - Dashboard do Dono de Banca (ou por banca para super_admin/admin/cargos personalizados)
  * - dono_banca: métricas da própria banca.
@@ -16,8 +19,14 @@ export async function GET(req: NextRequest) {
     const dateFrom = searchParams.get('date_from');
     const dateTo = searchParams.get('date_to');
     const bancaId = searchParams.get('banca_id')?.trim() || null;
-    const limit = Math.min(Math.max(parseInt(searchParams.get('limit') ?? '500', 10) || 500, 1), 1000);
-    const offset = Math.max(parseInt(searchParams.get('offset') ?? '0', 10) || 0, 0);
+    /** Paginação opcional: quando presente, o serviço processa só N gerentes por request (evita 504/edge HTML na Netlify). */
+    const hasPaging = searchParams.has('limit') || searchParams.has('offset');
+    const gerentesLimit = hasPaging
+      ? Math.min(Math.max(parseInt(searchParams.get('limit') ?? '5', 10) || 5, 1), 1000)
+      : undefined;
+    const gerentesOffset = hasPaging
+      ? Math.max(parseInt(searchParams.get('offset') ?? '0', 10) || 0, 0)
+      : undefined;
 
     const isAdminOrSuperAdmin = profile?.status === 'super_admin' || profile?.status === 'admin';
     const isDonoBanca = profile?.status === 'dono_banca';
@@ -33,23 +42,26 @@ export async function GET(req: NextRequest) {
         bancaId,
         dateFrom: dateFrom ?? undefined,
         dateTo: dateTo ?? undefined,
+        gerentesOffset,
+        gerentesLimit,
       });
     } else {
       // Dono de banca: comportamento original (usa banca do perfil)
       data = await getDonoBancaDashboardData({
         userId,
         dateFrom,
-        dateTo
+        dateTo,
+        gerentesOffset,
+        gerentesLimit,
       });
     }
 
-    const totalGerentes = data.gerentes?.length ?? 0;
-    const gerentesSlice = (data.gerentes ?? []).slice(offset, offset + limit);
-    const hasMore = offset + gerentesSlice.length < totalGerentes;
+    const totalGerentes =
+      (data as { totalGerentes?: number }).totalGerentes ?? data.gerentes?.length ?? 0;
+    const hasMore = (data as { hasMoreGerentes?: boolean }).hasMoreGerentes ?? false;
 
     return successResponse({
       ...data,
-      gerentes: gerentesSlice,
       totalGerentes,
       hasMore,
     });

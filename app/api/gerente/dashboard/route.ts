@@ -1,5 +1,8 @@
 import { NextRequest } from 'next/server';
 import { requireStatusOrSidebarPermission, getUserProfile } from '@/lib/middleware/permissions';
+
+/** Mesma necessidade do dono-banca: paginação CRM e KPIs podem exceder o timeout padrão em produção. */
+export const maxDuration = 300;
 import { getEffectiveDonoIdForGestor } from '@/lib/middleware/gestor-owner';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';

@@ -21,6 +21,8 @@
     schedule = "*/1 * * * *"
   [functions."process-activation-mass-send"]
     schedule = "*/1 * * * *"
+    # Deve cobrir POST /api/.../mass-send/process (DB + envio Evolution). Padrão 10s corta antes da API responder.
+    timeout = 26
   [functions."process-broadcast-queue"]
     schedule = "*/1 * * * *"
     timeout = 26
