@@ -1393,6 +1393,12 @@ const LeadCard: React.FC<LeadCardProps> = ({
               {tag.label}
             </span>
           ))}
+          {(!lead.tags || lead.tags.length === 0) && lead.has_any_tag_association === true && (
+            <span className="flex items-center gap-1.5 text-[10px] font-black px-2.5 py-1 rounded-full uppercase tracking-tight border border-amber-300/60 text-amber-700 bg-amber-100">
+              <TagIcon className="w-3 h-3" />
+              Etiqueta vinculada
+            </span>
+          )}
         </div>
 
         {/* 5. Telefone: borda tracejada, ícone verde, número, copiar */}
@@ -3355,6 +3361,8 @@ const LeadCard: React.FC<LeadCardProps> = ({
                       </span>
                     ))}
                   </div>
+                ) : lead.has_any_tag_association === true ? (
+                  <p className="text-sm text-amber-700 dark:text-amber-300">Etiqueta vinculada (sincronizando visualização).</p>
                 ) : (
                   <p className="text-sm text-gray-500 dark:text-gray-400">Nenhuma etiqueta.</p>
                 )}

@@ -352,6 +352,7 @@ export async function GET(req: NextRequest) {
       const originalIds = filteredLeads.map(toOriginalId);
       let leadTagsMap: Record<string, any[]> = {};
       let lastFeedbackMap: Record<string, string> = {};
+      let leadHasAnyTagMap: Record<string, boolean> = {};
 
       // Query única: todas as associações lead->tag do user_id (sem filtrar por lead_external_id)
       const { data: leadTagAssociations, error: associationsError } = await supabaseServiceRole
@@ -364,7 +365,11 @@ export async function GET(req: NextRequest) {
       }
 
       if (leadTagAssociations && leadTagAssociations.length > 0) {
-        const tagIds = [...new Set(leadTagAssociations.map((lt: any) => lt.tag_id))];
+        const rawTagIds = [...new Set(leadTagAssociations.map((lt: any) => lt.tag_id))];
+        const uuidLike = (v: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+        const tagIds = rawTagIds
+          .map((id: any) => String(id ?? '').trim())
+          .filter((id: string) => id.length > 0 && uuidLike(id));
         const { data: tags, error: tagsError } = await supabaseServiceRole
           .from('crm_tags')
           .select('id, label, color')
@@ -395,10 +400,14 @@ export async function GET(req: NextRequest) {
             const leadExternalId = lt.lead_external_id != null ? String(lt.lead_external_id).trim() : '';
             const tagIdNorm = lt.tag_id != null ? String(lt.tag_id) : '';
             const tag = tagsById[tagIdNorm] ?? tagsById[lt.tag_id];
+            if (leadExternalId) leadHasAnyTagMap[leadExternalId] = true;
             if (tag) {
               pushTagToMap(leadExternalId, tag);
               const numericSuffix = leadExternalId.includes('-') ? leadExternalId.split('-').pop() : null;
-              if (numericSuffix && /^\d+$/.test(numericSuffix)) pushTagToMap(numericSuffix, tag);
+              if (numericSuffix && /^\d+$/.test(numericSuffix)) {
+                pushTagToMap(numericSuffix, tag);
+                leadHasAnyTagMap[numericSuffix] = true;
+              }
             }
           });
         }
@@ -473,6 +482,12 @@ export async function GET(req: NextRequest) {
         });
 
         const originalId = l._originalId ?? l.id;
+        const mappedTags = (leadTagsMap[compositeId] || leadTagsMap[originalIdStr] || []).map((t: any) => ({
+          id: t.id != null ? String(t.id) : '',
+          label: t.label != null ? String(t.label) : '',
+          color: t.color != null ? String(t.color) : '#6B7280',
+        }));
+        const hasAnyTagAssociation = !!leadHasAnyTagMap[compositeId] || !!leadHasAnyTagMap[originalIdStr];
         return {
           id: compositeId,
           /** Id numérico do lead na API externa (ex.: 28660). Usar em user_id ao salvar feedback. */
@@ -515,15 +530,12 @@ export async function GET(req: NextRequest) {
           convert: l.convert ? Math.round((parseFloat(l.convert.toString()) || 0) * 100) / 100 : 0,
           total_afiliate: l.total_afiliate ? Math.round((parseFloat(l.total_afiliate.toString()) || 0) * 100) / 100 : 0,
           aposta_estrelas: l.aposta_estrelas ? parseInt(l.aposta_estrelas.toString()) || 0 : 0,
-          tags: (leadTagsMap[compositeId] || leadTagsMap[originalIdStr] || []).map((t: any) => ({
-            id: t.id != null ? String(t.id) : '',
-            label: t.label != null ? String(t.label) : '',
-            color: t.color != null ? String(t.color) : '#6B7280',
-          })),
+          tags: mappedTags,
+          /** Verdadeiro quando existe associação em crm_lead_tags, mesmo se a etiqueta não foi resolvida no mapa visual. */
+          has_any_tag_association: hasAnyTagAssociation,
           has_interaction: l.has_interaction === true || l.has_interaction === 'true' || l.has_interaction === 1 || !!localLastContact || false,
         };
       });
-
       if (onlyResponded) {
         const respondedOnly = formattedLeads.filter(
           (l: any) => l.has_interaction === true || l.has_interaction === 'true' || l.has_interaction === 1

@@ -8,6 +8,27 @@ import { calculateLeadTemperature } from '@/lib/utils/temperature';
 import { getBancasVisiveis } from '@/app/api/crm/bancas/route';
 
 const LOG_PREFIX = '[CRM Transferred Leads]';
+const TAG_LOOKUP_CHUNK_SIZE = 120;
+
+async function fetchLeadTagAssociationsByLeadIds(userId: string, leadIds: string[]) {
+  const normalizedIds = Array.from(new Set((leadIds || []).map((id) => String(id).trim()).filter(Boolean)));
+  if (normalizedIds.length === 0) return { data: [] as any[], error: null as any };
+
+  const allRows: any[] = [];
+  for (let i = 0; i < normalizedIds.length; i += TAG_LOOKUP_CHUNK_SIZE) {
+    const chunk = normalizedIds.slice(i, i + TAG_LOOKUP_CHUNK_SIZE);
+    const { data, error } = await supabaseServiceRole
+      .from('crm_lead_tags')
+      .select('lead_external_id, tag_id')
+      .eq('user_id', userId)
+      .in('lead_external_id', chunk);
+
+    if (error) return { data: [] as any[], error };
+    if (Array.isArray(data) && data.length > 0) allRows.push(...data);
+  }
+
+  return { data: allRows, error: null as any };
+}
 
 /**
  * GET /api/crm/transferred-leads
@@ -194,12 +215,17 @@ export async function GET(req: NextRequest) {
         .filter((l: any) => isTransferred(l))
         .map((l: any) => ({ ...l, _originalId: l.id, _bancaKey: firstBanca.id }));
 
-      // Tags para formatação (uma única query)
+      // Tags para formatação: limitar por leads do lote atual evita inconsistências em bases muito grandes
       let leadTagsMap: Record<string, any[]> = {};
-      const { data: leadTagAssociations } = await supabaseServiceRole
-        .from('crm_lead_tags')
-        .select('lead_external_id, tag_id')
-        .eq('user_id', targetUserId);
+      let leadHasAnyTagMap: Record<string, boolean> = {};
+      const quickCompositeIds = rawFirstPage
+        .map((l: any) => (l._bancaKey != null && l._originalId != null ? `${l._bancaKey}-${l._originalId}` : String(l._originalId ?? l.id)))
+        .filter((id: string) => !!id);
+      const quickOriginalIds = rawFirstPage
+        .map((l: any) => String(l._originalId ?? l.id))
+        .filter((id: string) => !!id);
+      const quickLeadIds = Array.from(new Set([...quickCompositeIds, ...quickOriginalIds]));
+      const { data: leadTagAssociations } = await fetchLeadTagAssociationsByLeadIds(targetUserId, quickLeadIds);
       if (leadTagAssociations?.length) {
         const tagIds = [...new Set(leadTagAssociations.map((lt: any) => lt.tag_id))];
         const { data: tags } = await supabaseServiceRole
@@ -218,11 +244,15 @@ export async function GET(req: NextRequest) {
           };
           leadTagAssociations.forEach((lt: any) => {
             const leadExternalId = lt.lead_external_id != null ? String(lt.lead_external_id).trim() : '';
-            const tag = tagsById[lt.tag_id];
+            const tag = tagsById[String(lt.tag_id)];
+            if (leadExternalId) leadHasAnyTagMap[leadExternalId] = true;
             if (tag) {
               pushTagToMap(leadExternalId, tag);
               const numericSuffix = leadExternalId.includes('-') ? leadExternalId.split('-').pop() : null;
-              if (numericSuffix && /^\d+$/.test(numericSuffix)) pushTagToMap(numericSuffix, tag);
+              if (numericSuffix && /^\d+$/.test(numericSuffix)) {
+                pushTagToMap(numericSuffix, tag);
+                leadHasAnyTagMap[numericSuffix] = true;
+              }
             }
           });
         }
@@ -236,6 +266,8 @@ export async function GET(req: NextRequest) {
         const compositeId = toLeadExternalId(l);
         const originalId = l._originalId ?? l.id;
         const originalIdStr = toOriginalId(l);
+        const mappedTags = (leadTagsMap[compositeId] || leadTagsMap[originalIdStr] || []).map((t: any) => ({ id: t.id, label: t.label ?? '', color: t.color ?? '#6B7280' }));
+        const hasAnyTagAssociation = !!leadHasAnyTagMap[compositeId] || !!leadHasAnyTagMap[originalIdStr];
         const leadIdStr = String(originalId);
         const temperature = calculateLeadTemperature({
           created_at: l.created_at || new Date().toISOString(),
@@ -277,7 +309,8 @@ export async function GET(req: NextRequest) {
           convert: l.convert ? Math.round((parseFloat(String(l.convert)) || 0) * 100) / 100 : 0,
           total_afiliate: l.total_afiliate ? Math.round((parseFloat(String(l.total_afiliate)) || 0) * 100) / 100 : 0,
           aposta_estrelas: l.aposta_estrelas ? parseInt(String(l.aposta_estrelas)) || 0 : 0,
-          tags: (leadTagsMap[compositeId] || leadTagsMap[originalIdStr] || []).map((t: any) => ({ id: t.id, label: t.label ?? '', color: t.color ?? '#6B7280' })),
+          tags: mappedTags,
+          has_any_tag_association: hasAnyTagAssociation,
           has_interaction: l.has_interaction === true || l.has_interaction === 'true' || l.has_interaction === 1 || false,
           tag_de_redistribuicao: l.tag_de_redistribuicao ?? null,
           transferred: true,
@@ -856,15 +889,17 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Busca tags (mesma lógica do /api/crm/leads: busca TODAS as associações do user, evita .in() e falhas de match)
+    // Busca tags: limitar por leads da resposta atual melhora consistência e performance
     const toLeadExternalId = (l: any) =>
       l._bancaKey != null && l._originalId != null ? `${l._bancaKey}-${l._originalId}` : (l._originalId ?? l.id).toString();
     const toOriginalId = (l: any) => (l._originalId ?? l.id).toString();
     let leadTagsMap: Record<string, any[]> = {};
-    const { data: leadTagAssociations } = await supabaseServiceRole
-      .from('crm_lead_tags')
-      .select('lead_external_id, tag_id')
-      .eq('user_id', targetUserId);
+    let leadHasAnyTagMap: Record<string, boolean> = {};
+    const compositeIds = filteredLeads.map(toLeadExternalId).filter((id: string) => !!id);
+    const originalIds = filteredLeads.map(toOriginalId).filter((id: string) => !!id);
+    const leadIdsForTagLookup = Array.from(new Set([...compositeIds, ...originalIds]));
+    const { data: leadTagAssociations, error: tagAssocError } = await fetchLeadTagAssociationsByLeadIds(targetUserId, leadIdsForTagLookup);
+    console.log(`${LOG_PREFIX} [TAGS] user_id=${targetUserId} | leads_lote=${leadIdsForTagLookup.length} | associações=${leadTagAssociations?.length ?? 0} | erro=${tagAssocError?.message ?? 'nenhum'}`);
     if (leadTagAssociations?.length) {
       const tagIds = [...new Set(leadTagAssociations.map((lt: any) => lt.tag_id))];
       const { data: tags } = await supabaseServiceRole
@@ -885,11 +920,15 @@ export async function GET(req: NextRequest) {
         };
         leadTagAssociations.forEach((lt: any) => {
           const leadExternalId = lt.lead_external_id != null ? String(lt.lead_external_id).trim() : '';
-          const tag = tagsById[lt.tag_id];
+          const tag = tagsById[String(lt.tag_id)];
+          if (leadExternalId) leadHasAnyTagMap[leadExternalId] = true;
           if (tag) {
             pushTagToMap(leadExternalId, tag);
             const numericSuffix = leadExternalId.includes('-') ? leadExternalId.split('-').pop() : null;
-            if (numericSuffix && /^\d+$/.test(numericSuffix)) pushTagToMap(numericSuffix, tag);
+            if (numericSuffix && /^\d+$/.test(numericSuffix)) {
+              pushTagToMap(numericSuffix, tag);
+              leadHasAnyTagMap[numericSuffix] = true;
+            }
           }
         });
       }
@@ -914,6 +953,12 @@ export async function GET(req: NextRequest) {
       const compositeId = toLeadExternalId(l);
       const originalId = l._originalId ?? l.id;
       const originalIdStr = toOriginalId(l);
+      const mappedTags = (leadTagsMap[compositeId] || leadTagsMap[originalIdStr] || []).map((t: any) => ({
+        id: t.id != null ? String(t.id) : '',
+        label: t.label ?? '',
+        color: t.color ?? '#6B7280',
+      }));
+      const hasAnyTagAssociation = !!leadHasAnyTagMap[compositeId] || !!leadHasAnyTagMap[originalIdStr];
       const leadIdStr = String(originalId);
       const transferredAtFallback = transferDateByLeadId[leadIdStr] ?? null;
       const temperature = calculateLeadTemperature({
@@ -956,11 +1001,8 @@ export async function GET(req: NextRequest) {
         convert: l.convert ? Math.round((parseFloat(String(l.convert)) || 0) * 100) / 100 : 0,
         total_afiliate: l.total_afiliate ? Math.round((parseFloat(String(l.total_afiliate)) || 0) * 100) / 100 : 0,
         aposta_estrelas: l.aposta_estrelas ? parseInt(String(l.aposta_estrelas)) || 0 : 0,
-        tags: (leadTagsMap[compositeId] || leadTagsMap[originalIdStr] || []).map((t: any) => ({
-          id: t.id != null ? String(t.id) : '',
-          label: t.label ?? '',
-          color: t.color ?? '#6B7280',
-        })),
+        tags: mappedTags,
+        has_any_tag_association: hasAnyTagAssociation,
         has_interaction: l.has_interaction === true || l.has_interaction === 'true' || l.has_interaction === 1 || false,
         tag_de_redistribuicao: l.tag_de_redistribuicao ?? null,
         transferred: true,

@@ -102,6 +102,8 @@ export default function MaturadorPage() {
   const PLAN_ID_VIRGIN_MESSAGES = 'a0000000-0000-0000-0000-000000000001';
   const useVirginMessages = selectedPlanId === VIRGIN_MESSAGES_OPTION;
   const plansFiltered = plans.filter((p) => p.id !== PLAN_ID_VIRGIN_MESSAGES);
+  const myPlans = plansFiltered.filter((p) => p.created_by === userId);
+  const suggestedPlans = plansFiltered.filter((p) => p.created_by !== userId);
   const [checkingConnection, setCheckingConnection] = useState<string | null>(null);
   /** IDs (evolution_instance_id) das instâncias selecionadas para o Start. Vazio = qualquer disponível. */
   const [selectedInstanceIds, setSelectedInstanceIds] = useState<Set<string>>(new Set());
@@ -248,6 +250,25 @@ export default function MaturadorPage() {
     setPlanFormDescription('');
     setPlanFormTargetChatId('');
     setPlanFormSteps([{ type: 'text', delay_seconds: 5, payload: { text: '' } }]);
+    setShowPlanModal(true);
+  }
+
+  function openCreatePlanFromSuggestion(plan: MaturationPlan) {
+    setEditingPlan(null);
+    setPlanFormName(`${plan.name} (cópia)`);
+    setPlanFormDescription(plan.description ?? '');
+    setPlanFormTargetChatId(plan.default_target_chat_id ?? '');
+    const steps = plan.steps_json?.length
+      ? plan.steps_json
+      : [{ type: 'text' as const, delaySec: 5, payload: { text: '' } }];
+    setPlanFormSteps(
+      steps.map((s) => ({
+        type: s.type,
+        delay_seconds: s.delaySec ?? 5,
+        target_chat_id: s.target_chat_id ?? '',
+        payload: s.payload || { text: '', media_url: '', caption: '' },
+      }))
+    );
     setShowPlanModal(true);
   }
 
@@ -474,6 +495,10 @@ export default function MaturadorPage() {
       return;
     }
     const plan = useVirgin ? null : plans.find((p) => p.id === selectedPlanId);
+    if (!useVirgin && (!plan || plan.created_by !== userId)) {
+      alert('Para iniciar, crie e selecione um plano seu. Os planos do admin aparecem apenas como sugestão.');
+      return;
+    }
     const targetChatId = useVirgin ? (targetChatIdInput || '').trim() : (plan?.default_target_chat_id || '');
     // Target Chat ID é opcional: o job pode ter destino padrão; steps podem ter "Enviar para grupo" no fluxo
 
@@ -842,9 +867,22 @@ export default function MaturadorPage() {
                       <option value={VIRGIN_MESSAGES_OPTION}>
                         Mensagens do Auto maturador{virginMessagesCount >= 0 ? ` (${virginMessagesCount} msg)` : ''}
                       </option>
-                      {plansFiltered.map((plan) => (
-                        <option key={plan.id} value={plan.id}>{plan.name}</option>
-                      ))}
+                      {myPlans.length > 0 && (
+                        <optgroup label="Meus planos">
+                          {myPlans.map((plan) => (
+                            <option key={plan.id} value={plan.id}>{plan.name}</option>
+                          ))}
+                        </optgroup>
+                      )}
+                      {suggestedPlans.length > 0 && (
+                        <optgroup label="Sugestões do admin">
+                          {suggestedPlans.map((plan) => (
+                            <option key={plan.id} value={plan.id} disabled>
+                              {plan.name} (sugestão)
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
                     </select>
                   </div>
                   <div className="w-full sm:w-28">
@@ -898,6 +936,11 @@ export default function MaturadorPage() {
                     />
                   </div>
                 )}
+                {!useVirginMessages && selectedPlanId && !myPlans.some((p) => p.id === selectedPlanId) && (
+                  <p className="text-xs text-amber-600">
+                    Planos do admin aparecem como sugestão. Para iniciar, crie seu plano com base em uma sugestão.
+                  </p>
+                )}
                 {selectedInstanceIds.size > 0 && (
                   <p className="text-xs text-slate-500 dark:text-[#aaa]">
                     {selectedInstanceIds.size} instância(s) selecionada(s) para este job. Sem seleção = qualquer disponível.
@@ -928,53 +971,118 @@ export default function MaturadorPage() {
                 {plansFiltered.length === 0 ? (
                   <p className="text-sm text-slate-500 dark:text-[#888] py-4 text-center">Nenhum plano. Clique em &quot;Novo plano&quot; para criar.</p>
                 ) : (
-                  <ul className="space-y-2">
-                    {plansFiltered.map((plan) => {
-                      const stepsCount = Array.isArray(plan.steps_json) ? plan.steps_json.length : 0;
-                      const isExpanded = expandedPlanConfig === plan.id;
-                      const canEdit = canEditPlan(plan);
-                      return (
-                        <li key={plan.id} className="rounded-lg border border-slate-200 dark:border-[#404040] bg-slate-50/50 dark:bg-[#333]/50">
-                          <div className="p-3 flex items-center justify-between gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setExpandedPlanConfig(isExpanded ? null : plan.id)}
-                              className="flex-1 flex items-center gap-2 text-left min-w-0"
-                            >
-                              <FileText className="w-4 h-4 text-slate-500 shrink-0" />
-                              <span className="font-medium text-slate-800 dark:text-white truncate">{plan.name}</span>
-                              <span className="text-xs text-slate-500 shrink-0">{stepsCount} step(s)</span>
-                              {isExpanded ? <ChevronUp className="w-4 h-4 shrink-0" /> : <ChevronDown className="w-4 h-4 shrink-0" />}
-                            </button>
-                            {canEdit && (
-                              <div className="flex items-center gap-1 shrink-0">
-                                <button type="button" onClick={() => openEditPlanModal(plan)} className="p-1.5 text-slate-500 hover:text-[#8CD955] rounded" title="Editar">
-                                  <Edit className="w-4 h-4" />
-                                </button>
-                                <button type="button" onClick={() => handleDeletePlan(plan.id)} className="p-1.5 text-slate-500 hover:text-red-500 rounded" title="Excluir">
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                          {isExpanded && (plan.steps_json?.length ?? 0) > 0 && (
-                            <div className="px-3 pb-3 pt-0 border-t border-slate-100 dark:border-[#404040]">
-                              <ul className="mt-2 space-y-1.5 text-xs text-slate-600 dark:text-[#aaa]">
-                                {(plan.steps_json ?? []).map((s, i) => (
-                                  <li key={i} className="flex items-center gap-2">
-                                    <span className="font-mono text-slate-400 w-5">{i + 1}.</span>
-                                    <span>{s.type}</span>
-                                    <span className="text-slate-400">{s.delaySec}s</span>
-                                    {s.type === 'text' && s.payload?.text && <span className="truncate max-w-[180px]">{s.payload.text}</span>}
-                                  </li>
-                                ))}
-                              </ul>
-                            </div>
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ul>
+                  <div className="space-y-3">
+                    <div>
+                      <p className="text-xs font-semibold text-slate-500 dark:text-[#aaa] mb-2">Meus planos</p>
+                      {myPlans.length === 0 ? (
+                        <p className="text-xs text-slate-400 dark:text-[#888] px-1 py-1">
+                          Você ainda não criou um plano.
+                        </p>
+                      ) : (
+                        <ul className="space-y-2">
+                          {myPlans.map((plan) => {
+                            const stepsCount = Array.isArray(plan.steps_json) ? plan.steps_json.length : 0;
+                            const isExpanded = expandedPlanConfig === plan.id;
+                            const canEdit = canEditPlan(plan);
+                            return (
+                              <li key={plan.id} className="rounded-lg border border-slate-200 dark:border-[#404040] bg-slate-50/50 dark:bg-[#333]/50">
+                                <div className="p-3 flex items-center justify-between gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => setExpandedPlanConfig(isExpanded ? null : plan.id)}
+                                    className="flex-1 flex items-center gap-2 text-left min-w-0"
+                                  >
+                                    <FileText className="w-4 h-4 text-slate-500 shrink-0" />
+                                    <span className="font-medium text-slate-800 dark:text-white truncate">{plan.name}</span>
+                                    <span className="text-xs text-slate-500 shrink-0">{stepsCount} step(s)</span>
+                                    {isExpanded ? <ChevronUp className="w-4 h-4 shrink-0" /> : <ChevronDown className="w-4 h-4 shrink-0" />}
+                                  </button>
+                                  {canEdit && (
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      <button type="button" onClick={() => openEditPlanModal(plan)} className="p-1.5 text-slate-500 hover:text-[#8CD955] rounded" title="Editar">
+                                        <Edit className="w-4 h-4" />
+                                      </button>
+                                      <button type="button" onClick={() => handleDeletePlan(plan.id)} className="p-1.5 text-slate-500 hover:text-red-500 rounded" title="Excluir">
+                                        <Trash2 className="w-4 h-4" />
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                                {isExpanded && (plan.steps_json?.length ?? 0) > 0 && (
+                                  <div className="px-3 pb-3 pt-0 border-t border-slate-100 dark:border-[#404040]">
+                                    <ul className="mt-2 space-y-1.5 text-xs text-slate-600 dark:text-[#aaa]">
+                                      {(plan.steps_json ?? []).map((s, i) => (
+                                        <li key={i} className="flex items-center gap-2">
+                                          <span className="font-mono text-slate-400 w-5">{i + 1}.</span>
+                                          <span>{s.type}</span>
+                                          <span className="text-slate-400">{s.delaySec}s</span>
+                                          {s.type === 'text' && s.payload?.text && <span className="truncate max-w-[180px]">{s.payload.text}</span>}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                )}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold text-slate-500 dark:text-[#aaa] mb-2">Sugestões do admin</p>
+                      {suggestedPlans.length === 0 ? (
+                        <p className="text-xs text-slate-400 dark:text-[#888] px-1 py-1">
+                          Nenhuma sugestão disponível.
+                        </p>
+                      ) : (
+                        <ul className="space-y-2">
+                          {suggestedPlans.map((plan) => {
+                            const stepsCount = Array.isArray(plan.steps_json) ? plan.steps_json.length : 0;
+                            const isExpanded = expandedPlanConfig === plan.id;
+                            return (
+                              <li key={plan.id} className="rounded-lg border border-amber-200 dark:border-amber-800/60 bg-amber-50/50 dark:bg-amber-900/10">
+                                <div className="p-3 flex items-center justify-between gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => setExpandedPlanConfig(isExpanded ? null : plan.id)}
+                                    className="flex-1 flex items-center gap-2 text-left min-w-0"
+                                  >
+                                    <FileText className="w-4 h-4 text-amber-600 shrink-0" />
+                                    <span className="font-medium text-slate-800 dark:text-white truncate">{plan.name}</span>
+                                    <span className="text-xs text-amber-700 dark:text-amber-400 shrink-0">Sugestão</span>
+                                    <span className="text-xs text-slate-500 shrink-0">{stepsCount} step(s)</span>
+                                    {isExpanded ? <ChevronUp className="w-4 h-4 shrink-0" /> : <ChevronDown className="w-4 h-4 shrink-0" />}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => openCreatePlanFromSuggestion(plan)}
+                                    className="px-2.5 py-1 rounded-lg text-xs font-medium bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 hover:bg-amber-200 dark:hover:bg-amber-900/60"
+                                    title="Criar meu plano com base nesta sugestão"
+                                  >
+                                    Usar como base
+                                  </button>
+                                </div>
+                                {isExpanded && (plan.steps_json?.length ?? 0) > 0 && (
+                                  <div className="px-3 pb-3 pt-0 border-t border-amber-100 dark:border-amber-800/40">
+                                    <ul className="mt-2 space-y-1.5 text-xs text-slate-600 dark:text-[#aaa]">
+                                      {(plan.steps_json ?? []).map((s, i) => (
+                                        <li key={i} className="flex items-center gap-2">
+                                          <span className="font-mono text-slate-400 w-5">{i + 1}.</span>
+                                          <span>{s.type}</span>
+                                          <span className="text-slate-400">{s.delaySec}s</span>
+                                          {s.type === 'text' && s.payload?.text && <span className="truncate max-w-[180px]">{s.payload.text}</span>}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                )}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </div>
+                  </div>
                 )}
               </div>
             </div>

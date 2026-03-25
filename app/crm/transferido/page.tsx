@@ -198,6 +198,7 @@ const TransferidoContent = () => {
           status: (l.status as Lead['status']) || 'novo',
           thermalStatus: (l.temperature as ThermalStatus) || 'cold',
           tags: l.tags || [],
+          has_any_tag_association: l.has_any_tag_association === true,
           createdAt: l.created_at,
           total_depositado: l.total_depositado,
           total_apostado: l.total_apostado,
@@ -612,9 +613,9 @@ const TransferidoContent = () => {
     if (filters.tags) {
       const tagValue = typeof filters.tags === 'object' ? filters.tags.value : filters.tags;
       if (tagValue === '__has_any') {
-        formattedLeads = formattedLeads.filter((l) => (l.tags || []).length > 0);
+        formattedLeads = formattedLeads.filter((l) => (l.tags || []).length > 0 || l.has_any_tag_association === true);
       } else if (tagValue === '__none') {
-        formattedLeads = formattedLeads.filter((l) => (l.tags || []).length === 0);
+        formattedLeads = formattedLeads.filter((l) => (l.tags || []).length === 0 && l.has_any_tag_association !== true);
       } else if (tagValue) {
         formattedLeads = formattedLeads.filter((l) => (l.tags || []).some((t: { id: string }) => t.id === tagValue));
       }
@@ -894,7 +895,7 @@ const TransferidoContent = () => {
                     onStarsChange={handleStarsChange}
                     onDragStart={onDragStart}
                     onDrop={onDrop}
-                    targetUserId={userId || undefined}
+                    targetUserId={targetUserId || userId || undefined}
                     onTagAdded={handleTagAdded}
                     onTagRemoved={handleTagRemoved}
                     onRefresh={() => loadLeads(true)}

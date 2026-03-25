@@ -257,6 +257,14 @@ export async function runMaturationStart(supabase: SupabaseClient, params: Start
     return { success: false, error: 'Plano não encontrado ou inativo', statusCode: 404 };
   }
 
+  if (!useVirgin && plan.created_by !== userId) {
+    return {
+      success: false,
+      error: 'Você só pode iniciar jobs com planos criados por você. Use uma sugestão do admin como base e salve sua cópia.',
+      statusCode: 403,
+    };
+  }
+
   if (!useVirgin) {
     const planSteps = Array.isArray(plan.steps_json) ? plan.steps_json : [];
     if (planSteps.length === 0) {

@@ -80,6 +80,8 @@ export interface Lead {
   vinculado?: boolean;
   /** Prazo em dias definido na transferência (admin_lead_transfer_logs.deadline_days). Sobrescreve a prop de coluna no LeadCard. */
   transfer_deadline_days?: number | null;
+  /** Indica associação em crm_lead_tags mesmo quando a etiqueta não veio resolvida visualmente. */
+  has_any_tag_association?: boolean;
 }
 
 export interface Column {

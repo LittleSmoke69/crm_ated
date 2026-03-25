@@ -131,6 +131,13 @@ const AddTagModal: React.FC<AddTagModalProps> = ({
           onClose();
         }
       } else {
+        const duplicate = typeof result.error === 'string' && result.error.toLowerCase().includes('já está associada');
+        if (duplicate) {
+          const existingTag = tags.find(t => t.id === tagId);
+          if (existingTag) onTagAdded?.(existingTag);
+          setAddedTag(existingTag || { id: tagId, label: 'Etiqueta', color: '#6B7280' });
+          return;
+        }
         setError(result.error || 'Erro ao adicionar etiqueta');
       }
     } catch (err) {

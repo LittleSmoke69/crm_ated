@@ -295,7 +295,6 @@ const KanbanContent = () => {
     if (isInitialLoad) {
       isInitialLoadRef.current = false;
     }
-
     loadLeads(!isInitialLoad);
   }, [userId, targetUserId, bancaKey, dateKey, bancasReady]);
 
@@ -407,6 +406,7 @@ const KanbanContent = () => {
         convert: l.convert ? parseFloat(l.convert) : 0,
         total_afiliate: l.total_afiliate ? parseFloat(l.total_afiliate) : 0,
         aposta_estrelas: l.aposta_estrelas ? parseInt(l.aposta_estrelas.toString()) || 0 : 0,
+        has_any_tag_association: l.has_any_tag_association === true,
         banca_id: l.banca_id,
         banca_name: l.banca_name,
         banca_url: l.banca_url,
@@ -1184,9 +1184,9 @@ const KanbanContent = () => {
     if (filters.tags) {
       const tagValue = typeof filters.tags === 'object' ? filters.tags.value : filters.tags;
       if (tagValue === '__has_any') {
-        formattedLeads = formattedLeads.filter(l => (l.tags || []).length > 0);
+        formattedLeads = formattedLeads.filter(l => (l.tags || []).length > 0 || l.has_any_tag_association === true);
       } else if (tagValue === '__none') {
-        formattedLeads = formattedLeads.filter(l => (l.tags || []).length === 0);
+        formattedLeads = formattedLeads.filter(l => (l.tags || []).length === 0 && l.has_any_tag_association !== true);
       } else if (tagValue) {
         formattedLeads = formattedLeads.filter(l =>
           (l.tags || []).some((t: { id: string }) => t.id === tagValue)
@@ -1293,7 +1293,12 @@ const KanbanContent = () => {
 
   const handleTagAdded = (leadId: string | number, addedTag: { id: string; label: string; color: string }) => {
     setRawLeads(prev =>
-      prev.map(l => (l.id === leadId ? { ...l, tags: [...(l.tags || []), addedTag] } : l))
+      prev.map(l => {
+        if (String(l.id) !== String(leadId)) return l;
+        const already = (l.tags || []).some(t => t.id === addedTag.id);
+        if (already) return l;
+        return { ...l, tags: [...(l.tags || []), addedTag], has_any_tag_association: true };
+      })
     );
   };
 
