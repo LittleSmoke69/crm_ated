@@ -107,7 +107,7 @@ const headlineRichCnn = {
   ],
 };
 
-export type VslTemplateKey = 'finance' | 'cnn' | 'nbc';
+export type VslTemplateKey = 'finance' | 'cnn' | 'nbc' | 'bolao';
 
 export function getContentTemplate(key: VslTemplateKey): VslContentRoot {
   const id = () => `${key}-${Math.random().toString(36).slice(2, 9)}`;
@@ -307,6 +307,71 @@ export function getContentTemplate(key: VslTemplateKey): VslContentRoot {
                 },
               },
             ],
+          },
+        ],
+      };
+    case 'bolao':
+      return {
+        id: 'page',
+        type: 'page',
+        children: [
+          {
+            id: id(),
+            type: 'bolaoLanding',
+            props: {
+              logoUrl: '/logo_zaploto.png',
+              backgroundColor: 'hsl(224, 60%, 12%)',
+              titleBefore: 'Clique e Escolha ',
+              titleHighlight: 'Seu Bolão!',
+              subtitle: 'A Primeira Casa Lotérica Online do Brasil.',
+              videoPlayerId: '69c1b2853d18cfb2430cce49',
+              disableMessage: 'Configure o link do botão no painel',
+
+              bolaoLotteryButtons: [
+                {
+                  badgeText: 'LOTOFACIL',
+                  mainText: 'Lotinha',
+                  href: 'https://web.agoraeuganho.online/combo/56dd2e02-790a-41d2-a75e-d5d0341d0984',
+                  accentFrom: '#ff3ea5',
+                  accentTo: '#b30068',
+                  scheduleGroup: 'lotofacil-quina',
+                },
+                {
+                  badgeText: 'QUINA',
+                  mainText: 'Super 5',
+                  href: 'https://web.agoraeuganho.online/combo/f158ac2b-41b1-48f2-a357-dc8c451d92a7',
+                  accentFrom: '#7c3aed',
+                  accentTo: '#4c1d95',
+                  scheduleGroup: 'lotofacil-quina',
+                },
+                {
+                  badgeText: 'MEGA-SENA',
+                  mainText: 'Super 6',
+                  href: 'https://web.agoraeuganho.online/combo/a1c35736-cd2a-414a-af6a-136b9babb15e',
+                  accentFrom: '#2ddb6f',
+                  accentTo: '#0f8038',
+                  scheduleGroup: 'mega',
+                },
+              ],
+              lotofacilNickname: 'Lotinha',
+              lotofacilHref: 'https://web.agoraeuganho.online/combo/56dd2e02-790a-41d2-a75e-d5d0341d0984',
+              lotofacilAccentFrom: '#ff3ea5',
+              lotofacilAccentTo: '#b30068',
+              quinaNickname: 'Super 5',
+              quinaHref: 'https://web.agoraeuganho.online/combo/f158ac2b-41b1-48f2-a357-dc8c451d92a7',
+              quinaAccentFrom: '#7c3aed',
+              quinaAccentTo: '#4c1d95',
+              megaNickname: 'Super 6',
+              megaHref: 'https://web.agoraeuganho.online/combo/a1c35736-cd2a-414a-af6a-136b9babb15e',
+              megaAccentFrom: '#2ddb6f',
+              megaAccentTo: '#0f8038',
+
+              whatsappHref: 'https://wa.me/557991055651',
+              whatsappPrefix: 'Atendimento via',
+              whatsappMain: 'Falar com Atendente',
+              whatsappAccentFrom: '#2ddb6f',
+              whatsappAccentTo: '#0f8038',
+            },
           },
         ],
       };

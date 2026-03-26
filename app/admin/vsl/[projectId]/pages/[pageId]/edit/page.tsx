@@ -300,7 +300,7 @@ export default function EditVslPagePage() {
         </div>
 
         {activeTab === 'design' ? (
-          <div className="space-y-4 bg-gray-100 rounded-xl p-4">
+          <div className="space-y-4 bg-gray-100 rounded-xl p-4 h-[calc(100vh-9rem)] overflow-hidden">
             <div className="flex items-center justify-between">
               <p className="text-sm text-gray-600">Altere o template e os blocos; depois salve para publicar.</p>
               <button
@@ -320,6 +320,7 @@ export default function EditVslPagePage() {
               slug={form.slug}
               redirectSlug={form.redirect_slug}
               ctaText={form.cta_text}
+              projectId={projectId}
               videoPlayerId={vturbFromDb?.player_id}
               videoScriptSrc={vturbFromDb?.script_src}
             />

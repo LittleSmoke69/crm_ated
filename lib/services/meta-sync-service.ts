@@ -40,7 +40,9 @@ export interface MetaConfigInput {
 }
 
 export interface MetaIntegrationRow {
+  /** integration_id (novo modelo compartilhado) */
   id: string;
+  /** banca_id selecionada no contexto (para compat/UI) */
   banca_id: string;
   base_url: string;
   access_token_encrypted: string | null;
@@ -53,22 +55,174 @@ export interface MetaIntegrationRow {
   last_sync_at: string | null;
   last_sync_error: string | null;
   last_sync_date_preset: string | null;
+  banca_ids?: string[];
+}
+
+async function resolveIntegrationIdByBanca(bancaId: string): Promise<string | null> {
+  const { data, error } = await supabaseServiceRole
+    .from('meta_integration_bancas')
+    .select('integration_id')
+    .eq('banca_id', bancaId)
+    .maybeSingle();
+  if (error || !data?.integration_id) return null;
+  return String(data.integration_id);
+}
+
+async function listBancasByIntegration(integrationId: string): Promise<string[]> {
+  const { data, error } = await supabaseServiceRole
+    .from('meta_integration_bancas')
+    .select('banca_id')
+    .eq('integration_id', integrationId);
+  if (error || !data) return [];
+  return data.map((r: any) => String(r.banca_id));
+}
+
+/** Modelo legado (por banca): ainda usado quando não há linha em meta_integration_bancas. */
+async function getLegacyMetaIntegrationByBanca(bancaId: string): Promise<MetaIntegrationRow | null> {
+  const { data, error } = await supabaseServiceRole
+    .from('meta_integrations')
+    .select(
+      'id, banca_id, base_url, access_token_encrypted, token_last4, ad_account_id, pixel_id, default_campaign_id, is_active, currency, last_sync_at, last_sync_error, last_sync_date_preset'
+    )
+    .eq('banca_id', bancaId)
+    .maybeSingle();
+  if (error || !data) return null;
+  const d = data as Record<string, unknown>;
+  return {
+    id: String(d.id),
+    banca_id: bancaId,
+    base_url: String(d.base_url ?? DEFAULT_BASE_URL),
+    access_token_encrypted: (d.access_token_encrypted as string | null) ?? null,
+    token_last4: (d.token_last4 as string | null) ?? null,
+    ad_account_id: (d.ad_account_id as string | null) ?? null,
+    pixel_id: (d.pixel_id as string | null) ?? null,
+    default_campaign_id: (d.default_campaign_id as string | null) ?? null,
+    is_active: d.is_active !== false,
+    currency: (d.currency as string | null) ?? null,
+    last_sync_at: (d.last_sync_at as string | null) ?? null,
+    last_sync_error: (d.last_sync_error as string | null) ?? null,
+    last_sync_date_preset: (d.last_sync_date_preset as string | null) ?? null,
+    banca_ids: [bancaId],
+  };
+}
+
+/** base_url e ad_account para integração nova ou legada (Meta API). */
+async function resolveMetaApiContext(bancaId: string): Promise<{
+  baseUrl: string;
+  adAccountId: string | null;
+}> {
+  const integrationId = await resolveIntegrationIdByBanca(bancaId);
+  if (integrationId) {
+    const { data } = await supabaseServiceRole
+      .from('meta_integration_configs')
+      .select('base_url, ad_account_id')
+      .eq('id', integrationId)
+      .maybeSingle();
+    return {
+      baseUrl: (data?.base_url as string) || DEFAULT_BASE_URL,
+      adAccountId: (data?.ad_account_id as string) || null,
+    };
+  }
+  const { data: leg } = await supabaseServiceRole
+    .from('meta_integrations')
+    .select('base_url, ad_account_id')
+    .eq('banca_id', bancaId)
+    .maybeSingle();
+  return {
+    baseUrl: (leg?.base_url as string) || DEFAULT_BASE_URL,
+    adAccountId: (leg?.ad_account_id as string) || null,
+  };
 }
 
 export async function getMetaConfig(bancaId: string): Promise<MetaIntegrationRow | null> {
-  const { data, error } = await supabaseServiceRole
-    .from('meta_integrations')
-    .select('id, banca_id, base_url, token_last4, ad_account_id, pixel_id, default_campaign_id, is_active, currency, last_sync_at, last_sync_error, last_sync_date_preset')
-    .eq('banca_id', bancaId)
-    .maybeSingle();
+  const integrationId = await resolveIntegrationIdByBanca(bancaId);
+  if (integrationId) {
+    const { data, error } = await supabaseServiceRole
+      .from('meta_integration_configs')
+      .select('id, base_url, token_last4, ad_account_id, pixel_id, default_campaign_id, is_active, currency, last_sync_at, last_sync_error, last_sync_date_preset, access_token_encrypted')
+      .eq('id', integrationId)
+      .maybeSingle();
 
-  if (error || !data) return null;
-  return data as MetaIntegrationRow;
+    if (error || !data) return null;
+    const banca_ids = await listBancasByIntegration(integrationId);
+    return { ...(data as any), banca_id: bancaId, banca_ids } as MetaIntegrationRow;
+  }
+  return getLegacyMetaIntegrationByBanca(bancaId);
+}
+
+export type MetaConfigForBancasResult =
+  | { ok: true; mode: 'unconfigured'; banca_ids: string[] }
+  | { ok: true; mode: 'configured'; row: MetaIntegrationRow }
+  | { ok: false; error: string };
+
+/**
+ * Resolve uma única integração Meta para um conjunto de bancas.
+ * Bancas sem vínculo são ignoradas na detecção de conflito (útil para incluir novas bancas no mesmo save).
+ */
+export async function getMetaConfigForBancaIds(bancaIds: string[]): Promise<MetaConfigForBancasResult> {
+  const unique = Array.from(new Set(bancaIds.map((x) => String(x).trim()).filter(Boolean)));
+  if (unique.length === 0) {
+    return { ok: true, mode: 'unconfigured', banca_ids: [] };
+  }
+
+  const integrationIdByBanca = new Map<string, string | null>();
+  for (const bid of unique) {
+    integrationIdByBanca.set(bid, await resolveIntegrationIdByBanca(bid));
+  }
+
+  const linkedIds = [...integrationIdByBanca.values()].filter((x): x is string => Boolean(x));
+  const distinctIntegrationIds = Array.from(new Set(linkedIds));
+
+  if (distinctIntegrationIds.length === 0) {
+    const legacyEntries: { row: MetaIntegrationRow }[] = [];
+    for (const bid of unique) {
+      const row = await getLegacyMetaIntegrationByBanca(bid);
+      if (row) legacyEntries.push({ row });
+    }
+    if (legacyEntries.length === 0) {
+      return { ok: true, mode: 'unconfigured', banca_ids: unique };
+    }
+    const legacyIds = Array.from(new Set(legacyEntries.map((e) => e.row.id)));
+    if (legacyIds.length > 1) {
+      return {
+        ok: false,
+        error:
+          'As bancas selecionadas têm cadastros Meta antigos (meta_integrations) diferentes. Edite uma banca por vez ou unifique no modelo compartilhado.',
+      };
+    }
+    const baseRow = legacyEntries[0].row;
+    return {
+      ok: true,
+      mode: 'configured',
+      row: { ...baseRow, banca_ids: unique, banca_id: baseRow.banca_id },
+    };
+  }
+
+  if (distinctIntegrationIds.length > 1) {
+    return {
+      ok: false,
+      error:
+        'As bancas selecionadas estão vinculadas a integrações Meta diferentes. Selecione apenas bancas que compartilham a mesma integração ou edite uma por vez.',
+    };
+  }
+
+  const integrationId = distinctIntegrationIds[0];
+  const bancaComVinculo = unique.find((b) => integrationIdByBanca.get(b) === integrationId);
+  if (!bancaComVinculo) {
+    return { ok: true, mode: 'unconfigured', banca_ids: unique };
+  }
+
+  const row = await getMetaConfig(bancaComVinculo);
+  if (!row) {
+    return { ok: true, mode: 'unconfigured', banca_ids: unique };
+  }
+  return { ok: true, mode: 'configured', row };
 }
 
 export async function upsertMetaConfig(
   bancaId: string,
-  input: MetaConfigInput
+  input: MetaConfigInput,
+  bancaIdsToLink?: string[] | null
 ): Promise<MetaIntegrationRow> {
   const baseUrl = input.base_url?.trim() || DEFAULT_BASE_URL;
   const now = new Date().toISOString();
@@ -91,47 +245,92 @@ export async function upsertMetaConfig(
     updatePayload.token_last4 = token.length >= 4 ? token.slice(-4) : '****';
   }
 
-  const { data: existing } = await supabaseServiceRole
-    .from('meta_integrations')
-    .select('id')
-    .eq('banca_id', bancaId)
-    .maybeSingle();
+  const existingIntegrationId = await resolveIntegrationIdByBanca(bancaId);
 
-  if (existing) {
+  // Atualiza config existente (uma vez) e atualiza vínculos (opcional)
+  if (existingIntegrationId) {
     const { data, error } = await supabaseServiceRole
-      .from('meta_integrations')
+      .from('meta_integration_configs')
       .update(updatePayload)
-      .eq('banca_id', bancaId)
+      .eq('id', existingIntegrationId)
       .select()
       .single();
     if (error) throw new Error(error.message);
-    return data as MetaIntegrationRow;
+
+    if (Array.isArray(bancaIdsToLink) && bancaIdsToLink.length > 0) {
+      // Substitui o conjunto de bancas vinculadas (remove ausentes e adiciona novas)
+      const desired = Array.from(new Set(bancaIdsToLink.map((x) => String(x).trim()).filter(Boolean)));
+
+      const current = await listBancasByIntegration(existingIntegrationId);
+      const currentSet = new Set(current);
+      const desiredSet = new Set(desired);
+
+      const toRemove = current.filter((id) => !desiredSet.has(id));
+      const toAdd = desired.filter((id) => !currentSet.has(id));
+
+      if (toRemove.length > 0) {
+        await supabaseServiceRole
+          .from('meta_integration_bancas')
+          .delete()
+          .eq('integration_id', existingIntegrationId)
+          .in('banca_id', toRemove);
+      }
+      if (toAdd.length > 0) {
+        await supabaseServiceRole
+          .from('meta_integration_bancas')
+          .insert(toAdd.map((id) => ({ integration_id: existingIntegrationId, banca_id: id })));
+      }
+    }
+
+    const banca_ids = await listBancasByIntegration(existingIntegrationId);
+    return { ...(data as any), banca_id: bancaId, banca_ids } as MetaIntegrationRow;
   }
 
-  const insertRow = {
-    banca_id: bancaId,
-    ...updatePayload,
-  };
-  const { data, error } = await supabaseServiceRole
-    .from('meta_integrations')
-    .insert(insertRow)
+  // Cria nova integração + vínculo
+  const { data: created, error: createError } = await supabaseServiceRole
+    .from('meta_integration_configs')
+    .insert({ ...updatePayload })
     .select()
     .single();
-  if (error) throw new Error(error.message);
-  return data as MetaIntegrationRow;
+  if (createError) throw new Error(createError.message);
+
+  const integrationId = String((created as any).id);
+  const desired = Array.isArray(bancaIdsToLink) && bancaIdsToLink.length > 0
+    ? Array.from(new Set(bancaIdsToLink.map((x) => String(x).trim()).filter(Boolean)))
+    : [bancaId];
+
+  await supabaseServiceRole
+    .from('meta_integration_bancas')
+    .insert(desired.map((id) => ({ integration_id: integrationId, banca_id: id })));
+
+  const banca_ids = await listBancasByIntegration(integrationId);
+  return { ...(created as any), banca_id: bancaId, banca_ids } as MetaIntegrationRow;
 }
 
 export async function getDecryptedToken(bancaId: string): Promise<string | null> {
-  const { data } = await supabaseServiceRole
-    .from('meta_integrations')
-    .select('access_token_encrypted')
-    .eq('banca_id', bancaId)
-    .eq('is_active', true)
-    .maybeSingle();
+  const integrationId = await resolveIntegrationIdByBanca(bancaId);
+  let encrypted: string | null | undefined;
+  if (integrationId) {
+    const { data } = await supabaseServiceRole
+      .from('meta_integration_configs')
+      .select('access_token_encrypted')
+      .eq('id', integrationId)
+      .eq('is_active', true)
+      .maybeSingle();
+    encrypted = data?.access_token_encrypted;
+  } else {
+    const { data } = await supabaseServiceRole
+      .from('meta_integrations')
+      .select('access_token_encrypted')
+      .eq('banca_id', bancaId)
+      .eq('is_active', true)
+      .maybeSingle();
+    encrypted = data?.access_token_encrypted;
+  }
 
-  if (!data?.access_token_encrypted) return null;
+  if (!encrypted) return null;
   try {
-    return encryptionService.decrypt(data.access_token_encrypted);
+    return encryptionService.decrypt(encrypted);
   } catch {
     return null;
   }
@@ -148,13 +347,7 @@ export async function testConnection(bancaId: string): Promise<{
     return { success: false, error: 'Token não configurado ou inválido. Configure o token primeiro.' };
   }
 
-  const { data: config } = await supabaseServiceRole
-    .from('meta_integrations')
-    .select('base_url')
-    .eq('banca_id', bancaId)
-    .single();
-
-  const baseUrl = (config?.base_url as string) || DEFAULT_BASE_URL;
+  const { baseUrl } = await resolveMetaApiContext(bancaId);
 
   try {
     const me = await getMe(baseUrl, token);
@@ -179,14 +372,8 @@ export async function loadCampaigns(bancaId: string): Promise<{
     return { success: false, error: 'Token não configurado.' };
   }
 
-  const { data: config } = await supabaseServiceRole
-    .from('meta_integrations')
-    .select('base_url, ad_account_id')
-    .eq('banca_id', bancaId)
-    .single();
-
-  const baseUrl = (config?.base_url as string) || DEFAULT_BASE_URL;
-  const adAccountId = config?.ad_account_id as string | undefined;
+  const { baseUrl, adAccountId: adAccountIdRaw } = await resolveMetaApiContext(bancaId);
+  const adAccountId = adAccountIdRaw ?? undefined;
   if (!adAccountId) {
     return { success: false, error: 'Ad Account ID não configurado.' };
   }
@@ -442,14 +629,8 @@ export async function runSync(bancaId: string, datePreset = DEFAULT_DATE_PRESET)
     return { success: false, error: 'Token não configurado.' };
   }
 
-  const { data: config } = await supabaseServiceRole
-    .from('meta_integrations')
-    .select('base_url, ad_account_id')
-    .eq('banca_id', bancaId)
-    .single();
-
-  const baseUrl = (config?.base_url as string) || DEFAULT_BASE_URL;
-  const adAccountId = config?.ad_account_id as string | undefined;
+  const { baseUrl, adAccountId: adAccountIdRaw } = await resolveMetaApiContext(bancaId);
+  const adAccountId = adAccountIdRaw ?? undefined;
   if (!adAccountId) {
     return { success: false, error: 'Ad Account ID não configurado.' };
   }
@@ -533,16 +714,31 @@ export async function runSync(bancaId: string, datePreset = DEFAULT_DATE_PRESET)
       if (!error) insightsCount++;
     }
 
-    await supabaseServiceRole
-      .from('meta_integrations')
-      .update({
+    const presetLabel = `${timeRange.since}..${timeRange.until}`;
+    const integrationIdAfter = await resolveIntegrationIdByBanca(bancaId);
+    if (integrationIdAfter) {
+      await supabaseServiceRole
+        .from('meta_integration_configs')
+        .update({
         last_sync_at: now,
         last_sync_error: null,
-        last_sync_date_preset: `${timeRange.since}..${timeRange.until}`,
+        last_sync_date_preset: presetLabel,
         currency: accountCurrency,
         updated_at: now,
-      })
-      .eq('banca_id', bancaId);
+        })
+        .eq('id', integrationIdAfter);
+    } else {
+      await supabaseServiceRole
+        .from('meta_integrations')
+        .update({
+          last_sync_at: now,
+          last_sync_error: null,
+          last_sync_date_preset: presetLabel,
+          currency: accountCurrency,
+          updated_at: now,
+        })
+        .eq('banca_id', bancaId);
+    }
 
     return {
       success: true,
@@ -552,14 +748,27 @@ export async function runSync(bancaId: string, datePreset = DEFAULT_DATE_PRESET)
     };
   } catch (err: any) {
     const errMsg = err?.message || 'Erro ao sincronizar';
-    await supabaseServiceRole
-      .from('meta_integrations')
-      .update({
-        last_sync_at: new Date().toISOString(),
+    const ts = new Date().toISOString();
+    const integrationIdErr = await resolveIntegrationIdByBanca(bancaId);
+    if (integrationIdErr) {
+      await supabaseServiceRole
+        .from('meta_integration_configs')
+        .update({
+        last_sync_at: ts,
         last_sync_error: errMsg,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('banca_id', bancaId);
+        updated_at: ts,
+        })
+        .eq('id', integrationIdErr);
+    } else {
+      await supabaseServiceRole
+        .from('meta_integrations')
+        .update({
+          last_sync_at: ts,
+          last_sync_error: errMsg,
+          updated_at: ts,
+        })
+        .eq('banca_id', bancaId);
+    }
 
     return { success: false, error: errMsg };
   }

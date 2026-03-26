@@ -40,6 +40,41 @@ export default async function VslPage({ params }: { params: Promise<{ slug: stri
   const useBlocks = isValidContentRoot(contentJson);
 
   if (useBlocks) {
+    // Assina logo de templates Bolão (Storage privado) para render público.
+    // Sem isso, o componente cliente tentaria assinar via endpoint admin (sem auth).
+    const resolveBolaoLandingLogos = async (node: unknown): Promise<unknown> => {
+      if (!node || typeof node !== 'object') return node;
+      const n = node as Record<string, unknown>;
+      const children = Array.isArray(n.children) ? (n.children as unknown[]) : null;
+
+      if (n.type === 'bolaoLanding') {
+        const props = (n.props as Record<string, unknown> | undefined) ?? undefined;
+        const logoUrl = typeof props?.logoUrl === 'string' ? (props.logoUrl as string) : undefined;
+        const expectedPrefix = `bancas/${project.id}/bolao-landing-logos/`;
+
+        if (logoUrl && logoUrl.startsWith(expectedPrefix) && !logoUrl.startsWith('http')) {
+          const signedExpiresSeconds = 60 * 60 * 24 * 30; // 30 dias
+          const { data: signed } = await supabaseServiceRole.storage
+            .from('brand-assets')
+            .createSignedUrl(logoUrl, signedExpiresSeconds);
+          const signedUrl = signed?.signedUrl;
+          if (signedUrl) {
+            const nextNode = { ...n, props: { ...(props ?? {}), logoUrl: signedUrl } };
+            if (children) {
+              return { ...nextNode, children: await Promise.all(children.map(resolveBolaoLandingLogos)) };
+            }
+            return nextNode;
+          }
+        }
+      }
+
+      if (children) {
+        return { ...n, children: await Promise.all(children.map(resolveBolaoLandingLogos)) };
+      }
+      return n;
+    };
+
+    const resolvedContentJson = (await resolveBolaoLandingLogos(contentJson)) as VslContentRoot;
     return (
       <VslPageClientBlocks
         pageId={page.id}
@@ -51,7 +86,7 @@ export default async function VslPage({ params }: { params: Promise<{ slug: stri
         ctaDelaySeconds={page.cta_delay_seconds ?? 0}
         videoPlayerId={page.video_player_id ?? undefined}
         videoScriptSrc={page.video_script_src ?? undefined}
-        content={contentJson as VslContentRoot}
+        content={resolvedContentJson}
       />
     );
   }

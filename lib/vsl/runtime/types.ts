@@ -93,6 +93,76 @@ export interface ButtonCTAProps {
   delaySeconds?: number;
 }
 
+/** Um dos três botões de loteria no template Bolão (textos e link independentes). */
+export interface BolaoLotteryButtonConfig {
+  badgeText: string;
+  mainText: string;
+  href: string;
+  accentFrom: string;
+  accentTo: string;
+  scheduleGroup: 'lotofacil-quina' | 'mega';
+}
+
+export interface BolaoLandingProps {
+  /**
+   * URL da logo (opcional). Se não definido, o componente usa um fallback padrão.
+   */
+  logoUrl?: string;
+
+  /**
+   * Cor de fundo do template (CSS string: `hsl(...)`, `#...`, etc).
+   * Ex: `hsl(224, 60%, 12%)`
+   */
+  backgroundColor?: string;
+
+  // ===== Cores/gradientes dos botões de loteria (customizáveis) =====
+  lotofacilAccentFrom?: string;
+  lotofacilAccentTo?: string;
+  quinaAccentFrom?: string;
+  quinaAccentTo?: string;
+  megaAccentFrom?: string;
+  megaAccentTo?: string;
+
+  whatsappAccentFrom?: string;
+  whatsappAccentTo?: string;
+  /**
+   * Título do topo. Ex: "Clique e Escolha " + highlight "Seu Bolão!"
+   */
+  titleBefore?: string;
+  titleHighlight?: string;
+  subtitle?: string;
+
+  /**
+   * Player ConverteAI (playerId). Se não houver override, tenta usar o playerId do contexto do VSL.
+   * O template começa com o playerId fixo do pedido.
+   */
+  videoPlayerId?: string;
+  /**
+   * projectId ConverteAI (opcional). Se não informado, é derivado de videoScriptSrc quando disponível.
+   */
+  videoProjectId?: string;
+
+  /** Texto exibido no botão da loteria quando `href` estiver vazio (não bloqueia mais por dia da semana). */
+  disableMessage?: string;
+
+  /**
+   * Três botões (Lotofácil, Quina, Mega-Sena) com textos independentes.
+   * Se preenchido, tem precedência sobre os campos lotofacilNickname, quinaNickname, etc.
+   */
+  bolaoLotteryButtons?: BolaoLotteryButtonConfig[];
+
+  lotofacilNickname?: string;
+  lotofacilHref?: string;
+  quinaNickname?: string;
+  quinaHref?: string;
+  megaNickname?: string;
+  megaHref?: string;
+
+  whatsappHref?: string;
+  whatsappPrefix?: string;
+  whatsappMain?: string;
+}
+
 export interface PageProps extends Record<string, unknown> {
   className?: string;
 }
@@ -116,7 +186,8 @@ export type VslBlockType =
   | 'headlineRich'
   | 'articleMeta'
   | 'vturbVideo'
-  | 'buttonCTA';
+  | 'buttonCTA'
+  | 'bolaoLanding';
 
 export type VslContentRoot = VslBlockNode<'page', PageProps>;
 

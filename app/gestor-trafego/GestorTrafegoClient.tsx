@@ -461,8 +461,12 @@ export default function GestorTrafegoClient({
       .finally(() => setLoadingExtMetrics(false));
 
     const bancaPromise = fetch(bancaUrl, { headers, credentials: 'include' })
-      .then((r) => r.json())
-      .then((result) => {
+      .then(async (r) => {
+        const status = r.status;
+        const result = await r.json().catch(() => null);
+        return { status, result };
+      })
+      .then(({ status, result }) => {
         if (result?.success && result?.data) {
           setApiError(null);
           setIsAuthorized(true);
@@ -483,12 +487,23 @@ export default function GestorTrafegoClient({
         } else {
           const errMsg = result?.error || result?.message || (typeof result?.data === 'string' ? result.data : null);
           setApiError(errMsg || null);
-          setIsAuthorized(false);
+          const normalizedErr = String(errMsg || '').toLowerCase();
+          const isAuthError =
+            status === 401 ||
+            status === 403 ||
+            normalizedErr.includes('acesso negado') ||
+            normalizedErr.includes('não autenticado') ||
+            normalizedErr.includes('usuario inválido') ||
+            normalizedErr.includes('usuário inválido');
+          // Só mostra tela "Acesso Negado" quando for realmente erro de autorização.
+          setIsAuthorized(isAuthError ? false : true);
         }
       })
       .catch((err) => {
         console.error('[Frontend] Erro ao buscar dados da banca:', err);
-        setIsAuthorized(false);
+        setApiError('Erro ao carregar dados da banca. Tente novamente.');
+        // Erro de rede/servidor não deve virar "Acesso Negado".
+        setIsAuthorized(true);
       })
       .finally(() => setLoadingBanca(false));
 

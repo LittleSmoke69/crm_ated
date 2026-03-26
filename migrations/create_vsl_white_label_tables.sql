@@ -167,5 +167,5 @@ COMMENT ON TABLE vsl_projects IS 'Projetos VSL White Label (banca/tenant). Admin
 COMMENT ON COLUMN vsl_projects.banca_id IS 'Opcional: vincula ao crm_bancas para gestor filtrar por user_bancas';
 COMMENT ON COLUMN vsl_projects.capi_access_token IS 'NUNCA expor ao client; apenas server com service role';
 
--- Bucket brand-assets: criar manualmente no Dashboard (Storage > New bucket > brand-assets, private)
+-- Bucket brand-assets: aplicar migrations/create_brand_assets_storage_bucket.sql (ou criar no Dashboard)
 -- Path: bancas/<project_id>/logo.png

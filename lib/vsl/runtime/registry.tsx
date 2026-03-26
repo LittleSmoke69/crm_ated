@@ -7,6 +7,7 @@ import { ArticleMeta } from '@/components/vsl/blocks/ArticleMeta';
 import { HeadlineRich } from '@/components/vsl/blocks/HeadlineRich';
 import { Section } from '@/components/vsl/blocks/Section';
 import { VturbPlayer } from '@/components/vsl/VturbPlayer';
+import { BolaoLanding } from '@/components/vsl/blocks/BolaoLanding';
 import type { VslBlockNode, VslRenderContext } from './types';
 import type {
   NewsTopbarProps,
@@ -16,6 +17,7 @@ import type {
   SectionProps,
   VturbVideoProps,
   ButtonCTAProps,
+  BolaoLandingProps,
 } from './types';
 
 export interface BlockRenderProps {
@@ -105,6 +107,16 @@ export const vslBlockRegistry: Record<string, BlockComponent> = {
           <span className="ml-1.5">{text.replace(/^SIM!?\s*/i, '').trim() || 'Eu quero participar!'}</span>
         </button>
       </div>
+    );
+  },
+  bolaoLanding(props) {
+    return (
+      <BolaoLanding
+        {...((props.node.props ?? {}) as BolaoLandingProps)}
+        contextVideoPlayerId={props.context.videoPlayerId}
+        contextVideoScriptSrc={props.context.videoScriptSrc}
+        vslProjectId={props.context.projectId}
+      />
     );
   },
 };
