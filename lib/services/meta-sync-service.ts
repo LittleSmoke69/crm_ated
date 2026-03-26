@@ -254,6 +254,24 @@ export async function getMetaInsightsAggregated(
   const { data, error } = await query;
   if (error || !data?.length) return null;
 
+  const firstInsight = data[0] as Record<string, unknown>;
+  console.log('[Meta Ads] getMetaInsightsAggregated payload:', {
+    bancaId,
+    dateFrom: dateFrom ?? null,
+    dateTo: dateTo ?? null,
+    activeOnly,
+    rows: data.length,
+    fields: Object.keys(firstInsight ?? {}),
+    sample: {
+      campaign_id: firstInsight?.campaign_id ?? null,
+      reach: firstInsight?.reach ?? null,
+      impressions: firstInsight?.impressions ?? null,
+      clicks: firstInsight?.clicks ?? null,
+      leads: firstInsight?.leads ?? null,
+      spend: firstInsight?.spend ?? null,
+    },
+  });
+
   const aggregated = data.reduce(
     (acc, row) => ({
       reach: acc.reach + (Number(row.reach) || 0),
@@ -277,6 +295,27 @@ export interface MetaCampaignWithMetrics {
   clicks: number;
   spend: number;
   leads: number;
+  results: number;
+  cost_per_result: number | null;
+}
+
+const META_RESULT_ACTION_TYPES = new Set([
+  'lead',
+  'omni_lead',
+  'leadgen_grouped',
+  'purchase',
+  'complete_registration',
+  'app_install',
+  'subscribe',
+  'contact',
+  'submit_application',
+]);
+
+function extractResultsFromRawActions(rawActions: Array<{ action_type: string; value: string }> | null | undefined): number {
+  if (!rawActions || !Array.isArray(rawActions)) return 0;
+  return rawActions
+    .filter((a) => META_RESULT_ACTION_TYPES.has(a.action_type))
+    .reduce((sum, a) => sum + (parseInt(a.value || '0', 10) || 0), 0);
 }
 
 export async function getMetaCampaignsWithInsights(
@@ -312,7 +351,7 @@ export async function getMetaCampaignsWithInsights(
 
   let insightsQuery = supabaseServiceRole
     .from('meta_insights_daily')
-    .select('campaign_id, campaign_name, reach, impressions, clicks, spend, leads')
+    .select('campaign_id, campaign_name, reach, impressions, clicks, spend, leads, raw_actions')
     .eq('banca_id', bancaId)
     .in('campaign_id', campaignIds);
   if (dateFrom) insightsQuery = insightsQuery.gte('date', dateFrom);
@@ -329,22 +368,53 @@ export async function getMetaCampaignsWithInsights(
       clicks: 0,
       spend: 0,
       leads: 0,
+      results: 0,
+      cost_per_result: null,
     }));
   }
 
-  const metricsByCampaign = new Map<string, { reach: number; impressions: number; clicks: number; spend: number; leads: number }>();
-  insights.forEach((row: { campaign_id: string; campaign_name?: string | null; reach?: number; impressions?: number; clicks?: number; spend?: number; leads?: number }) => {
-    const cur = metricsByCampaign.get(row.campaign_id) || { reach: 0, impressions: 0, clicks: 0, spend: 0, leads: 0 };
+  const firstCampaignInsight = insights[0] as Record<string, unknown>;
+  const firstRawActions = Array.isArray(firstCampaignInsight?.raw_actions)
+    ? (firstCampaignInsight.raw_actions as Array<{ action_type?: string; value?: string }>)
+    : [];
+  console.log('[Meta Ads] getMetaCampaignsWithInsights payload:', {
+    bancaId,
+    dateFrom: dateFrom ?? null,
+    dateTo: dateTo ?? null,
+    activeOnly,
+    campaignCount: campaigns.length,
+    insightsRows: insights.length,
+    fields: Object.keys(firstCampaignInsight ?? {}),
+    sample: {
+      campaign_id: firstCampaignInsight?.campaign_id ?? null,
+      campaign_name: firstCampaignInsight?.campaign_name ?? null,
+      reach: firstCampaignInsight?.reach ?? null,
+      impressions: firstCampaignInsight?.impressions ?? null,
+      clicks: firstCampaignInsight?.clicks ?? null,
+      spend: firstCampaignInsight?.spend ?? null,
+      leads: firstCampaignInsight?.leads ?? null,
+      raw_actions_count: firstRawActions.length,
+      raw_action_types: firstRawActions
+        .map((action) => action?.action_type)
+        .filter((type): type is string => Boolean(type))
+        .slice(0, 15),
+    },
+  });
+
+  const metricsByCampaign = new Map<string, { reach: number; impressions: number; clicks: number; spend: number; leads: number; results: number }>();
+  insights.forEach((row: { campaign_id: string; campaign_name?: string | null; reach?: number; impressions?: number; clicks?: number; spend?: number; leads?: number; raw_actions?: Array<{ action_type: string; value: string }> | null }) => {
+    const cur = metricsByCampaign.get(row.campaign_id) || { reach: 0, impressions: 0, clicks: 0, spend: 0, leads: 0, results: 0 };
     cur.reach += Number(row.reach) || 0;
     cur.impressions += Number(row.impressions) || 0;
     cur.clicks += Number(row.clicks) || 0;
     cur.spend += Number(row.spend) || 0;
     cur.leads += Number(row.leads) || 0;
+    cur.results += extractResultsFromRawActions(row.raw_actions);
     metricsByCampaign.set(row.campaign_id, cur);
   });
 
   return campaigns.map((c: { campaign_id: string; name: string | null }) => {
-    const m = metricsByCampaign.get(c.campaign_id) || { reach: 0, impressions: 0, clicks: 0, spend: 0, leads: 0 };
+    const m = metricsByCampaign.get(c.campaign_id) || { reach: 0, impressions: 0, clicks: 0, spend: 0, leads: 0, results: 0 };
     return {
       campaign_id: c.campaign_id,
       campaign_name: c.name || c.campaign_id,
@@ -354,6 +424,8 @@ export async function getMetaCampaignsWithInsights(
       clicks: m.clicks,
       spend: m.spend,
       leads: m.leads,
+      results: m.results,
+      cost_per_result: m.results > 0 ? m.spend / m.results : null,
     };
   });
 }

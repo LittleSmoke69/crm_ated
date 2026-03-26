@@ -56,6 +56,28 @@ async function fetchVideoUrlAsBase64(videoUrl: string): Promise<string> {
 /** Acima deste número de grupos, o envio é enfileirado e processado em segundo plano (evita timeout na Netlify). */
 const THRESHOLD_MASS_SEND = 10;
 
+/** Log de debug (sessão 66edb5) — não remover até verificação pós-fix. */
+function agentActivationDebug(
+  message: string,
+  data: Record<string, unknown>,
+  hypothesisId: string,
+) {
+  // #region agent log
+  fetch('http://127.0.0.1:7901/ingest/0ef4209d-37f6-4cbb-b28d-8cf53becc342', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '66edb5' },
+    body: JSON.stringify({
+      sessionId: '66edb5',
+      location: 'app/api/crm/activations/send/route.ts',
+      message,
+      data,
+      timestamp: Date.now(),
+      hypothesisId,
+    }),
+  }).catch(() => {});
+  // #endregion
+}
+
 /**
  * POST /api/crm/activations/send - Envia uma mensagem de ativação para vários grupos
  * Se groupIds.length > THRESHOLD_MASS_SEND (ou forceMassSend=true), cria campanha em massa e retorna 202.
@@ -71,6 +93,19 @@ export async function POST(req: NextRequest) {
       return errorResponse('messageId, groupIds e instanceName são obrigatórios', 400);
     }
 
+    agentActivationDebug(
+      'activation_send_start',
+      {
+        isCronProcess,
+        instanceNameLen: String(instanceName).length,
+        instanceHasLeadingTrailingSpace: String(instanceName).trim() !== String(instanceName),
+        userIdPrefix: userId ? `${userId.slice(0, 8)}…` : null,
+        groupCount: groupIds.length,
+        messageIdPrefix: String(messageId).slice(0, 8),
+      },
+      'H1-H3',
+    );
+
     // 1. Busca os detalhes da mensagem (incluindo mention_all para menção @todos em todos os grupos)
     const { data: message, error: messageError } = await supabaseServiceRole
       .from('messages')
@@ -79,7 +114,17 @@ export async function POST(req: NextRequest) {
       .single();
 
     if (messageError || !message) {
-      return errorResponse('Mensagem não encontrada', 404);
+      console.warn('[ACTIVATION] 404 MESSAGE_NOT_FOUND', {
+        messageId,
+        supabaseCode: messageError?.code,
+        supabaseMessage: messageError?.message,
+      });
+      agentActivationDebug(
+        'activation_message_not_found',
+        { messageId, supabaseCode: messageError?.code },
+        'H5',
+      );
+      return errorResponse('Mensagem não encontrada', 404, { code: 'MESSAGE_NOT_FOUND' });
     }
 
     // Bloqueia disparo de mensagem de texto sem conteúdo (previne mensagem fantasma)
@@ -200,7 +245,28 @@ export async function POST(req: NextRequest) {
       .single();
 
     if (instanceError || !instance) {
-      return errorResponse('Instância não encontrada ou inativa', 404);
+      console.warn('[ACTIVATION] 404 INSTANCE_QUERY', {
+        instanceName: String(instanceName),
+        userIdPrefix: `${userId.slice(0, 8)}…`,
+        isCronProcess,
+        supabaseCode: instanceError?.code,
+        supabaseMessage: instanceError?.message,
+        hint:
+          'Verifique: nome exato em evolution_instances, user_id dono, is_active=true, e linha em evolution_apis (join interno).',
+      });
+      agentActivationDebug(
+        'activation_instance_not_found',
+        {
+          instanceName: String(instanceName).slice(0, 64),
+          userIdPrefix: userId.slice(0, 8),
+          isCronProcess,
+          supabaseCode: instanceError?.code,
+        },
+        'H1-H4',
+      );
+      return errorResponse('Instância não encontrada ou inativa', 404, {
+        code: 'INSTANCE_NOT_FOUND_OR_INACTIVE',
+      });
     }
 
     const evolutionApi = Array.isArray(instance.evolution_apis) 
@@ -208,7 +274,25 @@ export async function POST(req: NextRequest) {
       : instance.evolution_apis;
 
     if (!evolutionApi?.base_url) {
-      return errorResponse('Evolution API sem base_url configurada', 404);
+      console.warn('[ACTIVATION] 404 EVOLUTION_API_NO_BASE_URL', {
+        instanceName: String(instanceName),
+        evolutionApiId: evolutionApi && typeof evolutionApi === 'object' ? (evolutionApi as { id?: string }).id : undefined,
+        apiIsActive:
+          evolutionApi && typeof evolutionApi === 'object'
+            ? (evolutionApi as { is_active?: boolean }).is_active
+            : undefined,
+      });
+      agentActivationDebug(
+        'activation_evolution_api_missing_base_url',
+        {
+          instanceName: String(instanceName).slice(0, 64),
+          hasEvolutionApiRow: !!evolutionApi,
+        },
+        'H4',
+      );
+      return errorResponse('Evolution API sem base_url configurada', 404, {
+        code: 'EVOLUTION_API_NO_BASE_URL',
+      });
     }
 
     const apiKey = instance.apikey;

@@ -12,7 +12,8 @@ export async function getEffectiveDonoIdForGestor(gestorUserId: string): Promise
     return null;
   }
   const enrollerProfile = await getUserProfile(profile.enroller);
-  if (!enrollerProfile || enrollerProfile.status !== 'dono_banca') {
+  const enrollerStatusNorm = enrollerProfile?.status?.trim().toLowerCase();
+  if (!enrollerProfile || enrollerStatusNorm !== 'dono_banca') {
     return null;
   }
   return enrollerProfile.id;

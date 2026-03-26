@@ -191,6 +191,8 @@ export default function GestorTrafegoClient({
     clicks: number;
     spend: number;
     leads: number;
+    results?: number;
+    cost_per_result?: number | null;
   }>>(initialData?.metaCampaignsData || []);
   const [top5Consultants, setTop5Consultants] = useState<Array<{ name: string; value: number }>>(initialData?.top5Consultants || []);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -213,8 +215,10 @@ export default function GestorTrafegoClient({
   const effectiveBancaId = bancaId ?? (selectedDonoId?.startsWith('banca:') ? selectedDonoId.slice(6) : null);
   const [loadingDonos, setLoadingDonos] = useState(false);
   
-  // Estados de loading específicos para não travar toda a página
-  const [loadingMetrics, setLoadingMetrics] = useState(false);
+  // Estados de loading independentes por seção — cada promise limpa o seu
+  const [loadingBanca, setLoadingBanca] = useState(false);       // gerentes, top5, gráficos
+  const [loadingMeta, setLoadingMeta] = useState(false);         // Meta Ads, Funil Meta
+  const [loadingExtMetrics, setLoadingExtMetrics] = useState(false); // Resumo Geral (dashboard-metrics)
   
   // Filtro de data
   const [dateFilter, setDateFilter] = useState<'daily' | 'yesterday' | '7days' | '15days' | '30days' | 'custom' | 'all'>('daily');
@@ -409,18 +413,25 @@ export default function GestorTrafegoClient({
       }
     }
 
-    setLoadingMetrics(true);
+    setLoadingBanca(true);
+    setLoadingMeta(true);
+    setLoadingExtMetrics(true);
     setExternalMetricsError(null);
 
-    // --- Chamada 1: apenas Meta Ads (rápida — só Supabase, sem APIs externas) ---
+    // --- Chamada 1: Meta Ads (rápida — só Supabase) ---
     const metaParams = new URLSearchParams(baseParams);
     metaParams.set('only_meta', '1');
     const metaUrl = `/api/gestor-trafego/dashboard?${metaParams.toString()}`;
 
-    // --- Chamada 2: dados de banca/gerentes (lenta — APIs externas do CRM) ---
+    // --- Chamada 2: externalMetrics do CRM (rápida — uma chamada dashboard-metrics) ---
+    const extMetricsParams = new URLSearchParams(baseParams);
+    extMetricsParams.set('only_external_metrics', '1');
+    const extMetricsUrl = `/api/gestor-trafego/dashboard?${extMetricsParams.toString()}`;
+
+    // --- Chamada 3: gerentes/top5 (lenta — fetchIndicatedsByConsultants) ---
     const bancaUrl = `/api/gestor-trafego/dashboard?${baseParams.toString()}`;
 
-    // Dispara as duas em paralelo. Cada uma atualiza a UI quando resolver.
+    // Dispara as três em paralelo. Cada uma limpa seu próprio loading ao resolver.
     const metaPromise = fetch(metaUrl, { headers, credentials: 'include' })
       .then((r) => r.json())
       .then((result) => {
@@ -431,7 +442,23 @@ export default function GestorTrafegoClient({
           if (result.data.bancaInfo?.name) setBancaName(result.data.bancaInfo.name);
         }
       })
-      .catch((err) => console.warn('[Frontend] Erro ao buscar Meta:', err));
+      .catch((err) => console.warn('[Frontend] Erro ao buscar Meta:', err))
+      .finally(() => setLoadingMeta(false));
+
+    const extMetricsPromise = fetch(extMetricsUrl, { headers, credentials: 'include' })
+      .then((r) => r.json())
+      .then((result) => {
+        if (result?.success && result?.data) {
+          if (result.data.bancaId) setBancaId(result.data.bancaId);
+          if (result.data.bancaInfo?.name) setBancaName(result.data.bancaInfo.name);
+          if (result.data.externalMetrics) {
+            setExternalMetrics(result.data.externalMetrics);
+            setExternalMetricsError(null);
+          }
+        }
+      })
+      .catch((err) => console.warn('[Frontend] Erro ao buscar externalMetrics:', err))
+      .finally(() => setLoadingExtMetrics(false));
 
     const bancaPromise = fetch(bancaUrl, { headers, credentials: 'include' })
       .then((r) => r.json())
@@ -444,12 +471,12 @@ export default function GestorTrafegoClient({
           }
           setGerentes(result.data.gerentes || []);
           setTop5Consultants(result.data.top5Consultants || []);
+          // Fallback: usa externalMetrics da chamada lenta apenas se a rápida não retornou
           if (result.data.externalMetrics) {
-            setExternalMetrics(result.data.externalMetrics);
+            setExternalMetrics((prev) => prev ?? result.data.externalMetrics);
             setExternalMetricsError(null);
-          } else {
-            setExternalMetrics(null);
-            if (result.data.externalMetricsError) setExternalMetricsError(result.data.externalMetricsError);
+          } else if (result.data.externalMetricsError) {
+            setExternalMetricsError((prev) => prev ?? result.data.externalMetricsError);
           }
           if (result.data.bancaId) setBancaId(result.data.bancaId);
           if (result.data.bancaInfo?.name) setBancaName(result.data.bancaInfo.name);
@@ -462,13 +489,13 @@ export default function GestorTrafegoClient({
       .catch((err) => {
         console.error('[Frontend] Erro ao buscar dados da banca:', err);
         setIsAuthorized(false);
-      });
+      })
+      .finally(() => setLoadingBanca(false));
 
     try {
-      await Promise.allSettled([metaPromise, bancaPromise]);
+      await Promise.allSettled([metaPromise, extMetricsPromise, bancaPromise]);
     } finally {
       setLoading(false);
-      setLoadingMetrics(false);
     }
   };
 
@@ -747,7 +774,7 @@ export default function GestorTrafegoClient({
                         setSelectedDonoId(e.target.value);
                         if (e.target.value) {
                           setIsAuthorized(null);
-                          setLoadingMetrics(true);
+                          setLoadingExtMetrics(true);
                           setMetaFunnel(null);
                           setMetaCampaignsData([]);
                           setBancaId(null);
@@ -956,7 +983,7 @@ export default function GestorTrafegoClient({
 
           {/* Card Métricas Meta Ads (Campanhas) - acima do Resumo Geral */}
           <div className="relative mb-6">
-            {loadingMetrics && (
+            {loadingMeta && (
               <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
               </div>
@@ -1048,6 +1075,7 @@ export default function GestorTrafegoClient({
                         <th className="px-4 py-3 font-bold text-gray-600 dark:text-gray-400 uppercase text-right">Cliques</th>
                         <th className="px-4 py-3 font-bold text-gray-600 dark:text-gray-400 uppercase text-right">Gasto</th>
                         <th className="px-4 py-3 font-bold text-gray-600 dark:text-gray-400 uppercase text-right">Leads</th>
+                        <th className="px-4 py-3 font-bold text-gray-600 dark:text-gray-400 uppercase text-right">Custo por resultado</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1060,6 +1088,11 @@ export default function GestorTrafegoClient({
                           <td className="px-4 py-3 text-right text-gray-800 dark:text-gray-200">{row.clicks.toLocaleString('pt-BR')}</td>
                           <td className="px-4 py-3 text-right text-gray-800 dark:text-gray-200">{formatMetaSpend(row.spend, metaFunnel?.currency)}</td>
                           <td className="px-4 py-3 text-right text-gray-800 dark:text-gray-200">{row.leads.toLocaleString('pt-BR')}</td>
+                          <td className="px-4 py-3 text-right text-gray-800 dark:text-gray-200">
+                            {row.cost_per_result != null
+                              ? formatMetaSpend(row.cost_per_result, metaFunnel?.currency)
+                              : '—'}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -1070,7 +1103,7 @@ export default function GestorTrafegoClient({
           </div>
           
           <div className="relative">
-            {loadingMetrics && (
+            {loadingExtMetrics && (
               <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
               </div>
@@ -1331,7 +1364,7 @@ export default function GestorTrafegoClient({
 
         {/* Gráficos Detalhados do Resumo Geral - sempre visível */}
         <div className="relative">
-          {loadingMetrics && (
+          {loadingBanca && (
             <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
             </div>
@@ -1370,7 +1403,7 @@ export default function GestorTrafegoClient({
 
         {/* Funil Facebook (Meta) + Loteria - unificado */}
         <div className="relative bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
-          {loadingMetrics && (
+          {loadingMeta && (
             <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex flex-col items-center justify-center gap-3">
               <div className="animate-spin rounded-full h-10 w-10 border-2 border-[#8CD955] border-t-transparent" />
               <p className="text-sm font-medium text-gray-600 dark:text-gray-300">Carregando dados do funil...</p>
@@ -1414,7 +1447,7 @@ export default function GestorTrafegoClient({
 
         {/* Top 5 Consultores por Vendas - Design Visual */}
         <div className="relative">
-          {loadingMetrics && (
+          {loadingBanca && (
             <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
             </div>

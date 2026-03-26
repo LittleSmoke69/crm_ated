@@ -11,7 +11,8 @@ const GESTOR_TRAFEGO_STATUSES = ['gestor', 'admin', 'super_admin'] as const;
  */
 export async function canAccessGestorTrafego(profile: UserProfile | null): Promise<boolean> {
   if (!profile?.status) return false;
-  if (GESTOR_TRAFEGO_STATUSES.includes(profile.status as (typeof GESTOR_TRAFEGO_STATUSES)[number])) {
+  const normalizedStatus = String(profile.status).trim().toLowerCase();
+  if (GESTOR_TRAFEGO_STATUSES.includes(normalizedStatus as (typeof GESTOR_TRAFEGO_STATUSES)[number])) {
     return true;
   }
   return hasSidebarPermission(profile, 'gestao_trafego');

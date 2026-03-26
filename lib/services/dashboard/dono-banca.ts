@@ -597,7 +597,7 @@ export async function getDashboardDataFromIndicatedsOnly(
   };
 }
 
-async function fetchDashboardMetrics(
+export async function fetchDashboardMetrics(
   cleanBancaUrl: string,
   dateFrom: string | null | undefined,
   dateTo: string | null | undefined
@@ -617,12 +617,24 @@ async function fetchDashboardMetrics(
     const contentType = res.headers.get('content-type');
     if (!contentType?.includes('application/json')) return null;
     const externalData = await res.json();
+    const externalRootKeys = externalData && typeof externalData === 'object'
+      ? Object.keys(externalData as Record<string, unknown>)
+      : [];
     let metrics: any = null;
     if (externalData?.success && externalData.metrics) metrics = externalData.metrics;
     else if (externalData?.metrics) metrics = externalData.metrics;
     else if (externalData?.total_leads !== undefined || externalData?.total_deposited !== undefined) metrics = externalData;
+    const metricsKeys = metrics && typeof metrics === 'object'
+      ? Object.keys(metrics as Record<string, unknown>)
+      : [];
+    console.log('[DonoBanca Service] dashboard-metrics payload fields:', {
+      rootKeys: externalRootKeys,
+      metricsKeys,
+      hasSuccessFlag: Boolean(externalData?.success),
+      hasMetricsObject: Boolean(externalData?.metrics),
+    });
     if (!metrics) return null;
-    return {
+    const normalizedMetrics = {
       total_leads: Number(metrics.total_leads) || 0,
       total_deposited: Number(metrics.total_deposited) || 0,
       total_bets: Number(metrics.total_bets) || 0,
@@ -635,6 +647,8 @@ async function fetchDashboardMetrics(
       ltv_avg: Number(metrics.ltv_avg) || 0,
       net_profit: Number(metrics.net_profit) || (Number(metrics.total_deposited) || 0) - (Number(metrics.total_prizes) || 0),
     };
+    console.log('[DonoBanca Service] dashboard-metrics normalized snapshot:', normalizedMetrics);
+    return normalizedMetrics;
   } catch (err: any) {
     console.warn('[DonoBanca Service] Erro ao buscar dashboard-metrics:', err?.message);
     return null;

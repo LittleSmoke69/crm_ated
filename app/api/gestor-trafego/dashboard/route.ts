@@ -4,7 +4,7 @@ import { getUserProfile } from '@/lib/middleware/permissions';
 import { canAccessGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
 import { getEffectiveDonoIdForGestor } from '@/lib/middleware/gestor-owner';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
-import { getDonoBancaDashboardData, getDashboardDataByBancaId } from '@/lib/services/dashboard/dono-banca';
+import { getDonoBancaDashboardData, getDashboardDataByBancaId, fetchDashboardMetrics } from '@/lib/services/dashboard/dono-banca';
 import { getMetaInsightsAggregated, getMetaCampaignsWithInsights } from '@/lib/services/meta-sync-service';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
@@ -33,8 +33,10 @@ export async function GET(req: NextRequest) {
     const dateFrom = searchParams.get('date_from');
     const dateTo = searchParams.get('date_to');
     // only_meta=1 → retorna apenas dados Meta Ads (rápido, só DB). skip_meta=1 → retorna só dados de banca (sem Meta).
+    // only_external_metrics=1 → retorna apenas externalMetrics do CRM (dashboard-metrics, rápido, sem gerentes).
     const onlyMeta = searchParams.get('only_meta') === '1';
     const skipMeta = searchParams.get('skip_meta') === '1';
+    const onlyExternalMetrics = searchParams.get('only_external_metrics') === '1';
 
     const auth = await requireAuth(req);
     if (!auth?.userId) {
@@ -122,7 +124,7 @@ export async function GET(req: NextRequest) {
           }
         }
       }
-      if (!bancaId && !donoId) {
+      if (!bancaId && !bancaUrl) {
         const profileId = profile.id;
         let { data: ubRow } = await supabaseServiceRole
           .from('user_bancas')
@@ -145,6 +147,7 @@ export async function GET(req: NextRequest) {
             bancaId = banca.id;
             bancaUrl = banca.url;
             bancaName = banca.name || banca.url || 'Banca';
+            donoId = null; // usar bancaId em vez de donoId sem banca_url
           }
         }
       }
@@ -220,6 +223,15 @@ export async function GET(req: NextRequest) {
 
     if (!bancaUrl) {
       return errorResponse('Banca não definida.', 400);
+    }
+
+    // Modo rápido: externalMetrics do CRM (uma chamada dashboard-metrics, sem gerentes/indicateds)
+    if (onlyExternalMetrics) {
+      const cleanUrl = normalizeBancaUrl(bancaUrl);
+      const externalMetrics = cleanUrl
+        ? await fetchDashboardMetrics(cleanUrl, dateFrom ?? undefined, dateTo ?? undefined).catch(() => null)
+        : null;
+      return successResponse({ bancaId: bancaId ?? null, bancaInfo: { name: bancaName, url: bancaUrl }, externalMetrics });
     }
 
     // Modo rápido: apenas Meta Ads (só queries no Supabase, sem chamadas externas)

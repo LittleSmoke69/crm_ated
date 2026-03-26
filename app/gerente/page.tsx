@@ -304,7 +304,7 @@ export default function GerentePage() {
 
   // Filtros e paginação da tabela "Sua equipe"
   const [tableSearchTerm, setTableSearchTerm] = useState('');
-  type TeamTableSortField = 'name' | 'lastSeenAt' | 'totalOnlineTime' | 'totalCrmTime' | 'leads' | 'deposited' | 'profit';
+  type TeamTableSortField = 'name' | 'lastSeenAt' | 'totalOnlineTime' | 'totalCrmTime' | 'leads' | 'deposited' | 'profit' | 'result';
   const [sortBy, setSortBy] = useState<TeamTableSortField>('name');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [teamTablePageSize, setTeamTablePageSize] = useState(10);
@@ -1319,6 +1319,10 @@ export default function GerentePage() {
         case 'profit':
           valA = a.externalKpis?.net_profit || 0;
           valB = b.externalKpis?.net_profit || 0;
+          break;
+        case 'result':
+          valA = a.externalKpis?.conversion_rate || 0;
+          valB = b.externalKpis?.conversion_rate || 0;
           break;
         default:
           valA = (a.name || a.email || '').toLowerCase();
@@ -2442,6 +2446,7 @@ export default function GerentePage() {
                       <SortableTh field="leads" label="Leads" align="right" />
                       <SortableTh field="deposited" label="Depositado" align="right" />
                       <SortableTh field="profit" label="Lucro" align="right" />
+                      <SortableTh field="result" label="Resultado (Meta Ads)" align="right" />
                       <th className="px-4 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-right min-w-[120px]">
                         Ações
                       </th>
@@ -2502,6 +2507,18 @@ export default function GerentePage() {
                               ? `R$ ${(consultor.externalKpis.net_profit / 1000).toFixed(1)}k`
                               : '—'}
                           </span>
+                        </td>
+                        <td className="px-4 py-4 text-right">
+                          <div className="flex flex-col items-end">
+                            <span className="text-xs font-semibold text-gray-800 dark:text-gray-200">
+                              {consultor.externalKpis?.conversion_rate != null
+                                ? `${consultor.externalKpis.conversion_rate.toFixed(1)}%`
+                                : '—'}
+                            </span>
+                            <span className="text-[11px] text-gray-500 dark:text-gray-400">
+                              {`${consultor.externalKpis?.awarded_clients_count ?? 0} premiados`}
+                            </span>
+                          </div>
                         </td>
                         <td className="px-4 py-3 align-middle text-right">
                           <button
@@ -2605,6 +2622,7 @@ export default function GerentePage() {
                       <div>Leads: <span className="font-medium text-gray-700 dark:text-gray-300">{consultor.externalKpis?.total_leads ?? 0}</span></div>
                       <div>Dep.: <span className="font-medium text-gray-700 dark:text-gray-300">{consultor.externalKpis?.total_deposited != null ? `R$ ${(consultor.externalKpis.total_deposited / 1000).toFixed(1)}k` : '—'}</span></div>
                       <div>Lucro: <span className={`font-medium ${(consultor.externalKpis?.net_profit ?? 0) >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>{consultor.externalKpis?.net_profit != null ? `R$ ${(consultor.externalKpis.net_profit / 1000).toFixed(1)}k` : '—'}</span></div>
+                      <div>Resultado: <span className="font-medium text-gray-700 dark:text-gray-300">{consultor.externalKpis?.conversion_rate != null ? `${consultor.externalKpis.conversion_rate.toFixed(1)}%` : '—'}</span> · <span className="font-medium text-gray-700 dark:text-gray-300">{consultor.externalKpis?.awarded_clients_count ?? 0} premiados</span></div>
                     </div>
                   </div>
                 ))}

@@ -5341,30 +5341,73 @@ export default function AdminLeadTransferPage() {
                   }}
                 >
                   <div className="bg-white dark:bg-[#1f1f1f] rounded-2xl border border-gray-200 dark:border-[#404040] shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
-                    <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-[#404040]">
+                    <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-[#404040] gap-3">
                       <h3 className="text-lg font-bold text-gray-900 dark:text-white">Mover leads</h3>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setMoveLeadsModalOpen(false);
-                          setMoveLeadsSelectedLog(null);
-                          setMoveLeadsEntriesLoadedForLogId(null);
-                          setMoveLeadsPreselectedLogId(null);
-                          setMoveLeadsEnterFormDirectly(false);
-                          setMoveLeadsFixedRecipient(null);
-                          setMoveLeadsPreselectRequestId(null);
-                          setMoveLeadsSelectedSourceEmail('');
-                          setMoveLeadsSelectedRequest(null);
-                          setMoveLeadsTargetEmail('');
-                          setMoveLeadsModalResolvedSearch('');
-                          setMoveLeadsModalTfFilter('all');
-                          setProblematicLeadIds(new Set());
-                          setProblematicCountBySource({});
-                        }}
-                        className="p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-[#404040] text-gray-600 dark:text-gray-300"
-                      >
-                        <X className="w-5 h-5" />
-                      </button>
+                      <div className="flex items-center justify-end gap-2 flex-wrap">
+                        {moveLeadsSelectedLog ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setMoveLeadsSelectedLog(null);
+                                setMoveLeadsEntriesLoadedForLogId(null);
+                                setMoveLeadsSelectedRequest(null);
+                                setMoveLeadsEnterFormDirectly(false);
+                                setMoveLeadsSelectedSourceEmail('');
+                                setMoveLeadsTargetEmail('');
+                              }}
+                              className="px-3 py-2 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#404040] transition-colors"
+                            >
+                              Voltar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => runMoveLeads()}
+                              disabled={!canConfirmMoveLeads || moveLeadsMoving}
+                              title={
+                                (loadingMoveLeadsEntries || loadingMoveLeadsConsultants)
+                                  ? 'Aguarde o carregamento dos leads...'
+                                  : !moveLeadsDestinationEmail.trim()
+                                  ? 'Informe o consultor destino'
+                                  : moveLeadsQtyToSend <= 0
+                                  ? 'Nenhum lead disponível para transferir'
+                                  : ''
+                              }
+                              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500 text-white hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                            >
+                              {moveLeadsMoving ? (
+                                <><Loader2 className="w-4 h-4 animate-spin" /> Repassando…</>
+                              ) : (loadingMoveLeadsEntries || loadingMoveLeadsConsultants) ? (
+                                <><Loader2 className="w-4 h-4 animate-spin" /> Carregando…</>
+                              ) : (
+                                'Confirmar transferência'
+                              )}
+                            </button>
+                          </>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMoveLeadsModalOpen(false);
+                            setMoveLeadsSelectedLog(null);
+                            setMoveLeadsEntriesLoadedForLogId(null);
+                            setMoveLeadsPreselectedLogId(null);
+                            setMoveLeadsEnterFormDirectly(false);
+                            setMoveLeadsFixedRecipient(null);
+                            setMoveLeadsPreselectRequestId(null);
+                            setMoveLeadsSelectedSourceEmail('');
+                            setMoveLeadsSelectedRequest(null);
+                            setMoveLeadsTargetEmail('');
+                            setMoveLeadsModalResolvedSearch('');
+                            setMoveLeadsModalTfFilter('all');
+                            setProblematicLeadIds(new Set());
+                            setProblematicCountBySource({});
+                          }}
+                          className="p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-[#404040] text-gray-600 dark:text-gray-300"
+                        >
+                          <X className="w-5 h-5" />
+                        </button>
+                      </div>
                     </div>
                     <div className="flex-1 overflow-y-auto p-4">
                       {moveLeadsSelectedLog ? (
@@ -5702,45 +5745,6 @@ export default function AdminLeadTransferPage() {
                             <option value={20}>20 dias</option>
                             <option value={30}>30 dias</option>
                           </select>
-                          <div className="flex justify-end gap-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setMoveLeadsSelectedLog(null);
-                                setMoveLeadsEntriesLoadedForLogId(null);
-                                setMoveLeadsSelectedRequest(null);
-                                setMoveLeadsEnterFormDirectly(false);
-                                setMoveLeadsSelectedSourceEmail('');
-                                setMoveLeadsTargetEmail('');
-                              }}
-                              className="px-3 py-2 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#404040] transition-colors"
-                            >
-                              Voltar
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => runMoveLeads()}
-                              disabled={!canConfirmMoveLeads || moveLeadsMoving}
-                              title={
-                                (loadingMoveLeadsEntries || loadingMoveLeadsConsultants)
-                                  ? 'Aguarde o carregamento dos leads...'
-                                  : !moveLeadsDestinationEmail.trim()
-                                  ? 'Informe o consultor destino'
-                                  : moveLeadsQtyToSend <= 0
-                                  ? 'Nenhum lead disponível para transferir'
-                                  : ''
-                              }
-                              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500 text-white hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                            >
-                              {moveLeadsMoving ? (
-                                <><Loader2 className="w-4 h-4 animate-spin" /> Repassando…</>
-                              ) : (loadingMoveLeadsEntries || loadingMoveLeadsConsultants) ? (
-                                <><Loader2 className="w-4 h-4 animate-spin" /> Carregando…</>
-                              ) : (
-                                'Confirmar transferência'
-                              )}
-                            </button>
-                          </div>
                           {moveLeadsBlockedByRateLimit && (
                             <p className="text-xs text-amber-700 dark:text-amber-300 mt-2">
                               Muitas tentativas no CRM. Tente novamente em alguns segundos para liberar a confirmação.
