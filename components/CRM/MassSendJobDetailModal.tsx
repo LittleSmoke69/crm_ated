@@ -198,7 +198,13 @@ const MassSendJobDetailModal: React.FC<MassSendJobDetailModalProps> = ({
 
           {!loading && job && (
             <>
-              {job.status !== 'completed' && (
+              {job.status === 'paused' && (
+                <p className="text-sm text-violet-800 dark:text-violet-200 bg-violet-50 dark:bg-violet-900/30 border border-violet-200 dark:border-violet-800 rounded-lg px-3 py-2">
+                  Campanha pausada. Retome na lista de campanhas (botão play) para continuar o envio.
+                </p>
+              )}
+
+              {job.status !== 'completed' && job.status !== 'paused' && (
                 <p className="text-sm text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2">
                   {job.status === 'processing' || job.status === 'pending'
                     ? 'Campanha em andamento. A lista abaixo reflete apenas os grupos já processados até agora.'

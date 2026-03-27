@@ -2,6 +2,9 @@
  * GET /api/crm/activations/mass-send/jobs/[id]
  * Detalhe da campanha (inclui resultados por grupo para sucesso/falha).
  *
+ * PATCH /api/crm/activations/mass-send/jobs/[id]
+ * body: { action: 'pause' | 'resume' }
+ *
  * DELETE /api/crm/activations/mass-send/jobs/[id]
  * Exclui uma campanha de disparo em massa (apenas se pertencer ao usuário).
  */
@@ -9,6 +12,7 @@ import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { triggerMassSendProcessFromOrigin } from '@/lib/crm/trigger-mass-send-process';
 
 export const dynamic = 'force-dynamic';
 
@@ -75,6 +79,91 @@ export async function GET(
       group_outcomes !== undefined ? { ...job, group_outcomes } : { ...job };
 
     return successResponse(payload);
+  } catch (e) {
+    return serverErrorResponse(e);
+  }
+}
+
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { userId } = await requireAuth(req);
+    const { id: rawId } = await params;
+    const jobId = typeof rawId === 'string' ? rawId.trim() : '';
+
+    if (!jobId) {
+      return errorResponse('ID da campanha é obrigatório', 400);
+    }
+
+    let body: { action?: string };
+    try {
+      body = await req.json();
+    } catch {
+      return errorResponse('JSON inválido', 400);
+    }
+
+    const action = body?.action;
+    if (action !== 'pause' && action !== 'resume') {
+      return errorResponse('action deve ser "pause" ou "resume"', 400);
+    }
+
+    const { data: job, error: fetchError } = await supabaseServiceRole
+      .from('activation_mass_send_jobs')
+      .select('id, user_id, status')
+      .eq('id', jobId)
+      .maybeSingle();
+
+    if (fetchError || !job) {
+      return errorResponse('Campanha não encontrada', 404);
+    }
+
+    if (job.user_id !== userId) {
+      return errorResponse('Sem permissão', 403);
+    }
+
+    const now = new Date().toISOString();
+
+    if (action === 'pause') {
+      if (job.status !== 'pending' && job.status !== 'processing') {
+        return errorResponse('Só é possível pausar campanhas pendentes ou em andamento.', 400);
+      }
+      const { error: upErr } = await supabaseServiceRole
+        .from('activation_mass_send_jobs')
+        .update({
+          status: 'paused',
+          locked_at: null,
+          locked_by: null,
+          updated_at: now,
+        })
+        .eq('id', jobId);
+
+      if (upErr) {
+        console.error('[MASS-SEND] pause:', upErr);
+        return errorResponse('Erro ao pausar. Rode a migration com status "paused" ou tente novamente.', 500);
+      }
+      return successResponse({ status: 'paused' }, 'Campanha pausada.');
+    }
+
+    if (job.status !== 'paused') {
+      return errorResponse('Só é possível retomar campanhas pausadas.', 400);
+    }
+
+    const { error: upErr } = await supabaseServiceRole
+      .from('activation_mass_send_jobs')
+      .update({ status: 'pending', updated_at: now })
+      .eq('id', jobId);
+
+    if (upErr) {
+      console.error('[MASS-SEND] resume:', upErr);
+      return errorResponse('Erro ao retomar campanha.', 500);
+    }
+
+    const origin = req.nextUrl?.origin || new URL(req.url).origin;
+    triggerMassSendProcessFromOrigin(origin);
+
+    return successResponse({ status: 'pending' }, 'Campanha retomada. O envio continuará em breve.');
   } catch (e) {
     return serverErrorResponse(e);
   }

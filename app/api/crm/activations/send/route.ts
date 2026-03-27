@@ -3,6 +3,7 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { sanitizeMassSendErrorMessage } from '@/lib/utils/activation-send-errors';
+import { triggerMassSendProcessFromOrigin } from '@/lib/crm/trigger-mass-send-process';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300; // 5 minutos
@@ -103,6 +104,7 @@ function clampInterGroupDelayMs(raw: unknown): number {
  */
 export async function POST(req: NextRequest) {
   try {
+    const requestOrigin = req.nextUrl?.origin || new URL(req.url).origin;
     const { userId } = await requireAuth(req);
     const body = await req.json();
     const { messageId, groupIds, instanceName, forceMassSend, forceSync } = body;
@@ -171,7 +173,7 @@ export async function POST(req: NextRequest) {
         process.env.URL ||
         process.env.NEXT_PUBLIC_SITE_URL ||
         (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null);
-      const siteUrl = base ? base.replace(/\/$/, '') : null;
+      const siteUrl = (base ? base.replace(/\/$/, '') : null) || requestOrigin;
 
       // Envio imediato do primeiro grupo: confirmação visual de que a campanha foi iniciada.
       // Para PTV por URL (download + base64), pula envio síncrono para evitar timeout da requisição principal.
@@ -196,74 +198,92 @@ export async function POST(req: NextRequest) {
               groupIds: [groupIds[0]],
               instanceName,
               forceSync: true,
+              interGroupDelayMs: 0,
             }),
             signal: firstGroupController.signal,
           });
           clearTimeout(firstGroupTimeout);
-          const firstJson = await firstRes.json();
-          const firstSent = firstJson?.data?.success ?? 0;
-          const firstFailed = firstJson?.data?.failed ?? 0;
-          const rawFirstErr =
-            firstFailed > 0 && Array.isArray(firstJson?.data?.errors) && firstJson.data.errors.length > 0
-              ? String(firstJson.data.errors[0]?.error ?? '')
-              : '';
-          const firstLastError = rawFirstErr ? sanitizeMassSendErrorMessage(rawFirstErr) || null : null;
-          const firstGroupId = groupIds[0];
-          const firstOutcomes: { groupId: string; success: boolean; error?: string }[] =
-            Array.isArray(firstJson?.data?.groupOutcomes) && firstJson.data.groupOutcomes.length > 0
-              ? firstJson.data.groupOutcomes.map((o: { groupId?: string; group_id?: string; success?: boolean; error?: string }) => ({
-                  groupId: String(o.groupId ?? o.group_id ?? firstGroupId),
-                  success: o.success === true,
-                  ...(o.error
-                    ? { error: sanitizeMassSendErrorMessage(String(o.error)) || String(o.error).slice(0, 200) }
-                    : {}),
-                }))
-              : [
-                  (() => {
-                    const err = firstJson?.data?.errors?.find((e: { groupId?: string }) => e.groupId === firstGroupId);
-                    if (!err) return { groupId: firstGroupId, success: true };
-                    const msg = String(err.error ?? '');
-                    return {
-                      groupId: firstGroupId,
-                      success: false,
-                      error: sanitizeMassSendErrorMessage(msg) || msg.slice(0, 200),
-                    };
-                  })(),
-                ];
-          const isComplete = groupIds.length <= 1;
-          await supabaseServiceRole.rpc('increment_mass_send_job_counts', {
-            p_job_id: job.id,
-            p_sent: firstSent,
-            p_failed: firstFailed,
-            p_processed_index: 1,
-            p_last_error: firstLastError,
-            p_status: isComplete ? 'completed' : 'pending',
-            p_now: new Date().toISOString(),
-            p_group_outcomes: firstOutcomes,
-          });
-          firstGroupSent = firstSent > 0;
-          console.log(`${firstGroupSent ? '✅' : '⚠️'} [ACTIVATION] Envio imediato do 1º grupo: sent=${firstSent}, failed=${firstFailed}`);
+          if (!firstRes.ok) {
+            console.warn(
+              `[ACTIVATION] Envio imediato do 1º grupo: HTTP ${firstRes.status} — índice não avança; o worker reprocessará o grupo 0.`
+            );
+          } else {
+            let firstJson: Record<string, unknown> | null = null;
+            try {
+              firstJson = (await firstRes.json()) as Record<string, unknown>;
+            } catch (parseErr: unknown) {
+              console.warn(
+                '[ACTIVATION] Envio imediato do 1º grupo: corpo não é JSON válido — worker reprocessará o grupo 0.',
+                (parseErr as Error)?.message
+              );
+            }
+            if (firstJson && firstJson.success === false) {
+              console.warn('[ACTIVATION] Envio imediato do 1º grupo: API retornou success=false — worker reprocessará o grupo 0.');
+            } else if (firstJson) {
+              const data = firstJson.data as Record<string, unknown> | undefined;
+              const firstSent = Number(data?.success ?? 0) || 0;
+              const firstFailed = Number(data?.failed ?? 0) || 0;
+              const rawFirstErr =
+                firstFailed > 0 && Array.isArray(data?.errors) && data.errors.length > 0
+                  ? String((data.errors[0] as { error?: string })?.error ?? '')
+                  : '';
+              const firstLastError = rawFirstErr ? sanitizeMassSendErrorMessage(rawFirstErr) || null : null;
+              const firstGroupId = groupIds[0];
+              const firstOutcomes: { groupId: string; success: boolean; error?: string }[] =
+                Array.isArray(data?.groupOutcomes) && data.groupOutcomes.length > 0
+                  ? (data.groupOutcomes as { groupId?: string; group_id?: string; success?: boolean; error?: string }[]).map(
+                      (o) => ({
+                        groupId: String(o.groupId ?? o.group_id ?? firstGroupId),
+                        success: o.success === true,
+                        ...(o.error
+                          ? { error: sanitizeMassSendErrorMessage(String(o.error)) || String(o.error).slice(0, 200) }
+                          : {}),
+                      })
+                    )
+                  : [
+                      (() => {
+                        const errors = data?.errors as { groupId?: string; error?: string }[] | undefined;
+                        const err = errors?.find((e) => e.groupId === firstGroupId);
+                        if (!err) return { groupId: firstGroupId, success: true };
+                        const msg = String(err.error ?? '');
+                        return {
+                          groupId: firstGroupId,
+                          success: false,
+                          error: sanitizeMassSendErrorMessage(msg) || msg.slice(0, 200),
+                        };
+                      })(),
+                    ];
+              const isComplete = groupIds.length <= 1;
+              await supabaseServiceRole.rpc('increment_mass_send_job_counts', {
+                p_job_id: job.id,
+                p_sent: firstSent,
+                p_failed: firstFailed,
+                p_processed_index: 1,
+                p_last_error: firstLastError,
+                p_status: isComplete ? 'completed' : 'pending',
+                p_now: new Date().toISOString(),
+                p_group_outcomes: firstOutcomes,
+              });
+              firstGroupSent = firstSent > 0;
+              console.log(
+                `${firstGroupSent ? '✅' : '⚠️'} [ACTIVATION] Envio imediato do 1º grupo: sent=${firstSent}, failed=${firstFailed}`
+              );
+            }
+          }
         } catch (err: any) {
           clearTimeout(firstGroupTimeout);
           console.warn('[ACTIVATION] Envio imediato do 1º grupo falhou (cron processará):', err?.message);
         }
       }
 
-      // Dispara o processamento em segundo plano.
-      // - Se houve envio imediato do 1º grupo, processa os restantes.
-      // - Se não houve envio imediato (ex.: PTV por URL), processa todos os grupos.
-      const shouldTriggerBackgroundProcessing = siteUrl && cronSecret && (groupIds.length > 1 || !firstGroupAttempted);
-      if (shouldTriggerBackgroundProcessing) {
-        const processUrl = `${siteUrl}/api/crm/activations/mass-send/process`;
-        fetch(processUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-internal-cron-secret': cronSecret,
-          },
-        }).catch((err) => {
-          console.warn('[ACTIVATION] Trigger em background do processamento falhou (cron continuará):', err?.message);
-        });
+      // Dispara o worker sempre que possível: campanha de 1 grupo com falha no envio imediato
+      // deixaria o job em processed_index=0 sem trigger se condicionássemos a "mais de um grupo".
+      if (cronSecret && siteUrl) {
+        triggerMassSendProcessFromOrigin(siteUrl);
+      } else if (!cronSecret) {
+        console.warn(
+          '[ACTIVATION] CRON_SECRET não configurado — campanha criada mas o worker não será acionado até o cron ou variável existir.'
+        );
       }
 
       return new Response(

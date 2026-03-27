@@ -2547,7 +2547,7 @@ const ActivationsPage = () => {
                       <th className="text-center p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Total</th>
                       <th className="text-center p-3 text-sm font-medium text-gray-700 dark:text-[#ccc] w-28">Por grupo</th>
                       <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Criada em</th>
-                      <th className="text-center p-3 text-sm font-medium text-gray-700 dark:text-[#ccc] w-24">Ações</th>
+                      <th className="text-center p-3 text-sm font-medium text-gray-700 dark:text-[#ccc] min-w-[8rem]">Ações</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2563,10 +2563,11 @@ const ActivationsPage = () => {
                             <span className={`px-2 py-1 rounded text-xs font-medium ${
                               job.status === 'completed' ? 'bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-200' :
                               job.status === 'processing' || job.status === 'pending' ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200' :
+                              job.status === 'paused' ? 'bg-violet-100 dark:bg-violet-900/40 text-violet-800 dark:text-violet-200' :
                               job.status === 'failed' ? 'bg-red-100 dark:bg-red-900/40 text-red-800 dark:text-red-200' :
                               'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300'
                             }`}>
-                              {job.status === 'completed' ? 'Concluída' : job.status === 'processing' ? 'Em andamento' : job.status === 'pending' ? 'Pendente' : job.status === 'failed' ? 'Falhou' : job.status}
+                              {job.status === 'completed' ? 'Concluída' : job.status === 'processing' ? 'Em andamento' : job.status === 'pending' ? 'Pendente' : job.status === 'paused' ? 'Pausada' : job.status === 'failed' ? 'Falhou' : job.status}
                             </span>
                           </td>
                           <td className="p-3 text-center">
@@ -2606,31 +2607,93 @@ const ActivationsPage = () => {
                             {job.created_at ? new Date(job.created_at).toLocaleString('pt-BR') : '—'}
                           </td>
                           <td className="p-3 text-center">
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                if (!window.confirm('Excluir esta campanha? O envio será interrompido.')) return;
-                                try {
-                                  const res = await fetch(`/api/crm/activations/mass-send/jobs/${job.id}`, {
-                                    method: 'DELETE',
-                                    headers: { 'X-User-Id': userId ?? '' },
-                                  });
-                                  const data = await safeResponseJson(res);
-                                  if (res.ok && data.success) {
-                                    showToast('Campanha excluída.', 'success');
-                                    loadMassSendJobs();
-                                  } else {
-                                    showToast(data?.error || 'Erro ao excluir campanha.', 'error');
+                            <div className="flex items-center justify-center gap-0.5 flex-wrap">
+                              {(job.status === 'pending' || job.status === 'processing') && (
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    try {
+                                      const res = await fetch(`/api/crm/activations/mass-send/jobs/${job.id}`, {
+                                        method: 'PATCH',
+                                        headers: {
+                                          'Content-Type': 'application/json',
+                                          'X-User-Id': userId ?? '',
+                                        },
+                                        body: JSON.stringify({ action: 'pause' }),
+                                      });
+                                      const data = await safeResponseJson(res);
+                                      if (res.ok && data.success) {
+                                        showToast('Campanha pausada.', 'success');
+                                        loadMassSendJobs();
+                                      } else {
+                                        showToast(data?.error || 'Erro ao pausar.', 'error');
+                                      }
+                                    } catch {
+                                      showToast('Erro ao pausar campanha.', 'error');
+                                    }
+                                  }}
+                                  className="p-2 rounded-lg text-violet-600 hover:bg-violet-50 dark:hover:bg-violet-900/30 transition-colors"
+                                  title="Pausar envio"
+                                >
+                                  <Pause className="w-4 h-4" />
+                                </button>
+                              )}
+                              {job.status === 'paused' && (
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    try {
+                                      const res = await fetch(`/api/crm/activations/mass-send/jobs/${job.id}`, {
+                                        method: 'PATCH',
+                                        headers: {
+                                          'Content-Type': 'application/json',
+                                          'X-User-Id': userId ?? '',
+                                        },
+                                        body: JSON.stringify({ action: 'resume' }),
+                                      });
+                                      const data = await safeResponseJson(res);
+                                      if (res.ok && data.success) {
+                                        showToast(data.message || 'Campanha retomada.', 'success');
+                                        loadMassSendJobs();
+                                      } else {
+                                        showToast(data?.error || 'Erro ao retomar.', 'error');
+                                      }
+                                    } catch {
+                                      showToast('Erro ao retomar campanha.', 'error');
+                                    }
+                                  }}
+                                  className="p-2 rounded-lg text-[#8CD955] hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors"
+                                  title="Retomar envio"
+                                >
+                                  <Play className="w-4 h-4" />
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  if (!window.confirm('Excluir esta campanha? O envio será interrompido.')) return;
+                                  try {
+                                    const res = await fetch(`/api/crm/activations/mass-send/jobs/${job.id}`, {
+                                      method: 'DELETE',
+                                      headers: { 'X-User-Id': userId ?? '' },
+                                    });
+                                    const data = await safeResponseJson(res);
+                                    if (res.ok && data.success) {
+                                      showToast('Campanha excluída.', 'success');
+                                      loadMassSendJobs();
+                                    } else {
+                                      showToast(data?.error || 'Erro ao excluir campanha.', 'error');
+                                    }
+                                  } catch {
+                                    showToast('Erro ao excluir campanha.', 'error');
                                   }
-                                } catch {
-                                  showToast('Erro ao excluir campanha.', 'error');
-                                }
-                              }}
-                              className="p-2 rounded-lg text-gray-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400 transition-colors"
-                              title="Excluir campanha"
-                            >
-                              <Trash className="w-4 h-4" />
-                            </button>
+                                }}
+                                className="p-2 rounded-lg text-gray-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400 transition-colors"
+                                title="Excluir campanha"
+                              >
+                                <Trash className="w-4 h-4" />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
