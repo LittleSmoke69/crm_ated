@@ -45,6 +45,8 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
   const [showChoiceModal, setShowChoiceModal] = useState(false);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [forceMassSend, setForceMassSend] = useState(false);
+  /** Pausa entre um disparo e outro (0 = padrão rápido). Máx. 15s — espelha a API. */
+  const [interGroupDelaySec, setInterGroupDelaySec] = useState(0);
 
   const { toasts, showToast, removeToast } = useToast();
 
@@ -153,6 +155,10 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
     }
   }, [isOpen, userId, defaultToMassSend]);
 
+  useEffect(() => {
+    if (isOpen) setInterGroupDelaySec(0);
+  }, [isOpen]);
+
   // Carrega instâncias e grupos do banco ao abrir (apenas quando for enviar agora)
   useEffect(() => {
     const init = async () => {
@@ -235,12 +241,18 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
 
     setSending(true);
     try {
-      // Timeout de 60 segundos para envio de mensagens (pode demorar mais)
+      const interGroupDelayMs = Math.min(15000, Math.max(0, Math.round(interGroupDelaySec * 1000)));
+      const n = selectedGroups.size;
+      const clientTimeoutMs = Math.min(
+        300_000,
+        Math.max(60_000, 55_000 + n * 28_000 + Math.max(0, n - 1) * interGroupDelayMs)
+      );
+
       const controller = new AbortController();
       const timeoutId = setTimeout(() => {
         controller.abort();
-        console.warn('⏱️ [SEND] Timeout de 60s atingido ao enviar mensagens');
-      }, 60000);
+        console.warn(`⏱️ [SEND] Timeout de ${clientTimeoutMs}ms atingido ao enviar mensagens`);
+      }, clientTimeoutMs);
 
       let response: Response;
       try {
@@ -254,6 +266,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
             messageId,
             groupIds: Array.from(selectedGroups),
             instanceName: selectedInstance,
+            interGroupDelayMs,
             ...(forceMassSend && { forceMassSend: true }),
           }),
           signal: controller.signal,
@@ -264,7 +277,9 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
         
         // Se foi abortado por timeout, relança com mensagem específica
         if (fetchError.name === 'AbortError' || controller.signal.aborted) {
-          throw new Error('Timeout: A requisição demorou mais de 60 segundos. Tente novamente.');
+          throw new Error(
+            'Timeout: a requisição demorou mais que o limite. Reduza grupos, pausa entre disparos ou tente de novo.'
+          );
         }
         
         // Outros erros de rede
@@ -504,6 +519,34 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
             </button>
             <span className="text-[#8CD955] font-bold text-sm">Total: {filteredGroupIds.length}</span>
           </div>
+        </div>
+
+        {/* Pausa entre disparos (campanha em massa e envio direto) */}
+        <div className="px-4 py-3 border-b border-gray-200 dark:border-[#404040] flex-shrink-0 bg-white/60 dark:bg-[#2a2a2a]/80">
+          <label className="text-gray-700 dark:text-gray-300 text-xs font-semibold mb-2 block uppercase tracking-wider">
+            Pausa entre um disparo e outro
+          </label>
+          <div className="flex items-center gap-3">
+            <input
+              type="range"
+              min={0}
+              max={15}
+              step={1}
+              value={interGroupDelaySec}
+              onChange={(e) => setInterGroupDelaySec(Number(e.target.value))}
+              className="flex-1 min-w-0 h-2 accent-[#8CD955] rounded-lg appearance-none bg-gray-200 dark:bg-[#404040]"
+              aria-valuemin={0}
+              aria-valuemax={15}
+              aria-valuenow={interGroupDelaySec}
+              aria-label="Segundos de pausa entre disparos"
+            />
+            <span className="text-sm font-bold text-[#8CD955] w-24 text-right tabular-nums shrink-0">
+              {interGroupDelaySec === 0 ? 'Padrão' : `${interGroupDelaySec}s`}
+            </span>
+          </div>
+          <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-2 leading-snug">
+            Em <strong className="font-medium text-gray-600 dark:text-gray-300">Padrão</strong>, os envios seguem o modo rápido (lotes paralelos). Com 1s a 15s, cada grupo é enviado em sequência com essa pausa — útil para reduzir bloqueio ou sobrecarga na instância.
+          </p>
         </div>
 
         {/* Lista de Grupos - scroll interno; altura limitada para o footer ficar sempre visível */}

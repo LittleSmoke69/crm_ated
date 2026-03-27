@@ -238,6 +238,10 @@ export default function AdminMetaPage() {
   });
   /** Quando já existe token salvo, mostra máscara no campo até o usuário clicar em «Alterar token». */
   const [editingToken, setEditingToken] = useState(false);
+  /** Após «Revelar token», mostra o valor em texto claro (não como password). */
+  const [accessTokenRevealed, setAccessTokenRevealed] = useState(false);
+  const [revealTokenLoading, setRevealTokenLoading] = useState(false);
+  const [revealTokenError, setRevealTokenError] = useState<string | null>(null);
 
   const loadConfig = useCallback(async (idsOverride?: string[]) => {
     const ids = (idsOverride?.length ? idsOverride : selectedBancaIds).map((x) => String(x).trim()).filter(Boolean);
@@ -253,6 +257,8 @@ export default function AdminMetaPage() {
       if (!data.success) {
         setConfig(null);
         setEditingToken(false);
+        setAccessTokenRevealed(false);
+        setRevealTokenError(null);
         setConfigLoadError(data.error || 'Erro ao carregar integração');
         setTestResult({ success: false, error: data.error || 'Erro ao carregar integração' });
         return;
@@ -268,6 +274,8 @@ export default function AdminMetaPage() {
       if (data.data) {
         setConfig(data.data);
         setEditingToken(false);
+        setAccessTokenRevealed(false);
+        setRevealTokenError(null);
         const d = data.data;
         setForm((f) => ({
           ...f,
@@ -283,6 +291,8 @@ export default function AdminMetaPage() {
       console.error(err);
       setConfig(null);
       setEditingToken(false);
+      setAccessTokenRevealed(false);
+      setRevealTokenError(null);
       setConfigLoadError('Erro de rede ao carregar integração');
       setTestResult({ success: false, error: 'Erro de rede ao carregar integração' });
     } finally {
@@ -651,6 +661,31 @@ export default function AdminMetaPage() {
       setTestResult({ success: false, error: err?.message || 'Erro ao testar' });
     } finally {
       setTesting(false);
+    }
+  };
+
+  const handleRevealAccessToken = async () => {
+    if (!userId || !primaryBancaId) return;
+    setRevealTokenLoading(true);
+    setRevealTokenError(null);
+    try {
+      const res = await fetch('/api/admin/meta/reveal-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({ banca_id: primaryBancaId }),
+      });
+      const data = await res.json();
+      if (data.success && typeof data.data?.access_token === 'string') {
+        setEditingToken(true);
+        setAccessTokenRevealed(true);
+        setForm((f) => ({ ...f, access_token: data.data.access_token }));
+      } else {
+        setRevealTokenError(data.error || 'Não foi possível revelar o token.');
+      }
+    } catch (err: any) {
+      setRevealTokenError(err?.message || 'Erro ao revelar o token.');
+    } finally {
+      setRevealTokenLoading(false);
     }
   };
 
@@ -2033,6 +2068,8 @@ export default function AdminMetaPage() {
                                 : selectedBancaIds.filter((x) => x !== b.id);
                               setSelectedBancaIds(next);
                               setEditingToken(false);
+                              setAccessTokenRevealed(false);
+                              setRevealTokenError(null);
                               setTestResult(null);
                               setSyncResult(null);
                               setConfigLoadError(null);
@@ -2108,38 +2145,72 @@ export default function AdminMetaPage() {
                     Access Token
                   </label>
                   {config?.token_last4 && !editingToken ? (
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                      <input
-                        type="text"
-                        readOnly
-                        value={`••••${config.token_last4}`}
-                        aria-label="Token salvo (máscara)"
-                        className="w-full px-4 py-2 border border-gray-200 rounded-xl text-gray-800 bg-gray-50 font-mono text-sm"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingToken(true);
-                          setForm((f) => ({ ...f, access_token: '' }));
-                        }}
-                        className="shrink-0 px-4 py-2 rounded-xl border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50"
-                      >
-                        Alterar token
-                      </button>
+                    <div className="space-y-1">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:flex-wrap">
+                        <input
+                          type="text"
+                          readOnly
+                          value={`••••${config.token_last4}`}
+                          aria-label="Token salvo (máscara)"
+                          className="w-full min-w-0 px-4 py-2 border border-gray-200 rounded-xl text-gray-800 bg-gray-50 font-mono text-sm"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void handleRevealAccessToken()}
+                          disabled={!primaryBancaId || revealTokenLoading}
+                          className="shrink-0 inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl border border-amber-200 bg-amber-50 text-sm font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+                        >
+                          {revealTokenLoading ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Eye className="w-4 h-4" />
+                          )}
+                          Revelar token
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingToken(true);
+                            setAccessTokenRevealed(false);
+                            setRevealTokenError(null);
+                            setForm((f) => ({ ...f, access_token: '' }));
+                          }}
+                          className="shrink-0 px-4 py-2 rounded-xl border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                        >
+                          Alterar token
+                        </button>
+                      </div>
+                      {revealTokenError ? (
+                        <p className="text-xs text-red-600">{revealTokenError}</p>
+                      ) : null}
                     </div>
                   ) : (
-                    <input
-                      type="password"
-                      autoComplete="off"
-                      value={form.access_token}
-                      onChange={(e) => setForm((f) => ({ ...f, access_token: e.target.value }))}
-                      placeholder={
-                        config?.configured && config?.token_last4
-                          ? 'Novo token (ou deixe em branco ao salvar para manter o atual)'
-                          : 'Token do System User'
-                      }
-                      className="w-full px-4 py-2 border border-gray-200 rounded-xl text-gray-800 placeholder:text-gray-500"
-                    />
+                    <div className="space-y-1">
+                      <input
+                        type={accessTokenRevealed ? 'text' : 'password'}
+                        autoComplete="off"
+                        value={form.access_token}
+                        onChange={(e) => {
+                          setForm((f) => ({ ...f, access_token: e.target.value }));
+                          if (accessTokenRevealed) setAccessTokenRevealed(false);
+                        }}
+                        placeholder={
+                          config?.configured && config?.token_last4
+                            ? 'Novo token (ou deixe em branco ao salvar para manter o atual)'
+                            : 'Token do System User'
+                        }
+                        className="w-full px-4 py-2 border border-gray-200 rounded-xl text-gray-800 placeholder:text-gray-500 font-mono text-sm"
+                      />
+                      {form.access_token ? (
+                        <button
+                          type="button"
+                          onClick={() => setAccessTokenRevealed((v) => !v)}
+                          className="text-xs font-medium text-amber-800 hover:text-amber-950"
+                        >
+                          {accessTokenRevealed ? 'Ocultar token (mascarar)' : 'Mostrar token'}
+                        </button>
+                      ) : null}
+                    </div>
                   )}
                 </div>
                 <div>

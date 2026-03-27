@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { sanitizeMassSendErrorMessage } from '@/lib/utils/activation-send-errors';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300; // 5 minutos
@@ -37,6 +38,17 @@ function isPtvUrlMessage(message: {
   if (!message || message.message_type !== 'ptv') return false;
   const url = String(message.attachment_url || '').trim();
   return url.startsWith('http://') || url.startsWith('https://');
+}
+
+function summarizeRequestBodyForLog(body: unknown): unknown {
+  if (!body || typeof body !== 'object') return body;
+  const base = { ...(body as Record<string, unknown>) };
+  if (typeof base.video === 'string') {
+    const videoStr = base.video as string;
+    const isLikelyUrl = videoStr.startsWith('http://') || videoStr.startsWith('https://');
+    base.video = isLikelyUrl ? '[video_url]' : `[base64:${Math.round(videoStr.length / 1024)}KB]`;
+  }
+  return base;
 }
 
 /**
@@ -75,6 +87,15 @@ async function fetchVideoUrlAsBase64(videoUrl: string): Promise<string> {
 /** Acima deste número de grupos, o envio é enfileirado e processado em segundo plano (evita timeout na Netlify). */
 const THRESHOLD_MASS_SEND = 10;
 
+/** Pausa entre disparos consecutivos (ms), configurável na UI; máximo 15s. */
+const INTER_GROUP_DELAY_MAX_MS = 15_000;
+
+function clampInterGroupDelayMs(raw: unknown): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(INTER_GROUP_DELAY_MAX_MS, Math.max(0, Math.floor(n)));
+}
+
 
 /**
  * POST /api/crm/activations/send - Envia uma mensagem de ativação para vários grupos
@@ -85,6 +106,10 @@ export async function POST(req: NextRequest) {
     const { userId } = await requireAuth(req);
     const body = await req.json();
     const { messageId, groupIds, instanceName, forceMassSend, forceSync } = body;
+    const interGroupDelayMs = clampInterGroupDelayMs(
+      (body as { interGroupDelayMs?: unknown; inter_group_delay_ms?: unknown }).interGroupDelayMs ??
+        (body as { inter_group_delay_ms?: unknown }).inter_group_delay_ms
+    );
     const isCronProcess = req.headers.get('x-internal-cron-secret') === process.env.CRON_SECRET;
 
     if (!messageId || !groupIds || !Array.isArray(groupIds) || groupIds.length === 0 || !instanceName) {
@@ -131,6 +156,7 @@ export async function POST(req: NextRequest) {
           total_groups: groupIds.length,
           sent_count: 0,
           failed_count: 0,
+          inter_group_delay_ms: interGroupDelayMs,
         })
         .select('id')
         .single();
@@ -177,10 +203,33 @@ export async function POST(req: NextRequest) {
           const firstJson = await firstRes.json();
           const firstSent = firstJson?.data?.success ?? 0;
           const firstFailed = firstJson?.data?.failed ?? 0;
-          const firstLastError =
+          const rawFirstErr =
             firstFailed > 0 && Array.isArray(firstJson?.data?.errors) && firstJson.data.errors.length > 0
-              ? (firstJson.data.errors[0]?.error ?? null)
-              : null;
+              ? String(firstJson.data.errors[0]?.error ?? '')
+              : '';
+          const firstLastError = rawFirstErr ? sanitizeMassSendErrorMessage(rawFirstErr) || null : null;
+          const firstGroupId = groupIds[0];
+          const firstOutcomes: { groupId: string; success: boolean; error?: string }[] =
+            Array.isArray(firstJson?.data?.groupOutcomes) && firstJson.data.groupOutcomes.length > 0
+              ? firstJson.data.groupOutcomes.map((o: { groupId?: string; group_id?: string; success?: boolean; error?: string }) => ({
+                  groupId: String(o.groupId ?? o.group_id ?? firstGroupId),
+                  success: o.success === true,
+                  ...(o.error
+                    ? { error: sanitizeMassSendErrorMessage(String(o.error)) || String(o.error).slice(0, 200) }
+                    : {}),
+                }))
+              : [
+                  (() => {
+                    const err = firstJson?.data?.errors?.find((e: { groupId?: string }) => e.groupId === firstGroupId);
+                    if (!err) return { groupId: firstGroupId, success: true };
+                    const msg = String(err.error ?? '');
+                    return {
+                      groupId: firstGroupId,
+                      success: false,
+                      error: sanitizeMassSendErrorMessage(msg) || msg.slice(0, 200),
+                    };
+                  })(),
+                ];
           const isComplete = groupIds.length <= 1;
           await supabaseServiceRole.rpc('increment_mass_send_job_counts', {
             p_job_id: job.id,
@@ -190,6 +239,7 @@ export async function POST(req: NextRequest) {
             p_last_error: firstLastError,
             p_status: isComplete ? 'completed' : 'pending',
             p_now: new Date().toISOString(),
+            p_group_outcomes: firstOutcomes,
           });
           firstGroupSent = firstSent > 0;
           console.log(`${firstGroupSent ? '✅' : '⚠️'} [ACTIVATION] Envio imediato do 1º grupo: sent=${firstSent}, failed=${firstFailed}`);
@@ -361,8 +411,9 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 3. Envia para cada grupo em paralelo (todos com a mesma opção de menção)
-    const sendPromises = groupIds.map(async (groupId: string) => {
+    // 3. Envia para cada grupo.
+    // Para PTV com base64 muito grande, envia em sequência para evitar pico de memória/timeout.
+    const processGroupSend = async (groupId: string) => {
       try {
         const FETCH_TIMEOUT_MS = 30000; // 30 segundos
         const controller = new AbortController();
@@ -498,8 +549,11 @@ export async function POST(req: NextRequest) {
             };
           }
 
-          // Log simplificado do request
-          console.log(`📤 [ACTIVATION] Enviando para ${groupId}:`, JSON.stringify({ url, body: requestBody }, null, 2));
+          // Log seguro: nunca serializar base64 gigante.
+          console.log(`📤 [ACTIVATION] Enviando para ${groupId}:`, {
+            url,
+            body: summarizeRequestBodyForLog(requestBody),
+          });
 
           const requestStartTime = Date.now();
           const response = await fetch(url, {
@@ -585,7 +639,8 @@ export async function POST(req: NextRequest) {
 
             const userMessage = isConnectionClosed
               ? `Sessão WhatsApp encerrada (Connection Closed). A instância ${instanceName} foi marcada como desconectada. Reconecte a instância e tente novamente.`
-              : errorMessage;
+              : sanitizeMassSendErrorMessage(errorMessage) ||
+                `Erro ao enviar mensagem: ${response.status} ${response.statusText}`;
             throw new Error(userMessage);
           }
 
@@ -603,19 +658,46 @@ export async function POST(req: NextRequest) {
         }
       } catch (err: any) {
         results.failed++;
-        const errorMessage = err.message || 'Erro desconhecido';
+        const rawMsg = err.message || 'Erro desconhecido';
+        const errorMessage = sanitizeMassSendErrorMessage(rawMsg) || rawMsg;
         results.errors.push({ groupId, error: errorMessage });
         console.error(`❌ [ACTIVATION] Erro ao enviar para ${groupId}:`, errorMessage);
         return { success: false, groupId, error: errorMessage };
       }
-    });
+    };
 
-    // Aguarda todos os envios completarem
-    await Promise.all(sendPromises);
+    const shouldSendSequentially =
+      message.message_type === 'ptv' &&
+      typeof ptvVideoPayload === 'string' &&
+      !ptvVideoPayload.startsWith('http://') &&
+      !ptvVideoPayload.startsWith('https://');
+
+    const useParallel = !shouldSendSequentially && interGroupDelayMs <= 0;
+
+    if (useParallel) {
+      await Promise.all(groupIds.map((groupId: string) => processGroupSend(groupId)));
+    } else {
+      for (let i = 0; i < groupIds.length; i++) {
+        await processGroupSend(groupIds[i]);
+        if (i < groupIds.length - 1 && interGroupDelayMs > 0) {
+          await new Promise((r) => setTimeout(r, interGroupDelayMs));
+        }
+      }
+    }
 
     console.log(`📊 [ACTIVATION] Resultado final: ${results.success} sucessos, ${results.failed} falhas`);
 
-    return successResponse(results, `Envio concluído: ${results.success} sucessos, ${results.failed} falhas`);
+    const groupOutcomes = groupIds.map((groupId: string) => {
+      const err = results.errors.find((e: { groupId?: string }) => e.groupId === groupId);
+      return err
+        ? { groupId, success: false as const, error: String((err as { error?: string }).error ?? '') }
+        : { groupId, success: true as const };
+    });
+
+    return successResponse(
+      { ...results, groupOutcomes },
+      `Envio concluído: ${results.success} sucessos, ${results.failed} falhas`
+    );
   } catch (err: any) {
     console.error(`❌ [ACTIVATION] Erro geral:`, err);
     return serverErrorResponse(err);

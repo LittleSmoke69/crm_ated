@@ -6,6 +6,7 @@ import { useRequireAuth } from '@/utils/useRequireAuth';
 import { Activity, Heart, Search, Plus, MoreVertical, Paperclip, X, Trash2, Edit2, Star, Info, Upload, ArrowLeft, Video, Phone, MoreVertical as MoreVerticalIcon, Smile, Camera, Mic, Check, CheckCheck, Send, Calendar, Clock, Play, Pause, Eye, Trash, Music, Megaphone, Image, CircleDot } from 'lucide-react';
 import SendActivationsModal from '@/components/CRM/SendActivationsModal';
 import ScheduleDetailsModal from '@/components/CRM/ScheduleDetailsModal';
+import MassSendJobDetailModal from '@/components/CRM/MassSendJobDetailModal';
 import { useToast } from '@/hooks/useToast';
 import ToastContainer from '@/components/Toast/ToastContainer';
 import { supabaseClient } from '@/lib/supabase/client';
@@ -133,6 +134,7 @@ const ActivationsPage = () => {
   // Campanhas de disparo em massa
   const [massSendJobs, setMassSendJobs] = useState<any[]>([]);
   const [loadingMassSendJobs, setLoadingMassSendJobs] = useState(false);
+  const [massSendDetailJobId, setMassSendDetailJobId] = useState<string | null>(null);
 
   // Agendamentos
   const [schedules, setSchedules] = useState<any[]>([]);
@@ -2543,6 +2545,7 @@ const ActivationsPage = () => {
                       <th className="text-center p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Sucesso</th>
                       <th className="text-center p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Falhas</th>
                       <th className="text-center p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Total</th>
+                      <th className="text-center p-3 text-sm font-medium text-gray-700 dark:text-[#ccc] w-28">Por grupo</th>
                       <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Criada em</th>
                       <th className="text-center p-3 text-sm font-medium text-gray-700 dark:text-[#ccc] w-24">Ações</th>
                     </tr>
@@ -2567,17 +2570,37 @@ const ActivationsPage = () => {
                             </span>
                           </td>
                           <td className="p-3 text-center">
-                            <span className="inline-flex items-center justify-center min-w-[2.5rem] px-2 py-1 rounded-md bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-200 font-semibold text-sm">
+                            <button
+                              type="button"
+                              onClick={() => setMassSendDetailJobId(job.id)}
+                              className="inline-flex items-center justify-center min-w-[2.5rem] px-2 py-1 rounded-md bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-200 font-semibold text-sm hover:ring-2 hover:ring-green-400/50 focus:outline-none focus:ring-2 focus:ring-[#8CD955]"
+                              title="Ver lista de grupos com sucesso e falhas"
+                            >
                               {sent}
-                            </span>
+                            </button>
                           </td>
                           <td className="p-3 text-center">
-                            <span className={`inline-flex items-center justify-center min-w-[2.5rem] px-2 py-1 rounded-md font-semibold text-sm ${failed > 0 ? 'bg-red-100 dark:bg-red-900/40 text-red-800 dark:text-red-200' : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400'}`}>
+                            <button
+                              type="button"
+                              onClick={() => setMassSendDetailJobId(job.id)}
+                              className={`inline-flex items-center justify-center min-w-[2.5rem] px-2 py-1 rounded-md font-semibold text-sm hover:ring-2 focus:outline-none focus:ring-2 focus:ring-[#8CD955] ${failed > 0 ? 'bg-red-100 dark:bg-red-900/40 text-red-800 dark:text-red-200 hover:ring-red-400/50' : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:ring-gray-400/40'}`}
+                              title="Ver lista de grupos com sucesso e falhas"
+                            >
                               {failed}
-                            </span>
+                            </button>
                           </td>
                           <td className="p-3 text-center text-sm text-gray-700 dark:text-[#ccc] font-medium">
                             {total}
+                          </td>
+                          <td className="p-3 text-center">
+                            <button
+                              type="button"
+                              onClick={() => setMassSendDetailJobId(job.id)}
+                              className="p-2 rounded-lg text-[#8CD955] hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors"
+                              title="Ver grupos (sucesso e falhas) · repetir só falhas"
+                            >
+                              <Eye className="w-4 h-4 mx-auto" />
+                            </button>
                           </td>
                           <td className="p-3 text-sm text-gray-500 dark:text-[#888]">
                             {job.created_at ? new Date(job.created_at).toLocaleString('pt-BR') : '—'}
@@ -2637,6 +2660,15 @@ const ActivationsPage = () => {
           onEditMessageForGroup={handleEditMessageForGroup}
         />
       )}
+
+      <MassSendJobDetailModal
+        isOpen={massSendDetailJobId !== null}
+        onClose={() => setMassSendDetailJobId(null)}
+        jobId={massSendDetailJobId}
+        userId={userId}
+        onRetryQueued={loadMassSendJobs}
+        showToast={showToast}
+      />
     </Layout>
   );
 };
