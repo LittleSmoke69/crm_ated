@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { VturbPlayer } from '@/components/vsl/VturbPlayer';
 import Image from 'next/image';
+import { buildVslRedirectHref } from '@/lib/vsl/runtime/redirect-url';
 
 declare global {
   interface Window {
@@ -213,8 +214,9 @@ export function VslPageClient({
 
   const onCtaClick = useCallback(() => {
     trackEvent('VSL_CTA_CLICK', { redirect_slug: redirectSlug });
-    const q = sessionId ? `?sid=${sessionId}` : '';
-    router.push(`/r/${redirectSlug}${q}`);
+    const href = buildVslRedirectHref(redirectSlug, sessionId);
+    if (!href) return;
+    router.push(href);
   }, [sessionId, redirectSlug, trackEvent, router]);
 
   return (

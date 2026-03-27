@@ -61,6 +61,33 @@ export interface MetaInsight {
   ctr?: string;
   actions?: Array<{ action_type: string; value: string }>;
   action_values?: Array<{ action_type: string; value: string }>;
+  /** Custo médio por tipo de ação (Insights API). */
+  cost_per_action_type?: Array<{ action_type: string; value: string }>;
+}
+
+function normalizeCostPerActionType(
+  input: unknown
+): Array<{ action_type: string; value: string }> | null {
+  let source: unknown = input;
+  if (typeof source === 'string') {
+    try {
+      source = JSON.parse(source);
+    } catch {
+      source = null;
+    }
+  }
+  if (!Array.isArray(source) || source.length === 0) return null;
+  const mapped = source
+    .map((item) => {
+      const o = item as { action_type?: unknown; value?: unknown };
+      const actionType = String(o?.action_type ?? '').trim();
+      if (!actionType) return null;
+      // Mantém o valor como string (formato padrão retornado pela Meta API).
+      const value = String(o?.value ?? '0');
+      return { action_type: actionType, value };
+    })
+    .filter((x): x is { action_type: string; value: string } => Boolean(x));
+  return mapped.length > 0 ? mapped : null;
 }
 
 export interface MetaAccountFinance {
@@ -173,6 +200,12 @@ export async function listCampaigns(
     if (nextData?.data) results.push(...nextData.data);
     next = nextData?.paging?.next;
   }
+  const sample = results[0] as unknown as Record<string, unknown> | undefined;
+  console.log('[Meta Graph] listCampaigns', {
+    count: results.length,
+    fields: sample ? Object.keys(sample) : [],
+    sample: sample ?? null,
+  });
   return results;
 }
 
@@ -195,6 +228,12 @@ export async function listAdSets(
     if (nextData?.data) results.push(...nextData.data);
     next = nextData?.paging?.next;
   }
+  const adSample = results[0] as unknown as Record<string, unknown> | undefined;
+  console.log('[Meta Graph] listAdSets', {
+    count: results.length,
+    fields: adSample ? Object.keys(adSample) : [],
+    sample: adSample ?? null,
+  });
   return results;
 }
 
@@ -220,7 +259,7 @@ export async function getInsightsDaily(
   const cleanId = adAccountId.startsWith('act_') ? adAccountId : `act_${adAccountId}`;
   const path = `${cleanId}/insights`;
   const fields =
-    'date_start,date_stop,campaign_id,campaign_name,reach,impressions,clicks,spend,cpm,cpc,ctr,actions,action_values';
+    'date_start,date_stop,campaign_id,campaign_name,reach,impressions,clicks,spend,cpm,cpc,ctr,actions,action_values,cost_per_action_type';
 
   const isTimeRange =
     typeof dateOption === 'object' &&
@@ -241,6 +280,14 @@ export async function getInsightsDaily(
     if (nextData?.data) results.push(...nextData.data);
     next = nextData?.paging?.next;
   }
+  const insSample = results[0] as unknown as Record<string, unknown> | undefined;
+  console.log('[Meta Graph] getInsightsDaily', {
+    count: results.length,
+    fields: insSample ? Object.keys(insSample) : [],
+    sample: insSample ?? null,
+    requestedFields:
+      'date_start,date_stop,campaign_id,campaign_name,reach,impressions,clicks,spend,cpm,cpc,ctr,actions,action_values,cost_per_action_type',
+  });
   return results;
 }
 
@@ -262,6 +309,7 @@ export function mapInsightToRow(insight: MetaInsight, bancaId: string) {
   const clicks = parseInt(insight.clicks || '0', 10) || 0;
   const spend = parseFloat(insight.spend || '0') || 0;
   const leads = extractLeadsFromActions(insight.actions);
+  const normalizedCostPerActionType = normalizeCostPerActionType(insight.cost_per_action_type);
   return {
     banca_id: bancaId,
     date: insight.date_start,
@@ -276,5 +324,6 @@ export function mapInsightToRow(insight: MetaInsight, bancaId: string) {
     ctr: insight.ctr ? parseFloat(insight.ctr) : null,
     leads,
     raw_actions: insight.actions || null,
+    raw_cost_per_action_type: normalizedCostPerActionType,
   };
 }

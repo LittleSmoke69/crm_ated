@@ -4,7 +4,18 @@ import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { Loader2, Plus, Copy, Pencil, Trash2, Percent } from 'lucide-react';
+import { Loader2, Plus, Copy, Pencil, Trash2, Percent, Scale } from 'lucide-react';
+
+interface ConsultantOption {
+  id: string;
+  full_name: string | null;
+  email: string | null;
+}
+
+interface ConsultantUi {
+  mode: 'flat' | 'by_banca';
+  bancas: { id: string; name: string; url: string }[];
+}
 
 interface Group {
   id: string;
@@ -13,6 +24,8 @@ interface Group {
   weight_percent: number;
   is_active: boolean;
   clicks: number;
+  consultant_user_id?: string | null;
+  consultant?: { full_name: string | null; email: string | null } | null;
 }
 
 interface UtmVisit {
@@ -51,8 +64,18 @@ export default function AdminRedirectPage() {
   const [modalEdit, setModalEdit] = useState(false);
   const [modalWeights, setModalWeights] = useState(false);
   const [projectId, setProjectId] = useState<string | null>(null);
-  const [addForm, setAddForm] = useState({ name: '', invite_url: '', weight_percent: 0 });
-  const [editForm, setEditForm] = useState<{ id: string; name: string; invite_url: string } | null>(null);
+  const [consultantOptions, setConsultantOptions] = useState<ConsultantOption[]>([]);
+  const [consultantUi, setConsultantUi] = useState<ConsultantUi>({ mode: 'flat', bancas: [] });
+  const [consultantBancaIdModal, setConsultantBancaIdModal] = useState('');
+  const [consultantsByBanca, setConsultantsByBanca] = useState<ConsultantOption[]>([]);
+  const [loadingConsultantsByBanca, setLoadingConsultantsByBanca] = useState(false);
+  const [addForm, setAddForm] = useState({ name: '', invite_url: '', weight_percent: 0, consultant_user_id: '' as string });
+  const [editForm, setEditForm] = useState<{
+    id: string;
+    name: string;
+    invite_url: string;
+    consultant_user_id: string;
+  } | null>(null);
   const [weights, setWeights] = useState<Record<string, number>>({});
   const [saving, setSaving] = useState(false);
   const [savingPixel, setSavingPixel] = useState(false);
@@ -63,10 +86,12 @@ export default function AdminRedirectPage() {
   const [pixelId, setPixelId] = useState('');
   const [utmVisits, setUtmVisits] = useState<UtmVisit[]>([]);
   const [utmSummary, setUtmSummary] = useState<UtmSummary>({ total: 0, by_source: {}, by_medium: {}, by_campaign: {}, by_source_medium: {}, by_day: {}, sample_size: 0 });
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!userId) return;
-    fetch(`/api/admin/redirect/groups?project_id=${projectSlug}`, { headers: { 'X-User-Id': userId } })
+    setLoadError(null);
+    fetch(`/api/admin/redirect/groups?project_id=${encodeURIComponent(projectSlug)}`, { headers: { 'X-User-Id': userId } })
       .then((r) => {
         if (r.status === 403) {
           router.push('/admin/vsl');
@@ -75,7 +100,18 @@ export default function AdminRedirectPage() {
         return r.json();
       })
       .then((json) => {
+        if (!json) {
+          setLoadError('Resposta vazia do servidor.');
+          setLoading(false);
+          return;
+        }
+        if (json.success === false) {
+          setLoadError(typeof json.error === 'string' ? json.error : 'Erro ao carregar redirect.');
+          setLoading(false);
+          return;
+        }
         if (!json?.data) {
+          setLoadError('Resposta da API sem dados (data).');
           setLoading(false);
           return;
         }
@@ -89,11 +125,35 @@ export default function AdminRedirectPage() {
         setRedirectTimerSeconds(json.data.redirect_timer_seconds ?? 3);
         setUtmVisits(json.data.utm_visits ?? []);
         setUtmSummary(json.data.utm_summary ?? { total: 0, by_source: {}, by_medium: {}, by_campaign: {}, by_source_medium: {}, by_day: {}, sample_size: 0 });
+        setConsultantOptions(json.data.consultants_for_select ?? []);
+        setConsultantUi(json.data.consultant_ui ?? { mode: 'flat', bancas: [] });
         setLoading(false);
       })
-      .catch(() => setLoading(false));
+      .catch(() => {
+        setLoadError('Falha de rede ao carregar o redirect.');
+        setLoading(false);
+      });
   }, [userId, projectSlug, router]);
 
+  const loadConsultantsForBanca = async (bancaId: string) => {
+    if (!userId || !bancaId) return;
+    setLoadingConsultantsByBanca(true);
+    try {
+      const r = await fetch(`/api/admin/redirect/consultants?banca_id=${encodeURIComponent(bancaId)}`, {
+        headers: { 'X-User-Id': userId },
+      });
+      const j = await r.json();
+      if (j?.success && Array.isArray(j.data)) setConsultantsByBanca(j.data as ConsultantOption[]);
+      else setConsultantsByBanca([]);
+    } catch {
+      setConsultantsByBanca([]);
+    } finally {
+      setLoadingConsultantsByBanca(false);
+    }
+  };
+
+  const isConsultantByBanca = consultantUi.mode === 'by_banca' && consultantUi.bancas.length > 0;
+  const consultantPickList = isConsultantByBanca ? consultantsByBanca : consultantOptions;
 
   const addGroup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -109,13 +169,21 @@ export default function AdminRedirectPage() {
           invite_url: addForm.invite_url.trim(),
           weight_percent: addForm.weight_percent,
           is_active: true,
+          consultant_user_id: addForm.consultant_user_id.trim() || null,
         }),
       });
       const json = await res.json();
       if (json?.data) {
-        setGroups((g) => [...g, { ...json.data, clicks: 0 }]);
+        const row = json.data as Group & { clicks?: number };
+        const cid = row.consultant_user_id ?? null;
+        const list = isConsultantByBanca ? consultantsByBanca : consultantOptions;
+        const opt = cid ? list.find((c) => c.id === cid) : null;
+        const consultant = opt ? { full_name: opt.full_name, email: opt.email } : null;
+        setGroups((g) => [...g, { ...row, clicks: 0, consultant }]);
         setModalAdd(false);
-        setAddForm({ name: '', invite_url: '', weight_percent: 0 });
+        setAddForm({ name: '', invite_url: '', weight_percent: 0, consultant_user_id: '' });
+        setConsultantBancaIdModal('');
+        setConsultantsByBanca([]);
       } else {
         alert(json.error || 'Erro ao adicionar');
       }
@@ -136,8 +204,39 @@ export default function AdminRedirectPage() {
   };
 
   const openEditModal = (g: Group) => {
-    setEditForm({ id: g.id, name: g.name, invite_url: g.invite_url });
+    setConsultantBancaIdModal('');
+    setConsultantsByBanca([]);
+    setEditForm({
+      id: g.id,
+      name: g.name,
+      invite_url: g.invite_url,
+      consultant_user_id: g.consultant_user_id ?? '',
+    });
     setModalEdit(true);
+
+    const byBanca = consultantUi.mode === 'by_banca' && consultantUi.bancas.length > 0;
+    const cid = g.consultant_user_id?.trim();
+    if (byBanca && userId && cid) {
+      setLoadingConsultantsByBanca(true);
+      void (async () => {
+        try {
+          for (const b of consultantUi.bancas) {
+            const r = await fetch(`/api/admin/redirect/consultants?banca_id=${encodeURIComponent(b.id)}`, {
+              headers: { 'X-User-Id': userId },
+            });
+            const j = await r.json();
+            const arr: ConsultantOption[] = j?.success && Array.isArray(j.data) ? j.data : [];
+            if (arr.some((c) => c.id === cid)) {
+              setConsultantBancaIdModal(b.id);
+              setConsultantsByBanca(arr);
+              return;
+            }
+          }
+        } finally {
+          setLoadingConsultantsByBanca(false);
+        }
+      })();
+    }
   };
 
   const saveEdit = async (e: React.FormEvent) => {
@@ -148,13 +247,33 @@ export default function AdminRedirectPage() {
       const res = await fetch(`/api/admin/redirect/groups/${editForm.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-        body: JSON.stringify({ name: editForm.name.trim(), invite_url: editForm.invite_url.trim() }),
+        body: JSON.stringify({
+          name: editForm.name.trim(),
+          invite_url: editForm.invite_url.trim(),
+          consultant_user_id: editForm.consultant_user_id.trim() || null,
+        }),
       });
       const json = await res.json();
       if (json?.success && json?.data) {
-        setGroups((prev) => prev.map((x) => (x.id === editForm.id ? { ...x, name: json.data.name, invite_url: json.data.invite_url } : x)));
+        const d = json.data as { name: string; invite_url: string; consultant_user_id?: string | null };
+        const cid = d.consultant_user_id ?? null;
+        setGroups((prev) =>
+          prev.map((row) => {
+            if (row.id !== editForm.id) return row;
+            const list = isConsultantByBanca ? consultantsByBanca : consultantOptions;
+            const opt = cid ? list.find((c) => c.id === cid) : null;
+            const consultant = opt
+              ? { full_name: opt.full_name, email: opt.email }
+              : cid
+                ? row.consultant ?? null
+                : null;
+            return { ...row, name: d.name, invite_url: d.invite_url, consultant_user_id: cid, consultant };
+          })
+        );
         setModalEdit(false);
         setEditForm(null);
+        setConsultantBancaIdModal('');
+        setConsultantsByBanca([]);
       } else {
         alert(json?.error || 'Erro ao salvar');
       }
@@ -191,6 +310,20 @@ export default function AdminRedirectPage() {
     groups.filter((g) => g.is_active).forEach((g) => { w[g.id] = g.weight_percent; });
     setWeights(w);
     setModalWeights(true);
+  };
+
+  /** Divide 100% entre grupos ativos; o resto da divisão inteira é distribuído +1% aos primeiros grupos (soma exata 100). */
+  const redistributeWeightsEqually = () => {
+    const active = groups.filter((g) => g.is_active);
+    const n = active.length;
+    if (n === 0) return;
+    const base = Math.floor(100 / n);
+    const remainder = 100 - base * n;
+    const next: Record<string, number> = {};
+    active.forEach((g, i) => {
+      next[g.id] = base + (i < remainder ? 1 : 0);
+    });
+    setWeights(next);
   };
 
   const saveWeights = async () => {
@@ -274,6 +407,10 @@ export default function AdminRedirectPage() {
     }
   };
 
+  const activeForWeights = groups.filter((g) => g.is_active);
+  const weightsSum = activeForWeights.reduce((s, g) => s + (weights[g.id] ?? 0), 0);
+  const weightsRemainder = Math.round((100 - weightsSum) * 100) / 100;
+
   if (checking || loading) {
     return (
       <Layout>
@@ -296,6 +433,12 @@ export default function AdminRedirectPage() {
           <span className="text-gray-400">/</span>
           <h1 className="text-xl font-bold text-gray-800">Redirect Manager — /{projectSlug}</h1>
         </div>
+
+        {loadError && (
+          <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
+            {loadError}
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Coluna esquerda: cards de métricas + adicionar grupo */}
@@ -389,7 +532,11 @@ export default function AdminRedirectPage() {
               <h2 className="font-semibold text-gray-800 text-sm mb-3">Adicionar Novo Grupo</h2>
               <button
                 type="button"
-                onClick={() => setModalAdd(true)}
+                onClick={() => {
+                  setConsultantBancaIdModal('');
+                  setConsultantsByBanca([]);
+                  setModalAdd(true);
+                }}
                 className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-[#8CD955] text-white font-medium rounded-xl hover:opacity-90 transition"
               >
                 <Plus className="w-4 h-4" />
@@ -418,6 +565,7 @@ export default function AdminRedirectPage() {
                 <thead>
                   <tr className="bg-gray-50 text-left text-xs font-medium text-gray-700">
                     <th className="p-3">Nome</th>
+                    <th className="p-3 hidden md:table-cell">Consultor</th>
                     <th className="p-3 hidden sm:table-cell">Link</th>
                     <th className="p-3">Status</th>
                     <th className="p-3 w-14">%</th>
@@ -429,6 +577,11 @@ export default function AdminRedirectPage() {
                   {groups.map((g) => (
                     <tr key={g.id} className="border-t border-gray-100 hover:bg-gray-50/50">
                       <td className="p-3 font-medium text-gray-800 truncate max-w-[120px] sm:max-w-none">{g.name}</td>
+                      <td className="p-3 text-xs text-gray-700 truncate max-w-[160px] hidden md:table-cell" title={g.consultant?.email ?? ''}>
+                        {g.consultant
+                          ? (g.consultant.full_name?.trim() || g.consultant.email?.trim() || '—')
+                          : '—'}
+                      </td>
                       <td className="p-3 text-xs text-gray-700 truncate max-w-[140px] hidden sm:table-cell">{g.invite_url}</td>
                       <td className="p-3">
                         <label className="flex items-center gap-2 cursor-pointer">
@@ -708,11 +861,76 @@ export default function AdminRedirectPage() {
                     required
                   />
                 </div>
+                {isConsultantByBanca ? (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Banca</label>
+                      <select
+                        value={consultantBancaIdModal}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setConsultantBancaIdModal(v);
+                          setEditForm((f) => f && { ...f, consultant_user_id: '' });
+                          if (v) void loadConsultantsForBanca(v);
+                          else setConsultantsByBanca([]);
+                        }}
+                        className={inputClass}
+                      >
+                        <option value="">Selecione a banca</option>
+                        {consultantUi.bancas.map((b) => (
+                          <option key={b.id} value={b.id}>
+                            {(b.name || b.url || b.id).slice(0, 80)}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-gray-500 mt-1">Só bancas em que você está vinculado.</p>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Consultor vinculado (opcional)</label>
+                      <select
+                        value={editForm.consultant_user_id}
+                        onChange={(e) => setEditForm((f) => f && { ...f, consultant_user_id: e.target.value })}
+                        disabled={!consultantBancaIdModal || loadingConsultantsByBanca}
+                        className={inputClass}
+                      >
+                        <option value="">{loadingConsultantsByBanca ? 'Carregando…' : 'Nenhum'}</option>
+                        {consultantPickList.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {(c.full_name?.trim() || c.email || c.id).slice(0, 80)}
+                            {c.email ? ` — ${c.email}` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </>
+                ) : (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Consultor vinculado (opcional)</label>
+                    <select
+                      value={editForm.consultant_user_id}
+                      onChange={(e) => setEditForm((f) => f && { ...f, consultant_user_id: e.target.value })}
+                      className={inputClass}
+                    >
+                      <option value="">Nenhum</option>
+                      {consultantOptions.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {(c.full_name?.trim() || c.email || c.id).slice(0, 80)}
+                          {c.email ? ` — ${c.email}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    {consultantOptions.length === 0 && (
+                      <p className="text-xs text-amber-700 mt-1">
+                        Nenhum consultor na lista. Com banca no projeto, só aparecem consultores vinculados a ela; sem banca, até 500 consultores do sistema.
+                      </p>
+                    )}
+                  </div>
+                )}
                 <div className="flex gap-3 pt-2">
                   <button type="submit" disabled={saving} className="px-5 py-2.5 bg-[#8CD955] text-white font-medium rounded-xl disabled:opacity-50 transition">
                     {saving ? <Loader2 className="w-4 h-4 animate-spin inline mr-1" /> : null} Salvar
                   </button>
-                  <button type="button" onClick={() => { setModalEdit(false); setEditForm(null); }} className="px-5 py-2.5 bg-gray-200 text-gray-800 font-medium rounded-xl hover:bg-gray-300 transition">
+                  <button type="button" onClick={() => { setModalEdit(false); setEditForm(null); setConsultantBancaIdModal(''); setConsultantsByBanca([]); }} className="px-5 py-2.5 bg-gray-200 text-gray-800 font-medium rounded-xl hover:bg-gray-300 transition">
                     Cancelar
                   </button>
                 </div>
@@ -756,11 +974,76 @@ export default function AdminRedirectPage() {
                     className={`w-28 ${inputClass}`}
                   />
                 </div>
+                {isConsultantByBanca ? (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Banca</label>
+                      <select
+                        value={consultantBancaIdModal}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setConsultantBancaIdModal(v);
+                          setAddForm((f) => ({ ...f, consultant_user_id: '' }));
+                          if (v) void loadConsultantsForBanca(v);
+                          else setConsultantsByBanca([]);
+                        }}
+                        className={inputClass}
+                      >
+                        <option value="">Selecione a banca</option>
+                        {consultantUi.bancas.map((b) => (
+                          <option key={b.id} value={b.id}>
+                            {(b.name || b.url || b.id).slice(0, 80)}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-gray-500 mt-1">Escolha a banca para listar os consultores vinculados.</p>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Consultor vinculado (opcional)</label>
+                      <select
+                        value={addForm.consultant_user_id}
+                        onChange={(e) => setAddForm((f) => ({ ...f, consultant_user_id: e.target.value }))}
+                        disabled={!consultantBancaIdModal || loadingConsultantsByBanca}
+                        className={inputClass}
+                      >
+                        <option value="">{loadingConsultantsByBanca ? 'Carregando…' : 'Nenhum'}</option>
+                        {consultantPickList.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {(c.full_name?.trim() || c.email || c.id).slice(0, 80)}
+                            {c.email ? ` — ${c.email}` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </>
+                ) : (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Consultor vinculado (opcional)</label>
+                    <select
+                      value={addForm.consultant_user_id}
+                      onChange={(e) => setAddForm((f) => ({ ...f, consultant_user_id: e.target.value }))}
+                      className={inputClass}
+                    >
+                      <option value="">Nenhum</option>
+                      {consultantOptions.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {(c.full_name?.trim() || c.email || c.id).slice(0, 80)}
+                          {c.email ? ` — ${c.email}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    {consultantOptions.length === 0 && (
+                      <p className="text-xs text-amber-700 mt-1">
+                        Nenhum consultor na lista. Com banca no projeto, só aparecem consultores vinculados a ela; sem banca, até 500 consultores do sistema.
+                      </p>
+                    )}
+                  </div>
+                )}
                 <div className="flex gap-3 pt-2">
                   <button type="submit" disabled={saving} className="px-5 py-2.5 bg-[#8CD955] text-white font-medium rounded-xl disabled:opacity-50 transition">
                     {saving ? <Loader2 className="w-4 h-4 animate-spin inline mr-1" /> : null} Salvar
                   </button>
-                  <button type="button" onClick={() => setModalAdd(false)} className="px-5 py-2.5 bg-gray-200 text-gray-800 font-medium rounded-xl hover:bg-gray-300 transition">
+                  <button type="button" onClick={() => { setModalAdd(false); setConsultantBancaIdModal(''); setConsultantsByBanca([]); }} className="px-5 py-2.5 bg-gray-200 text-gray-800 font-medium rounded-xl hover:bg-gray-300 transition">
                     Cancelar
                   </button>
                 </div>
@@ -790,14 +1073,37 @@ export default function AdminRedirectPage() {
                   </div>
                 ))}
               </div>
-              <p className="text-sm text-gray-600 mb-4">
-                Soma: <span className="font-semibold text-gray-800">{Object.values(weights).reduce((a, b) => a + b, 0)}%</span>
-              </p>
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+                <p className="text-sm text-gray-600">
+                  Soma:{' '}
+                  <span className={`font-semibold ${Math.abs(weightsSum - 100) > 0.01 ? 'text-amber-700' : 'text-gray-800'}`}>
+                    {weightsSum}%
+                  </span>
+                  {Math.abs(weightsSum - 100) > 0.01 && (
+                    <span className="block text-xs text-amber-800 mt-0.5">
+                      {weightsRemainder > 0
+                        ? `Faltam ${weightsRemainder}% para completar 100.`
+                        : weightsRemainder < 0
+                          ? `Excedem ${Math.abs(weightsRemainder)}% além de 100.`
+                          : null}
+                    </span>
+                  )}
+                </p>
+                <button
+                  type="button"
+                  onClick={redistributeWeightsEqually}
+                  disabled={activeForWeights.length === 0}
+                  className="inline-flex items-center justify-center gap-2 px-3 py-2 text-sm font-medium rounded-lg border border-gray-300 bg-white text-gray-800 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Scale className="w-4 h-4" />
+                  Redistribuir igual (100%)
+                </button>
+              </div>
               <div className="flex gap-3">
                 <button
                   type="button"
                   onClick={saveWeights}
-                  disabled={saving || Math.abs(Object.values(weights).reduce((a, b) => a + b, 0) - 100) > 0.01}
+                  disabled={saving || Math.abs(weightsSum - 100) > 0.01}
                   className="px-5 py-2.5 bg-[#8CD955] text-white font-medium rounded-xl disabled:opacity-50 transition"
                 >
                   {saving ? <Loader2 className="w-4 h-4 animate-spin inline mr-1" /> : null} Salvar

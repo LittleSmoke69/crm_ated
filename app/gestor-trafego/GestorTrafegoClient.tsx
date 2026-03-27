@@ -193,7 +193,19 @@ export default function GestorTrafegoClient({
     leads: number;
     results?: number;
     cost_per_result?: number | null;
+    assigned_consultors?: Array<{
+      id: string;
+      email: string;
+      full_name: string | null;
+      total_leads: number;
+      total_deposited: number;
+    }>;
+    consultor_total_leads?: number;
+    consultor_total_deposited?: number;
   }>>(initialData?.metaCampaignsData || []);
+  const [metaCampaignConsultorDraft, setMetaCampaignConsultorDraft] = useState<Record<string, string[]>>({});
+  const [metaCampaignConsultorSavingKey, setMetaCampaignConsultorSavingKey] = useState<string | null>(null);
+  const [metaConsultorOptions, setMetaConsultorOptions] = useState<Array<{ id: string; email: string; full_name: string | null }>>([]);
   const [top5Consultants, setTop5Consultants] = useState<Array<{ name: string; value: number }>>(initialData?.top5Consultants || []);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -392,10 +404,44 @@ export default function GestorTrafegoClient({
     return `${fmt(dateFrom)} a ${fmt(dateTo)}`;
   };
 
+  /**
+   * Meta sempre consulta meta_insights_daily com intervalo explícito (granularidade diária).
+   * Quando o filtro global é "todo período" ou ainda não há datas, usa janela de 30 dias (alinhada ao sync).
+   */
+  const getMetaInsightsQueryRange = (): { dateFrom: string; dateTo: string } => {
+    const { dateFrom, dateTo } = getDateRange();
+    if (dateFrom && dateTo) return { dateFrom, dateTo };
+    const now = new Date();
+    const todayStr = toLocalDateString(now);
+    const thirtyDaysAgo = new Date(now);
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 29);
+    return { dateFrom: toLocalDateString(thirtyDaysAgo), dateTo: todayStr };
+  };
+
+  const getMetaPeriodLabel = (): string => {
+    const crm = getDateRange();
+    const { dateFrom, dateTo } = getMetaInsightsQueryRange();
+    const fmt = (s: string) => {
+      const [y, m, d] = s.split('-');
+      return `${d}/${m}/${y}`;
+    };
+    if (dateFrom === dateTo) {
+      if (dateFilter === 'daily') return `Hoje (${fmt(dateFrom)})`;
+      if (dateFilter === 'yesterday') return `Ontem (${fmt(dateFrom)})`;
+      return fmt(dateFrom);
+    }
+    const crmOpen = !crm.dateFrom || !crm.dateTo;
+    if (crmOpen) {
+      return `${fmt(dateFrom)} a ${fmt(dateTo)} (Meta: últimos 30 dias; CRM pode estar em “todo o período”)`;
+    }
+    return `${fmt(dateFrom)} a ${fmt(dateTo)}`;
+  };
+
   const checkAuthorization = async () => {
     if (!userId) return;
 
     const { dateFrom, dateTo } = getDateRange();
+    const metaRange = getMetaInsightsQueryRange();
 
     const baseParams = new URLSearchParams();
     if (dateFrom) baseParams.append('date_from', dateFrom);
@@ -419,7 +465,10 @@ export default function GestorTrafegoClient({
     setExternalMetricsError(null);
 
     // --- Chamada 1: Meta Ads (rápida — só Supabase) ---
-    const metaParams = new URLSearchParams(baseParams);
+    const metaParams = new URLSearchParams();
+    metaParams.append('meta_active_only', metaActiveOnly ? '1' : '0');
+    metaParams.set('date_from', metaRange.dateFrom);
+    metaParams.set('date_to', metaRange.dateTo);
     metaParams.set('only_meta', '1');
     const metaUrl = `/api/gestor-trafego/dashboard?${metaParams.toString()}`;
 
@@ -690,6 +739,30 @@ export default function GestorTrafegoClient({
     }
   };
 
+  const handleSaveMetaCampaignConsultors = async (campaignId: string) => {
+    if (!effectiveBancaId || !userId) return;
+    const key = `${effectiveBancaId}:${campaignId}`;
+    const consultorIds = metaCampaignConsultorDraft[key] || [];
+    setMetaCampaignConsultorSavingKey(key);
+    try {
+      const res = await fetch('/api/gestor-trafego/meta/campaign-consultors', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({
+          banca_id: effectiveBancaId,
+          campaign_id: campaignId,
+          consultor_ids: consultorIds,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) await checkAuthorization();
+    } catch (err) {
+      console.error('[GestorTrafego] erro ao salvar consultores da campanha:', err);
+    } finally {
+      setMetaCampaignConsultorSavingKey(null);
+    }
+  };
+
   const handleSignOut = () => {
     if (typeof window !== 'undefined') {
       sessionStorage.removeItem('user_id');
@@ -714,6 +787,36 @@ export default function GestorTrafegoClient({
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
   }, [showDatePicker]);
+
+  useEffect(() => {
+    const nextDraft: Record<string, string[]> = {};
+    for (const row of metaCampaignsData || []) {
+      const key = `${effectiveBancaId || ''}:${row.campaign_id}`;
+      nextDraft[key] = Array.isArray(row.assigned_consultors)
+        ? row.assigned_consultors.map((c) => String(c.id)).filter(Boolean)
+        : [];
+    }
+    setMetaCampaignConsultorDraft(nextDraft);
+  }, [metaCampaignsData, effectiveBancaId]);
+
+  useEffect(() => {
+    if (!effectiveBancaId || !userId) return;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/gestor-trafego/meta/campaign-consultors?banca_id=${encodeURIComponent(effectiveBancaId)}`, {
+          headers: { 'X-User-Id': userId },
+        });
+        const data = await res.json();
+        if (data.success) {
+          setMetaConsultorOptions(data.data?.consultors || []);
+        } else {
+          setMetaConsultorOptions([]);
+        }
+      } catch {
+        setMetaConsultorOptions([]);
+      }
+    })();
+  }, [effectiveBancaId, userId]);
 
   // Acesso negado (gestor sem vínculo ou usuário não permitido) — admin/super_admin sempre veem o dashboard
   if (isAuthorized === false) {
@@ -1011,7 +1114,7 @@ export default function GestorTrafegoClient({
                   </div>
                   <div>
                     <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100">Métricas Meta Ads (Campanhas)</h2>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">Dados diários da Meta (meta_insights_daily) — Período: <span className="font-medium text-gray-700 dark:text-gray-300">{getPeriodLabel()}</span></p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">Dados diários da Meta (meta_insights_daily) — Período: <span className="font-medium text-gray-700 dark:text-gray-300">{getMetaPeriodLabel()}</span></p>
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
@@ -1091,6 +1194,9 @@ export default function GestorTrafegoClient({
                         <th className="px-4 py-3 font-bold text-gray-600 dark:text-gray-400 uppercase text-right">Gasto</th>
                         <th className="px-4 py-3 font-bold text-gray-600 dark:text-gray-400 uppercase text-right">Leads</th>
                         <th className="px-4 py-3 font-bold text-gray-600 dark:text-gray-400 uppercase text-right">Custo por resultado</th>
+                        <th className="px-4 py-3 font-bold text-gray-600 dark:text-gray-400 uppercase text-right">Leads consultores</th>
+                        <th className="px-4 py-3 font-bold text-gray-600 dark:text-gray-400 uppercase text-right">Depósito consultores</th>
+                        <th className="px-4 py-3 font-bold text-gray-600 dark:text-gray-400 uppercase">Atribuir consultores</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1107,6 +1213,40 @@ export default function GestorTrafegoClient({
                             {row.cost_per_result != null
                               ? formatMetaSpend(row.cost_per_result, metaFunnel?.currency)
                               : '—'}
+                          </td>
+                          <td className="px-4 py-3 text-right text-gray-800 dark:text-gray-200">
+                            {(Number(row.consultor_total_leads) || 0).toLocaleString('pt-BR')}
+                          </td>
+                          <td className="px-4 py-3 text-right text-gray-800 dark:text-gray-200">
+                            {formatMetaSpend(Number(row.consultor_total_deposited) || 0, metaFunnel?.currency)}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="space-y-1">
+                              <select
+                                multiple
+                                value={metaCampaignConsultorDraft[`${effectiveBancaId || ''}:${row.campaign_id}`] || []}
+                                onChange={(e) => {
+                                  const values = Array.from(e.target.selectedOptions).map((o) => o.value);
+                                  const key = `${effectiveBancaId || ''}:${row.campaign_id}`;
+                                  setMetaCampaignConsultorDraft((prev) => ({ ...prev, [key]: values }));
+                                }}
+                                className="px-2 py-1 rounded-lg border border-gray-200 dark:border-gray-600 text-xs text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-800 min-w-[210px] h-[70px]"
+                              >
+                                {metaConsultorOptions.map((consultor) => (
+                                  <option key={consultor.id} value={consultor.id}>
+                                    {consultor.full_name || consultor.email}
+                                  </option>
+                                ))}
+                              </select>
+                              <button
+                                type="button"
+                                onClick={() => handleSaveMetaCampaignConsultors(row.campaign_id)}
+                                disabled={metaCampaignConsultorSavingKey === `${effectiveBancaId || ''}:${row.campaign_id}`}
+                                className="px-2 py-1 rounded-lg border border-blue-200 dark:border-blue-700 text-blue-700 dark:text-blue-300 text-xs hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-50"
+                              >
+                                {metaCampaignConsultorSavingKey === `${effectiveBancaId || ''}:${row.campaign_id}` ? 'Salvando…' : 'Salvar'}
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -1300,8 +1440,11 @@ export default function GestorTrafegoClient({
                         className="flex-1 px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm text-gray-800 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white dark:bg-gray-800"
                       >
                         <option value="">Nenhuma</option>
-                        {metaCampaignsList.map((c) => (
-                          <option key={c.id} value={c.id}>{c.name || c.id}</option>
+                        {metaCampaignsList.map((c: { id: string; name?: string; campaign_kind?: string }) => (
+                          <option key={c.id} value={c.id}>
+                            {c.campaign_kind === 'bolao' ? '[Bolão] ' : ''}
+                            {c.name || c.id}
+                          </option>
                         ))}
                       </select>
                       <button
@@ -1429,7 +1572,9 @@ export default function GestorTrafegoClient({
             Funil Facebook (Meta) + Loteria
           </h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
-            Dados diários da Meta (alcance, impressões, cliques, leads) e da Loteria (cadastros, depósitos, ativos) para o período: <span className="font-medium text-gray-700 dark:text-gray-300">{getPeriodLabel()}</span>
+            Meta (insights diários): <span className="font-medium text-gray-700 dark:text-gray-300">{getMetaPeriodLabel()}</span>
+            {' · '}
+            Loteria / CRM: <span className="font-medium text-gray-700 dark:text-gray-300">{getPeriodLabel()}</span>
           </p>
           <div className="bg-gray-50/50 dark:bg-gray-800/50 p-4 rounded-xl border border-gray-100 dark:border-gray-700 min-h-[340px]">
             <Funnel3DChart

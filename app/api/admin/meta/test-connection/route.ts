@@ -19,12 +19,23 @@ export async function POST(req: NextRequest) {
 
     const result = await testConnection(bancaId);
     if (!result.success) {
+      console.log('[admin/meta API] POST test-connection resposta', {
+        banca_id: bancaId,
+        success: false,
+        error: result.error ?? null,
+      });
       return successResponse({
         success: false,
         error: result.error,
       });
     }
 
+    console.log('[admin/meta API] POST test-connection resposta', {
+      banca_id: bancaId,
+      success: true,
+      me_id: result.me?.id ?? null,
+      ad_accounts_returned: result.adAccounts?.length ?? 0,
+    });
     return successResponse({
       success: true,
       me: result.me,

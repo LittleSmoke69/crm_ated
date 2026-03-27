@@ -88,8 +88,26 @@ export async function GET(req: NextRequest) {
     if (!result.success) {
       return successResponse({ campaigns: [], error: result.error });
     }
+    const list = result.campaigns || [];
+    const ids = list.map((c) => c.id).filter(Boolean);
+    const kindMap = new Map<string, string>();
+    if (ids.length > 0) {
+      const { data: rows } = await supabaseServiceRole
+        .from('meta_campaigns')
+        .select('campaign_id,campaign_kind')
+        .eq('banca_id', bancaId)
+        .in('campaign_id', ids);
+      for (const r of rows ?? []) {
+        const row = r as { campaign_id: string; campaign_kind?: string | null };
+        kindMap.set(row.campaign_id, String(row.campaign_kind || 'normal'));
+      }
+    }
+    const enriched = list.map((c) => ({
+      ...c,
+      campaign_kind: (kindMap.get(c.id) ?? 'normal') as 'normal' | 'bolao',
+    }));
     return successResponse({
-      campaigns: result.campaigns || [],
+      campaigns: enriched,
     });
   } catch (err: any) {
     if (err?.message?.includes('Acesso negado') || err?.message?.includes('Não autenticado')) {

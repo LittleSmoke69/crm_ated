@@ -21,8 +21,9 @@
     schedule = "*/1 * * * *"
   [functions."process-activation-mass-send"]
     schedule = "*/1 * * * *"
-    # Deve cobrir POST /api/.../mass-send/process (DB + envio Evolution). Padrão 10s corta antes da API responder.
-    timeout = 26
+    # Executa múltiplos lotes por invocação (loop interno) para simular frequência sub-minuto.
+    # 120s cobre até 5 lotes de 8 grupos (~24s cada) por ciclo de cron.
+    timeout = 120
   [functions."process-broadcast-queue"]
     schedule = "*/1 * * * *"
     timeout = 26

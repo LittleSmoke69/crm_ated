@@ -1,4 +1,9 @@
 import { NextRequest } from 'next/server';
+import {
+  assertConsultantAllowedForVslUser,
+  isMissingConsultantColumnError,
+  validateConsultantUserId,
+} from '@/lib/admin/redirect-group-consultant';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { requireVslProjectAccess } from '@/lib/middleware/vsl-admin';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
@@ -21,7 +26,7 @@ export async function PATCH(
       .eq('id', id)
       .single();
     if (!group) return errorResponse('Grupo não encontrado', 404);
-    await requireVslProjectAccess(req, group.project_id);
+    const { userId, profile } = await requireVslProjectAccess(req, group.project_id);
 
     const body = await req.json().catch(() => ({})) as Record<string, unknown>;
     const payload: Record<string, unknown> = { updated_at: new Date().toISOString() };
@@ -38,13 +43,28 @@ export async function PATCH(
       }
       payload.invite_url = url;
     }
+    if (body.consultant_user_id !== undefined) {
+      const chk = await validateConsultantUserId(body.consultant_user_id);
+      if (!chk.ok) return errorResponse(chk.message, 400);
+      const consultantGate = await assertConsultantAllowedForVslUser(chk.id, profile, userId);
+      if (!consultantGate.ok) return errorResponse(consultantGate.message, 400);
+      payload.consultant_user_id = chk.id;
+    }
 
-    const { data, error } = await supabaseServiceRole
+    let { data, error } = await supabaseServiceRole
       .from('redirect_groups')
       .update(payload)
       .eq('id', id)
       .select()
       .single();
+
+    if (error && isMissingConsultantColumnError(error) && payload.consultant_user_id !== undefined) {
+      console.warn('[admin/redirect/groups PATCH] coluna consultant_user_id ausente — atualizando sem ela.');
+      const { consultant_user_id: _drop, ...rest } = payload;
+      const retry = await supabaseServiceRole.from('redirect_groups').update(rest).eq('id', id).select().single();
+      data = retry.data;
+      error = retry.error;
+    }
 
     if (error) {
       console.error('[admin/redirect/groups PATCH]', error.message);

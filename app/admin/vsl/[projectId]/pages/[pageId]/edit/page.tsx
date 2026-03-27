@@ -8,6 +8,7 @@ import { Loader2, Plus, Trash2, ExternalLink, RefreshCw, FileVideo, Type, MouseP
 import { VslDesignPanel } from '@/components/vsl/design/VslDesignPanel';
 import type { VslContentRoot } from '@/lib/vsl/runtime/types';
 import { buildContentFromFormData } from '@/lib/vsl/presets/content-templates';
+import { normalizeRedirectSlug } from '@/lib/vsl/runtime/redirect-url';
 
 type TestimonialType = 'text' | 'video';
 
@@ -188,7 +189,7 @@ export default function EditVslPagePage() {
   const buildPayload = () => ({
     title: form.title.trim(),
     cta_text: form.cta_text.trim(),
-    redirect_slug: form.redirect_slug.trim(),
+    redirect_slug: normalizeRedirectSlug(form.redirect_slug),
     vturb_embed: form.vturb_embed.trim() || undefined,
     header_title: form.header_title.trim() || 'FINANÇAS',
     marquee_text: form.marquee_text.trim(),
@@ -429,7 +430,7 @@ export default function EditVslPagePage() {
                   <label className={labelClass}>Slug do redirect</label>
                   <input
                     value={form.redirect_slug}
-                    onChange={(e) => setForm((f) => ({ ...f, redirect_slug: e.target.value.trim() }))}
+                    onChange={(e) => setForm((f) => ({ ...f, redirect_slug: normalizeRedirectSlug(e.target.value) }))}
                     className={inputClass}
                     required
                     placeholder="Ex: lotox"

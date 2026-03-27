@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { Loader2 } from 'lucide-react';
+import { normalizeRedirectSlug } from '@/lib/vsl/runtime/redirect-url';
 
 export default function NewVslPagePage() {
   const params = useParams();
@@ -37,7 +38,7 @@ export default function NewVslPagePage() {
           slug: form.slug.trim(),
           title: form.title.trim(),
           cta_text: form.cta_text.trim(),
-          redirect_slug: form.redirect_slug.trim(),
+          redirect_slug: normalizeRedirectSlug(form.redirect_slug),
           vturb_embed: form.vturb_embed.trim() || undefined,
           cta_min_watch_percent: form.cta_min_watch_percent,
           cta_delay_seconds: form.cta_delay_seconds,
@@ -110,7 +111,7 @@ export default function NewVslPagePage() {
             <label className="block text-sm font-medium text-gray-700 mb-1.5">Slug do redirect (ex: lotox)</label>
             <input
               value={form.redirect_slug}
-              onChange={(e) => setForm((f) => ({ ...f, redirect_slug: e.target.value.trim() }))}
+              onChange={(e) => setForm((f) => ({ ...f, redirect_slug: normalizeRedirectSlug(e.target.value) }))}
               className={inputClass}
               required
             />

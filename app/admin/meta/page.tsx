@@ -24,7 +24,11 @@ import {
   DollarSign,
   MousePointer,
   Eye,
+  Link2,
+  Users,
+  UserPlus,
 } from 'lucide-react';
+import Funnel3DChart from '@/components/Charts/Funnel3DChart';
 
 interface Banca {
   id: string;
@@ -47,9 +51,12 @@ interface MetaConfig {
   last_sync_date_preset: string | null;
 }
 
+type MetaCampaignKind = 'normal' | 'bolao';
+
 interface CampaignOption {
   id: string;
   name?: string;
+  campaign_kind?: MetaCampaignKind;
 }
 
 interface MetaOverviewRow {
@@ -87,6 +94,52 @@ interface MetaOverviewRow {
   };
 }
 
+type OverviewKindSummaryBucket = {
+  campaigns: number;
+  reach: number;
+  impressions: number;
+  clicks: number;
+  leads: number;
+  spend: number;
+  insights_rows: number;
+};
+
+interface RedirectSummaryTotals {
+  total_clicks: number;
+  total_groups: number;
+  active_groups: number;
+  redirect_slugs: number;
+  active_redirect_slugs: number;
+  vsl_projects: number;
+}
+
+interface RedirectSummaryProjectRow {
+  project_id: string;
+  name: string;
+  project_slug: string;
+  redirect_slug: string | null;
+  redirect_active: boolean | null;
+  clicks: number;
+  groups_total: number;
+  groups_active: number;
+}
+
+/** `cost_per_action_type` da Meta Insights API, persistido como `raw_cost_per_action_type` (JSONB). */
+function formatCostPerActionTypeCell(raw: unknown): { short: string; title: string } {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return { short: '—', title: '' };
+  }
+  const parts: string[] = [];
+  for (const item of raw) {
+    const o = item as { action_type?: string; value?: string };
+    parts.push(`${o.action_type ?? '?'}: ${o.value ?? ''}`);
+  }
+  const title = parts.join('\n');
+  const short =
+    parts.slice(0, 2).join(' · ') + (parts.length > 2 ? ` (+${parts.length - 2})` : '');
+  return { short, title };
+}
+
 export default function AdminMetaPage() {
   const { checking, userId } = useRequireAuth();
   const router = useRouter();
@@ -97,6 +150,7 @@ export default function AdminMetaPage() {
   const [bancaPickerOpen, setBancaPickerOpen] = useState(false);
   const [bancaPickerSearch, setBancaPickerSearch] = useState('');
   const bancaPickerRef = useRef<HTMLDivElement | null>(null);
+  const overviewFilterBancaRef = useRef<HTMLDivElement | null>(null);
   const [configLoadError, setConfigLoadError] = useState<string | null>(null);
   const [config, setConfig] = useState<MetaConfig | null>(null);
   const [loading, setLoading] = useState(true);
@@ -108,9 +162,18 @@ export default function AdminMetaPage() {
   const [syncResult, setSyncResult] = useState<{ success: boolean; campaignsCount?: number; adsetsCount?: number; insightsCount?: number; error?: string } | null>(null);
   const [campaigns, setCampaigns] = useState<CampaignOption[]>([]);
   const [syncedData, setSyncedData] = useState<{ campaigns: any[]; adsets: any[]; insights: any[] } | null>(null);
+  const [syncedDataPage, setSyncedDataPage] = useState<{ campaigns: number; adsets: number; insights: number }>({
+    campaigns: 1,
+    adsets: 1,
+    insights: 1,
+  });
   const [loadingData, setLoadingData] = useState(false);
   const [expandedTab, setExpandedTab] = useState<'campaigns' | 'adsets' | 'insights' | null>('campaigns');
   const [overviewRows, setOverviewRows] = useState<MetaOverviewRow[]>([]);
+  const [overviewKindSummary, setOverviewKindSummary] = useState<Record<'normal' | 'bolao', OverviewKindSummaryBucket>>({
+    normal: { campaigns: 0, reach: 0, impressions: 0, clicks: 0, leads: 0, spend: 0, insights_rows: 0 },
+    bolao: { campaigns: 0, reach: 0, impressions: 0, clicks: 0, leads: 0, spend: 0, insights_rows: 0 },
+  });
   const [loadingOverview, setLoadingOverview] = useState(false);
   const [overviewError, setOverviewError] = useState<string | null>(null);
   const [overviewSearch, setOverviewSearch] = useState('');
@@ -118,7 +181,20 @@ export default function AdminMetaPage() {
   const [overviewFilterBancaId, setOverviewFilterBancaId] = useState<string>('');
   /** IDs das bancas selecionadas para filtrar os cards de visão geral */
   const [overviewSelectedBancaIds, setOverviewSelectedBancaIds] = useState<string[]>([]);
+  const [overviewFilterBancaSearch, setOverviewFilterBancaSearch] = useState('');
+  const [overviewFilterBancaOpen, setOverviewFilterBancaOpen] = useState(false);
   const [overviewPage, setOverviewPage] = useState(1);
+  /** Período das métricas diárias (meta_insights_daily) na visão geral e em Dados Sincronizados. */
+  const [metaInsightsPeriod, setMetaInsightsPeriod] = useState<'daily' | 'yesterday' | '7days' | '15days' | '30days' | 'custom' | 'all'>('daily');
+  const [metaInsightsCustomFrom, setMetaInsightsCustomFrom] = useState('');
+  const [metaInsightsCustomTo, setMetaInsightsCustomTo] = useState('');
+
+  const [redirectSummary, setRedirectSummary] = useState<{
+    totals: RedirectSummaryTotals;
+    projects: RedirectSummaryProjectRow[];
+  } | null>(null);
+  const [loadingRedirectSummary, setLoadingRedirectSummary] = useState(false);
+  const [redirectSummaryError, setRedirectSummaryError] = useState<string | null>(null);
 
   // Modal: criar nova integração
   const [newIntegrationOpen, setNewIntegrationOpen] = useState(false);
@@ -139,8 +215,19 @@ export default function AdminMetaPage() {
   const [allCampaignsError, setAllCampaignsError] = useState<string | null>(null);
   const [allCampaignsSearch, setAllCampaignsSearch] = useState('');
   const [allCampaignsShowInactive, setAllCampaignsShowInactive] = useState(false);
+  const [allCampaignsKindFilter, setAllCampaignsKindFilter] = useState<'all' | MetaCampaignKind>('all');
   const [allCampaignsPage, setAllCampaignsPage] = useState(1);
+  const [campaignOwnerDraft, setCampaignOwnerDraft] = useState<Record<string, string>>({});
+  const [campaignOwnerSavingKey, setCampaignOwnerSavingKey] = useState<string | null>(null);
+  const [campaignKindSavingKey, setCampaignKindSavingKey] = useState<string | null>(null);
+  const [campaignConsultorDraft, setCampaignConsultorDraft] = useState<Record<string, string[]>>({});
+  const [campaignConsultorSavingKey, setCampaignConsultorSavingKey] = useState<string | null>(null);
+  const [consultorsByBanca, setConsultorsByBanca] = useState<Record<string, Array<{ id: string; email: string; full_name: string | null }>>>({});
+  const [consultorModalOpen, setConsultorModalOpen] = useState(false);
+  const [consultorModalCampaignKey, setConsultorModalCampaignKey] = useState<string>('');
+  const [consultorModalSearch, setConsultorModalSearch] = useState('');
   const ALL_CAMPAIGNS_PAGE_SIZE = 20;
+  const SYNCED_DATA_PAGE_SIZE = 5;
 
   const [form, setForm] = useState({
     base_url: 'https://graph.facebook.com/v19.0',
@@ -260,6 +347,14 @@ export default function AdminMetaPage() {
         (b.name || '').toLowerCase().includes(q) || (b.url || '').toLowerCase().includes(q)
     );
   }, [bancas, bancaPickerSearch]);
+  const bancasForMetaFilter = useMemo(() => {
+    const q = overviewFilterBancaSearch.trim().toLowerCase();
+    if (!q) return bancas;
+    return bancas.filter(
+      (b) =>
+        (b.name || '').toLowerCase().includes(q) || (b.url || '').toLowerCase().includes(q)
+    );
+  }, [bancas, overviewFilterBancaSearch]);
 
   useEffect(() => {
     if (!bancaPickerOpen) return;
@@ -272,22 +367,103 @@ export default function AdminMetaPage() {
     return () => document.removeEventListener('mousedown', onDocDown);
   }, [bancaPickerOpen]);
 
+  useEffect(() => {
+    if (!overviewFilterBancaOpen) return;
+    const onDocDown = (e: MouseEvent) => {
+      if (overviewFilterBancaRef.current && !overviewFilterBancaRef.current.contains(e.target as Node)) {
+        setOverviewFilterBancaOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocDown);
+    return () => document.removeEventListener('mousedown', onDocDown);
+  }, [overviewFilterBancaOpen]);
+
+  const META_TIMEZONE = 'America/Sao_Paulo';
+
+  const toMetaDateString = (d: Date) => {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: META_TIMEZONE,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(d);
+    const y = parts.find((p) => p.type === 'year')?.value ?? '';
+    const m = parts.find((p) => p.type === 'month')?.value ?? '';
+    const day = parts.find((p) => p.type === 'day')?.value ?? '';
+    return `${y}-${m}-${day}`;
+  };
+
+  const adminMetaInsightsDateRange = useMemo(() => {
+    const now = new Date();
+    const todayStr = toMetaDateString(now);
+    switch (metaInsightsPeriod) {
+      case 'daily':
+        return { dateFrom: todayStr, dateTo: todayStr, label: `Hoje (${todayStr})` };
+      case 'yesterday': {
+        const y = new Date(now);
+        y.setDate(y.getDate() - 1);
+        const yStr = toMetaDateString(y);
+        return { dateFrom: yStr, dateTo: yStr, label: `Ontem (${yStr})` };
+      }
+      case '7days': {
+        const s = new Date(now);
+        s.setDate(s.getDate() - 6);
+        return { dateFrom: toMetaDateString(s), dateTo: todayStr, label: `Últimos 7 dias (${toMetaDateString(s)} → ${todayStr})` };
+      }
+      case '15days': {
+        const s = new Date(now);
+        s.setDate(s.getDate() - 14);
+        return { dateFrom: toMetaDateString(s), dateTo: todayStr, label: `Últimos 15 dias (${toMetaDateString(s)} → ${todayStr})` };
+      }
+      case '30days': {
+        const s = new Date(now);
+        s.setDate(s.getDate() - 29);
+        return { dateFrom: toMetaDateString(s), dateTo: todayStr, label: `Últimos 30 dias (${toMetaDateString(s)} → ${todayStr})` };
+      }
+      case 'custom': {
+        const df = metaInsightsCustomFrom.trim();
+        const dt = metaInsightsCustomTo.trim();
+        if (df && dt) {
+          return { dateFrom: df, dateTo: dt, label: `Personalizado (${df} → ${dt})` };
+        }
+        return { dateFrom: null as string | null, dateTo: null as string | null, label: 'Personalizado (preencha início e fim)' };
+      }
+      case 'all':
+      default:
+        return { dateFrom: null as string | null, dateTo: null as string | null, label: 'Todo o período' };
+    }
+  }, [metaInsightsPeriod, metaInsightsCustomFrom, metaInsightsCustomTo]);
+
   /** Para APIs que exigem um único banca_id: prefere uma banca já vinculada à integração carregada. */
   const primaryBancaId =
-    config?.configured && Array.isArray(config.banca_ids)
+    overviewFilterBancaId ||
+    (config?.configured && Array.isArray(config.banca_ids)
       ? selectedBancaIds.find((id) => config.banca_ids!.includes(id)) ?? selectedBancaIds[0] ?? ''
-      : selectedBancaIds[0] ?? '';
+      : selectedBancaIds[0] ?? '');
 
   const loadSyncedData = useCallback(async () => {
     if (!primaryBancaId || !userId) return;
     setLoadingData(true);
     try {
-      const res = await fetch(`/api/admin/meta/data?banca_id=${encodeURIComponent(primaryBancaId)}`, {
+      const params = new URLSearchParams({ banca_id: primaryBancaId });
+      if (adminMetaInsightsDateRange.dateFrom) params.set('date_from', adminMetaInsightsDateRange.dateFrom);
+      if (adminMetaInsightsDateRange.dateTo) params.set('date_to', adminMetaInsightsDateRange.dateTo);
+      const res = await fetch(`/api/admin/meta/data?${params.toString()}`, {
         headers: { 'X-User-Id': userId },
       });
       const data = await res.json();
       if (data.success && data.data) {
         setSyncedData(data.data);
+        setSyncedDataPage({ campaigns: 1, adsets: 1, insights: 1 });
+        const d = data.data as { campaigns?: any[]; adsets?: any[]; insights?: any[] };
+        const c0 = d.campaigns?.[0];
+        const a0 = d.adsets?.[0];
+        const i0 = d.insights?.[0];
+        console.log('[admin/meta] dados sincronizados (campos por tabela)', {
+          campaigns: { n: d.campaigns?.length ?? 0, fields: c0 ? Object.keys(c0) : [], sample: c0 },
+          adsets: { n: d.adsets?.length ?? 0, fields: a0 ? Object.keys(a0) : [], sample: a0 },
+          insights: { n: d.insights?.length ?? 0, fields: i0 ? Object.keys(i0) : [], sample: i0 },
+        });
       } else {
         setSyncedData(null);
       }
@@ -296,40 +472,109 @@ export default function AdminMetaPage() {
     } finally {
       setLoadingData(false);
     }
-  }, [primaryBancaId, userId]);
+  }, [primaryBancaId, userId, adminMetaInsightsDateRange.dateFrom, adminMetaInsightsDateRange.dateTo]);
 
   const loadOverview = useCallback(async () => {
     if (!userId) return;
     setLoadingOverview(true);
     setOverviewError(null);
     try {
-      const res = await fetch('/api/admin/meta/overview', {
+      const qs = new URLSearchParams();
+      if (adminMetaInsightsDateRange.dateFrom) qs.set('date_from', adminMetaInsightsDateRange.dateFrom);
+      if (adminMetaInsightsDateRange.dateTo) qs.set('date_to', adminMetaInsightsDateRange.dateTo);
+      if (overviewFilterBancaId) qs.set('banca_id', overviewFilterBancaId);
+      const url = qs.toString() ? `/api/admin/meta/overview?${qs.toString()}` : '/api/admin/meta/overview';
+      const res = await fetch(url, {
         headers: { 'X-User-Id': userId },
       });
       const data = await res.json();
       if (data.success && Array.isArray(data.data?.rows)) {
         setOverviewRows(data.data.rows);
+        const ks = data.data?.kind_summary;
+        if (ks?.normal && ks?.bolao) {
+          setOverviewKindSummary({
+            normal: {
+              campaigns: Number(ks.normal.campaigns) || 0,
+              reach: Number(ks.normal.reach) || 0,
+              impressions: Number(ks.normal.impressions) || 0,
+              clicks: Number(ks.normal.clicks) || 0,
+              leads: Number(ks.normal.leads) || 0,
+              spend: Number(ks.normal.spend) || 0,
+              insights_rows: Number(ks.normal.insights_rows) || 0,
+            },
+            bolao: {
+              campaigns: Number(ks.bolao.campaigns) || 0,
+              reach: Number(ks.bolao.reach) || 0,
+              impressions: Number(ks.bolao.impressions) || 0,
+              clicks: Number(ks.bolao.clicks) || 0,
+              leads: Number(ks.bolao.leads) || 0,
+              spend: Number(ks.bolao.spend) || 0,
+              insights_rows: Number(ks.bolao.insights_rows) || 0,
+            },
+          });
+        } else {
+          setOverviewKindSummary({
+            normal: { campaigns: 0, reach: 0, impressions: 0, clicks: 0, leads: 0, spend: 0, insights_rows: 0 },
+            bolao: { campaigns: 0, reach: 0, impressions: 0, clicks: 0, leads: 0, spend: 0, insights_rows: 0 },
+          });
+        }
       } else {
         setOverviewRows([]);
+        setOverviewKindSummary({
+          normal: { campaigns: 0, reach: 0, impressions: 0, clicks: 0, leads: 0, spend: 0, insights_rows: 0 },
+          bolao: { campaigns: 0, reach: 0, impressions: 0, clicks: 0, leads: 0, spend: 0, insights_rows: 0 },
+        });
         setOverviewError(data.error || 'Erro ao carregar visão geral das integrações.');
       }
     } catch (err: any) {
       setOverviewRows([]);
+      setOverviewKindSummary({
+        normal: { campaigns: 0, reach: 0, impressions: 0, clicks: 0, leads: 0, spend: 0, insights_rows: 0 },
+        bolao: { campaigns: 0, reach: 0, impressions: 0, clicks: 0, leads: 0, spend: 0, insights_rows: 0 },
+      });
       setOverviewError(err?.message || 'Erro ao carregar visão geral das integrações.');
     } finally {
       setLoadingOverview(false);
     }
-  }, [userId]);
+  }, [userId, adminMetaInsightsDateRange.dateFrom, adminMetaInsightsDateRange.dateTo, overviewFilterBancaId]);
+
+  const loadRedirectSummary = useCallback(async () => {
+    if (!userId) return;
+    setLoadingRedirectSummary(true);
+    setRedirectSummaryError(null);
+    try {
+      const qs = new URLSearchParams();
+      if (adminMetaInsightsDateRange.dateFrom) qs.set('date_from', adminMetaInsightsDateRange.dateFrom);
+      if (adminMetaInsightsDateRange.dateTo) qs.set('date_to', adminMetaInsightsDateRange.dateTo);
+      const url = qs.toString() ? `/api/admin/meta/redirect-summary?${qs.toString()}` : '/api/admin/meta/redirect-summary';
+      const res = await fetch(url, {
+        headers: { 'X-User-Id': userId },
+      });
+      const data = await res.json();
+      if (data.success && data.data?.totals && Array.isArray(data.data.projects)) {
+        setRedirectSummary({ totals: data.data.totals, projects: data.data.projects });
+      } else {
+        setRedirectSummary(null);
+        setRedirectSummaryError(data.error || 'Erro ao carregar resumo de redirects.');
+      }
+    } catch (err: any) {
+      setRedirectSummary(null);
+      setRedirectSummaryError(err?.message || 'Erro ao carregar resumo de redirects.');
+    } finally {
+      setLoadingRedirectSummary(false);
+    }
+  }, [userId, adminMetaInsightsDateRange.dateFrom, adminMetaInsightsDateRange.dateTo]);
 
   useEffect(() => {
-    if (primaryBancaId && config) loadSyncedData();
+    if (primaryBancaId) loadSyncedData();
     else setSyncedData(null);
-  }, [primaryBancaId, config?.last_sync_at, loadSyncedData]);
+  }, [primaryBancaId, loadSyncedData]);
 
   useEffect(() => {
     if (!userId) return;
     void loadOverview();
-  }, [userId, loadOverview]);
+    void loadRedirectSummary();
+  }, [userId, loadOverview, loadRedirectSummary]);
 
   // Remove da seleção IDs que deixaram de existir na visão geral (ex.: após refresh da lista)
   useEffect(() => {
@@ -446,9 +691,17 @@ export default function AdminMetaPage() {
       const data = await res.json();
       if (data.success && data.data) {
         setSyncResult(data.data);
-        await loadConfig(selectedBancaIds);
-        await loadSyncedData();
-        await loadOverview();
+        // Libera o botão imediatamente após concluir o endpoint de sync.
+        // Os refreshes de tela rodam em sequência sem manter o botão travado.
+        setSyncing(false);
+        setAllCampaignsPage(1);
+        void Promise.allSettled([
+          loadConfig(selectedBancaIds),
+          loadSyncedData(),
+          loadOverview(),
+          loadAllCampaigns(),
+          loadRedirectSummary(),
+        ]);
       } else {
         setSyncResult({ success: false, error: data.error || 'Erro ao sincronizar' });
       }
@@ -471,12 +724,24 @@ export default function AdminMetaPage() {
       });
       if (allCampaignsSearch.trim()) params.set('search', allCampaignsSearch.trim());
       params.set('active_only', allCampaignsShowInactive ? '0' : '1');
+      if (overviewFilterBancaId) params.set('banca_id', overviewFilterBancaId);
+      if (allCampaignsKindFilter !== 'all') params.set('campaign_kind', allCampaignsKindFilter);
+      if (adminMetaInsightsDateRange.dateFrom) params.set('date_from', adminMetaInsightsDateRange.dateFrom);
+      if (adminMetaInsightsDateRange.dateTo) params.set('date_to', adminMetaInsightsDateRange.dateTo);
       const res = await fetch(`/api/admin/meta/campaigns-all?${params.toString()}`, {
         headers: { 'X-User-Id': userId },
       });
       const data = await res.json();
       if (data.success && data.data?.rows) {
         setAllCampaignsRows(data.data.rows);
+        const nextDraft: Record<string, string[]> = {};
+        for (const row of data.data.rows as any[]) {
+          const key = `${String(row.banca_id)}:${String(row.campaign_id)}`;
+          nextDraft[key] = Array.isArray(row.assigned_consultors)
+            ? row.assigned_consultors.map((c: any) => String(c.id)).filter(Boolean)
+            : [];
+        }
+        setCampaignConsultorDraft(nextDraft);
       } else {
         setAllCampaignsRows([]);
         setAllCampaignsError(data.error || 'Erro ao carregar campanhas (todas as integrações).');
@@ -487,12 +752,150 @@ export default function AdminMetaPage() {
     } finally {
       setAllCampaignsLoading(false);
     }
-  }, [userId, allCampaignsPage, allCampaignsSearch, allCampaignsShowInactive]);
+  }, [
+    userId,
+    allCampaignsPage,
+    allCampaignsSearch,
+    allCampaignsShowInactive,
+    overviewFilterBancaId,
+    allCampaignsKindFilter,
+    adminMetaInsightsDateRange.dateFrom,
+    adminMetaInsightsDateRange.dateTo,
+  ]);
+
+  const handleSaveCampaignKind = useCallback(
+    async (bancaId: string, campaignId: string, campaign_kind: MetaCampaignKind) => {
+      if (!userId) return;
+      const key = `${bancaId}:${campaignId}`;
+      setCampaignKindSavingKey(key);
+      setAllCampaignsError(null);
+      try {
+        const res = await fetch('/api/admin/meta/campaign-kind', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+          body: JSON.stringify({ banca_id: bancaId, campaign_id: campaignId, campaign_kind }),
+        });
+        const data = await res.json();
+        if (!data.success) {
+          setAllCampaignsError(data.error || 'Erro ao salvar tipo de campanha.');
+          return;
+        }
+        await loadAllCampaigns();
+        await loadOverview();
+        if (primaryBancaId === bancaId) {
+          await loadSyncedData();
+          fetch(`/api/admin/meta/campaigns?banca_id=${encodeURIComponent(bancaId)}`, {
+            headers: { 'X-User-Id': userId },
+          })
+            .then((r) => r.json())
+            .then((d) => {
+              if (d.success && d.data?.campaigns) setCampaigns(d.data.campaigns);
+            })
+            .catch(() => {});
+        }
+      } catch (err: any) {
+        setAllCampaignsError(err?.message || 'Erro ao salvar tipo de campanha.');
+      } finally {
+        setCampaignKindSavingKey(null);
+      }
+    },
+    [userId, loadAllCampaigns, loadOverview, loadSyncedData, primaryBancaId]
+  );
+
+  const handleAssignCampaignOwner = useCallback(async (row: any) => {
+    if (!userId) return;
+    const key = `${row.banca_id}:${row.campaign_id}`;
+    const targetBancaId = (campaignOwnerDraft[key] || '').trim();
+    if (!targetBancaId || targetBancaId === String(row.banca_id)) return;
+
+    setCampaignOwnerSavingKey(key);
+    setAllCampaignsError(null);
+    try {
+      const res = await fetch('/api/admin/meta/campaign-owner', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({
+          banca_id: row.banca_id,
+          source_banca_id: row.banca_id,
+          target_banca_id: targetBancaId,
+          campaign_id: row.campaign_id,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        setAllCampaignsError(data.error || 'Erro ao vincular campanha à banca.');
+        return;
+      }
+      await loadAllCampaigns();
+      await loadOverview();
+      if (selectedBancaIds.includes(String(row.banca_id)) || selectedBancaIds.includes(targetBancaId)) {
+        await loadSyncedData();
+      }
+    } catch (err: any) {
+      setAllCampaignsError(err?.message || 'Erro ao vincular campanha à banca.');
+    } finally {
+      setCampaignOwnerSavingKey(null);
+    }
+  }, [userId, campaignOwnerDraft, loadAllCampaigns, loadOverview, selectedBancaIds, loadSyncedData]);
+
+  const handleSaveCampaignConsultors = useCallback(async (row: any) => {
+    if (!userId) return;
+    const key = `${String(row.banca_id)}:${String(row.campaign_id)}`;
+    const consultorIds = campaignConsultorDraft[key] || [];
+    setCampaignConsultorSavingKey(key);
+    setAllCampaignsError(null);
+    try {
+      const res = await fetch('/api/admin/meta/campaign-consultors', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({
+          banca_id: row.banca_id,
+          campaign_id: row.campaign_id,
+          consultor_ids: consultorIds,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        setAllCampaignsError(data.error || 'Erro ao salvar consultores da campanha.');
+        return false;
+      }
+      await loadAllCampaigns();
+      return true;
+    } catch (err: any) {
+      setAllCampaignsError(err?.message || 'Erro ao salvar consultores da campanha.');
+      return false;
+    } finally {
+      setCampaignConsultorSavingKey(null);
+    }
+  }, [userId, campaignConsultorDraft, loadAllCampaigns]);
 
   useEffect(() => {
     if (!userId) return;
     void loadAllCampaigns();
   }, [userId, loadAllCampaigns]);
+
+  useEffect(() => {
+    if (!userId) return;
+    const bancaIds = Array.from(new Set((allCampaignsRows || []).map((row: any) => String(row.banca_id)).filter(Boolean)));
+    if (!bancaIds.length) return;
+    void (async () => {
+      const entries = await Promise.all(
+        bancaIds.map(async (bancaId) => {
+          try {
+            const res = await fetch(`/api/admin/meta/campaign-consultors?banca_id=${encodeURIComponent(bancaId)}`, {
+              headers: { 'X-User-Id': userId },
+            });
+            const data = await res.json();
+            if (!data.success) return [bancaId, []] as const;
+            return [bancaId, data.data?.consultors || []] as const;
+          } catch {
+            return [bancaId, []] as const;
+          }
+        })
+      );
+      setConsultorsByBanca(Object.fromEntries(entries));
+    })();
+  }, [userId, allCampaignsRows]);
 
   const handleCreateIntegration = async () => {
     if (!userId) return;
@@ -545,7 +948,11 @@ export default function AdminMetaPage() {
   };
 
   const selectedBancaName =
-    selectedBancaIds.length === 0
+    overviewFilterBancaId
+      ? (bancas.find((b) => b.id === overviewFilterBancaId)?.name ||
+         bancas.find((b) => b.id === overviewFilterBancaId)?.url ||
+         overviewFilterBancaId)
+      : selectedBancaIds.length === 0
       ? '-'
       : selectedBancaIds.length === 1
         ? bancas.find((b) => b.id === selectedBancaIds[0])?.name ||
@@ -565,6 +972,7 @@ export default function AdminMetaPage() {
   }
 
   const filteredOverviewRows = overviewRows
+    .filter((row) => (overviewFilterBancaId ? row.banca_id === overviewFilterBancaId : true))
     .filter((row) => {
       const term = overviewSearch.trim().toLowerCase();
       if (!term) return true;
@@ -583,11 +991,7 @@ export default function AdminMetaPage() {
     overviewPageSafe * OVERVIEW_PAGE_SIZE
   );
 
-  const overviewSelectedSet = new Set(overviewSelectedBancaIds);
-  const cardOverviewRows =
-    overviewSelectedBancaIds.length > 0
-      ? overviewRows.filter((row) => overviewSelectedSet.has(row.banca_id))
-      : filteredOverviewRows;
+  const cardOverviewRows = filteredOverviewRows;
 
   const overviewTotals = cardOverviewRows.reduce(
     (acc, row) => {
@@ -608,6 +1012,69 @@ export default function AdminMetaPage() {
     },
     { reach: 0, impressions: 0, clicks: 0, leads: 0, spend: 0 }
   );
+  const consultorTotalsFromCampaignRows = (allCampaignsRows ?? []).reduce(
+    (acc, row: any) => {
+      acc.leads += Number(row.consultor_total_leads) || 0;
+      acc.deposited += Number(row.consultor_total_deposited) || 0;
+      return acc;
+    },
+    { leads: 0, deposited: 0 }
+  );
+  const syncedAdsetRows = syncedData?.adsets ?? [];
+  const syncedInsightRows = syncedData?.insights ?? [];
+  const syncedAdsetTotalPages = Math.max(1, Math.ceil(syncedAdsetRows.length / SYNCED_DATA_PAGE_SIZE));
+  const syncedInsightTotalPages = Math.max(1, Math.ceil(syncedInsightRows.length / SYNCED_DATA_PAGE_SIZE));
+  const syncedAdsetPage = Math.min(syncedDataPage.adsets, syncedAdsetTotalPages);
+  const syncedInsightPage = Math.min(syncedDataPage.insights, syncedInsightTotalPages);
+  const pagedSyncedAdsetRows = syncedAdsetRows.slice(
+    (syncedAdsetPage - 1) * SYNCED_DATA_PAGE_SIZE,
+    syncedAdsetPage * SYNCED_DATA_PAGE_SIZE
+  );
+  const pagedSyncedInsightRows = syncedInsightRows.slice(
+    (syncedInsightPage - 1) * SYNCED_DATA_PAGE_SIZE,
+    syncedInsightPage * SYNCED_DATA_PAGE_SIZE
+  );
+  const selectedConsultorModalRow = useMemo(
+    () => (allCampaignsRows || []).find((row: any) => `${String(row.banca_id)}:${String(row.campaign_id)}` === consultorModalCampaignKey) ?? null,
+    [allCampaignsRows, consultorModalCampaignKey]
+  );
+  const consultorModalSelectedIds = useMemo(() => {
+    if (!selectedConsultorModalRow) return [];
+    return campaignConsultorDraft[consultorModalCampaignKey]
+      ?? (Array.isArray(selectedConsultorModalRow.assigned_consultors)
+        ? selectedConsultorModalRow.assigned_consultors.map((x: any) => String(x.id))
+        : []);
+  }, [selectedConsultorModalRow, campaignConsultorDraft, consultorModalCampaignKey]);
+  const consultorModalFilteredOptions = useMemo(() => {
+    if (!selectedConsultorModalRow) return [];
+    const options = consultorsByBanca[String(selectedConsultorModalRow.banca_id)] || [];
+    const term = consultorModalSearch.trim().toLowerCase();
+    if (!term) return options;
+    return options.filter((c) => {
+      const name = (c.full_name || '').toLowerCase();
+      const email = (c.email || '').toLowerCase();
+      return name.includes(term) || email.includes(term);
+    });
+  }, [selectedConsultorModalRow, consultorsByBanca, consultorModalSearch]);
+
+  useEffect(() => {
+    const contributors = cardOverviewRows.map((row) => ({
+      banca_id: row.banca_id,
+      banca_name: row.banca_name,
+      spend: Number(row.metrics.spend) || 0,
+      leads: Number(row.metrics.leads) || 0,
+      insights_rows: Number(row.metrics.insights_rows) || 0,
+    }));
+    console.log('[admin/meta page] SOMA cards visão geral (Total gasto / Total de leads)', {
+      selected_banca_ids: overviewSelectedBancaIds,
+      rows_considered: contributors.length,
+      totals: {
+        totalSpend: overviewTotals.totalSpend,
+        totalLeads: overviewTotals.totalLeads,
+      },
+      contributors,
+    });
+  }, [cardOverviewRows, overviewSelectedBancaIds, overviewTotals.totalLeads, overviewTotals.totalSpend]);
 
   if (checking || !userId) {
     return (
@@ -626,29 +1093,124 @@ export default function AdminMetaPage() {
           <BarChart3 className="w-6 h-6 text-[#8CD955]" />
           <h1 className="text-2xl font-bold text-gray-800">Integração Meta Ads</h1>
         </div>
-        <p className="text-gray-600">
-          Gestão geral das integrações Meta Ads por banca, com status, métricas e campanhas sincronizadas.
-        </p>
-
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="grid gap-4 md:grid-cols-3 flex-1 min-w-[280px]">
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase">Total gasto (visão geral)</p>
-            <p className="text-2xl font-bold text-gray-800 mt-1">R$ {overviewTotals.totalSpend.toFixed(2)}</p>
-            <p className="text-xs text-gray-500 mt-1">Somatório das bancas filtradas na tabela abaixo.</p>
-          </div>
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase">Total de leads</p>
-            <p className="text-2xl font-bold text-gray-800 mt-1">{overviewTotals.totalLeads.toLocaleString('pt-BR')}</p>
-            <p className="text-xs text-gray-500 mt-1">Leads da Meta no mesmo recorte exibido.</p>
-          </div>
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase">Bancas exibidas</p>
-            <p className="text-2xl font-bold text-gray-800 mt-1">{cardOverviewRows.length.toLocaleString('pt-BR')}</p>
-            <p className="text-xs text-gray-500 mt-1">{overviewSelectedBancaIds.length > 0 ? 'Somente as bancas selecionadas' : 'Com ou sem integração configurada'}</p>
-          </div>
-          </div>
-          <div className="shrink-0">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <p className="text-gray-600">
+            Gestão geral das integrações Meta Ads por banca, com status, métricas e campanhas sincronizadas.
+          </p>
+          <div className="shrink-0 flex items-end gap-2 flex-wrap">
+            <div>
+              <label className="block text-[11px] font-semibold text-gray-500 uppercase mb-1">Período Meta</label>
+              <select
+                value={metaInsightsPeriod}
+                onChange={(e) => {
+                  setMetaInsightsPeriod(e.target.value as typeof metaInsightsPeriod);
+                  setOverviewPage(1);
+                }}
+                className="px-3 py-2 border border-gray-200 rounded-xl text-sm text-gray-800 bg-white min-w-[170px]"
+              >
+                <option value="daily">Hoje</option>
+                <option value="yesterday">Ontem</option>
+                <option value="7days">7 dias</option>
+                <option value="15days">15 dias</option>
+                <option value="30days">30 dias</option>
+                <option value="custom">Personalizado</option>
+                <option value="all">Todo o período</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-gray-500 uppercase mb-1">Banca Meta</label>
+              <div className="relative min-w-[220px]" ref={overviewFilterBancaRef}>
+                <button
+                  type="button"
+                  onClick={() => setOverviewFilterBancaOpen((v) => !v)}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm text-gray-800 bg-white flex items-center justify-between gap-2"
+                >
+                  <span className="truncate">
+                    {overviewFilterBancaId
+                      ? (bancas.find((b) => b.id === overviewFilterBancaId)?.name ||
+                         bancas.find((b) => b.id === overviewFilterBancaId)?.url ||
+                         overviewFilterBancaId)
+                      : 'Todas as bancas'}
+                  </span>
+                  <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${overviewFilterBancaOpen ? 'rotate-180' : ''}`} />
+                </button>
+                {overviewFilterBancaOpen ? (
+                  <div className="absolute z-30 left-0 right-0 mt-1 rounded-xl border border-gray-200 bg-white shadow-lg overflow-hidden">
+                    <input
+                      type="search"
+                      value={overviewFilterBancaSearch}
+                      onChange={(e) => setOverviewFilterBancaSearch(e.target.value)}
+                      placeholder="Buscar banca..."
+                      className="w-full px-3 py-2.5 text-sm border-b border-gray-100 text-gray-800 placeholder:text-gray-400 focus:outline-none"
+                    />
+                    <div className="max-h-56 overflow-y-auto p-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOverviewFilterBancaId('');
+                          setOverviewPage(1);
+                          setAllCampaignsPage(1);
+                          setOverviewFilterBancaOpen(false);
+                        }}
+                        className={`w-full text-left px-2.5 py-2 rounded-lg text-sm ${
+                          overviewFilterBancaId === '' ? 'bg-[#F1FAE8] text-[#6AAE39]' : 'text-gray-700 hover:bg-gray-50'
+                        }`}
+                      >
+                        Todas as bancas
+                      </button>
+                      {bancasForMetaFilter.map((b) => (
+                        <button
+                          key={b.id}
+                          type="button"
+                          onClick={() => {
+                            setOverviewFilterBancaId(b.id);
+                            setOverviewPage(1);
+                            setAllCampaignsPage(1);
+                            setOverviewFilterBancaOpen(false);
+                          }}
+                          className={`w-full text-left px-2.5 py-2 rounded-lg text-sm ${
+                            overviewFilterBancaId === b.id ? 'bg-[#F1FAE8] text-[#6AAE39]' : 'text-gray-700 hover:bg-gray-50'
+                          }`}
+                        >
+                          {b.name || b.url}
+                        </button>
+                      ))}
+                      {bancasForMetaFilter.length === 0 ? (
+                        <p className="px-2.5 py-2 text-xs text-gray-500">Nenhuma banca encontrada.</p>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+            {metaInsightsPeriod === 'custom' && (
+              <>
+                <div>
+                  <label className="block text-[11px] font-semibold text-gray-500 uppercase mb-1">De</label>
+                  <input
+                    type="date"
+                    value={metaInsightsCustomFrom}
+                    onChange={(e) => {
+                      setMetaInsightsCustomFrom(e.target.value);
+                      setOverviewPage(1);
+                    }}
+                    className="px-3 py-2 border border-gray-200 rounded-xl text-sm text-gray-800 bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-gray-500 uppercase mb-1">Até</label>
+                  <input
+                    type="date"
+                    value={metaInsightsCustomTo}
+                    onChange={(e) => {
+                      setMetaInsightsCustomTo(e.target.value);
+                      setOverviewPage(1);
+                    }}
+                    className="px-3 py-2 border border-gray-200 rounded-xl text-sm text-gray-800 bg-white"
+                  />
+                </div>
+              </>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -671,6 +1233,180 @@ export default function AdminMetaPage() {
           </div>
         </div>
 
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
+            <p className="text-xs font-semibold text-gray-500 uppercase">Total gasto (visão geral)</p>
+            <p className="text-2xl font-bold text-gray-800 mt-1">R$ {overviewTotals.totalSpend.toFixed(2)}</p>
+          </div>
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
+            <p className="text-xs font-semibold text-gray-500 uppercase">Total de leads</p>
+            <p className="text-2xl font-bold text-gray-800 mt-1">{overviewTotals.totalLeads.toLocaleString('pt-BR')}</p>
+          </div>
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
+            <p className="text-xs font-semibold text-gray-500 uppercase">Total gasto campanhas de bolão</p>
+            <p className="text-2xl font-bold text-gray-800 mt-1">R$ {overviewKindSummary.bolao.spend.toFixed(2)}</p>
+          </div>
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
+            <p className="text-xs font-semibold text-gray-500 uppercase">Gasto de campanhas tipo normal</p>
+            <p className="text-2xl font-bold text-gray-800 mt-1">R$ {overviewKindSummary.normal.spend.toFixed(2)}</p>
+          </div>
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
+            <p className="text-xs font-semibold text-gray-500 uppercase">Resultado campanhas de bolão</p>
+            <p className="text-2xl font-bold text-gray-800 mt-1">{overviewKindSummary.bolao.leads.toLocaleString('pt-BR')}</p>
+          </div>
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
+            <p className="text-xs font-semibold text-gray-500 uppercase">Resultado campanhas normal</p>
+            <p className="text-2xl font-bold text-gray-800 mt-1">{overviewKindSummary.normal.leads.toLocaleString('pt-BR')}</p>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 md:p-5">
+          <div className="flex items-center gap-2 mb-2">
+            <BarChart3 className="w-5 h-5 text-[#8CD955]" />
+            <h2 className="text-base font-semibold text-gray-800">Funil de campanhas + consultores</h2>
+          </div>
+          <p className="text-xs text-gray-500 mb-4">
+            Meta por período selecionado + cadastrados/depósito dos consultores atribuídos nas campanhas listadas.
+          </p>
+          <div className="bg-gray-50 p-3 rounded-xl border border-gray-100 min-h-[320px]">
+            <Funnel3DChart
+              data={{
+                stages: ['Impressões', 'Alcance', 'Cliques', 'Leads Meta', 'Cadastros consultores', 'Depósito consultores (R$)'],
+                values: [
+                  overviewRows.reduce((sum, row) => sum + (Number(row.metrics.impressions) || 0), 0),
+                  overviewRows.reduce((sum, row) => sum + (Number(row.metrics.reach) || 0), 0),
+                  overviewRows.reduce((sum, row) => sum + (Number(row.metrics.clicks) || 0), 0),
+                  overviewTotals.totalLeads,
+                  consultorTotalsFromCampaignRows.leads,
+                  consultorTotalsFromCampaignRows.deposited,
+                ],
+              }}
+              showPlaceholder={!overviewRows.length && !allCampaignsRows.length}
+            />
+          </div>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 md:p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
+            <div className="flex items-center gap-2">
+              <Link2 className="w-5 h-5 text-[#8CD955]" />
+              <div>
+                <h2 className="text-base font-semibold text-gray-800">Redirects VSL (todos os projetos)</h2>
+                <p className="text-sm text-gray-600">
+                  Cliques registrados, slugs públicos e grupos de destino agregados no sistema.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => void loadRedirectSummary()}
+              disabled={loadingRedirectSummary}
+              className="px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-xl font-medium text-gray-700 disabled:opacity-50 flex items-center gap-2 text-sm"
+            >
+              {loadingRedirectSummary ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+              Atualizar redirects
+            </button>
+          </div>
+          {redirectSummaryError && (
+            <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700">
+              {redirectSummaryError}
+            </div>
+          )}
+          {loadingRedirectSummary && !redirectSummary ? (
+            <div className="flex items-center justify-center py-12 text-gray-500 gap-2">
+              <Loader2 className="w-6 h-6 animate-spin text-[#8CD955]" />
+              Carregando…
+            </div>
+          ) : redirectSummary ? (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 mb-6">
+                <div className="rounded-xl border border-gray-100 bg-gray-50/80 p-3">
+                  <p className="text-[11px] font-semibold text-gray-500 uppercase">Total de cliques</p>
+                  <p className="text-xl font-bold text-gray-800 mt-0.5">
+                    {redirectSummary.totals.total_clicks.toLocaleString('pt-BR')}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-gray-100 bg-gray-50/80 p-3">
+                  <p className="text-[11px] font-semibold text-gray-500 uppercase">Grupos</p>
+                  <p className="text-xl font-bold text-gray-800 mt-0.5">
+                    {redirectSummary.totals.total_groups.toLocaleString('pt-BR')}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {redirectSummary.totals.active_groups.toLocaleString('pt-BR')} ativos
+                  </p>
+                </div>
+                <div className="rounded-xl border border-gray-100 bg-gray-50/80 p-3">
+                  <p className="text-[11px] font-semibold text-gray-500 uppercase">Slugs redirect</p>
+                  <p className="text-xl font-bold text-gray-800 mt-0.5">
+                    {redirectSummary.totals.redirect_slugs.toLocaleString('pt-BR')}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {redirectSummary.totals.active_redirect_slugs.toLocaleString('pt-BR')} ativos
+                  </p>
+                </div>
+                <div className="rounded-xl border border-gray-100 bg-gray-50/80 p-3">
+                  <p className="text-[11px] font-semibold text-gray-500 uppercase">Projetos VSL</p>
+                  <p className="text-xl font-bold text-gray-800 mt-0.5">
+                    {redirectSummary.totals.vsl_projects.toLocaleString('pt-BR')}
+                  </p>
+                </div>
+              </div>
+              <div className="overflow-x-auto max-h-[min(420px,50vh)] overflow-y-auto rounded-xl border border-gray-100">
+                <table className="w-full min-w-[720px] text-sm">
+                  <thead className="sticky top-0 bg-gray-50 text-gray-700 z-10">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-semibold">Projeto</th>
+                      <th className="px-3 py-2 text-left font-semibold">Slug redirect</th>
+                      <th className="px-3 py-2 text-right font-semibold">Cliques</th>
+                      <th className="px-3 py-2 text-right font-semibold">Grupos</th>
+                      <th className="px-3 py-2 text-right font-semibold">Grupos ativos</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {redirectSummary.projects
+                      .filter(
+                        (r) =>
+                          r.redirect_slug ||
+                          r.clicks > 0 ||
+                          r.groups_total > 0
+                      )
+                      .map((r) => (
+                        <tr key={r.project_id} className="hover:bg-gray-50/80">
+                          <td className="px-3 py-2 text-gray-800">
+                            <span className="font-medium">{r.name}</span>
+                            <span className="block text-xs text-gray-500">{r.project_slug}</span>
+                          </td>
+                          <td className="px-3 py-2 text-gray-700">
+                            {r.redirect_slug ? (
+                              <>
+                                <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{r.redirect_slug}</code>
+                                {r.redirect_active === false && (
+                                  <span className="ml-1 text-xs text-amber-600">inativo</span>
+                                )}
+                              </>
+                            ) : (
+                              <span className="text-gray-400">—</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums">{r.clicks.toLocaleString('pt-BR')}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">{r.groups_total.toLocaleString('pt-BR')}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">{r.groups_active.toLocaleString('pt-BR')}</td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+                {redirectSummary.projects.filter(
+                  (r) => r.redirect_slug || r.clicks > 0 || r.groups_total > 0
+                ).length === 0 && (
+                  <p className="p-6 text-center text-gray-500 text-sm">
+                    Nenhum projeto com redirect ou cliques ainda.
+                  </p>
+                )}
+              </div>
+            </>
+          ) : null}
+        </div>
+
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
           <div className="p-4 border-b border-gray-100 bg-gray-50/50 flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -678,24 +1414,6 @@ export default function AdminMetaPage() {
               <p className="text-sm text-gray-600">Acompanhe integração e métricas Meta por banca.</p>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
-              <div>
-                <label className="block text-[11px] font-semibold text-gray-500 uppercase mb-1">Filtro dos cards</label>
-                <select
-                  value={overviewFilterBancaId}
-                  onChange={(e) => {
-                    setOverviewFilterBancaId(e.target.value);
-                    setOverviewPage(1);
-                  }}
-                  className="px-3 py-2 border border-gray-200 rounded-xl text-sm text-gray-800 bg-white"
-                >
-                  <option value="">Todas as bancas</option>
-                  {bancas.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name || b.url}
-                    </option>
-                  ))}
-                </select>
-              </div>
               <input
                 value={overviewSearch}
                 onChange={(e) => { setOverviewSearch(e.target.value); setOverviewPage(1); }}
@@ -704,7 +1422,10 @@ export default function AdminMetaPage() {
               />
               <button
                 type="button"
-                onClick={() => loadOverview()}
+                onClick={() => {
+                  void loadOverview();
+                  void loadRedirectSummary();
+                }}
                 disabled={loadingOverview}
                 className="px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-xl font-medium text-gray-700 disabled:opacity-50 flex items-center gap-2"
               >
@@ -766,20 +1487,15 @@ export default function AdminMetaPage() {
                         <button
                           type="button"
                           onClick={() => {
-                            setOverviewFilterBancaId(row.banca_id);
-                            setTestResult(null);
-                            setSyncResult(null);
-                            setSyncedData(null);
-                            setConfigLoadError(null);
                             setSelectedBancaIds([row.banca_id]);
-                            void loadConfig([row.banca_id]);
+                            setSyncedData(null);
                             setTimeout(() => {
-                              document.getElementById('meta-config-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                              document.getElementById('dados-sincronizados-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
                             }, 0);
                           }}
                           className="px-3 py-1.5 rounded-lg bg-[#8CD955] hover:bg-[#7BC84A] text-white text-xs font-medium"
                         >
-                          Gerenciar
+                          Ver dados
                         </button>
                       </td>
                     </tr>
@@ -869,6 +1585,394 @@ export default function AdminMetaPage() {
             <div className="p-6 text-sm text-center text-gray-500">
               Nenhuma banca encontrada para exibir no painel geral.
             </div>
+          )}
+        </div>
+
+        <div id="dados-sincronizados-section" className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 md:p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="text-base font-semibold text-gray-800">Campanhas sincronizadas</h3>
+              <p className="text-xs text-gray-500 mt-1">
+                Card separado da integração Meta. Período aplicado: {adminMetaInsightsDateRange.label}.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  const first = (allCampaignsRows || [])[0];
+                  if (first) {
+                    setConsultorModalCampaignKey(`${String(first.banca_id)}:${String(first.campaign_id)}`);
+                  }
+                  setConsultorModalOpen(true);
+                }}
+                disabled={allCampaignsRows.length === 0}
+                className="text-sm text-blue-700 hover:text-blue-800 font-medium flex items-center gap-1 disabled:opacity-40"
+              >
+                <Users className="w-4 h-4" />
+                Atribuir consultores
+              </button>
+              <button
+                onClick={() => loadSyncedData()}
+                disabled={loadingData}
+                className="text-sm text-[#8CD955] hover:text-[#7BC84A] font-medium flex items-center gap-1 disabled:opacity-50"
+              >
+                {loadingData ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                Atualizar
+              </button>
+            </div>
+          </div>
+
+          {syncedData ? (
+            <>
+              {loadingData ? (
+                <div className="py-8 flex justify-center">
+                  <Loader2 className="w-6 h-6 animate-spin text-[#8CD955]" />
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="border border-gray-200 rounded-xl overflow-hidden">
+                    <button
+                      onClick={() => setExpandedTab(expandedTab === 'campaigns' ? null : 'campaigns')}
+                      className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition"
+                    >
+                      <span className="flex items-center gap-2 font-medium text-gray-800">
+                        <Target className="w-4 h-4 text-[#8CD955]" />
+                        Campanhas ({allCampaignsRows.length})
+                      </span>
+                      {expandedTab === 'campaigns' ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+                    </button>
+                    {expandedTab === 'campaigns' && (
+                      <div className="overflow-x-auto max-h-80 overflow-y-auto">
+                        <table className="w-full text-sm text-left min-w-[2220px]">
+                          <thead className="bg-gray-100 text-gray-700 sticky top-0">
+                            <tr>
+                              <th className="px-4 py-2">Início</th>
+                              <th className="px-4 py-2">Banca</th>
+                              <th className="px-4 py-2">Nome</th>
+                              <th className="px-4 py-2">Campaign ID</th>
+                              <th className="px-4 py-2">Tipo</th>
+                              <th className="px-4 py-2 text-right">Reach</th>
+                              <th className="px-4 py-2 text-right">Impressões</th>
+                              <th className="px-4 py-2 text-right">Cliques</th>
+                              <th className="px-4 py-2 text-right">Leads</th>
+                              <th className="px-4 py-2 text-right">Gasto</th>
+                              <th className="px-4 py-2 text-right">Leads consultores</th>
+                              <th className="px-4 py-2 text-right">Depósito consultores</th>
+                              <th className="px-4 py-2">Status</th>
+                              <th className="px-4 py-2">Objetivo</th>
+                              <th className="px-4 py-2 text-right">Orçamento diário</th>
+                              <th className="px-4 py-2 text-right">Orçamento total</th>
+                              <th className="px-4 py-2">Fim</th>
+                              <th className="px-4 py-2">Atualizado</th>
+                              <th className="px-4 py-2">Atribuir banca</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {(allCampaignsRows ?? []).map((c: any) => {
+                              const m = {
+                                reach: Number(c.reach) || 0,
+                                impressions: Number(c.impressions) || 0,
+                                clicks: Number(c.clicks) || 0,
+                                leads: Number(c.leads) || 0,
+                                spend: Number(c.spend) || 0,
+                              };
+                              const ownerKey = `${String(c.banca_id)}:${String(c.campaign_id)}`;
+                              const ownerTarget = campaignOwnerDraft[ownerKey] ?? String(c.banca_id);
+                              return (
+                                <tr key={c.id ?? c.campaign_id} className="hover:bg-gray-50">
+                                  <td className="px-4 py-2 text-gray-700">{c.start_time ? formatDate(c.start_time) : '-'}</td>
+                                  <td className="px-4 py-2 text-xs text-gray-600">
+                                    <p className="font-medium text-gray-800">{c.banca_name || c.banca_id}</p>
+                                    {c.banca_url ? <p className="text-[11px] text-gray-500 break-all">{c.banca_url}</p> : null}
+                                  </td>
+                                  <td className="px-4 py-2 font-medium text-gray-800">{c.name || c.campaign_id}</td>
+                                  <td className="px-4 py-2 text-xs font-mono text-gray-700">{c.campaign_id || '-'}</td>
+                                  <td className="px-4 py-2 align-top">
+                                    {c.banca_id ? (
+                                      <select
+                                        value={(c.campaign_kind as MetaCampaignKind) || 'normal'}
+                                        disabled={campaignKindSavingKey === `${String(c.banca_id)}:${String(c.campaign_id)}`}
+                                        onChange={(e) => {
+                                          const v = e.target.value as MetaCampaignKind;
+                                          void handleSaveCampaignKind(String(c.banca_id), String(c.campaign_id), v);
+                                        }}
+                                        className="px-2 py-1 rounded-lg border border-gray-200 text-xs text-gray-800 bg-white max-w-[140px] disabled:opacity-50"
+                                      >
+                                        <option value="normal">Normal</option>
+                                        <option value="bolao">Bolão</option>
+                                      </select>
+                                    ) : (
+                                      <span className="text-xs text-gray-500">—</span>
+                                    )}
+                                  </td>
+                                  <td className="px-4 py-2 text-right text-gray-700 tabular-nums">{m.reach.toLocaleString('pt-BR')}</td>
+                                  <td className="px-4 py-2 text-right text-gray-700 tabular-nums">{m.impressions.toLocaleString('pt-BR')}</td>
+                                  <td className="px-4 py-2 text-right text-gray-700 tabular-nums">{m.clicks.toLocaleString('pt-BR')}</td>
+                                  <td className="px-4 py-2 text-right text-gray-700 tabular-nums">{m.leads.toLocaleString('pt-BR')}</td>
+                                  <td className="px-4 py-2 text-right text-gray-700 tabular-nums">R$ {m.spend.toFixed(2)}</td>
+                                  <td className="px-4 py-2 text-right text-gray-700 tabular-nums">{(Number(c.consultor_total_leads) || 0).toLocaleString('pt-BR')}</td>
+                                  <td className="px-4 py-2 text-right text-gray-700 tabular-nums">R$ {(Number(c.consultor_total_deposited) || 0).toFixed(2)}</td>
+                                  <td className="px-4 py-2 text-gray-700">{c.effective_status || c.status || '-'}</td>
+                                  <td className="px-4 py-2 text-gray-700">{c.objective || '-'}</td>
+                                  <td className="px-4 py-2 text-right text-gray-700">{c.daily_budget != null ? `R$ ${Number(c.daily_budget).toFixed(2)}` : '-'}</td>
+                                  <td className="px-4 py-2 text-right text-gray-700">{c.lifetime_budget != null ? `R$ ${Number(c.lifetime_budget).toFixed(2)}` : '-'}</td>
+                                  <td className="px-4 py-2 text-gray-700">{c.stop_time ? formatDate(c.stop_time) : '-'}</td>
+                                  <td className="px-4 py-2 text-xs text-gray-600">{c.updated_at ? formatDate(c.updated_at) : '-'}</td>
+                                  <td className="px-4 py-2">
+                                    {c.banca_id ? (
+                                      <div className="flex items-center gap-2">
+                                        <select
+                                          value={ownerTarget ?? ''}
+                                          onChange={(e) =>
+                                            setCampaignOwnerDraft((prev) => ({
+                                              ...prev,
+                                              [ownerKey]: e.target.value,
+                                            }))
+                                          }
+                                          className="px-2 py-1 rounded-lg border border-gray-200 text-xs text-gray-700 bg-white max-w-[220px]"
+                                        >
+                                          {bancas.map((b) => (
+                                            <option key={b.id} value={b.id}>
+                                              {b.name || b.url || b.id}
+                                            </option>
+                                          ))}
+                                        </select>
+                                        <button
+                                          type="button"
+                                          disabled={
+                                            campaignOwnerSavingKey === ownerKey ||
+                                            !ownerTarget ||
+                                            ownerTarget === String(c.banca_id)
+                                          }
+                                          onClick={() =>
+                                            handleAssignCampaignOwner({
+                                              banca_id: String(c.banca_id),
+                                              campaign_id: String(c.campaign_id),
+                                              name: c.name,
+                                            })
+                                          }
+                                          className="px-3 py-1.5 rounded-lg border border-[#8CD955] text-[#6AAE39] hover:bg-[#F1FAE8] text-xs font-medium disabled:opacity-50"
+                                        >
+                                          {campaignOwnerSavingKey === ownerKey ? 'Salvando…' : 'Vincular banca'}
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <span className="text-xs text-gray-500">—</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                        {(allCampaignsRows?.length ?? 0) === 0 && (
+                          <p className="px-4 py-6 text-center text-gray-500">Nenhuma campanha sincronizada.</p>
+                        )}
+                        {(allCampaignsRows?.length ?? 0) > 0 && (
+                          <div className="px-4 py-3 border-t border-gray-100 bg-gray-50/40 flex items-center justify-between">
+                            <p className="text-xs text-gray-500">Página {allCampaignsPage}</p>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setAllCampaignsPage((p) => Math.max(1, p - 1))}
+                                disabled={allCampaignsPage <= 1}
+                                className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                              >
+                                ‹ Anterior
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setAllCampaignsPage((p) => p + 1)}
+                                className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                              >
+                                Próximo ›
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="border border-gray-200 rounded-xl overflow-hidden">
+                    <button
+                      onClick={() => setExpandedTab(expandedTab === 'adsets' ? null : 'adsets')}
+                      className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition"
+                    >
+                      <span className="flex items-center gap-2 font-medium text-gray-800">
+                        <Layers className="w-4 h-4 text-blue-600" />
+                        AdSets ({syncedData.adsets?.length ?? 0})
+                      </span>
+                      {expandedTab === 'adsets' ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+                    </button>
+                    {expandedTab === 'adsets' && (
+                      <div className="overflow-x-auto max-h-80 overflow-y-auto">
+                        <table className="w-full text-sm text-left min-w-[700px]">
+                          <thead className="bg-gray-100 text-gray-700 sticky top-0">
+                            <tr>
+                              <th className="px-4 py-2">Banca</th>
+                              <th className="px-4 py-2">Nome</th>
+                              <th className="px-4 py-2">Status</th>
+                              <th className="px-4 py-2">Campanha ID</th>
+                              <th className="px-4 py-2">Orçamento diário</th>
+                              <th className="px-4 py-2">Otimização</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {pagedSyncedAdsetRows.map((a: any) => (
+                              <tr key={a.id} className="hover:bg-gray-50">
+                                <td className="px-4 py-2 text-xs text-gray-600">{selectedBancaName}</td>
+                                <td className="px-4 py-2 font-medium text-gray-800">{a.name || a.adset_id}</td>
+                                <td className="px-4 py-2 text-gray-700">{a.effective_status || a.status || '-'}</td>
+                                <td className="px-4 py-2 text-xs text-gray-700">{a.campaign_id || '-'}</td>
+                                <td className="px-4 py-2 text-gray-700">{a.daily_budget != null ? `R$ ${Number(a.daily_budget).toFixed(2)}` : '-'}</td>
+                                <td className="px-4 py-2 text-gray-700">{a.optimization_goal || '-'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        {(syncedData.adsets?.length ?? 0) === 0 && (
+                          <p className="px-4 py-6 text-center text-gray-500">Nenhum adset sincronizado.</p>
+                        )}
+                        {(syncedData.adsets?.length ?? 0) > 0 && (
+                          <div className="px-4 py-3 border-t border-gray-100 bg-gray-50/40 flex items-center justify-between">
+                            <p className="text-xs text-gray-500">Página {syncedAdsetPage} de {syncedAdsetTotalPages}</p>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setSyncedDataPage((prev) => ({ ...prev, adsets: Math.max(1, prev.adsets - 1) }))
+                                }
+                                disabled={syncedAdsetPage <= 1}
+                                className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                              >
+                                ‹ Anterior
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setSyncedDataPage((prev) => ({
+                                    ...prev,
+                                    adsets: Math.min(syncedAdsetTotalPages, prev.adsets + 1),
+                                  }))
+                                }
+                                disabled={syncedAdsetPage >= syncedAdsetTotalPages}
+                                className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                              >
+                                Próximo ›
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="border border-gray-200 rounded-xl overflow-hidden">
+                    <button
+                      onClick={() => setExpandedTab(expandedTab === 'insights' ? null : 'insights')}
+                      className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition"
+                    >
+                      <span className="flex items-center gap-2 font-medium text-gray-800">
+                        <TrendingUp className="w-4 h-4 text-purple-600" />
+                        Insights diários ({syncedData.insights?.length ?? 0})
+                      </span>
+                      {expandedTab === 'insights' ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+                    </button>
+                    {expandedTab === 'insights' && (
+                      <div className="overflow-x-auto max-h-96 overflow-y-auto">
+                        <table className="w-full text-sm text-left min-w-[1080px]">
+                          <thead className="bg-gray-100 text-gray-700 sticky top-0">
+                            <tr>
+                              <th className="px-4 py-2">Banca</th>
+                              <th className="px-4 py-2">Data</th>
+                              <th className="px-4 py-2">Campanha</th>
+                              <th className="px-4 py-2"><Eye className="w-4 h-4 inline" /> Alcance</th>
+                              <th className="px-4 py-2"><MousePointer className="w-4 h-4 inline" /> Impressões</th>
+                              <th className="px-4 py-2">Cliques</th>
+                              <th className="px-4 py-2"><DollarSign className="w-4 h-4 inline" /> Gasto</th>
+                              <th className="px-4 py-2">Leads</th>
+                              <th className="px-4 py-2">CPM</th>
+                              <th className="px-4 py-2">CPC</th>
+                              <th className="px-4 py-2">CTR %</th>
+                              <th
+                                className="px-4 py-2 min-w-[200px]"
+                                title="cost_per_action_type (Meta Insights API), armazenado como raw_cost_per_action_type"
+                              >
+                                Custo / tipo de ação
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {pagedSyncedInsightRows.map((i: any) => {
+                              const cpa = formatCostPerActionTypeCell(
+                                i.raw_cost_per_action_type ?? i.cost_per_action_type
+                              );
+                              return (
+                                <tr key={i.id} className="hover:bg-gray-50">
+                                  <td className="px-4 py-2 text-xs text-gray-600">{selectedBancaName}</td>
+                                  <td className="px-4 py-2 text-gray-700">{i.date}</td>
+                                  <td className="px-4 py-2 font-medium text-gray-800">{i.campaign_name || i.campaign_id}</td>
+                                  <td className="px-4 py-2 text-gray-700">{(i.reach ?? 0).toLocaleString('pt-BR')}</td>
+                                  <td className="px-4 py-2 text-gray-700">{(i.impressions ?? 0).toLocaleString('pt-BR')}</td>
+                                  <td className="px-4 py-2 text-gray-700">{(i.clicks ?? 0).toLocaleString('pt-BR')}</td>
+                                  <td className="px-4 py-2 text-gray-700">R$ {(Number(i.spend ?? 0)).toFixed(2)}</td>
+                                  <td className="px-4 py-2 text-gray-700">{(i.leads ?? 0).toLocaleString('pt-BR')}</td>
+                                  <td className="px-4 py-2 text-gray-700">{i.cpm != null ? Number(i.cpm).toFixed(2) : '-'}</td>
+                                  <td className="px-4 py-2 text-gray-700">{i.cpc != null ? Number(i.cpc).toFixed(2) : '-'}</td>
+                                  <td className="px-4 py-2 text-gray-700">{i.ctr != null ? Number(i.ctr).toFixed(2) : '-'}</td>
+                                  <td
+                                    className="px-4 py-2 text-xs text-gray-700 max-w-[280px] truncate align-top"
+                                    title={cpa.title || undefined}
+                                  >
+                                    {cpa.short}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                        {(syncedData.insights?.length ?? 0) === 0 && (
+                          <p className="px-4 py-6 text-center text-gray-500">Nenhum insight sincronizado. Execute a sincronização.</p>
+                        )}
+                        {(syncedData.insights?.length ?? 0) > 0 && (
+                          <div className="px-4 py-3 border-t border-gray-100 bg-gray-50/40 flex items-center justify-between">
+                            <p className="text-xs text-gray-500">Página {syncedInsightPage} de {syncedInsightTotalPages}</p>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setSyncedDataPage((prev) => ({ ...prev, insights: Math.max(1, prev.insights - 1) }))
+                                }
+                                disabled={syncedInsightPage <= 1}
+                                className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                              >
+                                ‹ Anterior
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setSyncedDataPage((prev) => ({
+                                    ...prev,
+                                    insights: Math.min(syncedInsightTotalPages, prev.insights + 1),
+                                  }))
+                                }
+                                disabled={syncedInsightPage >= syncedInsightTotalPages}
+                                className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                              >
+                                Próximo ›
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <p className="py-4 text-sm text-gray-500">Selecione uma banca em &quot;Visão geral&quot; e clique em &quot;Ver dados&quot; para carregar.</p>
           )}
         </div>
 
@@ -1072,6 +2176,7 @@ export default function AdminMetaPage() {
                       <option value="">Nenhuma</option>
                       {campaigns.map((c) => (
                         <option key={c.id} value={c.id}>
+                          {c.campaign_kind === 'bolao' ? '[Bolão] ' : ''}
                           {c.name || c.id}
                         </option>
                       ))}
@@ -1225,339 +2330,141 @@ export default function AdminMetaPage() {
                 </div>
               </div>
 
-              {/* Dados Sincronizados */}
-              <div className="border-t border-gray-200 pt-6">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-base font-semibold text-gray-800">Dados Sincronizados</h3>
-                  <button
-                    onClick={() => loadSyncedData()}
-                    disabled={loadingData}
-                    className="text-sm text-[#8CD955] hover:text-[#7BC84A] font-medium flex items-center gap-1 disabled:opacity-50"
-                  >
-                    {loadingData ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                    Atualizar
-                  </button>
-                </div>
-
-                {/* Todas as integrações: Campanhas */}
-                <div className="mb-6 rounded-2xl border border-gray-200 overflow-hidden">
-                  <div className="px-4 py-3 bg-gray-50/70 border-b border-gray-100 flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-semibold text-gray-800">Campanhas sincronizadas (todas as bancas)</p>
-                      <p className="text-xs text-gray-500">Lista global de `meta_campaigns` para gestão completa.</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <label className="inline-flex items-center gap-2 text-sm text-gray-700">
-                        <input
-                          type="checkbox"
-                          checked={allCampaignsShowInactive}
-                          onChange={(e) => {
-                            setAllCampaignsShowInactive(e.target.checked);
-                            setAllCampaignsPage(1);
-                          }}
-                          className="rounded border-gray-300 text-[#8CD955] focus:ring-[#8CD955]"
-                        />
-                        Mostrar inativas
-                      </label>
-                      <input
-                        value={allCampaignsSearch}
-                        onChange={(e) => { setAllCampaignsSearch(e.target.value); setAllCampaignsPage(1); }}
-                        placeholder="Buscar campanha (nome)"
-                        className="px-3 py-2 border border-gray-200 rounded-xl text-sm text-gray-800 placeholder:text-gray-500 bg-white"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => loadAllCampaigns()}
-                        disabled={allCampaignsLoading}
-                        className="px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-xl font-medium text-gray-700 disabled:opacity-50 flex items-center gap-2"
-                      >
-                        {allCampaignsLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                        Atualizar
-                      </button>
-                    </div>
-                  </div>
-                  {allCampaignsError ? (
-                    <div className="p-4 text-sm text-red-700 bg-red-50 border-t border-red-200">{allCampaignsError}</div>
-                  ) : null}
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm min-w-[900px]">
-                      <thead className="bg-white text-gray-700">
-                        <tr className="border-b border-gray-100">
-                          <th className="px-4 py-2 text-left font-semibold">Banca</th>
-                          <th className="px-4 py-2 text-left font-semibold">Campanha</th>
-                          <th className="px-4 py-2 text-left font-semibold">Status</th>
-                          <th className="px-4 py-2 text-left font-semibold">Objetivo</th>
-                          <th className="px-4 py-2 text-right font-semibold">Orçamento diário</th>
-                          <th className="px-4 py-2 text-right font-semibold">Orçamento total</th>
-                          <th className="px-4 py-2 text-left font-semibold">Atualizado</th>
-                          <th className="px-4 py-2 text-left font-semibold">Ações</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100">
-                        {(allCampaignsRows ?? []).map((row: any) => (
-                          <tr key={`${row.banca_id}:${row.campaign_id}`} className="hover:bg-gray-50/60">
-                            <td className="px-4 py-2">
-                              <p className="font-medium text-gray-800">{row.banca_name}</p>
-                              {row.banca_url ? <p className="text-xs text-gray-500 break-all">{row.banca_url}</p> : null}
-                            </td>
-                            <td className="px-4 py-2">
-                              <p className="font-medium text-gray-800">{row.name || row.campaign_id}</p>
-                              <p className="text-xs text-gray-500 font-mono break-all">{row.campaign_id}</p>
-                            </td>
-                            <td className="px-4 py-2 text-gray-700">{row.effective_status || row.status || '-'}</td>
-                            <td className="px-4 py-2 text-gray-700">{row.objective || '-'}</td>
-                            <td className="px-4 py-2 text-right text-gray-700">{row.daily_budget != null ? `R$ ${Number(row.daily_budget).toFixed(2)}` : '-'}</td>
-                            <td className="px-4 py-2 text-right text-gray-700">{row.lifetime_budget != null ? `R$ ${Number(row.lifetime_budget).toFixed(2)}` : '-'}</td>
-                            <td className="px-4 py-2 text-xs text-gray-600">{formatDate(row.updated_at)}</td>
-                            <td className="px-4 py-2">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setOverviewFilterBancaId(row.banca_id);
-                                  setTestResult(null);
-                                  setSyncResult(null);
-                                  setSyncedData(null);
-                                  setConfigLoadError(null);
-                                  setSelectedBancaIds([row.banca_id]);
-                                  void loadConfig([row.banca_id]);
-                                  setTimeout(() => {
-                                    document.getElementById('meta-config-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                                  }, 0);
-                                }}
-                                className="px-3 py-1.5 rounded-lg bg-[#8CD955] hover:bg-[#7BC84A] text-white text-xs font-medium"
-                              >
-                                Gerenciar banca
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                        {(allCampaignsRows?.length ?? 0) === 0 && !allCampaignsLoading && (
-                          <tr>
-                            <td colSpan={8} className="px-4 py-6 text-center text-gray-500">
-                              Nenhuma campanha sincronizada encontrada.
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div className="px-4 py-3 border-t border-gray-100 bg-gray-50/40 flex items-center justify-between">
-                    <p className="text-xs text-gray-500">Página {allCampaignsPage}</p>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setAllCampaignsPage((p) => Math.max(1, p - 1))}
-                        className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-100"
-                      >
-                        ‹ Anterior
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setAllCampaignsPage((p) => p + 1)}
-                        className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-100"
-                      >
-                        Próximo ›
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => loadAllCampaigns()}
-                        className="px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-xs text-gray-700"
-                      >
-                        Recarregar
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {loadingData ? (
-                  <div className="py-8 flex justify-center">
-                    <Loader2 className="w-6 h-6 animate-spin text-[#8CD955]" />
-                  </div>
-                ) : syncedData ? (
-                  <div className="space-y-4">
-                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-                      <div className="p-3 rounded-xl border border-gray-200 bg-gray-50">
-                        <p className="text-[11px] uppercase font-semibold text-gray-500">Banca</p>
-                        <p className="text-sm font-semibold text-gray-800 mt-1">{selectedBancaName}</p>
-                      </div>
-                      <div className="p-3 rounded-xl border border-gray-200 bg-gray-50">
-                        <p className="text-[11px] uppercase font-semibold text-gray-500">Campanhas / AdSets</p>
-                        <p className="text-sm font-semibold text-gray-800 mt-1">
-                          {(syncedData.campaigns?.length ?? 0).toLocaleString('pt-BR')} / {(syncedData.adsets?.length ?? 0).toLocaleString('pt-BR')}
-                        </p>
-                      </div>
-                      <div className="p-3 rounded-xl border border-gray-200 bg-gray-50">
-                        <p className="text-[11px] uppercase font-semibold text-gray-500">Reach / Impressões</p>
-                        <p className="text-sm font-semibold text-gray-800 mt-1">
-                          {syncedTotals.reach.toLocaleString('pt-BR')} / {syncedTotals.impressions.toLocaleString('pt-BR')}
-                        </p>
-                      </div>
-                      <div className="p-3 rounded-xl border border-gray-200 bg-gray-50">
-                        <p className="text-[11px] uppercase font-semibold text-gray-500">Cliques / Leads</p>
-                        <p className="text-sm font-semibold text-gray-800 mt-1">
-                          {syncedTotals.clicks.toLocaleString('pt-BR')} / {syncedTotals.leads.toLocaleString('pt-BR')}
-                        </p>
-                      </div>
-                      <div className="p-3 rounded-xl border border-gray-200 bg-gray-50">
-                        <p className="text-[11px] uppercase font-semibold text-gray-500">Gasto total</p>
-                        <p className="text-sm font-semibold text-gray-800 mt-1">R$ {syncedTotals.spend.toFixed(2)}</p>
-                      </div>
-                    </div>
-                    {/* Campanhas */}
-                    <div className="border border-gray-200 rounded-xl overflow-hidden">
-                      <button
-                        onClick={() => setExpandedTab(expandedTab === 'campaigns' ? null : 'campaigns')}
-                        className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition"
-                      >
-                        <span className="flex items-center gap-2 font-medium text-gray-800">
-                          <Target className="w-4 h-4 text-[#8CD955]" />
-                          Campanhas ({syncedData.campaigns?.length ?? 0})
-                        </span>
-                        {expandedTab === 'campaigns' ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
-                      </button>
-                      {expandedTab === 'campaigns' && (
-                        <div className="overflow-x-auto max-h-80 overflow-y-auto">
-                          <table className="w-full text-sm text-left min-w-[720px]">
-                            <thead className="bg-gray-100 text-gray-700 sticky top-0">
-                              <tr>
-                                <th className="px-4 py-2">Banca</th>
-                                <th className="px-4 py-2">Nome</th>
-                                <th className="px-4 py-2">Status</th>
-                                <th className="px-4 py-2">Objetivo</th>
-                                <th className="px-4 py-2">Orçamento diário</th>
-                                <th className="px-4 py-2">Orçamento total</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-100">
-                              {(syncedData.campaigns ?? []).map((c: any) => (
-                                <tr key={c.id} className="hover:bg-gray-50">
-                                  <td className="px-4 py-2 text-xs text-gray-600">{selectedBancaName}</td>
-                                  <td className="px-4 py-2 font-medium text-gray-800">{c.name || c.campaign_id}</td>
-                                  <td className="px-4 py-2 text-gray-700">{c.effective_status || c.status || '-'}</td>
-                                  <td className="px-4 py-2 text-gray-700">{c.objective || '-'}</td>
-                                  <td className="px-4 py-2 text-gray-700">{c.daily_budget != null ? `R$ ${Number(c.daily_budget).toFixed(2)}` : '-'}</td>
-                                  <td className="px-4 py-2 text-gray-700">{c.lifetime_budget != null ? `R$ ${Number(c.lifetime_budget).toFixed(2)}` : '-'}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                          {(syncedData.campaigns?.length ?? 0) === 0 && (
-                            <p className="px-4 py-6 text-center text-gray-500">Nenhuma campanha sincronizada.</p>
-                          )}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* AdSets */}
-                    <div className="border border-gray-200 rounded-xl overflow-hidden">
-                      <button
-                        onClick={() => setExpandedTab(expandedTab === 'adsets' ? null : 'adsets')}
-                        className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition"
-                      >
-                        <span className="flex items-center gap-2 font-medium text-gray-800">
-                          <Layers className="w-4 h-4 text-blue-600" />
-                          AdSets ({syncedData.adsets?.length ?? 0})
-                        </span>
-                        {expandedTab === 'adsets' ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
-                      </button>
-                      {expandedTab === 'adsets' && (
-                        <div className="overflow-x-auto max-h-80 overflow-y-auto">
-                          <table className="w-full text-sm text-left min-w-[700px]">
-                            <thead className="bg-gray-100 text-gray-700 sticky top-0">
-                              <tr>
-                                <th className="px-4 py-2">Banca</th>
-                                <th className="px-4 py-2">Nome</th>
-                                <th className="px-4 py-2">Status</th>
-                                <th className="px-4 py-2">Campanha ID</th>
-                                <th className="px-4 py-2">Orçamento diário</th>
-                                <th className="px-4 py-2">Otimização</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-100">
-                              {(syncedData.adsets ?? []).map((a: any) => (
-                                <tr key={a.id} className="hover:bg-gray-50">
-                                  <td className="px-4 py-2 text-xs text-gray-600">{selectedBancaName}</td>
-                                  <td className="px-4 py-2 font-medium text-gray-800">{a.name || a.adset_id}</td>
-                                  <td className="px-4 py-2 text-gray-700">{a.effective_status || a.status || '-'}</td>
-                                  <td className="px-4 py-2 text-xs text-gray-700">{a.campaign_id || '-'}</td>
-                                  <td className="px-4 py-2 text-gray-700">{a.daily_budget != null ? `R$ ${Number(a.daily_budget).toFixed(2)}` : '-'}</td>
-                                  <td className="px-4 py-2 text-gray-700">{a.optimization_goal || '-'}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                          {(syncedData.adsets?.length ?? 0) === 0 && (
-                            <p className="px-4 py-6 text-center text-gray-500">Nenhum adset sincronizado.</p>
-                          )}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Insights */}
-                    <div className="border border-gray-200 rounded-xl overflow-hidden">
-                      <button
-                        onClick={() => setExpandedTab(expandedTab === 'insights' ? null : 'insights')}
-                        className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition"
-                      >
-                        <span className="flex items-center gap-2 font-medium text-gray-800">
-                          <TrendingUp className="w-4 h-4 text-purple-600" />
-                          Insights diários ({syncedData.insights?.length ?? 0})
-                        </span>
-                        {expandedTab === 'insights' ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
-                      </button>
-                      {expandedTab === 'insights' && (
-                        <div className="overflow-x-auto max-h-96 overflow-y-auto">
-                          <table className="w-full text-sm text-left min-w-[860px]">
-                            <thead className="bg-gray-100 text-gray-700 sticky top-0">
-                              <tr>
-                                <th className="px-4 py-2">Banca</th>
-                                <th className="px-4 py-2">Data</th>
-                                <th className="px-4 py-2">Campanha</th>
-                                <th className="px-4 py-2"><Eye className="w-4 h-4 inline" /> Alcance</th>
-                                <th className="px-4 py-2"><MousePointer className="w-4 h-4 inline" /> Impressões</th>
-                                <th className="px-4 py-2">Cliques</th>
-                                <th className="px-4 py-2"><DollarSign className="w-4 h-4 inline" /> Gasto</th>
-                                <th className="px-4 py-2">Leads</th>
-                                <th className="px-4 py-2">CPM</th>
-                                <th className="px-4 py-2">CPC</th>
-                                <th className="px-4 py-2">CTR %</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-100">
-                              {(syncedData.insights ?? []).map((i: any) => (
-                                <tr key={i.id} className="hover:bg-gray-50">
-                                  <td className="px-4 py-2 text-xs text-gray-600">{selectedBancaName}</td>
-                                  <td className="px-4 py-2 text-gray-700">{i.date}</td>
-                                  <td className="px-4 py-2 font-medium text-gray-800">{i.campaign_name || i.campaign_id}</td>
-                                  <td className="px-4 py-2 text-gray-700">{(i.reach ?? 0).toLocaleString('pt-BR')}</td>
-                                  <td className="px-4 py-2 text-gray-700">{(i.impressions ?? 0).toLocaleString('pt-BR')}</td>
-                                  <td className="px-4 py-2 text-gray-700">{(i.clicks ?? 0).toLocaleString('pt-BR')}</td>
-                                  <td className="px-4 py-2 text-gray-700">R$ {(Number(i.spend ?? 0)).toFixed(2)}</td>
-                                  <td className="px-4 py-2 text-gray-700">{(i.leads ?? 0).toLocaleString('pt-BR')}</td>
-                                  <td className="px-4 py-2 text-gray-700">{i.cpm != null ? Number(i.cpm).toFixed(2) : '-'}</td>
-                                  <td className="px-4 py-2 text-gray-700">{i.cpc != null ? Number(i.cpc).toFixed(2) : '-'}</td>
-                                  <td className="px-4 py-2 text-gray-700">{i.ctr != null ? Number(i.ctr).toFixed(2) : '-'}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                          {(syncedData.insights?.length ?? 0) === 0 && (
-                            <p className="px-4 py-6 text-center text-gray-500">Nenhum insight sincronizado. Execute a sincronização.</p>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <p className="py-6 text-center text-gray-500">Nenhum dado sincronizado. Configure e clique em &quot;Sincronizar agora&quot;.</p>
-                )}
-              </div>
+              
             </div>
           ) : (
             <div className="p-8 text-center text-gray-500">Marque pelo menos uma banca para configurar a integração Meta.</div>
           )}
         </div>
       </div>
+
+      {consultorModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+          <div className="w-full max-w-2xl bg-white rounded-2xl border border-gray-200 shadow-xl">
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-semibold text-gray-800">Atribuir consultores à campanha</h3>
+                <p className="text-xs text-gray-500 mt-0.5">Selecione a campanha e os consultores responsáveis.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setConsultorModalOpen(false)}
+                className="px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-600 hover:bg-gray-50"
+              >
+                Fechar
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold uppercase text-gray-500 mb-1">Campanha</label>
+                <select
+                  value={consultorModalCampaignKey}
+                  onChange={(e) => {
+                    setConsultorModalCampaignKey(e.target.value);
+                    setConsultorModalSearch('');
+                  }}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm text-gray-800 bg-white"
+                >
+                  {(allCampaignsRows || []).map((row: any) => {
+                    const key = `${String(row.banca_id)}:${String(row.campaign_id)}`;
+                    return (
+                      <option key={key} value={key}>
+                        {(row.name || row.campaign_id)} — {row.banca_name || row.banca_id}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+
+              {selectedConsultorModalRow ? (
+                <>
+                  <div className="grid sm:grid-cols-2 gap-3">
+                    <div className="p-3 rounded-xl border border-gray-100 bg-gray-50">
+                      <p className="text-[11px] font-semibold text-gray-500 uppercase">Leads consultores</p>
+                      <p className="text-xl font-bold text-gray-800 mt-1">
+                        {(Number(selectedConsultorModalRow.consultor_total_leads) || 0).toLocaleString('pt-BR')}
+                      </p>
+                    </div>
+                    <div className="p-3 rounded-xl border border-gray-100 bg-gray-50">
+                      <p className="text-[11px] font-semibold text-gray-500 uppercase">Depósito consultores</p>
+                      <p className="text-xl font-bold text-gray-800 mt-1">
+                        R$ {(Number(selectedConsultorModalRow.consultor_total_deposited) || 0).toFixed(2)}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold uppercase text-gray-500 mb-1">Consultores da banca</label>
+                    <input
+                      type="search"
+                      value={consultorModalSearch}
+                      onChange={(e) => setConsultorModalSearch(e.target.value)}
+                      placeholder="Buscar consultor por nome ou e-mail…"
+                      className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm text-gray-800 bg-white mb-2"
+                    />
+                    <div className="border border-gray-200 rounded-xl bg-white max-h-56 overflow-y-auto divide-y divide-gray-100">
+                      {consultorModalFilteredOptions.length === 0 ? (
+                        <p className="px-3 py-3 text-xs text-gray-500">Nenhum consultor encontrado.</p>
+                      ) : (
+                        consultorModalFilteredOptions.map((consultor) => {
+                          const checked = consultorModalSelectedIds.includes(String(consultor.id));
+                          return (
+                            <label key={consultor.id} className="flex items-start gap-2 px-3 py-2 cursor-pointer hover:bg-gray-50">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(e) => {
+                                  setCampaignConsultorDraft((prev) => {
+                                    const current = new Set(prev[consultorModalCampaignKey] ?? consultorModalSelectedIds);
+                                    if (e.target.checked) current.add(String(consultor.id));
+                                    else current.delete(String(consultor.id));
+                                    return { ...prev, [consultorModalCampaignKey]: Array.from(current) };
+                                  });
+                                }}
+                                className="mt-0.5 rounded border-gray-300 text-[#8CD955] focus:ring-[#8CD955]"
+                              />
+                              <span className="min-w-0">
+                                <span className="block text-sm text-gray-800">{consultor.full_name || 'Sem nome'}</span>
+                                <span className="block text-xs text-gray-500 break-all">{consultor.email}</span>
+                              </span>
+                            </label>
+                          );
+                        })
+                      )}
+                    </div>
+                    <p className="text-[11px] text-gray-500 mt-1">
+                      Selecionados: <span className="font-semibold text-gray-700">{consultorModalSelectedIds.length}</span>
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <p className="text-sm text-gray-500">Nenhuma campanha disponível para atribuição.</p>
+              )}
+            </div>
+            <div className="px-5 py-4 border-t border-gray-100 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConsultorModalOpen(false)}
+                className="px-4 py-2 rounded-xl border border-gray-200 text-sm text-gray-600 hover:bg-gray-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={!selectedConsultorModalRow || campaignConsultorSavingKey === consultorModalCampaignKey}
+                onClick={async () => {
+                  if (!selectedConsultorModalRow) return;
+                  const ok = await handleSaveCampaignConsultors(selectedConsultorModalRow);
+                  if (ok) setConsultorModalOpen(false);
+                }}
+                className="px-4 py-2 rounded-xl bg-[#8CD955] hover:bg-[#7BC84A] disabled:opacity-50 text-white text-sm font-medium"
+              >
+                {campaignConsultorSavingKey === consultorModalCampaignKey ? 'Salvando…' : 'Salvar atribuição'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal: Nova integração */}
       {newIntegrationOpen && (

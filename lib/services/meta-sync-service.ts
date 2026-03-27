@@ -17,9 +17,17 @@ import {
   normalizeBudget,
   formatMetaDate,
 } from '@/lib/meta/metaClient';
+import { buildCampaignConsultorSummary } from '@/lib/services/meta-campaign-consultors';
 
 const DEFAULT_BASE_URL = 'https://graph.facebook.com/v19.0';
 const DEFAULT_DATE_PRESET = 'last_30d';
+
+/** Logs do retorno bruto da Meta (admin / sync); nunca incluir token. */
+const META_API_LOG = '[Meta Ads API]';
+
+function logMetaReturn(context: string, data: Record<string, unknown>): void {
+  console.log(META_API_LOG, context, data);
+}
 
 /** Retorna time_range desde (hoje - dias) até hoje em YYYY-MM-DD. Meta usa timezone da conta. */
 function getTimeRangeSinceUntil(daysAgo: number): { since: string; until: string } {
@@ -75,6 +83,25 @@ async function listBancasByIntegration(integrationId: string): Promise<string[]>
     .eq('integration_id', integrationId);
   if (error || !data) return [];
   return data.map((r: any) => String(r.banca_id));
+}
+
+/** Moeda da conta Meta (integração compartilhada ou legado por banca). */
+async function getMetaCurrencyForBanca(bancaId: string): Promise<string> {
+  const integrationId = await resolveIntegrationIdByBanca(bancaId);
+  if (integrationId) {
+    const { data } = await supabaseServiceRole
+      .from('meta_integration_configs')
+      .select('currency')
+      .eq('id', integrationId)
+      .maybeSingle();
+    if (data?.currency) return String(data.currency);
+  }
+  const { data: leg } = await supabaseServiceRole
+    .from('meta_integrations')
+    .select('currency')
+    .eq('banca_id', bancaId)
+    .maybeSingle();
+  return (leg?.currency as string) || 'BRL';
 }
 
 /** Modelo legado (por banca): ainda usado quando não há linha em meta_integration_bancas. */
@@ -352,12 +379,31 @@ export async function testConnection(bancaId: string): Promise<{
   try {
     const me = await getMe(baseUrl, token);
     const adAccounts = await getAdAccounts(baseUrl, token);
+    logMetaReturn('testConnection ← Meta', {
+      banca_id: bancaId,
+      base_url_host: (() => {
+        try {
+          return new URL(baseUrl).host;
+        } catch {
+          return 'invalid';
+        }
+      })(),
+      me: { id: me.id, name: me.name ?? null },
+      ad_accounts_count: adAccounts.length,
+      ad_accounts_sample: adAccounts.slice(0, 5).map((a) => ({
+        id: a.id,
+        name: a.name ?? null,
+        account_status: a.account_status ?? null,
+        currency: a.currency ?? null,
+      })),
+    });
     return {
       success: true,
       me: { id: me.id, name: me.name },
       adAccounts: adAccounts.map((a) => ({ id: a.id, name: a.name })),
     };
   } catch (err: any) {
+    logMetaReturn('testConnection ✗ Meta', { banca_id: bancaId, error: err?.message ?? String(err) });
     return { success: false, error: err?.message || 'Erro ao conectar com a Meta API' };
   }
 }
@@ -380,11 +426,24 @@ export async function loadCampaigns(bancaId: string): Promise<{
 
   try {
     const campaigns = await listCampaigns(baseUrl, token, adAccountId);
+    const adAcct = adAccountId.startsWith('act_') ? adAccountId : `act_${adAccountId}`;
+    logMetaReturn('loadCampaigns ← Meta', {
+      banca_id: bancaId,
+      ad_account_id: adAcct,
+      campaigns_count: campaigns.length,
+      campaigns_sample: campaigns.slice(0, 8).map((c) => ({
+        id: c.id,
+        name: c.name ?? null,
+        status: c.status ?? null,
+        effective_status: c.effective_status ?? null,
+      })),
+    });
     return {
       success: true,
       campaigns: campaigns.map((c) => ({ id: c.id, name: c.name })),
     };
   } catch (err: any) {
+    logMetaReturn('loadCampaigns ✗ Meta', { banca_id: bancaId, error: err?.message ?? String(err) });
     return { success: false, error: err?.message || 'Erro ao carregar campanhas' };
   }
 }
@@ -404,7 +463,7 @@ export async function getMetaInsightsAggregated(
   dateTo?: string | null,
   activeOnly = true
 ): Promise<MetaInsightsAggregated | null> {
-  const [campaignsResult, integrationResult] = await Promise.all([
+  const [campaignsResult, currency] = await Promise.all([
     activeOnly
       ? supabaseServiceRole
           .from('meta_campaigns')
@@ -413,14 +472,8 @@ export async function getMetaInsightsAggregated(
           .eq('status', 'ACTIVE')
           .eq('effective_status', 'ACTIVE')
       : Promise.resolve({ data: null }),
-    supabaseServiceRole
-      .from('meta_integrations')
-      .select('currency')
-      .eq('banca_id', bancaId)
-      .maybeSingle(),
+    getMetaCurrencyForBanca(bancaId),
   ]);
-
-  const currency = (integrationResult as any).data?.currency || 'BRL';
 
   let campaignIds: string[] | null = null;
   if (activeOnly) {
@@ -484,6 +537,15 @@ export interface MetaCampaignWithMetrics {
   leads: number;
   results: number;
   cost_per_result: number | null;
+  assigned_consultors?: Array<{
+    id: string;
+    email: string;
+    full_name: string | null;
+    total_leads: number;
+    total_deposited: number;
+  }>;
+  consultor_total_leads?: number;
+  consultor_total_deposited?: number;
 }
 
 const META_RESULT_ACTION_TYPES = new Set([
@@ -545,8 +607,18 @@ export async function getMetaCampaignsWithInsights(
   if (dateTo) insightsQuery = insightsQuery.lte('date', dateTo);
 
   const { data: insights } = await insightsQuery;
+  const campaignIdsForSummary = campaigns.map((c: { campaign_id: string }) => c.campaign_id);
+  const consultorSummaryByCampaign = await buildCampaignConsultorSummary(
+    bancaId,
+    campaignIdsForSummary,
+    dateFrom ?? null,
+    dateTo ?? null
+  );
+
   if (!insights?.length) {
-    return campaigns.map((c: { campaign_id: string; name: string | null }) => ({
+    return campaigns.map((c: { campaign_id: string; name: string | null }) => {
+      const consultorSummary = consultorSummaryByCampaign.get(c.campaign_id);
+      return {
       campaign_id: c.campaign_id,
       campaign_name: c.name || c.campaign_id,
       adsets: adsetsByCampaign.get(c.campaign_id) || [],
@@ -557,7 +629,11 @@ export async function getMetaCampaignsWithInsights(
       leads: 0,
       results: 0,
       cost_per_result: null,
-    }));
+      assigned_consultors: consultorSummary?.assigned_consultors ?? [],
+      consultor_total_leads: consultorSummary?.consultor_total_leads ?? 0,
+      consultor_total_deposited: consultorSummary?.consultor_total_deposited ?? 0,
+    };
+    });
   }
 
   const firstCampaignInsight = insights[0] as Record<string, unknown>;
@@ -602,6 +678,7 @@ export async function getMetaCampaignsWithInsights(
 
   return campaigns.map((c: { campaign_id: string; name: string | null }) => {
     const m = metricsByCampaign.get(c.campaign_id) || { reach: 0, impressions: 0, clicks: 0, spend: 0, leads: 0, results: 0 };
+    const consultorSummary = consultorSummaryByCampaign.get(c.campaign_id);
     return {
       campaign_id: c.campaign_id,
       campaign_name: c.name || c.campaign_id,
@@ -613,8 +690,91 @@ export async function getMetaCampaignsWithInsights(
       leads: m.leads,
       results: m.results,
       cost_per_result: m.results > 0 ? m.spend / m.results : null,
+      assigned_consultors: consultorSummary?.assigned_consultors ?? [],
+      consultor_total_leads: consultorSummary?.consultor_total_leads ?? 0,
+      consultor_total_deposited: consultorSummary?.consultor_total_deposited ?? 0,
     };
   });
+}
+
+/**
+ * Reatribui uma campanha (e seus dados sincronizados) para outra banca
+ * dentro do mesmo vínculo de integração compartilhada.
+ */
+export async function assignCampaignToBanca(
+  contextBancaId: string,
+  sourceBancaId: string,
+  targetBancaId: string,
+  campaignId: string
+): Promise<{ success: boolean; moved?: { campaigns: number; adsets: number; insights: number }; error?: string }> {
+  const integrationId = await resolveIntegrationIdByBanca(contextBancaId);
+  if (!integrationId) {
+    return { success: false, error: 'Integração Meta não encontrada para a banca informada.' };
+  }
+
+  const linkedBancas = await listBancasByIntegration(integrationId);
+  const linkedSet = new Set(linkedBancas);
+  if (!linkedSet.has(sourceBancaId) || !linkedSet.has(targetBancaId)) {
+    return { success: false, error: 'A banca de origem/destino não pertence à mesma integração.' };
+  }
+  if (!campaignId) {
+    return { success: false, error: 'campaign_id é obrigatório.' };
+  }
+  if (sourceBancaId === targetBancaId) {
+    return { success: true, moved: { campaigns: 0, adsets: 0, insights: 0 } };
+  }
+
+  const now = new Date().toISOString();
+  try {
+    // Evita conflito de chave única no destino quando já existir a mesma campanha.
+    await supabaseServiceRole
+      .from('meta_campaigns')
+      .delete()
+      .eq('banca_id', targetBancaId)
+      .eq('campaign_id', campaignId);
+
+    // Se já houver linhas de insights no destino para o mesmo campaign/date, mantém só a origem (mais recente do fluxo manual).
+    await supabaseServiceRole
+      .from('meta_insights_daily')
+      .delete()
+      .eq('banca_id', targetBancaId)
+      .eq('campaign_id', campaignId);
+
+    const { data: movedCampaigns, error: campaignErr } = await supabaseServiceRole
+      .from('meta_campaigns')
+      .update({ banca_id: targetBancaId, updated_at: now })
+      .eq('banca_id', sourceBancaId)
+      .eq('campaign_id', campaignId)
+      .select('campaign_id');
+    if (campaignErr) return { success: false, error: campaignErr.message };
+
+    const { data: movedAdsets, error: adsetErr } = await supabaseServiceRole
+      .from('meta_adsets')
+      .update({ banca_id: targetBancaId, updated_at: now })
+      .eq('banca_id', sourceBancaId)
+      .eq('campaign_id', campaignId)
+      .select('adset_id');
+    if (adsetErr) return { success: false, error: adsetErr.message };
+
+    const { data: movedInsights, error: insightErr } = await supabaseServiceRole
+      .from('meta_insights_daily')
+      .update({ banca_id: targetBancaId, updated_at: now })
+      .eq('banca_id', sourceBancaId)
+      .eq('campaign_id', campaignId)
+      .select('date');
+    if (insightErr) return { success: false, error: insightErr.message };
+
+    return {
+      success: true,
+      moved: {
+        campaigns: movedCampaigns?.length ?? 0,
+        adsets: movedAdsets?.length ?? 0,
+        insights: movedInsights?.length ?? 0,
+      },
+    };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Erro ao reatribuir campanha.' };
+  }
 }
 
 export async function runSync(bancaId: string, datePreset = DEFAULT_DATE_PRESET): Promise<{
@@ -650,16 +810,171 @@ export async function runSync(bancaId: string, datePreset = DEFAULT_DATE_PRESET)
       getAccountFinance(baseUrl, token, adAccountId).catch(() => null),
     ]);
 
+    const integrationId = await resolveIntegrationIdByBanca(bancaId);
+    const linkedBancas = integrationId ? await listBancasByIntegration(integrationId) : [bancaId];
+    const scopeBancas = linkedBancas.length > 0 ? linkedBancas : [bancaId];
+    const fetchedCampaignIds = Array.from(new Set(campaigns.map((c) => String(c.id)).filter(Boolean)));
+    const ownerByCampaign = new Map<string, string>();
+    if (fetchedCampaignIds.length > 0) {
+      const { data: existingOwners } = await supabaseServiceRole
+        .from('meta_campaigns')
+        .select('campaign_id, banca_id, updated_at')
+        .in('campaign_id', fetchedCampaignIds)
+        .in('banca_id', scopeBancas)
+        .order('updated_at', { ascending: false });
+      for (const row of existingOwners ?? []) {
+        const campaignId = String((row as { campaign_id: string }).campaign_id);
+        const ownerBancaId = String((row as { banca_id: string }).banca_id);
+        if (!ownerByCampaign.has(campaignId)) ownerByCampaign.set(campaignId, ownerBancaId);
+      }
+    }
+    const resolveCampaignOwner = (campaignId: string | null | undefined): string =>
+      (campaignId ? ownerByCampaign.get(String(campaignId)) : null) ?? bancaId;
+
+    const kindByBancaCampaign = new Map<string, string>();
+    if (fetchedCampaignIds.length > 0 && scopeBancas.length > 0) {
+      const { data: kindRows } = await supabaseServiceRole
+        .from('meta_campaigns')
+        .select('banca_id,campaign_id,campaign_kind')
+        .in('campaign_id', fetchedCampaignIds)
+        .in('banca_id', scopeBancas);
+      for (const row of kindRows ?? []) {
+        const r = row as { banca_id: string; campaign_id: string; campaign_kind?: string | null };
+        kindByBancaCampaign.set(`${r.banca_id}:${r.campaign_id}`, String(r.campaign_kind || 'normal'));
+      }
+    }
+
+    const ins0 = insights[0] as unknown as Record<string, unknown> | undefined;
+    const camp0 = campaigns[0] as unknown as Record<string, unknown> | undefined;
+    const campaignStatusStats = campaigns.reduce<Record<string, number>>((acc, c) => {
+      const s = String(c.effective_status || c.status || 'UNKNOWN');
+      acc[s] = (acc[s] || 0) + 1;
+      return acc;
+    }, {});
+    const campaignObjectiveStats = campaigns.reduce<Record<string, number>>((acc, c) => {
+      const o = String(c.objective || 'UNKNOWN');
+      acc[o] = (acc[o] || 0) + 1;
+      return acc;
+    }, {});
+    const campaignOwnerPreview = campaigns.slice(0, 20).map((c) => ({
+      campaign_id: c.id,
+      campaign_name: c.name ?? null,
+      owner_banca_id: resolveCampaignOwner(c.id),
+    }));
+    const metaMetricsByCampaign = new Map<
+      string,
+      { campaign_id: string; campaign_name: string | null; reach: number; impressions: number; clicks: number; leads: number; spend: number; insights_rows: number }
+    >();
+    for (const ins of insights) {
+      const cid = String(ins.campaign_id ?? '').trim();
+      if (!cid) continue;
+      const cur =
+        metaMetricsByCampaign.get(cid) ?? {
+          campaign_id: cid,
+          campaign_name: (ins.campaign_name as string | undefined) ?? null,
+          reach: 0,
+          impressions: 0,
+          clicks: 0,
+          leads: 0,
+          spend: 0,
+          insights_rows: 0,
+        };
+      cur.reach += Number(ins.reach) || 0;
+      cur.impressions += Number(ins.impressions) || 0;
+      cur.clicks += Number(ins.clicks) || 0;
+      cur.leads += Number((ins as { leads?: number | string | null }).leads) || 0;
+      cur.spend += Number(ins.spend) || 0;
+      cur.insights_rows += 1;
+      if (!cur.campaign_name && ins.campaign_name) cur.campaign_name = String(ins.campaign_name);
+      metaMetricsByCampaign.set(cid, cur);
+    }
+    const topCampaignMetricsFromMeta = [...metaMetricsByCampaign.values()]
+      .sort((a, b) => b.spend - a.spend)
+      .slice(0, 20);
+    const metricCoverageStats = {
+      campaigns_from_meta: campaigns.length,
+      campaigns_with_metrics: metaMetricsByCampaign.size,
+      campaigns_without_metrics: Math.max(campaigns.length - metaMetricsByCampaign.size, 0),
+      insights_rows_from_meta: insights.length,
+    };
+    const insightsWithCpa = insights.filter(
+      (ins) => Array.isArray(ins.cost_per_action_type) && ins.cost_per_action_type.length > 0
+    );
+    const firstWithCpa = insightsWithCpa[0] as unknown as Record<string, unknown> | undefined;
+    const adAcct = adAccountId.startsWith('act_') ? adAccountId : `act_${adAccountId}`;
+    logMetaReturn('runSync ← Meta (antes de gravar no DB)', {
+      banca_id: bancaId,
+      ad_account_id: adAcct,
+      time_range: timeRange,
+      date_preset_param: datePreset,
+      campaigns_from_meta: campaigns.length,
+      first_campaign_keys: camp0 ? Object.keys(camp0) : [],
+      first_campaign_sample: camp0
+        ? {
+            id: camp0.id ?? null,
+            name: camp0.name ?? null,
+            objective: camp0.objective ?? null,
+            status: camp0.status ?? null,
+            effective_status: camp0.effective_status ?? null,
+            daily_budget: camp0.daily_budget ?? null,
+            lifetime_budget: camp0.lifetime_budget ?? null,
+            start_time: camp0.start_time ?? null,
+            stop_time: camp0.stop_time ?? null,
+          }
+        : null,
+      campaign_status_stats: campaignStatusStats,
+      campaign_objective_stats: campaignObjectiveStats,
+      campaign_owner_preview: campaignOwnerPreview,
+      campaign_metrics_coverage: metricCoverageStats,
+      top_campaign_metrics_from_meta: topCampaignMetricsFromMeta,
+      adsets_from_meta: adsets.length,
+      insights_rows_from_meta: insights.length,
+      account_finance: accountFinance
+        ? {
+            currency: accountFinance.currency ?? null,
+            timezone_name: accountFinance.timezone_name ?? null,
+            has_amount_spent: accountFinance.amount_spent != null,
+            has_balance: accountFinance.balance != null,
+          }
+        : null,
+      first_insight_keys: ins0 ? Object.keys(ins0) : [],
+      first_insight_sample: ins0
+        ? {
+            date_start: ins0.date_start ?? null,
+            campaign_id: ins0.campaign_id ?? null,
+            campaign_name: ins0.campaign_name ?? null,
+            spend: ins0.spend ?? null,
+            impressions: ins0.impressions ?? null,
+            actions_len: Array.isArray(ins0.actions) ? (ins0.actions as unknown[]).length : 0,
+            cost_per_action_type_len: Array.isArray(ins0.cost_per_action_type)
+              ? (ins0.cost_per_action_type as unknown[]).length
+              : 0,
+            cost_per_action_type_sample: Array.isArray(ins0.cost_per_action_type)
+              ? (ins0.cost_per_action_type as unknown[]).slice(0, 5)
+              : null,
+          }
+        : null,
+      cost_per_action_type_stats: {
+        insights_with_cost_per_action_type: insightsWithCpa.length,
+        first_campaign_with_cost_per_action_type: firstWithCpa?.campaign_id ?? null,
+        first_cost_per_action_type_sample: Array.isArray(firstWithCpa?.cost_per_action_type)
+          ? (firstWithCpa!.cost_per_action_type as unknown[]).slice(0, 5)
+          : null,
+      },
+    });
+
     const accountCurrency = accountFinance?.currency || 'BRL';
 
     const now = new Date().toISOString();
 
     for (const c of campaigns) {
+      const ownerBancaId = resolveCampaignOwner(c.id);
+      const preservedKind = kindByBancaCampaign.get(`${ownerBancaId}:${c.id}`) ?? 'normal';
       const { error } = await supabaseServiceRole
         .from('meta_campaigns')
         .upsert(
           {
-            banca_id: bancaId,
+            banca_id: ownerBancaId,
             campaign_id: c.id,
             name: c.name,
             objective: c.objective,
@@ -669,6 +984,7 @@ export async function runSync(bancaId: string, datePreset = DEFAULT_DATE_PRESET)
             lifetime_budget: normalizeBudget(c.lifetime_budget),
             start_time: c.start_time || null,
             stop_time: c.stop_time || null,
+            campaign_kind: preservedKind,
             updated_at: now,
           },
           { onConflict: 'banca_id,campaign_id' }
@@ -677,11 +993,12 @@ export async function runSync(bancaId: string, datePreset = DEFAULT_DATE_PRESET)
     }
 
     for (const a of adsets) {
+      const ownerBancaId = resolveCampaignOwner(a.campaign_id);
       const { error } = await supabaseServiceRole
         .from('meta_adsets')
         .upsert(
           {
-            banca_id: bancaId,
+            banca_id: ownerBancaId,
             adset_id: a.id,
             campaign_id: a.campaign_id,
             name: a.name,
@@ -701,7 +1018,8 @@ export async function runSync(bancaId: string, datePreset = DEFAULT_DATE_PRESET)
     }
 
     for (const ins of insights) {
-      const row = mapInsightToRow(ins, bancaId);
+      const ownerBancaId = resolveCampaignOwner(ins.campaign_id);
+      const row = mapInsightToRow(ins, ownerBancaId);
       const { error } = await supabaseServiceRole
         .from('meta_insights_daily')
         .upsert(
@@ -740,6 +1058,16 @@ export async function runSync(bancaId: string, datePreset = DEFAULT_DATE_PRESET)
         .eq('banca_id', bancaId);
     }
 
+    logMetaReturn('runSync → DB concluído', {
+      banca_id: bancaId,
+      ad_account_id: adAcct,
+      campaigns_upsert_ok: campaignsCount,
+      adsets_upsert_ok: adsetsCount,
+      insights_upsert_ok: insightsCount,
+      preset_label: presetLabel,
+      currency: accountCurrency,
+    });
+
     return {
       success: true,
       campaignsCount,
@@ -748,6 +1076,7 @@ export async function runSync(bancaId: string, datePreset = DEFAULT_DATE_PRESET)
     };
   } catch (err: any) {
     const errMsg = err?.message || 'Erro ao sincronizar';
+    logMetaReturn('runSync ✗', { banca_id: bancaId, error: errMsg });
     const ts = new Date().toISOString();
     const integrationIdErr = await resolveIntegrationIdByBanca(bancaId);
     if (integrationIdErr) {

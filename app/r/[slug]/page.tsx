@@ -26,6 +26,83 @@ function sp(val: string | string[] | undefined): string | null {
   return typeof val === 'string' ? val.trim() || null : null;
 }
 
+async function resolveRedirectRow(slug: string): Promise<{ id: string; project_id: string } | null> {
+  const normalized = slug.trim().toLowerCase();
+  if (!normalized) return null;
+
+  // 1) Caminho principal: slug ativo já cadastrado.
+  const { data: bySlug } = await supabaseServiceRole
+    .from('redirect_slugs')
+    .select('id, project_id')
+    .eq('slug', normalized)
+    .eq('is_active', true)
+    .maybeSingle();
+  if (bySlug) return bySlug;
+
+  // 2) Fallback por página VSL: slug configurado na página, mesmo sem linha em redirect_slugs.
+  const { data: pageByRedirect } = await supabaseServiceRole
+    .from('vsl_pages')
+    .select('project_id')
+    .eq('redirect_slug', normalized)
+    .eq('is_active', true)
+    .limit(1)
+    .maybeSingle();
+
+  let projectId = pageByRedirect?.project_id ? String(pageByRedirect.project_id) : '';
+
+  // 3) Fallback por projeto: /r/{project.slug}
+  if (!projectId) {
+    const { data: projectBySlug } = await supabaseServiceRole
+      .from('vsl_projects')
+      .select('id')
+      .eq('slug', normalized)
+      .eq('is_active', true)
+      .limit(1)
+      .maybeSingle();
+    if (projectBySlug?.id) projectId = String(projectBySlug.id);
+  }
+
+  if (!projectId) return null;
+
+  // 4) Se já existe slug para o projeto, prioriza o próprio slug solicitado (reativando se necessário).
+  const { data: existingForSameSlug } = await supabaseServiceRole
+    .from('redirect_slugs')
+    .select('id, project_id, is_active')
+    .eq('project_id', projectId)
+    .eq('slug', normalized)
+    .limit(1)
+    .maybeSingle();
+
+  if (existingForSameSlug?.id) {
+    if (!existingForSameSlug.is_active) {
+      await supabaseServiceRole
+        .from('redirect_slugs')
+        .update({ is_active: true })
+        .eq('id', existingForSameSlug.id);
+    }
+    return { id: existingForSameSlug.id, project_id: String(existingForSameSlug.project_id) };
+  }
+
+  // 5) Se não existe, cria o slug solicitado para o projeto.
+  const { data: inserted } = await supabaseServiceRole
+    .from('redirect_slugs')
+    .insert({ project_id: projectId, slug: normalized, is_active: true })
+    .select('id, project_id')
+    .maybeSingle();
+
+  if (inserted) return inserted;
+
+  // 6) Último fallback: usa qualquer slug ativo do projeto.
+  const { data: anyActive } = await supabaseServiceRole
+    .from('redirect_slugs')
+    .select('id, project_id')
+    .eq('project_id', projectId)
+    .eq('is_active', true)
+    .limit(1)
+    .maybeSingle();
+  return anyActive ?? null;
+}
+
 export default async function RedirectPage({ params, searchParams }: PageProps) {
   const { slug: rawSlug } = await params;
   const query = await searchParams;
@@ -38,17 +115,7 @@ export default async function RedirectPage({ params, searchParams }: PageProps) 
   const utm_content = sp(query.utm_content);
   const utm_term = sp(query.utm_term);
 
-  // Queries essenciais em paralelo
-  const [{ data: bySlug }, ] = await Promise.all([
-    supabaseServiceRole
-      .from('redirect_slugs')
-      .select('id, project_id')
-      .eq('slug', slug)
-      .eq('is_active', true)
-      .maybeSingle(),
-  ]);
-
-  const redirectRow = bySlug ?? null;
+  const redirectRow = await resolveRedirectRow(slug);
   if (!redirectRow) notFound();
 
   // Projeto + grupos em paralelo
@@ -66,7 +133,17 @@ export default async function RedirectPage({ params, searchParams }: PageProps) 
 
   if (!project) notFound();
 
-  const groupIds = (linkRows ?? []).map((r: { group_id: string }) => r.group_id);
+  let groupIds = (linkRows ?? []).map((r: { group_id: string }) => r.group_id);
+  if (groupIds.length === 0) {
+    // Fallback: alguns slugs legados/recém-criados não têm mapeamento em redirect_slug_groups.
+    // Nesse caso, usa todos os grupos ativos do projeto para não quebrar o redirect.
+    const { data: projectGroups } = await supabaseServiceRole
+      .from('redirect_groups')
+      .select('id')
+      .eq('project_id', redirectRow.project_id)
+      .eq('is_active', true);
+    groupIds = (projectGroups ?? []).map((g: { id: string }) => g.id);
+  }
   if (groupIds.length === 0) notFound();
 
   const { data: groups } = await supabaseServiceRole
@@ -75,7 +152,15 @@ export default async function RedirectPage({ params, searchParams }: PageProps) 
     .in('id', groupIds)
     .eq('is_active', true);
 
-  const withWeight = (groups ?? []).filter((g: { weight_percent: number }) => g.weight_percent > 0);
+  const weightedGroups = (groups ?? []).filter((g: { weight_percent: number }) => g.weight_percent > 0);
+  // Fallback: se nenhum grupo tiver peso > 0, distribui igualmente entre os grupos ativos.
+  const withWeight =
+    weightedGroups.length > 0
+      ? weightedGroups
+      : (groups ?? []).map((g: { id: string; name: string; invite_url: string; weight_percent: number }) => ({
+          ...g,
+          weight_percent: 1,
+        }));
   const selected = selectGroupByWeight(withWeight);
   if (!selected) notFound();
 

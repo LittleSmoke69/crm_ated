@@ -15,8 +15,8 @@ export const dynamic = 'force-dynamic';
 /** Alinhado ao teto prático de funções na Netlify; o lote é pequeno para caber no tempo. */
 export const maxDuration = 60;
 
-/** Menor que antes: menos pressão na Evolution API e menor chance de estourar timeout da infra. */
-const BATCH_SIZE = 3;
+/** Grupos por lote: paralelismo razoável sem sobrecarregar a Evolution API. */
+const BATCH_SIZE = 8;
 const LOCK_TTL_MS = 4 * 60 * 1000; // 4 min
 
 const HEARTBEAT_MS = 8000;
@@ -69,6 +69,7 @@ async function executeMassSendProcess(): Promise<ApiResponse> {
     })
     .eq('id', job.id)
     .eq('status', job.status)
+    .or('locked_at.is.null,locked_at.lt.' + lockExpired)
     .select('id')
     .single();
 
@@ -119,28 +120,17 @@ async function executeMassSendProcess(): Promise<ApiResponse> {
   const totalGroups = Number(job.total_groups) || groupIds.length;
   const isComplete = newProcessedIndex >= totalGroups;
 
-  const { data: current } = await supabaseServiceRole
-    .from('activation_mass_send_jobs')
-    .select('sent_count, failed_count')
-    .eq('id', job.id)
-    .single();
-
-  const newSent = (current?.sent_count ?? 0) + sent;
-  const newFailed = (current?.failed_count ?? 0) + failed;
-
-  await supabaseServiceRole
-    .from('activation_mass_send_jobs')
-    .update({
-      processed_index: newProcessedIndex,
-      sent_count: newSent,
-      failed_count: newFailed,
-      last_error: lastError,
-      status: isComplete ? 'completed' : 'processing',
-      locked_at: null,
-      locked_by: null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', job.id);
+  // Usa RPC para incremento atômico — evita race condition de read-modify-write
+  // quando dois workers executam o mesmo job simultaneamente.
+  await supabaseServiceRole.rpc('increment_mass_send_job_counts', {
+    p_job_id: job.id,
+    p_sent: sent,
+    p_failed: failed,
+    p_processed_index: newProcessedIndex,
+    p_last_error: lastError,
+    p_status: isComplete ? 'completed' : 'processing',
+    p_now: new Date().toISOString(),
+  });
 
   return {
     success: true,
@@ -150,8 +140,6 @@ async function executeMassSendProcess(): Promise<ApiResponse> {
       batch_size: batch.length,
       sent,
       failed,
-      total_sent: newSent,
-      total_failed: newFailed,
       status: isComplete ? 'completed' : 'processing',
     },
   };

@@ -56,27 +56,6 @@ async function fetchVideoUrlAsBase64(videoUrl: string): Promise<string> {
 /** Acima deste número de grupos, o envio é enfileirado e processado em segundo plano (evita timeout na Netlify). */
 const THRESHOLD_MASS_SEND = 10;
 
-/** Log de debug (sessão 66edb5) — não remover até verificação pós-fix. */
-function agentActivationDebug(
-  message: string,
-  data: Record<string, unknown>,
-  hypothesisId: string,
-) {
-  // #region agent log
-  fetch('http://127.0.0.1:7901/ingest/0ef4209d-37f6-4cbb-b28d-8cf53becc342', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '66edb5' },
-    body: JSON.stringify({
-      sessionId: '66edb5',
-      location: 'app/api/crm/activations/send/route.ts',
-      message,
-      data,
-      timestamp: Date.now(),
-      hypothesisId,
-    }),
-  }).catch(() => {});
-  // #endregion
-}
 
 /**
  * POST /api/crm/activations/send - Envia uma mensagem de ativação para vários grupos
@@ -93,19 +72,6 @@ export async function POST(req: NextRequest) {
       return errorResponse('messageId, groupIds e instanceName são obrigatórios', 400);
     }
 
-    agentActivationDebug(
-      'activation_send_start',
-      {
-        isCronProcess,
-        instanceNameLen: String(instanceName).length,
-        instanceHasLeadingTrailingSpace: String(instanceName).trim() !== String(instanceName),
-        userIdPrefix: userId ? `${userId.slice(0, 8)}…` : null,
-        groupCount: groupIds.length,
-        messageIdPrefix: String(messageId).slice(0, 8),
-      },
-      'H1-H3',
-    );
-
     // 1. Busca os detalhes da mensagem (incluindo mention_all para menção @todos em todos os grupos)
     const { data: message, error: messageError } = await supabaseServiceRole
       .from('messages')
@@ -119,11 +85,6 @@ export async function POST(req: NextRequest) {
         supabaseCode: messageError?.code,
         supabaseMessage: messageError?.message,
       });
-      agentActivationDebug(
-        'activation_message_not_found',
-        { messageId, supabaseCode: messageError?.code },
-        'H5',
-      );
       return errorResponse('Mensagem não encontrada', 404, { code: 'MESSAGE_NOT_FOUND' });
     }
 
@@ -159,26 +120,73 @@ export async function POST(req: NextRequest) {
       }
       console.log(`📋 [ACTIVATION] Campanha de disparo em massa criada: job ${job.id}, ${groupIds.length} grupos`);
 
-      // Dispara o processamento imediato (em segundo plano) para a campanha começar a executar em segundos
       const cronSecret = process.env.CRON_SECRET;
-      if (cronSecret) {
-        const base =
-          process.env.URL ||
-          process.env.NEXT_PUBLIC_SITE_URL ||
-          (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null);
-        const siteUrl = base ? base.replace(/\/$/, '') : null;
-        if (siteUrl) {
-          const processUrl = `${siteUrl}/api/crm/activations/mass-send/process`;
-          fetch(processUrl, {
+      const base =
+        process.env.URL ||
+        process.env.NEXT_PUBLIC_SITE_URL ||
+        (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null);
+      const siteUrl = base ? base.replace(/\/$/, '') : null;
+
+      // Envio imediato do primeiro grupo: confirmação visual de que a campanha foi iniciada.
+      let firstGroupSent = false;
+      if (siteUrl && cronSecret) {
+        const sendUrl = `${siteUrl}/api/crm/activations/send`;
+        const firstGroupController = new AbortController();
+        const firstGroupTimeout = setTimeout(() => firstGroupController.abort(), 20000);
+        try {
+          const firstRes = await fetch(sendUrl, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
               'x-internal-cron-secret': cronSecret,
+              'x-user-id': userId,
             },
-          }).catch((err) => {
-            console.warn('[ACTIVATION] Trigger em background do processamento falhou (cron continuará):', err?.message);
+            body: JSON.stringify({
+              messageId,
+              groupIds: [groupIds[0]],
+              instanceName,
+              forceSync: true,
+            }),
+            signal: firstGroupController.signal,
           });
+          clearTimeout(firstGroupTimeout);
+          const firstJson = await firstRes.json();
+          const firstSent = firstJson?.data?.success ?? 0;
+          const firstFailed = firstJson?.data?.failed ?? 0;
+          const firstLastError =
+            firstFailed > 0 && Array.isArray(firstJson?.data?.errors) && firstJson.data.errors.length > 0
+              ? (firstJson.data.errors[0]?.error ?? null)
+              : null;
+          const isComplete = groupIds.length <= 1;
+          await supabaseServiceRole.rpc('increment_mass_send_job_counts', {
+            p_job_id: job.id,
+            p_sent: firstSent,
+            p_failed: firstFailed,
+            p_processed_index: 1,
+            p_last_error: firstLastError,
+            p_status: isComplete ? 'completed' : 'pending',
+            p_now: new Date().toISOString(),
+          });
+          firstGroupSent = firstSent > 0;
+          console.log(`${firstGroupSent ? '✅' : '⚠️'} [ACTIVATION] Envio imediato do 1º grupo: sent=${firstSent}, failed=${firstFailed}`);
+        } catch (err: any) {
+          clearTimeout(firstGroupTimeout);
+          console.warn('[ACTIVATION] Envio imediato do 1º grupo falhou (cron processará):', err?.message);
         }
+      }
+
+      // Dispara o processamento em segundo plano para os grupos restantes
+      if (siteUrl && cronSecret && groupIds.length > 1) {
+        const processUrl = `${siteUrl}/api/crm/activations/mass-send/process`;
+        fetch(processUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-internal-cron-secret': cronSecret,
+          },
+        }).catch((err) => {
+          console.warn('[ACTIVATION] Trigger em background do processamento falhou (cron continuará):', err?.message);
+        });
       }
 
       return new Response(
@@ -187,7 +195,10 @@ export async function POST(req: NextRequest) {
           job_id: job.id,
           mass_send: true,
           total_groups: groupIds.length,
-          message: 'Campanha de disparo em massa criada. O envio continuará em segundo plano. Acompanhe em Ativações > Campanhas de disparo.',
+          first_group_sent: firstGroupSent,
+          message: firstGroupSent
+            ? 'Campanha criada. Primeiro grupo enviado como confirmação. O envio continuará em segundo plano. Acompanhe em Ativações > Campanhas de disparo.'
+            : 'Campanha de disparo em massa criada. O envio continuará em segundo plano. Acompanhe em Ativações > Campanhas de disparo.',
         }),
         { status: 202, headers: { 'Content-Type': 'application/json' } }
       );
@@ -254,16 +265,6 @@ export async function POST(req: NextRequest) {
         hint:
           'Verifique: nome exato em evolution_instances, user_id dono, is_active=true, e linha em evolution_apis (join interno).',
       });
-      agentActivationDebug(
-        'activation_instance_not_found',
-        {
-          instanceName: String(instanceName).slice(0, 64),
-          userIdPrefix: userId.slice(0, 8),
-          isCronProcess,
-          supabaseCode: instanceError?.code,
-        },
-        'H1-H4',
-      );
       return errorResponse('Instância não encontrada ou inativa', 404, {
         code: 'INSTANCE_NOT_FOUND_OR_INACTIVE',
       });
@@ -282,14 +283,6 @@ export async function POST(req: NextRequest) {
             ? (evolutionApi as { is_active?: boolean }).is_active
             : undefined,
       });
-      agentActivationDebug(
-        'activation_evolution_api_missing_base_url',
-        {
-          instanceName: String(instanceName).slice(0, 64),
-          hasEvolutionApiRow: !!evolutionApi,
-        },
-        'H4',
-      );
       return errorResponse('Evolution API sem base_url configurada', 404, {
         code: 'EVOLUTION_API_NO_BASE_URL',
       });

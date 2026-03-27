@@ -17,12 +17,9 @@
 
 import { createClient } from '@supabase/supabase-js';
 import {
-  getCurrentDayAndTimeInTimezone,
   getCurrentDateAndTimeInTimezone,
   dateAtTimezoneToUTC,
   normalizeRecurringDays,
-  isTodayInRecurringDays,
-  isCurrentTimeAtOrPastRecurringTime,
   calculateNextRecurringRun as calcNextRun,
 } from '../../lib/utils/recurring-schedule';
 
@@ -62,18 +59,23 @@ const supabaseServiceRole = createClient(supabaseUrl, supabaseServiceRoleKey, {
 
 // Configurações
 const BATCH_LIMIT = 20; // Máximo de jobs por execução
-const LOCK_TTL_MINUTES = 3; // TTL do lock (recupera jobs travados após 3 min)
+const LOCK_TTL_MINUTES = 7; // TTL do lock (recupera jobs travados após 7 min — margem para batch de 20 jobs com 30s timeout cada)
 const FETCH_TIMEOUT_MS = 30000; // Timeout para Evolution API
 const LOOKAHEAD_MINUTES = 2; // Lookahead para buscar jobs próximos
 
-/** Indica se o erro é por instância inativa/desconectada — nesses casos não conta para o limite de tentativas e o job continua sendo reagendado até a instância voltar. */
+/** Indica se o erro é por instância DESCONECTADA na Evolution API — nesses casos não conta para o
+ * limite de tentativas e o job continua sendo reagendado até a instância voltar.
+ * Erros de configuração (instância não existe no DB, sem apikey, etc.) NÃO devem ser capturados aqui
+ * — eles são erros permanentes e devem contar para o limite de tentativas. */
 function isInstanceUnavailableError(errorMsg: string): boolean {
   const msg = (errorMsg || '').toLowerCase();
+  // Erros permanentes de configuração — NÃO tratar como instância indisponível
+  if (msg.includes('[falha_permanente]')) return false;
+  // Desconexão real da instância (status != ok no banco, confirmado após verificação)
   return (
-    msg.includes('instância não encontrada') ||
-    msg.includes('instancia não encontrada') ||
-    msg.includes('ou inativa') ||
-    msg.includes('inativa') && msg.includes('instância') ||
+    msg.includes('desconectada (status:') ||
+    msg.includes('aguardando reconexão') ||
+    // Erros da Evolution API indicando instância offline (respostas HTTP da Evolution)
     msg.includes('evolution api não encontrada') ||
     msg.includes('base_url não configurado') ||
     msg.includes('instância sem apikey')
@@ -198,7 +200,27 @@ async function processMessageJob(job: any, workerId: string): Promise<{ success:
       }
     }
 
-    // Busca dados da instância
+    // Busca dados da instância — dois passos para distinguir "não existe" de "desconectada":
+    // 1) Verifica se existe (sem filtro de status) — falha permanente se não existir
+    // 2) Verifica se está conectada (status=ok) — retry infinito se desconectada
+    const { data: instanceExists } = await supabaseServiceRole
+      .from('evolution_instances')
+      .select('id, instance_name, is_active, status')
+      .eq('instance_name', instance_name)
+      .maybeSingle();
+
+    if (!instanceExists) {
+      // Instância deletada ou nunca existiu — falha permanente (não é instanceUnavailable)
+      throw new Error(`[FALHA_PERMANENTE] Instância "${instance_name}" não encontrada no sistema`);
+    }
+    if (!instanceExists.is_active) {
+      throw new Error(`[FALHA_PERMANENTE] Instância "${instance_name}" está desativada (is_active=false)`);
+    }
+    if (instanceExists.status !== 'ok') {
+      // Instância existe mas está desconectada — retry infinito até reconectar
+      throw new Error(`Instância desconectada (status: ${instanceExists.status}) — aguardando reconexão`);
+    }
+
     const { data: instance, error: instanceError } = await supabaseServiceRole
       .from('evolution_instances')
       .select(`
@@ -217,7 +239,8 @@ async function processMessageJob(job: any, workerId: string): Promise<{ success:
       .single();
 
     if (instanceError || !instance) {
-      throw new Error(`Instância não encontrada ou inativa: ${instanceError?.message}`);
+      // Evolution API não configurada para essa instância — falha permanente
+      throw new Error(`[FALHA_PERMANENTE] Evolution API não configurada para instância "${instance_name}": ${instanceError?.message}`);
     }
 
     const evolutionApi = Array.isArray(instance.evolution_apis) 
@@ -528,18 +551,27 @@ async function processMessageJob(job: any, workerId: string): Promise<{ success:
       }
 
       // Atualiza job para success
+      // Para recorrentes: zera attempts (cada ciclo é independente) e agenda próxima execução
+      // Para pontuais: marca como sent definitivamente
       const updateData: any = {
-        status: schedule_type === 'recurring' ? 'scheduled' : 'sent', // Recorrente volta para scheduled
+        status: schedule_type === 'recurring' ? 'scheduled' : 'sent',
         sent_at: now,
-        attempts: (job.attempts || 0) + 1,
+        attempts: schedule_type === 'recurring' ? 0 : (job.attempts || 0) + 1,
         last_error: null,
         updated_at: now,
         locked_at: null,
         locked_by: null,
       };
 
-      if (schedule_type === 'recurring' && nextRunUTC) {
-        updateData.next_run_utc = nextRunUTC;
+      if (schedule_type === 'recurring') {
+        if (nextRunUTC) {
+          updateData.next_run_utc = nextRunUTC;
+        } else {
+          // Se não conseguiu calcular o próximo horário, marca como falha para evitar loop de disparo imediato
+          console.error(`${logPrefix} ❌ [RECORRENTE] Não foi possível calcular próximo horário — marcando como falha para evitar disparo em loop`);
+          updateData.status = 'failed';
+          updateData.last_error = 'Não foi possível calcular próximo horário de recorrência. Verifique os dias e horário configurados.';
+        }
       }
 
       await supabaseServiceRole
@@ -551,86 +583,100 @@ async function processMessageJob(job: any, workerId: string): Promise<{ success:
     } else {
       // Erro na resposta da API
       const errorMsg = responseData.message || responseText || `HTTP ${response.status}`;
-      const instanceUnavailable = isInstanceUnavailableError(errorMsg);
-      // Para instância inativa/reconectada: não conta tentativas — sempre reagenda até a instância voltar
-      const maxRetries = instanceUnavailable ? Infinity : 3;
-      const attempts = instanceUnavailable ? (job.attempts || 0) : (job.attempts || 0) + 1;
-
-      if (instanceUnavailable) {
-        console.log(`${logPrefix} 🔄 [INSTÂNCIA INDISPONÍVEL] Reagendando para 5 min (mensagem será reenviada quando a instância estiver ativa)`);
-      }
-
-      if (attempts < maxRetries) {
-        const nextRetry = new Date(Date.now() + 5 * 60 * 1000);
-        await supabaseServiceRole
-          .from('message_schedules')
-          .update({
-            status: 'scheduled',
-            next_run_utc: nextRetry.toISOString(),
-            attempts: instanceUnavailable ? (job.attempts || 0) : attempts,
-            last_error: errorMsg,
-            updated_at: new Date().toISOString(),
-            locked_at: null,
-            locked_by: null,
-          })
-          .eq('id', id);
-        return { success: false, error: `Retry agendado: ${errorMsg}` };
-      } else {
-        await supabaseServiceRole
-          .from('message_schedules')
-          .update({
-            status: 'failed',
-            attempts,
-            last_error: errorMsg,
-            updated_at: new Date().toISOString(),
-            locked_at: null,
-            locked_by: null,
-          })
-          .eq('id', id);
-        return { success: false, error: errorMsg };
-      }
+      return handleJobError(job, id, errorMsg, workerId, logPrefix);
     }
   } catch (error: any) {
     const errorMsg = error?.message || String(error);
     console.error(`[WORKER ${workerId}] Job ${id}: ❌ ERRO - ${errorMsg}`);
+    return handleJobError(job, id, errorMsg, workerId, logPrefix);
+  }
+}
 
-    const instanceUnavailable = isInstanceUnavailableError(errorMsg);
-    const maxRetries = instanceUnavailable ? Infinity : 3;
-    const attempts = instanceUnavailable ? (job.attempts || 0) : (job.attempts || 0) + 1;
+/** Tempo máximo de retry para instância desconectada: 24 horas.
+ * Após isso o job é marcado como falha para não ficar preso indefinidamente. */
+const INSTANCE_UNAVAILABLE_MAX_RETRY_MS = 24 * 60 * 60 * 1000;
 
-    if (instanceUnavailable) {
-      console.log(`[WORKER ${workerId}] Job ${id}: 🔄 [INSTÂNCIA INDISPONÍVEL] Reagendando para 5 min (será reenviado quando a instância estiver ativa)`);
-    }
+/** Centraliza a lógica de erro para evitar duplicação entre catch do fetch e catch externo. */
+async function handleJobError(
+  job: any,
+  id: string,
+  errorMsg: string,
+  workerId: string,
+  logPrefix: string
+): Promise<{ success: boolean; error: string }> {
+  const instanceUnavailable = isInstanceUnavailableError(errorMsg);
 
-    if (attempts < maxRetries) {
+  if (instanceUnavailable) {
+    // Verifica se está dentro do prazo máximo de retry (24h desde a criação)
+    const createdAt = job.created_at ? new Date(job.created_at).getTime() : Date.now();
+    const elapsedMs = Date.now() - createdAt;
+    const withinRetryWindow = elapsedMs < INSTANCE_UNAVAILABLE_MAX_RETRY_MS;
+
+    if (withinRetryWindow) {
+      console.log(`${logPrefix} 🔄 [INSTÂNCIA DESCONECTADA] Reagendando em 5 min (${Math.round(elapsedMs / 60000)}min de ${INSTANCE_UNAVAILABLE_MAX_RETRY_MS / 60000}min de janela)`);
       const nextRetry = new Date(Date.now() + 5 * 60 * 1000);
       await supabaseServiceRole
         .from('message_schedules')
         .update({
           status: 'scheduled',
           next_run_utc: nextRetry.toISOString(),
-          attempts: instanceUnavailable ? (job.attempts || 0) : attempts,
-          last_error: errorMsg,
+          // Não incrementa attempts para desconexão — preserva contagem real de erros de envio
+          last_error: `⚡ Instância desconectada — aguardando reconexão. ${errorMsg}`,
           updated_at: new Date().toISOString(),
           locked_at: null,
           locked_by: null,
         })
         .eq('id', id);
-      return { success: false, error: `Retry agendado: ${errorMsg}` };
+      return { success: false, error: `Retry agendado (instância desconectada): ${errorMsg}` };
     } else {
+      // Esgotou 24h de espera — marca como falha
+      console.error(`${logPrefix} ❌ [INSTÂNCIA DESCONECTADA] Esgotou 24h de retry — marcando como falha`);
       await supabaseServiceRole
         .from('message_schedules')
         .update({
           status: 'failed',
-          attempts,
-          last_error: errorMsg,
+          last_error: `Instância ficou desconectada por mais de 24h e o agendamento foi cancelado. Último erro: ${errorMsg}`,
           updated_at: new Date().toISOString(),
           locked_at: null,
           locked_by: null,
         })
         .eq('id', id);
-      return { success: false, error: errorMsg };
+      return { success: false, error: `Instância desconectada por 24h: ${errorMsg}` };
     }
+  }
+
+  // Erro de envio comum (não é desconexão de instância) — até 3 tentativas com 5min de espera
+  const attempts = (job.attempts || 0) + 1;
+  const maxRetries = 3;
+
+  if (attempts <= maxRetries) {
+    const nextRetry = new Date(Date.now() + 5 * 60 * 1000);
+    await supabaseServiceRole
+      .from('message_schedules')
+      .update({
+        status: 'scheduled',
+        next_run_utc: nextRetry.toISOString(),
+        attempts,
+        last_error: `[Tentativa ${attempts}/${maxRetries}] ${errorMsg}`,
+        updated_at: new Date().toISOString(),
+        locked_at: null,
+        locked_by: null,
+      })
+      .eq('id', id);
+    return { success: false, error: `Retry ${attempts}/${maxRetries}: ${errorMsg}` };
+  } else {
+    await supabaseServiceRole
+      .from('message_schedules')
+      .update({
+        status: 'failed',
+        attempts,
+        last_error: `[Falhou após ${maxRetries} tentativas] ${errorMsg}`,
+        updated_at: new Date().toISOString(),
+        locked_at: null,
+        locked_by: null,
+      })
+      .eq('id', id);
+    return { success: false, error: errorMsg };
   }
 }
 
@@ -672,22 +718,24 @@ export const handler: Handler = async (event, context) => {
     console.log(`[WORKER ${WORKER_ID}] 🕐 [TEMPO] Agora: ${nowISO} (${now.toLocaleString('pt-BR', { timeZone: 'America/Recife' })})`);
     console.log(`[WORKER ${WORKER_ID}] 🕐 [TEMPO] Lookahead (${LOOKAHEAD_MINUTES}min): ${lookaheadISO} (${lookahead.toLocaleString('pt-BR', { timeZone: 'America/Recife' })})`);
     
-    // Primeiro, libera locks antigos (mais de 3 minutos)
+    // Libera locks antigos (mais de LOCK_TTL_MINUTES) — exclui o próprio worker para não
+    // liberar jobs que este mesmo worker acabou de travar e ainda está processando.
     const lockThreshold = new Date(now.getTime() - LOCK_TTL_MINUTES * 60 * 1000);
     console.log(`[WORKER ${WORKER_ID}] 🔓 [UNLOCK] Liberando locks antigos (anteriores a ${lockThreshold.toISOString()})`);
-    
+
     const { data: unlockedJobs } = await supabaseServiceRole
       .from('message_schedules')
       .update({
-        status: 'scheduled', // Reseta para scheduled para que o job possa ser reprocessado
+        status: 'scheduled',
         locked_at: null,
         locked_by: null,
         updated_at: new Date().toISOString(),
       })
       .eq('status', 'processing')
       .lte('locked_at', lockThreshold.toISOString())
+      .neq('locked_by', WORKER_ID) // Não libera locks do próprio worker (ainda pode estar ativo)
       .select('id');
-    
+
     if (unlockedJobs && unlockedJobs.length > 0) {
       console.log(`[WORKER ${WORKER_ID}] 🔓 [UNLOCK] ${unlockedJobs.length} job(s) desbloqueado(s)`);
     }
@@ -802,59 +850,9 @@ export const handler: Handler = async (event, context) => {
         continue;
       }
 
-      // Recorrente: só processar se hoje for um dos recurring_days E se já estiver no horário recurringTime (no timezone)
-      if (job.schedule_type === 'recurring') {
-        const tz = job.timezone || 'America/Sao_Paulo';
-        const todayIsRecurringDay = isTodayInRecurringDays(job.recurring_days, tz);
-        const timeReached = isCurrentTimeAtOrPastRecurringTime(job.recurring_time || '', tz);
+      // next_run_utc é o único critério de disparo — foi calculado com timezone e dias corretos.
+      // Não há double-check de dia/hora: se isDue=true, o job deve ser executado.
 
-        if (!todayIsRecurringDay) {
-          console.log(`[WORKER ${WORKER_ID}] 📅 [JOB ${job.id}] Hoje não é dia de recorrência (timezone: ${tz}), recalculando próximo horário...`);
-          const nextRunUTC = calculateNextRecurringRun(
-            job.cron_expr || '',
-            tz,
-            job.recurring_days,
-            job.recurring_time || '',
-            `[WORKER ${WORKER_ID}] [JOB ${job.id}]`
-          );
-          if (nextRunUTC) {
-            await supabaseServiceRole
-              .from('message_schedules')
-              .update({
-                next_run_utc: nextRunUTC,
-                updated_at: new Date().toISOString(),
-              })
-              .eq('id', job.id);
-            console.log(`[WORKER ${WORKER_ID}] 📅 [JOB ${job.id}] next_run_utc atualizado para: ${nextRunUTC}`);
-          }
-          continue;
-        }
-
-        if (!timeReached) {
-          console.log(`[WORKER ${WORKER_ID}] ⏰ [JOB ${job.id}] Ainda não é o horário de recorrência (recurringTime: ${job.recurring_time}, timezone: ${tz}), recalculando próximo horário...`);
-          const nextRunUTC = calculateNextRecurringRun(
-            job.cron_expr || '',
-            tz,
-            job.recurring_days,
-            job.recurring_time || '',
-            `[WORKER ${WORKER_ID}] [JOB ${job.id}]`
-          );
-          if (nextRunUTC) {
-            await supabaseServiceRole
-              .from('message_schedules')
-              .update({
-                next_run_utc: nextRunUTC,
-                updated_at: new Date().toISOString(),
-              })
-              .eq('id', job.id);
-            console.log(`[WORKER ${WORKER_ID}] ⏰ [JOB ${job.id}] next_run_utc atualizado para: ${nextRunUTC}`);
-          }
-          continue;
-        }
-
-        console.log(`[WORKER ${WORKER_ID}] 📅⏰ [JOB ${job.id}] Dia e horário de recorrência confirmados (hoje, ${job.recurring_time}), executando.`);
-      }
-      
       console.log(`[WORKER ${WORKER_ID}] ✅ [JOB ${job.id}] Está devido! Processando...`);
       
       // Tenta travar o job

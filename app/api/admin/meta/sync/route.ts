@@ -21,12 +21,26 @@ export async function POST(req: NextRequest) {
 
     const result = await runSync(bancaId, datePreset);
     if (!result.success) {
+      console.log('[admin/meta API] POST sync resposta', {
+        banca_id: bancaId,
+        date_preset: datePreset,
+        success: false,
+        error: result.error ?? null,
+      });
       return successResponse({
         success: false,
         error: result.error,
       });
     }
 
+    console.log('[admin/meta API] POST sync resposta', {
+      banca_id: bancaId,
+      date_preset: datePreset,
+      success: true,
+      campaignsCount: result.campaignsCount ?? 0,
+      adsetsCount: result.adsetsCount ?? 0,
+      insightsCount: result.insightsCount ?? 0,
+    });
     return successResponse({
       success: true,
       campaignsCount: result.campaignsCount,

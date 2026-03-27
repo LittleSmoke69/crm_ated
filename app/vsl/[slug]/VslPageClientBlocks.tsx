@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { VslContentRenderer } from '@/components/vsl/VslContentRenderer';
 import type { VslContentRoot } from '@/lib/vsl/runtime/types';
+import { buildVslRedirectHref } from '@/lib/vsl/runtime/redirect-url';
 
 declare global {
   interface Window {
@@ -147,8 +148,9 @@ export function VslPageClientBlocks({
   );
   const onCtaClick = useCallback(() => {
     trackEvent('VSL_CTA_CLICK', { redirect_slug: redirectSlug });
-    const q = sessionId ? `?sid=${sessionId}` : '';
-    router.push(`/r/${redirectSlug}${q}`);
+    const href = buildVslRedirectHref(redirectSlug, sessionId);
+    if (!href) return;
+    router.push(href);
   }, [sessionId, redirectSlug, trackEvent, router]);
 
   const context = {

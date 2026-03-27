@@ -3,6 +3,33 @@ import { requireAdmin } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
+const META_OVERVIEW_CAMPAIGNS_FIELDS = 'banca_id, campaign_id, name, status, effective_status, updated_at, campaign_kind';
+const META_OVERVIEW_INSIGHTS_FIELDS =
+  'banca_id, campaign_id, reach, impressions, clicks, leads, spend, raw_cost_per_action_type';
+
+/** Acumula cost_per_action_type (JSONB por linha) para debug nos logs — valores somados por action_type no período. */
+function accumulateCostPerActionType(into: Map<string, number>, raw: unknown): void {
+  let source: unknown = raw;
+  if (typeof source === 'string') {
+    try {
+      source = JSON.parse(source);
+    } catch {
+      source = null;
+    }
+  }
+  if (!source || !Array.isArray(source)) return;
+  for (const item of source as { action_type?: string; value?: string }[]) {
+    const at = item?.action_type != null ? String(item.action_type) : '';
+    if (!at) continue;
+    const n = parseFloat(String(item.value ?? '0')) || 0;
+    into.set(at, (into.get(at) ?? 0) + n);
+  }
+}
+
+function costPerActionMapForLog(m: Map<string, number>, limit = 20): Record<string, number> {
+  return Object.fromEntries([...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit));
+}
+
 /** Linha de `meta_integration_configs` usada no join com `meta_integration_bancas`. */
 type MetaIntegrationConfigRow = {
   id: string;
@@ -52,6 +79,16 @@ type OverviewRow = {
   };
 };
 
+type KindSummaryBucket = {
+  campaigns: number;
+  reach: number;
+  impressions: number;
+  clicks: number;
+  leads: number;
+  spend: number;
+  insights_rows: number;
+};
+
 /**
  * GET /api/admin/meta/overview
  * Retorna visão geral de TODAS as bancas com:
@@ -64,23 +101,35 @@ export async function GET(req: NextRequest) {
     await requireAdmin(req);
     const dateFrom = req.nextUrl.searchParams.get('date_from');
     const dateTo = req.nextUrl.searchParams.get('date_to');
+    const bancaId = req.nextUrl.searchParams.get('banca_id')?.trim() || null;
+    let appliedDateFrom = dateFrom;
+    let appliedDateTo = dateTo;
 
     const [bancasRes, linksRes, configsRes, campaignsResRaw, insightsResRaw, legacyRes] = await Promise.all([
-      supabaseServiceRole.from('crm_bancas').select('id, name, url').order('name', { ascending: true }),
+      (() => {
+        let q = supabaseServiceRole.from('crm_bancas').select('id, name, url').order('name', { ascending: true });
+        if (bancaId) q = q.eq('id', bancaId);
+        return q;
+      })(),
       supabaseServiceRole
         .from('meta_integration_bancas')
         .select('banca_id, integration_id'),
       supabaseServiceRole
         .from('meta_integration_configs')
         .select('id, is_active, base_url, token_last4, ad_account_id, pixel_id, default_campaign_id, last_sync_at, last_sync_error, last_sync_date_preset'),
-      supabaseServiceRole
-        .from('meta_campaigns')
-        .select('banca_id, campaign_id, name, status, effective_status, updated_at')
-        .order('updated_at', { ascending: false }),
+      (() => {
+        let q = supabaseServiceRole
+          .from('meta_campaigns')
+          .select(META_OVERVIEW_CAMPAIGNS_FIELDS)
+          .order('updated_at', { ascending: false });
+        if (bancaId) q = q.eq('banca_id', bancaId);
+        return q;
+      })(),
       (() => {
         let query = supabaseServiceRole
           .from('meta_insights_daily')
-          .select('banca_id, reach, impressions, clicks, leads, spend');
+          .select(META_OVERVIEW_INSIGHTS_FIELDS);
+        if (bancaId) query = query.eq('banca_id', bancaId);
         if (dateFrom) query = query.gte('date', dateFrom);
         if (dateTo) query = query.lte('date', dateTo);
         return query;
@@ -104,7 +153,72 @@ export async function GET(req: NextRequest) {
     const links = linksRes.data ?? [];
     const configs = configsRes.data ?? [];
     const campaigns = campaignsResRaw.data ?? [];
-    const insights = insightsResRaw.data ?? [];
+    let insights = insightsResRaw.data ?? [];
+
+    // Fallback pragmático: se o filtro diário vier sem linhas, usa o último dia com dados até date_to.
+    // Isso evita cards zerados quando a virada do dia ocorreu, mas o sync do dia ainda não rodou.
+    if (
+      insights.length === 0 &&
+      dateFrom &&
+      dateTo &&
+      dateFrom === dateTo
+    ) {
+      let latestDateQuery = supabaseServiceRole
+        .from('meta_insights_daily')
+        .select('date')
+        .lte('date', dateTo)
+        .order('date', { ascending: false })
+        .limit(1);
+      if (bancaId) latestDateQuery = latestDateQuery.eq('banca_id', bancaId);
+      const latestDateRes = await latestDateQuery.maybeSingle();
+
+      const fallbackDate =
+        !latestDateRes.error && latestDateRes.data?.date
+          ? String(latestDateRes.data.date)
+          : null;
+
+      if (fallbackDate && fallbackDate !== dateFrom) {
+        let fallbackInsightsQuery = supabaseServiceRole
+          .from('meta_insights_daily')
+          .select(META_OVERVIEW_INSIGHTS_FIELDS)
+          .gte('date', fallbackDate)
+          .lte('date', fallbackDate);
+        if (bancaId) fallbackInsightsQuery = fallbackInsightsQuery.eq('banca_id', bancaId);
+        const fallbackInsightsRes = await fallbackInsightsQuery;
+
+        if (!fallbackInsightsRes.error) {
+          insights = fallbackInsightsRes.data ?? [];
+          appliedDateFrom = fallbackDate;
+          appliedDateTo = fallbackDate;
+          console.log('[admin/meta/overview] fallback período sem insights no dia', {
+            requested_date: dateFrom,
+            applied_date: fallbackDate,
+            insights_rows: insights.length,
+          });
+        }
+      }
+    }
+
+    const firstInsight = insights[0] as Record<string, unknown> | undefined;
+    const firstCampaign = campaigns[0] as Record<string, unknown> | undefined;
+    console.log('[admin/meta/overview] DB meta_insights_daily', {
+      rows: insights.length,
+      fields: firstInsight ? Object.keys(firstInsight) : [],
+      sample: firstInsight ?? null,
+    });
+    console.log('[admin/meta/overview] DB meta_campaigns', {
+      rows: campaigns.length,
+      fields: firstCampaign ? Object.keys(firstCampaign) : [],
+      sample: firstCampaign ?? null,
+      requested_fields: META_OVERVIEW_CAMPAIGNS_FIELDS,
+      filters: { date_from: dateFrom ?? null, date_to: dateTo ?? null },
+      applied_filters: { date_from: appliedDateFrom ?? null, date_to: appliedDateTo ?? null },
+    });
+    console.log('[admin/meta/overview] DB meta_insights_daily requested_fields', {
+      requested_fields: META_OVERVIEW_INSIGHTS_FIELDS,
+      filters: { date_from: dateFrom ?? null, date_to: dateTo ?? null },
+      applied_filters: { date_from: appliedDateFrom ?? null, date_to: appliedDateTo ?? null },
+    });
 
     const configById = new Map<string, MetaIntegrationConfigRow>(
       (configs as MetaIntegrationConfigRow[]).map((c) => [String(c.id), c])
@@ -165,8 +279,48 @@ export async function GET(req: NextRequest) {
     }
 
     const metricsByBanca = new Map<string, OverviewRow['metrics']>();
+    const campaignKindByBancaCampaign = new Map<string, 'normal' | 'bolao'>();
+    const campaignKindByCampaignId = new Map<string, 'normal' | 'bolao'>();
+    for (const row of campaigns as Array<{ banca_id: string; campaign_id: string; campaign_kind?: string | null }>) {
+      const key = `${String(row.banca_id)}:${String(row.campaign_id)}`;
+      const kind = String(row.campaign_kind || 'normal') === 'bolao' ? 'bolao' : 'normal';
+      campaignKindByBancaCampaign.set(key, kind);
+      const cid = String(row.campaign_id);
+      const prev = campaignKindByCampaignId.get(cid);
+      // Em caso de conflito, prioriza bolão.
+      if (!prev || prev === 'normal') {
+        campaignKindByCampaignId.set(cid, kind);
+      }
+    }
+
+    const kindSummary: Record<'normal' | 'bolao', KindSummaryBucket> = {
+      normal: { campaigns: 0, reach: 0, impressions: 0, clicks: 0, leads: 0, spend: 0, insights_rows: 0 },
+      bolao: { campaigns: 0, reach: 0, impressions: 0, clicks: 0, leads: 0, spend: 0, insights_rows: 0 },
+    };
+    for (const row of campaigns as Array<{ campaign_kind?: string | null }>) {
+      const kind = String(row.campaign_kind || 'normal') === 'bolao' ? 'bolao' : 'normal';
+      kindSummary[kind].campaigns += 1;
+    }
+    const costPerActionByBanca = new Map<string, Map<string, number>>();
+    const globalCostPerAction = new Map<string, number>();
+
+    let insightsWithoutKindMatch = 0;
     for (const row of insights) {
       const bid = String((row as { banca_id: string }).banca_id);
+      const cid = String((row as { campaign_id?: string | null }).campaign_id ?? '');
+      const exactKind = campaignKindByBancaCampaign.get(`${bid}:${cid}`);
+      const kindByCampaign = campaignKindByCampaignId.get(cid);
+      const kind = exactKind ?? kindByCampaign ?? 'normal';
+      if (!exactKind && !kindByCampaign) insightsWithoutKindMatch += 1;
+      const rawCpa = (row as { raw_cost_per_action_type?: unknown }).raw_cost_per_action_type;
+      accumulateCostPerActionType(globalCostPerAction, rawCpa);
+      let perBanca = costPerActionByBanca.get(bid);
+      if (!perBanca) {
+        perBanca = new Map<string, number>();
+        costPerActionByBanca.set(bid, perBanca);
+      }
+      accumulateCostPerActionType(perBanca, rawCpa);
+
       const current = metricsByBanca.get(bid) ?? {
         reach: 0,
         impressions: 0,
@@ -182,6 +336,15 @@ export async function GET(req: NextRequest) {
       current.spend += Number(row.spend) || 0;
       current.insights_rows += 1;
       metricsByBanca.set(bid, current);
+
+      if (cid) {
+        kindSummary[kind].reach += Number(row.reach) || 0;
+        kindSummary[kind].impressions += Number(row.impressions) || 0;
+        kindSummary[kind].clicks += Number(row.clicks) || 0;
+        kindSummary[kind].leads += Number(row.leads) || 0;
+        kindSummary[kind].spend += Number(row.spend) || 0;
+        kindSummary[kind].insights_rows += 1;
+      }
     }
 
     const rows: OverviewRow[] = bancas.map((banca) => {
@@ -214,12 +377,68 @@ export async function GET(req: NextRequest) {
       };
     });
 
+    const totalsOverview = rows.reduce(
+      (acc, row) => {
+        acc.total_reach += Number(row.metrics.reach) || 0;
+        acc.total_impressions += Number(row.metrics.impressions) || 0;
+        acc.total_clicks += Number(row.metrics.clicks) || 0;
+        acc.total_spend += Number(row.metrics.spend) || 0;
+        acc.total_leads += Number(row.metrics.leads) || 0;
+        acc.insights_rows += Number(row.metrics.insights_rows) || 0;
+        return acc;
+      },
+      {
+        total_reach: 0,
+        total_impressions: 0,
+        total_clicks: 0,
+        total_spend: 0,
+        total_leads: 0,
+        insights_rows: 0,
+      }
+    );
+    const topContributors = rows
+      .filter((row) => (Number(row.metrics.spend) || 0) > 0 || (Number(row.metrics.leads) || 0) > 0)
+      .sort((a, b) => (Number(b.metrics.spend) || 0) - (Number(a.metrics.spend) || 0))
+      .slice(0, 10)
+      .map((row) => {
+        const bid = String(row.banca_id);
+        const cpaMap = costPerActionByBanca.get(bid);
+        return {
+          banca_id: row.banca_id,
+          banca_name: row.banca_name,
+          reach: Number(row.metrics.reach) || 0,
+          impressions: Number(row.metrics.impressions) || 0,
+          clicks: Number(row.metrics.clicks) || 0,
+          leads: Number(row.metrics.leads) || 0,
+          spend: Number(row.metrics.spend) || 0,
+          insights_rows: Number(row.metrics.insights_rows) || 0,
+          cost_per_action_type: cpaMap ? costPerActionMapForLog(cpaMap) : {},
+        };
+      });
+    console.log('[admin/meta/overview] SOMA visão geral (base para cards de Gasto/Leads)', {
+      totals: {
+        ...totalsOverview,
+        cost_per_action_type: costPerActionMapForLog(globalCostPerAction),
+      },
+      contributors_count: topContributors.length,
+      top_contributors: topContributors,
+      kind_summary: kindSummary,
+      kind_mapping_debug: {
+        insights_without_kind_match: insightsWithoutKindMatch,
+      },
+    });
+
     return successResponse({
       rows,
       period: {
+        date_from: appliedDateFrom ?? null,
+        date_to: appliedDateTo ?? null,
+      },
+      requested_period: {
         date_from: dateFrom ?? null,
         date_to: dateTo ?? null,
       },
+      kind_summary: kindSummary,
     });
   } catch (err: any) {
     if (err?.message?.includes('Acesso negado') || err?.message?.includes('não autenticado')) {

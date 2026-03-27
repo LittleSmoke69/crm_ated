@@ -121,9 +121,19 @@ export async function GET(
       .select('group_id')
       .eq('redirect_slug_id', redirectRow.id);
 
-    const groupIds = (linkRows ?? []).map((r: { group_id: string }) => r.group_id);
+    let groupIds = (linkRows ?? []).map((r: { group_id: string }) => r.group_id);
     if (groupIds.length === 0) {
-      return errorResponse('Nenhum grupo vinculado ao redirect', 400);
+      // Fallback: slugs legados/novos podem existir sem mapeamento explícito.
+      // Usa grupos ativos do projeto para manter o redirect funcional.
+      const { data: projectGroups } = await supabaseServiceRole
+        .from('redirect_groups')
+        .select('id')
+        .eq('project_id', redirectRow.project_id)
+        .eq('is_active', true);
+      groupIds = (projectGroups ?? []).map((g: { id: string }) => g.id);
+    }
+    if (groupIds.length === 0) {
+      return errorResponse('Nenhum grupo ativo disponível para o projeto', 400);
     }
 
     const { data: groups } = await supabaseServiceRole
