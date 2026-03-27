@@ -90,7 +90,13 @@ function normalizeBaseUrl(baseUrl: string): string {
   return normalized;
 }
 
-const PTV_FETCH_MAX_BYTES = 20 * 1024 * 1024; // 20MB
+const PTV_FETCH_MAX_MB = (() => {
+  const raw = process.env.PTV_FETCH_MAX_MB;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.floor(parsed);
+})();
+const PTV_FETCH_MAX_BYTES = PTV_FETCH_MAX_MB ? PTV_FETCH_MAX_MB * 1024 * 1024 : null;
 const PTV_FETCH_TIMEOUT_MS = 45000;
 
 /** Baixa vídeo de URL e retorna base64. Evolution sendPtv usa stat() em path local; URL causa ENOENT. */
@@ -104,13 +110,13 @@ async function fetchVideoUrlAsBase64(videoUrl: string): Promise<string> {
     const contentLength = res.headers.get('content-length');
     if (contentLength) {
       const len = parseInt(contentLength, 10);
-      if (!Number.isNaN(len) && len > PTV_FETCH_MAX_BYTES) {
-        throw new Error(`Vídeo PTV maior que ${PTV_FETCH_MAX_BYTES / 1024 / 1024}MB`);
+      if (PTV_FETCH_MAX_BYTES && !Number.isNaN(len) && len > PTV_FETCH_MAX_BYTES) {
+        throw new Error(`Vídeo PTV maior que ${PTV_FETCH_MAX_MB}MB`);
       }
     }
     const buf = await res.arrayBuffer();
-    if (buf.byteLength > PTV_FETCH_MAX_BYTES) {
-      throw new Error(`Vídeo PTV maior que ${PTV_FETCH_MAX_BYTES / 1024 / 1024}MB`);
+    if (PTV_FETCH_MAX_BYTES && buf.byteLength > PTV_FETCH_MAX_BYTES) {
+      throw new Error(`Vídeo PTV maior que ${PTV_FETCH_MAX_MB}MB`);
     }
     return Buffer.from(buf).toString('base64');
   } finally {

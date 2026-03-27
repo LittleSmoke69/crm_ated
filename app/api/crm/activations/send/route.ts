@@ -16,9 +16,28 @@ function normalizeBaseUrl(baseUrl: string): string {
   return normalized;
 }
 
-/** Tamanho máximo para vídeo PTV (20MB). A Evolution sendPtv usa stat() em path local; para URL precisamos enviar base64. */
-const PTV_FETCH_MAX_BYTES = 20 * 1024 * 1024;
+/** Limite opcional para vídeo PTV em MB. Sem limite quando vazio/0/inválido. */
+const PTV_FETCH_MAX_MB = (() => {
+  const raw = process.env.PTV_FETCH_MAX_MB;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.floor(parsed);
+})();
+const PTV_FETCH_MAX_BYTES = PTV_FETCH_MAX_MB ? PTV_FETCH_MAX_MB * 1024 * 1024 : null;
 const PTV_FETCH_TIMEOUT_MS = 45000;
+
+/**
+ * Detecta cenário de PTV por URL (download + base64), que pode ser pesado e causar timeout
+ * em requisições síncronas quando executado no request principal.
+ */
+function isPtvUrlMessage(message: {
+  message_type?: string | null;
+  attachment_url?: string | null;
+} | null | undefined): boolean {
+  if (!message || message.message_type !== 'ptv') return false;
+  const url = String(message.attachment_url || '').trim();
+  return url.startsWith('http://') || url.startsWith('https://');
+}
 
 /**
  * Baixa o vídeo de uma URL e retorna em base64.
@@ -37,13 +56,13 @@ async function fetchVideoUrlAsBase64(videoUrl: string): Promise<string> {
     const contentLength = res.headers.get('content-length');
     if (contentLength) {
       const len = parseInt(contentLength, 10);
-      if (!Number.isNaN(len) && len > PTV_FETCH_MAX_BYTES) {
-        throw new Error(`Vídeo PTV maior que ${PTV_FETCH_MAX_BYTES / 1024 / 1024}MB`);
+      if (PTV_FETCH_MAX_BYTES && !Number.isNaN(len) && len > PTV_FETCH_MAX_BYTES) {
+        throw new Error(`Vídeo PTV maior que ${PTV_FETCH_MAX_MB}MB`);
       }
     }
     const buf = await res.arrayBuffer();
-    if (buf.byteLength > PTV_FETCH_MAX_BYTES) {
-      throw new Error(`Vídeo PTV maior que ${PTV_FETCH_MAX_BYTES / 1024 / 1024}MB`);
+    if (PTV_FETCH_MAX_BYTES && buf.byteLength > PTV_FETCH_MAX_BYTES) {
+      throw new Error(`Vídeo PTV maior que ${PTV_FETCH_MAX_MB}MB`);
     }
     const base64 = Buffer.from(buf).toString('base64');
     return base64;
@@ -95,9 +114,10 @@ export async function POST(req: NextRequest) {
     }
 
     // Chamada interna do worker de campanhas em massa: sempre envia o lote de forma síncrona
+    const ptvUrlHeavyProcessing = isPtvUrlMessage(message);
     const useMassSend =
       !(forceSync === true && isCronProcess) &&
-      (forceMassSend === true || groupIds.length > THRESHOLD_MASS_SEND);
+      (forceMassSend === true || groupIds.length > THRESHOLD_MASS_SEND || ptvUrlHeavyProcessing);
     if (useMassSend) {
       const { data: job, error: jobError } = await supabaseServiceRole
         .from('activation_mass_send_jobs')
@@ -128,8 +148,12 @@ export async function POST(req: NextRequest) {
       const siteUrl = base ? base.replace(/\/$/, '') : null;
 
       // Envio imediato do primeiro grupo: confirmação visual de que a campanha foi iniciada.
+      // Para PTV por URL (download + base64), pula envio síncrono para evitar timeout da requisição principal.
+      const shouldSkipImmediateFirstSend = ptvUrlHeavyProcessing;
       let firstGroupSent = false;
-      if (siteUrl && cronSecret) {
+      let firstGroupAttempted = false;
+      if (siteUrl && cronSecret && !shouldSkipImmediateFirstSend) {
+        firstGroupAttempted = true;
         const sendUrl = `${siteUrl}/api/crm/activations/send`;
         const firstGroupController = new AbortController();
         const firstGroupTimeout = setTimeout(() => firstGroupController.abort(), 20000);
@@ -175,8 +199,11 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // Dispara o processamento em segundo plano para os grupos restantes
-      if (siteUrl && cronSecret && groupIds.length > 1) {
+      // Dispara o processamento em segundo plano.
+      // - Se houve envio imediato do 1º grupo, processa os restantes.
+      // - Se não houve envio imediato (ex.: PTV por URL), processa todos os grupos.
+      const shouldTriggerBackgroundProcessing = siteUrl && cronSecret && (groupIds.length > 1 || !firstGroupAttempted);
+      if (shouldTriggerBackgroundProcessing) {
         const processUrl = `${siteUrl}/api/crm/activations/mass-send/process`;
         fetch(processUrl, {
           method: 'POST',
@@ -196,8 +223,11 @@ export async function POST(req: NextRequest) {
           mass_send: true,
           total_groups: groupIds.length,
           first_group_sent: firstGroupSent,
+          first_group_attempted: firstGroupAttempted,
           message: firstGroupSent
             ? 'Campanha criada. Primeiro grupo enviado como confirmação. O envio continuará em segundo plano. Acompanhe em Ativações > Campanhas de disparo.'
+            : shouldSkipImmediateFirstSend
+              ? 'Campanha criada. O envio PTV continuará em segundo plano para evitar timeout na requisição principal. Acompanhe em Ativações > Campanhas de disparo.'
             : 'Campanha de disparo em massa criada. O envio continuará em segundo plano. Acompanhe em Ativações > Campanhas de disparo.',
         }),
         { status: 202, headers: { 'Content-Type': 'application/json' } }

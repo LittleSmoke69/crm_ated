@@ -33,6 +33,15 @@ Quando a instância **não** está no Supabase:
 | `EVOLUTION_BASE_URL`  | Sim                     | `https://72.61.46.153:21465`     |
 | `EVOLUTION_API_KEY`   | Sim                     | apikey global da Evolution      |
 
+### Limite de tamanho do vídeo PTV (disparo/worker)
+
+| Variável            | Obrigatória | Default | Exemplo |
+|---------------------|-------------|---------|---------|
+| `PTV_FETCH_MAX_MB`  | Não         | sem limite (`0`/vazio) | `80` |
+
+Quando o vídeo vem por URL, o backend baixa e converte para base64 antes de enviar no `sendPtv`.
+Defina `PTV_FETCH_MAX_MB` apenas se quiser impor um teto de segurança.
+
 ## Body da requisição (JSON)
 
 | Campo             | Obrigatório | Descrição |

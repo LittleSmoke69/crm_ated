@@ -58,6 +58,8 @@ interface ParsedMessage {
 }
 
 const CHAT_MEDIA_BUCKET = 'chat-media';
+const CONFIG_FETCH_MAX_RETRIES = 3;
+const CONFIG_FETCH_BASE_DELAY_MS = 400;
 
 /** Mensagem usada quando o token do WhatsApp Oficial está inválido/expirado (401). Usado para exibir alerta na UI. */
 export const WHATSAPP_OFFICIAL_TOKEN_ERROR_MSG =
@@ -83,6 +85,73 @@ function sanitizeErrorMessage(err: unknown): string {
     return `Erro de rede/servidor (resposta inválida ou muito longa).`;
   }
   return msg;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientConfigFetchError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes('ssl handshake failed') ||
+    normalized.includes('error code 525') ||
+    normalized.includes('bad gateway') ||
+    normalized.includes('service unavailable') ||
+    normalized.includes('gateway timeout') ||
+    normalized.includes('connection terminated') ||
+    normalized.includes('network') ||
+    normalized.includes('fetch failed') ||
+    normalized.includes('econnreset') ||
+    normalized.includes('etimedout') ||
+    normalized.includes('enotfound') ||
+    normalized.includes('cloudflare') ||
+    normalized.includes('502') ||
+    normalized.includes('503') ||
+    normalized.includes('504') ||
+    normalized.includes('525')
+  );
+}
+
+type WhatsAppOfficialConfigRow = {
+  id: string;
+  zaploto_id: string;
+  access_token?: string;
+  graph_version?: string;
+};
+
+async function fetchActiveConfigByPhoneNumberId(
+  phoneNumberIdStr: string
+): Promise<{ config: WhatsAppOfficialConfigRow | null; errorMessage: string | null }> {
+  for (let attempt = 1; attempt <= CONFIG_FETCH_MAX_RETRIES; attempt += 1) {
+    const { data: config, error: configError } = await supabaseServiceRole
+      .from('whatsapp_official_configs')
+      .select('id, zaploto_id, access_token, graph_version')
+      .eq('phone_number_id', phoneNumberIdStr)
+      .eq('is_active', true)
+      .maybeSingle();
+
+    if (!configError) {
+      return { config: (config as WhatsAppOfficialConfigRow | null) ?? null, errorMessage: null };
+    }
+
+    const safeMessage = sanitizeErrorMessage(configError);
+    const isTransient = isTransientConfigFetchError(safeMessage);
+    const canRetry = isTransient && attempt < CONFIG_FETCH_MAX_RETRIES;
+    if (canRetry) {
+      const jitterMs = Math.floor(Math.random() * 120);
+      const delayMs = CONFIG_FETCH_BASE_DELAY_MS * Math.pow(2, attempt - 1) + jitterMs;
+      console.warn(
+        `[Zaploto Chat] Falha transitória ao buscar config por phone_number_id (${phoneNumberIdStr}), tentativa ${attempt}/${CONFIG_FETCH_MAX_RETRIES}. Retentando em ${delayMs}ms. Motivo: ${safeMessage}`
+      );
+      await sleep(delayMs);
+      continue;
+    }
+
+    return { config: null, errorMessage: safeMessage };
+  }
+
+  return { config: null, errorMessage: 'Falha ao buscar configuração ativa após retentativas.' };
 }
 
 class WhatsAppOfficialProcessingError extends Error {
@@ -256,15 +325,10 @@ async function handleInboundMessages(value: WaValue): Promise<{ tokenAlert: bool
     return { tokenAlert: false, errors: ['Evento sem phone_number_id no metadata'] };
   }
 
-  const { data: config, error: configError } = await supabaseServiceRole
-    .from('whatsapp_official_configs')
-    .select('id, zaploto_id, access_token, graph_version')
-    .eq('phone_number_id', phoneNumberIdStr)
-    .eq('is_active', true)
-    .maybeSingle();
-  if (configError) {
-    console.error('[Zaploto Chat] Erro ao buscar config por phone_number_id:', configError.message);
-    return { tokenAlert: false, errors: [sanitizeErrorMessage(configError)] };
+  const { config, errorMessage } = await fetchActiveConfigByPhoneNumberId(phoneNumberIdStr);
+  if (errorMessage) {
+    console.error('[Zaploto Chat] Erro ao buscar config por phone_number_id:', errorMessage);
+    return { tokenAlert: false, errors: [errorMessage] };
   }
   if (!config) {
     console.warn('[Zaploto Chat] Config não encontrada para phone_number_id:', phoneNumberIdStr);
