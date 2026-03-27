@@ -88,15 +88,6 @@ async function fetchVideoUrlAsBase64(videoUrl: string): Promise<string> {
 /** Acima deste número de grupos, o envio é enfileirado e processado em segundo plano (evita timeout na Netlify). */
 const THRESHOLD_MASS_SEND = 10;
 
-/** Pausa entre disparos consecutivos (ms), configurável na UI; máximo 15s. */
-const INTER_GROUP_DELAY_MAX_MS = 15_000;
-
-function clampInterGroupDelayMs(raw: unknown): number {
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return 0;
-  return Math.min(INTER_GROUP_DELAY_MAX_MS, Math.max(0, Math.floor(n)));
-}
-
 
 /**
  * POST /api/crm/activations/send - Envia uma mensagem de ativação para vários grupos
@@ -108,10 +99,6 @@ export async function POST(req: NextRequest) {
     const { userId } = await requireAuth(req);
     const body = await req.json();
     const { messageId, groupIds, instanceName, forceMassSend, forceSync } = body;
-    const interGroupDelayMs = clampInterGroupDelayMs(
-      (body as { interGroupDelayMs?: unknown; inter_group_delay_ms?: unknown }).interGroupDelayMs ??
-        (body as { inter_group_delay_ms?: unknown }).inter_group_delay_ms
-    );
     const isCronProcess = req.headers.get('x-internal-cron-secret') === process.env.CRON_SECRET;
 
     if (!messageId || !groupIds || !Array.isArray(groupIds) || groupIds.length === 0 || !instanceName) {
@@ -158,7 +145,6 @@ export async function POST(req: NextRequest) {
           total_groups: groupIds.length,
           sent_count: 0,
           failed_count: 0,
-          inter_group_delay_ms: interGroupDelayMs,
         })
         .select('id')
         .single();
@@ -175,109 +161,9 @@ export async function POST(req: NextRequest) {
         (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null);
       const siteUrl = (base ? base.replace(/\/$/, '') : null) || requestOrigin;
 
-      // Envio imediato do primeiro grupo: confirmação visual de que a campanha foi iniciada.
-      // Para PTV por URL (download + base64), pula envio síncrono para evitar timeout da requisição principal.
-      const shouldSkipImmediateFirstSend = ptvUrlHeavyProcessing;
-      let firstGroupSent = false;
-      let firstGroupAttempted = false;
-      if (siteUrl && cronSecret && !shouldSkipImmediateFirstSend) {
-        firstGroupAttempted = true;
-        const sendUrl = `${siteUrl}/api/crm/activations/send`;
-        const firstGroupController = new AbortController();
-        const firstGroupTimeout = setTimeout(() => firstGroupController.abort(), 20000);
-        try {
-          const firstRes = await fetch(sendUrl, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'x-internal-cron-secret': cronSecret,
-              'x-user-id': userId,
-            },
-            body: JSON.stringify({
-              messageId,
-              groupIds: [groupIds[0]],
-              instanceName,
-              forceSync: true,
-              interGroupDelayMs: 0,
-            }),
-            signal: firstGroupController.signal,
-          });
-          clearTimeout(firstGroupTimeout);
-          if (!firstRes.ok) {
-            console.warn(
-              `[ACTIVATION] Envio imediato do 1º grupo: HTTP ${firstRes.status} — índice não avança; o worker reprocessará o grupo 0.`
-            );
-          } else {
-            let firstJson: Record<string, unknown> | null = null;
-            try {
-              firstJson = (await firstRes.json()) as Record<string, unknown>;
-            } catch (parseErr: unknown) {
-              console.warn(
-                '[ACTIVATION] Envio imediato do 1º grupo: corpo não é JSON válido — worker reprocessará o grupo 0.',
-                (parseErr as Error)?.message
-              );
-            }
-            if (firstJson && firstJson.success === false) {
-              console.warn('[ACTIVATION] Envio imediato do 1º grupo: API retornou success=false — worker reprocessará o grupo 0.');
-            } else if (firstJson) {
-              const data = firstJson.data as Record<string, unknown> | undefined;
-              const firstSent = Number(data?.success ?? 0) || 0;
-              const firstFailed = Number(data?.failed ?? 0) || 0;
-              const rawFirstErr =
-                firstFailed > 0 && Array.isArray(data?.errors) && data.errors.length > 0
-                  ? String((data.errors[0] as { error?: string })?.error ?? '')
-                  : '';
-              const firstLastError = rawFirstErr ? sanitizeMassSendErrorMessage(rawFirstErr) || null : null;
-              const firstGroupId = groupIds[0];
-              const firstOutcomes: { groupId: string; success: boolean; error?: string }[] =
-                Array.isArray(data?.groupOutcomes) && data.groupOutcomes.length > 0
-                  ? (data.groupOutcomes as { groupId?: string; group_id?: string; success?: boolean; error?: string }[]).map(
-                      (o) => ({
-                        groupId: String(o.groupId ?? o.group_id ?? firstGroupId),
-                        success: o.success === true,
-                        ...(o.error
-                          ? { error: sanitizeMassSendErrorMessage(String(o.error)) || String(o.error).slice(0, 200) }
-                          : {}),
-                      })
-                    )
-                  : [
-                      (() => {
-                        const errors = data?.errors as { groupId?: string; error?: string }[] | undefined;
-                        const err = errors?.find((e) => e.groupId === firstGroupId);
-                        if (!err) return { groupId: firstGroupId, success: true };
-                        const msg = String(err.error ?? '');
-                        return {
-                          groupId: firstGroupId,
-                          success: false,
-                          error: sanitizeMassSendErrorMessage(msg) || msg.slice(0, 200),
-                        };
-                      })(),
-                    ];
-              const isComplete = groupIds.length <= 1;
-              await supabaseServiceRole.rpc('increment_mass_send_job_counts', {
-                p_job_id: job.id,
-                p_sent: firstSent,
-                p_failed: firstFailed,
-                p_processed_index: 1,
-                p_last_error: firstLastError,
-                p_status: isComplete ? 'completed' : 'pending',
-                p_now: new Date().toISOString(),
-                p_group_outcomes: firstOutcomes,
-              });
-              firstGroupSent = firstSent > 0;
-              console.log(
-                `${firstGroupSent ? '✅' : '⚠️'} [ACTIVATION] Envio imediato do 1º grupo: sent=${firstSent}, failed=${firstFailed}`
-              );
-            }
-          }
-        } catch (err: any) {
-          clearTimeout(firstGroupTimeout);
-          console.warn('[ACTIVATION] Envio imediato do 1º grupo falhou (cron processará):', err?.message);
-        }
-      }
-
-      // Dispara o worker sempre que possível: campanha de 1 grupo com falha no envio imediato
-      // deixaria o job em processed_index=0 sem trigger se condicionássemos a "mais de um grupo".
+      // Todos os grupos são processados pelo worker (1 por vez, delay fixo de 2s).
+      // Não fazemos envio imediato aqui para evitar que apenas o grupo 0 seja enviado
+      // enquanto os demais ficam presos aguardando o cron.
       if (cronSecret && siteUrl) {
         triggerMassSendProcessFromOrigin(siteUrl);
       } else if (!cronSecret) {
@@ -292,13 +178,7 @@ export async function POST(req: NextRequest) {
           job_id: job.id,
           mass_send: true,
           total_groups: groupIds.length,
-          first_group_sent: firstGroupSent,
-          first_group_attempted: firstGroupAttempted,
-          message: firstGroupSent
-            ? 'Campanha criada. Primeiro grupo enviado como confirmação. O envio continuará em segundo plano. Acompanhe em Ativações > Campanhas de disparo.'
-            : shouldSkipImmediateFirstSend
-              ? 'Campanha criada. O envio PTV continuará em segundo plano para evitar timeout na requisição principal. Acompanhe em Ativações > Campanhas de disparo.'
-            : 'Campanha de disparo em massa criada. O envio continuará em segundo plano. Acompanhe em Ativações > Campanhas de disparo.',
+          message: 'Campanha de disparo em massa criada. O envio continuará em segundo plano. Acompanhe em Ativações > Campanhas de disparo.',
         }),
         { status: 202, headers: { 'Content-Type': 'application/json' } }
       );
@@ -692,17 +572,12 @@ export async function POST(req: NextRequest) {
       !ptvVideoPayload.startsWith('http://') &&
       !ptvVideoPayload.startsWith('https://');
 
-    const useParallel = !shouldSendSequentially && interGroupDelayMs <= 0;
-
-    if (useParallel) {
-      await Promise.all(groupIds.map((groupId: string) => processGroupSend(groupId)));
-    } else {
-      for (let i = 0; i < groupIds.length; i++) {
-        await processGroupSend(groupIds[i]);
-        if (i < groupIds.length - 1 && interGroupDelayMs > 0) {
-          await new Promise((r) => setTimeout(r, interGroupDelayMs));
-        }
+    if (shouldSendSequentially) {
+      for (const groupId of groupIds) {
+        await processGroupSend(groupId);
       }
+    } else {
+      await Promise.all(groupIds.map((groupId: string) => processGroupSend(groupId)));
     }
 
     console.log(`📊 [ACTIVATION] Resultado final: ${results.success} sucessos, ${results.failed} falhas`);

@@ -7,8 +7,9 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { sanitizeMassSendErrorMessage } from '@/lib/utils/activation-send-errors';
 import type { ApiResponse } from '@/lib/utils/response';
 
-/** Grupos por lote quando não há delay configurado. */
-const BATCH_SIZE = 8;
+/** Delay aleatório entre 1s e 2s entre grupos para parecer mais natural. */
+const INTER_GROUP_DELAY_MIN_MS = 1_000;
+const INTER_GROUP_DELAY_MAX_MS = 2_000;
 const LOCK_TTL_MS = 4 * 60 * 1000;
 
 /** Tempo máximo do loop interno por chamada HTTP (deixa margem ao maxDuration da rota). */
@@ -78,7 +79,7 @@ export async function massSendProcessSingleStep(publicOrigin?: string | null): P
 
   const { data: jobs } = await supabaseServiceRole
     .from('activation_mass_send_jobs')
-    .select('id, user_id, message_id, instance_name, group_ids, total_groups, processed_index, status, inter_group_delay_ms')
+    .select('id, user_id, message_id, instance_name, group_ids, total_groups, processed_index, status')
     .in('status', ['pending', 'processing'])
     .or(`locked_at.is.null,locked_at.lt.${lockExpired}`)
     .order('created_at', { ascending: true })
@@ -94,11 +95,8 @@ export async function massSendProcessSingleStep(publicOrigin?: string | null): P
 
   const groupIds = Array.isArray(job.group_ids) ? job.group_ids : [];
   const start = Number(job.processed_index) || 0;
-  const rawDelay = Number((job as { inter_group_delay_ms?: number }).inter_group_delay_ms);
-  const delayMs =
-    Number.isFinite(rawDelay) && rawDelay > 0 ? Math.max(0, Math.min(15_000, Math.floor(rawDelay))) : 0;
-  const effectiveBatchSize = delayMs > 0 ? 1 : BATCH_SIZE;
-  const batch = groupIds.slice(start, start + effectiveBatchSize);
+  // Um grupo por passo — delay fixo de 2s entre eles garante estabilidade na instância.
+  const batch = groupIds.slice(start, start + 1);
 
   if (batch.length === 0) {
     await supabaseServiceRole
@@ -138,9 +136,10 @@ export async function massSendProcessSingleStep(publicOrigin?: string | null): P
     };
   }
 
-  // Após o 1º grupo (ex.: disparo imediato na criação), respeita o delay antes do próximo envio.
-  if (delayMs > 0 && start > 0) {
-    await new Promise((r) => setTimeout(r, delayMs));
+  // Delay fixo de 2s entre grupos (a partir do 2º) para não sobrecarregar a instância.
+  if (start > 0) {
+    const delay = INTER_GROUP_DELAY_MIN_MS + Math.random() * (INTER_GROUP_DELAY_MAX_MS - INTER_GROUP_DELAY_MIN_MS);
+    await new Promise((r) => setTimeout(r, delay));
   }
 
   const siteUrl = resolvePublicSiteUrl(publicOrigin);
@@ -150,7 +149,7 @@ export async function massSendProcessSingleStep(publicOrigin?: string | null): P
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-internal-cron-secret': process.env.CRON_SECRET!,
+      'x-internal-cron-secret': process.env.CRON_SECRET ?? '',
       'x-user-id': job.user_id,
     },
     body: JSON.stringify({
@@ -158,7 +157,6 @@ export async function massSendProcessSingleStep(publicOrigin?: string | null): P
       groupIds: batch,
       instanceName: job.instance_name,
       forceSync: true,
-      interGroupDelayMs: delayMs > 0 ? delayMs : 0,
     }),
   });
 
@@ -198,10 +196,10 @@ export async function massSendProcessSingleStep(publicOrigin?: string | null): P
   }
 
   const newProcessedIndex = start + batch.length;
-  const totalGroups = Number(job.total_groups) || groupIds.length;
-  const isComplete = newProcessedIndex >= totalGroups;
+  // Usa groupIds.length como fonte de verdade para evitar job incompleto quando total_groups diverge.
+  const isComplete = newProcessedIndex >= groupIds.length;
 
-  await supabaseServiceRole.rpc('increment_mass_send_job_counts', {
+  const { error: rpcErr } = await supabaseServiceRole.rpc('increment_mass_send_job_counts', {
     p_job_id: job.id,
     p_sent: sent,
     p_failed: failed,
@@ -211,6 +209,18 @@ export async function massSendProcessSingleStep(publicOrigin?: string | null): P
     p_now: new Date().toISOString(),
     p_group_outcomes: batchOutcomes.length > 0 ? batchOutcomes : null,
   });
+
+  if (rpcErr) {
+    console.error('[MASS-SEND] RPC increment_mass_send_job_counts falhou — liberando lock:', rpcErr.message);
+    await supabaseServiceRole
+      .from('activation_mass_send_jobs')
+      .update({ locked_at: null, locked_by: null, updated_at: new Date().toISOString() })
+      .eq('id', job.id);
+    return {
+      response: { success: false, error: 'Erro interno ao salvar resultado do grupo. Será reprocessado.' },
+      hint: 'retry_lock',
+    };
+  }
 
   const response: ApiResponse = {
     success: true,
