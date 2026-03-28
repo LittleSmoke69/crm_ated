@@ -85,7 +85,22 @@ async function regenerateSignedUrl(message: DbMessage): Promise<string | null> {
 function isTransientError(error?: string): boolean {
   if (!error) return false;
   const e = error.toLowerCase();
-  return e.includes('timeout') || e.includes('fetch failed') || e.includes('504') || e.includes('502') || e.includes('503') || e.includes('econnreset') || e.includes('econnrefused');
+  return e.includes('timeout') || e.includes('fetch failed') || e.includes('504') || e.includes('502') || e.includes('503') || e.includes('econnreset') || e.includes('econnrefused') || e.includes('enotfound') || e.includes('socket hang up');
+}
+
+function extractErrorCause(e: unknown): string {
+  if (!e || typeof e !== 'object') return '';
+  const err = e as { cause?: unknown; message?: string };
+  if (err.cause && typeof err.cause === 'object') {
+    const cause = err.cause as { code?: string; message?: string; cause?: unknown };
+    const parts = [cause.code, cause.message].filter(Boolean);
+    if (cause.cause && typeof cause.cause === 'object') {
+      const inner = cause.cause as { code?: string; message?: string };
+      parts.push(inner.code, inner.message);
+    }
+    return parts.filter(Boolean).join(' | ');
+  }
+  return '';
 }
 
 // ─── Build Evolution Context ─────────────────────────────────────────────────
@@ -245,7 +260,10 @@ async function sendGroupToEvolution(
     if (e.name === 'AbortError') {
       return { success: false, error: `Timeout: Evolution não respondeu em ${EVOLUTION_FETCH_TIMEOUT_MS / 1000}s` };
     }
-    return { success: false, error: e.message || 'Erro de rede ao chamar Evolution' };
+    const cause = extractErrorCause(e);
+    const detail = cause ? `${e.message} (${cause})` : (e.message || 'Erro de rede');
+    console.error(`[MassSend] fetch falhou para ${url}: ${detail}`);
+    return { success: false, error: detail };
   }
 }
 
@@ -405,15 +423,17 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
 
   const { ctx } = ctxResult;
   const groupId = groupIds[currentIndex];
+  console.log(`[MassSend] [${currentIndex + 1}/${total}] Evolution: ${ctx.baseUrl} | tipo: ${ctx.message.message_type} | grupo: ${groupId}`);
 
-  // 5. Envia para 1 grupo
+  // 5. Envia para 1 grupo (até 3 tentativas para erros transientes)
   const t0 = Date.now();
+  const retryDelays = [3_000, 5_000, 8_000];
   let result = await sendGroupToEvolution(ctx, groupId);
 
-  // Retry uma vez para erros transientes
-  if (!result.success && isTransientError(result.error)) {
-    console.warn(`[MassSend] [${currentIndex + 1}/${total}] ${groupId} retry em 3s (${result.error})`);
-    await new Promise((r) => setTimeout(r, 3_000));
+  for (let attempt = 0; attempt < retryDelays.length && !result.success && isTransientError(result.error); attempt++) {
+    const delay = retryDelays[attempt];
+    console.warn(`[MassSend] [${currentIndex + 1}/${total}] ${groupId} retry ${attempt + 1}/3 em ${delay / 1000}s (${result.error})`);
+    await new Promise((r) => setTimeout(r, delay));
     result = await sendGroupToEvolution(ctx, groupId);
   }
 
