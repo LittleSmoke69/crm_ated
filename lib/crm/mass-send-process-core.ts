@@ -12,7 +12,6 @@ import type { ApiResponse } from '@/lib/utils/response';
 const INTER_GROUP_DELAY_MS = 1_000;
 const LOCK_TTL_MS = 4 * 60 * 1000;
 const INNER_LOOP_BUDGET_MS = 110_000;
-const MAX_INNER_STEPS = 100;
 const EVOLUTION_FETCH_TIMEOUT_MS = 30_000;
 const PTV_FETCH_TIMEOUT_MS = 45_000;
 
@@ -42,8 +41,6 @@ type EvolutionContext = {
   isMentionAll: boolean;
   messageContent: string;
 };
-
-type StepHint = 'stop' | 'retry_lock' | 'continue';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -85,12 +82,17 @@ async function regenerateSignedUrl(message: DbMessage): Promise<string | null> {
   }
 }
 
+function isTransientError(error?: string): boolean {
+  if (!error) return false;
+  const e = error.toLowerCase();
+  return e.includes('timeout') || e.includes('fetch failed') || e.includes('504') || e.includes('502') || e.includes('503') || e.includes('econnreset') || e.includes('econnrefused');
+}
+
 // ─── Build Evolution Context (uma vez por job) ───────────────────────────────
 
 async function buildEvolutionContext(
   job: { id: string; user_id: string; message_id: string; instance_name: string }
 ): Promise<{ ctx: EvolutionContext } | { error: string }> {
-  // 1. Busca mensagem
   const { data: message, error: msgErr } = await supabaseServiceRole
     .from('messages')
     .select('id, content, title, message_type, attachment_url, attachment_type, attachment_mime, mention_all, ptv_delay')
@@ -101,7 +103,6 @@ async function buildEvolutionContext(
     return { error: `Mensagem ${job.message_id} não encontrada` };
   }
 
-  // 2. Busca instância + Evolution API
   const { data: instance, error: instErr } = await supabaseServiceRole
     .from('evolution_instances')
     .select('id, apikey, instance_name, evolution_apis!inner(base_url)')
@@ -122,18 +123,16 @@ async function buildEvolutionContext(
     return { error: 'Instância sem base_url ou apikey' };
   }
 
-  // 3. Regenera URL assinada se necessário
   const freshUrl = await regenerateSignedUrl(message as DbMessage);
   if (freshUrl) (message as DbMessage).attachment_url = freshUrl;
 
-  // 4. Baixa vídeo PTV como base64 (uma vez)
   let ptvVideoPayload: string | null = null;
   if (message.message_type === 'ptv' && message.attachment_url) {
     const v = String(message.attachment_url).trim();
     if (v.startsWith('http://') || v.startsWith('https://')) {
       try {
         ptvVideoPayload = await fetchVideoUrlAsBase64(v);
-        console.log(`[MASS-SEND] PTV base64 baixado: ${Math.round(ptvVideoPayload.length / 1024)}KB`);
+        console.log(`[MassSend] PTV base64 baixado: ${Math.round(ptvVideoPayload.length / 1024)}KB`);
       } catch (e: any) {
         return { error: `Falha ao baixar vídeo PTV: ${e.message}` };
       }
@@ -229,7 +228,6 @@ async function sendGroupToEvolution(
         errMsg = text.slice(0, 300);
       }
 
-      // Connection Closed → marca instância como desconectada
       if (/connection\s*closed/i.test(errMsg)) {
         await supabaseServiceRole
           .from('evolution_instances')
@@ -259,7 +257,6 @@ function resolveMediaMeta(message: DbMessage): { mediatype: string; mimetype: st
     const ext = mime.includes('jpeg') ? 'jpg' : mime.includes('gif') ? 'gif' : 'png';
     return { mediatype: 'image', mimetype: mime, fileName: `image.${ext}` };
   }
-  // Fallback por extensão da URL
   const url = String(message.attachment_url || '').toLowerCase();
   if (url.match(/\.(mp4|mov|avi|webm)/) || mime.startsWith('video/')) return { mediatype: 'video', mimetype: mime || 'video/mp4', fileName: 'video.mp4' };
   if (url.match(/\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt)/) || mime.startsWith('application/')) return { mediatype: 'document', mimetype: mime || 'application/pdf', fileName: 'file' };
@@ -291,105 +288,25 @@ async function persistGroupResult(
   });
 
   if (rpcErr) {
-    console.error(`[MASS-SEND] RPC falhou — fallback direto:`, rpcErr.message);
+    console.error(`[MassSend] RPC falhou — fallback direto:`, rpcErr.message);
     await supabaseServiceRole
       .from('activation_mass_send_jobs')
       .update({
         processed_index: newProcessedIndex,
         status: isComplete ? 'completed' : 'processing',
-        locked_at: null,
-        locked_by: null,
         updated_at: now,
       })
       .eq('id', jobId);
   }
 }
 
-// ─── Processar um grupo (um step) ────────────────────────────────────────────
+// ─── Release lock helper ─────────────────────────────────────────────────────
 
-async function processSingleGroup(
-  ctx: EvolutionContext,
-  groupIds: string[],
-  start: number,
-  jobId: string,
-  jobStatus: string
-): Promise<{ hint: StepHint; sent: number; failed: number }> {
-  const now = new Date().toISOString();
-  const lockExpired = new Date(Date.now() - LOCK_TTL_MS).toISOString();
-  const groupId = groupIds[start];
-  const total = groupIds.length;
-
-  // Lock
-  const locked = await supabaseServiceRole
+async function releaseLock(jobId: string): Promise<void> {
+  await supabaseServiceRole
     .from('activation_mass_send_jobs')
-    .update({ status: 'processing', locked_at: now, locked_by: 'mass-send-worker', updated_at: now })
-    .eq('id', jobId)
-    .in('status', [jobStatus, 'processing'])
-    .or('locked_at.is.null,locked_at.lt.' + lockExpired)
-    .select('id')
-    .single();
-
-  if (locked.error || !locked.data) {
-    return { hint: 'retry_lock', sent: 0, failed: 0 };
-  }
-
-  // Delay fixo de 1s entre grupos (a partir do 2º)
-  if (start > 0) {
-    await new Promise((r) => setTimeout(r, INTER_GROUP_DELAY_MS));
-  }
-
-  // Checa pausa antes de enviar
-  const { data: freshJob } = await supabaseServiceRole
-    .from('activation_mass_send_jobs')
-    .select('status')
-    .eq('id', jobId)
-    .single();
-
-  if (freshJob?.status === 'paused') {
-    await supabaseServiceRole
-      .from('activation_mass_send_jobs')
-      .update({ locked_at: null, locked_by: null, updated_at: new Date().toISOString() })
-      .eq('id', jobId);
-    console.log(`[MASS-SEND] [${start + 1}/${total}] PAUSADO pelo usuario`);
-    return { hint: 'stop', sent: 0, failed: 0 };
-  }
-
-  // Envio direto para Evolution com retry
-  const t0 = Date.now();
-  let result = await sendGroupToEvolution(ctx, groupId);
-
-  // Retry uma vez para erros transientes
-  if (!result.success && isTransientError(result.error)) {
-    console.warn(`[MASS-SEND] [${start + 1}/${total}] ${groupId} retry em 3s (${result.error})`);
-    await new Promise((r) => setTimeout(r, 3_000));
-    result = await sendGroupToEvolution(ctx, groupId);
-  }
-
-  const duration = Date.now() - t0;
-  const newIdx = start + 1;
-  const isComplete = newIdx >= total;
-
-  // Log
-  if (result.success) {
-    console.log(`[MASS-SEND] [${start + 1}/${total}] ${groupId} OK (${duration}ms)`);
-  } else {
-    console.error(`[MASS-SEND] [${start + 1}/${total}] ${groupId} FALHA: ${result.error} (${duration}ms)`);
-  }
-
-  // Persiste resultado
-  await persistGroupResult(jobId, groupId, result, newIdx, isComplete);
-
-  return {
-    hint: isComplete ? 'stop' : 'continue',
-    sent: result.success ? 1 : 0,
-    failed: result.success ? 0 : 1,
-  };
-}
-
-function isTransientError(error?: string): boolean {
-  if (!error) return false;
-  const e = error.toLowerCase();
-  return e.includes('timeout') || e.includes('fetch failed') || e.includes('504') || e.includes('502') || e.includes('503') || e.includes('econnreset') || e.includes('econnrefused');
+    .update({ locked_at: null, locked_by: null, updated_at: new Date().toISOString() })
+    .eq('id', jobId);
 }
 
 // ─── Orquestrador principal ───────────────────────────────────────────────────
@@ -423,15 +340,30 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
     return { success: true, data: { processed: true, job_id: job.id, status: 'completed' } };
   }
 
+  // ── Adquire lock UMA VEZ para todo o lote ──────────────────────────────────
+  const now = new Date().toISOString();
+  const locked = await supabaseServiceRole
+    .from('activation_mass_send_jobs')
+    .update({ status: 'processing', locked_at: now, locked_by: 'mass-send-worker', updated_at: now })
+    .eq('id', job.id)
+    .in('status', [job.status, 'processing'])
+    .or('locked_at.is.null,locked_at.lt.' + lockExpired)
+    .select('id')
+    .single();
+
+  if (locked.error || !locked.data) {
+    console.log(`[MassSend] Job ${shortId(job.id)} — não conseguiu adquirir lock (outro worker?)`);
+    return { success: true, data: { processed: false, message: 'Job locked por outro worker' } };
+  }
+
   // Build context (mensagem + instância) — UMA VEZ por job
-  console.log(`[MASS-SEND] ══════════════════════════════════════════════════`);
-  console.log(`[MASS-SEND] Job ${shortId(job.id)} | inst: ${job.instance_name} | ${groupIds.length} grupos (index: ${start})`);
-  console.log(`[MASS-SEND] ══════════════════════════════════════════════════`);
+  console.log(`[MassSend] ══════════════════════════════════════════════════`);
+  console.log(`[MassSend] Job ${shortId(job.id)} | inst: ${job.instance_name} | ${groupIds.length} grupos (index: ${start})`);
+  console.log(`[MassSend] ══════════════════════════════════════════════════`);
 
   const ctxResult = await buildEvolutionContext(job);
   if ('error' in ctxResult) {
-    console.error(`[MASS-SEND] Erro ao montar contexto: ${ctxResult.error}`);
-    // Marca todos os grupos restantes como falha
+    console.error(`[MassSend] Erro ao montar contexto: ${ctxResult.error}`);
     await supabaseServiceRole
       .from('activation_mass_send_jobs')
       .update({
@@ -446,44 +378,86 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
   }
 
   const { ctx } = ctxResult;
-  console.log(`[MASS-SEND] Mensagem: "${ctx.message.title || ctx.message.id}" | tipo: ${ctx.message.message_type} | mentionAll: ${ctx.isMentionAll}`);
+  console.log(`[MassSend] Mensagem: "${ctx.message.title || ctx.message.id}" | tipo: ${ctx.message.message_type} | mentionAll: ${ctx.isMentionAll}`);
   const jobStart = Date.now();
   let totalSent = 0;
   let totalFailed = 0;
   let currentIndex = start;
-  let lastHint: StepHint = 'continue';
+  let paused = false;
 
-  // Loop: processa grupo por grupo dentro do budget
+  // ── Loop: processa grupo por grupo, lock já adquirido ───────────────────────
   while (currentIndex < groupIds.length && Date.now() < budgetEnd) {
-    const { hint, sent, failed } = await processSingleGroup(ctx, groupIds, currentIndex, job.id, job.status);
-    totalSent += sent;
-    totalFailed += failed;
-    lastHint = hint;
+    const groupId = groupIds[currentIndex];
+    const total = groupIds.length;
 
-    if (hint === 'stop') break;
-    if (hint === 'retry_lock') {
-      await new Promise((r) => setTimeout(r, 1200));
-      // Re-read processed_index em caso de retry
-      const { data: fresh } = await supabaseServiceRole
-        .from('activation_mass_send_jobs')
-        .select('processed_index, status')
-        .eq('id', job.id)
-        .single();
-      if (fresh?.status === 'paused') break;
-      currentIndex = Number(fresh?.processed_index) || currentIndex;
-      continue;
+    // Delay fixo de 1s entre grupos (a partir do 2º)
+    if (currentIndex > start) {
+      await new Promise((r) => setTimeout(r, INTER_GROUP_DELAY_MS));
     }
 
-    currentIndex++;
+    // Checa pausa antes de enviar
+    const { data: freshJob } = await supabaseServiceRole
+      .from('activation_mass_send_jobs')
+      .select('status')
+      .eq('id', job.id)
+      .single();
+
+    if (freshJob?.status === 'paused') {
+      console.log(`[MassSend] [${currentIndex + 1}/${total}] PAUSADO pelo usuario`);
+      paused = true;
+      break;
+    }
+
+    // Renova o lock a cada grupo (mantém o mesmo worker, só atualiza locked_at)
+    await supabaseServiceRole
+      .from('activation_mass_send_jobs')
+      .update({ locked_at: new Date().toISOString() })
+      .eq('id', job.id);
+
+    // Envio direto para Evolution
+    const t0 = Date.now();
+    let result = await sendGroupToEvolution(ctx, groupId);
+
+    // Retry uma vez para erros transientes
+    if (!result.success && isTransientError(result.error)) {
+      console.warn(`[MassSend] [${currentIndex + 1}/${total}] ${groupId} retry em 3s (${result.error})`);
+      await new Promise((r) => setTimeout(r, 3_000));
+      result = await sendGroupToEvolution(ctx, groupId);
+    }
+
+    const duration = Date.now() - t0;
+    const newIdx = currentIndex + 1;
+    const isComplete = newIdx >= total;
+
+    if (result.success) {
+      console.log(`[MassSend] [${currentIndex + 1}/${total}] ${groupId} OK (${duration}ms)`);
+      totalSent++;
+    } else {
+      console.error(`[MassSend] [${currentIndex + 1}/${total}] ${groupId} FALHA: ${result.error} (${duration}ms)`);
+      totalFailed++;
+    }
+
+    // Persiste resultado (não toca em locked_at/locked_by)
+    await persistGroupResult(job.id, groupId, result, newIdx, isComplete);
+
+    currentIndex = newIdx;
+  }
+
+  // ── Libera lock ─────────────────────────────────────────────────────────────
+  if (paused) {
+    // Pausa: libera lock, mantém status 'paused' (já setado pelo PATCH do usuário)
+    await releaseLock(job.id);
+  } else {
+    await releaseLock(job.id);
   }
 
   const elapsed = ((Date.now() - jobStart) / 1000).toFixed(1);
   const isComplete = currentIndex >= groupIds.length;
-  console.log(`[MASS-SEND] ──────────────────────────────────────────────────`);
-  console.log(`[MASS-SEND] Job ${shortId(job.id)} ${isComplete ? 'CONCLUIDO' : 'PARCIAL'}: ${totalSent} OK / ${totalFailed} FALHA | ${elapsed}s | processados ate ${currentIndex}/${groupIds.length}`);
-  console.log(`[MASS-SEND] ──────────────────────────────────────────────────`);
+  console.log(`[MassSend] ──────────────────────────────────────────────────`);
+  console.log(`[MassSend] Job ${shortId(job.id)} ${isComplete ? 'CONCLUIDO' : paused ? 'PAUSADO' : 'PARCIAL'}: ${totalSent} OK / ${totalFailed} FALHA | ${elapsed}s | processados ate ${currentIndex}/${groupIds.length}`);
+  console.log(`[MassSend] ──────────────────────────────────────────────────`);
 
-  const morePending = !isComplete && lastHint !== 'stop';
+  const morePending = !isComplete && !paused;
 
   return {
     success: true,
@@ -492,7 +466,7 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
       job_id: job.id,
       sent: totalSent,
       failed: totalFailed,
-      status: isComplete ? 'completed' : 'processing',
+      status: isComplete ? 'completed' : paused ? 'paused' : 'processing',
       ...(morePending ? { more_pending: true } : {}),
     },
   };
