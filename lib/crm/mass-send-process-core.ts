@@ -1,7 +1,8 @@
 /**
  * Worker de campanhas de disparo em massa (ativações).
- * Usado pela rota POST /api/crm/activations/mass-send/process.
- * Chama a Evolution API diretamente (sem passar por /api/send).
+ * Cada chamada a executeMassSendProcess() processa EXATAMENTE 1 grupo,
+ * persiste o resultado, libera o lock e retorna.
+ * A re-invocação é feita pela Netlify Scheduled Function (while-loop).
  */
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { sanitizeMassSendErrorMessage } from '@/lib/utils/activation-send-errors';
@@ -9,11 +10,10 @@ import type { ApiResponse } from '@/lib/utils/response';
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
-const INTER_GROUP_DELAY_MS = 1_000;
-const LOCK_TTL_MS = 4 * 60 * 1000;
-const INNER_LOOP_BUDGET_MS = 110_000;
 const EVOLUTION_FETCH_TIMEOUT_MS = 30_000;
 const PTV_FETCH_TIMEOUT_MS = 45_000;
+/** Lock expira em 60s — se a função morrer, o próximo poll recupera rápido. */
+const LOCK_TTL_MS = 60_000;
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -88,7 +88,7 @@ function isTransientError(error?: string): boolean {
   return e.includes('timeout') || e.includes('fetch failed') || e.includes('504') || e.includes('502') || e.includes('503') || e.includes('econnreset') || e.includes('econnrefused');
 }
 
-// ─── Build Evolution Context (uma vez por job) ───────────────────────────────
+// ─── Build Evolution Context ─────────────────────────────────────────────────
 
 async function buildEvolutionContext(
   job: { id: string; user_id: string; message_id: string; instance_name: string }
@@ -300,22 +300,44 @@ async function persistGroupResult(
   }
 }
 
-// ─── Release lock helper ─────────────────────────────────────────────────────
+// ─── Reconcilia contadores finais a partir da tabela de grupos ────────────────
 
-async function releaseLock(jobId: string): Promise<void> {
+async function reconcileFinalCounts(jobId: string): Promise<void> {
+  const { data: rows } = await supabaseServiceRole
+    .from('activation_mass_send_job_groups')
+    .select('success')
+    .eq('job_id', jobId);
+
+  if (!Array.isArray(rows) || rows.length === 0) return;
+
+  let sent = 0;
+  let failed = 0;
+  for (const r of rows) {
+    if (r.success === true) sent++;
+    else failed++;
+  }
+
   await supabaseServiceRole
     .from('activation_mass_send_jobs')
-    .update({ locked_at: null, locked_by: null, updated_at: new Date().toISOString() })
+    .update({
+      sent_count: sent,
+      failed_count: failed,
+      status: 'completed',
+      locked_at: null,
+      locked_by: null,
+      updated_at: new Date().toISOString(),
+    })
     .eq('id', jobId);
+
+  console.log(`[MassSend] Job ${jobId.slice(0, 8)} RECONCILIADO: ${sent} OK, ${failed} falha (${rows.length} total)`);
 }
 
-// ─── Orquestrador principal ───────────────────────────────────────────────────
+// ─── Orquestrador: processa 1 grupo por chamada ──────────────────────────────
 
 export async function executeMassSendProcess(_publicOrigin?: string | null): Promise<ApiResponse> {
-  const budgetEnd = Date.now() + INNER_LOOP_BUDGET_MS;
   const lockExpired = new Date(Date.now() - LOCK_TTL_MS).toISOString();
 
-  // Busca próximo job
+  // 1. Busca próximo job pendente/processing com lock disponível
   const { data: jobs } = await supabaseServiceRole
     .from('activation_mass_send_jobs')
     .select('id, user_id, message_id, instance_name, group_ids, total_groups, processed_index, status')
@@ -330,17 +352,16 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
   }
 
   const groupIds = Array.isArray(job.group_ids) ? (job.group_ids as string[]) : [];
-  const start = Number(job.processed_index) || 0;
+  const currentIndex = Number(job.processed_index) || 0;
+  const total = groupIds.length;
 
-  if (start >= groupIds.length) {
-    await supabaseServiceRole
-      .from('activation_mass_send_jobs')
-      .update({ status: 'completed', locked_at: null, locked_by: null, updated_at: new Date().toISOString() })
-      .eq('id', job.id);
+  // Já terminou? Reconcilia contadores e marca completo.
+  if (currentIndex >= total) {
+    await reconcileFinalCounts(job.id);
     return { success: true, data: { processed: true, job_id: job.id, status: 'completed' } };
   }
 
-  // ── Adquire lock UMA VEZ para todo o lote ──────────────────────────────────
+  // 2. Adquire lock
   const now = new Date().toISOString();
   const locked = await supabaseServiceRole
     .from('activation_mass_send_jobs')
@@ -352,121 +373,85 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
     .single();
 
   if (locked.error || !locked.data) {
-    console.log(`[MassSend] Job ${shortId(job.id)} — não conseguiu adquirir lock (outro worker?)`);
     return { success: true, data: { processed: false, message: 'Job locked por outro worker' } };
   }
 
-  // Build context (mensagem + instância) — UMA VEZ por job
-  console.log(`[MassSend] ══════════════════════════════════════════════════`);
-  console.log(`[MassSend] Job ${shortId(job.id)} | inst: ${job.instance_name} | ${groupIds.length} grupos (index: ${start})`);
-  console.log(`[MassSend] ══════════════════════════════════════════════════`);
+  // 3. Checa pausa
+  const { data: freshJob } = await supabaseServiceRole
+    .from('activation_mass_send_jobs')
+    .select('status')
+    .eq('id', job.id)
+    .single();
 
-  const ctxResult = await buildEvolutionContext(job);
-  if ('error' in ctxResult) {
-    console.error(`[MassSend] Erro ao montar contexto: ${ctxResult.error}`);
+  if (freshJob?.status === 'paused') {
     await supabaseServiceRole
       .from('activation_mass_send_jobs')
-      .update({
-        status: 'failed',
-        last_error: ctxResult.error,
-        locked_at: null,
-        locked_by: null,
-        updated_at: new Date().toISOString(),
-      })
+      .update({ locked_at: null, locked_by: null, updated_at: new Date().toISOString() })
+      .eq('id', job.id);
+    console.log(`[MassSend] Job ${shortId(job.id)} [${currentIndex + 1}/${total}] PAUSADO`);
+    return { success: true, data: { processed: true, job_id: job.id, status: 'paused' } };
+  }
+
+  // 4. Build context (mensagem + instância)
+  const ctxResult = await buildEvolutionContext(job);
+  if ('error' in ctxResult) {
+    console.error(`[MassSend] Job ${shortId(job.id)} erro contexto: ${ctxResult.error}`);
+    await supabaseServiceRole
+      .from('activation_mass_send_jobs')
+      .update({ status: 'failed', last_error: ctxResult.error, locked_at: null, locked_by: null, updated_at: new Date().toISOString() })
       .eq('id', job.id);
     return { success: false, error: ctxResult.error };
   }
 
   const { ctx } = ctxResult;
-  console.log(`[MassSend] Mensagem: "${ctx.message.title || ctx.message.id}" | tipo: ${ctx.message.message_type} | mentionAll: ${ctx.isMentionAll}`);
-  const jobStart = Date.now();
-  let totalSent = 0;
-  let totalFailed = 0;
-  let currentIndex = start;
-  let paused = false;
+  const groupId = groupIds[currentIndex];
 
-  // ── Loop: processa grupo por grupo, lock já adquirido ───────────────────────
-  while (currentIndex < groupIds.length && Date.now() < budgetEnd) {
-    const groupId = groupIds[currentIndex];
-    const total = groupIds.length;
+  // 5. Envia para 1 grupo
+  const t0 = Date.now();
+  let result = await sendGroupToEvolution(ctx, groupId);
 
-    // Delay fixo de 1s entre grupos (a partir do 2º)
-    if (currentIndex > start) {
-      await new Promise((r) => setTimeout(r, INTER_GROUP_DELAY_MS));
-    }
+  // Retry uma vez para erros transientes
+  if (!result.success && isTransientError(result.error)) {
+    console.warn(`[MassSend] [${currentIndex + 1}/${total}] ${groupId} retry em 3s (${result.error})`);
+    await new Promise((r) => setTimeout(r, 3_000));
+    result = await sendGroupToEvolution(ctx, groupId);
+  }
 
-    // Checa pausa antes de enviar
-    const { data: freshJob } = await supabaseServiceRole
-      .from('activation_mass_send_jobs')
-      .select('status')
-      .eq('id', job.id)
-      .single();
+  const duration = Date.now() - t0;
+  const newIdx = currentIndex + 1;
+  const isComplete = newIdx >= total;
 
-    if (freshJob?.status === 'paused') {
-      console.log(`[MassSend] [${currentIndex + 1}/${total}] PAUSADO pelo usuario`);
-      paused = true;
-      break;
-    }
+  if (result.success) {
+    console.log(`[MassSend] [${currentIndex + 1}/${total}] ${groupId} OK (${duration}ms)`);
+  } else {
+    console.error(`[MassSend] [${currentIndex + 1}/${total}] ${groupId} FALHA: ${result.error} (${duration}ms)`);
+  }
 
-    // Renova o lock a cada grupo (mantém o mesmo worker, só atualiza locked_at)
+  // 6. Persiste resultado + avança processed_index
+  await persistGroupResult(job.id, groupId, result, newIdx, isComplete);
+
+  // 7. Se completou, reconcilia contadores reais. Senão, libera lock.
+  if (isComplete) {
+    await reconcileFinalCounts(job.id);
+  } else {
     await supabaseServiceRole
       .from('activation_mass_send_jobs')
-      .update({ locked_at: new Date().toISOString() })
+      .update({ locked_at: null, locked_by: null, updated_at: new Date().toISOString() })
       .eq('id', job.id);
-
-    // Envio direto para Evolution
-    const t0 = Date.now();
-    let result = await sendGroupToEvolution(ctx, groupId);
-
-    // Retry uma vez para erros transientes
-    if (!result.success && isTransientError(result.error)) {
-      console.warn(`[MassSend] [${currentIndex + 1}/${total}] ${groupId} retry em 3s (${result.error})`);
-      await new Promise((r) => setTimeout(r, 3_000));
-      result = await sendGroupToEvolution(ctx, groupId);
-    }
-
-    const duration = Date.now() - t0;
-    const newIdx = currentIndex + 1;
-    const isComplete = newIdx >= total;
-
-    if (result.success) {
-      console.log(`[MassSend] [${currentIndex + 1}/${total}] ${groupId} OK (${duration}ms)`);
-      totalSent++;
-    } else {
-      console.error(`[MassSend] [${currentIndex + 1}/${total}] ${groupId} FALHA: ${result.error} (${duration}ms)`);
-      totalFailed++;
-    }
-
-    // Persiste resultado (não toca em locked_at/locked_by)
-    await persistGroupResult(job.id, groupId, result, newIdx, isComplete);
-
-    currentIndex = newIdx;
   }
 
-  // ── Libera lock ─────────────────────────────────────────────────────────────
-  if (paused) {
-    // Pausa: libera lock, mantém status 'paused' (já setado pelo PATCH do usuário)
-    await releaseLock(job.id);
-  } else {
-    await releaseLock(job.id);
-  }
-
-  const elapsed = ((Date.now() - jobStart) / 1000).toFixed(1);
-  const isComplete = currentIndex >= groupIds.length;
-  console.log(`[MassSend] ──────────────────────────────────────────────────`);
-  console.log(`[MassSend] Job ${shortId(job.id)} ${isComplete ? 'CONCLUIDO' : paused ? 'PAUSADO' : 'PARCIAL'}: ${totalSent} OK / ${totalFailed} FALHA | ${elapsed}s | processados ate ${currentIndex}/${groupIds.length}`);
-  console.log(`[MassSend] ──────────────────────────────────────────────────`);
-
-  const morePending = !isComplete && !paused;
+  const morePending = !isComplete;
 
   return {
     success: true,
     data: {
       processed: true,
       job_id: job.id,
-      sent: totalSent,
-      failed: totalFailed,
-      status: isComplete ? 'completed' : paused ? 'paused' : 'processing',
+      sent: result.success ? 1 : 0,
+      failed: result.success ? 0 : 1,
+      current_index: newIdx,
+      total,
+      status: isComplete ? 'completed' : 'processing',
       ...(morePending ? { more_pending: true } : {}),
     },
   };

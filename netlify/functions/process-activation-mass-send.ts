@@ -1,8 +1,9 @@
 /**
  * Netlify Scheduled Function: process-activation-mass-send
  *
- * O agendamento Netlify é no mínimo 1/min. A frequência em segundos vem do polling aqui:
- * entre chamadas a /api/crm/activations/mass-send/process enquanto houver fila (env MASS_SEND_CRON_POLL_INTERVAL_MS).
+ * Roda a cada 1 min (mín. Netlify). Timeout: 120s.
+ * Cada iteração chama a API route que processa EXATAMENTE 1 grupo.
+ * O delay de 1s entre grupos é aplicado aqui entre as chamadas.
  */
 
 interface HandlerEvent {
@@ -19,15 +20,11 @@ interface HandlerResponse {
   headers?: Record<string, string>;
 }
 
-function resolvePollIntervalMs(): number {
-  const raw = process.env.MASS_SEND_CRON_POLL_INTERVAL_MS;
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return 2000;
-  return Math.min(30_000, Math.max(500, Math.floor(n)));
-}
+/** Delay entre grupos (1s). */
+const INTER_GROUP_DELAY_MS = 1_000;
 
-/** Orçamento total em ms (timeout da função é 120s; usamos 110s como teto seguro). */
-const MAX_LOOP_MS = 110_000;
+/** Orçamento total da função (timeout é 120s, usamos 115s como teto). */
+const MAX_LOOP_MS = 115_000;
 
 function parseProcessBody(text: string): unknown {
   const trimmed = text.trimStart();
@@ -43,10 +40,9 @@ function parseProcessBody(text: string): unknown {
 export const handler = async (_event: HandlerEvent, _context: HandlerContext): Promise<HandlerResponse> => {
   const siteUrl = process.env.URL || process.env.SITE_URL;
   const cronSecret = process.env.CRON_SECRET;
-  const pollMs = resolvePollIntervalMs();
 
   if (!siteUrl || !cronSecret) {
-    console.warn('[process-activation-mass-send] URL ou CRON_SECRET não configurados');
+    console.warn('[mass-send-cron] URL ou CRON_SECRET não configurados');
     return {
       statusCode: 200,
       body: JSON.stringify({ ok: false, message: 'Configuração ausente' }),
@@ -56,12 +52,13 @@ export const handler = async (_event: HandlerEvent, _context: HandlerContext): P
 
   const processUrl = `${siteUrl.replace(/\/$/, '')}/api/crm/activations/mass-send/process`;
   const startTime = Date.now();
-  const results: unknown[] = [];
   let iteration = 0;
+  let totalSent = 0;
+  let totalFailed = 0;
 
   while (Date.now() - startTime < MAX_LOOP_MS) {
     iteration++;
-    let body: unknown;
+
     try {
       const res = await fetch(processUrl, {
         method: 'POST',
@@ -72,70 +69,78 @@ export const handler = async (_event: HandlerEvent, _context: HandlerContext): P
       });
 
       const text = await res.text();
-      body = parseProcessBody(text);
+      const body = parseProcessBody(text) as Record<string, unknown>;
+      const data = body?.data as Record<string, unknown> | undefined;
 
       if (!res.ok) {
-        console.error(`[process-activation-mass-send] Iteração ${iteration}: API retornou ${res.status}`, text);
-        results.push({ iteration, ok: false, status: res.status, body });
+        console.error(`[mass-send-cron] #${iteration} API ${res.status}:`, text.slice(0, 200));
         break;
       }
 
-      results.push({ iteration, ok: true, body });
-
-      const bodyObj = body as Record<string, unknown>;
-      const data = bodyObj?.data as Record<string, unknown> | undefined;
-      const msg = String(data?.message ?? '').toLowerCase();
-
+      // Nenhum job na fila → encerra
       if (data?.processed === false) {
-        if (msg.includes('nenhum job pendente') || msg.includes('nenhum job')) {
-          console.log(`[process-activation-mass-send] Fila vazia na iteração ${iteration}. Encerrando.`);
+        const msg = String(data?.message ?? '').toLowerCase();
+        if (msg.includes('nenhum job')) {
+          console.log(`[mass-send-cron] Fila vazia. ${iteration} iterações, ${totalSent} OK, ${totalFailed} falha.`);
           break;
         }
-        if (msg.includes('já em processamento') || msg.includes('em processamento')) {
-          console.log(`[process-activation-mass-send] Lock ocupado na iteração ${iteration}, aguardando 1,5s…`);
-          await new Promise((r) => setTimeout(r, 1500));
+        // Lock ocupado por outro worker → aguarda e tenta de novo
+        if (msg.includes('lock')) {
+          console.log(`[mass-send-cron] #${iteration} lock ocupado, aguardando 2s…`);
+          await new Promise((r) => setTimeout(r, 2000));
           continue;
         }
-        console.log(`[process-activation-mass-send] processed=false (${data?.message ?? ''}), aguardando ${pollMs}ms`);
-        await new Promise((r) => setTimeout(r, pollMs));
+        // Outro caso de processed=false
+        console.log(`[mass-send-cron] #${iteration} processed=false: ${data?.message}`);
+        await new Promise((r) => setTimeout(r, 2000));
         continue;
       }
 
+      // Processou 1 grupo
       if (data?.processed === true) {
+        totalSent += Number(data.sent ?? 0);
+        totalFailed += Number(data.failed ?? 0);
+
         const status = data.status;
-        const deferred = data.follow_up_deferred === true;
-        if (status === 'processing' || deferred) {
-          console.log(
-            `[process-activation-mass-send] Fila com trabalho restante (status=${String(status)} deferred=${deferred}), próximo poll em ${pollMs}ms`
-          );
-          await new Promise((r) => setTimeout(r, pollMs));
-          continue;
+        const idx = data.current_index;
+        const total = data.total;
+
+        // Campanha pausada → para
+        if (status === 'paused') {
+          console.log(`[mass-send-cron] Job pausado. ${iteration} iterações, ${totalSent} OK, ${totalFailed} falha.`);
+          break;
         }
+
+        // Campanha concluída → verifica se há outro job
         if (status === 'completed') {
-          console.log(`[process-activation-mass-send] Lote concluído na iteração ${iteration}, verificando se há outro job em ${pollMs}ms`);
-          await new Promise((r) => setTimeout(r, pollMs));
+          console.log(`[mass-send-cron] Job concluído [${idx}/${total}]. Verificando próximo job…`);
+          await new Promise((r) => setTimeout(r, INTER_GROUP_DELAY_MS));
           continue;
         }
-        await new Promise((r) => setTimeout(r, pollMs));
-        continue;
+
+        // Ainda tem mais grupos → delay de 1s e próximo
+        if (data.more_pending) {
+          console.log(`[mass-send-cron] #${iteration} [${idx}/${total}] OK. Próximo em ${INTER_GROUP_DELAY_MS}ms…`);
+          await new Promise((r) => setTimeout(r, INTER_GROUP_DELAY_MS));
+          continue;
+        }
       }
 
-      await new Promise((r) => setTimeout(r, pollMs));
+      // Fallback: aguarda e tenta
+      await new Promise((r) => setTimeout(r, INTER_GROUP_DELAY_MS));
     } catch (err: unknown) {
-      console.error(`[process-activation-mass-send] Iteração ${iteration}: erro ao chamar API:`, err);
-      results.push({ iteration, ok: false, error: String(err) });
-      break;
+      console.error(`[mass-send-cron] #${iteration} erro:`, err);
+      // Erro de rede → tenta de novo após 3s
+      await new Promise((r) => setTimeout(r, 3000));
     }
   }
 
   const totalMs = Date.now() - startTime;
-  console.log(
-    `[process-activation-mass-send] Concluído: ${results.length} iterações em ${totalMs}ms (poll=${pollMs}ms)`
-  );
+  console.log(`[mass-send-cron] Concluído: ${iteration} iterações em ${Math.round(totalMs / 1000)}s | ${totalSent} OK, ${totalFailed} falha`);
 
   return {
     statusCode: 200,
-    body: JSON.stringify({ ok: true, iterations: results.length, elapsed_ms: totalMs, poll_ms: pollMs, results }),
+    body: JSON.stringify({ ok: true, iterations: iteration, elapsed_ms: totalMs, sent: totalSent, failed: totalFailed }),
     headers: { 'Content-Type': 'application/json' },
   };
 };
