@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
-import { X, Loader2, RotateCcw, Users } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { X, Loader2, RotateCcw, Users, CheckCircle2, XCircle, Clock } from 'lucide-react';
 import { sanitizeMassSendErrorMessage } from '@/lib/utils/activation-send-errors';
 
 export type MassSendGroupOutcome = {
@@ -22,15 +22,21 @@ export type MassSendJobDetail = {
   failed_count: number;
   processed_index?: number;
   last_error: string | null;
-  /** Preferencial: linhas em activation_mass_send_job_groups (API GET). */
   group_outcomes?: MassSendGroupOutcome[] | null;
-  /** Legado / redundante: jsonb na própria campanha. */
   group_results?: MassSendGroupOutcome[] | null;
   group_ids?: string[] | null;
-  /** Mapa group_id → nome do grupo (vindo da API). */
   groupNameMap?: Record<string, string> | null;
   created_at: string;
 };
+
+type GroupEntry = {
+  groupId: string;
+  groupName: string | null;
+  status: 'success' | 'failed' | 'pending';
+  error?: string;
+};
+
+type FilterTab = 'all' | 'success' | 'failed' | 'pending';
 
 async function safeResponseJson(response: Response): Promise<{
   success?: boolean;
@@ -89,6 +95,7 @@ const MassSendJobDetailModal: React.FC<MassSendJobDetailModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [job, setJob] = useState<MassSendJobDetail | null>(null);
   const [retrying, setRetrying] = useState(false);
+  const [filter, setFilter] = useState<FilterTab>('all');
 
   const load = useCallback(async () => {
     if (!userId || !jobId) return;
@@ -119,17 +126,60 @@ const MassSendJobDetailModal: React.FC<MassSendJobDetailModalProps> = ({
     }
   }, [isOpen, jobId, userId, load]);
 
+  // Build unified group list
+  const { allGroups, counts } = useMemo(() => {
+    if (!job) return { allGroups: [] as GroupEntry[], counts: { success: 0, failed: 0, pending: 0 } };
+
+    const outcomes = normalizeOutcomes(job.group_outcomes ?? job.group_results, job.groupNameMap);
+    const outcomeMap = new Map<string, MassSendGroupOutcome>();
+    for (const o of outcomes) {
+      outcomeMap.set(o.groupId, o);
+    }
+
+    const nameMap = job.groupNameMap ?? {};
+    const allIds = Array.isArray(job.group_ids) ? (job.group_ids as string[]) : [];
+
+    // If no group_ids, fall back to outcomes only
+    const ids = allIds.length > 0 ? allIds : outcomes.map((o) => o.groupId);
+
+    const entries: GroupEntry[] = ids.map((gid) => {
+      const outcome = outcomeMap.get(gid);
+      if (outcome) {
+        return {
+          groupId: gid,
+          groupName: outcome.groupName || nameMap[gid] || null,
+          status: outcome.success ? 'success' : 'failed',
+          ...(outcome.error ? { error: outcome.error } : {}),
+        } as GroupEntry;
+      }
+      return {
+        groupId: gid,
+        groupName: nameMap[gid] || null,
+        status: 'pending',
+      } as GroupEntry;
+    });
+
+    const c = { success: 0, failed: 0, pending: 0 };
+    for (const e of entries) c[e.status]++;
+
+    return { allGroups: entries, counts: c };
+  }, [job]);
+
+  const filtered = useMemo(() => {
+    if (filter === 'all') return allGroups;
+    return allGroups.filter((g) => g.status === filter);
+  }, [allGroups, filter]);
+
+  const failedIds = useMemo(
+    () => allGroups.filter((g) => g.status === 'failed').map((g) => g.groupId),
+    [allGroups]
+  );
+
   if (!isOpen) return null;
 
-  const outcomes = normalizeOutcomes(job?.group_outcomes ?? job?.group_results, job?.groupNameMap);
-  const okList = outcomes.filter((o) => o.success);
-  const failList = outcomes.filter((o) => !o.success);
-  const failedIds = failList.map((o) => o.groupId);
-  const noPerGroupDetail =
-    job &&
-    outcomes.length === 0 &&
-    (job.sent_count > 0 || job.failed_count > 0) &&
-    ['completed', 'failed', 'processing', 'pending'].includes(job.status);
+  const total = allGroups.length || job?.total_groups || 0;
+  const pctSuccess = total > 0 ? (counts.success / total) * 100 : 0;
+  const pctFailed = total > 0 ? (counts.failed / total) * 100 : 0;
 
   const handleRetryFailures = async () => {
     if (!userId || !job || failedIds.length === 0) return;
@@ -168,14 +218,33 @@ const MassSendJobDetailModal: React.FC<MassSendJobDetailModalProps> = ({
     }
   };
 
+  const filterTabs: { key: FilterTab; label: string; count: number; color: string }[] = [
+    { key: 'all', label: 'Todos', count: total, color: 'text-gray-700 dark:text-gray-200' },
+    { key: 'success', label: 'Enviados', count: counts.success, color: 'text-green-700 dark:text-green-300' },
+    { key: 'failed', label: 'Falhas', count: counts.failed, color: 'text-red-700 dark:text-red-300' },
+    { key: 'pending', label: 'Pendentes', count: counts.pending, color: 'text-amber-700 dark:text-amber-300' },
+  ];
+
+  const statusIcon = (s: GroupEntry['status']) => {
+    switch (s) {
+      case 'success':
+        return <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />;
+      case 'failed':
+        return <XCircle className="w-4 h-4 text-red-500 shrink-0" />;
+      case 'pending':
+        return <Clock className="w-4 h-4 text-amber-400 shrink-0" />;
+    }
+  };
+
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50" role="dialog" aria-modal="true">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-2 sm:p-4 bg-black/50" role="dialog" aria-modal="true">
       <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-xl border border-gray-200 dark:border-[#404040] w-full max-w-3xl max-h-[90vh] flex flex-col">
-        <div className="flex items-center justify-between gap-3 p-4 border-b border-gray-200 dark:border-[#404040]">
+        {/* Header */}
+        <div className="flex items-center justify-between gap-3 p-3 sm:p-4 border-b border-gray-200 dark:border-[#404040]">
           <div className="flex items-center gap-2 min-w-0">
             <Users className="w-5 h-5 text-[#8CD955] shrink-0" />
             <div className="min-w-0">
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-white truncate">Grupos da campanha</h2>
+              <h2 className="text-base sm:text-lg font-semibold text-gray-900 dark:text-white truncate">Grupos da campanha</h2>
               {job && (
                 <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
                   {job.message_title || job.message_id?.slice(0, 8)} · {job.instance_name}
@@ -193,7 +262,8 @@ const MassSendJobDetailModal: React.FC<MassSendJobDetailModalProps> = ({
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3">
           {loading && (
             <div className="flex flex-col items-center justify-center py-16 text-gray-500 dark:text-gray-400">
               <Loader2 className="w-8 h-8 animate-spin mb-2 text-[#8CD955]" />
@@ -203,66 +273,118 @@ const MassSendJobDetailModal: React.FC<MassSendJobDetailModalProps> = ({
 
           {!loading && job && (
             <>
+              {/* Status banner */}
               {job.status === 'paused' && (
                 <p className="text-sm text-violet-800 dark:text-violet-200 bg-violet-50 dark:bg-violet-900/30 border border-violet-200 dark:border-violet-800 rounded-lg px-3 py-2">
                   Campanha pausada. Retome na lista de campanhas (botão play) para continuar o envio.
                 </p>
               )}
-
-              {job.status !== 'completed' && job.status !== 'paused' && (
+              {(job.status === 'processing' || job.status === 'pending') && (
                 <p className="text-sm text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2">
-                  {job.status === 'processing' || job.status === 'pending'
-                    ? 'Campanha em andamento. A lista abaixo reflete apenas os grupos já processados até agora.'
-                    : `Status: ${job.status}. Confira os totais e a lista registrada.`}
+                  Campanha em andamento. A lista atualiza conforme os grupos são processados.
                 </p>
               )}
 
-              {noPerGroupDetail && (
-                <p className="text-sm text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg px-3 py-2">
-                  Não há detalhe por grupo para esta campanha (registrado antes da atualização ou dados indisponíveis).
-                  Você ainda vê os totais na tabela: {job.sent_count} sucesso(s), {job.failed_count} falha(s).
-                </p>
-              )}
-
-              {outcomes.length > 0 && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="rounded-lg border border-green-200 dark:border-green-900/50 bg-green-50/80 dark:bg-green-950/20 p-3 min-h-[120px]">
-                    <h3 className="text-sm font-semibold text-green-800 dark:text-green-200 mb-2">
-                      Enviados com sucesso ({okList.length})
-                    </h3>
-                    <ul className="text-xs space-y-1.5 max-h-48 overflow-y-auto font-mono text-green-900 dark:text-green-100 break-all">
-                      {okList.length === 0 ? (
-                        <li className="text-green-700/70 dark:text-green-300/70">Nenhum ainda nesta lista.</li>
-                      ) : (
-                        okList.map((o) => <li key={o.groupId}>{o.groupName || o.groupId}</li>)
-                      )}
-                    </ul>
-                  </div>
-                  <div className="rounded-lg border border-red-200 dark:border-red-900/50 bg-red-50/80 dark:bg-red-950/20 p-3 min-h-[120px]">
-                    <h3 className="text-sm font-semibold text-red-800 dark:text-red-200 mb-2">
-                      Falhas ({failList.length})
-                    </h3>
-                    <ul className="text-xs space-y-2 max-h-56 overflow-y-auto">
-                      {failList.length === 0 ? (
-                        <li className="text-red-700/70 dark:text-red-300/70 font-mono">Nenhuma falha registrada.</li>
-                      ) : (
-                        failList.map((o) => (
-                          <li key={o.groupId} className="break-all border-b border-red-200/50 dark:border-red-900/30 pb-2 last:border-0">
-                            <span className="text-red-900 dark:text-red-100 font-medium">
-                              {o.groupName || o.groupId}
-                            </span>
-                            {o.error && (
-                              <span className="block text-red-700 dark:text-red-300 mt-0.5 whitespace-pre-wrap font-mono">
-                                {sanitizeMassSendErrorMessage(o.error) || o.error}
-                              </span>
-                            )}
-                          </li>
-                        ))
-                      )}
-                    </ul>
-                  </div>
+              {/* Progress bar */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400">
+                  <span>Progresso: {counts.success + counts.failed} de {total} grupos</span>
+                  <span>{total > 0 ? Math.round(((counts.success + counts.failed) / total) * 100) : 0}%</span>
                 </div>
-              )}
+                <div className="w-full h-2.5 bg-gray-200 dark:bg-[#404040] rounded-full overflow-hidden flex">
+                  {pctSuccess > 0 && (
+                    <div
+                      className="h-full bg-green-500 transition-all duration-300"
+                      style={{ width: `${pctSuccess}%` }}
+                    />
+                  )}
+                  {pctFailed > 0 && (
+                    <div
+                      className="h-full bg-red-500 transition-all duration-300"
+                      style={{ width: `${pctFailed}%` }}
+                    />
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                  <span className="flex items-center gap-1 text-green-700 dark:text-green-300">
+                    <span className="w-2 h-2 rounded-full bg-green-500 inline-block" />
+                    {counts.success} enviado{counts.success !== 1 ? 's' : ''}
+                  </span>
+                  <span className="flex items-center gap-1 text-red-700 dark:text-red-300">
+                    <span className="w-2 h-2 rounded-full bg-red-500 inline-block" />
+                    {counts.failed} falha{counts.failed !== 1 ? 's' : ''}
+                  </span>
+                  <span className="flex items-center gap-1 text-amber-700 dark:text-amber-300">
+                    <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />
+                    {counts.pending} pendente{counts.pending !== 1 ? 's' : ''}
+                  </span>
+                </div>
+              </div>
+
+              {/* Filter tabs */}
+              <div className="flex gap-1 overflow-x-auto pb-1 -mx-1 px-1">
+                {filterTabs.map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => setFilter(tab.key)}
+                    className={`
+                      px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors
+                      ${
+                        filter === tab.key
+                          ? 'bg-[#8CD955]/20 text-[#5a9a2a] dark:text-[#8CD955] border border-[#8CD955]/40'
+                          : 'bg-gray-100 dark:bg-[#333] text-gray-600 dark:text-gray-400 border border-transparent hover:bg-gray-200 dark:hover:bg-[#3a3a3a]'
+                      }
+                    `}
+                  >
+                    {tab.label} ({tab.count})
+                  </button>
+                ))}
+              </div>
+
+              {/* Group list */}
+              <div className="rounded-lg border border-gray-200 dark:border-[#404040] overflow-hidden">
+                {filtered.length === 0 ? (
+                  <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-8">
+                    Nenhum grupo nesta categoria.
+                  </p>
+                ) : (
+                  <ul className="divide-y divide-gray-100 dark:divide-[#383838] max-h-[40vh] overflow-y-auto">
+                    {filtered.map((g, idx) => (
+                      <li
+                        key={g.groupId}
+                        className="flex items-start gap-2.5 px-3 py-2.5 hover:bg-gray-50 dark:hover:bg-[#333] transition-colors"
+                      >
+                        <span className="text-[11px] text-gray-400 dark:text-gray-500 w-6 text-right shrink-0 pt-0.5 tabular-nums">
+                          {idx + 1}
+                        </span>
+                        <span className="pt-0.5">{statusIcon(g.status)}</span>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm text-gray-900 dark:text-white break-all leading-snug">
+                            {g.groupName || g.groupId}
+                          </p>
+                          {g.error && (
+                            <p className="text-xs text-red-600 dark:text-red-400 mt-0.5 break-all font-mono leading-relaxed">
+                              {sanitizeMassSendErrorMessage(g.error) || g.error}
+                            </p>
+                          )}
+                        </div>
+                        <span
+                          className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full shrink-0 ${
+                            g.status === 'success'
+                              ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
+                              : g.status === 'failed'
+                                ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
+                                : 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300'
+                          }`}
+                        >
+                          {g.status === 'success' ? 'Enviado' : g.status === 'failed' ? 'Falha' : 'Pendente'}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
 
               {job.last_error && (
                 <p className="text-xs text-gray-600 dark:text-gray-400">
@@ -276,7 +398,8 @@ const MassSendJobDetailModal: React.FC<MassSendJobDetailModalProps> = ({
           )}
         </div>
 
-        <div className="p-4 border-t border-gray-200 dark:border-[#404040] flex flex-col sm:flex-row gap-2 sm:justify-end">
+        {/* Footer */}
+        <div className="p-3 sm:p-4 border-t border-gray-200 dark:border-[#404040] flex flex-col sm:flex-row gap-2 sm:justify-end">
           <button
             type="button"
             onClick={onClose}
@@ -284,15 +407,17 @@ const MassSendJobDetailModal: React.FC<MassSendJobDetailModalProps> = ({
           >
             Fechar
           </button>
-          <button
-            type="button"
-            disabled={retrying || failedIds.length === 0 || !userId || loading}
-            onClick={handleRetryFailures}
-            className="px-4 py-2.5 rounded-lg bg-[#8CD955] hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium flex items-center justify-center gap-2"
-          >
-            {retrying ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
-            Nova campanha só com falhas ({failedIds.length})
-          </button>
+          {failedIds.length > 0 && (
+            <button
+              type="button"
+              disabled={retrying || !userId || loading}
+              onClick={handleRetryFailures}
+              className="px-4 py-2.5 rounded-lg bg-[#8CD955] hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium flex items-center justify-center gap-2"
+            >
+              {retrying ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+              Nova campanha só com falhas ({failedIds.length})
+            </button>
+          )}
         </div>
       </div>
     </div>

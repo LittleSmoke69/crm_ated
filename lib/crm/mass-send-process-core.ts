@@ -1,82 +1,404 @@
 /**
  * Worker de campanhas de disparo em massa (ativações).
  * Usado pela rota POST /api/crm/activations/mass-send/process.
- * Loop interno: vários lotes na mesma invocação (cron Netlify roda no máx. 1/min).
+ * Chama a Evolution API diretamente (sem passar por /api/send).
  */
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { sanitizeMassSendErrorMessage } from '@/lib/utils/activation-send-errors';
 import type { ApiResponse } from '@/lib/utils/response';
 
-/** Delay aleatório entre 1s e 2s entre grupos para parecer mais natural. */
-const INTER_GROUP_DELAY_MIN_MS = 1_000;
-const INTER_GROUP_DELAY_MAX_MS = 2_000;
+// ─── Constantes ───────────────────────────────────────────────────────────────
+
+const INTER_GROUP_DELAY_MS = 1_000;
 const LOCK_TTL_MS = 4 * 60 * 1000;
-
-/** Tempo máximo do loop interno por chamada HTTP (deixa margem ao maxDuration da rota). */
 const INNER_LOOP_BUDGET_MS = 110_000;
-const MAX_INNER_STEPS = 40;
+const MAX_INNER_STEPS = 100;
+const EVOLUTION_FETCH_TIMEOUT_MS = 30_000;
+const PTV_FETCH_TIMEOUT_MS = 45_000;
 
-function buildBatchGroupOutcomes(
-  batch: string[],
-  json: { data?: Record<string, unknown> } | null,
-  fallbackError: string | null
-): { groupId: string; success: boolean; error?: string }[] {
-  if (fallbackError) {
-    const safe = sanitizeMassSendErrorMessage(fallbackError) || fallbackError.slice(0, 200);
-    return batch.map((groupId) => ({ groupId, success: false, error: safe }));
-  }
-  const data = json?.data as Record<string, unknown> | undefined;
-  const rawOutcomes = data?.groupOutcomes;
-  if (Array.isArray(rawOutcomes) && rawOutcomes.length > 0) {
-    return rawOutcomes
-      .map((o: unknown) => {
-        const row = o as { groupId?: string; group_id?: string; success?: boolean; error?: string };
-        const groupId = String(row.groupId ?? row.group_id ?? '').trim();
-        if (!groupId) return null;
-        const em = row.error ? String(row.error) : '';
-        return {
-          groupId,
-          success: row.success === true,
-          ...(em ? { error: sanitizeMassSendErrorMessage(em) || em.slice(0, 200) } : {}),
-        };
-      })
-      .filter(Boolean) as { groupId: string; success: boolean; error?: string }[];
-  }
-  const errors = Array.isArray(data?.errors) ? (data.errors as { groupId?: string; error?: string }[]) : [];
-  return batch.map((groupId) => {
-    const err = errors.find((e) => e.groupId === groupId);
-    if (!err) return { groupId, success: true };
-    const msg = String(err.error ?? '');
-    return { groupId, success: false, error: sanitizeMassSendErrorMessage(msg) || msg.slice(0, 200) };
-  });
-}
+// ─── Tipos ────────────────────────────────────────────────────────────────────
 
-export type MassSendStepHint = 'stop' | 'retry_lock' | 'continue';
-
-export type MassSendSingleStepResult = {
-  response: ApiResponse;
-  hint: MassSendStepHint;
+type DbMessage = {
+  id: string;
+  content: string | null;
+  title: string | null;
+  message_type: string | null;
+  attachment_url: string | null;
+  attachment_type: string | null;
+  attachment_mime: string | null;
+  mention_all: boolean | null;
+  ptv_delay: number | null;
 };
 
-function resolvePublicSiteUrl(publicOrigin?: string | null): string {
-  const fromReq = publicOrigin?.trim().replace(/\/$/, '');
-  if (fromReq) return fromReq;
-  const fromEnv =
-    process.env.URL ||
-    process.env.NEXT_PUBLIC_SITE_URL ||
-    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null);
-  if (fromEnv) return fromEnv.replace(/\/$/, '');
-  return 'http://localhost:3000';
+type EvolutionContext = {
+  jobId: string;
+  userId: string;
+  message: DbMessage;
+  instanceName: string;
+  instanceId: string;
+  apiKey: string;
+  baseUrl: string;
+  ptvVideoPayload: string | null;
+  isMentionAll: boolean;
+  messageContent: string;
+};
+
+type StepHint = 'stop' | 'retry_lock' | 'continue';
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function normalizeUrl(url: string): string {
+  return url.trim().replace(/\/+$/, '').replace(/([^:]\/)\/+/g, '$1');
 }
 
-/**
- * Um passo: lock → (opcional pausa se delay e já houve envios) → POST interno /send → RPC.
- * @param publicOrigin — ex.: req.nextUrl.origin da chamada a /process (evita fetch em localhost errado no servidor).
- */
-export async function massSendProcessSingleStep(publicOrigin?: string | null): Promise<MassSendSingleStepResult> {
+function shortId(id: string): string {
+  return id.slice(0, 8);
+}
+
+async function fetchVideoUrlAsBase64(videoUrl: string): Promise<string> {
+  const controller = new AbortController();
+  const tid = setTimeout(() => controller.abort(), PTV_FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(videoUrl, { signal: controller.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status} ao baixar vídeo`);
+    const buf = await res.arrayBuffer();
+    return Buffer.from(buf).toString('base64');
+  } finally {
+    clearTimeout(tid);
+  }
+}
+
+async function regenerateSignedUrl(message: DbMessage): Promise<string | null> {
+  const url = message.attachment_url;
+  if (!url || !url.includes('supabase.co/storage/v1')) return url;
+  try {
+    const match = url.match(/\/storage\/v1\/object\/sign\/([^/]+)\/(.+?)(\?|$)/);
+    if (!match?.[1] || !match?.[2]) return url;
+    const bucket = match[1];
+    const path = decodeURIComponent(match[2]);
+    const { data, error } = await supabaseServiceRole.storage.from(bucket).createSignedUrl(path, 31536000);
+    if (error || !data?.signedUrl) return url;
+    await supabaseServiceRole.from('messages').update({ attachment_url: data.signedUrl }).eq('id', message.id);
+    return data.signedUrl;
+  } catch {
+    return url;
+  }
+}
+
+// ─── Build Evolution Context (uma vez por job) ───────────────────────────────
+
+async function buildEvolutionContext(
+  job: { id: string; user_id: string; message_id: string; instance_name: string }
+): Promise<{ ctx: EvolutionContext } | { error: string }> {
+  // 1. Busca mensagem
+  const { data: message, error: msgErr } = await supabaseServiceRole
+    .from('messages')
+    .select('id, content, title, message_type, attachment_url, attachment_type, attachment_mime, mention_all, ptv_delay')
+    .eq('id', job.message_id)
+    .single();
+
+  if (msgErr || !message) {
+    return { error: `Mensagem ${job.message_id} não encontrada` };
+  }
+
+  // 2. Busca instância + Evolution API
+  const { data: instance, error: instErr } = await supabaseServiceRole
+    .from('evolution_instances')
+    .select('id, apikey, instance_name, evolution_apis!inner(base_url)')
+    .eq('instance_name', job.instance_name)
+    .eq('user_id', job.user_id)
+    .eq('is_active', true)
+    .single();
+
+  if (instErr || !instance) {
+    return { error: `Instância ${job.instance_name} não encontrada ou inativa` };
+  }
+
+  const api = Array.isArray(instance.evolution_apis) ? instance.evolution_apis[0] : instance.evolution_apis;
+  const baseUrl = (api as { base_url?: string })?.base_url;
+  const apiKey = instance.apikey as string;
+
+  if (!baseUrl || !apiKey) {
+    return { error: 'Instância sem base_url ou apikey' };
+  }
+
+  // 3. Regenera URL assinada se necessário
+  const freshUrl = await regenerateSignedUrl(message as DbMessage);
+  if (freshUrl) (message as DbMessage).attachment_url = freshUrl;
+
+  // 4. Baixa vídeo PTV como base64 (uma vez)
+  let ptvVideoPayload: string | null = null;
+  if (message.message_type === 'ptv' && message.attachment_url) {
+    const v = String(message.attachment_url).trim();
+    if (v.startsWith('http://') || v.startsWith('https://')) {
+      try {
+        ptvVideoPayload = await fetchVideoUrlAsBase64(v);
+        console.log(`[MASS-SEND] PTV base64 baixado: ${Math.round(ptvVideoPayload.length / 1024)}KB`);
+      } catch (e: any) {
+        return { error: `Falha ao baixar vídeo PTV: ${e.message}` };
+      }
+    } else {
+      ptvVideoPayload = v;
+    }
+  }
+
+  const isMentionAll = message.mention_all === true || String(message.mention_all).toLowerCase() === 'true';
+  const messageContent = message.content ? String(message.content).trim() : '';
+
+  return {
+    ctx: {
+      jobId: job.id,
+      userId: job.user_id,
+      message: message as DbMessage,
+      instanceName: job.instance_name,
+      instanceId: instance.id as string,
+      apiKey,
+      baseUrl: normalizeUrl(baseUrl),
+      ptvVideoPayload,
+      isMentionAll,
+      messageContent,
+    },
+  };
+}
+
+// ─── Envio direto para Evolution API ──────────────────────────────────────────
+
+async function sendGroupToEvolution(
+  ctx: EvolutionContext,
+  groupId: string
+): Promise<{ success: boolean; error?: string }> {
+  const { baseUrl, instanceName, apiKey, message, ptvVideoPayload, isMentionAll, messageContent } = ctx;
+
+  let url: string;
+  let body: Record<string, unknown>;
+
+  if (message.message_type === 'ptv' && ptvVideoPayload) {
+    url = `${baseUrl}/message/sendPtv/${instanceName}`;
+    const delay = typeof message.ptv_delay === 'number' && message.ptv_delay >= 0 ? message.ptv_delay : 1200;
+    body = { number: groupId, video: ptvVideoPayload, delay };
+  } else if (message.message_type === 'audio' && message.attachment_url) {
+    url = `${baseUrl}/message/sendWhatsAppAudio/${instanceName}`;
+    body = {
+      number: groupId,
+      audio: String(message.attachment_url),
+      ...(isMentionAll && { mentionsEveryOne: true }),
+    };
+  } else if (message.message_type === 'text_with_attachment' && message.attachment_url) {
+    url = `${baseUrl}/message/sendMedia/${instanceName}`;
+    const { mediatype, mimetype, fileName } = resolveMediaMeta(message);
+    body = {
+      number: groupId,
+      mediatype,
+      mimetype,
+      media: String(message.attachment_url),
+      fileName,
+      ...(messageContent ? { caption: messageContent } : {}),
+      ...(isMentionAll && { mentionsEveryOne: true }),
+    };
+  } else {
+    if (!messageContent) return { success: false, error: 'Mensagem sem conteúdo' };
+    url = `${baseUrl}/message/sendText/${instanceName}`;
+    body = {
+      number: groupId,
+      text: messageContent,
+      ...(isMentionAll && { mentionsEveryOne: true }),
+    };
+  }
+
+  url = normalizeUrl(url);
+  const controller = new AbortController();
+  const tid = setTimeout(() => controller.abort(), EVOLUTION_FETCH_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: apiKey },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    clearTimeout(tid);
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      let errMsg = '';
+      try {
+        const j = JSON.parse(text);
+        const src = j.message ?? j.response?.message ?? j.error;
+        errMsg = Array.isArray(src) ? src.join('; ') : String(src || '');
+      } catch {
+        errMsg = text.slice(0, 300);
+      }
+
+      // Connection Closed → marca instância como desconectada
+      if (/connection\s*closed/i.test(errMsg)) {
+        await supabaseServiceRole
+          .from('evolution_instances')
+          .update({ status: 'disconnected', updated_at: new Date().toISOString() })
+          .eq('id', ctx.instanceId);
+      }
+
+      const userMsg = sanitizeMassSendErrorMessage(errMsg) || `Erro ${res.status}: ${res.statusText}`;
+      return { success: false, error: userMsg };
+    }
+
+    return { success: true };
+  } catch (e: any) {
+    clearTimeout(tid);
+    if (e.name === 'AbortError') {
+      return { success: false, error: `Timeout: Evolution não respondeu em ${EVOLUTION_FETCH_TIMEOUT_MS / 1000}s` };
+    }
+    return { success: false, error: e.message || 'Erro de rede ao chamar Evolution' };
+  }
+}
+
+function resolveMediaMeta(message: DbMessage): { mediatype: string; mimetype: string; fileName: string } {
+  const mime = message.attachment_mime || 'image/png';
+  if (message.attachment_type === 'video') return { mediatype: 'video', mimetype: message.attachment_mime || 'video/mp4', fileName: 'video.mp4' };
+  if (message.attachment_type === 'audio') return { mediatype: 'document', mimetype: message.attachment_mime || 'audio/mpeg', fileName: 'audio.mp3' };
+  if (message.attachment_type === 'image') {
+    const ext = mime.includes('jpeg') ? 'jpg' : mime.includes('gif') ? 'gif' : 'png';
+    return { mediatype: 'image', mimetype: mime, fileName: `image.${ext}` };
+  }
+  // Fallback por extensão da URL
+  const url = String(message.attachment_url || '').toLowerCase();
+  if (url.match(/\.(mp4|mov|avi|webm)/) || mime.startsWith('video/')) return { mediatype: 'video', mimetype: mime || 'video/mp4', fileName: 'video.mp4' };
+  if (url.match(/\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt)/) || mime.startsWith('application/')) return { mediatype: 'document', mimetype: mime || 'application/pdf', fileName: 'file' };
+  const ext = mime.includes('jpeg') ? 'jpg' : mime.includes('gif') ? 'gif' : 'png';
+  return { mediatype: 'image', mimetype: mime, fileName: `image.${ext}` };
+}
+
+// ─── Persistir resultado de um grupo ──────────────────────────────────────────
+
+async function persistGroupResult(
+  jobId: string,
+  groupId: string,
+  result: { success: boolean; error?: string },
+  newProcessedIndex: number,
+  isComplete: boolean
+): Promise<void> {
+  const now = new Date().toISOString();
+  const outcome = [{ groupId, success: result.success, ...(result.error ? { error: result.error } : {}) }];
+
+  const { error: rpcErr } = await supabaseServiceRole.rpc('increment_mass_send_job_counts', {
+    p_job_id: jobId,
+    p_sent: result.success ? 1 : 0,
+    p_failed: result.success ? 0 : 1,
+    p_processed_index: newProcessedIndex,
+    p_last_error: result.error || null,
+    p_status: isComplete ? 'completed' : 'processing',
+    p_now: now,
+    p_group_outcomes: outcome,
+  });
+
+  if (rpcErr) {
+    console.error(`[MASS-SEND] RPC falhou — fallback direto:`, rpcErr.message);
+    await supabaseServiceRole
+      .from('activation_mass_send_jobs')
+      .update({
+        processed_index: newProcessedIndex,
+        status: isComplete ? 'completed' : 'processing',
+        locked_at: null,
+        locked_by: null,
+        updated_at: now,
+      })
+      .eq('id', jobId);
+  }
+}
+
+// ─── Processar um grupo (um step) ────────────────────────────────────────────
+
+async function processSingleGroup(
+  ctx: EvolutionContext,
+  groupIds: string[],
+  start: number,
+  jobId: string,
+  jobStatus: string
+): Promise<{ hint: StepHint; sent: number; failed: number }> {
   const now = new Date().toISOString();
   const lockExpired = new Date(Date.now() - LOCK_TTL_MS).toISOString();
+  const groupId = groupIds[start];
+  const total = groupIds.length;
 
+  // Lock
+  const locked = await supabaseServiceRole
+    .from('activation_mass_send_jobs')
+    .update({ status: 'processing', locked_at: now, locked_by: 'mass-send-worker', updated_at: now })
+    .eq('id', jobId)
+    .in('status', [jobStatus, 'processing'])
+    .or('locked_at.is.null,locked_at.lt.' + lockExpired)
+    .select('id')
+    .single();
+
+  if (locked.error || !locked.data) {
+    return { hint: 'retry_lock', sent: 0, failed: 0 };
+  }
+
+  // Delay fixo de 1s entre grupos (a partir do 2º)
+  if (start > 0) {
+    await new Promise((r) => setTimeout(r, INTER_GROUP_DELAY_MS));
+  }
+
+  // Checa pausa antes de enviar
+  const { data: freshJob } = await supabaseServiceRole
+    .from('activation_mass_send_jobs')
+    .select('status')
+    .eq('id', jobId)
+    .single();
+
+  if (freshJob?.status === 'paused') {
+    await supabaseServiceRole
+      .from('activation_mass_send_jobs')
+      .update({ locked_at: null, locked_by: null, updated_at: new Date().toISOString() })
+      .eq('id', jobId);
+    console.log(`[MASS-SEND] [${start + 1}/${total}] PAUSADO pelo usuario`);
+    return { hint: 'stop', sent: 0, failed: 0 };
+  }
+
+  // Envio direto para Evolution com retry
+  const t0 = Date.now();
+  let result = await sendGroupToEvolution(ctx, groupId);
+
+  // Retry uma vez para erros transientes
+  if (!result.success && isTransientError(result.error)) {
+    console.warn(`[MASS-SEND] [${start + 1}/${total}] ${groupId} retry em 3s (${result.error})`);
+    await new Promise((r) => setTimeout(r, 3_000));
+    result = await sendGroupToEvolution(ctx, groupId);
+  }
+
+  const duration = Date.now() - t0;
+  const newIdx = start + 1;
+  const isComplete = newIdx >= total;
+
+  // Log
+  if (result.success) {
+    console.log(`[MASS-SEND] [${start + 1}/${total}] ${groupId} OK (${duration}ms)`);
+  } else {
+    console.error(`[MASS-SEND] [${start + 1}/${total}] ${groupId} FALHA: ${result.error} (${duration}ms)`);
+  }
+
+  // Persiste resultado
+  await persistGroupResult(jobId, groupId, result, newIdx, isComplete);
+
+  return {
+    hint: isComplete ? 'stop' : 'continue',
+    sent: result.success ? 1 : 0,
+    failed: result.success ? 0 : 1,
+  };
+}
+
+function isTransientError(error?: string): boolean {
+  if (!error) return false;
+  const e = error.toLowerCase();
+  return e.includes('timeout') || e.includes('fetch failed') || e.includes('504') || e.includes('502') || e.includes('503') || e.includes('econnreset') || e.includes('econnrefused');
+}
+
+// ─── Orquestrador principal ───────────────────────────────────────────────────
+
+export async function executeMassSendProcess(_publicOrigin?: string | null): Promise<ApiResponse> {
+  const budgetEnd = Date.now() + INNER_LOOP_BUDGET_MS;
+  const lockExpired = new Date(Date.now() - LOCK_TTL_MS).toISOString();
+
+  // Busca próximo job
   const { data: jobs } = await supabaseServiceRole
     .from('activation_mass_send_jobs')
     .select('id, user_id, message_id, instance_name, group_ids, total_groups, processed_index, status')
@@ -87,274 +409,91 @@ export async function massSendProcessSingleStep(publicOrigin?: string | null): P
 
   const job = jobs?.[0];
   if (!job) {
-    return {
-      response: { success: true, data: { processed: false, message: 'Nenhum job pendente' } },
-      hint: 'stop',
-    };
+    return { success: true, data: { processed: false, message: 'Nenhum job pendente' } };
   }
 
-  const groupIds = Array.isArray(job.group_ids) ? job.group_ids : [];
+  const groupIds = Array.isArray(job.group_ids) ? (job.group_ids as string[]) : [];
   const start = Number(job.processed_index) || 0;
-  // Um grupo por passo — delay fixo de 2s entre eles garante estabilidade na instância.
-  const batch = groupIds.slice(start, start + 1);
 
-  if (batch.length === 0) {
+  if (start >= groupIds.length) {
     await supabaseServiceRole
       .from('activation_mass_send_jobs')
-      .update({ status: 'completed', locked_at: null, locked_by: null, updated_at: now })
+      .update({ status: 'completed', locked_at: null, locked_by: null, updated_at: new Date().toISOString() })
       .eq('id', job.id);
-    return {
-      response: {
-        success: true,
-        data: { processed: true, job_id: job.id, status: 'completed' },
-      },
-      hint: 'stop',
-    };
+    return { success: true, data: { processed: true, job_id: job.id, status: 'completed' } };
   }
 
-  const locked = await supabaseServiceRole
-    .from('activation_mass_send_jobs')
-    .update({
-      status: 'processing',
-      locked_at: now,
-      locked_by: 'mass-send-process',
-      updated_at: now,
-    })
-    .eq('id', job.id)
-    .eq('status', job.status)
-    .or('locked_at.is.null,locked_at.lt.' + lockExpired)
-    .select('id')
-    .single();
+  // Build context (mensagem + instância) — UMA VEZ por job
+  console.log(`[MASS-SEND] ══════════════════════════════════════════════════`);
+  console.log(`[MASS-SEND] Job ${shortId(job.id)} | inst: ${job.instance_name} | ${groupIds.length} grupos (index: ${start})`);
+  console.log(`[MASS-SEND] ══════════════════════════════════════════════════`);
 
-  if (locked.error || !locked.data) {
-    return {
-      response: {
-        success: true,
-        data: { processed: false, message: 'Job já em processamento' },
-      },
-      hint: 'retry_lock',
-    };
-  }
-
-  // Delay fixo de 2s entre grupos (a partir do 2º) para não sobrecarregar a instância.
-  if (start > 0) {
-    const delay = INTER_GROUP_DELAY_MIN_MS + Math.random() * (INTER_GROUP_DELAY_MAX_MS - INTER_GROUP_DELAY_MIN_MS);
-    await new Promise((r) => setTimeout(r, delay));
-  }
-
-  const siteUrl = resolvePublicSiteUrl(publicOrigin);
-  const sendUrl = `${siteUrl}/api/crm/activations/send`;
-
-  const doSend = () =>
-    fetch(sendUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-internal-cron-secret': process.env.CRON_SECRET ?? '',
-        'x-user-id': job.user_id,
-      },
-      body: JSON.stringify({
-        messageId: job.message_id,
-        groupIds: batch,
-        instanceName: job.instance_name,
-        forceSync: true,
-      }),
-      signal: AbortSignal.timeout(90_000),
-    });
-
-  let sendRes: Response;
-  try {
-    sendRes = await doSend();
-    // Retry automático para erros transientes (502/503/504).
-    if (sendRes.status >= 502 && sendRes.status <= 504) {
-      console.warn(`[MASS-SEND] HTTP ${sendRes.status} no grupo ${batch[0]} — retry em 3s`);
-      await new Promise((r) => setTimeout(r, 3_000));
-      sendRes = await doSend();
-    }
-  } catch (firstErr) {
-    // TypeError: fetch failed — retry uma vez após 3s.
-    console.warn(`[MASS-SEND] fetch falhou no grupo ${batch[0]} — retry em 3s:`, (firstErr as Error).message);
-    await new Promise((r) => setTimeout(r, 3_000));
-    try {
-      sendRes = await doSend();
-    } catch (retryErr) {
-      // Falha definitiva: registra erro e continua.
-      const errMsg = `Falha de rede ao enviar (${(retryErr as Error).message}). Verifique a conexão.`;
-      const batchOutcomesFail = buildBatchGroupOutcomes(batch, null, errMsg);
-      const newIdx = start + batch.length;
-      const done = newIdx >= groupIds.length;
-      await supabaseServiceRole.rpc('increment_mass_send_job_counts', {
-        p_job_id: job.id, p_sent: 0, p_failed: batch.length,
-        p_processed_index: newIdx, p_last_error: errMsg,
-        p_status: done ? 'completed' : 'processing',
-        p_now: new Date().toISOString(),
-        p_group_outcomes: batchOutcomesFail.length > 0 ? batchOutcomesFail : null,
-      }).then(({ error: rpcE }) => {
-        if (rpcE) {
-          // Fallback direto se RPC falhar.
-          return supabaseServiceRole.from('activation_mass_send_jobs').update({
-            processed_index: newIdx, status: done ? 'completed' : 'processing',
-            locked_at: null, locked_by: null, updated_at: new Date().toISOString(),
-          }).eq('id', job.id);
-        }
-      });
-      return {
-        response: { success: true, data: { processed: true, job_id: job.id, batch_size: batch.length, sent: 0, failed: batch.length, status: done ? 'completed' : 'processing' } },
-        hint: done ? 'stop' : 'continue',
-      };
-    }
-  }
-
-  let sent = 0;
-  let failed = 0;
-  let lastError: string | null = null;
-  let batchOutcomes: { groupId: string; success: boolean; error?: string }[] = [];
-
-  if (sendRes.ok) {
-    const json = (await sendRes.json()) as { data?: Record<string, unknown> };
-    sent = (json?.data?.success as number) ?? 0;
-    failed = (json?.data?.failed as number) ?? 0;
-    if (Array.isArray(json?.data?.errors) && (json.data.errors as unknown[]).length > 0) {
-      const errs = json.data.errors as { error?: string }[];
-      const raw = String(errs[errs.length - 1]?.error ?? '');
-      lastError = raw ? sanitizeMassSendErrorMessage(raw) || null : null;
-    }
-    batchOutcomes = buildBatchGroupOutcomes(batch, json, null);
-    if (batchOutcomes.length !== batch.length) {
-      batchOutcomes = batch.map((groupId) => {
-        const errs = Array.isArray(json?.data?.errors)
-          ? (json.data.errors as { groupId?: string; error?: string }[])
-          : [];
-        const err = errs.find((e) => e.groupId === groupId);
-        if (!err) return { groupId, success: true };
-        const msg = String(err.error ?? '');
-        return { groupId, success: false, error: sanitizeMassSendErrorMessage(msg) || msg.slice(0, 200) };
-      });
-    }
-  } else {
-    const text = await sendRes.text();
-    lastError =
-      sanitizeMassSendErrorMessage(text) ||
-      `Falha ao chamar o envio (HTTP ${sendRes.status}). Verifique a aplicação e o proxy.`;
-    failed = batch.length;
-    batchOutcomes = buildBatchGroupOutcomes(batch, null, lastError);
-  }
-
-  const newProcessedIndex = start + batch.length;
-  // Usa groupIds.length como fonte de verdade para evitar job incompleto quando total_groups diverge.
-  const isComplete = newProcessedIndex >= groupIds.length;
-
-  const { error: rpcErr } = await supabaseServiceRole.rpc('increment_mass_send_job_counts', {
-    p_job_id: job.id,
-    p_sent: sent,
-    p_failed: failed,
-    p_processed_index: newProcessedIndex,
-    p_last_error: lastError,
-    p_status: isComplete ? 'completed' : 'processing',
-    p_now: new Date().toISOString(),
-    p_group_outcomes: batchOutcomes.length > 0 ? batchOutcomes : null,
-  });
-
-  if (rpcErr) {
-    console.error('[MASS-SEND] RPC increment_mass_send_job_counts falhou — tentando fallback direto:', rpcErr.message);
-    // Fallback: avança processed_index mesmo sem o RPC para evitar re-envio infinito do mesmo grupo.
-    const { error: fallbackErr } = await supabaseServiceRole
+  const ctxResult = await buildEvolutionContext(job);
+  if ('error' in ctxResult) {
+    console.error(`[MASS-SEND] Erro ao montar contexto: ${ctxResult.error}`);
+    // Marca todos os grupos restantes como falha
+    await supabaseServiceRole
       .from('activation_mass_send_jobs')
       .update({
-        processed_index: newProcessedIndex,
-        status: isComplete ? 'completed' : 'processing',
+        status: 'failed',
+        last_error: ctxResult.error,
         locked_at: null,
         locked_by: null,
         updated_at: new Date().toISOString(),
       })
       .eq('id', job.id);
-
-    if (fallbackErr) {
-      console.error('[MASS-SEND] Fallback direto também falhou — liberando lock sem avançar:', fallbackErr.message);
-      await supabaseServiceRole
-        .from('activation_mass_send_jobs')
-        .update({ locked_at: null, locked_by: null, updated_at: new Date().toISOString() })
-        .eq('id', job.id);
-      return {
-        response: { success: false, error: 'Erro interno ao salvar resultado do grupo. Será reprocessado.' },
-        hint: 'retry_lock',
-      };
-    }
-
-    // Fallback ok: processed_index avançou — continua normalmente sem reprocessar o mesmo grupo.
-    return {
-      response: {
-        success: true,
-        data: {
-          processed: true,
-          job_id: job.id,
-          batch_size: batch.length,
-          sent,
-          failed,
-          status: isComplete ? 'completed' : 'processing',
-          rpc_fallback: true,
-        },
-      },
-      hint: isComplete ? 'stop' : 'continue',
-    };
+    return { success: false, error: ctxResult.error };
   }
 
-  const response: ApiResponse = {
-    success: true,
-    data: {
-      processed: true,
-      job_id: job.id,
-      batch_size: batch.length,
-      sent,
-      failed,
-      status: isComplete ? 'completed' : 'processing',
-    },
-  };
+  const { ctx } = ctxResult;
+  console.log(`[MASS-SEND] Mensagem: "${ctx.message.title || ctx.message.id}" | tipo: ${ctx.message.message_type} | mentionAll: ${ctx.isMentionAll}`);
+  const jobStart = Date.now();
+  let totalSent = 0;
+  let totalFailed = 0;
+  let currentIndex = start;
+  let lastHint: StepHint = 'continue';
 
-  return {
-    response,
-    hint: isComplete ? 'stop' : 'continue',
-  };
-}
-
-/**
- * Vários lotes na mesma requisição (cron Netlify ≥1 min; `more_pending` permite polling em segundos no caller).
- */
-export async function executeMassSendProcess(publicOrigin?: string | null): Promise<ApiResponse> {
-  const budgetEnd = Date.now() + INNER_LOOP_BUDGET_MS;
-  let last: ApiResponse = {
-    success: true,
-    data: { processed: false, message: 'Nenhum job pendente' },
-  };
-  let steps = 0;
-  let lastHint: MassSendStepHint = 'stop';
-
-  while (Date.now() < budgetEnd && steps < MAX_INNER_STEPS) {
-    steps++;
-    const { response, hint } = await massSendProcessSingleStep(publicOrigin);
-    last = response;
+  // Loop: processa grupo por grupo dentro do budget
+  while (currentIndex < groupIds.length && Date.now() < budgetEnd) {
+    const { hint, sent, failed } = await processSingleGroup(ctx, groupIds, currentIndex, job.id, job.status);
+    totalSent += sent;
+    totalFailed += failed;
     lastHint = hint;
 
     if (hint === 'stop') break;
     if (hint === 'retry_lock') {
       await new Promise((r) => setTimeout(r, 1200));
+      // Re-read processed_index em caso de retry
+      const { data: fresh } = await supabaseServiceRole
+        .from('activation_mass_send_jobs')
+        .select('processed_index, status')
+        .eq('id', job.id)
+        .single();
+      if (fresh?.status === 'paused') break;
+      currentIndex = Number(fresh?.processed_index) || currentIndex;
       continue;
     }
-    if (hint === 'continue') continue;
+
+    currentIndex++;
   }
 
-  const d = last.data as Record<string, unknown> | undefined;
-  const status = d?.status;
-  const morePending =
-    lastHint === 'continue' ||
-    lastHint === 'retry_lock' ||
-    (d?.processed === true && status === 'processing');
+  const elapsed = ((Date.now() - jobStart) / 1000).toFixed(1);
+  const isComplete = currentIndex >= groupIds.length;
+  console.log(`[MASS-SEND] ──────────────────────────────────────────────────`);
+  console.log(`[MASS-SEND] Job ${shortId(job.id)} ${isComplete ? 'CONCLUIDO' : 'PARCIAL'}: ${totalSent} OK / ${totalFailed} FALHA | ${elapsed}s | processados ate ${currentIndex}/${groupIds.length}`);
+  console.log(`[MASS-SEND] ──────────────────────────────────────────────────`);
 
-  if (morePending && d && typeof d === 'object') {
-    d.more_pending = true;
-  } else if (d && typeof d === 'object' && 'more_pending' in d) {
-    delete d.more_pending;
-  }
+  const morePending = !isComplete && lastHint !== 'stop';
 
-  return last;
+  return {
+    success: true,
+    data: {
+      processed: true,
+      job_id: job.id,
+      sent: totalSent,
+      failed: totalFailed,
+      status: isComplete ? 'completed' : 'processing',
+      ...(morePending ? { more_pending: true } : {}),
+    },
+  };
 }

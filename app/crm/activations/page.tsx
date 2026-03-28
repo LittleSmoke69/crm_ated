@@ -279,6 +279,37 @@ const ActivationsPage = () => {
     }
   }, [userId, activeTab, loadMassSendJobs]);
 
+  // Realtime: atualiza campanhas automaticamente quando há mudanças no banco.
+  useEffect(() => {
+    if (!userId || activeTab !== 'mass_send') return;
+    const channel = supabaseClient
+      .channel('mass-send-realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'activation_mass_send_jobs',
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload) => {
+          if (payload.eventType === 'DELETE') {
+            setMassSendJobs((prev) => prev.filter((j) => j.id !== payload.old?.id));
+          } else if (payload.eventType === 'INSERT') {
+            setMassSendJobs((prev) => [payload.new as any, ...prev]);
+          } else if (payload.eventType === 'UPDATE') {
+            setMassSendJobs((prev) =>
+              prev.map((j) => (j.id === (payload.new as any).id ? { ...j, ...payload.new } : j))
+            );
+          }
+        }
+      )
+      .subscribe();
+    return () => {
+      supabaseClient.removeChannel(channel);
+    };
+  }, [userId, activeTab]);
+
   // Recalcula próxima execução de todos os recorrentes (corrige dados antigos)
   const handleRecalculateRecurring = async () => {
     if (!userId || !isAdmin) return;
