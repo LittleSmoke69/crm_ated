@@ -145,20 +145,65 @@ export async function massSendProcessSingleStep(publicOrigin?: string | null): P
   const siteUrl = resolvePublicSiteUrl(publicOrigin);
   const sendUrl = `${siteUrl}/api/crm/activations/send`;
 
-  const sendRes = await fetch(sendUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-internal-cron-secret': process.env.CRON_SECRET ?? '',
-      'x-user-id': job.user_id,
-    },
-    body: JSON.stringify({
-      messageId: job.message_id,
-      groupIds: batch,
-      instanceName: job.instance_name,
-      forceSync: true,
-    }),
-  });
+  const doSend = () =>
+    fetch(sendUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-internal-cron-secret': process.env.CRON_SECRET ?? '',
+        'x-user-id': job.user_id,
+      },
+      body: JSON.stringify({
+        messageId: job.message_id,
+        groupIds: batch,
+        instanceName: job.instance_name,
+        forceSync: true,
+      }),
+      signal: AbortSignal.timeout(90_000),
+    });
+
+  let sendRes: Response;
+  try {
+    sendRes = await doSend();
+    // Retry automático para erros transientes (502/503/504).
+    if (sendRes.status >= 502 && sendRes.status <= 504) {
+      console.warn(`[MASS-SEND] HTTP ${sendRes.status} no grupo ${batch[0]} — retry em 3s`);
+      await new Promise((r) => setTimeout(r, 3_000));
+      sendRes = await doSend();
+    }
+  } catch (firstErr) {
+    // TypeError: fetch failed — retry uma vez após 3s.
+    console.warn(`[MASS-SEND] fetch falhou no grupo ${batch[0]} — retry em 3s:`, (firstErr as Error).message);
+    await new Promise((r) => setTimeout(r, 3_000));
+    try {
+      sendRes = await doSend();
+    } catch (retryErr) {
+      // Falha definitiva: registra erro e continua.
+      const errMsg = `Falha de rede ao enviar (${(retryErr as Error).message}). Verifique a conexão.`;
+      const batchOutcomesFail = buildBatchGroupOutcomes(batch, null, errMsg);
+      const newIdx = start + batch.length;
+      const done = newIdx >= groupIds.length;
+      await supabaseServiceRole.rpc('increment_mass_send_job_counts', {
+        p_job_id: job.id, p_sent: 0, p_failed: batch.length,
+        p_processed_index: newIdx, p_last_error: errMsg,
+        p_status: done ? 'completed' : 'processing',
+        p_now: new Date().toISOString(),
+        p_group_outcomes: batchOutcomesFail.length > 0 ? batchOutcomesFail : null,
+      }).then(({ error: rpcE }) => {
+        if (rpcE) {
+          // Fallback direto se RPC falhar.
+          return supabaseServiceRole.from('activation_mass_send_jobs').update({
+            processed_index: newIdx, status: done ? 'completed' : 'processing',
+            locked_at: null, locked_by: null, updated_at: new Date().toISOString(),
+          }).eq('id', job.id);
+        }
+      });
+      return {
+        response: { success: true, data: { processed: true, job_id: job.id, batch_size: batch.length, sent: 0, failed: batch.length, status: done ? 'completed' : 'processing' } },
+        hint: done ? 'stop' : 'continue',
+      };
+    }
+  }
 
   let sent = 0;
   let failed = 0;
@@ -211,14 +256,46 @@ export async function massSendProcessSingleStep(publicOrigin?: string | null): P
   });
 
   if (rpcErr) {
-    console.error('[MASS-SEND] RPC increment_mass_send_job_counts falhou — liberando lock:', rpcErr.message);
-    await supabaseServiceRole
+    console.error('[MASS-SEND] RPC increment_mass_send_job_counts falhou — tentando fallback direto:', rpcErr.message);
+    // Fallback: avança processed_index mesmo sem o RPC para evitar re-envio infinito do mesmo grupo.
+    const { error: fallbackErr } = await supabaseServiceRole
       .from('activation_mass_send_jobs')
-      .update({ locked_at: null, locked_by: null, updated_at: new Date().toISOString() })
+      .update({
+        processed_index: newProcessedIndex,
+        status: isComplete ? 'completed' : 'processing',
+        locked_at: null,
+        locked_by: null,
+        updated_at: new Date().toISOString(),
+      })
       .eq('id', job.id);
+
+    if (fallbackErr) {
+      console.error('[MASS-SEND] Fallback direto também falhou — liberando lock sem avançar:', fallbackErr.message);
+      await supabaseServiceRole
+        .from('activation_mass_send_jobs')
+        .update({ locked_at: null, locked_by: null, updated_at: new Date().toISOString() })
+        .eq('id', job.id);
+      return {
+        response: { success: false, error: 'Erro interno ao salvar resultado do grupo. Será reprocessado.' },
+        hint: 'retry_lock',
+      };
+    }
+
+    // Fallback ok: processed_index avançou — continua normalmente sem reprocessar o mesmo grupo.
     return {
-      response: { success: false, error: 'Erro interno ao salvar resultado do grupo. Será reprocessado.' },
-      hint: 'retry_lock',
+      response: {
+        success: true,
+        data: {
+          processed: true,
+          job_id: job.id,
+          batch_size: batch.length,
+          sent,
+          failed,
+          status: isComplete ? 'completed' : 'processing',
+          rpc_fallback: true,
+        },
+      },
+      hint: isComplete ? 'stop' : 'continue',
     };
   }
 

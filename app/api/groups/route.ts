@@ -69,8 +69,8 @@ export async function GET(req: NextRequest) {
     const result = deduped.map(({ group_id, group_subject }) => ({ group_id, group_subject }));
 
     return successResponse(result);
-  } catch (err: any) {
-    return errorResponse(err.message || 'Erro ao buscar grupos', 401);
+  } catch (err: unknown) {
+    return serverErrorResponse(err);
   }
 }
 

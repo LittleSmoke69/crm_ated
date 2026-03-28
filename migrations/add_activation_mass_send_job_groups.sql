@@ -1,5 +1,9 @@
 -- Estrutura relacional para resultado por grupo (sucesso/falha + mensagem).
 -- Complementa group_results (jsonb) com consultas indexadas e histórico claro de falhas.
+--
+-- A RPC abaixo atualiza group_results; a coluna precisa existir (também em add_activation_mass_send_group_results.sql).
+ALTER TABLE activation_mass_send_jobs
+  ADD COLUMN IF NOT EXISTS group_results jsonb NOT NULL DEFAULT '[]'::jsonb;
 
 CREATE TABLE IF NOT EXISTS activation_mass_send_job_groups (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

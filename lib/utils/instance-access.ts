@@ -43,12 +43,14 @@ export async function checkInstanceAccess(userId: string, instanceName: string):
     console.log(`🔍 [checkInstanceAccess] Usuário ${userId} não é admin - verificando se é dono da instância ${instanceName}`);
 
     // Se não for admin, verifica se é dono da instância
+    // maybeSingle evita PGRST116 quando outro usuário tem instância com mesmo nome
     const { data: instance, error: instanceError } = await supabaseServiceRole
       .from('evolution_instances')
       .select('user_id, id, instance_name, is_active')
       .eq('instance_name', instanceName)
+      .eq('user_id', userId)
       .eq('is_active', true)
-      .single();
+      .maybeSingle();
 
     if (instanceError) {
       console.error(`❌ [checkInstanceAccess] Erro ao buscar instância ${instanceName}:`, instanceError);
@@ -63,33 +65,14 @@ export async function checkInstanceAccess(userId: string, instanceName: string):
       instanceFound: !!instance,
     });
 
-    // Se não encontrou a instância, não tem acesso
+    // Query já filtra por user_id: se retornou linha, o usuário é o dono.
     if (!instance) {
-      console.warn(`⚠️ [checkInstanceAccess] Instância ${instanceName} não encontrada ou não está ativa`);
+      console.warn(`⚠️ [checkInstanceAccess] Instância ${instanceName} não encontrada para o usuário ${userId}`);
       return false;
     }
 
-    // Se user_id for null (instância antiga), não permite acesso
-    if (instance.user_id === null) {
-      console.warn(`⚠️ [checkInstanceAccess] Instância ${instanceName} tem user_id null - acesso negado`);
-      return false;
-    }
-
-    // Verifica se o user_id da instância corresponde ao usuário
-    const hasAccess = instance.user_id === userId;
-    console.log(`🔍 [checkInstanceAccess] Comparação de user_id:`, {
-      instanceUserId: instance.user_id,
-      requestUserId: userId,
-      match: hasAccess,
-    });
-
-    if (hasAccess) {
-      console.log(`✅ [checkInstanceAccess] Usuário ${userId} é dono da instância ${instanceName} - acesso permitido`);
-    } else {
-      console.warn(`⚠️ [checkInstanceAccess] Usuário ${userId} NÃO é dono da instância ${instanceName} (dono: ${instance.user_id}) - acesso negado`);
-    }
-
-    return hasAccess;
+    console.log(`✅ [checkInstanceAccess] Usuário ${userId} é dono da instância ${instanceName} - acesso permitido`);
+    return true;
   } catch (error: any) {
     console.error(`❌ [checkInstanceAccess] Erro ao verificar acesso à instância:`, {
       userId,

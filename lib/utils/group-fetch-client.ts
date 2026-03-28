@@ -6,7 +6,17 @@ async function parseJsonSafe(response: Response): Promise<Record<string, unknown
   const contentType = response.headers.get('content-type') ?? '';
   const text = await response.text();
   if (!contentType.includes('application/json')) {
-    throw new Error('Resposta inválida do servidor. Verifique se está logado e tente novamente.');
+    const s = response.status;
+    if (s === 401 || s === 403) {
+      throw new Error('Sem permissão para acessar este recurso. Verifique se está logado e tente novamente.');
+    }
+    if (s === 504 || s === 502 || s === 503) {
+      throw new Error('Servidor indisponível ou timeout ao buscar grupos. Tente novamente em instantes.');
+    }
+    if (s === 404) {
+      throw new Error('Rota não encontrada. Contate o suporte.');
+    }
+    throw new Error(`Erro inesperado no servidor (HTTP ${s}). Tente novamente.`);
   }
   if (!text.trim()) return {};
   try {

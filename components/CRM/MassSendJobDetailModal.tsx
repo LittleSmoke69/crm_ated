@@ -6,6 +6,7 @@ import { sanitizeMassSendErrorMessage } from '@/lib/utils/activation-send-errors
 
 export type MassSendGroupOutcome = {
   groupId: string;
+  groupName?: string | null;
   success: boolean;
   error?: string;
 };
@@ -26,6 +27,8 @@ export type MassSendJobDetail = {
   /** Legado / redundante: jsonb na própria campanha. */
   group_results?: MassSendGroupOutcome[] | null;
   group_ids?: string[] | null;
+  /** Mapa group_id → nome do grupo (vindo da API). */
+  groupNameMap?: Record<string, string> | null;
   created_at: string;
 };
 
@@ -46,15 +49,17 @@ async function safeResponseJson(response: Response): Promise<{
   }
 }
 
-function normalizeOutcomes(raw: unknown): MassSendGroupOutcome[] {
+function normalizeOutcomes(raw: unknown, nameMap?: Record<string, string> | null): MassSendGroupOutcome[] {
   if (!Array.isArray(raw)) return [];
   return raw
     .map((o) => {
       const r = o as Record<string, unknown>;
       const groupId = String(r.groupId ?? r.group_id ?? '').trim();
       if (!groupId) return null;
+      const groupName = (r.groupName as string) || nameMap?.[groupId] || null;
       return {
         groupId,
+        ...(groupName ? { groupName } : {}),
         success: r.success === true,
         ...(r.error ? { error: String(r.error) } : {}),
       } as MassSendGroupOutcome;
@@ -116,7 +121,7 @@ const MassSendJobDetailModal: React.FC<MassSendJobDetailModalProps> = ({
 
   if (!isOpen) return null;
 
-  const outcomes = normalizeOutcomes(job?.group_outcomes ?? job?.group_results);
+  const outcomes = normalizeOutcomes(job?.group_outcomes ?? job?.group_results, job?.groupNameMap);
   const okList = outcomes.filter((o) => o.success);
   const failList = outcomes.filter((o) => !o.success);
   const failedIds = failList.map((o) => o.groupId);
@@ -229,7 +234,7 @@ const MassSendJobDetailModal: React.FC<MassSendJobDetailModalProps> = ({
                       {okList.length === 0 ? (
                         <li className="text-green-700/70 dark:text-green-300/70">Nenhum ainda nesta lista.</li>
                       ) : (
-                        okList.map((o) => <li key={o.groupId}>{o.groupId}</li>)
+                        okList.map((o) => <li key={o.groupId}>{o.groupName || o.groupId}</li>)
                       )}
                     </ul>
                   </div>
@@ -242,10 +247,12 @@ const MassSendJobDetailModal: React.FC<MassSendJobDetailModalProps> = ({
                         <li className="text-red-700/70 dark:text-red-300/70 font-mono">Nenhuma falha registrada.</li>
                       ) : (
                         failList.map((o) => (
-                          <li key={o.groupId} className="font-mono break-all border-b border-red-200/50 dark:border-red-900/30 pb-2 last:border-0">
-                            <span className="text-red-900 dark:text-red-100">{o.groupId}</span>
+                          <li key={o.groupId} className="break-all border-b border-red-200/50 dark:border-red-900/30 pb-2 last:border-0">
+                            <span className="text-red-900 dark:text-red-100 font-medium">
+                              {o.groupName || o.groupId}
+                            </span>
                             {o.error && (
-                              <span className="block text-red-700 dark:text-red-300 mt-0.5 whitespace-pre-wrap">
+                              <span className="block text-red-700 dark:text-red-300 mt-0.5 whitespace-pre-wrap font-mono">
                                 {sanitizeMassSendErrorMessage(o.error) || o.error}
                               </span>
                             )}

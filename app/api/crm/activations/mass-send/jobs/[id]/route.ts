@@ -66,17 +66,38 @@ export async function GET(
       console.warn('[MASS-SEND] GET job: activation_mass_send_job_groups indisponível (rode a migration?):', groupsErr.message);
     }
 
+    // Busca nomes dos grupos na tabela whatsapp_groups para exibir no modal.
+    const allGroupIds = Array.isArray(job.group_ids) ? (job.group_ids as string[]) : [];
+    let groupNameMap: Record<string, string> = {};
+    if (allGroupIds.length > 0) {
+      const { data: groupNames } = await supabaseServiceRole
+        .from('whatsapp_groups')
+        .select('group_id, group_subject')
+        .eq('instance_name', job.instance_name)
+        .eq('user_id', userId)
+        .in('group_id', allGroupIds);
+      if (Array.isArray(groupNames)) {
+        for (const g of groupNames) {
+          if (g.group_id && g.group_subject) {
+            groupNameMap[g.group_id] = g.group_subject;
+          }
+        }
+      }
+    }
+
     const group_outcomes =
       !groupsErr && Array.isArray(groupRows) && groupRows.length > 0
         ? groupRows.map((r: { group_id: string; success: boolean; error_message: string | null }) => ({
             groupId: r.group_id,
+            groupName: groupNameMap[r.group_id] || null,
             success: r.success === true,
             ...(r.error_message ? { error: r.error_message } : {}),
           }))
         : undefined;
 
+    // Se não há group_outcomes (tabela indisponível), monta a partir de group_ids + group_results legado.
     const payload =
-      group_outcomes !== undefined ? { ...job, group_outcomes } : { ...job };
+      group_outcomes !== undefined ? { ...job, group_outcomes, groupNameMap } : { ...job, groupNameMap };
 
     return successResponse(payload);
   } catch (e) {
