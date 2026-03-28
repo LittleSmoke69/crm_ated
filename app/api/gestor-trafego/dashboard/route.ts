@@ -227,9 +227,11 @@ export async function GET(req: NextRequest) {
 
     // Modo rápido: externalMetrics do CRM (uma chamada dashboard-metrics, sem gerentes/indicateds)
     if (onlyExternalMetrics) {
-      const cleanUrl = normalizeBancaUrl(bancaUrl);
-      const externalMetrics = cleanUrl
-        ? await fetchDashboardMetrics(cleanUrl, dateFrom ?? undefined, dateTo ?? undefined).catch(() => null)
+      // normalizeBancaUrl aqui devolve host sem protocolo (para comparar com profiles); fetchDashboardMetrics exige URL absoluta.
+      const cleanHost = normalizeBancaUrl(bancaUrl);
+      const crmBaseUrl = cleanHost ? `https://${cleanHost.replace(/^https?:\/\//i, '')}` : '';
+      const externalMetrics = crmBaseUrl
+        ? await fetchDashboardMetrics(crmBaseUrl, dateFrom ?? undefined, dateTo ?? undefined).catch(() => null)
         : null;
       return successResponse({ bancaId: bancaId ?? null, bancaInfo: { name: bancaName, url: bancaUrl }, externalMetrics });
     }

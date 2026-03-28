@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   UserPlus, 
   Users, 
@@ -41,6 +41,27 @@ import { useRequireAuth } from '@/utils/useRequireAuth';
 import FinancialMetricsBarChart from '@/components/Charts/FinancialMetricsBarChart';
 import LeadsDistributionChart from '@/components/Charts/LeadsDistributionChart';
 import Funnel3DChart from '@/components/Charts/Funnel3DChart';
+
+/** Evita que respostas antigas sobrescrevam estado após novo filtro/requisição. */
+function useDashboardFetchGeneration() {
+  const ref = useRef(0);
+  const next = () => {
+    ref.current += 1;
+    return ref.current;
+  };
+  const isCurrent = (id: number) => id === ref.current;
+  return { next, isCurrent };
+}
+
+function MetaMetricSkeleton() {
+  return (
+    <div className="h-8 w-20 rounded-md bg-gray-200/90 dark:bg-gray-600/80 animate-pulse" aria-hidden />
+  );
+}
+
+function ResumoMetricSkeleton() {
+  return <div className="h-9 w-24 rounded-md bg-white/25 animate-pulse" aria-hidden />;
+}
 
 interface ConsultorOutraBanca {
   id: string;
@@ -231,6 +252,7 @@ export default function GestorTrafegoClient({
   const [loadingBanca, setLoadingBanca] = useState(false);       // gerentes, top5, gráficos
   const [loadingMeta, setLoadingMeta] = useState(false);         // Meta Ads, Funil Meta
   const [loadingExtMetrics, setLoadingExtMetrics] = useState(false); // Resumo Geral (dashboard-metrics)
+  const dashboardFetchGen = useDashboardFetchGeneration();
   
   // Filtro de data
   const [dateFilter, setDateFilter] = useState<'daily' | 'yesterday' | '7days' | '15days' | '30days' | 'custom' | 'all'>('daily');
@@ -459,6 +481,8 @@ export default function GestorTrafegoClient({
       }
     }
 
+    const requestId = dashboardFetchGen.next();
+
     setLoadingBanca(true);
     setLoadingMeta(true);
     setLoadingExtMetrics(true);
@@ -484,6 +508,7 @@ export default function GestorTrafegoClient({
     const metaPromise = fetch(metaUrl, { headers, credentials: 'include' })
       .then((r) => r.json())
       .then((result) => {
+        if (!dashboardFetchGen.isCurrent(requestId)) return;
         if (result?.success && result?.data) {
           setMetaFunnel(result.data.metaFunnel || null);
           setMetaCampaignsData(result.data.metaCampaignsData || []);
@@ -492,22 +517,28 @@ export default function GestorTrafegoClient({
         }
       })
       .catch((err) => console.warn('[Frontend] Erro ao buscar Meta:', err))
-      .finally(() => setLoadingMeta(false));
+      .finally(() => {
+        if (dashboardFetchGen.isCurrent(requestId)) setLoadingMeta(false);
+      });
 
     const extMetricsPromise = fetch(extMetricsUrl, { headers, credentials: 'include' })
       .then((r) => r.json())
       .then((result) => {
+        if (!dashboardFetchGen.isCurrent(requestId)) return;
         if (result?.success && result?.data) {
           if (result.data.bancaId) setBancaId(result.data.bancaId);
           if (result.data.bancaInfo?.name) setBancaName(result.data.bancaInfo.name);
-          if (result.data.externalMetrics) {
-            setExternalMetrics(result.data.externalMetrics);
+          const em = result.data.externalMetrics;
+          if (em != null && typeof em === 'object') {
+            setExternalMetrics(em as ExternalMetrics);
             setExternalMetricsError(null);
           }
         }
       })
       .catch((err) => console.warn('[Frontend] Erro ao buscar externalMetrics:', err))
-      .finally(() => setLoadingExtMetrics(false));
+      .finally(() => {
+        if (dashboardFetchGen.isCurrent(requestId)) setLoadingExtMetrics(false);
+      });
 
     const bancaPromise = fetch(bancaUrl, { headers, credentials: 'include' })
       .then(async (r) => {
@@ -516,6 +547,7 @@ export default function GestorTrafegoClient({
         return { status, result };
       })
       .then(({ status, result }) => {
+        if (!dashboardFetchGen.isCurrent(requestId)) return;
         if (result?.success && result?.data) {
           setApiError(null);
           setIsAuthorized(true);
@@ -524,9 +556,10 @@ export default function GestorTrafegoClient({
           }
           setGerentes(result.data.gerentes || []);
           setTop5Consultants(result.data.top5Consultants || []);
-          // Fallback: usa externalMetrics da chamada lenta apenas se a rápida não retornou
-          if (result.data.externalMetrics) {
-            setExternalMetrics((prev) => prev ?? result.data.externalMetrics);
+          // Fallback: métricas da chamada completa se a rota only_external_metrics falhou ou veio vazia
+          const em = result.data.externalMetrics;
+          if (em != null && typeof em === 'object') {
+            setExternalMetrics((prev) => prev ?? (em as ExternalMetrics));
             setExternalMetricsError(null);
           } else if (result.data.externalMetricsError) {
             setExternalMetricsError((prev) => prev ?? result.data.externalMetricsError);
@@ -549,12 +582,15 @@ export default function GestorTrafegoClient({
         }
       })
       .catch((err) => {
+        if (!dashboardFetchGen.isCurrent(requestId)) return;
         console.error('[Frontend] Erro ao buscar dados da banca:', err);
         setApiError('Erro ao carregar dados da banca. Tente novamente.');
         // Erro de rede/servidor não deve virar "Acesso Negado".
         setIsAuthorized(true);
       })
-      .finally(() => setLoadingBanca(false));
+      .finally(() => {
+        if (dashboardFetchGen.isCurrent(requestId)) setLoadingBanca(false);
+      });
 
     try {
       await Promise.allSettled([metaPromise, extMetricsPromise, bancaPromise]);
@@ -1101,11 +1137,6 @@ export default function GestorTrafegoClient({
 
           {/* Card Métricas Meta Ads (Campanhas) - acima do Resumo Geral */}
           <div className="relative mb-6">
-            {loadingMeta && (
-              <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
-              </div>
-            )}
             <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
                 <div className="flex items-center gap-2">
@@ -1142,29 +1173,35 @@ export default function GestorTrafegoClient({
                     <Eye className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                     <p className="text-xs font-bold text-gray-600 dark:text-gray-400 uppercase">Impressões</p>
                   </div>
-                  <p className="text-xl font-bold text-gray-800 dark:text-gray-100">{(metaFunnel?.impressions ?? 0).toLocaleString('pt-BR')}</p>
+                  <p className="text-xl font-bold text-gray-800 dark:text-gray-100 min-h-[2rem] flex items-center">
+                    {loadingMeta ? <MetaMetricSkeleton /> : (metaFunnel?.impressions ?? 0).toLocaleString('pt-BR')}
+                  </p>
                 </div>
                 <div className="bg-gray-50/80 dark:bg-gray-800/60 p-4 rounded-xl border border-gray-100 dark:border-gray-600">
                   <div className="flex items-center gap-2 mb-2">
                     <Users className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                     <p className="text-xs font-bold text-gray-600 dark:text-gray-400 uppercase">Alcance</p>
                   </div>
-                  <p className="text-xl font-bold text-gray-800 dark:text-gray-100">{(metaFunnel?.reach ?? 0).toLocaleString('pt-BR')}</p>
+                  <p className="text-xl font-bold text-gray-800 dark:text-gray-100 min-h-[2rem] flex items-center">
+                    {loadingMeta ? <MetaMetricSkeleton /> : (metaFunnel?.reach ?? 0).toLocaleString('pt-BR')}
+                  </p>
                 </div>
                 <div className="bg-gray-50/80 dark:bg-gray-800/60 p-4 rounded-xl border border-gray-100 dark:border-gray-600">
                   <div className="flex items-center gap-2 mb-2">
                     <MousePointer className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                     <p className="text-xs font-bold text-gray-600 dark:text-gray-400 uppercase">Cliques</p>
                   </div>
-                  <p className="text-xl font-bold text-gray-800 dark:text-gray-100">{(metaFunnel?.clicks ?? 0).toLocaleString('pt-BR')}</p>
+                  <p className="text-xl font-bold text-gray-800 dark:text-gray-100 min-h-[2rem] flex items-center">
+                    {loadingMeta ? <MetaMetricSkeleton /> : (metaFunnel?.clicks ?? 0).toLocaleString('pt-BR')}
+                  </p>
                 </div>
                 <div className="bg-gray-50/80 dark:bg-gray-800/60 p-4 rounded-xl border border-gray-100 dark:border-gray-600">
                   <div className="flex items-center gap-2 mb-2">
                     <DollarSign className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                     <p className="text-xs font-bold text-gray-600 dark:text-gray-400 uppercase">Gasto</p>
                   </div>
-                  <p className="text-xl font-bold text-gray-800 dark:text-gray-100">
-                    {formatMetaSpend(metaFunnel?.spend ?? 0, metaFunnel?.currency)}
+                  <p className="text-xl font-bold text-gray-800 dark:text-gray-100 min-h-[2rem] flex items-center">
+                    {loadingMeta ? <MetaMetricSkeleton /> : formatMetaSpend(metaFunnel?.spend ?? 0, metaFunnel?.currency)}
                   </p>
                 </div>
                 <div className="bg-gray-50/80 dark:bg-gray-800/60 p-4 rounded-xl border border-gray-100 dark:border-gray-600">
@@ -1172,16 +1209,24 @@ export default function GestorTrafegoClient({
                     <UserPlus className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                     <p className="text-xs font-bold text-gray-600 dark:text-gray-400 uppercase">Leads (Meta)</p>
                   </div>
-                  <p className="text-xl font-bold text-gray-800 dark:text-gray-100">{(metaFunnel?.leads ?? 0).toLocaleString('pt-BR')}</p>
+                  <p className="text-xl font-bold text-gray-800 dark:text-gray-100 min-h-[2rem] flex items-center">
+                    {loadingMeta ? <MetaMetricSkeleton /> : (metaFunnel?.leads ?? 0).toLocaleString('pt-BR')}
+                  </p>
                 </div>
               </div>
-              {!metaFunnel && (
+              {!loadingMeta && !metaFunnel && (
                 <p className="text-xs text-amber-600 dark:text-amber-400 mt-3">
                   Configure a integração Meta na seção &quot;Configurar integração Meta&quot; abaixo ou em Admin → Meta Ads. Depois sincronize para ver as métricas.
                 </p>
               )}
+              {loadingMeta && (
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-4 flex items-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                  Carregando tabela de campanhas…
+                </p>
+              )}
               {/* Tabela de campanhas */}
-              {metaCampaignsData.length > 0 && (
+              {!loadingMeta && metaCampaignsData.length > 0 && (
                 <div className="mt-6 overflow-x-auto">
                   <table className="w-full text-left border-collapse text-sm">
                     <thead>
@@ -1258,12 +1303,7 @@ export default function GestorTrafegoClient({
           </div>
           
           <div className="relative">
-            {loadingExtMetrics && (
-              <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
-              </div>
-            )}
-            {/* Resumo Geral: sempre visível (dados ou zeros) */}
+            {/* Resumo Geral: skeleton nos valores enquanto carrega (evita confundir com zero real) */}
             <div className="bg-gradient-to-br from-[#A8E677] to-[#8CD955] p-6 rounded-2xl shadow-lg border border-[#8CD955]/40">
               <div className="flex items-center gap-2 mb-6">
                 <BarChart3 className="w-6 h-6 text-white" />
@@ -1275,15 +1315,21 @@ export default function GestorTrafegoClient({
                     <Users className="w-4 h-4 text-white" />
                     <p className="text-xs font-bold text-white/90 uppercase">Total de Leads</p>
                   </div>
-                  <p className="text-2xl font-bold text-white">{externalMetrics?.total_leads ?? 0}</p>
+                  <p className="text-2xl font-bold text-white min-h-[2.25rem] flex items-center">
+                    {loadingExtMetrics ? <ResumoMetricSkeleton /> : (externalMetrics?.total_leads ?? 0)}
+                  </p>
                 </div>
                 <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
                   <div className="flex items-center gap-2 mb-2">
                     <DollarSign className="w-4 h-4 text-white" />
                     <p className="text-xs font-bold text-white/90 uppercase">Total Depositado</p>
                   </div>
-                  <p className="text-2xl font-bold text-white">
-                    R$ {(externalMetrics?.total_deposited ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                  <p className="text-2xl font-bold text-white min-h-[2.25rem] flex items-center">
+                    {loadingExtMetrics ? (
+                      <ResumoMetricSkeleton />
+                    ) : (
+                      `R$ ${(externalMetrics?.total_deposited ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+                    )}
                   </p>
                 </div>
                 <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
@@ -1291,8 +1337,12 @@ export default function GestorTrafegoClient({
                     <Target className="w-4 h-4 text-white" />
                     <p className="text-xs font-bold text-white/90 uppercase">Total Apostado</p>
                   </div>
-                  <p className="text-2xl font-bold text-white">
-                    R$ {(externalMetrics?.total_bets ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                  <p className="text-2xl font-bold text-white min-h-[2.25rem] flex items-center">
+                    {loadingExtMetrics ? (
+                      <ResumoMetricSkeleton />
+                    ) : (
+                      `R$ ${(externalMetrics?.total_bets ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+                    )}
                   </p>
                 </div>
                 <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
@@ -1300,8 +1350,12 @@ export default function GestorTrafegoClient({
                     <Award className="w-4 h-4 text-white" />
                     <p className="text-xs font-bold text-white/90 uppercase">Total Premiado</p>
                   </div>
-                  <p className="text-2xl font-bold text-white">
-                    R$ {(externalMetrics?.total_prizes ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                  <p className="text-2xl font-bold text-white min-h-[2.25rem] flex items-center">
+                    {loadingExtMetrics ? (
+                      <ResumoMetricSkeleton />
+                    ) : (
+                      `R$ ${(externalMetrics?.total_prizes ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+                    )}
                   </p>
                 </div>
                 <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
@@ -1309,22 +1363,26 @@ export default function GestorTrafegoClient({
                     <Award className="w-4 h-4 text-white" />
                     <p className="text-xs font-bold text-white/90 uppercase">Leads Premiados</p>
                   </div>
-                  <p className="text-2xl font-bold text-white">{externalMetrics?.awarded_clients_count ?? 0}</p>
+                  <p className="text-2xl font-bold text-white min-h-[2.25rem] flex items-center">
+                    {loadingExtMetrics ? <ResumoMetricSkeleton /> : (externalMetrics?.awarded_clients_count ?? 0)}
+                  </p>
                 </div>
                 <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
                   <div className="flex items-center gap-2 mb-2">
                     <CheckCircle2 className="w-4 h-4 text-white" />
                     <p className="text-xs font-bold text-white/90 uppercase">Clientes Ativos</p>
                   </div>
-                  <p className="text-2xl font-bold text-white">{externalMetrics?.active_leads ?? 0}</p>
+                  <p className="text-2xl font-bold text-white min-h-[2.25rem] flex items-center">
+                    {loadingExtMetrics ? <ResumoMetricSkeleton /> : (externalMetrics?.active_leads ?? 0)}
+                  </p>
                 </div>
                 <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
                   <div className="flex items-center gap-2 mb-2">
                     <TrendingUp className="w-4 h-4 text-white" />
                     <p className="text-xs font-bold text-white/90 uppercase">Taxa de Conversão</p>
                   </div>
-                  <p className="text-2xl font-bold text-white">
-                    {(externalMetrics?.conversion_rate ?? 0).toFixed(2)}%
+                  <p className="text-2xl font-bold text-white min-h-[2.25rem] flex items-center">
+                    {loadingExtMetrics ? <ResumoMetricSkeleton /> : `${(externalMetrics?.conversion_rate ?? 0).toFixed(2)}%`}
                   </p>
                 </div>
                 <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
@@ -1332,8 +1390,12 @@ export default function GestorTrafegoClient({
                     <TrendingUp className="w-4 h-4 text-white" />
                     <p className="text-xs font-bold text-white/90 uppercase">Taxa de LTV</p>
                   </div>
-                  <p className="text-2xl font-bold text-white">
-                    R$ {(externalMetrics?.ltv_avg ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  <p className="text-2xl font-bold text-white min-h-[2.25rem] flex items-center">
+                    {loadingExtMetrics ? (
+                      <ResumoMetricSkeleton />
+                    ) : (
+                      `R$ ${(externalMetrics?.ltv_avg ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                    )}
                   </p>
                 </div>
                 <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
@@ -1341,8 +1403,12 @@ export default function GestorTrafegoClient({
                     <Wallet className="w-4 h-4 text-white" />
                     <p className="text-xs font-bold text-white/90 uppercase">Profit da Rede</p>
                   </div>
-                  <p className="text-2xl font-bold text-white">
-                    R$ {(externalMetrics?.net_profit ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                  <p className="text-2xl font-bold text-white min-h-[2.25rem] flex items-center">
+                    {loadingExtMetrics ? (
+                      <ResumoMetricSkeleton />
+                    ) : (
+                      `R$ ${(externalMetrics?.net_profit ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+                    )}
                   </p>
                 </div>
               </div>
@@ -1522,9 +1588,10 @@ export default function GestorTrafegoClient({
 
         {/* Gráficos Detalhados do Resumo Geral - sempre visível */}
         <div className="relative">
-          {loadingBanca && (
-            <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
+          {(loadingBanca || loadingExtMetrics) && (
+            <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex flex-col items-center justify-center gap-2">
+              <Loader2 className="h-8 w-8 text-[#8CD955] animate-spin" />
+              <span className="text-sm font-medium text-gray-600 dark:text-gray-300">Carregando gráficos…</span>
             </div>
           )}
           <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
@@ -1561,10 +1628,10 @@ export default function GestorTrafegoClient({
 
         {/* Funil Facebook (Meta) + Loteria - unificado */}
         <div className="relative bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
-          {loadingMeta && (
+          {(loadingMeta || loadingExtMetrics) && (
             <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex flex-col items-center justify-center gap-3">
-              <div className="animate-spin rounded-full h-10 w-10 border-2 border-[#8CD955] border-t-transparent" />
-              <p className="text-sm font-medium text-gray-600 dark:text-gray-300">Carregando dados do funil...</p>
+              <Loader2 className="h-10 w-10 text-[#8CD955] animate-spin" />
+              <p className="text-sm font-medium text-gray-600 dark:text-gray-300">Carregando dados do funil…</p>
             </div>
           )}
           <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-2 flex items-center gap-2">
@@ -1590,7 +1657,7 @@ export default function GestorTrafegoClient({
                   externalMetrics?.active_leads ?? 0,
                 ],
               }}
-              showPlaceholder={!metaFunnel && !externalMetrics}
+              showPlaceholder={loadingMeta || loadingExtMetrics || (!metaFunnel && !externalMetrics)}
             />
           </div>
           {metaFunnel && metaFunnel.spend > 0 && (
@@ -1608,8 +1675,9 @@ export default function GestorTrafegoClient({
         {/* Top 5 Consultores por Vendas - Design Visual */}
         <div className="relative">
           {loadingBanca && (
-            <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
+            <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex flex-col items-center justify-center gap-2">
+              <Loader2 className="h-8 w-8 text-[#8CD955] animate-spin" />
+              <span className="text-sm font-medium text-gray-600 dark:text-gray-300">Carregando ranking…</span>
             </div>
           )}
           <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
@@ -1772,7 +1840,9 @@ export default function GestorTrafegoClient({
               </div>
               <span className="text-sm font-medium text-gray-500 dark:text-gray-400">Total de Gerentes</span>
             </div>
-            <p className="text-2xl font-bold text-gray-800 dark:text-gray-100">{gerentes.length}</p>
+            <p className="text-2xl font-bold text-gray-800 dark:text-gray-100 min-h-[2rem] flex items-center">
+              {loadingBanca ? <MetaMetricSkeleton /> : gerentes.length}
+            </p>
           </div>
           
           <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
@@ -1782,8 +1852,12 @@ export default function GestorTrafegoClient({
               </div>
               <span className="text-sm font-medium text-gray-500 dark:text-gray-400">Taxa Conversão Média</span>
             </div>
-            <p className="text-2xl font-bold text-gray-800 dark:text-gray-100">
-              {(gerentes.reduce((acc, g) => acc + (g.metrics.externalKpis?.conversion_rate || parseFloat(g.metrics.successRate) || 0), 0) / (gerentes.length || 1)).toFixed(1)}%
+            <p className="text-2xl font-bold text-gray-800 dark:text-gray-100 min-h-[2rem] flex items-center">
+              {loadingBanca ? (
+                <MetaMetricSkeleton />
+              ) : (
+                `${(gerentes.reduce((acc, g) => acc + (g.metrics.externalKpis?.conversion_rate || parseFloat(g.metrics.successRate) || 0), 0) / (gerentes.length || 1)).toFixed(1)}%`
+              )}
             </p>
           </div>
 
@@ -1794,8 +1868,12 @@ export default function GestorTrafegoClient({
               </div>
               <span className="text-sm font-medium text-gray-500 dark:text-gray-400">Total de Leads</span>
             </div>
-            <p className="text-2xl font-bold text-gray-800 dark:text-gray-100">
-              {gerentes.reduce((acc, g) => acc + (g.metrics.externalKpis?.total_leads || g.metrics.contacts || 0), 0)}
+            <p className="text-2xl font-bold text-gray-800 dark:text-gray-100 min-h-[2rem] flex items-center">
+              {loadingBanca ? (
+                <MetaMetricSkeleton />
+              ) : (
+                gerentes.reduce((acc, g) => acc + (g.metrics.externalKpis?.total_leads || g.metrics.contacts || 0), 0)
+              )}
             </p>
           </div>
         </div>
