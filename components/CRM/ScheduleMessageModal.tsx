@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, Search, Check, Calendar, Clock, ArrowLeft, ArrowRight, Loader2, Plus, CheckCircle2 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { deduplicateGroupsById } from '@/lib/utils/group-utils';
@@ -58,7 +58,8 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
   // Step 4: Confirm
   const [saving, setSaving] = useState(false);
   const [dontShowAgain, setDontShowAgain] = useState(false);
-  
+  const saveLockedRef = useRef(false);
+
   const { toasts, showToast, removeToast } = useToast();
 
   const daysOfWeek = [
@@ -330,7 +331,9 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
 
   const handleSave = async () => {
     if (!canGoToNextStep()) return;
-    
+    if (saveLockedRef.current || saving) return;
+
+    saveLockedRef.current = true;
     setSaving(true);
     try {
       let scheduledAtUTC = '';
@@ -391,6 +394,7 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
       console.error('Erro ao criar agendamento:', error);
       showToast(`Erro ao criar agendamento: ${error.message || 'Erro desconhecido'}`, 'error');
     } finally {
+      saveLockedRef.current = false;
       setSaving(false);
     }
   };

@@ -58,6 +58,10 @@ CREATE INDEX IF NOT EXISTS idx_amsg_job_groups_failed
   ON public.activation_mass_send_job_groups (job_id)
   WHERE success = false;
 
+CREATE INDEX IF NOT EXISTS idx_amsg_job_groups_job_id_success_true
+  ON public.activation_mass_send_job_groups (job_id, group_id)
+  WHERE success = true;
+
 ALTER TABLE public.activation_mass_send_jobs ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Users can view own activation_mass_send_jobs" ON public.activation_mass_send_jobs;
@@ -85,21 +89,26 @@ CREATE POLICY "Users can view activation_mass_send_job_groups for own jobs"
     )
   );
 
+DROP FUNCTION IF EXISTS public.increment_mass_send_job_counts(UUID, INT, INT, INT, TEXT, TEXT, TIMESTAMPTZ, JSONB);
+
 CREATE OR REPLACE FUNCTION public.increment_mass_send_job_counts(
   p_job_id UUID,
   p_sent INT,
   p_failed INT,
   p_processed_index INT,
+  p_expected_processed_index INT,
   p_last_error TEXT,
   p_status TEXT,
   p_now TIMESTAMPTZ,
   p_group_outcomes JSONB DEFAULT NULL
 )
-RETURNS VOID
+RETURNS BOOLEAN
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
+DECLARE
+  updated_count INT;
 BEGIN
   UPDATE public.activation_mass_send_jobs
   SET
@@ -124,7 +133,14 @@ BEGIN
       THEN COALESCE(group_results, '[]'::jsonb) || p_group_outcomes
       ELSE group_results
     END
-  WHERE id = p_job_id;
+  WHERE id = p_job_id
+    AND processed_index = p_expected_processed_index;
+
+  GET DIAGNOSTICS updated_count = ROW_COUNT;
+
+  IF updated_count = 0 THEN
+    RETURN FALSE;
+  END IF;
 
   IF p_group_outcomes IS NOT NULL
      AND jsonb_typeof(p_group_outcomes) = 'array'
@@ -145,10 +161,15 @@ BEGIN
       error_message = EXCLUDED.error_message,
       updated_at = EXCLUDED.updated_at;
   END IF;
+
+  RETURN TRUE;
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION public.increment_mass_send_job_counts(UUID, INT, INT, INT, TEXT, TEXT, TIMESTAMPTZ, JSONB) TO service_role;
-GRANT EXECUTE ON FUNCTION public.increment_mass_send_job_counts(UUID, INT, INT, INT, TEXT, TEXT, TIMESTAMPTZ, JSONB) TO authenticated;
+COMMENT ON FUNCTION public.increment_mass_send_job_counts(UUID, INT, INT, INT, INT, TEXT, TEXT, TIMESTAMPTZ, JSONB) IS
+  'CAS em processed_index; p_group_outcomes NULL + p_sent/p_failed 0 = só avança índice (skip idempotente).';
+
+GRANT EXECUTE ON FUNCTION public.increment_mass_send_job_counts(UUID, INT, INT, INT, INT, TEXT, TEXT, TIMESTAMPTZ, JSONB) TO service_role;
+GRANT EXECUTE ON FUNCTION public.increment_mass_send_job_counts(UUID, INT, INT, INT, INT, TEXT, TEXT, TIMESTAMPTZ, JSONB) TO authenticated;
 
 COMMENT ON TABLE public.activation_mass_send_jobs IS 'Disparo em massa de ativações (background Netlify)';

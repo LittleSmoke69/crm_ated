@@ -36,6 +36,15 @@ function shortId(id: string): string {
   return id.slice(0, 8);
 }
 
+async function loadSucceededGroupIds(supabase: ReturnType<typeof getSupabase>, jobId: string): Promise<Set<string>> {
+  const { data } = await supabase
+    .from('activation_mass_send_job_groups')
+    .select('group_id')
+    .eq('job_id', jobId)
+    .eq('success', true);
+  return new Set((data ?? []).map((r: { group_id: string }) => String(r.group_id || '').trim()).filter(Boolean));
+}
+
 function isTransient(err: string): boolean {
   const e = err.toLowerCase();
   return e.includes('timeout') || e.includes('fetch failed') || e.includes('504') || e.includes('502') || e.includes('503') || e.includes('econnreset') || e.includes('econnrefused') || e.includes('enotfound') || e.includes('socket');
@@ -65,6 +74,10 @@ async function sendToEvolution(
   const attachMime = String(msg.attachment_mime || 'image/png');
   const mentionAll = msg.mention_all === true || String(msg.mention_all).toLowerCase() === 'true';
   const ptvDelay = typeof msg.ptv_delay === 'number' ? msg.ptv_delay : 1200;
+
+  if (msgType === 'ptv' && !msg._ptvBase64) {
+    return { success: false, error: 'PTV sem vídeo' };
+  }
 
   let url: string;
   let body: Record<string, unknown>;
@@ -267,12 +280,37 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
       }
     }
 
+    if (message.message_type === 'ptv' && !msg._ptvBase64) {
+      await supabase
+        .from('activation_mass_send_jobs')
+        .update({
+          status: 'failed',
+          last_error: 'PTV sem vídeo — campanha cancelada',
+          locked_at: null,
+          locked_by: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', job.id);
+      console.error(`[MassSend] Job ${shortId(job.id)} PTV sem payload`);
+      continue;
+    }
+
     console.log(`[MassSend] Job ${shortId(job.id)} | ${baseUrl} | tipo: ${message.message_type} | ${idx + 1}→${total}`);
+
+    const succeededGroupIds = await loadSucceededGroupIds(supabase, job.id);
 
     // 5. Loop de grupos para este job
     let loopTick = 0;
     let lastLockTouchMs = Date.now();
     while (idx < total && (Date.now() - startTime) < BUDGET_MS) {
+      const { data: idxSnap } = await supabase.from('activation_mass_send_jobs').select('processed_index').eq('id', job.id).maybeSingle();
+      const dbIdx = Number(idxSnap?.processed_index) || 0;
+      if (dbIdx !== idx) {
+        console.warn(`[MassSend] índice realinhado DB=${dbIdx} local=${idx} job=${shortId(job.id)}`);
+        idx = dbIdx;
+        if (idx >= total) break;
+      }
+
       const groupId = groupIds[idx];
 
       // Delay 1s entre grupos
@@ -299,45 +337,62 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
         lastLockTouchMs = Date.now();
       }
 
-      // Envia com retry
-      const t0 = Date.now();
-      let result = await sendToEvolution(baseUrl, job.instance_name, apiKey, groupId, msg);
+      const alreadyOk = succeededGroupIds.has(groupId);
+      let result: SendResult;
 
-      for (let r = 0; r < RETRY_DELAYS.length && !result.success && isTransient(result.error || ''); r++) {
-        console.warn(`[MassSend] [${idx + 1}/${total}] ${groupId} retry ${r + 1}/${RETRY_DELAYS.length} em ${RETRY_DELAYS[r] / 1000}s | ${result.error}`);
-        await new Promise((w) => setTimeout(w, RETRY_DELAYS[r]));
+      if (alreadyOk) {
+        console.log(
+          `[MassSend] [${idx + 1}/${total}] ${groupId} PULAR — já consta envio com sucesso (idempotente)`
+        );
+        result = { success: true };
+      } else {
+        const t0 = Date.now();
         result = await sendToEvolution(baseUrl, job.instance_name, apiKey, groupId, msg);
+
+        for (let r = 0; r < RETRY_DELAYS.length && !result.success && isTransient(result.error || ''); r++) {
+          console.warn(`[MassSend] [${idx + 1}/${total}] ${groupId} retry ${r + 1}/${RETRY_DELAYS.length} em ${RETRY_DELAYS[r] / 1000}s | ${result.error}`);
+          await new Promise((w) => setTimeout(w, RETRY_DELAYS[r]));
+          result = await sendToEvolution(baseUrl, job.instance_name, apiKey, groupId, msg);
+        }
+
+        const ms = Date.now() - t0;
+        if (result.success) {
+          console.log(`[MassSend] [${idx + 1}/${total}] ${groupId} OK (${ms}ms)`);
+          totalSent++;
+          succeededGroupIds.add(groupId);
+        } else {
+          console.error(`[MassSend] [${idx + 1}/${total}] ${groupId} FALHA (${ms}ms) | ${result.error}`);
+          totalFailed++;
+        }
       }
 
-      const ms = Date.now() - t0;
       const newIdx = idx + 1;
       const isComplete = newIdx >= total;
 
-      if (result.success) {
-        console.log(`[MassSend] [${idx + 1}/${total}] ${groupId} OK (${ms}ms)`);
-        totalSent++;
-      } else {
-        console.error(`[MassSend] [${idx + 1}/${total}] ${groupId} FALHA (${ms}ms) | ${result.error}`);
-        totalFailed++;
-      }
-
-      // Persiste resultado
       const pNow = new Date().toISOString();
-      const outcome = [{ groupId, success: result.success, ...(result.error ? { error: result.error } : {}) }];
-      const { error: rpcErr } = await supabase.rpc('increment_mass_send_job_counts', {
+      const skipRpcOutcomes = alreadyOk;
+      const outcome = skipRpcOutcomes
+        ? null
+        : [{ groupId, success: result.success, ...(result.error ? { error: result.error } : {}) }];
+      const { data: rpcApplied, error: rpcErr } = await supabase.rpc('increment_mass_send_job_counts', {
         p_job_id: job.id,
-        p_sent: result.success ? 1 : 0,
-        p_failed: result.success ? 0 : 1,
+        p_sent: skipRpcOutcomes ? 0 : result.success ? 1 : 0,
+        p_failed: skipRpcOutcomes ? 0 : result.success ? 0 : 1,
         p_processed_index: newIdx,
-        p_last_error: result.error || null,
+        p_expected_processed_index: idx,
+        p_last_error: skipRpcOutcomes ? null : result.error || null,
         p_status: isComplete ? 'completed' : 'processing',
         p_now: pNow,
         p_group_outcomes: outcome,
       });
 
-      if (rpcErr) {
+      let persisted = rpcApplied === true;
+      if (!rpcErr && rpcApplied === false) {
+        console.warn(`[MassSend] persist ignorado (corrida) job=${shortId(job.id)} esperado_idx=${idx}`);
+        persisted = false;
+      } else if (rpcErr) {
         console.error(`[MassSend] RPC falhou: ${rpcErr.message}`);
-        await supabase
+        const { data: fbRows, error: fbErr } = await supabase
           .from('activation_mass_send_jobs')
           .update({
             processed_index: newIdx,
@@ -345,10 +400,21 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
             updated_at: pNow,
             ...(isComplete ? { locked_at: null, locked_by: null } : { locked_at: pNow }),
           })
-          .eq('id', job.id);
+          .eq('id', job.id)
+          .eq('processed_index', idx)
+          .select('id');
+        persisted = !fbErr && Array.isArray(fbRows) && fbRows.length > 0;
+        if (!persisted) console.warn(`[MassSend] fallback CAS falhou job=${shortId(job.id)} idx=${idx}`);
       }
 
       lastLockTouchMs = Date.now();
+
+      if (!persisted) {
+        const { data: snap } = await supabase.from('activation_mass_send_jobs').select('processed_index').eq('id', job.id).maybeSingle();
+        idx = Number(snap?.processed_index) || 0;
+        loopTick++;
+        continue;
+      }
 
       if (isComplete) {
         await reconcile(supabase, job.id);
@@ -360,11 +426,12 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
       loopTick++;
     }
 
-    // Libera lock se não completou
+    // Libera lock se não completou — devolve ao Next e encerra esta invocação (evita re-adquirir o mesmo job no mesmo tick e competir com os POSTs disparados)
     if (idx < total) {
       await supabase.from('activation_mass_send_jobs').update({ locked_at: null, locked_by: null, updated_at: new Date().toISOString() }).eq('id', job.id);
       console.log(`[MassSend] Job ${shortId(job.id)} budget esgotado em ${idx}/${total}. Auto-chain + próximo cron.`);
       triggerMassSendWorkerFromDeployUrl();
+      return done(startTime, groupsProcessed, totalSent, totalFailed);
     }
   }
 
@@ -395,17 +462,14 @@ function triggerMassSendWorkerFromDeployUrl(): void {
   const base = (process.env.URL || process.env.DEPLOY_PRIME_URL || '').replace(/\/$/, '');
   if (!secret || !base) return;
   const processUrl = `${base}/api/crm/activations/mass-send/process`;
-  const fire = () =>
-    fetch(processUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-internal-cron-secret': secret,
-      },
-    }).catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn('[MassSend] Auto-chain process falhou:', msg);
-    });
-  fire();
-  setTimeout(fire, 4_500);
+  void fetch(processUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-internal-cron-secret': secret,
+    },
+  }).catch((err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn('[MassSend] Auto-chain process falhou:', msg);
+  });
 }

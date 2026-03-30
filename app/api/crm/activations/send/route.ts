@@ -98,10 +98,18 @@ export async function POST(req: NextRequest) {
     const requestOrigin = req.nextUrl?.origin || new URL(req.url).origin;
     const { userId } = await requireAuth(req);
     const body = await req.json();
-    const { messageId, groupIds, instanceName, forceMassSend, forceSync } = body;
+    const { messageId, instanceName, forceMassSend, forceSync } = body;
+    const rawGroupIds = body.groupIds;
+    const groupIds = [
+      ...new Set(
+        (Array.isArray(rawGroupIds) ? rawGroupIds : [])
+          .map((id: unknown) => String(id ?? '').trim())
+          .filter(Boolean)
+      ),
+    ];
     const isCronProcess = req.headers.get('x-internal-cron-secret') === process.env.CRON_SECRET;
 
-    if (!messageId || !groupIds || !Array.isArray(groupIds) || groupIds.length === 0 || !instanceName) {
+    if (!messageId || groupIds.length === 0 || !instanceName) {
       return errorResponse('messageId, groupIds e instanceName são obrigatórios', 400);
     }
 
@@ -133,6 +141,43 @@ export async function POST(req: NextRequest) {
       !(forceSync === true && isCronProcess) &&
       (forceMassSend === true || groupIds.length > THRESHOLD_MASS_SEND || ptvUrlHeavyProcessing);
     if (useMassSend) {
+      const { data: existingActive } = await supabaseServiceRole
+        .from('activation_mass_send_jobs')
+        .select('id, status')
+        .eq('user_id', userId)
+        .eq('message_id', messageId)
+        .in('status', ['pending', 'processing', 'paused'])
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (existingActive?.id) {
+        console.warn('[ACTIVATION] Campanha em massa já ativa para esta mensagem — evitando job duplicado', {
+          jobId: existingActive.id,
+          status: existingActive.status,
+        });
+        const cronSecretDup = process.env.CRON_SECRET;
+        const baseDup =
+          process.env.URL ||
+          process.env.NEXT_PUBLIC_SITE_URL ||
+          (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null);
+        const siteUrlDup = (baseDup ? baseDup.replace(/\/$/, '') : null) || requestOrigin;
+        if (cronSecretDup && siteUrlDup) {
+          triggerMassSendProcessChained(siteUrlDup);
+        }
+        return new Response(
+          JSON.stringify({
+            success: true,
+            job_id: existingActive.id,
+            mass_send: true,
+            reused_existing_job: true,
+            message:
+              'Já existe uma campanha em andamento (ou pausada) para esta mensagem. Não criamos outro job; acompanhe o existente em Campanhas de disparo.',
+          }),
+          { status: 202, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
       const { data: job, error: jobError } = await supabaseServiceRole
         .from('activation_mass_send_jobs')
         .insert({

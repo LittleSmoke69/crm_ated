@@ -6,7 +6,8 @@
  * 
  * Fluxo:
  * 1. Busca agendamentos devidos com status 'scheduled'
- * 2. Trava os jobs (lock) para evitar processamento duplicado
+ * 2. Trava os jobs (lock) para evitar processamento duplicado. Locks expirados voltam para
+ *    `scheduled` com next_run adiado (~3 min) para mitigar reenvio se o worker morreu após a Evolution aceitar o POST.
  * 3. Para cada job, chama Evolution API para enviar mensagem (text, audio, image)
  * 4. Atualiza status do job (success/failed)
  * 5. Para recorrentes, calcula próximo next_run_utc
@@ -62,6 +63,8 @@ const BATCH_LIMIT = 20; // Máximo de jobs por execução
 const LOCK_TTL_MINUTES = 7; // TTL do lock (recupera jobs travados após 7 min — margem para batch de 20 jobs com 30s timeout cada)
 const FETCH_TIMEOUT_MS = 30000; // Timeout para Evolution API
 const LOOKAHEAD_MINUTES = 2; // Lookahead para buscar jobs próximos
+/** Ao expirar lock `processing`, adia o próximo disparo para evitar reenvio imediato se a Evolution já aceitou o POST mas o worker caiu antes do UPDATE (duplicata no grupo). */
+const STALE_UNLOCK_DELAY_MS = 3 * 60 * 1000;
 
 /** Indica se o erro é por instância DESCONECTADA na Evolution API — nesses casos não conta para o
  * limite de tentativas e o job continua sendo reagendado até a instância voltar.
@@ -297,6 +300,10 @@ async function processMessageJob(job: any, workerId: string): Promise<{ success:
       } else {
         ptvVideoPayload = v;
       }
+    }
+
+    if (message.message_type === 'ptv' && !ptvVideoPayload) {
+      throw new Error('PTV sem vídeo (attachment_url ausente ou inválido) — cancelando disparo agendado');
     }
 
     // Monta URL e body baseado no tipo de mensagem
@@ -729,13 +736,20 @@ export const handler: Handler = async (event, context) => {
     const lockThreshold = new Date(now.getTime() - LOCK_TTL_MINUTES * 60 * 1000);
     console.log(`[WORKER ${WORKER_ID}] 🔓 [UNLOCK] Liberando locks antigos (anteriores a ${lockThreshold.toISOString()})`);
 
+    const staggerAfterStaleMs = now.getTime() + STALE_UNLOCK_DELAY_MS;
+    const staggerIso = new Date(staggerAfterStaleMs).toISOString();
+    const staleUnlockNote =
+      'Processamento interrompido (travamento expirado). Próximo envio adiado alguns minutos para reduzir risco de mensagem duplicada no grupo.';
+
     const { data: unlockedJobs } = await supabaseServiceRole
       .from('message_schedules')
       .update({
         status: 'scheduled',
+        next_run_utc: staggerIso,
         locked_at: null,
         locked_by: null,
         updated_at: new Date().toISOString(),
+        last_error: staleUnlockNote,
       })
       .eq('status', 'processing')
       .lte('locked_at', lockThreshold.toISOString())

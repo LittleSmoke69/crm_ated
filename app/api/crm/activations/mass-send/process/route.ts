@@ -1,7 +1,7 @@
 /**
  * POST /api/crm/activations/mass-send/process
  * Processa um lote de grupos (budget ~45s). Streaming + heartbeat evita 504 no Netlify.
- * Com trabalho restante, encadeia outra POST (imediato + backup via after() registrado no handler).
+ * Com trabalho restante, um único follow-up via after() + delay (evita múltiplos POSTs concorrentes).
  */
 import { NextRequest, after } from 'next/server';
 import { errorResponse } from '@/lib/utils/response';
@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
   }
 
   const publicOrigin = req.nextUrl?.origin || new URL(req.url).origin;
-  /** Atualizado ao fim do processamento; `after()` corre após o stream fechar (chainState já está definido). */
+  /** Backup único após fechar a resposta (evita POST duplicado imediato + after + finally). */
   const chainState = { morePending: false };
   let afterRegistered = false;
   try {
@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
     });
     afterRegistered = true;
   } catch {
-    /* contexto sem after() — backup agendado no fechamento do stream */
+    /* contexto sem after() — backup no fechamento do stream */
   }
 
   const encoder = new TextEncoder();
@@ -54,7 +54,6 @@ export async function POST(req: NextRequest) {
             : null;
         if (data?.more_pending === true && publicOrigin) {
           chainState.morePending = true;
-          triggerMassSendProcessFromOrigin(publicOrigin);
         }
         clearInterval(heartbeat);
         controller.enqueue(encoder.encode(JSON.stringify(payload)));

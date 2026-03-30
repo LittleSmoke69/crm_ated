@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, Search, Check, Send, Loader2, Plus } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { deduplicateGroupsById } from '@/lib/utils/group-utils';
@@ -45,6 +45,8 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
   const [showChoiceModal, setShowChoiceModal] = useState(false);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [forceMassSend, setForceMassSend] = useState(false);
+  /** Evita duplo clique antes do React aplicar sending=true (segundo job / envio duplicado). */
+  const sendLockedRef = useRef(false);
 
   const { toasts, showToast, removeToast } = useToast();
 
@@ -223,6 +225,10 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
   };
 
   const handleSend = async () => {
+    if (sendLockedRef.current || sending) {
+      return;
+    }
+
     if (selectedGroups.size === 0) {
       showToast('Selecione pelo menos um grupo', 'error');
       return;
@@ -233,6 +239,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
       return;
     }
 
+    sendLockedRef.current = true;
     setSending(true);
     try {
       // Timeout generoso: para mass send a resposta é 202 imediato; para sync direto até ~5 grupos.
@@ -300,8 +307,11 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
 
       if (response.status === 202 && data.mass_send) {
         showToast(
-          data.message || 'Campanha de disparo em massa criada. O envio continuará em segundo plano. Acompanhe em Ativações > Campanhas de disparo.',
-          'success'
+          data.message ||
+            (data.reused_existing_job
+              ? 'Já existe campanha ativa para esta mensagem; acompanhe o job em Campanhas de disparo.'
+              : 'Campanha de disparo em massa criada. O envio continuará em segundo plano. Acompanhe em Ativações > Campanhas de disparo.'),
+          data.reused_existing_job ? 'info' : 'success'
         );
         onClose();
         return;
@@ -331,6 +341,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
         showToast('Erro ao enviar mensagens: Erro desconhecido. Tente novamente.', 'error');
       }
     } finally {
+      sendLockedRef.current = false;
       setSending(false);
     }
   };

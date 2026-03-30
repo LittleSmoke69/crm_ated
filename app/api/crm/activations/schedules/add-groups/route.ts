@@ -43,7 +43,10 @@ export async function POST(req: NextRequest) {
       .eq('schedule_type', source.schedule_type);
 
     const existingGroupIds = new Set((existingRows || []).map((r: { group_id: string }) => r.group_id));
-    const toAdd = groupIds.filter((g: string) => !existingGroupIds.has(g));
+    const uniqueIncoming = [
+      ...new Set((groupIds as string[]).map((g) => String(g ?? '').trim()).filter(Boolean)),
+    ];
+    const toAdd = uniqueIncoming.filter((g: string) => !existingGroupIds.has(g));
     if (toAdd.length === 0) {
       return successResponse(
         { added: 0, schedules: [] },

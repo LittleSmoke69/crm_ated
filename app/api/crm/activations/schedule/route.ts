@@ -20,7 +20,6 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const {
       messageId,
-      groupIds,
       instanceName,
       scheduleType,
       scheduledAtUTC,
@@ -29,8 +28,16 @@ export async function POST(req: NextRequest) {
       recurringDays,
       recurringTime,
     } = body;
+    const rawGroupIds = body.groupIds;
+    const groupIds = [
+      ...new Set(
+        (Array.isArray(rawGroupIds) ? rawGroupIds : [])
+          .map((id: unknown) => String(id ?? '').trim())
+          .filter(Boolean)
+      ),
+    ];
 
-    if (!messageId || !groupIds || !Array.isArray(groupIds) || groupIds.length === 0 || !instanceName) {
+    if (!messageId || groupIds.length === 0 || !instanceName) {
       return errorResponse('messageId, groupIds e instanceName são obrigatórios', 400);
     }
 
@@ -64,10 +71,32 @@ export async function POST(req: NextRequest) {
       return errorResponse('Mensagem não encontrada', 404);
     }
 
+    if (message.message_type === 'ptv' && !String(message.attachment_url || '').trim()) {
+      return errorResponse('PTV sem vídeo anexado — não é possível agendar (evita falha ou disparo fantasma).', 400);
+    }
+
     // Bloqueia agendamento de mensagens de texto sem conteúdo (previne disparo fantasma)
     const isMediaOnly = message.message_type === 'audio' || message.message_type === 'ptv';
     if (!isMediaOnly && (!message.content || !String(message.content).trim())) {
       return errorResponse('Não é possível agendar uma mensagem sem conteúdo', 400);
+    }
+
+    const { data: conflicting } = await supabaseServiceRole
+      .from('message_schedules')
+      .select('group_id')
+      .eq('user_id', userId)
+      .eq('message_id', messageId)
+      .eq('instance_name', instanceName)
+      .in('group_id', groupIds)
+      .in('status', ['scheduled', 'processing']);
+
+    if (conflicting && conflicting.length > 0) {
+      const dup = [...new Set(conflicting.map((r: { group_id: string }) => r.group_id))];
+      return errorResponse(
+        `Já existe agendamento ativo para esta mensagem em ${dup.length} grupo(s) (${dup.slice(0, 5).join(', ')}${dup.length > 5 ? '…' : ''}). Conclua, pause ou exclua o disparo antes de criar outro.`,
+        409,
+        { code: 'SCHEDULE_CONFLICT', conflicting_group_ids: dup }
+      );
     }
 
     // Mesma regra da listagem /api/instances: admin vê qualquer instância; dono/gerente inclui subordinados
