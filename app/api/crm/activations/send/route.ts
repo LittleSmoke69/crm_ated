@@ -3,7 +3,7 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { sanitizeMassSendErrorMessage } from '@/lib/utils/activation-send-errors';
-import { triggerMassSendProcessFromOrigin } from '@/lib/crm/trigger-mass-send-process';
+import { triggerMassSendProcessChained } from '@/lib/crm/trigger-mass-send-chained';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300; // 5 minutos
@@ -165,10 +165,14 @@ export async function POST(req: NextRequest) {
       // Não fazemos envio imediato aqui para evitar que apenas o grupo 0 seja enviado
       // enquanto os demais ficam presos aguardando o cron.
       if (cronSecret && siteUrl) {
-        triggerMassSendProcessFromOrigin(siteUrl);
+        triggerMassSendProcessChained(siteUrl);
       } else if (!cronSecret) {
         console.warn(
           '[ACTIVATION] CRON_SECRET não configurado — campanha criada mas o worker não será acionado até o cron ou variável existir.'
+        );
+      } else if (!siteUrl) {
+        console.warn(
+          '[ACTIVATION] URL do site indefinida (defina URL ou NEXT_PUBLIC_SITE_URL no deploy). Worker de mass send não foi acionado; use retomar na UI ou cron.'
         );
       }
 

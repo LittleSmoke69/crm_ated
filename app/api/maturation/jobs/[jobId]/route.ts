@@ -1,8 +1,9 @@
 /**
  * API Route: /api/maturation/jobs/[jobId]
- * 
+ *
  * GET: Busca detalhes de um job específico
  * PATCH: Atualiza status do job (pause/resume/abort)
+ * DELETE: Remove o job (e steps/mensagens em cascata); libera lock da instância mestre
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -166,6 +167,52 @@ export async function PATCH(
     console.error('[PATCH /api/maturation/jobs/[jobId]] Erro:', error);
     return NextResponse.json(
       { error: error.message || 'Erro ao atualizar job' },
+      { status: error.message === 'Não autenticado' ? 401 : 500 }
+    );
+  }
+}
+
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ jobId: string }> }
+) {
+  try {
+    const auth = await requireAuth(req);
+    const userId = auth.userId;
+    const { jobId } = await params;
+
+    const { data: job, error: jobError } = await supabaseServiceRole
+      .from('maturation_jobs')
+      .select('id, master_instance_id')
+      .eq('id', jobId)
+      .eq('owner_user_id', userId)
+      .single();
+
+    if (jobError || !job) {
+      return NextResponse.json({ error: 'Job não encontrado' }, { status: 404 });
+    }
+
+    await supabaseServiceRole
+      .from('master_instances')
+      .update({
+        is_locked: false,
+        locked_job_id: null,
+        locked_at: null,
+      })
+      .eq('id', job.master_instance_id);
+
+    const { error: delError } = await supabaseServiceRole.from('maturation_jobs').delete().eq('id', jobId);
+
+    if (delError) {
+      console.error('[DELETE /api/maturation/jobs/[jobId]] Erro:', delError);
+      return NextResponse.json({ error: 'Erro ao remover job' }, { status: 500 });
+    }
+
+    return NextResponse.json({ success: true, job_id: jobId });
+  } catch (error: any) {
+    console.error('[DELETE /api/maturation/jobs/[jobId]] Erro:', error);
+    return NextResponse.json(
+      { error: error.message || 'Erro ao remover job' },
       { status: error.message === 'Não autenticado' ? 401 : 500 }
     );
   }

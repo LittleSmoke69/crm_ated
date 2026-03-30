@@ -35,6 +35,7 @@ export async function POST(req: NextRequest) {
         success: true,
         job_id: result.job_id,
         job_ids: result.job_ids,
+        campaign_id: result.campaign_id,
         master_instance: result.master_instance,
         master_instances: result.master_instances,
         total_steps: result.total_steps,

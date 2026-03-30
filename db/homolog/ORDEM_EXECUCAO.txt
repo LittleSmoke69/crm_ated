@@ -1,0 +1,42 @@
+Homologação + white label — ordem de execução no SQL Editor (Supabase) ou psql
+
+Mapeamento completo módulos → tabelas/RPCs/migrations: MAPEAMENTO_APLICACAO_SQL.txt (na mesma pasta).
+
+Execute os arquivos na sequência numérica. Cada arquivo é um módulo (não há um SQL gigante).
+
+Em lote (requer psql e DATABASE_URL):
+  chmod +x db/homolog/apply-homolog.sh && export DATABASE_URL="postgresql://..." && ./db/homolog/apply-homolog.sh
+
+01_extensions.sql
+02_identity_profiles.sql
+03_white_label_zaploto.sql
+04_identity_tenant_link.sql
+05_crm_bancas_user_bancas.sql
+06_evolution_stack.sql
+07_whatsapp_groups.sql
+08_messages_schedules.sql
+09_campaigns_queue.sql
+10_activation_mass_send.sql
+11_whatsapp_oficial_chat_e_eventos.sql
+12_flow_builder_e_webhook.sql
+13_meta_ads.sql
+99_postgrest_refresh.sql
+
+Observação: este pacote cobre identidade, tenant white label, CRM básico, Evolution, grupos WhatsApp,
+mensagens/agendamentos, fila de campanhas (add-to-group), disparo em massa de ativações e WhatsApp Cloud
+API (oficial): whatsapp_official_configs, webhook_events, chat_conversations/chat_messages com conflict_key,
+increment_unread_count, bucket chat-media, Realtime (webhook_events + chat).
+
+Flow Builder + auditoria de webhooks Evolution: evolution_webhook_events, evolution_webhook_test_waiters,
+flows, flow_executions (env, instance_name, paused), flow_execution_steps, flow_instances, flow_question_pending.
+
+Meta Ads: meta_integrations (com currency), meta_campaigns (campaign_kind), meta_adsets, meta_insights_daily
+(raw_cost_per_action_type), meta_integration_configs, meta_integration_bancas, meta_campaign_consultors;
+RLS de gestor com user_bancas.banca_ids (JSONB).
+
+Para o schema completo do repositório (VSL/redirect, Zaplink, Academy, maturação, anti-spam,
+triggers pesados Evolution→chat, etc.), após estes arquivos aplique a pasta migrations/ na ordem definida em
+migrations/migrations_order.txt ou use scripts/apply-migrations.sh com DATABASE_URL.
+
+Novo tenant white label: inserir linha em zaploto_tenants (slug único), depois popular zaploto_roles,
+zaploto_sidebar_items e vínculos conforme o app admin; usuários e bancas recebem zaploto_id do tenant.

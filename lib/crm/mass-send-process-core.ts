@@ -1,8 +1,8 @@
 /**
  * Worker de campanhas de disparo em massa (ativações).
- * Cada chamada a executeMassSendProcess() processa EXATAMENTE 1 grupo,
- * persiste o resultado, libera o lock e retorna.
- * A re-invocação é feita pela Netlify Scheduled Function (while-loop).
+ * Cada chamada processa vários grupos até o budget (CALL_BUDGET_MS), persiste via RPC
+ * e renova lock enquanto status = processing. Ao esgotar o budget, libera o lock e
+ * Encadeamento: a route /mass-send/process usa after() + triggerMassSendProcessFromOrigin.
  */
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { sanitizeMassSendErrorMessage } from '@/lib/utils/activation-send-errors';
@@ -12,8 +12,13 @@ import type { ApiResponse } from '@/lib/utils/response';
 
 const EVOLUTION_FETCH_TIMEOUT_MS = 30_000;
 const PTV_FETCH_TIMEOUT_MS = 45_000;
-/** Lock expira em 60s — se a função morrer, o próximo poll recupera rápido. */
-const LOCK_TTL_MS = 60_000;
+/**
+ * TTL do lock na query de “job disponível”. Precisa cobrir 1 grupo lento + retries
+ * (ex.: 30s timeout × tentativas + 3s + 5s) sem outro worker assumir o mesmo job.
+ */
+const LOCK_TTL_MS = 180_000;
+/** Renova locked_at no DB se o último touch foi há mais que isso (antes do fetch Evolution). */
+const LOCK_HEARTBEAT_MS = 25_000;
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -103,6 +108,102 @@ function extractErrorCause(e: unknown): string {
   return '';
 }
 
+/** Campos comuns de erro de rede (Node / undici) para interpretar “fetch failed”. */
+type FetchDiag = {
+  codes: string[];
+  errno?: string | number;
+  syscall?: string;
+  hostname?: string;
+  port?: string | number;
+  address?: string;
+};
+
+function collectFetchDiagnostics(e: unknown): FetchDiag {
+  const codes: string[] = [];
+  let errno: string | number | undefined;
+  let syscall: string | undefined;
+  let hostname: string | undefined;
+  let port: string | number | undefined;
+  let address: string | undefined;
+
+  function walk(err: unknown, depth: number): void {
+    if (!err || typeof err !== 'object' || depth > 8) return;
+    const o = err as Record<string, unknown>;
+    if (typeof o.code === 'string' && o.code) codes.push(o.code);
+    if (o.errno != null && o.errno !== '') errno = o.errno as string | number;
+    if (typeof o.syscall === 'string') syscall = o.syscall;
+    if (typeof o.hostname === 'string') hostname = o.hostname;
+    if (o.port != null) port = o.port as string | number;
+    if (typeof o.address === 'string') address = o.address;
+    if (o.cause) walk(o.cause, depth + 1);
+  }
+
+  walk(e, 0);
+  return {
+    codes: [...new Set(codes)],
+    errno,
+    syscall,
+    hostname,
+    port,
+    address,
+  };
+}
+
+function formatFetchDiagShort(diag: FetchDiag | undefined): string {
+  if (!diag) return 'net=—';
+  const c = diag.codes.length ? diag.codes.join(',') : '—';
+  return `net_codes=${c} syscall=${diag.syscall ?? '—'} host=${diag.hostname ?? '—'} port=${diag.port ?? '—'} errno=${diag.errno ?? '—'}`;
+}
+
+function interpretEvolutionFetchFailure(diag: FetchDiag | undefined, errLower: string): string {
+  const codes = (diag?.codes ?? []).join(' ').toLowerCase();
+  const joined = `${codes} ${errLower}`;
+  if (joined.includes('econnrefused')) {
+    return 'HIPOTESE=evolution_offline_ou_porta — conexão recusada no TCP (API parada, porta errada, firewall). Não indica só sessão WhatsApp desconectada.';
+  }
+  if (joined.includes('enotfound') || joined.includes('eai_again')) {
+    return 'HIPOTESE=dns_host — hostname da Evolution não resolveu; confira base_url da API cadastrada.';
+  }
+  if (joined.includes('etimedout') || joined.includes('und_err_connect_timeout') || errLower.includes('timeout')) {
+    return 'HIPOTESE=rede_lenta_ou_api_sobrecarregada — timeout até a Evolution (instância lenta, queda intermitente ou link).';
+  }
+  if (joined.includes('econnreset') || joined.includes('epipe') || joined.includes('und_err_socket') || joined.includes('socket')) {
+    return 'HIPOTESE=peer_fechou_conexao — API reiniciou, proxy/nginx encerrou ou Evolution em deploy.';
+  }
+  if (errLower.includes('certificate') || errLower.includes('cert_') || joined.includes('ssl') || joined.includes('tls')) {
+    return 'HIPOTESE=tls_ssl — problema de certificado/HTTPS entre app e Evolution.';
+  }
+  if (errLower.includes('fetch failed')) {
+    return 'HIPOTESE=rede_generica_fetch_failed — ver base_url, SSL e se o container Evolution está no ar; comparar com status no Supabase abaixo.';
+  }
+  return 'HIPOTESE=indefinida — ver net_codes e status Supabase.';
+}
+
+async function evolutionInstanceDbStatusLine(instanceId: string): Promise<string> {
+  try {
+    const { data, error } = await supabaseServiceRole
+      .from('evolution_instances')
+      .select('instance_name, status, updated_at')
+      .eq('id', instanceId)
+      .maybeSingle();
+    if (error) return `supabase_inst=erro:${error.message}`;
+    if (!data) return `supabase_inst=nao_encontrada id=${shortId(instanceId)}`;
+    const st = String(data.status ?? 'n/a').toLowerCase();
+    const hint =
+      st === 'disconnected' || st === 'close' || st === 'closed'
+        ? ' [CRM: sessão/desconexão já refletida no status]'
+        : st === 'connected' || st === 'open' || st === 'ok'
+          ? ' [CRM: status ainda “conectada” — se o erro for ECONNREFUSED/timeout, tende a ser API Evolution/rede, não só WhatsApp]'
+          : '';
+    return `supabase_inst nome=${data.instance_name} status=${st} atualizado=${data.updated_at ?? 'n/a'}${hint}`;
+  } catch (e: unknown) {
+    const msg = e && typeof e === 'object' && 'message' in e ? String((e as { message?: string }).message) : String(e);
+    return `supabase_inst=excecao:${msg}`;
+  }
+}
+
+type EvolutionSendResult = { success: boolean; error?: string; fetchDiag?: FetchDiag };
+
 // ─── Build Evolution Context ─────────────────────────────────────────────────
 
 async function buildEvolutionContext(
@@ -177,10 +278,7 @@ async function buildEvolutionContext(
 
 // ─── Envio direto para Evolution API ──────────────────────────────────────────
 
-async function sendGroupToEvolution(
-  ctx: EvolutionContext,
-  groupId: string
-): Promise<{ success: boolean; error?: string }> {
+async function sendGroupToEvolution(ctx: EvolutionContext, groupId: string): Promise<EvolutionSendResult> {
   const { baseUrl, instanceName, apiKey, message, ptvVideoPayload, isMentionAll, messageContent } = ctx;
 
   let url: string;
@@ -233,14 +331,16 @@ async function sendGroupToEvolution(
     clearTimeout(tid);
 
     if (!res.ok) {
-      const text = await res.text().catch(() => '');
+      const rawBody = await res.text().catch(() => '');
+      console.error(`[MassSend] Evolution HTTP ${res.status} ${res.statusText} | url: ${url} | body: ${rawBody.slice(0, 500)}`);
+
       let errMsg = '';
       try {
-        const j = JSON.parse(text);
+        const j = JSON.parse(rawBody);
         const src = j.message ?? j.response?.message ?? j.error;
         errMsg = Array.isArray(src) ? src.join('; ') : String(src || '');
       } catch {
-        errMsg = text.slice(0, 300);
+        errMsg = rawBody.slice(0, 300);
       }
 
       if (/connection\s*closed/i.test(errMsg)) {
@@ -254,16 +354,29 @@ async function sendGroupToEvolution(
       return { success: false, error: userMsg };
     }
 
+    // Log sucesso com snippet da resposta
+    const okBody = await res.text().catch(() => '');
+    console.log(`[MassSend] Evolution OK 200 | url: ${url} | response: ${okBody.slice(0, 200)}`);
     return { success: true };
   } catch (e: any) {
     clearTimeout(tid);
     if (e.name === 'AbortError') {
-      return { success: false, error: `Timeout: Evolution não respondeu em ${EVOLUTION_FETCH_TIMEOUT_MS / 1000}s` };
+      const errLine = `Timeout: Evolution não respondeu em ${EVOLUTION_FETCH_TIMEOUT_MS / 1000}s | URL: ${url} | inst: ${ctx.instanceName}`;
+      console.error(`[MassSend] FETCH FALHOU (timeout): ${errLine}`);
+      return { success: false, error: errLine, fetchDiag: collectFetchDiagnostics(e) };
     }
     const cause = extractErrorCause(e);
-    const detail = cause ? `${e.message} (${cause})` : (e.message || 'Erro de rede');
-    console.error(`[MassSend] fetch falhou para ${url}: ${detail}`);
-    return { success: false, error: detail };
+    const fetchDiag = collectFetchDiagnostics(e);
+    const detail = [
+      e.message || 'Erro de rede',
+      cause ? `causa: ${cause}` : null,
+      formatFetchDiagShort(fetchDiag),
+      `url: ${url}`,
+      `inst: ${ctx.instanceName}`,
+      `instance_id: ${ctx.instanceId}`,
+    ].filter(Boolean).join(' | ');
+    console.error(`[MassSend] FETCH FALHOU: ${detail}`);
+    return { success: false, error: detail, fetchDiag };
   }
 }
 
@@ -287,7 +400,7 @@ function resolveMediaMeta(message: DbMessage): { mediatype: string; mimetype: st
 async function persistGroupResult(
   jobId: string,
   groupId: string,
-  result: { success: boolean; error?: string },
+  result: EvolutionSendResult,
   newProcessedIndex: number,
   isComplete: boolean
 ): Promise<void> {
@@ -313,6 +426,7 @@ async function persistGroupResult(
         processed_index: newProcessedIndex,
         status: isComplete ? 'completed' : 'processing',
         updated_at: now,
+        ...(isComplete ? { locked_at: null, locked_by: null } : { locked_at: now }),
       })
       .eq('id', jobId);
   }
@@ -350,9 +464,19 @@ async function reconcileFinalCounts(jobId: string): Promise<void> {
   console.log(`[MassSend] Job ${jobId.slice(0, 8)} RECONCILIADO: ${sent} OK, ${failed} falha (${rows.length} total)`);
 }
 
-// ─── Orquestrador: processa 1 grupo por chamada ──────────────────────────────
+// ─── Constante de budget por invocação ────────────────────────────────────────
+
+/** Budget por API call — margem para timeout ~60s do gateway. */
+const CALL_BUDGET_MS = 45_000;
+/** Intervalo mínimo entre grupos (ritmo estável sem pausas artificiais). */
+const INTER_GROUP_DELAY_MS = 500;
+/** Checagem de pausa no DB a cada N iterações (a RPC renova locked_at a cada grupo). */
+const PAUSE_POLL_EVERY = 5;
+
+// ─── Orquestrador: processa MÚLTIPLOS grupos por chamada (budget 40s) ────────
 
 export async function executeMassSendProcess(_publicOrigin?: string | null): Promise<ApiResponse> {
+  const callStart = Date.now();
   const lockExpired = new Date(Date.now() - LOCK_TTL_MS).toISOString();
 
   // 1. Busca próximo job pendente/processing com lock disponível
@@ -370,7 +494,7 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
   }
 
   const groupIds = Array.isArray(job.group_ids) ? (job.group_ids as string[]) : [];
-  const currentIndex = Number(job.processed_index) || 0;
+  let currentIndex = Number(job.processed_index) || 0;
   const total = groupIds.length;
 
   // Já terminou? Reconcilia contadores e marca completo.
@@ -379,7 +503,7 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
     return { success: true, data: { processed: true, job_id: job.id, status: 'completed' } };
   }
 
-  // 2. Adquire lock
+  // 2. Adquire lock UMA VEZ
   const now = new Date().toISOString();
   const locked = await supabaseServiceRole
     .from('activation_mass_send_jobs')
@@ -410,7 +534,7 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
     return { success: true, data: { processed: true, job_id: job.id, status: 'paused' } };
   }
 
-  // 4. Build context (mensagem + instância)
+  // 4. Build context UMA VEZ (mensagem + instância)
   const ctxResult = await buildEvolutionContext(job);
   if ('error' in ctxResult) {
     console.error(`[MassSend] Job ${shortId(job.id)} erro contexto: ${ctxResult.error}`);
@@ -422,57 +546,120 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
   }
 
   const { ctx } = ctxResult;
-  const groupId = groupIds[currentIndex];
-  console.log(`[MassSend] [${currentIndex + 1}/${total}] Evolution: ${ctx.baseUrl} | tipo: ${ctx.message.message_type} | grupo: ${groupId}`);
+  console.log(`[MassSend] Job ${shortId(job.id)} | Evolution: ${ctx.baseUrl} | tipo: ${ctx.message.message_type} | grupos: ${currentIndex + 1}-?/${total}`);
 
-  // 5. Envia para 1 grupo (até 3 tentativas para erros transientes)
-  const t0 = Date.now();
-  const retryDelays = [3_000, 5_000, 8_000];
-  let result = await sendGroupToEvolution(ctx, groupId);
+  // 5. Loop: processa grupos enquanto tiver budget
+  let totalSent = 0;
+  let totalFailed = 0;
+  let paused = false;
+  let loopTick = 0;
+  let lastLockTouchMs = Date.now();
+  const retryDelays = [3_000, 5_000];
 
-  for (let attempt = 0; attempt < retryDelays.length && !result.success && isTransientError(result.error); attempt++) {
-    const delay = retryDelays[attempt];
-    console.warn(`[MassSend] [${currentIndex + 1}/${total}] ${groupId} retry ${attempt + 1}/3 em ${delay / 1000}s (${result.error})`);
-    await new Promise((r) => setTimeout(r, delay));
-    result = await sendGroupToEvolution(ctx, groupId);
+  while (currentIndex < total && (Date.now() - callStart) < CALL_BUDGET_MS) {
+    const groupId = groupIds[currentIndex];
+
+    // Delay 1s entre grupos (a partir do 2º nesta call)
+    if (currentIndex > (Number(job.processed_index) || 0)) {
+      await new Promise((r) => setTimeout(r, INTER_GROUP_DELAY_MS));
+    }
+
+    if (loopTick % PAUSE_POLL_EVERY === 0) {
+      const { data: pauseCheck } = await supabaseServiceRole
+        .from('activation_mass_send_jobs')
+        .select('status')
+        .eq('id', job.id)
+        .single();
+
+      if (pauseCheck?.status === 'paused') {
+        console.log(`[MassSend] [${currentIndex + 1}/${total}] PAUSADO pelo usuario`);
+        paused = true;
+        break;
+      }
+    }
+
+    if (Date.now() - lastLockTouchMs >= LOCK_HEARTBEAT_MS) {
+      const hb = new Date().toISOString();
+      await supabaseServiceRole
+        .from('activation_mass_send_jobs')
+        .update({ locked_at: hb, updated_at: hb })
+        .eq('id', job.id)
+        .eq('locked_by', 'mass-send-worker');
+      lastLockTouchMs = Date.now();
+    }
+
+    // Envia para Evolution (com retry)
+    const t0 = Date.now();
+    let result = await sendGroupToEvolution(ctx, groupId);
+
+    for (let attempt = 0; attempt < retryDelays.length && !result.success && isTransientError(result.error); attempt++) {
+      const delay = retryDelays[attempt];
+      const dbSnap = await evolutionInstanceDbStatusLine(ctx.instanceId);
+      const errLower = String(result.error || '').toLowerCase();
+      const hint = interpretEvolutionFetchFailure(result.fetchDiag, errLower);
+      const tech = formatFetchDiagShort(result.fetchDiag);
+      console.warn(
+        `[MassSend] [${currentIndex + 1}/${total}] ${groupId} retry ${attempt + 1}/${retryDelays.length} em ${delay / 1000}s | ${hint} | ${tech} | ${dbSnap} | erro="${String(result.error || '').slice(0, 280)}"`
+      );
+      await new Promise((r) => setTimeout(r, delay));
+      result = await sendGroupToEvolution(ctx, groupId);
+    }
+
+    const duration = Date.now() - t0;
+    const newIdx = currentIndex + 1;
+    const isComplete = newIdx >= total;
+
+    if (result.success) {
+      console.log(`[MassSend] [${currentIndex + 1}/${total}] ${groupId} OK (${duration}ms)`);
+      totalSent++;
+    } else {
+      const dbSnap = await evolutionInstanceDbStatusLine(ctx.instanceId);
+      const hint = interpretEvolutionFetchFailure(result.fetchDiag, String(result.error || '').toLowerCase());
+      console.error(
+        `[MassSend] [${currentIndex + 1}/${total}] ${groupId} FALHA (${duration}ms) | ${hint} | ${dbSnap} | erro="${String(result.error || '').slice(0, 300)}"`
+      );
+      totalFailed++;
+    }
+
+    // Persiste resultado + avança index (RPC renova locked_at em processing)
+    await persistGroupResult(job.id, groupId, result, newIdx, isComplete);
+    lastLockTouchMs = Date.now();
+
+    // Se completou, reconcilia
+    if (isComplete) {
+      await reconcileFinalCounts(job.id);
+      console.log(`[MassSend] Job ${shortId(job.id)} COMPLETO: ${totalSent} OK, ${totalFailed} falha`);
+      return {
+        success: true,
+        data: { processed: true, job_id: job.id, sent: totalSent, failed: totalFailed, current_index: newIdx, total, status: 'completed' },
+      };
+    }
+
+    currentIndex = newIdx;
+    loopTick++;
   }
 
-  const duration = Date.now() - t0;
-  const newIdx = currentIndex + 1;
-  const isComplete = newIdx >= total;
+  // 6. Libera lock (há mais grupos ou pausa — próxima invocação pode assumir)
+  const hasMore = !paused && currentIndex < total;
+  await supabaseServiceRole
+    .from('activation_mass_send_jobs')
+    .update({ locked_at: null, locked_by: null, updated_at: new Date().toISOString() })
+    .eq('id', job.id);
 
-  if (result.success) {
-    console.log(`[MassSend] [${currentIndex + 1}/${total}] ${groupId} OK (${duration}ms)`);
-  } else {
-    console.error(`[MassSend] [${currentIndex + 1}/${total}] ${groupId} FALHA: ${result.error} (${duration}ms)`);
-  }
-
-  // 6. Persiste resultado + avança processed_index
-  await persistGroupResult(job.id, groupId, result, newIdx, isComplete);
-
-  // 7. Se completou, reconcilia contadores reais. Senão, libera lock.
-  if (isComplete) {
-    await reconcileFinalCounts(job.id);
-  } else {
-    await supabaseServiceRole
-      .from('activation_mass_send_jobs')
-      .update({ locked_at: null, locked_by: null, updated_at: new Date().toISOString() })
-      .eq('id', job.id);
-  }
-
-  const morePending = !isComplete;
+  const elapsed = ((Date.now() - callStart) / 1000).toFixed(1);
+  console.log(`[MassSend] Job ${shortId(job.id)} lote: ${totalSent} OK, ${totalFailed} falha | ${elapsed}s | ate ${currentIndex}/${total}${paused ? ' | PAUSADO' : ''}${hasMore ? ' | mais pendente (chain na route)' : ''}`);
 
   return {
     success: true,
     data: {
       processed: true,
       job_id: job.id,
-      sent: result.success ? 1 : 0,
-      failed: result.success ? 0 : 1,
-      current_index: newIdx,
+      sent: totalSent,
+      failed: totalFailed,
+      current_index: currentIndex,
       total,
-      status: isComplete ? 'completed' : 'processing',
-      ...(morePending ? { more_pending: true } : {}),
+      status: paused ? 'paused' : 'processing',
+      ...(hasMore ? { more_pending: true } : {}),
     },
   };
 }

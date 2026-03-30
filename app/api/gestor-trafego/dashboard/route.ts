@@ -5,8 +5,14 @@ import { canAccessGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
 import { getEffectiveDonoIdForGestor } from '@/lib/middleware/gestor-owner';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { getDonoBancaDashboardData, getDashboardDataByBancaId, fetchDashboardMetrics } from '@/lib/services/dashboard/dono-banca';
-import { getMetaInsightsAggregated, getMetaCampaignsWithInsights } from '@/lib/services/meta-sync-service';
+import {
+  fetchGestorMetaDashboardFromGraph,
+  getMetaInsightsAggregated,
+  getMetaCampaignsWithInsights,
+} from '@/lib/services/meta-sync-service';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+
+export const maxDuration = 120;
 
 function normalizeBancaUrl(url: string | null | undefined): string {
   if (!url) return '';
@@ -32,7 +38,7 @@ export async function GET(req: NextRequest) {
     const metaActiveOnly = metaActiveOnlyParam === '0' || metaActiveOnlyParam === 'false' ? false : true;
     const dateFrom = searchParams.get('date_from');
     const dateTo = searchParams.get('date_to');
-    // only_meta=1 → retorna apenas dados Meta Ads (rápido, só DB). skip_meta=1 → retorna só dados de banca (sem Meta).
+    // only_meta=1 → Meta Ads (Graph API em tempo real; fallback DB). skip_meta=1 → só dados de banca (sem Meta).
     // only_external_metrics=1 → retorna apenas externalMetrics do CRM (dashboard-metrics, rápido, sem gerentes).
     const onlyMeta = searchParams.get('only_meta') === '1';
     const skipMeta = searchParams.get('skip_meta') === '1';
@@ -236,16 +242,36 @@ export async function GET(req: NextRequest) {
       return successResponse({ bancaId: bancaId ?? null, bancaInfo: { name: bancaName, url: bancaUrl }, externalMetrics });
     }
 
-    // Modo rápido: apenas Meta Ads (só queries no Supabase, sem chamadas externas)
+    // Modo rápido: Meta Ads — Graph API em tempo real (insights diários); fallback Supabase se token/erro.
     if (onlyMeta) {
       if (!bancaId) {
         return successResponse({ bancaId: null, bancaInfo: { name: bancaName, url: bancaUrl }, metaFunnel: null, metaCampaignsData: [] });
       }
-      const [metaFunnel, metaCampaignsData] = await Promise.all([
-        getMetaInsightsAggregated(bancaId, dateFrom ?? undefined, dateTo ?? undefined, metaActiveOnly).catch(() => null),
-        getMetaCampaignsWithInsights(bancaId, dateFrom ?? undefined, dateTo ?? undefined, metaActiveOnly).catch(() => []),
-      ]);
-      return successResponse({ bancaId, bancaInfo: { name: bancaName, url: bancaUrl }, metaFunnel, metaCampaignsData });
+      const live = await fetchGestorMetaDashboardFromGraph(
+        bancaId,
+        dateFrom ?? undefined,
+        dateTo ?? undefined,
+        metaActiveOnly
+      );
+      let metaFunnel = live.metaFunnel;
+      let metaCampaignsData = live.metaCampaignsData;
+      let metaLiveSource: 'graph' | 'supabase' = live.success ? 'graph' : 'supabase';
+      if (!live.success) {
+        const [dbFunnel, dbCampaigns] = await Promise.all([
+          getMetaInsightsAggregated(bancaId, dateFrom ?? undefined, dateTo ?? undefined, metaActiveOnly).catch(() => null),
+          getMetaCampaignsWithInsights(bancaId, dateFrom ?? undefined, dateTo ?? undefined, metaActiveOnly).catch(() => []),
+        ]);
+        metaFunnel = dbFunnel;
+        metaCampaignsData = dbCampaigns;
+      }
+      return successResponse({
+        bancaId,
+        bancaInfo: { name: bancaName, url: bancaUrl },
+        metaFunnel,
+        metaCampaignsData,
+        metaLiveSource,
+        metaLiveError: live.success ? null : live.error ?? null,
+      });
     }
 
     // Modo banca: dados de gerentes/métricas (sem Meta Ads para evitar timeout)

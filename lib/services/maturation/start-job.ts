@@ -3,7 +3,9 @@
  * Usado por: Netlify Function maturation-start e API Next.js POST /api/maturation/start (dev local).
  */
 
+import { randomUUID } from 'crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { canUseAnyMaturationPlan } from '@/lib/maturation/plan-access';
 
 export const PLAN_ID_VIRGIN_MESSAGES = 'a0000000-0000-0000-0000-000000000001';
 
@@ -206,22 +208,93 @@ export type StartJobParams = {
     target_chat_id?: string;
     use_virgin_messages?: boolean;
     preferred_evolution_instance_ids?: string[];
+    /** @deprecated Ignorado: intervalos vêm sempre do plano (delaySec por step) ou das mensagens do Auto maturador. */
     delay_seconds_override?: number;
   };
 };
 
 export type StartJobResult =
-  | { success: true; job_id: string; job_ids: string[]; master_instance: string; master_instances: string[]; total_steps: number }
+  | {
+      success: true;
+      job_id: string;
+      job_ids: string[];
+      master_instance: string;
+      master_instances: string[];
+      total_steps: number;
+      /** Presente quando 2+ instâncias: uma campanha (malha) com vários jobs, um por remetente */
+      campaign_id?: string;
+    }
   | { success: false; error: string; statusCode: number };
+
+type PlanStepRow = {
+  type: string;
+  delaySec: number;
+  payload: Record<string, unknown>;
+  target_chat_id?: string | null;
+};
+
+/** Plano completo para cada destinatário; delays cumulativos entre todas as mensagens do job. */
+function buildMeshStepsToInsert(
+  jobId: string,
+  planSteps: PlanStepRow[],
+  recipientPhones: string[],
+  baseTime: Date
+): Array<{
+  job_id: string;
+  step_index: number;
+  type: string;
+  payload_json: Record<string, unknown>;
+  scheduled_at: string;
+  status: string;
+  target_chat_id: string | null;
+}> {
+  const rows: Array<{
+    job_id: string;
+    step_index: number;
+    type: string;
+    payload_json: Record<string, unknown>;
+    scheduled_at: string;
+    status: string;
+    target_chat_id: string | null;
+  }> = [];
+  let cumulativeDelay = 0;
+  let stepIndex = 0;
+
+  for (const rawPhone of recipientPhones) {
+    const phone = String(rawPhone || '').trim();
+    if (!phone) continue;
+    const jid = phone.includes('@') ? phone : `${phone}@s.whatsapp.net`;
+    for (const step of planSteps) {
+      const stepDelay = step.delaySec ?? 5;
+      cumulativeDelay += stepDelay;
+      const scheduledAt = new Date(baseTime.getTime() + cumulativeDelay * 1000);
+      const explicit = typeof step.target_chat_id === 'string' && step.target_chat_id.trim();
+      rows.push({
+        job_id: jobId,
+        step_index: stepIndex++,
+        type: step.type,
+        payload_json: step.payload || {},
+        scheduled_at: scheduledAt.toISOString(),
+        status: 'pending',
+        target_chat_id: explicit ? explicit.trim() : jid,
+      });
+    }
+  }
+  return rows;
+}
 
 export async function runMaturationStart(supabase: SupabaseClient, params: StartJobParams): Promise<StartJobResult> {
   const { userId, body } = params;
-  const { plan_id, target_chat_id, use_virgin_messages, preferred_evolution_instance_ids, delay_seconds_override } = body;
+  const { plan_id, target_chat_id, use_virgin_messages, preferred_evolution_instance_ids } = body;
   const useVirgin = use_virgin_messages === true;
 
   console.log(`[MATURATION] Iniciando job: ${useVirgin ? 'Auto maturador (mensagens virgem)' : 'Maturador manual (plano)'} plan_id=${useVirgin ? 'virgem' : plan_id || ''} user=${userId}`);
 
-  const { data: profile } = await supabase.from('profiles').select('id').eq('id', userId).maybeSingle();
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('id, status')
+    .eq('id', userId)
+    .maybeSingle();
   if (!profile) {
     return { success: false, error: 'Usuário inválido', statusCode: 401 };
   }
@@ -257,7 +330,7 @@ export async function runMaturationStart(supabase: SupabaseClient, params: Start
     return { success: false, error: 'Plano não encontrado ou inativo', statusCode: 404 };
   }
 
-  if (!useVirgin && plan.created_by !== userId) {
+  if (!useVirgin && plan.created_by !== userId && !canUseAnyMaturationPlan(profile.status)) {
     return {
       success: false,
       error: 'Você só pode iniciar jobs com planos criados por você. Use uma sugestão do admin como base e salve sua cópia.',
@@ -270,21 +343,40 @@ export async function runMaturationStart(supabase: SupabaseClient, params: Start
     if (planSteps.length === 0) {
       return { success: false, error: 'Plano não possui steps configurados', statusCode: 400 };
     }
-    steps = planSteps as typeof steps;
+    steps = planSteps.map((s: Record<string, unknown>) => ({
+      type: String(s.type || 'text'),
+      delaySec: Math.max(1, Number(s.delaySec ?? s.delay_seconds ?? 5) || 5),
+      payload: (s.payload as Record<string, unknown>) || {},
+      target_chat_id:
+        typeof s.target_chat_id === 'string' && s.target_chat_id.trim() ? s.target_chat_id.trim() : null,
+    }));
   }
 
   const finalTargetChatId =
     (typeof target_chat_id === 'string' && target_chat_id.trim()) || plan.default_target_chat_id || null;
 
-  const delayOverride =
-    typeof delay_seconds_override === 'number' && delay_seconds_override >= 0 ? delay_seconds_override : null;
+  const preferredList = preferred_evolution_instance_ids ?? [];
+  const multipleRequested = preferredList.length > 1;
+  const jobTargetTrimmed = finalTargetChatId && String(finalTargetChatId).trim();
+  const stepsHaveResolvedTargets = steps.every((s) => {
+    const st = typeof s.target_chat_id === 'string' && s.target_chat_id.trim();
+    return !!(st || jobTargetTrimmed);
+  });
+  if (!multipleRequested && !stepsHaveResolvedTargets) {
+    return {
+      success: false,
+      error:
+        'Defina o destino das mensagens: informe o Target Chat ID (abaixo), o destino padrão do plano ou o destino em cada step. Sem destino, nada é enviado.',
+      statusCode: 400,
+    };
+  }
 
-  /** Constrói os steps com delay cumulativo correto: cada step aguarda seu próprio delaySec a partir do anterior. */
+  /** Constrói os steps com delay cumulativo: cada step usa o intervalo configurado no plano (delaySec). */
   function buildStepsToInsert(jobId: string) {
     const baseTime = new Date();
     let cumulativeDelay = 0;
     return steps.map((step, index) => {
-      const stepDelay = delayOverride ?? step.delaySec ?? 5;
+      const stepDelay = step.delaySec ?? 5;
       cumulativeDelay += stepDelay;
       const scheduledAt = new Date(baseTime.getTime() + cumulativeDelay * 1000);
       // Per-step target tem prioridade; se não tiver, usa o override passado (target do job)
@@ -303,8 +395,6 @@ export async function runMaturationStart(supabase: SupabaseClient, params: Start
       };
     });
   }
-
-  const multipleRequested = (preferred_evolution_instance_ids?.length ?? 0) > 1;
 
   if (multipleRequested) {
     // Coleta todas as instâncias disponíveis e já as bloqueia
@@ -372,40 +462,113 @@ export async function runMaturationStart(supabase: SupabaseClient, params: Start
       };
     }
 
-    // Anel cíclico: A→B, B→C, ..., N→A
-    // (com 1 instância disponível cai no target original)
+    /** Só 1 instância no pool mas usuário pediu multi → usa target externo (sem campanha). */
+    if (participatingInstances.length === 1) {
+      const one = participatingInstances[0];
+      await supabase
+        .from('maturation_jobs')
+        .update({
+          target_chat_id: finalTargetChatId!,
+          progress_total: steps.length,
+        })
+        .eq('id', one.jobId);
+      const stepsToInsert = buildStepsToInsert(one.jobId);
+      const { error: insErr } = await supabase.from('maturation_steps').insert(stepsToInsert);
+      if (insErr) {
+        await supabase.from('master_instances')
+          .update({ is_locked: false, locked_job_id: null, locked_at: null })
+          .eq('id', one.masterInstanceId);
+        await supabase.from('maturation_jobs').delete().eq('id', one.jobId);
+        return { success: false, error: `Erro ao criar steps: ${insErr.message}`, statusCode: 500 };
+      }
+      await createMessage(supabase, {
+        jobId: one.jobId,
+        direction: 'system',
+        type: 'info',
+        title: 'Job iniciado',
+        content: `Job iniciado. Instância: ${one.instanceName}. Destino: ${finalTargetChatId}.`,
+        status: 'info',
+      });
+      return {
+        success: true,
+        job_id: one.jobId,
+        job_ids: [one.jobId],
+        master_instance: one.instanceName,
+        master_instances: [one.instanceName],
+        total_steps: steps.length,
+      };
+    }
+
+    /**
+     * Campanha única (campaign_id): malha completa.
+     * Cada instância é remetente de um job; envia o plano inteiro a cada uma das outras (N-1 destinos).
+     */
+    const campaignId = randomUUID();
+    const n = participatingInstances.length;
+    const perSenderStepCount = (n - 1) * steps.length;
+    const meshBaseTime = new Date();
+    const planRows: PlanStepRow[] = steps.map((s) => ({
+      type: s.type,
+      delaySec: s.delaySec ?? 5,
+      payload: s.payload || {},
+      target_chat_id: s.target_chat_id,
+    }));
+
     for (let i = 0; i < participatingInstances.length; i++) {
       const current = participatingInstances[i];
-      const nextIndex = (i + 1) % participatingInstances.length;
-      const partner = participatingInstances[nextIndex];
+      const recipientPhones = participatingInstances
+        .filter((_, j) => j !== i)
+        .map((p) => String(p.phoneNumber || '').trim())
+        .filter(Boolean);
 
-      const target =
-        participatingInstances.length > 1
-          ? partner.phoneNumber + '@s.whatsapp.net'
-          : finalTargetChatId!;
+      const firstJid = recipientPhones[0].includes('@')
+        ? recipientPhones[0]
+        : `${recipientPhones[0]}@s.whatsapp.net`;
 
-      await supabase.from('maturation_jobs').update({ target_chat_id: target }).eq('id', current.jobId);
+      await supabase
+        .from('maturation_jobs')
+        .update({
+          target_chat_id: firstJid,
+          progress_total: perSenderStepCount,
+          campaign_id: campaignId,
+        })
+        .eq('id', current.jobId);
 
-      const stepsToInsert = buildStepsToInsert(current.jobId);
-      await supabase.from('maturation_steps').insert(stepsToInsert);
+      const stepsToInsert = buildMeshStepsToInsert(current.jobId, planRows, recipientPhones, meshBaseTime);
+
+      const { error: insErr } = await supabase.from('maturation_steps').insert(stepsToInsert);
+      if (insErr) {
+        console.error(`[MATURATION] Erro ao inserir steps malha job=${current.jobId}:`, insErr.message);
+        await supabase.from('master_instances')
+          .update({ is_locked: false, locked_job_id: null, locked_at: null })
+          .eq('id', current.masterInstanceId);
+        await supabase.from('maturation_jobs').delete().eq('id', current.jobId);
+        return { success: false, error: `Erro ao criar steps da campanha: ${insErr.message}`, statusCode: 500 };
+      }
+
+      const destLabel = recipientPhones.join(', ');
       await createMessage(supabase, {
         jobId: current.jobId,
         direction: 'system',
         type: 'info',
-        title: 'Job iniciado',
-        content: `Job iniciado. Instância: ${current.instanceName}. Falando com: ${target}.`,
+        title: 'Campanha malha — remetente',
+        content: `Campanha ${campaignId.slice(0, 8)}… Remetente: ${current.instanceName}. Plano completo para: ${destLabel}.`,
         status: 'info',
       });
     }
 
-    console.log(`[MATURATION] Jobs criados (múltiplas instâncias): ${participatingInstances.length} job(s) ${steps.length} steps cada`);
+    const totalStepsAllJobs = participatingInstances.length * perSenderStepCount;
+    console.log(
+      `[MATURATION] Campanha ${campaignId}: ${participatingInstances.length} job(s) remetente, ${perSenderStepCount} steps/job, malha completa`
+    );
     return {
       success: true,
+      campaign_id: campaignId,
       job_id: participatingInstances[0].jobId,
-      job_ids: participatingInstances.map(p => p.jobId),
+      job_ids: participatingInstances.map((p) => p.jobId),
       master_instance: participatingInstances[0].instanceName,
-      master_instances: participatingInstances.map(p => p.instanceName),
-      total_steps: steps.length,
+      master_instances: participatingInstances.map((p) => p.instanceName),
+      total_steps: totalStepsAllJobs,
     };
   }
 

@@ -53,6 +53,8 @@ MATURATION_MIN_HEALTH_SCORE=80
 MATURATION_MAX_HOURS_SINCE_LAST_JOB=24
 MATURATION_DEFAULT_PLAN_ID=uuid-do-plano-padrao
 MATURATION_VERBOSE_EVOLUTION_LOGS=false
+# Logs detalhados do tick (fases, “próximo step”, resumo longo, Evolution em sucesso). Default silencioso.
+MATURATION_VERBOSE_LOGS=false
 ```
 
 ### Netlify Functions

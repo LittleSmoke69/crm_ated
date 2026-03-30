@@ -23,6 +23,8 @@ export const maxDuration = 55; // segundos — limite seguro abaixo do corte do 
 /** Profundidade máxima de encadeamento de ticks para não criar loop infinito */
 const MAX_CHAIN_DEPTH = 4;
 
+const MATURATION_VERBOSE_LOGS = process.env.MATURATION_VERBOSE_LOGS === 'true';
+
 export async function POST(req: NextRequest) {
   const cronSecret = process.env.CRON_SECRET;
 
@@ -50,7 +52,9 @@ export async function POST(req: NextRequest) {
       const nextDepth = chainDepth + 1;
       const origin = req.nextUrl?.origin || 'http://localhost:3000';
       const nextTickUrl = `${origin}/api/maturation/cron-tick`;
-      console.log(`[cron-tick] hasMorePending=true, encadeando tick (depth=${nextDepth}/${MAX_CHAIN_DEPTH})`);
+      if (MATURATION_VERBOSE_LOGS) {
+        console.log(`[cron-tick] hasMorePending=true, encadeando tick (depth=${nextDepth}/${MAX_CHAIN_DEPTH})`);
+      }
       fetch(nextTickUrl, {
         method: 'POST',
         headers: {
@@ -61,8 +65,10 @@ export async function POST(req: NextRequest) {
       }).catch((err) => {
         console.warn(`[cron-tick] Falha ao encadear tick depth=${nextDepth}:`, err?.message);
       });
-    } else if (result.hasMorePending) {
-      console.log(`[cron-tick] hasMorePending=true mas chain depth=${chainDepth} atingiu limite (${MAX_CHAIN_DEPTH}). Próximo cron de 1min processará o restante.`);
+    } else if (result.hasMorePending && MATURATION_VERBOSE_LOGS) {
+      console.log(
+        `[cron-tick] hasMorePending=true mas chain depth=${chainDepth} atingiu limite (${MAX_CHAIN_DEPTH}). Próximo cron de 1min processará o restante.`
+      );
     }
 
     return NextResponse.json({

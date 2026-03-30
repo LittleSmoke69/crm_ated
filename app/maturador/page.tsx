@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { useRouter } from 'next/navigation';
 import Layout from '@/components/Layout';
@@ -25,10 +25,15 @@ import {
   FileText,
   ChevronDown,
   ChevronUp,
+  Info,
 } from 'lucide-react';
+
+type MaturationStepStatus = 'pending' | 'processing' | 'sent' | 'failed';
 
 interface MaturationJob {
   id: string;
+  /** Mesmo UUID em todos os jobs de uma campanha malha (2+ instâncias). */
+  campaign_id?: string | null;
   plan: {
     id: string;
     name: string;
@@ -40,11 +45,18 @@ interface MaturationJob {
   progress_total: number;
   progress_done: number;
   progress_percent: number;
+  /** Status por step (API); fallback na UI se ausente */
+  step_statuses?: MaturationStepStatus[];
+  steps_sent?: number;
+  steps_failed?: number;
+  steps_pending?: number;
   started_at: string | null;
   ended_at: string | null;
   created_at: string;
   /** ISO string do próximo step pendente (para timer em tempo real) */
   next_scheduled_at: string | null;
+  /** Job de outro dono mas instância bloqueada: mostrar campanha sem pausar/remover. */
+  readonly_controls?: boolean;
 }
 
 interface PlanStepJson {
@@ -82,9 +94,50 @@ interface MasterInstance {
   available: boolean;
 }
 
+type JobsDisplayItem =
+  | { kind: 'campaign'; campaign_id: string; jobs: MaturationJob[] }
+  | { kind: 'job'; job: MaturationJob };
+
+const MATURATION_JOBS_LIST_PAGE_SIZE = 5;
+
+function aggregateMaturationCampaign(campaignJobs: MaturationJob[]) {
+  const sorted = [...campaignJobs].sort(
+    (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+  );
+  const progress_total = sorted.reduce((s, j) => s + (j.progress_total || 0), 0);
+  const steps_sent = sorted.reduce((s, j) => s + (j.steps_sent ?? j.progress_done), 0);
+  const steps_failed = sorted.reduce((s, j) => s + (j.steps_failed ?? 0), 0);
+  const steps_pending = sorted.reduce((s, j) => s + (j.steps_pending ?? 0), 0);
+  let status: MaturationJob['status'] = 'finished';
+  if (sorted.some((j) => j.status === 'running')) status = 'running';
+  else if (sorted.some((j) => j.status === 'paused')) status = 'paused';
+  else if (sorted.some((j) => j.status === 'failed' || j.status === 'aborted')) status = 'failed';
+  const nextTimes = sorted.map((j) => j.next_scheduled_at).filter(Boolean) as string[];
+  const next_scheduled_at =
+    nextTimes.length > 0
+      ? nextTimes.reduce((a, b) => (new Date(a).getTime() <= new Date(b).getTime() ? a : b))
+      : null;
+  const progress_percent =
+    progress_total > 0 ? Math.round((steps_sent / progress_total) * 100) : 0;
+  return {
+    plan: sorted[0].plan,
+    instance_names: sorted.map((j) => j.instance_name).filter(Boolean) as string[],
+    status,
+    progress_total,
+    steps_sent,
+    steps_failed,
+    steps_pending,
+    next_scheduled_at,
+    created_at: sorted[0].created_at,
+    jobs: sorted,
+    progress_percent,
+  };
+}
+
 export default function MaturadorPage() {
-  const { userId, checking } = useRequireAuth();
+  const { userId, checking, userStatus } = useRequireAuth();
   const router = useRouter();
+  const canUseAllMaturationPlans = userStatus === 'super_admin' || userStatus === 'admin';
   const [canAccess, setCanAccess] = useState(false);
   const [jobs, setJobs] = useState<MaturationJob[]>([]);
   const [plans, setPlans] = useState<MaturationPlan[]>([]);
@@ -95,6 +148,8 @@ export default function MaturadorPage() {
   const [selectedPlanId, setSelectedPlanId] = useState<string>('');
   const [targetChatIdInput, setTargetChatIdInput] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  /** Paginação da lista "Mensagens do Auto maturador" */
+  const [jobsListPage, setJobsListPage] = useState(1);
   
   /** Valor especial no select para usar mensagens do Auto maturador. */
   const VIRGIN_MESSAGES_OPTION = '__virgin_messages__';
@@ -102,23 +157,25 @@ export default function MaturadorPage() {
   const PLAN_ID_VIRGIN_MESSAGES = 'a0000000-0000-0000-0000-000000000001';
   const useVirginMessages = selectedPlanId === VIRGIN_MESSAGES_OPTION;
   const plansFiltered = plans.filter((p) => p.id !== PLAN_ID_VIRGIN_MESSAGES);
-  const myPlans = plansFiltered.filter((p) => p.created_by === userId);
-  const suggestedPlans = plansFiltered.filter((p) => p.created_by !== userId);
+  const myPlans = canUseAllMaturationPlans
+    ? plansFiltered
+    : plansFiltered.filter((p) => p.created_by === userId);
+  const suggestedPlans = canUseAllMaturationPlans
+    ? []
+    : plansFiltered.filter((p) => p.created_by !== userId);
   const [checkingConnection, setCheckingConnection] = useState<string | null>(null);
   /** IDs (evolution_instance_id) das instâncias selecionadas para o Start. Vazio = qualquer disponível. */
   const [selectedInstanceIds, setSelectedInstanceIds] = useState<Set<string>>(new Set());
-  /** Intervalo em segundos entre uma mensagem e a próxima (override do plano). Vazio = usar do plano. */
-  const [delaySecondsOverride, setDelaySecondsOverride] = useState<string>('');
   /** Por job: resultado do último processamento em lote (atrasados) */
   const [catchUpResults, setCatchUpResults] = useState<Record<string, { sent: number; failed: number; results: Array<{ step_index: number; status: string }> }>>({});
   const [catchUpLoading, setCatchUpLoading] = useState<string | null>(null);
+  const [expandedMeshCampaignId, setExpandedMeshCampaignId] = useState<string | null>(null);
   
   // Configurar plano (no próprio maturador, sem admin)
   const [showPlanModal, setShowPlanModal] = useState(false);
   const [editingPlan, setEditingPlan] = useState<MaturationPlan | null>(null);
   const [planFormName, setPlanFormName] = useState('');
   const [planFormDescription, setPlanFormDescription] = useState('');
-  const [planFormTargetChatId, setPlanFormTargetChatId] = useState('');
   const [planFormSteps, setPlanFormSteps] = useState<PlanStepForm[]>([]);
   const [planSaving, setPlanSaving] = useState(false);
   const [expandedPlanConfig, setExpandedPlanConfig] = useState<string | null>(null);
@@ -127,6 +184,11 @@ export default function MaturadorPage() {
   const [instancesPage, setInstancesPage] = useState(1);
   const instancesPerPage = 8;
   const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    const tp = Math.max(1, Math.ceil(masterInstances.length / instancesPerPage) || 1);
+    setInstancesPage((p) => (p > tp ? tp : p));
+  }, [masterInstances.length, instancesPerPage]);
   const loadDataRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   useEffect(() => {
@@ -152,6 +214,10 @@ export default function MaturadorPage() {
     }
   }, [canAccess, userId, statusFilter]);
 
+  useEffect(() => {
+    setJobsListPage(1);
+  }, [statusFilter]);
+
   // Polling: atualiza a lista de jobs enquanto houver algum rodando (para refletir steps e conclusão)
   const hasRunningJobs = jobs.some((j) => j.status === 'running');
   /** Ref que espelha o estado jobs — permite acesso correto dentro do setInterval */
@@ -171,13 +237,18 @@ export default function MaturadorPage() {
       // Garante continuidade mesmo que o cron de 1 min não esteja ativo ou o tick anterior tenha encadeado
       if (processingNowRef.current) return;
       const currentJobs = jobsRef.current;
-      const hasWorkToDo = currentJobs.some(
-        (j) =>
-          j.status === 'running' &&
-          j.progress_done < j.progress_total &&
+      const hasWorkToDo = currentJobs.some((j) => {
+        if (j.status !== 'running') return false;
+        const pending =
+          typeof j.steps_pending === 'number'
+            ? j.steps_pending > 0
+            : j.progress_done < j.progress_total;
+        return (
+          pending &&
           (j.next_scheduled_at == null ||
-            new Date(j.next_scheduled_at).getTime() <= Date.now() + 5000) // ≤5s para antecipar
-      );
+            new Date(j.next_scheduled_at).getTime() <= Date.now() + 5000)
+        );
+      });
       if (hasWorkToDo) {
         processingNowRef.current = true;
         fetch('/api/maturation/process-now', {
@@ -248,7 +319,6 @@ export default function MaturadorPage() {
     setEditingPlan(null);
     setPlanFormName('');
     setPlanFormDescription('');
-    setPlanFormTargetChatId('');
     setPlanFormSteps([{ type: 'text', delay_seconds: 5, payload: { text: '' } }]);
     setShowPlanModal(true);
   }
@@ -257,7 +327,6 @@ export default function MaturadorPage() {
     setEditingPlan(null);
     setPlanFormName(`${plan.name} (cópia)`);
     setPlanFormDescription(plan.description ?? '');
-    setPlanFormTargetChatId(plan.default_target_chat_id ?? '');
     const steps = plan.steps_json?.length
       ? plan.steps_json
       : [{ type: 'text' as const, delaySec: 5, payload: { text: '' } }];
@@ -276,7 +345,6 @@ export default function MaturadorPage() {
     setEditingPlan(plan);
     setPlanFormName(plan.name);
     setPlanFormDescription(plan.description ?? '');
-    setPlanFormTargetChatId(plan.default_target_chat_id ?? '');
     const steps = plan.steps_json?.length ? plan.steps_json : [{ type: 'text' as const, delaySec: 5, payload: { text: '' } }];
     setPlanFormSteps(
       steps.map((s) => ({
@@ -335,7 +403,8 @@ export default function MaturadorPage() {
       const body = {
         name: planFormName.trim(),
         description: planFormDescription.trim() || null,
-        default_target_chat_id: planFormTargetChatId.trim() || null,
+        /** Destino do chat não é mais configurado no plano; use o campo na tela ao iniciar ou malha entre instâncias. */
+        default_target_chat_id: null,
         steps: planFormSteps.map((s) => ({
           type: s.type,
           delay_seconds: s.delay_seconds,
@@ -383,6 +452,7 @@ export default function MaturadorPage() {
   }
 
   function canEditPlan(plan: MaturationPlan): boolean {
+    if (canUseAllMaturationPlans) return true;
     return plan.created_by != null && plan.created_by === userId;
   }
 
@@ -494,8 +564,14 @@ export default function MaturadorPage() {
       alert('Nenhuma mensagem configurada no Auto maturador. Configure em Admin > Maturador (fluxo Auto maturador).');
       return;
     }
+    if (useVirgin && selectedInstanceIds.size < 2 && !(targetChatIdInput || '').trim()) {
+      alert(
+        'Informe o Target Chat ID (número ou grupo WhatsApp) para o Auto maturador, ou selecione 2 ou mais instâncias para conversarem entre si.'
+      );
+      return;
+    }
     const plan = useVirgin ? null : plans.find((p) => p.id === selectedPlanId);
-    if (!useVirgin && (!plan || plan.created_by !== userId)) {
+    if (!useVirgin && (!plan || (!canUseAllMaturationPlans && plan.created_by !== userId))) {
       alert('Para iniciar, crie e selecione um plano seu. Os planos do admin aparecem apenas como sugestão.');
       return;
     }
@@ -513,14 +589,10 @@ export default function MaturadorPage() {
       const preferredIds = selectedInstanceIds.size > 0
         ? Array.from(selectedInstanceIds)
         : undefined;
-      const delayOverride = delaySecondsOverride.trim() !== ''
-        ? parseInt(delaySecondsOverride, 10)
-        : undefined;
       const body: Record<string, unknown> = useVirgin
         ? { use_virgin_messages: true, target_chat_id: targetChatId }
         : { plan_id: selectedPlanId, target_chat_id: targetChatId };
       if (preferredIds?.length) body.preferred_evolution_instance_ids = preferredIds;
-      if (typeof delayOverride === 'number' && delayOverride >= 0) body.delay_seconds_override = delayOverride;
       const res = await fetch('/api/maturation/jobs', {
         method: 'POST',
         headers: {
@@ -536,7 +608,11 @@ export default function MaturadorPage() {
         await loadData();
         setSelectedPlanId('');
         const count = data.job_ids?.length ?? 1;
-        if (count > 1) {
+        if (data.campaign_id && count > 1) {
+          alert(
+            `Campanha malha iniciada: uma campanha com ${count} instâncias (cada uma envia o plano completo às demais). A lista será atualizada automaticamente.`
+          );
+        } else if (count > 1) {
           alert(`${count} jobs iniciados. O processamento está em andamento (a lista será atualizada automaticamente).`);
         } else {
           alert('Job iniciado. O processamento está em andamento (a lista será atualizada automaticamente).');
@@ -610,6 +686,58 @@ export default function MaturadorPage() {
     }
   }
 
+  async function handleRemoveMaturationJob(jobId: string) {
+    if (!confirm('Remover este registro da lista? Ele será apagado permanentemente.')) return;
+    try {
+      const res = await fetch(`/api/maturation/jobs/${jobId}`, {
+        method: 'DELETE',
+        headers: { 'X-User-Id': userId || '' },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert((data as { error?: string }).error || 'Erro ao remover');
+        return;
+      }
+      setCatchUpResults((prev) => {
+        const next = { ...prev };
+        delete next[jobId];
+        return next;
+      });
+      await loadData();
+    } catch (e) {
+      console.error(e);
+      alert('Erro ao remover');
+    }
+  }
+
+  async function handleRemoveMaturationCampaign(campaignJobs: MaturationJob[]) {
+    const n = campaignJobs.length;
+    if (!confirm(`Remover toda a campanha? Serão apagados ${n} job(s) permanentemente.`)) return;
+    try {
+      for (const j of campaignJobs) {
+        const res = await fetch(`/api/maturation/jobs/${j.id}`, {
+          method: 'DELETE',
+          headers: { 'X-User-Id': userId || '' },
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          alert((data as { error?: string }).error || `Erro ao remover job ${j.instance_name || j.id}`);
+          await loadData();
+          return;
+        }
+        setCatchUpResults((prev) => {
+          const next = { ...prev };
+          delete next[j.id];
+          return next;
+        });
+      }
+      await loadData();
+    } catch (e) {
+      console.error(e);
+      alert('Erro ao remover campanha');
+    }
+  }
+
   // Verifica se a instância está OK (conectada)
   function isInstanceOk(status: string | null): boolean {
     return status === 'ok' || status === 'open' || status === 'connected';
@@ -643,6 +771,45 @@ export default function MaturadorPage() {
     return styles[status] || 'bg-gray-100 dark:bg-[#404040] text-gray-700 dark:text-[#aaa]';
   }
 
+  /** Rótulo do status em português (evita “finished”, “running”, etc. na UI). */
+  function getMaturationStatusLabelPt(status: string): string {
+    const map: Record<string, string> = {
+      finished: 'finalizado',
+      running: 'rodando',
+      paused: 'pausado',
+      failed: 'falhou',
+      aborted: 'cancelado',
+      queued: 'na fila',
+    };
+    return map[status] ?? status;
+  }
+
+  /** Evita “finished” verde quando nenhuma mensagem foi enviada (ex.: sem destino). */
+  function getJobHeaderPresentation(job: MaturationJob) {
+    const total = job.progress_total || 0;
+    const sent = job.steps_sent ?? job.progress_done;
+    const failed = job.steps_failed ?? 0;
+    if (job.status === 'finished' && total > 0 && sent === 0 && failed >= total) {
+      return {
+        icon: <XCircle className="w-4 h-4 text-amber-500" />,
+        badge: 'finalizado sem envios',
+        badgeClass: 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300',
+      };
+    }
+    if (job.status === 'finished' && failed > 0 && sent > 0) {
+      return {
+        icon: <CheckCircle2 className="w-4 h-4 text-yellow-500" />,
+        badge: 'concluído c/ falhas',
+        badgeClass: 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-800 dark:text-yellow-300',
+      };
+    }
+    return {
+      icon: getStatusIcon(job.status),
+      badge: getMaturationStatusLabelPt(job.status),
+      badgeClass: getStatusBadge(job.status),
+    };
+  }
+
   function formatDate(dateString: string | null) {
     if (!dateString) return '-';
     return new Date(dateString).toLocaleString('pt-BR', {
@@ -651,6 +818,108 @@ export default function MaturadorPage() {
       hour: '2-digit',
       minute: '2-digit',
     });
+  }
+
+  const jobsForList = useMemo(() => {
+    if (statusFilter === 'all') return jobs;
+    const campaignHasMatch = new Set<string>();
+    for (const j of jobs) {
+      if (j.campaign_id && j.status === statusFilter) campaignHasMatch.add(j.campaign_id);
+    }
+    return jobs.filter(
+      (j) =>
+        j.status === statusFilter ||
+        (j.campaign_id != null && campaignHasMatch.has(j.campaign_id))
+    );
+  }, [jobs, statusFilter]);
+
+  const jobsDisplayItems = useMemo((): JobsDisplayItem[] => {
+    const list = jobsForList;
+    const byCampaign = new Map<string, MaturationJob[]>();
+    for (const j of list) {
+      if (!j.campaign_id) continue;
+      const arr = byCampaign.get(j.campaign_id) || [];
+      arr.push(j);
+      byCampaign.set(j.campaign_id, arr);
+    }
+    const sorted = [...list].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+    const seen = new Set<string>();
+    const out: JobsDisplayItem[] = [];
+    for (const j of sorted) {
+      if (j.campaign_id) {
+        if (seen.has(j.campaign_id)) continue;
+        seen.add(j.campaign_id);
+        const group = [...(byCampaign.get(j.campaign_id) || [])].sort(
+          (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        );
+        out.push({ kind: 'campaign', campaign_id: j.campaign_id, jobs: group });
+      } else {
+        out.push({ kind: 'job', job: j });
+      }
+    }
+    return out;
+  }, [jobsForList]);
+
+  const jobsListTotalPages = Math.max(1, Math.ceil(jobsDisplayItems.length / MATURATION_JOBS_LIST_PAGE_SIZE));
+
+  const jobsDisplayPageItems = useMemo(() => {
+    const start = (jobsListPage - 1) * MATURATION_JOBS_LIST_PAGE_SIZE;
+    return jobsDisplayItems.slice(start, start + MATURATION_JOBS_LIST_PAGE_SIZE);
+  }, [jobsDisplayItems, jobsListPage]);
+
+  useEffect(() => {
+    setJobsListPage((p) => (p > jobsListTotalPages ? jobsListTotalPages : p < 1 ? 1 : p));
+  }, [jobsListTotalPages]);
+
+  async function handlePauseCampaign(cj: MaturationJob[]) {
+    for (const j of cj) {
+      if (j.status !== 'running') continue;
+      try {
+        await fetch(`/api/maturation/jobs/${j.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId || '' },
+          body: JSON.stringify({ status: 'paused' }),
+        });
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    await loadData();
+  }
+
+  async function handleResumeCampaign(cj: MaturationJob[]) {
+    for (const j of cj) {
+      if (j.status !== 'paused') continue;
+      try {
+        await fetch(`/api/maturation/jobs/${j.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId || '' },
+          body: JSON.stringify({ status: 'running' }),
+        });
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    await loadData();
+  }
+
+  async function handleAbortCampaign(cj: MaturationJob[]) {
+    if (!confirm('Abortar toda a campanha (todos os remetentes)?')) return;
+    for (const j of cj) {
+      if (j.status !== 'running' && j.status !== 'paused') continue;
+      try {
+        await fetch(`/api/maturation/jobs/${j.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId || '' },
+          body: JSON.stringify({ status: 'aborted' }),
+        });
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    await loadData();
   }
 
   // Sem permissão (nem admin nem cargo com Maturador na sidebar): acesso negado
@@ -675,8 +944,26 @@ export default function MaturadorPage() {
   );
   const availableInstancesCount = availableMasters.length;
 
+  function instanceHasPhone(inst: MasterInstance): boolean {
+    return !!(inst.phone_number && String(inst.phone_number).trim());
+  }
+
+  function maturationSortRank(inst: MasterInstance): number {
+    if (!instanceHasPhone(inst)) return 2;
+    if (isInstanceOk(inst.status) && !inst.is_locked) return 0;
+    return 1;
+  }
+
+  const sortedMasterInstances = [...masterInstances].sort((a, b) => {
+    const d = maturationSortRank(a) - maturationSortRank(b);
+    if (d !== 0) return d;
+    return a.instance_name.localeCompare(b.instance_name, 'pt-BR');
+  });
+
   function toggleInstanceSelection(evolutionInstanceId: string) {
     if (!evolutionInstanceId) return;
+    const inst = masterInstances.find((i) => i.evolution_instance_id === evolutionInstanceId);
+    if (!inst || !instanceHasPhone(inst) || inst.is_locked || !isInstanceOk(inst.status)) return;
     setSelectedInstanceIds((prev) => {
       const next = new Set(prev);
       if (next.has(evolutionInstanceId)) next.delete(evolutionInstanceId);
@@ -693,9 +980,9 @@ export default function MaturadorPage() {
     setSelectedInstanceIds(new Set());
   }
 
-  // Paginação
-  const totalPages = Math.ceil(masterInstances.length / instancesPerPage);
-  const paginatedInstances = masterInstances.slice(
+  // Paginação (lista ordenada: com telefone e disponíveis para maturar primeiro)
+  const totalPages = Math.ceil(sortedMasterInstances.length / instancesPerPage) || 1;
+  const paginatedInstances = sortedMasterInstances.slice(
     (instancesPage - 1) * instancesPerPage,
     instancesPage * instancesPerPage
   );
@@ -757,45 +1044,62 @@ export default function MaturadorPage() {
                     {paginatedInstances.map((instance) => {
                       const isOk = isInstanceOk(instance.status);
                       const isMaster = instance.is_master === true;
-                      const hasPhone = !!(instance as any).phone_number;
+                      const hasPhone = instanceHasPhone(instance);
                       const canSelect = isOk && !instance.is_locked && hasPhone;
                       const evId = instance.evolution_instance_id ?? '';
                       const isSelected = evId && selectedInstanceIds.has(evId);
+                      const cardClass = !hasPhone
+                        ? 'bg-red-50/90 dark:bg-red-950/30 border-red-300 dark:border-red-800/80'
+                        : isOk
+                          ? instance.is_locked
+                            ? 'bg-amber-50/70 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800/60'
+                            : 'bg-emerald-50/80 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800'
+                          : 'bg-slate-50 dark:bg-[#333] border-slate-200 dark:border-[#404040]';
                       return (
                         <div
                           key={instance.instance_name + evId}
-                          className={`p-3 rounded-lg border transition-all ${
-                            isOk ? 'bg-emerald-50/80 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800' : 'bg-slate-50 dark:bg-[#333] border-slate-200 dark:border-[#404040]'
-                          }`}
+                          className={`p-3 rounded-lg border transition-all ${cardClass}`}
                         >
                           <div className="flex items-start gap-3">
-                            {canSelect && (
-                              <input
-                                type="checkbox"
-                                checked={Boolean(isSelected)}
-                                onChange={() => toggleInstanceSelection(evId)}
-                                className="mt-1 h-4 w-4 rounded border-slate-300 dark:border-[#555] text-[#8CD955] focus:ring-[#8CD955] dark:focus:ring-[#8CD955]"
-                              />
-                            )}
+                            <div className="mt-1 w-4 h-4 shrink-0 flex items-center justify-center">
+                              {canSelect ? (
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(isSelected)}
+                                  onChange={() => toggleInstanceSelection(evId)}
+                                  className="h-4 w-4 rounded border-slate-300 dark:border-[#555] text-[#8CD955] focus:ring-[#8CD955] dark:focus:ring-[#8CD955]"
+                                />
+                              ) : null}
+                            </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 flex-wrap">
-                                <span className={`w-2 h-2 rounded-full shrink-0 ${isOk ? 'bg-emerald-500' : 'bg-slate-400 dark:bg-[#666]'}`} />
-                                <p className={`font-medium text-sm ${isOk ? 'text-slate-800 dark:text-white' : 'text-slate-600 dark:text-[#aaa]'}`}>
+                                <span
+                                  className={`w-2 h-2 rounded-full shrink-0 ${
+                                    !hasPhone ? 'bg-red-500' : isOk ? 'bg-emerald-500' : 'bg-slate-400 dark:bg-[#666]'
+                                  }`}
+                                />
+                                <p
+                                  className={`font-medium text-sm ${
+                                    !hasPhone ? 'text-red-900 dark:text-red-200' : isOk ? 'text-slate-800 dark:text-white' : 'text-slate-600 dark:text-[#aaa]'
+                                  }`}
+                                >
                                   {instance.instance_name}
                                 </p>
                                 <span className={`text-xs px-1.5 py-0.5 rounded ${isMaster ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300' : 'bg-slate-100 dark:bg-[#404040] text-slate-600 dark:text-[#aaa]'}`}>
                                   {isMaster ? 'Mestre' : 'Normal'}
                                 </span>
-                                {(instance as any).phone_number && (
-                                  <span className="text-xs text-slate-600 dark:text-[#aaa] font-mono">
-                                    {(instance as any).phone_number}
-                                  </span>
+                                {hasPhone && (
+                                  <span className="text-xs text-slate-600 dark:text-[#aaa] font-mono">{instance.phone_number}</span>
                                 )}
                               </div>
+                              {!hasPhone && (
+                                <p className="text-xs font-medium text-red-600 dark:text-red-400 mt-1.5">
+                                  Sem telefone configurado — não pode ser usada no maturador. Configure o número da instância em Admin.
+                                </p>
+                              )}
                               <p className="text-xs text-slate-500 dark:text-[#888] mt-0.5">
                                 {isOk ? 'OK - Conectada' : instance.status || 'Desconectada'}
-                                {instance.is_locked && ' · Em uso'}
-                                {!canSelect && !hasPhone && ' · Sem telefone (configure na instância)'}
+                                {instance.is_locked && hasPhone && ' · Em uso (bloqueada por outro job)'}
                               </p>
                             </div>
                             <button
@@ -855,85 +1159,86 @@ export default function MaturadorPage() {
                 </button>
               </div>
               <div className="space-y-4">
-                <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
-                  <div className="flex-1 min-w-0">
-                    <label className="block text-xs font-medium text-slate-500 dark:text-[#aaa] mb-1">Plano</label>
-                    <select
-                      value={selectedPlanId}
-                      onChange={(e) => setSelectedPlanId(e.target.value)}
-                      className="w-full px-4 py-2.5 border border-slate-300 dark:border-[#555] rounded-lg text-slate-800 dark:text-white bg-white dark:bg-[#333] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                <div className="space-y-2">
+                  <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
+                    <div className="flex-1 min-w-0">
+                      <label className="block text-xs font-medium text-slate-500 dark:text-[#aaa] mb-1">Plano</label>
+                      <select
+                        value={selectedPlanId}
+                        onChange={(e) => setSelectedPlanId(e.target.value)}
+                        className="w-full px-4 py-2.5 border border-slate-300 dark:border-[#555] rounded-lg text-slate-800 dark:text-white bg-white dark:bg-[#333] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                      >
+                        <option value="">Selecione um plano</option>
+                        <option value={VIRGIN_MESSAGES_OPTION}>
+                          Mensagens do Auto maturador{virginMessagesCount >= 0 ? ` (${virginMessagesCount} msg)` : ''}
+                        </option>
+                        {myPlans.length > 0 && (
+                          <optgroup label={canUseAllMaturationPlans ? 'Planos' : 'Meus planos'}>
+                            {myPlans.map((plan) => (
+                              <option key={plan.id} value={plan.id}>{plan.name}</option>
+                            ))}
+                          </optgroup>
+                        )}
+                        {suggestedPlans.length > 0 && (
+                          <optgroup label="Sugestões do admin">
+                            {suggestedPlans.map((plan) => (
+                              <option key={plan.id} value={plan.id} disabled>
+                                {plan.name} (sugestão)
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                      </select>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleStartJob}
+                      disabled={
+                        starting ||
+                        !selectedPlanId ||
+                        availableInstancesCount === 0 ||
+                        (useVirginMessages && virginMessagesCount === 0)
+                      }
+                      className="w-full sm:w-auto px-5 py-2.5 rounded-lg font-medium transition-colors inline-flex items-center justify-center gap-2 bg-[#8CD955] text-white hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed shrink-0 sm:min-h-[42px]"
+                      title={
+                        mounted
+                          ? availableInstancesCount === 0
+                            ? 'Configure o phone_number das instâncias em Admin'
+                            : useVirginMessages && virginMessagesCount === 0
+                              ? 'Configure as mensagens do Auto maturador em Admin'
+                              : ''
+                          : undefined
+                      }
                     >
-                      <option value="">Selecione um plano</option>
-                      <option value={VIRGIN_MESSAGES_OPTION}>
-                        Mensagens do Auto maturador{virginMessagesCount >= 0 ? ` (${virginMessagesCount} msg)` : ''}
-                      </option>
-                      {myPlans.length > 0 && (
-                        <optgroup label="Meus planos">
-                          {myPlans.map((plan) => (
-                            <option key={plan.id} value={plan.id}>{plan.name}</option>
-                          ))}
-                        </optgroup>
+                      {starting ? (
+                        <><Loader2 className="w-5 h-5 animate-spin" /> Iniciando...</>
+                      ) : (
+                        <><Play className="w-5 h-5" /> Start</>
                       )}
-                      {suggestedPlans.length > 0 && (
-                        <optgroup label="Sugestões do admin">
-                          {suggestedPlans.map((plan) => (
-                            <option key={plan.id} value={plan.id} disabled>
-                              {plan.name} (sugestão)
-                            </option>
-                          ))}
-                        </optgroup>
-                      )}
-                    </select>
+                    </button>
                   </div>
-                  <div className="w-full sm:w-28">
-                    <label className="block text-xs font-medium text-slate-500 dark:text-[#aaa] mb-1">Intervalo (s)</label>
-                    <input
-                      type="number"
-                      min={1}
-                      placeholder="Plano"
-                      value={delaySecondsOverride}
-                      onChange={(e) => setDelaySecondsOverride(e.target.value)}
-                      className="w-full px-3 py-2.5 border border-slate-300 dark:border-[#555] rounded-lg text-slate-800 dark:text-white bg-white dark:bg-[#333] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
-                      title="Segundos entre uma mensagem e a próxima (deixe vazio para usar o do plano)"
-                    />
-                  </div>
-                  <button
-                    onClick={handleStartJob}
-                    disabled={
-                      starting ||
-                      !selectedPlanId ||
-                      availableInstancesCount === 0 ||
-                      (useVirginMessages && virginMessagesCount === 0)
-                    }
-                    className="px-5 py-2.5 rounded-lg font-medium transition-colors flex items-center justify-center gap-2 bg-[#8CD955] text-white hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-                    title={
-                      mounted
-                        ? availableInstancesCount === 0
-                          ? 'Configure o phone_number das instâncias em Admin'
-                          : useVirginMessages && virginMessagesCount === 0
-                            ? 'Configure as mensagens do Auto maturador em Admin'
-                            : ''
-                        : undefined
-                    }
-                  >
-                    {starting ? (
-                      <><Loader2 className="w-5 h-5 animate-spin" /> Iniciando...</>
-                    ) : (
-                      <><Play className="w-5 h-5" /> Start</>
-                    )}
-                  </button>
+                  <p className="text-[11px] text-slate-500 dark:text-[#888]">
+                    O tempo entre cada mensagem é o definido em cada passo do plano (Configurar plano). No Auto maturador, usa-se o intervalo padrão das mensagens configuradas no admin.
+                  </p>
                 </div>
                 {useVirginMessages && (
                   <div>
-                    <label htmlFor="target-chat-id" className="block text-xs font-medium text-slate-500 dark:text-[#aaa] mb-1">Target Chat ID (opcional)</label>
+                    <label htmlFor="target-chat-id" className="block text-xs font-medium text-slate-500 dark:text-[#aaa] mb-1">
+                      Target Chat ID {selectedInstanceIds.size >= 2 ? '(opcional com 2+ instâncias)' : '(obrigatório)'}
+                    </label>
                     <input
                       id="target-chat-id"
                       type="text"
                       value={targetChatIdInput}
                       onChange={(e) => setTargetChatIdInput(e.target.value)}
-                      placeholder="Ex: 120363...@g.us"
+                      placeholder="Número ou grupo, ex: 5511999999999 ou 120363...@g.us"
                       className="w-full px-3 py-2 border border-slate-300 dark:border-[#555] rounded-lg text-slate-800 dark:text-white bg-white dark:bg-[#333] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
                     />
+                    {selectedInstanceIds.size < 2 && (
+                      <p className="text-xs text-slate-500 dark:text-[#888] mt-1">
+                        Sem destino, o job encerrava sem enviar. Com 2+ instâncias selecionadas, elas conversam entre si.
+                      </p>
+                    )}
                   </div>
                 )}
                 {!useVirginMessages && selectedPlanId && !myPlans.some((p) => p.id === selectedPlanId) && (
@@ -973,10 +1278,12 @@ export default function MaturadorPage() {
                 ) : (
                   <div className="space-y-3">
                     <div>
-                      <p className="text-xs font-semibold text-slate-500 dark:text-[#aaa] mb-2">Meus planos</p>
+                      <p className="text-xs font-semibold text-slate-500 dark:text-[#aaa] mb-2">
+                        {canUseAllMaturationPlans ? 'Todos os planos' : 'Meus planos'}
+                      </p>
                       {myPlans.length === 0 ? (
                         <p className="text-xs text-slate-400 dark:text-[#888] px-1 py-1">
-                          Você ainda não criou um plano.
+                          {canUseAllMaturationPlans ? 'Nenhum plano cadastrado.' : 'Você ainda não criou um plano.'}
                         </p>
                       ) : (
                         <ul className="space-y-2">
@@ -1028,6 +1335,7 @@ export default function MaturadorPage() {
                         </ul>
                       )}
                     </div>
+                    {!canUseAllMaturationPlans && (
                     <div>
                       <p className="text-xs font-semibold text-slate-500 dark:text-[#aaa] mb-2">Sugestões do admin</p>
                       {suggestedPlans.length === 0 ? (
@@ -1082,6 +1390,7 @@ export default function MaturadorPage() {
                         </ul>
                       )}
                     </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1122,48 +1431,240 @@ export default function MaturadorPage() {
                 <div className="p-8 text-center text-slate-400 dark:text-[#888] text-sm">
                   Nenhum job encontrado
                 </div>
+              ) : jobsForList.length === 0 ? (
+                <div className="p-8 text-center text-slate-400 dark:text-[#888] text-sm">
+                  Nenhum job neste filtro
+                </div>
               ) : (
+                <>
                 <div className="divide-y divide-slate-100 dark:divide-[#404040]">
-                  {jobs.map((job) => (
+                  {jobsDisplayPageItems.map((item) => {
+                    if (item.kind === 'campaign') {
+                      const agg = aggregateMaturationCampaign(item.jobs);
+                      const pseudoJob: MaturationJob = {
+                        id: item.campaign_id,
+                        campaign_id: item.campaign_id,
+                        plan: agg.plan,
+                        instance_name: agg.instance_names.join(' · '),
+                        target_chat_id: '',
+                        status: agg.status,
+                        progress_total: agg.progress_total,
+                        progress_done: agg.steps_sent,
+                        progress_percent: agg.progress_percent,
+                        steps_sent: agg.steps_sent,
+                        steps_failed: agg.steps_failed,
+                        steps_pending: agg.steps_pending,
+                        started_at: null,
+                        ended_at: null,
+                        created_at: agg.created_at,
+                        next_scheduled_at: agg.next_scheduled_at,
+                      };
+                      const header = getJobHeaderPresentation(pseudoJob);
+                      const expanded = expandedMeshCampaignId === item.campaign_id;
+                      const anyRunning = item.jobs.some((j) => j.status === 'running');
+                      const anyPaused = item.jobs.some((j) => j.status === 'paused');
+                      const campaignReadonly = item.jobs.some((j) => j.readonly_controls === true);
+                      return (
+                        <div key={item.campaign_id} className="p-4 hover:bg-slate-50/50 dark:hover:bg-[#333]/80 transition-colors">
+                          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-3 flex-wrap">
+                                {header.icon}
+                                <div>
+                                  <p className="font-medium text-slate-800 dark:text-white">{agg.plan.name}</p>
+                                  <p className="text-sm text-slate-500 dark:text-[#aaa]">
+                                    Campanha malha · {item.jobs.length} instâncias · cada uma envia o plano completo às demais
+                                  </p>
+                                  {campaignReadonly && (
+                                    <p className="text-xs text-amber-700 dark:text-amber-300/90 mt-1 max-w-xl">
+                                      Sua instância está nesta campanha, mas o processo foi iniciado por outro usuário (ex.: administrador ou auto maturador). Pausar, abortar ou remover não está disponível aqui.
+                                    </p>
+                                  )}
+                                </div>
+                                <span className={`px-2 py-0.5 rounded text-xs font-medium ${header.badgeClass}`}>
+                                  {header.badge}
+                                </span>
+                                <span className="text-xs text-slate-400 dark:text-[#888]">{formatDate(agg.created_at)}</span>
+                              </div>
+                              <p className="text-xs text-slate-600 dark:text-[#aaa] mt-2 break-words">
+                                {agg.instance_names.join(' · ')}
+                              </p>
+                              <div className="mt-3 text-xs text-slate-500 dark:text-[#888]">
+                                {agg.steps_sent}/{agg.progress_total} enviados no total
+                                {agg.status === 'running' && agg.steps_pending > 0 ? ' · aguardando envios' : ''}
+                                {agg.steps_failed > 0 ? ` · ${agg.steps_failed} falha(s)` : ''}
+                              </div>
+                              <div className="mt-2 w-full bg-slate-200 dark:bg-[#404040] rounded-full h-1.5">
+                                <div
+                                  className="bg-[#8CD955] h-1.5 rounded-full transition-all duration-300"
+                                  style={{ width: `${agg.progress_percent}%` }}
+                                />
+                              </div>
+                              {agg.status === 'running' && agg.next_scheduled_at != null && (
+                                <div className="mt-2 flex flex-wrap items-center gap-2">
+                                  <span className="inline-flex items-center gap-1.5 text-xs text-slate-600 dark:text-[#aaa]">
+                                    <Clock className="w-3.5 h-3.5" />
+                                    Próximo envio (campanha):{' '}
+                                    <strong className="font-mono text-[#8CD955] tabular-nums">
+                                      {getNextSendCountdown(agg.next_scheduled_at) ?? '—'}
+                                    </strong>
+                                  </span>
+                                </div>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setExpandedMeshCampaignId(expanded ? null : item.campaign_id)
+                                }
+                                className="mt-2 text-xs font-medium text-[#8CD955] hover:underline"
+                              >
+                                {expanded ? 'Ocultar remetentes' : 'Ver progresso por instância'}
+                              </button>
+                              {expanded && (
+                                <ul className="mt-2 space-y-2 border-t border-slate-100 dark:border-[#404040] pt-2">
+                                  {item.jobs.map((sj) => (
+                                    <li
+                                      key={sj.id}
+                                      className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 dark:text-[#aaa]"
+                                    >
+                                      <span className="font-medium text-slate-700 dark:text-[#ccc]">
+                                        {sj.instance_name || sj.id.slice(0, 8)}
+                                      </span>
+                                      <span>
+                                        {sj.steps_sent ?? sj.progress_done}/{sj.progress_total} enviados ·{' '}
+                                        <span>{getMaturationStatusLabelPt(sj.status)}</span>
+                                      </span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                            </div>
+                            {!campaignReadonly && (
+                              <div className="flex items-center gap-1 shrink-0 flex-wrap">
+                                {anyRunning && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handlePauseCampaign(item.jobs)}
+                                    className="p-2 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/30 rounded-lg"
+                                    title="Pausar campanha"
+                                  >
+                                    <Pause className="w-5 h-5" />
+                                  </button>
+                                )}
+                                {anyPaused && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleResumeCampaign(item.jobs)}
+                                    className="p-2 text-[#8CD955] hover:bg-[#8CD955]/20 dark:hover:bg-[#8CD955]/30 rounded-lg"
+                                    title="Retomar campanha"
+                                  >
+                                    <Play className="w-5 h-5" />
+                                  </button>
+                                )}
+                                {(anyRunning || anyPaused) && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAbortCampaign(item.jobs)}
+                                    className="p-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg"
+                                    title="Abortar campanha"
+                                  >
+                                    <Square className="w-5 h-5" />
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveMaturationCampaign(item.jobs)}
+                                  className="p-2 text-slate-500 dark:text-[#888] hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 rounded-lg"
+                                  title="Remover campanha da lista"
+                                >
+                                  <Trash2 className="w-5 h-5" />
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    }
+                    const job = item.job;
+                    const header = getJobHeaderPresentation(job);
+                    const stepStatuses = job.step_statuses ?? [];
+                    let firstPendingIdx = -1;
+                    for (let i = 0; i < job.progress_total; i++) {
+                      const s = stepStatuses[i] ?? 'pending';
+                      if (s === 'pending' || s === 'processing') {
+                        firstPendingIdx = i;
+                        break;
+                      }
+                    }
+                    const sentCount = job.steps_sent ?? job.progress_done;
+                    const pendingCount =
+                      typeof job.steps_pending === 'number'
+                        ? job.steps_pending
+                        : Math.max(0, job.progress_total - sentCount - (job.steps_failed ?? 0));
+                    const jobReadonly = job.readonly_controls === true;
+
+                    return (
                     <div key={job.id} className="p-4 hover:bg-slate-50/50 dark:hover:bg-[#333]/80 transition-colors">
                       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-3 flex-wrap">
-                            {getStatusIcon(job.status)}
+                            {header.icon}
                             <div>
                               <p className="font-medium text-slate-800 dark:text-white">{job.plan.name}</p>
                               <p className="text-sm text-slate-500 dark:text-[#aaa]">{job.instance_name || 'Aguardando instância'}</p>
+                              {jobReadonly && (
+                                <p className="text-xs text-amber-700 dark:text-amber-300/90 mt-1 max-w-xl">
+                                  Esta instância está em uso por um job iniciado por outro usuário. Pausar, abortar ou remover não está disponível aqui.
+                                </p>
+                              )}
                             </div>
-                            <span className={`px-2 py-0.5 rounded text-xs font-medium ${getStatusBadge(job.status)}`}>
-                              {job.status}
+                            <span className={`px-2 py-0.5 rounded text-xs font-medium ${header.badgeClass}`}>
+                              {header.badge}
                             </span>
                             <span className="text-xs text-slate-400 dark:text-[#888]">{formatDate(job.created_at)}</span>
                           </div>
-                          {/* Visualização de steps: indicadores 1..N */}
+                          {/* Steps: verde=sent, vermelho=failed, destaque=próximo a enviar */}
                           <div className="mt-3 flex items-center gap-1 flex-wrap">
                             <span className="text-xs text-slate-500 dark:text-[#888] mr-1">Steps:</span>
                             {Array.from({ length: job.progress_total }, (_, i) => {
                               const stepNum = i + 1;
-                              const done = stepNum <= job.progress_done;
-                              const current = job.status === 'running' && stepNum === job.progress_done + 1;
+                              const st = (stepStatuses[i] ?? 'pending') as MaturationStepStatus;
+                              const isNextToSend =
+                                job.status === 'running' && st === 'pending' && i === firstPendingIdx;
+                              const cls =
+                                st === 'sent'
+                                  ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400'
+                                  : st === 'failed'
+                                    ? 'bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400'
+                                    : st === 'processing'
+                                      ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200 border border-amber-300/60'
+                                      : isNextToSend
+                                        ? 'bg-[#8CD955]/25 dark:bg-[#8CD955]/35 text-[#8CD955] border border-[#8CD955]/50'
+                                        : 'bg-slate-100 dark:bg-[#404040] text-slate-400 dark:text-[#888]';
+                              const title =
+                                st === 'sent'
+                                  ? `Step ${stepNum}: enviado`
+                                  : st === 'failed'
+                                    ? `Step ${stepNum}: falhou`
+                                    : st === 'processing'
+                                      ? `Step ${stepNum}: enviando…`
+                                      : isNextToSend
+                                        ? `Step ${stepNum}: aguardando horário de envio`
+                                        : `Step ${stepNum}: pendente`;
                               return (
                                 <span
                                   key={stepNum}
-                                  className={`inline-flex items-center justify-center w-6 h-6 rounded text-xs font-medium ${
-                                    done
-                                      ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400'
-                                      : current
-                                        ? 'bg-[#8CD955]/25 dark:bg-[#8CD955]/35 text-[#8CD955] border border-[#8CD955]/50'
-                                        : 'bg-slate-100 dark:bg-[#404040] text-slate-400 dark:text-[#888]'
-                                  }`}
-                                  title={done ? `Step ${stepNum} concluído` : current ? `Step ${stepNum} em andamento` : `Step ${stepNum}`}
+                                  className={`inline-flex items-center justify-center w-6 h-6 rounded text-xs font-medium ${cls}`}
+                                  title={title}
                                 >
-                                  {done ? '✓' : stepNum}
+                                  {st === 'sent' ? '✓' : st === 'failed' ? '✗' : stepNum}
                                 </span>
                               );
                             })}
                             <span className="text-xs text-slate-400 dark:text-[#888] ml-1">
-                              {job.progress_done}/{job.progress_total}
+                              {sentCount}/{job.progress_total} enviados
+                              {job.status === 'running' && pendingCount > 0 ? ' · aguardando envio' : ''}
+                              {(job.steps_failed ?? 0) > 0 ? ` · ${job.steps_failed} falha(s)` : ''}
                             </span>
                           </div>
                           <div className="mt-2 w-full bg-slate-200 dark:bg-[#404040] rounded-full h-1.5">
@@ -1180,7 +1681,7 @@ export default function MaturadorPage() {
                                   Próximo envio em: <strong className="font-mono text-[#8CD955] tabular-nums">{getNextSendCountdown(job.next_scheduled_at) ?? '—'}</strong>
                                 </span>
                               )}
-                              {isNextStepOverdue(job.next_scheduled_at) && job.progress_done < job.progress_total && (
+                              {!jobReadonly && isNextStepOverdue(job.next_scheduled_at) && pendingCount > 0 && (
                                 <button
                                   type="button"
                                   onClick={() => handleProcessCatchUp(job.id)}
@@ -1215,27 +1716,73 @@ export default function MaturadorPage() {
                             </div>
                           )}
                         </div>
-                        <div className="flex items-center gap-1 shrink-0">
-                          {job.status === 'running' && (
-                            <button onClick={() => handlePauseJob(job.id)} className="p-2 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/30 rounded-lg" title="Pausar">
-                              <Pause className="w-5 h-5" />
+                        {!jobReadonly && (
+                          <div className="flex items-center gap-1 shrink-0">
+                            {job.status === 'running' && (
+                              <button onClick={() => handlePauseJob(job.id)} className="p-2 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/30 rounded-lg" title="Pausar">
+                                <Pause className="w-5 h-5" />
+                              </button>
+                            )}
+                            {job.status === 'paused' && (
+                              <button onClick={() => handleResumeJob(job.id)} className="p-2 text-[#8CD955] hover:bg-[#8CD955]/20 dark:hover:bg-[#8CD955]/30 rounded-lg" title="Retomar">
+                                <Play className="w-5 h-5" />
+                              </button>
+                            )}
+                            {(job.status === 'running' || job.status === 'paused') && (
+                              <button onClick={() => handleAbortJob(job.id)} className="p-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg" title="Abortar">
+                                <Square className="w-5 h-5" />
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveMaturationJob(job.id)}
+                              className="p-2 text-slate-500 dark:text-[#888] hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 rounded-lg"
+                              title="Remover da lista"
+                            >
+                              <Trash2 className="w-5 h-5" />
                             </button>
-                          )}
-                          {job.status === 'paused' && (
-                            <button onClick={() => handleResumeJob(job.id)} className="p-2 text-[#8CD955] hover:bg-[#8CD955]/20 dark:hover:bg-[#8CD955]/30 rounded-lg" title="Retomar">
-                              <Play className="w-5 h-5" />
-                            </button>
-                          )}
-                          {(job.status === 'running' || job.status === 'paused') && (
-                            <button onClick={() => handleAbortJob(job.id)} className="p-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg" title="Abortar">
-                              <Square className="w-5 h-5" />
-                            </button>
-                          )}
-                        </div>
+                          </div>
+                        )}
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
+                {jobsDisplayItems.length > 0 && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-t border-slate-100 dark:border-[#404040] bg-slate-50/60 dark:bg-[#262626]">
+                    <span className="text-xs text-slate-500 dark:text-[#888]">
+                      {jobsDisplayItems.length <= MATURATION_JOBS_LIST_PAGE_SIZE
+                        ? `${jobsDisplayItems.length} registro(s)`
+                        : `${(jobsListPage - 1) * MATURATION_JOBS_LIST_PAGE_SIZE + 1}–${Math.min(jobsListPage * MATURATION_JOBS_LIST_PAGE_SIZE, jobsDisplayItems.length)} de ${jobsDisplayItems.length}`}
+                    </span>
+                    {jobsListTotalPages > 1 && (
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setJobsListPage((p) => Math.max(1, p - 1))}
+                          disabled={jobsListPage <= 1}
+                          className="p-1.5 rounded-lg border border-slate-200 dark:border-[#404040] text-slate-600 dark:text-[#aaa] hover:bg-slate-100 dark:hover:bg-[#333] disabled:opacity-40 disabled:pointer-events-none"
+                          aria-label="Página anterior"
+                        >
+                          <ChevronLeft className="w-4 h-4" />
+                        </button>
+                        <span className="text-xs text-slate-600 dark:text-[#aaa] tabular-nums min-w-[4.5rem] text-center">
+                          {jobsListPage} de {jobsListTotalPages}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setJobsListPage((p) => Math.min(jobsListTotalPages, p + 1))}
+                          disabled={jobsListPage >= jobsListTotalPages}
+                          className="p-1.5 rounded-lg border border-slate-200 dark:border-[#404040] text-slate-600 dark:text-[#aaa] hover:bg-slate-100 dark:hover:bg-[#333] disabled:opacity-40 disabled:pointer-events-none"
+                          aria-label="Próxima página"
+                        >
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+                </>
               )}
             </div>
           </div>
@@ -1253,13 +1800,30 @@ export default function MaturadorPage() {
               </button>
             </div>
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              <div className="rounded-lg border border-slate-200 dark:border-[#404040] bg-slate-50/80 dark:bg-[#333]/80 p-3 flex gap-2.5">
+                <Info className="w-5 h-5 text-[#8CD955] shrink-0 mt-0.5" aria-hidden />
+                <div className="text-sm text-slate-600 dark:text-[#bbb] space-y-1.5">
+                  <p className="font-medium text-slate-800 dark:text-[#e8e8e8]">O que é um plano de maturação?</p>
+                  <p>
+                    É uma <strong className="font-medium text-slate-700 dark:text-[#ddd]">fila de mensagens</strong> na ordem em que você montar.
+                    Cada bloco abaixo é um envio: texto ou mídia. O número em &quot;Esperar&quot; é quantos segundos esperar desde o envio anterior até
+                    disparar este passo (o primeiro passo também respeita esse tempo após o início do job).
+                  </p>
+                  <p>
+                    <strong className="font-medium text-slate-700 dark:text-[#ddd]">Para quem envia?</strong> Você define na tela principal ao clicar em
+                    iniciar: com <strong className="font-medium text-slate-700 dark:text-[#ddd]">várias instâncias</strong> selecionadas, cada uma manda
+                    este plano para as outras automaticamente. Com <strong className="font-medium text-slate-700 dark:text-[#ddd]">uma instância</strong>,
+                    use o campo <strong className="font-medium text-slate-700 dark:text-[#ddd]">Target Chat ID</strong> ali mesmo (número ou grupo).
+                  </p>
+                </div>
+              </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 dark:text-[#ccc] mb-1">Nome do plano *</label>
                 <input
                   type="text"
                   value={planFormName}
                   onChange={(e) => setPlanFormName(e.target.value)}
-                  placeholder="Ex: Maturação Inicial"
+                  placeholder="Ex.: Boas-vindas em 3 mensagens"
                   className="w-full px-3 py-2 border border-slate-300 dark:border-[#555] rounded-lg text-slate-800 dark:text-white bg-white dark:bg-[#333] focus:ring-2 focus:ring-[#8CD955]"
                 />
               </div>
@@ -1268,40 +1832,37 @@ export default function MaturadorPage() {
                 <textarea
                   value={planFormDescription}
                   onChange={(e) => setPlanFormDescription(e.target.value)}
-                  placeholder="Opcional"
+                  placeholder="Opcional — anote para você o objetivo deste plano"
                   rows={2}
                   className="w-full px-3 py-2 border border-slate-300 dark:border-[#555] rounded-lg text-slate-800 dark:text-white bg-white dark:bg-[#333] resize-none focus:ring-2 focus:ring-[#8CD955]"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-[#ccc] mb-1">Target Chat ID padrão (opcional)</label>
-                <input
-                  type="text"
-                  value={planFormTargetChatId}
-                  onChange={(e) => setPlanFormTargetChatId(e.target.value)}
-                  placeholder="Ex: 1203...@g.us"
-                  className="w-full px-3 py-2 border border-slate-300 dark:border-[#555] rounded-lg text-slate-800 dark:text-white bg-white dark:bg-[#333] focus:ring-2 focus:ring-[#8CD955]"
-                />
-              </div>
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="block text-sm font-medium text-slate-700 dark:text-[#ccc]">Steps *</label>
-                  <button type="button" onClick={addPlanStep} className="text-sm text-[#8CD955] hover:underline flex items-center gap-1">
-                    <Plus className="w-4 h-4" /> Adicionar step
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-[#ccc]">Sequência de mensagens *</label>
+                    <p className="text-xs text-slate-500 dark:text-[#888] mt-0.5">
+                      Ordene do primeiro ao último envio. Use &quot;Adicionar passo&quot; para mais mensagens na mesma sequência.
+                    </p>
+                  </div>
+                  <button type="button" onClick={addPlanStep} className="text-sm text-[#8CD955] hover:underline flex items-center gap-1 shrink-0">
+                    <Plus className="w-4 h-4" /> Adicionar passo
                   </button>
                 </div>
                 <div className="space-y-3">
                   {planFormSteps.map((step, index) => (
                     <div key={index} className="p-3 rounded-lg bg-slate-50 dark:bg-[#333] border border-slate-200 dark:border-[#404040]">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm font-medium text-slate-700 dark:text-[#ccc]">Step {index + 1}</span>
+                        <span className="text-sm font-medium text-slate-700 dark:text-[#ccc]">
+                          Passo {index + 1} de {planFormSteps.length}
+                        </span>
                         <button type="button" onClick={() => removePlanStep(index)} disabled={planFormSteps.length <= 1} className="text-red-500 hover:text-red-600 disabled:opacity-40 text-xs">
                           Remover
                         </button>
                       </div>
                       <div className="grid grid-cols-2 gap-2 mb-2">
                         <div>
-                          <label className="block text-xs text-slate-500 mb-0.5">Tipo</label>
+                          <label className="block text-xs text-slate-500 dark:text-[#aaa] mb-0.5">Tipo</label>
                           <select
                             value={step.type}
                             onChange={(e) => updatePlanStep(index, 'type', e.target.value)}
@@ -1314,23 +1875,25 @@ export default function MaturadorPage() {
                           </select>
                         </div>
                         <div>
-                          <label className="block text-xs text-slate-500 mb-0.5">Delay (s)</label>
+                          <label className="block text-xs text-slate-500 dark:text-[#aaa] mb-0.5">Esperar (s)</label>
                           <input
                             type="number"
                             min={1}
                             value={step.delay_seconds}
                             onChange={(e) => updatePlanStep(index, 'delay_seconds', e.target.value)}
+                            title="Segundos desde o envio anterior até este passo"
                             className="w-full px-2 py-1.5 border border-slate-300 dark:border-[#555] rounded text-slate-800 dark:text-white bg-white dark:bg-[#2a2a2a] text-sm"
                           />
+                          <p className="text-[10px] text-slate-400 dark:text-[#777] mt-0.5 leading-tight">Intervalo após o passo anterior</p>
                         </div>
                       </div>
                       {step.type === 'text' ? (
                         <div>
-                          <label className="block text-xs text-slate-500 mb-0.5">Mensagem</label>
+                          <label className="block text-xs text-slate-500 dark:text-[#aaa] mb-0.5">Texto a enviar</label>
                           <textarea
                             value={step.payload.text || ''}
                             onChange={(e) => updatePlanStep(index, 'text', e.target.value)}
-                            placeholder="Texto da mensagem..."
+                            placeholder="Digite a mensagem que será enviada neste passo…"
                             rows={2}
                             className="w-full px-2 py-1.5 border border-slate-300 dark:border-[#555] rounded text-slate-800 dark:text-white bg-white dark:bg-[#2a2a2a] text-sm resize-none"
                           />
@@ -1338,7 +1901,7 @@ export default function MaturadorPage() {
                       ) : (
                         <>
                           <div className="mb-2">
-                            <label className="block text-xs text-slate-500 mb-0.5">URL da mídia *</label>
+                            <label className="block text-xs text-slate-500 dark:text-[#aaa] mb-0.5">URL da mídia *</label>
                             <input
                               type="url"
                               value={step.payload.media_url || ''}
@@ -1348,7 +1911,7 @@ export default function MaturadorPage() {
                             />
                           </div>
                           <div>
-                            <label className="block text-xs text-slate-500 mb-0.5">Legenda</label>
+                            <label className="block text-xs text-slate-500 dark:text-[#aaa] mb-0.5">Legenda</label>
                             <input
                               type="text"
                               value={step.payload.caption || ''}

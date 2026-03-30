@@ -91,10 +91,8 @@ export async function GET(req: NextRequest) {
       const isMaster = !!ei.is_master;
       const connected = isConnectedStatus(status);
       const hasPhoneNumber = !!(ei.phone_number && String(ei.phone_number).trim());
-      // Disponível = conectado, tem phone_number e (se está no pool do maturador, não pode estar locked)
-      // Todas as instâncias podem fazer maturação (não precisa ser mestre); phone_number é obrigatório para envio via API Evolution
-      const available =
-        connected && hasPhoneNumber && (inMaturador ? !is_locked : true);
+      // Só usar no maturador: conectado, telefone configurado e não bloqueado por outro job (is_locked no pool)
+      const available = connected && hasPhoneNumber && !is_locked;
       return {
         id: inMaturador ? (masterRows?.find((r: any) => r.evolution_instance_id === ei.id)?.id ?? null) : null,
         evolution_instance_id: ei.id,

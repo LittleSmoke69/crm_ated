@@ -224,6 +224,9 @@ export default function GestorTrafegoClient({
     consultor_total_leads?: number;
     consultor_total_deposited?: number;
   }>>(initialData?.metaCampaignsData || []);
+  /** graph = Meta Graph API ao vivo; supabase = fallback quando live falha */
+  const [metaMetricsSource, setMetaMetricsSource] = useState<'graph' | 'supabase' | null>(null);
+  const [metaMetricsLiveError, setMetaMetricsLiveError] = useState<string | null>(null);
   const [metaCampaignConsultorDraft, setMetaCampaignConsultorDraft] = useState<Record<string, string[]>>({});
   const [metaCampaignConsultorSavingKey, setMetaCampaignConsultorSavingKey] = useState<string | null>(null);
   const [metaConsultorOptions, setMetaConsultorOptions] = useState<Array<{ id: string; email: string; full_name: string | null }>>([]);
@@ -488,7 +491,7 @@ export default function GestorTrafegoClient({
     setLoadingExtMetrics(true);
     setExternalMetricsError(null);
 
-    // --- Chamada 1: Meta Ads (rápida — só Supabase) ---
+    // --- Chamada 1: Meta Ads (Graph API + fallback Supabase) ---
     const metaParams = new URLSearchParams();
     metaParams.append('meta_active_only', metaActiveOnly ? '1' : '0');
     metaParams.set('date_from', metaRange.dateFrom);
@@ -512,8 +515,13 @@ export default function GestorTrafegoClient({
         if (result?.success && result?.data) {
           setMetaFunnel(result.data.metaFunnel || null);
           setMetaCampaignsData(result.data.metaCampaignsData || []);
+          setMetaMetricsSource(result.data.metaLiveSource ?? null);
+          setMetaMetricsLiveError(result.data.metaLiveError ?? null);
           if (result.data.bancaId) setBancaId(result.data.bancaId);
           if (result.data.bancaInfo?.name) setBancaName(result.data.bancaInfo.name);
+        } else {
+          setMetaMetricsSource(null);
+          setMetaMetricsLiveError(null);
         }
       })
       .catch((err) => console.warn('[Frontend] Erro ao buscar Meta:', err))
@@ -1145,7 +1153,20 @@ export default function GestorTrafegoClient({
                   </div>
                   <div>
                     <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100">Métricas Meta Ads (Campanhas)</h2>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">Dados diários da Meta (meta_insights_daily) — Período: <span className="font-medium text-gray-700 dark:text-gray-300">{getMetaPeriodLabel()}</span></p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      Impressões, alcance, cliques, gasto, leads e custo por resultado —{' '}
+                      <span className="font-medium text-gray-700 dark:text-gray-300">granularidade diária</span> via{' '}
+                      <span className="font-medium text-gray-700 dark:text-gray-300">Meta Graph API</span>. Período:{' '}
+                      <span className="font-medium text-gray-700 dark:text-gray-300">{getMetaPeriodLabel()}</span>
+                    </p>
+                    {!loadingMeta && metaMetricsSource === 'graph' && (
+                      <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-1">Fonte: Graph API (tempo real)</p>
+                    )}
+                    {!loadingMeta && metaMetricsSource === 'supabase' && (
+                      <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
+                        Live Meta indisponível{metaMetricsLiveError ? ` (${metaMetricsLiveError})` : ''}. Exibindo dados do último sync no banco.
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
@@ -1214,7 +1235,14 @@ export default function GestorTrafegoClient({
                   </p>
                 </div>
               </div>
-              {!loadingMeta && !metaFunnel && (
+              {!loadingMeta && !metaFunnel && metaCampaignsData.length > 0 && (
+                <p className="text-xs text-amber-800 dark:text-amber-200 mt-3 rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-3 py-2.5 leading-relaxed">
+                  <strong>Sem agregado de funil para este período:</strong> a lista de campanhas veio do banco/sync, mas não há insights agregados em{' '}
+                  <code className="text-[10px] bg-amber-100/80 dark:bg-amber-900/50 px-1 rounded">meta_insights_daily</code> para{' '}
+                  <strong>{getMetaPeriodLabel()}</strong>. Com Graph API ativa, recarregue a página; se persistir, use <strong>Atualizar campanhas</strong>.
+                </p>
+              )}
+              {!loadingMeta && !metaFunnel && metaCampaignsData.length === 0 && (
                 <p className="text-xs text-amber-600 dark:text-amber-400 mt-3">
                   Configure a integração Meta na seção &quot;Configurar integração Meta&quot; abaixo ou em Admin → Meta Ads. Depois sincronize para ver as métricas.
                 </p>

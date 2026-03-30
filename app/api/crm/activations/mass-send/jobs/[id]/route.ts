@@ -12,7 +12,7 @@ import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { triggerMassSendProcessFromOrigin } from '@/lib/crm/trigger-mass-send-process';
+import { triggerMassSendProcessChained } from '@/lib/crm/trigger-mass-send-chained';
 
 export const dynamic = 'force-dynamic';
 
@@ -182,7 +182,7 @@ export async function PATCH(
     }
 
     const origin = req.nextUrl?.origin || new URL(req.url).origin;
-    triggerMassSendProcessFromOrigin(origin);
+    triggerMassSendProcessChained(origin);
 
     return successResponse({ status: 'pending' }, 'Campanha retomada. O envio continuará em breve.');
   } catch (e) {

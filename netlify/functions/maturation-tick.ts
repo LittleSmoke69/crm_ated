@@ -37,7 +37,8 @@ export const handler = async (_event: HandlerEvent, _context: HandlerContext): P
   }
 
   const tickUrl = `${siteUrl.replace(/\/$/, '')}/api/maturation/cron-tick`;
-  console.log('[maturation-tick] Chamando:', tickUrl);
+  const verbose = process.env.MATURATION_VERBOSE_LOGS === 'true';
+  if (verbose) console.log('[maturation-tick] Chamando:', tickUrl);
 
   try {
     const res = await fetch(tickUrl, {
@@ -61,7 +62,7 @@ export const handler = async (_event: HandlerEvent, _context: HandlerContext): P
       };
     }
 
-    console.log('[maturation-tick] Tick concluído:', JSON.stringify(body).substring(0, 200));
+    if (verbose) console.log('[maturation-tick] Tick concluído:', JSON.stringify(body).substring(0, 200));
     return {
       statusCode: 200,
       body: JSON.stringify({ ok: true, body }),

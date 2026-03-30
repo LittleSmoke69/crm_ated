@@ -61,7 +61,17 @@ const LOG_PREFIX = '[MATURATION]';
 const LOG_MANUAL = '[MATURADOR]';
 /** Logs do auto maturador (instâncias virgem em maturação automática). */
 const LOG_AUTO = '[AUTO-MATURADOR]';
+/** Detalhe por request à Evolution (URL/body). */
 const VERBOSE_EVOLUTION_LOGS = process.env.MATURATION_VERBOSE_EVOLUTION_LOGS === 'true';
+/**
+ * Logs chatos do tick: fases, “próximo step em…”, resumo longo, heartbeat do auto-maturador, etc.
+ * Default false — erros e avisos importantes continuam em console.warn/error.
+ */
+const MATURATION_VERBOSE_LOGS = process.env.MATURATION_VERBOSE_LOGS === 'true';
+
+function logVerbose(...args: unknown[]) {
+  if (MATURATION_VERBOSE_LOGS) console.log(...args);
+}
 
 function extractErrorMessage(responseText: string, fallback: string): string {
   try {
@@ -107,8 +117,13 @@ async function sendText(params: {
     clearTimeout(timeoutId);
     const latencyMs = Date.now() - startTime;
     const responseText = await response.text();
-    console.log(`${LOG_PREFIX} [Evolution API] sendText - Response: HTTP ${response.status}, latency=${latencyMs}ms`);
-    if (!response.ok) console.log(`${LOG_PREFIX} [Evolution API] sendText - Error body: ${responseText?.substring(0, 200)}`);
+    const evDetail = MATURATION_VERBOSE_LOGS || VERBOSE_EVOLUTION_LOGS;
+    if (evDetail) {
+      console.log(`${LOG_PREFIX} [Evolution API] sendText - Response: HTTP ${response.status}, latency=${latencyMs}ms`);
+      if (!response.ok) console.log(`${LOG_PREFIX} [Evolution API] sendText - Error body: ${responseText?.substring(0, 200)}`);
+    } else if (!response.ok) {
+      console.warn(`${LOG_PREFIX} [Evolution API] sendText HTTP ${response.status}: ${responseText?.substring(0, 200)}`);
+    }
     if (response.ok) return { success: true, latencyMs, httpStatus: response.status };
     const errorMsg = extractErrorMessage(responseText, `HTTP ${response.status}`);
     return { success: false, latencyMs, httpStatus: response.status, error: errorMsg };
@@ -150,8 +165,13 @@ async function sendMedia(params: {
     clearTimeout(timeoutId);
     const latencyMs = Date.now() - startTime;
     const responseText = await response.text();
-    console.log(`${LOG_PREFIX} [Evolution API] sendMedia - Response: HTTP ${response.status}, latency=${latencyMs}ms`);
-    if (!response.ok) console.log(`${LOG_PREFIX} [Evolution API] sendMedia - Error body: ${responseText?.substring(0, 200)}`);
+    const evDetail = MATURATION_VERBOSE_LOGS || VERBOSE_EVOLUTION_LOGS;
+    if (evDetail) {
+      console.log(`${LOG_PREFIX} [Evolution API] sendMedia - Response: HTTP ${response.status}, latency=${latencyMs}ms`);
+      if (!response.ok) console.log(`${LOG_PREFIX} [Evolution API] sendMedia - Error body: ${responseText?.substring(0, 200)}`);
+    } else if (!response.ok) {
+      console.warn(`${LOG_PREFIX} [Evolution API] sendMedia HTTP ${response.status}: ${responseText?.substring(0, 200)}`);
+    }
     if (response.ok) return { success: true, latencyMs, httpStatus: response.status, mediaUrl };
     const errorMsg = extractErrorMessage(responseText, `HTTP ${response.status}`);
     return { success: false, latencyMs, httpStatus: response.status, error: errorMsg, mediaUrl };
@@ -189,8 +209,13 @@ async function sendAudio(params: {
     clearTimeout(timeoutId);
     const latencyMs = Date.now() - startTime;
     const responseText = await response.text();
-    console.log(`${LOG_PREFIX} [Evolution API] sendWhatsAppAudio - Response: HTTP ${response.status}, latency=${latencyMs}ms`);
-    if (!response.ok) console.log(`${LOG_PREFIX} [Evolution API] sendWhatsAppAudio - Error body: ${responseText?.substring(0, 200)}`);
+    const evDetail = MATURATION_VERBOSE_LOGS || VERBOSE_EVOLUTION_LOGS;
+    if (evDetail) {
+      console.log(`${LOG_PREFIX} [Evolution API] sendWhatsAppAudio - Response: HTTP ${response.status}, latency=${latencyMs}ms`);
+      if (!response.ok) console.log(`${LOG_PREFIX} [Evolution API] sendWhatsAppAudio - Error body: ${responseText?.substring(0, 200)}`);
+    } else if (!response.ok) {
+      console.warn(`${LOG_PREFIX} [Evolution API] sendWhatsAppAudio HTTP ${response.status}: ${responseText?.substring(0, 200)}`);
+    }
     if (response.ok) return { success: true, latencyMs, httpStatus: response.status };
     const errorMsg = extractErrorMessage(responseText, `HTTP ${response.status}`);
     return { success: false, latencyMs, httpStatus: response.status, error: errorMsg };
@@ -238,7 +263,9 @@ function calculateBackoff(attempt: number): number {
 
 async function processStep(supabase: SupabaseClient, step: any): Promise<void> {
   const { id, job_id, step_index, type, instance_name, target_chat_id, base_url, api_key, payload_json, attempts } = step;
-  console.log(`${LOG_MANUAL} Step job=${job_id} step_index=${step_index} type=${type} instance=${instance_name} destino=${target_chat_id ? `${String(target_chat_id).slice(0, 20)}...` : 'vazio'}`);
+  logVerbose(
+    `${LOG_MANUAL} Step job=${job_id} step_index=${step_index} type=${type} instance=${instance_name} destino=${target_chat_id ? `${String(target_chat_id).slice(0, 20)}...` : 'vazio'}`
+  );
   if (!target_chat_id) {
     const msg = 'Destino não definido para este step.';
     await supabase.from('maturation_steps').update({ status: 'failed', error: msg }).eq('id', id);
@@ -275,7 +302,7 @@ async function processStep(supabase: SupabaseClient, step: any): Promise<void> {
   // 'image' e 'audio' não existem na constraint → mapeamos para 'video' como mídia genérica
   const msgType = (type === 'text' ? 'text' : 'video') as 'text' | 'video';
   if (result.success) {
-    console.log(`${LOG_MANUAL} Step job=${job_id} step_index=${step_index} OK enviado (${result.latencyMs}ms)`);
+    logVerbose(`${LOG_MANUAL} Step job=${job_id} step_index=${step_index} OK enviado (${result.latencyMs}ms)`);
     await supabase.from('maturation_steps').update({ status: 'sent', sent_at: new Date().toISOString(), latency_ms: result.latencyMs, http_status: result.httpStatus }).eq('id', id);
     await createMessage(supabase, { jobId: job_id, stepId: id, direction: 'instance', instanceLabel: instance_name, type: msgType, title: `✅ ${typeLabel} enviado`, content: `${typeLabel} enviado pela instância ${instance_name}`, mediaUrl: result.mediaUrl, status: 'sent', latencyMs: result.latencyMs, httpStatus: result.httpStatus });
   } else {
@@ -303,7 +330,7 @@ async function processStep(supabase: SupabaseClient, step: any): Promise<void> {
         .eq('status', 'processing');
 
       if ((pausedRows?.length || 0) > 0) {
-        console.log(`${LOG_MANUAL} Job ${job_id} pausado automaticamente por instância offline (${instance_name})`);
+        console.warn(`${LOG_MANUAL} Job ${job_id} pausado automaticamente por instância offline (${instance_name})`);
         await createMessage(supabase, {
           jobId: job_id,
           stepId: id,
@@ -320,7 +347,7 @@ async function processStep(supabase: SupabaseClient, step: any): Promise<void> {
     }
 
     const newAttempts = (attempts || 0) + 1;
-    console.log(`${LOG_MANUAL} Step job=${job_id} step_index=${step_index} FALHA tentativa=${newAttempts}/${MAX_ATTEMPTS} erro=${result.error}`);
+    console.warn(`${LOG_MANUAL} Step job=${job_id} step_index=${step_index} FALHA tentativa=${newAttempts}/${MAX_ATTEMPTS} erro=${result.error}`);
     if (newAttempts < MAX_ATTEMPTS) {
       const backoff = calculateBackoff(newAttempts);
       const next = new Date(Date.now() + backoff * 1000);
@@ -337,10 +364,14 @@ async function updateJobProgress(supabase: SupabaseClient, jobId: string): Promi
   const { count: sent } = await supabase.from('maturation_steps').select('id', { count: 'exact', head: true }).eq('job_id', jobId).eq('status', 'sent');
   const { count: failed } = await supabase.from('maturation_steps').select('id', { count: 'exact', head: true }).eq('job_id', jobId).eq('status', 'failed');
   const { count: total } = await supabase.from('maturation_steps').select('id', { count: 'exact', head: true }).eq('job_id', jobId);
-  const done = (sent || 0) + (failed || 0);
-  await supabase.from('maturation_jobs').update({ progress_done: done }).eq('id', jobId);
-  if (total && done >= total) {
-    console.log(`${LOG_MANUAL} Job ${jobId} finalizado: ${done}/${total} steps (sent=${sent}, failed=${failed})`);
+  const sentN = sent || 0;
+  const failedN = failed || 0;
+  const totalN = total || 0;
+  /** progress_done = apenas steps enviados com sucesso (UI e barra; falhas não aparecem como “concluído”) */
+  const terminalDone = sentN + failedN;
+  await supabase.from('maturation_jobs').update({ progress_done: sentN }).eq('id', jobId);
+  if (totalN && terminalDone >= totalN) {
+    logVerbose(`${LOG_MANUAL} Job ${jobId} finalizado: ${terminalDone}/${totalN} steps (sent=${sentN}, failed=${failedN})`);
     await supabase.from('maturation_jobs').update({ status: 'finished', ended_at: new Date().toISOString() }).eq('id', jobId);
     const { data: j } = await supabase.from('maturation_jobs').select('master_instance_id').eq('id', jobId).single();
     if (j) await supabase.from('master_instances').update({ is_locked: false, locked_job_id: null, locked_at: null }).eq('id', j.master_instance_id);
@@ -381,17 +412,16 @@ async function processVirginMaturation(supabase: SupabaseClient): Promise<number
     .is('maturation_paused_at', null);
 
   if (error) {
-    console.log(`${LOG_AUTO} Erro ao listar instâncias virgem: ${error.message}`);
+    console.warn(`${LOG_AUTO} Erro ao listar instâncias virgem: ${error.message}`);
     return 0;
   }
 
   const list = virgins || [];
   if (list.length === 0) {
-    console.log(`${LOG_AUTO} Nenhuma instância virgem em auto maturação ativa`);
     return 0;
   }
 
-  console.log(`${LOG_AUTO} ${list.length} instância(s) virgem em auto maturação ativa`);
+  logVerbose(`${LOG_AUTO} ${list.length} instância(s) virgem em auto maturação ativa`);
   let processed = 0;
 
   for (const v of list) {
@@ -406,14 +436,14 @@ async function processVirginMaturation(supabase: SupabaseClient): Promise<number
     const elapsedMs = now.getTime() - phaseStartedAt.getTime();
     const elapsedH = elapsedMs / (60 * 60 * 1000);
 
-    console.log(`${LOG_AUTO} Instância ${inst.instance_name}: status=${status} elapsed=${Math.floor(elapsedH)}h`);
+    logVerbose(`${LOG_AUTO} Instância ${inst.instance_name}: status=${status} elapsed=${Math.floor(elapsedH)}h`);
 
     // ─── State machine de fases ───────────────────────────────────────────────
 
     if (status === 'waiting_connection_test') {
       // Aguarda 24h, depois vai para contact_warmup
       if (elapsedMs >= VIRGIN_CONNECTION_TEST_MS) {
-        console.log(`${LOG_AUTO} ${inst.instance_name}: avançando para contact_warmup`);
+        logVerbose(`${LOG_AUTO} ${inst.instance_name}: avançando para contact_warmup`);
         await supabase.from('evolution_instances').update({
           maturation_status: 'contact_warmup',
           maturation_phase_started_at: now.toISOString(),
@@ -435,7 +465,7 @@ async function processVirginMaturation(supabase: SupabaseClient): Promise<number
       await ensureVirginWarmupJob(supabase, inst, now);
 
       if (elapsedMs >= VIRGIN_CONTACT_WARMUP_MS) {
-        console.log(`${LOG_AUTO} ${inst.instance_name}: avançando para group_warmup`);
+        logVerbose(`${LOG_AUTO} ${inst.instance_name}: avançando para group_warmup`);
         await supabase.from('evolution_instances').update({
           maturation_status: 'group_warmup',
           maturation_phase_started_at: now.toISOString(),
@@ -459,7 +489,7 @@ async function processVirginMaturation(supabase: SupabaseClient): Promise<number
       if (elapsedMs >= VIRGIN_GROUP_WARMUP_MS) {
         const newDay = Math.min((inst.current_day || 1) + 1, 5);
         const nextStatus = newDay >= 5 ? 'completed' : 'repeating_cycle';
-        console.log(`${LOG_AUTO} ${inst.instance_name}: avançando para ${nextStatus} (dia ${newDay})`);
+        logVerbose(`${LOG_AUTO} ${inst.instance_name}: avançando para ${nextStatus} (dia ${newDay})`);
         await supabase.from('evolution_instances').update({
           maturation_status: nextStatus,
           maturation_phase_started_at: now.toISOString(),
@@ -485,7 +515,7 @@ async function processVirginMaturation(supabase: SupabaseClient): Promise<number
       if (elapsedMs >= VIRGIN_GROUP_WARMUP_MS) {
         const newDay = Math.min((inst.current_day || 2) + 1, 5);
         const nextStatus = newDay >= 5 ? 'completed' : 'repeating_cycle';
-        console.log(`${LOG_AUTO} ${inst.instance_name}: ciclo avançando para ${nextStatus} (dia ${newDay})`);
+        logVerbose(`${LOG_AUTO} ${inst.instance_name}: ciclo avançando para ${nextStatus} (dia ${newDay})`);
         await supabase.from('evolution_instances').update({
           maturation_status: nextStatus,
           maturation_phase_started_at: now.toISOString(),
@@ -536,7 +566,7 @@ async function ensureVirginWarmupJob(supabase: SupabaseClient, inst: any, now: D
   }
 
   if (!masterRow) {
-    console.log(`${LOG_AUTO} ${inst.instance_name}: não foi possível registrar em master_instances`);
+    console.warn(`${LOG_AUTO} ${inst.instance_name}: não foi possível registrar em master_instances`);
     return;
   }
 
@@ -568,7 +598,7 @@ async function ensureVirginWarmupJob(supabase: SupabaseClient, inst: any, now: D
     : VIRGIN_MESSAGES_FALLBACK;
 
   if (messages.length === 0) {
-    console.log(`${LOG_AUTO} ${inst.instance_name}: nenhuma mensagem configurada para warmup`);
+    console.warn(`${LOG_AUTO} ${inst.instance_name}: nenhuma mensagem configurada para warmup`);
     return;
   }
 
@@ -586,7 +616,7 @@ async function ensureVirginWarmupJob(supabase: SupabaseClient, inst: any, now: D
   const targetPhone = Array.isArray(targetEv) ? targetEv[0]?.phone_number : targetEv?.phone_number;
 
   if (!targetPhone) {
-    console.log(`${LOG_AUTO} ${inst.instance_name}: nenhuma instância mestre disponível como destino`);
+    logVerbose(`${LOG_AUTO} ${inst.instance_name}: nenhuma instância mestre disponível como destino`);
     return;
   }
 
@@ -601,7 +631,7 @@ async function ensureVirginWarmupJob(supabase: SupabaseClient, inst: any, now: D
     .maybeSingle();
 
   if (!adminProfile) {
-    console.log(`${LOG_AUTO} ${inst.instance_name}: nenhum admin encontrado para criar job`);
+    console.warn(`${LOG_AUTO} ${inst.instance_name}: nenhum admin encontrado para criar job`);
     return;
   }
 
@@ -666,7 +696,7 @@ async function ensureVirginWarmupJob(supabase: SupabaseClient, inst: any, now: D
     .single();
 
   if (jobErr || !job) {
-    console.log(`${LOG_AUTO} ${inst.instance_name}: erro ao criar job - ${jobErr?.message}`);
+    console.warn(`${LOG_AUTO} ${inst.instance_name}: erro ao criar job - ${jobErr?.message}`);
     return;
   }
 
@@ -686,7 +716,7 @@ async function ensureVirginWarmupJob(supabase: SupabaseClient, inst: any, now: D
     payload_json: { job_id: job.id, target: targetChatId, steps: stepsToInsert.length },
   }).then(() => {});
 
-  console.log(`${LOG_AUTO} ${inst.instance_name}: job de warmup criado (${stepsToInsert.length} steps → ${targetChatId})`);
+  logVerbose(`${LOG_AUTO} ${inst.instance_name}: job de warmup criado (${stepsToInsert.length} steps → ${targetChatId})`);
 }
 
 export type CatchUpResult = {
@@ -716,10 +746,10 @@ export async function runJobCatchUp(supabase: SupabaseClient, jobId: string): Pr
     .single();
 
   if (jobErr || !job || job.status !== 'running') {
-    console.log(`${LOG_MANUAL} runJobCatchUp job=${jobId} ignorado (não encontrado ou não running)`);
+    logVerbose(`${LOG_MANUAL} runJobCatchUp job=${jobId} ignorado (não encontrado ou não running)`);
     return { sent: 0, failed: 0, results: [] };
   }
-  console.log(`${LOG_MANUAL} runJobCatchUp job=${jobId} processando steps atrasados`);
+  logVerbose(`${LOG_MANUAL} runJobCatchUp job=${jobId} processando steps atrasados`);
 
   const { data: steps, error: stepsErr } = await supabase
     .from('maturation_steps')
@@ -753,7 +783,7 @@ export async function runJobCatchUp(supabase: SupabaseClient, jobId: string): Pr
   const base_url = api?.base_url ?? '';
   const api_key = api?.api_key_global ?? '';
   if (!instance_name || !base_url || !api_key) {
-    console.log(`${LOG_PREFIX} runJobCatchUp - Credenciais não encontradas para job ${jobId}`);
+    console.warn(`${LOG_PREFIX} runJobCatchUp - Credenciais não encontradas para job ${jobId}`);
     return { sent: 0, failed: 0, results: [] };
   }
 
@@ -784,7 +814,7 @@ export async function runJobCatchUp(supabase: SupabaseClient, jobId: string): Pr
   }
 
   await updateJobProgress(supabase, jobId);
-  console.log(`${LOG_MANUAL} runJobCatchUp job=${jobId} concluído: sent=${sent} failed=${failed}`);
+  logVerbose(`${LOG_MANUAL} runJobCatchUp job=${jobId} concluído: sent=${sent} failed=${failed}`);
   return { sent, failed, results };
 }
 
@@ -801,11 +831,11 @@ async function recoverStuckSteps(supabase: SupabaseClient): Promise<number> {
     .lt('locked_at', cutoff)
     .select('id');
   if (error) {
-    console.log(`${LOG_MANUAL} Erro ao recuperar steps travados: ${error.message}`);
+    console.warn(`${LOG_MANUAL} Erro ao recuperar steps travados: ${error.message}`);
     return 0;
   }
   const count = data?.length ?? 0;
-  if (count > 0) console.log(`${LOG_MANUAL} ${count} step(s) travados em 'processing' resetados para 'pending'`);
+  if (count > 0) logVerbose(`${LOG_MANUAL} ${count} step(s) travados em 'processing' resetados para 'pending'`);
   return count;
 }
 
@@ -828,24 +858,24 @@ export async function runMaturationTick(supabase: SupabaseClient): Promise<any> 
   let hasMorePending = false;
   const processedJobIds = new Set<string>();
 
-  console.log(`${LOG_PREFIX} ========== Tick Maturador ==========`);
+  logVerbose(`${LOG_PREFIX} ========== Tick Maturador ==========`);
 
   // Fase 0: Recuperar steps travados em 'processing' de ticks anteriores
   await recoverStuckSteps(supabase);
 
-  console.log(`${LOG_MANUAL} Fase 1: Maturador (manual) - jobs com steps agendados`);
+  logVerbose(`${LOG_MANUAL} Fase 1: Maturador (manual) - jobs com steps agendados`);
 
   while (true) {
     const elapsed = Date.now() - startTime;
     if (elapsed + STEP_TIME_BUDGET_MS > MAX_RUNTIME_MS) {
-      console.log(`${LOG_MANUAL} Orçamento de tempo esgotado (${elapsed}ms/${MAX_RUNTIME_MS}ms), encerrando tick`);
+      logVerbose(`${LOG_MANUAL} Orçamento de tempo esgotado (${elapsed}ms/${MAX_RUNTIME_MS}ms), encerrando tick`);
       hasMorePending = true; // Pode haver mais steps — sinaliza para encadeamento
       break;
     }
 
     const { data: steps, error } = await supabase.rpc('claim_maturation_steps', { claim_limit: CLAIM_LIMIT });
     if (error) {
-      console.log(`${LOG_MANUAL} Erro ao reivindicar steps: ${error.message}`);
+      console.warn(`${LOG_MANUAL} Erro ao reivindicar steps: ${error.message}`);
       break;
     }
     if (!steps || steps.length === 0) {
@@ -870,7 +900,7 @@ export async function runMaturationTick(supabase: SupabaseClient): Promise<any> 
         .maybeSingle();
 
       if (!nextStep) {
-        console.log(`${LOG_MANUAL} Nenhum step pendente ou futuro para processar`);
+        logVerbose(`${LOG_MANUAL} Nenhum step pendente ou futuro para processar`);
         break;
       }
 
@@ -878,23 +908,27 @@ export async function runMaturationTick(supabase: SupabaseClient): Promise<any> 
 
       if (waitMs > 0 && waitMs + STEP_TIME_BUDGET_MS < remainingMs) {
         // Próximo step cabe no orçamento — aguarda e reprocessa
-        console.log(`${LOG_MANUAL} Próximo step em ${Math.ceil(waitMs / 1000)}s (orçamento restante ${Math.ceil(remainingMs / 1000)}s), aguardando...`);
+        logVerbose(
+          `${LOG_MANUAL} Próximo step em ${Math.ceil(waitMs / 1000)}s (orçamento restante ${Math.ceil(remainingMs / 1000)}s), aguardando...`
+        );
         await new Promise((r) => setTimeout(r, waitMs + 150)); // +150ms de margem para o clock
         continue; // Tenta claim novamente
       }
 
       // Próximo step vence depois do nosso orçamento — encadeia outro tick
-      console.log(`${LOG_MANUAL} Próximo step em ${Math.ceil(waitMs / 1000)}s, fora do orçamento restante (${Math.ceil(remainingMs / 1000)}s). Sinaliza encadeamento.`);
+      logVerbose(
+        `${LOG_MANUAL} Próximo step em ${Math.ceil(waitMs / 1000)}s, fora do orçamento restante (${Math.ceil(remainingMs / 1000)}s). Sinaliza encadeamento.`
+      );
       hasMorePending = true;
       break;
     }
-    console.log(`${LOG_MANUAL} ${steps.length} step(s) reivindicados para envio (Evolution API)`);
+    logVerbose(`${LOG_MANUAL} ${steps.length} step(s) reivindicados para envio (Evolution API)`);
 
     for (const step of steps) {
       const stepElapsed = Date.now() - startTime;
       if (stepElapsed + FETCH_TIMEOUT_MS > MAX_RUNTIME_MS) {
         // Sem tempo para este step — reseta para 'pending' para ser pego no próximo tick
-        console.log(`${LOG_MANUAL} Sem tempo para step job=${step.job_id} step_index=${step.step_index}, resetando para 'pending'`);
+        logVerbose(`${LOG_MANUAL} Sem tempo para step job=${step.job_id} step_index=${step.step_index}, resetando para 'pending'`);
         await supabase
           .from('maturation_steps')
           .update({ status: 'pending', locked_at: null, locked_by: null })
@@ -915,11 +949,13 @@ export async function runMaturationTick(supabase: SupabaseClient): Promise<any> 
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
 
-  console.log(`${LOG_AUTO} Fase 2: Auto maturador - instâncias virgem em maturação automática`);
+  logVerbose(`${LOG_AUTO} Fase 2: Auto maturador - instâncias virgem em maturação automática`);
   const virginCount = await processVirginMaturation(supabase);
 
   const elapsed = Date.now() - startTime;
-  console.log(`${LOG_PREFIX} ========== Fim do tick (${elapsed}ms) hasMorePending=${hasMorePending} ==========`);
-  console.log(`${LOG_PREFIX} Resumo: Maturador manual=${totalProcessed} steps processados, ${processedJobIds.size} job(s); Auto maturador=${virginCount} instância(s) virgem em maturação`);
+  logVerbose(`${LOG_PREFIX} ========== Fim do tick (${elapsed}ms) hasMorePending=${hasMorePending} ==========`);
+  logVerbose(
+    `${LOG_PREFIX} Resumo: Maturador manual=${totalProcessed} steps processados, ${processedJobIds.size} job(s); Auto maturador=${virginCount} instância(s) virgem em maturação`
+  );
   return { processed: totalProcessed, virginCount, jobs: Array.from(processedJobIds), hasMorePending };
 }

@@ -16,6 +16,7 @@ import {
   mapInsightToRow,
   normalizeBudget,
   formatMetaDate,
+  type MetaInsight,
 } from '@/lib/meta/metaClient';
 import { buildCampaignConsultorSummary } from '@/lib/services/meta-campaign-consultors';
 
@@ -695,6 +696,151 @@ export async function getMetaCampaignsWithInsights(
       consultor_total_deposited: consultorSummary?.consultor_total_deposited ?? 0,
     };
   });
+}
+
+function leadsFromMetaInsightActions(actions: MetaInsight['actions']): number {
+  if (!actions?.length) return 0;
+  const lead = actions.find((a) => a.action_type === 'lead');
+  return lead ? parseInt(lead.value || '0', 10) || 0 : 0;
+}
+
+function extractResultsFromInsightActions(actions: MetaInsight['actions']): number {
+  if (!actions?.length) return 0;
+  return actions
+    .filter((a) => META_RESULT_ACTION_TYPES.has(a.action_type))
+    .reduce((sum, a) => sum + (parseInt(a.value || '0', 10) || 0), 0);
+}
+
+/**
+ * Gestão de Tráfego: métricas Meta em tempo real via Graph API (insights diários por campanha).
+ * Atribuição de consultores continua vinda do CRM (`buildCampaignConsultorSummary`).
+ */
+export async function fetchGestorMetaDashboardFromGraph(
+  bancaId: string,
+  dateFrom?: string | null,
+  dateTo?: string | null,
+  activeOnly = true
+): Promise<{
+  success: boolean;
+  metaFunnel: MetaInsightsAggregated | null;
+  metaCampaignsData: MetaCampaignWithMetrics[];
+  error?: string;
+}> {
+  try {
+    const token = await getDecryptedToken(bancaId);
+    if (!token) {
+      return { success: false, metaFunnel: null, metaCampaignsData: [], error: 'Token Meta não configurado.' };
+    }
+    const { baseUrl, adAccountId } = await resolveMetaApiContext(bancaId);
+    if (!adAccountId) {
+      return { success: false, metaFunnel: null, metaCampaignsData: [], error: 'Ad Account Meta não configurado.' };
+    }
+
+    const timeRange =
+      dateFrom && dateTo
+        ? { since: dateFrom, until: dateTo }
+        : (() => {
+            const now = new Date();
+            const until = formatMetaDate(now);
+            const since = new Date(now);
+            since.setDate(since.getDate() - 29);
+            return { since: formatMetaDate(since), until };
+          })();
+
+    const [insights, graphCampaigns, graphAdsets, currency] = await Promise.all([
+      getInsightsDaily(baseUrl, token, adAccountId, timeRange),
+      listCampaigns(baseUrl, token, adAccountId),
+      listAdSets(baseUrl, token, adAccountId),
+      getMetaCurrencyForBanca(bancaId),
+    ]);
+
+    const visibleCampaigns = graphCampaigns.filter((c) => {
+      if (!activeOnly) return true;
+      return c.status === 'ACTIVE' && c.effective_status === 'ACTIVE';
+    });
+    const allowedIds = new Set(visibleCampaigns.map((c) => String(c.id)));
+
+    const filteredInsights = insights.filter(
+      (ins) => ins.campaign_id && allowedIds.has(String(ins.campaign_id))
+    );
+
+    let reach = 0;
+    let impressions = 0;
+    let clicks = 0;
+    let leads = 0;
+    let spend = 0;
+    for (const ins of filteredInsights) {
+      reach += parseInt(ins.reach || '0', 10) || 0;
+      impressions += parseInt(ins.impressions || '0', 10) || 0;
+      clicks += parseInt(ins.clicks || '0', 10) || 0;
+      spend += parseFloat(ins.spend || '0') || 0;
+      leads += leadsFromMetaInsightActions(ins.actions);
+    }
+
+    const metaFunnel: MetaInsightsAggregated = { reach, impressions, clicks, leads, spend, currency };
+
+    const adsetsByCampaign = new Map<string, string[]>();
+    for (const a of graphAdsets) {
+      const cid = String(a.campaign_id || '');
+      if (!cid || !allowedIds.has(cid)) continue;
+      const list = adsetsByCampaign.get(cid) || [];
+      if (a.name) list.push(a.name);
+      adsetsByCampaign.set(cid, list);
+    }
+
+    const metricsByCampaign = new Map<
+      string,
+      { reach: number; impressions: number; clicks: number; spend: number; leads: number; results: number }
+    >();
+    for (const ins of filteredInsights) {
+      const cid = String(ins.campaign_id);
+      const cur = metricsByCampaign.get(cid) || { reach: 0, impressions: 0, clicks: 0, spend: 0, leads: 0, results: 0 };
+      cur.reach += parseInt(ins.reach || '0', 10) || 0;
+      cur.impressions += parseInt(ins.impressions || '0', 10) || 0;
+      cur.clicks += parseInt(ins.clicks || '0', 10) || 0;
+      cur.spend += parseFloat(ins.spend || '0') || 0;
+      cur.leads += leadsFromMetaInsightActions(ins.actions);
+      cur.results += extractResultsFromInsightActions(ins.actions);
+      metricsByCampaign.set(cid, cur);
+    }
+
+    const orderedIds = visibleCampaigns.map((c) => String(c.id));
+    const consultorSummaryByCampaign = await buildCampaignConsultorSummary(
+      bancaId,
+      orderedIds,
+      dateFrom ?? null,
+      dateTo ?? null
+    );
+
+    const metaCampaignsData: MetaCampaignWithMetrics[] = visibleCampaigns.map((c) => {
+      const id = String(c.id);
+      const m = metricsByCampaign.get(id) || { reach: 0, impressions: 0, clicks: 0, spend: 0, leads: 0, results: 0 };
+      const consultorSummary = consultorSummaryByCampaign.get(id);
+      return {
+        campaign_id: id,
+        campaign_name: c.name || id,
+        adsets: adsetsByCampaign.get(id) || [],
+        reach: m.reach,
+        impressions: m.impressions,
+        clicks: m.clicks,
+        spend: m.spend,
+        leads: m.leads,
+        results: m.results,
+        cost_per_result: m.results > 0 ? m.spend / m.results : null,
+        assigned_consultors: consultorSummary?.assigned_consultors ?? [],
+        consultor_total_leads: consultorSummary?.consultor_total_leads ?? 0,
+        consultor_total_deposited: consultorSummary?.consultor_total_deposited ?? 0,
+      };
+    });
+
+    metaCampaignsData.sort((a, b) => b.spend - a.spend);
+
+    return { success: true, metaFunnel, metaCampaignsData };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn('[Gestor Meta Live] Graph falhou:', msg);
+    return { success: false, metaFunnel: null, metaCampaignsData: [], error: msg };
+  }
 }
 
 /**

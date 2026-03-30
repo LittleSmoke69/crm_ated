@@ -1,0 +1,311 @@
+================================================================================
+MAPEAMENTO: MÓDULOS DA APLICAÇÃO → TABELAS / RPCs / SQL (MIGRATIONS)
+================================================================================
+Projeto: ZaplotoV2
+Atualização: referência estática — ao criar tabelas novas no código, inclua a
+migration em migrations/ e uma linha neste arquivo.
+
+LEGENDA
+-------
+• "CREATE principal" = arquivo migrations/*.sql onde a tabela costuma ser criada
+  (pode haver vários add_*.sql que alteram a mesma tabela).
+• Para aplicar TUDO: após db/homolog (núcleo), rode migrations/migrations_order.txt
+  ou scripts/apply-migrations.sh com DATABASE_URL.
+• RPC = função Postgres chamada via supabase.rpc(...).
+
+--------------------------------------------------------------------------------
+1) PACOTE db/homolog (ordem em ORDEM_EXECUCAO.txt)
+--------------------------------------------------------------------------------
+Cobre: extensões, profiles, user_settings, white label (zaploto_*), tenant seed,
+crm_bancas + user_bancas (JSONB), evolution_*, webhook_configs, whatsapp_groups,
+messages + message_schedules, campaigns + campaign_groups + campaign_contacts +
+RPCs da fila, activation_mass_send_* + increment_mass_send_job_counts,
+WhatsApp oficial (configs, webhook_events, chat_*, increment_unread, chat-media,
+Realtime), Flow Builder + evolution_webhook_* (12), Meta Ads completo com RLS JSONB (13).
+
+Não substitui o restante das migrations — é bootstrap de homolog + white label +
+trechos críticos + flow + meta.
+
+--------------------------------------------------------------------------------
+2) MÓDULO → TABELAS / FUNÇÕES (por área funcional)
+--------------------------------------------------------------------------------
+
+--- Autenticação / perfil / configuração ---
+Áreas: app/register, app/api/admin/users, user_settings, password reset
+  profiles, user_settings
+  password_reset_codes, system_settings
+SQL: 0000_foundation_supabase_core.sql (parcial), 02_identity_profiles.sql (homolog),
+  create_password_reset_and_system_settings.sql
+
+--- White label / cargos / sidebar ---
+Áreas: admin tenant, sidebar dinâmica
+  zaploto_tenants, zaploto_roles, zaploto_sidebar_items, zaploto_role_sidebar,
+  zaploto_admin_steps, zaploto_role_admin_steps
+SQL: create_zaploto_tenants_and_roles.sql, add_zaploto_id_to_profiles_and_tables.sql,
+  vários add_*_zaploto_sidebar*.sql, seed_zaploto_default_roles_and_sidebar.sql
+
+--- CRM (bancas, leads, tags, feedback, sessões) ---
+Áreas: app/crm, app/api/crm, Kanban
+  crm_bancas, crm_leads, crm_tags, crm_lead_tags, crm_feedback, crm_view_sessions
+SQL: create_crm_*_table.sql, insert_crm_tags.sql, user_bancas_*.sql
+
+--- Evolution API / instâncias ---
+Áreas: instâncias, APIs, balanceamento
+  evolution_apis, evolution_instances, user_evolution_apis, webhook_configs
+  evolution_instance_logs (uso no código — verificar migration com nome próximo)
+  proxy_instances
+SQL: 0000_foundation + create_chat_tables.sql (ALTER), add_*_evolution*.sql,
+  enforce_tenant_isolation.sql
+
+--- Grupos WhatsApp (cache) ---
+Áreas: /api/groups, ativações
+  whatsapp_groups
+SQL: não há CREATE dedicado no repositório (tabela legada); homolog/07 ou DDL
+  inferido; deduplicate_whatsapp_groups.sql (índices)
+
+--- Mensagens / agendamentos / mídia campanha ---
+Áreas: mensagens, process-message-queue, campaigns_media
+  messages, message_schedules, campaigns_media
+SQL: create_messages_table.sql, create_message_schedules_table.sql,
+  add_*_messages.sql, create_campaigns_table.sql (campaigns_media)
+
+--- Campanhas add-to-group (fila) ---
+Áreas: app/api/campaigns, netlify process-campaign-queue
+  campaigns, campaign_groups, campaign_contacts
+SQL: create_campaign_queue_tables.sql, fix_rls_and_permissions.sql
+
+--- Ativações CRM (disparo em massa) ---
+Áreas: app/api/crm/activations, mass-send-process-core, Netlify
+  activation_mass_send_jobs, activation_mass_send_job_groups
+SQL: activation_mass_send_jobs.sql, add_activation_mass_send_*.sql,
+  add_increment_mass_send_job_counts_rpc.sql (supersedida por job_groups)
+
+--- Chat interno (Evolution + oficial) ---
+Áreas: chat-atendimento, webhooks, chatService
+  chat_conversations, chat_messages, webhook_events (oficial)
+  whatsapp_official_configs
+  chat_conversation_contacts, chat_conversation_tags, searches (contatos)
+  chat_instance_flows, chat_broadcasts
+  atendimento_chat_assignments
+SQL: create_chat_tables.sql, add_whatsapp_official_chat_support.sql,
+  create_whatsapp_official_configs.sql, add_webhook_events_processed_at.sql,
+  fix_chat_conversations_upsert_constraint.sql, create_chat_conversation_*.sql,
+  create_chat_contacts_searches.sql, add_chat_*.sql, consolidate_*.sql,
+  create_atendimento_chat_assignments.sql, add_chat_agent_and_broadcast.sql
+
+--- Webhooks Evolution (auditoria / flows / test) ---
+Áreas: app/api/webhooks/evolution, flow-executor
+  Homolog: db/homolog/12_flow_builder_e_webhook.sql (evolution_webhook_events, test_waiters)
+  evolution_webhook_events, evolution_webhook_test_waiters
+SQL: create_evolution_webhook_tables.sql, add_evolution_webhook_events_*.sql,
+  trigger_evolution_webhook_*.sql
+
+--- Normalização webhook ---
+  webhook_normalization_rules, group_participants_state
+SQL: create_normalization_system.sql
+
+--- Meta Ads (integração + insights + gestor) ---
+Áreas: admin meta, gestor-trafego, meta-sync-service
+  meta_integrations, meta_campaigns, meta_adsets, meta_insights_daily
+  meta_integration_configs, meta_integration_bancas, meta_campaign_consultors
+SQL: create_meta_ads_tables.sql, add_shared_meta_integrations.sql,
+  add_meta_campaign_*.sql, add_currency_to_meta_integrations.sql
+  Homolog: db/homolog/13_meta_ads.sql (RLS gestor com banca_ids JSONB)
+
+--- VSL / redirect / white label de páginas ---
+Áreas: app/r/[slug], app/vsl, admin redirect
+  vsl_projects, vsl_pages, redirect_slugs, redirect_groups, redirect_slug_groups,
+  redirect_clicks, redirect_visits, vsl_sessions, vsl_events
+SQL: create_vsl_white_label_tables.sql, add_redirect_*.sql, create_redirect_visits_utm.sql,
+  add_vsl_*.sql, create_brand_assets_storage_bucket.sql
+
+--- Zaplink ---
+Áreas: zaplink APIs, formulários
+  zaplink_links, zaplink_clicks, zaplink_forms, zaplink_form_submissions,
+  zaplink_gerente_notifications, zaplink_form_clicks, zaplink_bulk_send_log,
+  zaplink_consultant_requests, zaplink_consultant_request_fulfillments,
+  zaplink_consultant_removals
+SQL: zaplink_tables.sql, zaplink_*.sql (vários)
+
+--- Academy ---
+Áreas: academy UI, progresso, VTurb
+  academy_modules, academy_lessons, academy_assets, academy_lesson_attachments,
+  academy_user_progress, academy_vturb_snapshots, academy_lesson_comments
+SQL: create_academy_tables.sql, create_academy_rls_policies.sql,
+  create_academy_storage_bucket.sql, add_academy_*.sql
+
+--- Flow builder / execuções ---
+Áreas: flows admin, executor
+  flows, flow_instances, flow_executions, flow_execution_steps, flow_question_pending
+SQL: create_flow_builder_tables.sql, create_flow_instances_table.sql,
+  add_flow_*.sql, add_env_instance_to_flow_executions.sql
+  Homolog: db/homolog/12_flow_builder_e_webhook.sql
+
+--- Maturação ---
+Áreas: maturation processor, jobs
+  master_instances, maturation_plans, maturation_jobs, maturation_steps,
+  maturation_messages
+SQL: create_maturation_system.sql, maturation_target_chat_optional_and_per_step.sql,
+  fix_maturation_*.sql
+
+--- Maturação virgem ---
+  virgin_maturation_config, virgin_maturation_logs, virgin_maturation_groups
+SQL: create_virgin_maturation_config.sql, add_virgin_maturation_to_evolution_instances.sql,
+  create_virgin_maturation_media_bucket.sql
+
+--- Anti-spam ---
+  anti_spam_configs, anti_spam_groups, anti_spam_blacklist, anti_spam_event_cursor,
+  anti_spam_actions, anti_spam_scan_jobs, anti_spam_remove_jobs
+SQL: create_anti_spam_tables.sql, add_anti_spam_*.sql
+
+--- List cleaning ---
+  list_cleaning_jobs, list_cleaning_items, list_cleaning_verification_runs,
+  admin_wpp_connect_config
+SQL: create_list_cleaning_tables.sql, create_list_cleaning_verification_runs.sql
+
+--- Agentes IA em grupos / treino / jobs ---
+Áreas: group agents, media, training
+  whatsapp_group_agents, whatsapp_group_agent_context, whatsapp_group_agent_members,
+  media_assets, training_dataset_items, training_captions (se existir),
+  ai_jobs, ai_usage_logs, ai_agents, user_ai_agents
+SQL: create_group_agents_and_ai_system.sql, create_ai_agents_table(s).sql,
+  add_flow_fields_to_group_agents.sql
+
+--- LLM providers ---
+  llm_providers
+SQL: create_llm_providers_table.sql
+
+--- Admin transferência de leads / auditoria ---
+  admin_lead_transfer_logs, admin_lead_transfer_entries
+SQL: create_admin_lead_transfer_*.sql, add_*_admin_lead_transfer*.sql,
+  add_get_resolved_transfer_stats_rpc.sql, add_get_expired_transfer_stats_rpc.sql
+
+--- Gerente — solicitações de lead ---
+  gerente_lead_requests
+SQL: create_gerente_lead_requests.sql, alter_gerente_lead_requests_*.sql, add_*_gerente_lead_requests.sql
+
+--- Auditoria nomes de grupos ---
+  audit_group_names, audit_group_names_sync_jobs
+SQL: create_audit_group_names.sql, create_audit_group_names_sync_jobs.sql
+
+--- Saídas de participantes (audit) ---
+  group_participant_exits
+SQL: create_group_participant_exits_audit.sql
+
+--- Group fetch (Evolution) ---
+  group_fetch_jobs
+SQL: create_group_fetch_jobs.sql, group_fetch_jobs.sql (evolução; preferir um só em novos ambientes)
+
+--- Busca / listas customizadas ---
+  searches (também contatos chat), custom_contact_lists (app/api/contacts/custom-lists)
+  ATENÇÃO: add_id_list_to_searches.sql referencia custom_contact_lists(id), mas não há
+  CREATE TABLE custom_contact_lists neste repositório — criar migration ou importar DDL legado.
+SQL: create_chat_contacts_searches.sql, add_id_list_to_searches.sql, add_horario_to_searches.sql
+
+--- Webhook config Evolution (habilitar eventos) ---
+  webhook_events_config
+SQL: create_webhook_events_config.sql
+
+--- Usuários / instâncias legado ---
+  whatsapp_instances (tipos em lib/supabase.ts; migration pode ser externa)
+
+--- Relatório chat (admin) ---
+RPC: chat_message_counts_by_instance
+SQL: chat_message_counts_by_instance_fn.sql
+
+--- Maturação worker ---
+RPC: claim_maturation_steps
+SQL: create_maturation_system.sql, maturation_target_chat_optional_and_per_step.sql
+
+--- Transfer logs stats ---
+RPC: get_resolved_transfer_stats, get_expired_transfer_stats
+SQL: add_get_resolved_transfer_stats_rpc.sql, add_get_expired_transfer_stats_rpc.sql
+
+--- Fila campanhas ---
+RPC: claim_due_campaign_contacts, finalizar_campaign_se_necessario
+SQL: create_campaign_queue_tables.sql, fix_rls_and_permissions.sql (grants)
+
+--- Ativações ---
+RPC: increment_mass_send_job_counts (assinatura final em add_activation_mass_send_job_groups.sql)
+
+--- Chat ---
+RPC: increment_unread_count
+SQL: create_chat_tables.sql (homolog 11 recria equivalente)
+
+--------------------------------------------------------------------------------
+3) RPCs ENCONTRADOS NO CÓDIGO (TypeScript)
+--------------------------------------------------------------------------------
+increment_mass_send_job_counts     → lib/crm/mass-send-process-core, Netlify
+increment_unread_count             → whatsapp-official-webhook-processor, evolution-webhook-processor, webhooks/evolution
+claim_maturation_steps             → lib/services/maturation/processor.ts
+chat_message_counts_by_instance    → app/api/admin/chat-operations-report
+get_resolved_transfer_stats        → app/api/admin/crm/transfer-logs/resolved-stats
+get_expired_transfer_stats         → app/api/admin/crm/transfer-logs/expired
+
+--------------------------------------------------------------------------------
+4) STORAGE (buckets em migrations)
+--------------------------------------------------------------------------------
+chat-media        → create_chat_media_storage.sql (homolog 11 inclui)
+academy-assets    → create_academy_storage_bucket.sql
+brand-assets      → create_brand_assets_storage_bucket.sql
+(virgin maturação)→ create_virgin_maturation_media_bucket.sql
+
+--------------------------------------------------------------------------------
+5) COMO OBTER A LISTA COMPLETA DE TABELAS DO CÓDIGO (manutenção)
+--------------------------------------------------------------------------------
+No diretório ZaplotoV2:
+  grep -rhoE "\.from\(['\"][a-zA-Z0-9_]+['\"]\)" --include='*.ts' --include='*.tsx' . \
+    | sed "s/.from(['\"]//;s/['\"])//" | sort -u
+Filtrar nomes que não são tabelas (ex.: testes com strings curtas).
+
+--------------------------------------------------------------------------------
+6) TABELAS USADAS NO CÓDIGO SEM CREATE EM migrations/ (lacunas conhecidas)
+--------------------------------------------------------------------------------
+custom_contact_lists   → API custom-lists; FK em add_id_list_to_searches.sql
+evolution_instance_logs → uso em código; DDL não versionado nesta pasta
+proxy_instances        → uso em código; DDL não versionado nesta pasta
+users                  → possível falso positivo em testes; validar antes de criar
+
+--------------------------------------------------------------------------------
+7) TABELAS → ARQUIVO CREATE (índice rápido)
+--------------------------------------------------------------------------------
+(Somente tabelas com CREATE TABLE em migrations/; “—” = sem CREATE no repo.)
+
+academy_*                    → create_academy_tables.sql + add_academy_lesson_*.sql
+activation_mass_send_*      → activation_mass_send_jobs.sql + add_activation_mass_send_job_groups.sql
+admin_lead_transfer_*       → create_admin_lead_transfer_*.sql
+ai_agents, user_ai_agents   → create_ai_agents_tables.sql (ou create_ai_agents_table.sql)
+anti_spam_*                 → create_anti_spam_tables.sql + add_anti_spam_*.sql
+atendimento_chat_assignments → create_atendimento_chat_assignments.sql
+audit_group_names*          → create_audit_group_names*.sql
+campaigns / campaign_groups / campaign_contacts → create_campaign_queue_tables.sql
+campaigns_media             → create_campaigns_table.sql
+chat_* (núcleo)             → create_chat_tables.sql + add_whatsapp_official_chat_support.sql + fix_chat_*
+crm_*                       → create_crm_bancas_table.sql, create_crm_leads_table.sql, ...
+evolution_webhook_*         → create_evolution_webhook_tables.sql
+flow_*                      → create_flow_builder_tables.sql, create_flow_instances_table.sql
+gerente_lead_requests       → create_gerente_lead_requests.sql
+group_fetch_jobs            → create_group_fetch_jobs.sql
+group_participant_exits     → create_group_participant_exits_audit.sql
+list_cleaning_*             → create_list_cleaning_tables.sql + verification_runs
+master_instances, maturation_* → create_maturation_system.sql
+media_assets, training_*    → create_group_agents_and_ai_system.sql
+messages, message_schedules → create_messages_table.sql, create_message_schedules_table.sql
+meta_*                      → create_meta_ads_tables.sql + add_shared_meta_integrations.sql + add_meta_campaign_consultors.sql
+password_reset_codes, system_settings → create_password_reset_and_system_settings.sql
+profiles, user_settings     → 0000_foundation + homolog 02 (ou legado externo)
+redirect_*, vsl_*           → create_vsl_white_label_tables.sql + create_redirect_visits_utm.sql
+searches                    → create_chat_contacts_searches.sql (+ colunas add_*_searches)
+user_bancas                 → create_user_bancas_table.sql + user_bancas_banca_ids_jsonb.sql
+virgin_maturation_*         → create_virgin_maturation_config.sql + add_virgin_*.sql
+webhook_events*             → create_whatsapp_official_configs.sql + create_webhook_events_config.sql
+webhook_normalization_*     → create_normalization_system.sql
+whatsapp_group_agent*     → create_group_agents_and_ai_system.sql
+whatsapp_official_configs → create_whatsapp_official_configs.sql
+whatsapp_groups             → — (homolog 07 define DDL mínimo)
+zaplink_*                   → zaplink_tables.sql + migrations zaplink_*.sql
+zaploto_*                   → create_zaploto_tenants_and_roles.sql
+
+================================================================================
+FIM — Para SQL executável completo em ordem: migrations/migrations_order.txt
+================================================================================
