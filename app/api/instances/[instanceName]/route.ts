@@ -55,6 +55,7 @@ export async function GET(
       hash: Array.isArray(data.evolution_apis) ? data.evolution_apis[0]?.api_key_global : data.evolution_apis?.api_key_global || null,
       qr_code: null,
       user_id: userId,
+      blocked_from_maturation: data.blocked_from_maturation === true,
     };
 
     return successResponse(formatted);
@@ -80,14 +81,21 @@ export async function PATCH(
     }
 
     const body = await req.json();
-    const { phone_number } = body;
+    const { phone_number, blocked_from_maturation } = body;
+    const hasPhone = 'phone_number' in body;
+    const hasBlock = 'blocked_from_maturation' in body;
+
+    if (!hasPhone && !hasBlock) {
+      return errorResponse('Informe phone_number e/ou blocked_from_maturation', 400);
+    }
+
+    const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (hasPhone) patch.phone_number = phone_number;
+    if (hasBlock) patch.blocked_from_maturation = Boolean(blocked_from_maturation);
 
     const { data, error } = await supabaseServiceRole
       .from('evolution_instances')
-      .update({ 
-        phone_number, 
-        updated_at: new Date().toISOString() 
-      })
+      .update(patch)
       .eq('instance_name', instanceName)
       .eq('is_active', true)
       .select()

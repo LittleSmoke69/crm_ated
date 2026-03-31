@@ -42,6 +42,9 @@ CREATE TABLE IF NOT EXISTS public.evolution_instances (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE public.evolution_instances
+  ADD COLUMN IF NOT EXISTS blocked_from_maturation BOOLEAN NOT NULL DEFAULT false;
+
 CREATE INDEX IF NOT EXISTS idx_evolution_instances_api_id ON public.evolution_instances (evolution_api_id);
 CREATE INDEX IF NOT EXISTS idx_evolution_instances_user_id ON public.evolution_instances (user_id);
 CREATE INDEX IF NOT EXISTS idx_evolution_instances_name ON public.evolution_instances (instance_name);

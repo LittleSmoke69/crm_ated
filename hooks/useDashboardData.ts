@@ -27,6 +27,8 @@ export interface WhatsAppInstance {
   proxy_id?: string | null;
   webhook_configured?: boolean;
   is_blocked_for_instances?: boolean; // Indica se a API Evolution está bloqueada para criação de instâncias
+  /** Quando true, a instância não pode ser usada no maturador (definido em Instâncias). */
+  blocked_from_maturation?: boolean;
   proxy?: {
     id: string;
     name: string;

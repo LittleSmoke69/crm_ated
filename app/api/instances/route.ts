@@ -154,6 +154,7 @@ export async function GET(req: NextRequest) {
           current_day: inst.current_day ?? null,
           is_locked: inst.is_locked === true,
           is_blocked_for_instances: isBlocked, // Indica se a API está bloqueada para criação de instâncias
+          blocked_from_maturation: inst.blocked_from_maturation === true,
           proxy: proxy ? {
             id: proxy.id,
             name: proxy.name,

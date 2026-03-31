@@ -7,7 +7,6 @@ import QRCodeModal from '@/components/QRCodeModal';
 import Pagination from '@/components/Admin/Pagination';
 import { useDashboardData, WhatsAppInstance } from '@/hooks/useDashboardData';
 import {
-  Copy,
   Trash2,
   RefreshCw,
   Link as LinkIcon,
@@ -27,6 +26,7 @@ import {
   Phone,
   Loader2,
   UserPlus,
+  Ban,
 } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import { supabase } from '@/lib/supabase';
@@ -142,6 +142,8 @@ const InstancesPage = () => {
   const [phoneValue, setPhoneValue] = useState('');
   const [selectedInstanceForPhone, setSelectedInstanceForPhone] = useState<WhatsAppInstance | null>(null);
   const [isSavingPhone, setIsSavingPhone] = useState(false);
+  /** `instance_name` enquanto PATCH de blocked_from_maturation está em voo */
+  const [maturationBlockSaving, setMaturationBlockSaving] = useState<string | null>(null);
   
   // Função helper para verificar se o modal de extrair grupos já foi mostrado para uma instância
   const hasShownExtractGroupsModal = (instanceName: string): boolean => {
@@ -177,6 +179,7 @@ const InstancesPage = () => {
   
   // Paginação e filtro de instâncias
   const [instanceFilter, setInstanceFilter] = useState<'todas' | 'connected' | 'disconnected'>('todas');
+  const [instanceSearchQuery, setInstanceSearchQuery] = useState('');
   const [instanceCurrentPage, setInstanceCurrentPage] = useState(1);
   const [instanceItemsPerPage] = useState(6);
   const [isLoadingInstances, setIsLoadingInstances] = useState(true);
@@ -584,6 +587,36 @@ const InstancesPage = () => {
     setSelectedInstanceForPhone(inst);
     setPhoneValue(inst.number || '');
     setIsPhoneModalOpen(true);
+  };
+
+  const handleToggleBlockedFromMaturation = async (inst: WhatsAppInstance) => {
+    if (!userId || !inst.instance_name) return;
+    const next = !(inst.blocked_from_maturation === true);
+    setMaturationBlockSaving(inst.instance_name);
+    try {
+      const response = await fetch(`/api/instances/${encodeURIComponent(inst.instance_name)}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-Id': userId,
+        },
+        body: JSON.stringify({ blocked_from_maturation: next }),
+      });
+      const data = await response.json();
+      if (response.ok && data.success) {
+        showToast(
+          next ? 'Esta instância não será usada no maturador.' : 'Instância liberada para o maturador.',
+          'success'
+        );
+        await loadInitialData();
+      } else {
+        showToast(data.error || 'Erro ao atualizar bloqueio do maturador', 'error');
+      }
+    } catch {
+      showToast('Erro ao atualizar bloqueio do maturador', 'error');
+    } finally {
+      setMaturationBlockSaving(null);
+    }
   };
 
   const handleSavePhone = async () => {
@@ -1049,12 +1082,6 @@ const InstancesPage = () => {
     window.location.href = '/login';
   };
 
-  const copyApiKey = (hash: string) => {
-    navigator.clipboard.writeText(hash);
-    showToast('API Key copiada!', 'success');
-  };
-
-
   // Lógica de filtro e paginação de instâncias
   const getFilteredInstances = () => {
     let filtered = instances;
@@ -1074,7 +1101,26 @@ const InstancesPage = () => {
       });
     }
     // Se instanceFilter === 'todas', não filtra nada
-    
+
+    const qRaw = instanceSearchQuery.trim();
+    if (qRaw) {
+      const q = qRaw.toLowerCase();
+      const qDigits = qRaw.replace(/\D/g, '');
+      filtered = filtered.filter((inst) => {
+        const name = (inst.instance_name || '').toLowerCase();
+        if (name.includes(q)) return true;
+        const numStr = String(inst.number ?? '').trim();
+        if (!numStr) return false;
+        const numLower = numStr.toLowerCase();
+        if (numLower.includes(q)) return true;
+        if (qDigits.length > 0) {
+          const numDigits = numStr.replace(/\D/g, '');
+          if (numDigits.includes(qDigits)) return true;
+        }
+        return false;
+      });
+    }
+
     // Ordena: instâncias mestres primeiro, depois as demais
     filtered.sort((a, b) => {
       const aIsMaster = (a as any).is_master === true;
@@ -1094,10 +1140,10 @@ const InstancesPage = () => {
   const endInstanceIndex = startInstanceIndex + instanceItemsPerPage;
   const paginatedInstances = filteredInstances.slice(startInstanceIndex, endInstanceIndex);
 
-  // Resetar página quando o filtro mudar
+  // Resetar página quando o filtro ou a busca mudar
   useEffect(() => {
     setInstanceCurrentPage(1);
-  }, [instanceFilter]);
+  }, [instanceFilter, instanceSearchQuery]);
 
   // Verifica se há instância mestre conectada
   const hasMasterInstanceConnected = instances.some(
@@ -1268,16 +1314,43 @@ const InstancesPage = () => {
                     }).length})
                   </button>
                 </div>
+
+                <div className="relative mb-4">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-[#888] pointer-events-none" />
+                  <input
+                    type="search"
+                    value={instanceSearchQuery}
+                    onChange={(e) => setInstanceSearchQuery(e.target.value)}
+                    placeholder="Buscar por nome ou telefone…"
+                    className="w-full pl-10 pr-10 py-2.5 rounded-lg border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] text-gray-900 dark:text-white text-sm placeholder:text-gray-400 dark:placeholder:text-[#666] focus:outline-none focus:ring-2 focus:ring-[#8CD955]/50 focus:border-[#8CD955]"
+                    aria-label="Buscar instâncias por nome ou telefone"
+                  />
+                  {instanceSearchQuery.trim() !== '' && (
+                    <button
+                      type="button"
+                      onClick={() => setInstanceSearchQuery('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-md text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-[#404040]"
+                      aria-label="Limpar busca"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {filteredInstances.length === 0 ? (
                     <div className="col-span-full">
-                      <p className="text-sm text-gray-500 dark:text-[#888] text-center py-4">Nenhuma instância encontrada com o filtro selecionado</p>
+                      <p className="text-sm text-gray-500 dark:text-[#888] text-center py-4">
+                        {instanceSearchQuery.trim()
+                          ? 'Nenhuma instância corresponde à busca ou ao filtro selecionado.'
+                          : 'Nenhuma instância encontrada com o filtro selecionado.'}
+                      </p>
                     </div>
                   ) : (
                     <>
                       {paginatedInstances.map(inst => {
                         const connected = inst.status === 'connected' || inst.status === 'ok';
+                        const blockedFromMaturation = inst.blocked_from_maturation === true;
                         // Verifica se a instância está bloqueada (API Evolution bloqueada para criação de instâncias)
                         const isBlocked = !!inst.is_blocked_for_instances;
                         
@@ -1365,18 +1438,18 @@ const InstancesPage = () => {
                                       BLOQUEADO
                                     </span>
                                   )}
+                                  {blockedFromMaturation && (
+                                    <span
+                                      className="px-2 py-1 rounded text-xs font-medium bg-violet-100 dark:bg-violet-900/40 text-violet-800 dark:text-violet-300 flex items-center gap-1 flex-shrink-0"
+                                      title="Esta instância não entra no maturador (disparos e demais usos continuam normais)."
+                                    >
+                                      <Ban className="w-3 h-3" />
+                                      Sem maturador
+                                    </span>
+                                  )}
                                 </div>
                               </div>
                               <div className="flex gap-1 flex-shrink-0 ml-2">
-                                {inst.hash && (
-                                  <button
-                                    onClick={() => copyApiKey(inst.hash!)}
-                                    className="p-2 hover:bg-gray-100 dark:hover:bg-[#404040] rounded-lg transition text-gray-400 dark:text-[#888] hover:text-gray-600 dark:hover:text-white"
-                                    title="Copiar API Key"
-                                  >
-                                    <Copy className="w-4 h-4" />
-                                  </button>
-                                )}
                                 <button
                                   onClick={() => handleDeleteInstance(inst)}
                                   className="p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition text-gray-400 dark:text-[#888] hover:text-red-600 dark:hover:text-red-400"
@@ -1386,11 +1459,6 @@ const InstancesPage = () => {
                                 </button>
                               </div>
                             </div>
-                            {inst.hash && (
-                              <div className="mb-4 p-2 bg-gray-50 dark:bg-[#404040] border border-gray-100 dark:border-[#555] rounded-lg text-[10px] font-mono break-all text-gray-400 dark:text-[#aaa] flex items-center justify-center">
-                                {inst.hash}
-                              </div>
-                            )}
                             <div className="flex gap-2 mt-auto">
                               {!connected && (
                                 <button
@@ -1421,6 +1489,28 @@ const InstancesPage = () => {
                                 <span className="hidden sm:inline">{checkingInstance === inst.instance_name ? '...' : 'Verificar'}</span>
                               </button>
                             </div>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleBlockedFromMaturation(inst)}
+                              disabled={maturationBlockSaving === inst.instance_name}
+                              className={`w-full h-10 px-3 mt-2 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-2 border ${
+                                blockedFromMaturation
+                                  ? 'bg-violet-100 dark:bg-violet-900/35 text-violet-900 dark:text-violet-200 border-violet-300 dark:border-violet-700 hover:bg-violet-200/80 dark:hover:bg-violet-900/50'
+                                  : 'bg-white dark:bg-[#2a2a2a] text-slate-700 dark:text-slate-200 border-slate-200 dark:border-[#555] hover:bg-slate-50 dark:hover:bg-[#404040]'
+                              } disabled:opacity-50`}
+                              title={
+                                blockedFromMaturation
+                                  ? 'Clique para voltar a permitir esta instância no maturador'
+                                  : 'Impede uso desta instância no maturador (campanhas e disparos não mudam)'
+                              }
+                            >
+                              {maturationBlockSaving === inst.instance_name ? (
+                                <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                              ) : (
+                                <Ban className="w-4 h-4 shrink-0" />
+                              )}
+                              {blockedFromMaturation ? 'Liberar no maturador' : 'Bloquear no maturador'}
+                            </button>
                             {isGerente && inst.id && (() => {
                               const assignment = atendimentoAssignmentByInstanceId[inst.id];
                               const hasConsultor = (assignment?.consultorIds?.length ?? 0) > 0;

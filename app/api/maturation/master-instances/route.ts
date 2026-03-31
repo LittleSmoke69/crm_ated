@@ -39,6 +39,7 @@ export async function GET(req: NextRequest) {
           is_master,
           is_active,
           phone_number,
+          blocked_from_maturation,
           evolution_apis ( is_blocked_for_instances )
         `)
         .eq('is_active', true)
@@ -91,8 +92,9 @@ export async function GET(req: NextRequest) {
       const isMaster = !!ei.is_master;
       const connected = isConnectedStatus(status);
       const hasPhoneNumber = !!(ei.phone_number && String(ei.phone_number).trim());
-      // Só usar no maturador: conectado, telefone configurado e não bloqueado por outro job (is_locked no pool)
-      const available = connected && hasPhoneNumber && !is_locked;
+      const blockedFromMaturation = ei.blocked_from_maturation === true;
+      // Só usar no maturador: conectado, telefone, não bloqueada pelo usuário e não bloqueada por outro job
+      const available = connected && hasPhoneNumber && !is_locked && !blockedFromMaturation;
       return {
         id: inMaturador ? (masterRows?.find((r: any) => r.evolution_instance_id === ei.id)?.id ?? null) : null,
         evolution_instance_id: ei.id,
@@ -103,6 +105,7 @@ export async function GET(req: NextRequest) {
         is_locked,
         available,
         has_phone_number: hasPhoneNumber,
+        blocked_from_maturation: blockedFromMaturation,
         source: inMaturador ? 'master_instances' : 'evolution_instances',
       };
     });

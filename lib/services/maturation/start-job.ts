@@ -58,6 +58,18 @@ async function getVirginMessagesAsSteps(supabase: SupabaseClient): Promise<Array
   });
 }
 
+/** IDs de evolution_instances que existem e não estão bloqueadas para o maturador. */
+async function evolutionIdsAllowedForMaturation(supabase: SupabaseClient, ids: string[]): Promise<string[]> {
+  if (!ids.length) return [];
+  const { data, error } = await supabase
+    .from('evolution_instances')
+    .select('id')
+    .in('id', ids)
+    .eq('blocked_from_maturation', false);
+  if (error || !data) return [];
+  return data.map((r) => r.id);
+}
+
 async function selectAvailableMasterInstance(
   supabase: SupabaseClient,
   preferredEvolutionInstanceIds?: string[]
@@ -78,7 +90,8 @@ async function selectAvailableMasterInstance(
       evolution_instance_id,
       evolution_instances!inner (
         instance_name,
-        phone_number
+        phone_number,
+        blocked_from_maturation
       )
     `)
     .eq('is_active', true)
@@ -93,20 +106,23 @@ async function selectAvailableMasterInstance(
     const instance = Array.isArray(fromPool.evolution_instances)
       ? fromPool.evolution_instances[0]
       : fromPool.evolution_instances;
-    const phoneNumber = (instance as any)?.phone_number;
-    if (!phoneNumber || !String(phoneNumber).trim()) return null;
-    return {
-      id: fromPool.id,
-      evolution_instance_id: fromPool.evolution_instance_id,
-      instance_name: (instance as any).instance_name,
-      phone_number: phoneNumber,
-    };
+    const blocked = (instance as { blocked_from_maturation?: boolean })?.blocked_from_maturation === true;
+    const phoneNumber = (instance as { phone_number?: string | null; instance_name?: string })?.phone_number;
+    if (!blocked && phoneNumber && String(phoneNumber).trim()) {
+      return {
+        id: fromPool.id,
+        evolution_instance_id: fromPool.evolution_instance_id,
+        instance_name: String((instance as { instance_name?: string }).instance_name ?? ''),
+        phone_number: phoneNumber,
+      };
+    }
   }
 
   const { data: connectedMasters, error: evError } = await supabase
     .from('evolution_instances')
     .select('id, instance_name, phone_number')
     .eq('is_active', true)
+    .eq('blocked_from_maturation', false)
     .in('status', ['ok', 'open', 'connected'])
     .not('phone_number', 'is', null)
     .limit(50);
@@ -356,6 +372,20 @@ export async function runMaturationStart(supabase: SupabaseClient, params: Start
     (typeof target_chat_id === 'string' && target_chat_id.trim()) || plan.default_target_chat_id || null;
 
   const preferredList = preferred_evolution_instance_ids ?? [];
+  const preferredFiltered =
+    preferredList.length > 0 ? await evolutionIdsAllowedForMaturation(supabase, preferredList) : [];
+
+  if (preferredList.length > 0 && preferredFiltered.length === 0) {
+    return {
+      success: false,
+      error:
+        'As instâncias selecionadas não estão disponíveis no maturador (bloqueadas ou inexistentes). Ajuste em Instâncias ou escolha outras.',
+      statusCode: 400,
+    };
+  }
+
+  const preferredForSelect = preferredFiltered.length > 0 ? preferredFiltered : undefined;
+
   const multipleRequested = preferredList.length > 1;
   const jobTargetTrimmed = finalTargetChatId && String(finalTargetChatId).trim();
   const stepsHaveResolvedTargets = steps.every((s) => {
@@ -406,7 +436,7 @@ export async function runMaturationStart(supabase: SupabaseClient, params: Start
     }> = [];
 
     while (true) {
-      const masterInstance = await selectAvailableMasterInstance(supabase, preferred_evolution_instance_ids);
+      const masterInstance = await selectAvailableMasterInstance(supabase, preferredForSelect);
       if (!masterInstance) break;
 
       const { data: job, error: jobError } = await supabase
@@ -573,7 +603,7 @@ export async function runMaturationStart(supabase: SupabaseClient, params: Start
   }
 
   // Caso de instância única
-  const masterInstance = await selectAvailableMasterInstance(supabase, preferred_evolution_instance_ids);
+  const masterInstance = await selectAvailableMasterInstance(supabase, preferredForSelect);
   if (!masterInstance) {
     return { success: false, error: 'Nenhuma instância mestre disponível.', statusCode: 503 };
   }

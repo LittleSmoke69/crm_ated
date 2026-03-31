@@ -92,6 +92,7 @@ interface MasterInstance {
   is_master?: boolean;
   is_locked: boolean;
   available: boolean;
+  blocked_from_maturation?: boolean;
 }
 
 type JobsDisplayItem =
@@ -511,7 +512,25 @@ export default function MaturadorPage() {
 
       setJobs(jobsData.jobs || []);
       setPlans(plansData.plans || []);
-      setMasterInstances(instancesData.instances || []);
+      const list: MasterInstance[] = instancesData.instances || [];
+      setMasterInstances(list);
+      setSelectedInstanceIds((prev) => {
+        const next = new Set<string>();
+        for (const id of prev) {
+          const inst = list.find((i) => i.evolution_instance_id === id);
+          const hasPhone = !!(inst?.phone_number && String(inst.phone_number).trim());
+          if (
+            inst &&
+            hasPhone &&
+            !inst.is_locked &&
+            !inst.blocked_from_maturation &&
+            isInstanceOk(inst.status)
+          ) {
+            next.add(id);
+          }
+        }
+        return next;
+      });
       setVirginMessagesCount(typeof virginCountData?.count === 'number' ? virginCountData.count : 0);
     } catch (error) {
       console.error('Erro ao carregar dados:', error);
@@ -949,7 +968,8 @@ export default function MaturadorPage() {
   }
 
   function maturationSortRank(inst: MasterInstance): number {
-    if (!instanceHasPhone(inst)) return 2;
+    if (!instanceHasPhone(inst)) return 3;
+    if (inst.blocked_from_maturation) return 2;
     if (isInstanceOk(inst.status) && !inst.is_locked) return 0;
     return 1;
   }
@@ -963,7 +983,14 @@ export default function MaturadorPage() {
   function toggleInstanceSelection(evolutionInstanceId: string) {
     if (!evolutionInstanceId) return;
     const inst = masterInstances.find((i) => i.evolution_instance_id === evolutionInstanceId);
-    if (!inst || !instanceHasPhone(inst) || inst.is_locked || !isInstanceOk(inst.status)) return;
+    if (
+      !inst ||
+      !instanceHasPhone(inst) ||
+      inst.is_locked ||
+      inst.blocked_from_maturation ||
+      !isInstanceOk(inst.status)
+    )
+      return;
     setSelectedInstanceIds((prev) => {
       const next = new Set(prev);
       if (next.has(evolutionInstanceId)) next.delete(evolutionInstanceId);
@@ -1045,16 +1072,19 @@ export default function MaturadorPage() {
                       const isOk = isInstanceOk(instance.status);
                       const isMaster = instance.is_master === true;
                       const hasPhone = instanceHasPhone(instance);
-                      const canSelect = isOk && !instance.is_locked && hasPhone;
+                      const blockedMat = instance.blocked_from_maturation === true;
+                      const canSelect = isOk && !instance.is_locked && hasPhone && !blockedMat;
                       const evId = instance.evolution_instance_id ?? '';
                       const isSelected = evId && selectedInstanceIds.has(evId);
                       const cardClass = !hasPhone
                         ? 'bg-red-50/90 dark:bg-red-950/30 border-red-300 dark:border-red-800/80'
-                        : isOk
-                          ? instance.is_locked
-                            ? 'bg-amber-50/70 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800/60'
-                            : 'bg-emerald-50/80 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800'
-                          : 'bg-slate-50 dark:bg-[#333] border-slate-200 dark:border-[#404040]';
+                        : blockedMat && hasPhone
+                          ? 'bg-violet-50/80 dark:bg-violet-950/25 border-violet-200 dark:border-violet-800/60'
+                          : isOk
+                            ? instance.is_locked
+                              ? 'bg-amber-50/70 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800/60'
+                              : 'bg-emerald-50/80 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800'
+                            : 'bg-slate-50 dark:bg-[#333] border-slate-200 dark:border-[#404040]';
                       return (
                         <div
                           key={instance.instance_name + evId}
@@ -1095,6 +1125,11 @@ export default function MaturadorPage() {
                               {!hasPhone && (
                                 <p className="text-xs font-medium text-red-600 dark:text-red-400 mt-1.5">
                                   Sem telefone configurado — não pode ser usada no maturador. Configure o número da instância em Admin.
+                                </p>
+                              )}
+                              {hasPhone && blockedMat && (
+                                <p className="text-xs font-medium text-violet-700 dark:text-violet-300 mt-1.5">
+                                  Bloqueada para o maturador em Instâncias — não entra na seleção até você desbloquear.
                                 </p>
                               )}
                               <p className="text-xs text-slate-500 dark:text-[#888] mt-0.5">
