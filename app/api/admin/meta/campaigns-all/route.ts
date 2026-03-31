@@ -17,6 +17,83 @@ import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { buildCampaignConsultorSummary } from '@/lib/services/meta-campaign-consultors';
 
+/** Alinhado ao GET /api/admin/meta/overview: dia único sem linhas em meta_insights_daily usa o último dia com dados até date_to. */
+async function resolveInsightsForMetrics(args: {
+  bancaIdsForMetrics: string[];
+  campaignIdsForMetrics: string[];
+  dateFrom: string;
+  dateTo: string;
+  /** Filtro explícito da UI ou banca única na página. */
+  scopeBancaId: string | null;
+}): Promise<{
+  rows: Array<{
+    banca_id: string;
+    campaign_id: string;
+    reach: unknown;
+    impressions: unknown;
+    clicks: unknown;
+    leads: unknown;
+    spend: unknown;
+  }>;
+  appliedDateFrom: string;
+  appliedDateTo: string;
+}> {
+  const { bancaIdsForMetrics, campaignIdsForMetrics, dateFrom, dateTo, scopeBancaId } = args;
+
+  let appliedDateFrom = dateFrom;
+  let appliedDateTo = dateTo;
+
+  async function fetchInsights(dFrom: string, dTo: string) {
+    let iq = supabaseServiceRole
+      .from('meta_insights_daily')
+      .select('banca_id,campaign_id,reach,impressions,clicks,leads,spend')
+      .in('banca_id', bancaIdsForMetrics)
+      .in('campaign_id', campaignIdsForMetrics)
+      .gte('date', dFrom)
+      .lte('date', dTo);
+    const { data, error } = await iq;
+    return { data: data ?? [], error };
+  }
+
+  let { data: insightsRows, error: insightsErr } = await fetchInsights(dateFrom, dateTo);
+  if (insightsErr) {
+    throw new Error(insightsErr.message);
+  }
+
+  const singleDay = dateFrom === dateTo;
+  const canFallback = singleDay && scopeBancaId && (insightsRows?.length ?? 0) === 0;
+
+  if (canFallback) {
+    let latestDateQuery = supabaseServiceRole
+      .from('meta_insights_daily')
+      .select('date')
+      .lte('date', dateTo)
+      .order('date', { ascending: false })
+      .limit(1)
+      .eq('banca_id', scopeBancaId);
+    const latestDateRes = await latestDateQuery.maybeSingle();
+    const fallbackDate =
+      !latestDateRes.error && latestDateRes.data?.date ? String(latestDateRes.data.date) : null;
+
+    if (fallbackDate && fallbackDate !== dateFrom) {
+      const fb = await fetchInsights(fallbackDate, fallbackDate);
+      if (!fb.error && (fb.data?.length ?? 0) > 0) {
+        insightsRows = fb.data;
+        appliedDateFrom = fallbackDate;
+        appliedDateTo = fallbackDate;
+        console.log('[admin/meta/campaigns-all] fallback período sem insights no dia (métricas por campanha)', {
+          requested_date: dateFrom,
+          applied_date: fallbackDate,
+          banca_id: scopeBancaId,
+          insights_rows: insightsRows.length,
+        });
+      }
+    }
+  }
+
+  return { rows: insightsRows ?? [], appliedDateFrom, appliedDateTo };
+}
+
 export async function GET(req: NextRequest) {
   try {
     await requireAdmin(req);
@@ -77,7 +154,39 @@ export async function GET(req: NextRequest) {
       { reach: number; impressions: number; clicks: number; leads: number; spend: number }
     >();
 
-    if ((campaigns ?? []).length > 0) {
+    let consultorDateFrom = dateFrom || null;
+    let consultorDateTo = dateTo || null;
+
+    if ((campaigns ?? []).length > 0 && dateFrom && dateTo) {
+      const bancaIdsForMetrics = Array.from(new Set((campaigns ?? []).map((c) => String(c.banca_id))));
+      const campaignIdsForMetrics = Array.from(new Set((campaigns ?? []).map((c) => String(c.campaign_id))));
+      const scopeBancaId =
+        bancaId || (bancaIdsForMetrics.length === 1 ? bancaIdsForMetrics[0] : null);
+      try {
+        const { rows: insightsRows, appliedDateFrom, appliedDateTo } = await resolveInsightsForMetrics({
+          bancaIdsForMetrics,
+          campaignIdsForMetrics,
+          dateFrom,
+          dateTo,
+          scopeBancaId,
+        });
+        consultorDateFrom = appliedDateFrom;
+        consultorDateTo = appliedDateTo;
+        for (const r of insightsRows) {
+          const key = `${String(r.banca_id)}:${String(r.campaign_id)}`;
+          const cur = metricByKey.get(key) ?? { reach: 0, impressions: 0, clicks: 0, leads: 0, spend: 0 };
+          cur.reach += Number(r.reach) || 0;
+          cur.impressions += Number(r.impressions) || 0;
+          cur.clicks += Number(r.clicks) || 0;
+          cur.leads += Number(r.leads) || 0;
+          cur.spend += Number(r.spend) || 0;
+          metricByKey.set(key, cur);
+        }
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return errorResponse(`Erro ao buscar métricas de campanhas: ${msg}`, 500);
+      }
+    } else if ((campaigns ?? []).length > 0) {
       const bancaIdsForMetrics = Array.from(new Set((campaigns ?? []).map((c) => String(c.banca_id))));
       const campaignIdsForMetrics = Array.from(new Set((campaigns ?? []).map((c) => String(c.campaign_id))));
       let iq = supabaseServiceRole
@@ -113,8 +222,8 @@ export async function GET(req: NextRequest) {
       const summary = await buildCampaignConsultorSummary(
         bancaKey,
         campaignIds,
-        dateFrom || null,
-        dateTo || null
+        consultorDateFrom,
+        consultorDateTo
       );
       consultorSummaryByBancaCampaign.set(bancaKey, summary);
     }
@@ -171,6 +280,8 @@ export async function GET(req: NextRequest) {
         campaign_kind: campaignKind || null,
         date_from: dateFrom || null,
         date_to: dateTo || null,
+        metrics_date_from: consultorDateFrom,
+        metrics_date_to: consultorDateTo,
       },
     });
   } catch (err: any) {

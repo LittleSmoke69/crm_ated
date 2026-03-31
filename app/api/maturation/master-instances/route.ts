@@ -77,18 +77,41 @@ export async function GET(req: NextRequest) {
     // Busca master_instances para is_locked e available (só para as que estão no maturador)
     const { data: masterRows } = await supabaseServiceRole
       .from('master_instances')
-      .select('id, evolution_instance_id, is_active, is_locked')
+      .select('id, evolution_instance_id, is_active, is_locked, locked_job_id')
       .eq('is_active', true);
 
-    const lockByEvolutionId = new Map<string, { is_locked: boolean }>();
+    const lockByEvolutionId = new Map<string, { is_locked: boolean; locked_job_id: string | null }>();
     (masterRows || []).forEach((row: any) => {
-      lockByEvolutionId.set(row.evolution_instance_id, { is_locked: !!row.is_locked });
+      lockByEvolutionId.set(row.evolution_instance_id, {
+        is_locked: !!row.is_locked,
+        locked_job_id: row.locked_job_id ?? null,
+      });
     });
+
+    const lockedJobIds = Array.from(
+      new Set(
+        (masterRows || [])
+          .map((row: any) => row.locked_job_id)
+          .filter((id: unknown): id is string => typeof id === 'string' && id.length > 0)
+      )
+    );
+    const campaignByJobId = new Map<string, string | null>();
+    if (lockedJobIds.length > 0) {
+      const { data: lockedJobs } = await supabaseServiceRole
+        .from('maturation_jobs')
+        .select('id, campaign_id, status')
+        .in('id', lockedJobIds);
+      for (const job of lockedJobs || []) {
+        const active = ['queued', 'running', 'paused'].includes(job.status);
+        campaignByJobId.set(job.id, active ? (job.campaign_id ?? null) : null);
+      }
+    }
 
     const instances = (allConnected || []).map((ei: any) => {
       const status = ei.status || null;
       const inMaturador = lockByEvolutionId.has(ei.id);
-      const { is_locked = false } = lockByEvolutionId.get(ei.id) || {};
+      const { is_locked = false, locked_job_id = null } = lockByEvolutionId.get(ei.id) || {};
+      const campaignId = locked_job_id ? campaignByJobId.get(locked_job_id) ?? null : null;
       const isMaster = !!ei.is_master;
       const connected = isConnectedStatus(status);
       const hasPhoneNumber = !!(ei.phone_number && String(ei.phone_number).trim());
@@ -106,6 +129,8 @@ export async function GET(req: NextRequest) {
         available,
         has_phone_number: hasPhoneNumber,
         blocked_from_maturation: blockedFromMaturation,
+        campaign_id: campaignId,
+        campaign_status_label: campaignId ? 'em_campanha' : 'sem_campanha',
         source: inMaturador ? 'master_instances' : 'evolution_instances',
       };
     });

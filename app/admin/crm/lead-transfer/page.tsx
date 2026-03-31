@@ -430,8 +430,6 @@ export default function AdminLeadTransferPage() {
   const [leadsPageSize, setLeadsPageSize] = useState<number>(10);
   const [customPageSizeInput, setCustomPageSizeInput] = useState<string>('100');
   const [leadsPage, setLeadsPage] = useState(1);
-  /** Mostrar apenas leads listados para redistribuição que ainda não foram transferidos (default true). */
-  const [showOnlyNotTransferred, setShowOnlyNotTransferred] = useState<boolean>(true);
   const [transferring, setTransferring] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [transferType, setTransferType] = useState<'TF' | 'TF1' | 'TF2' | 'TF3'>('TF');
@@ -1977,11 +1975,9 @@ export default function AdminLeadTransferPage() {
     });
     return Array.from(set).sort((a, b) => getTemperatureLabel(a).localeCompare(getTemperatureLabel(b)));
   }, [sortedLeads]);
-  const filteredLeads = React.useMemo(() => {
+  /** Filtros de UI exceto “Só não transferidos” (esse é aplicado depois, com bypass se esvaziar a lista). */
+  const filteredLeadsBase = React.useMemo(() => {
     let list = sortedLeads;
-    if (showOnlyNotTransferred) {
-      list = list.filter((l) => (l as Record<string, unknown>)._transferred !== true);
-    }
     if (leadSearchLower) {
       list = list.filter((lead) => {
         const name = String((lead.name ?? lead.full_name ?? lead.email ?? '')).toLowerCase();
@@ -2072,7 +2068,17 @@ export default function AdminLeadTransferPage() {
       });
     }
     return list;
-  }, [sortedLeads, showOnlyNotTransferred, leadSearchLower, leadFilterStatus, leadFilterTemperature, balanceFilter, leadFilterSaldoMin, leadFilterSaldoMax, leadFilterAposta, leadFilterApostaMin, leadFilterApostaMax, leadFilterTotalDepositado, leadFilterTotalDepositadoMin, leadFilterTotalDepositadoMax, leadFilterSaqueDisponivel, leadFilterSaqueDisponivelMin, leadFilterSaqueDisponivelMax, leadFilterTotalPremio, leadFilterTotalPremioMin, leadFilterTotalPremioMax]);
+  }, [sortedLeads, leadSearchLower, leadFilterStatus, leadFilterTemperature, balanceFilter, leadFilterSaldoMin, leadFilterSaldoMax, leadFilterAposta, leadFilterApostaMin, leadFilterApostaMax, leadFilterTotalDepositado, leadFilterTotalDepositadoMin, leadFilterTotalDepositadoMax, leadFilterSaqueDisponivel, leadFilterSaqueDisponivelMin, leadFilterSaqueDisponivelMax, leadFilterTotalPremio, leadFilterTotalPremioMin, leadFilterTotalPremioMax]);
+
+  /**
+   * “Todos os leads”: exibe todos os retornados pela busca (incl. já transferidos no CRM após a checagem).
+   * Presets 7d, 15d, “Outro”, etc.: apenas leads com _transferred !== true (não transferidos no CRM).
+   */
+  const filteredLeads = React.useMemo(() => {
+    const base = filteredLeadsBase;
+    if (daysInactivePreset === 'all') return base;
+    return base.filter((l) => (l as Record<string, unknown>)._transferred !== true);
+  }, [filteredLeadsBase, daysInactivePreset]);
   /** Soma dos saldos dos leads já filtrados (usado no passo 3 para refletir filtros sem novo request). */
   const totalFilteredBalanceSum = React.useMemo(
     () => filteredLeads.reduce((acc, l) => acc + (parseFloat(String(l.balance ?? 0)) || 0), 0),
@@ -2088,7 +2094,9 @@ export default function AdminLeadTransferPage() {
       ? Math.max(1, Math.min(MAX_CUSTOM_PAGE_SIZE, parseInt(customPageSizeInput, 10) || 10))
       : leadsPageSize;
   const effectivePageSize =
-    rawPageSize <= 0 ? totalToShow : Math.min(rawPageSize, totalToShow || 1);
+    rawPageSize <= 0
+      ? Math.max(1, totalToShow)
+      : Math.min(rawPageSize, Math.max(1, totalToShow));
   const totalPages =
     effectivePageSize > 0 ? Math.max(1, Math.ceil(totalToShow / effectivePageSize)) : 1;
   const currentPage = Math.min(Math.max(1, leadsPage), totalPages);
@@ -7566,6 +7574,16 @@ export default function AdminLeadTransferPage() {
                           Carregando detalhes em segundo plano… (saldo, totais etc. serão atualizados em breve)
                         </p>
                       )}
+                      {daysInactivePreset === 'all' && (
+                        <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
+                          <strong className="font-medium text-gray-800 dark:text-gray-200">Todos os leads</strong>: lista completa retornada pela busca; a coluna Transferido indica o status no CRM após a verificação.
+                        </p>
+                      )}
+                      {daysInactivePreset !== 'all' && (
+                        <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
+                          Período com dias de inatividade: apenas leads <strong className="font-medium text-gray-800 dark:text-gray-200">não transferidos</strong> no CRM entram nesta lista.
+                        </p>
+                      )}
                       <div className="overflow-x-auto border border-gray-200 dark:border-[#404040] rounded-lg mt-3 max-h-[320px] overflow-y-auto">
                         <table className="w-full text-sm min-w-[520px]">
                           <thead className="bg-gray-50 dark:bg-[#333] border-b border-gray-200 dark:border-[#404040] sticky top-0 z-10">
@@ -7638,6 +7656,16 @@ export default function AdminLeadTransferPage() {
               )}
               {currentStep >= 4 && filteredLeads.length > 0 && (
                 <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl border border-gray-200 dark:border-[#404040] p-5 shadow-sm ring-1 ring-gray-100 dark:ring-transparent">
+                  {daysInactivePreset === 'all' && (
+                    <p className="text-xs text-gray-600 dark:text-gray-400 mb-3">
+                      <strong className="font-medium text-gray-800 dark:text-gray-200">Todos os leads</strong>: lista completa; confira a coluna <strong className="font-medium text-gray-800 dark:text-gray-200">Transferido</strong> antes de confirmar o repasse.
+                    </p>
+                  )}
+                  {daysInactivePreset !== 'all' && (
+                    <p className="text-xs text-gray-600 dark:text-gray-400 mb-3">
+                      Busca por período de inatividade: somente leads ainda <strong className="font-medium text-gray-800 dark:text-gray-200">não transferidos</strong> no CRM (coluna Transferido = Não).
+                    </p>
+                  )}
                   {/* Consultor destino: exibir acima da tabela quando no passo 5 (Destino) — modal + botão Revisar ao lado */}
                   {currentStep >= 5 && (
                     <div className="mb-5 pb-5 border-b border-gray-200 dark:border-[#404040]">
@@ -7716,10 +7744,6 @@ export default function AdminLeadTransferPage() {
                           <option key={t} value={t}>{getTemperatureLabel(t)}</option>
                         ))}
                       </select>
-                      <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer whitespace-nowrap">
-                        <input type="checkbox" checked={showOnlyNotTransferred} onChange={(e) => setShowOnlyNotTransferred(e.target.checked)} className="rounded border-gray-300 dark:border-[#555] text-[#8CD955] focus:ring-[#8CD955]" />
-                        Só não transferidos
-                      </label>
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">Total na Carteira:</span>
                         <select value={balanceFilter} onChange={(e) => setBalanceFilter(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[120px]">

@@ -1,8 +1,7 @@
 /**
  * API Route: /api/maturation/jobs
  *
- * GET: Lista jobs do usuário + jobs ativos que bloqueiam alguma instância (outro dono),
- *      para o maturador mostrar a campanha em uso com `readonly_controls: true`.
+ * GET: Lista apenas jobs do usuário autenticado.
  * POST: Cria novo job (chama Netlify Function maturation-start)
  */
 
@@ -24,12 +23,6 @@ const JOB_DETAIL_SELECT = `
     )
   )
 `;
-
-function jobMatchesStatusFilter(jobStatus: string, filter: string | null): boolean {
-  if (!filter) return true;
-  if (filter === 'failed') return jobStatus === 'failed' || jobStatus === 'aborted';
-  return jobStatus === filter;
-}
 
 export async function GET(req: NextRequest) {
   try {
@@ -64,66 +57,11 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const ownedJobs = jobs || [];
-    const ownedById = new Map<string, any>();
-    for (const j of ownedJobs) ownedById.set(j.id, j);
-
-    /** Jobs que ainda seguram lock em master_instances (ex.: auto-maturador do admin na instância do usuário). */
-    const { data: lockedRows } = await supabaseServiceRole
-      .from('master_instances')
-      .select('locked_job_id')
-      .eq('is_locked', true)
-      .not('locked_job_id', 'is', null);
-
-    const lockedJobIds = [
-      ...new Set((lockedRows || []).map((r: { locked_job_id: string }) => r.locked_job_id).filter(Boolean)),
-    ];
-    const missingLockIds = lockedJobIds.filter((id) => !ownedById.has(id));
-
-    const extraById = new Map<string, any>();
-
-    async function fetchJobsByIds(ids: string[]) {
-      if (ids.length === 0) return;
-      const { data: rows, error: e2 } = await supabaseServiceRole
-        .from('maturation_jobs')
-        .select(JOB_DETAIL_SELECT)
-        .in('id', ids);
-      if (e2 || !rows) return;
-      for (const row of rows) {
-        if (!jobMatchesStatusFilter(row.status, status)) continue;
-        if (row.owner_user_id === userId) continue;
-        extraById.set(row.id, row);
-      }
-    }
-
-    await fetchJobsByIds(missingLockIds);
-
-    const campaignIds = new Set<string>();
-    for (const j of extraById.values()) {
-      if (j.campaign_id) campaignIds.add(j.campaign_id);
-    }
-    for (const cid of campaignIds) {
-      const { data: campJobs } = await supabaseServiceRole
-        .from('maturation_jobs')
-        .select(JOB_DETAIL_SELECT)
-        .eq('campaign_id', cid);
-      for (const row of campJobs || []) {
-        if (!jobMatchesStatusFilter(row.status, status)) continue;
-        if (row.owner_user_id === userId) {
-          extraById.delete(row.id);
-          continue;
-        }
-        if (!ownedById.has(row.id)) extraById.set(row.id, row);
-      }
-    }
-
-    const mergedRaw = [...ownedJobs, ...[...extraById.values()].filter((j) => !ownedById.has(j.id))];
-    mergedRaw.sort(
+    const mergedJobs = [...(jobs || [])];
+    mergedJobs.sort(
       (a: { created_at: string }, b: { created_at: string }) =>
         new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     );
-
-    const mergedJobs = mergedRaw;
 
     const runningJobIds = mergedJobs.filter((j: any) => j.status === 'running').map((j: any) => j.id);
     let nextScheduledByJob: Record<string, string> = {};
@@ -174,7 +112,6 @@ export async function GET(req: NextRequest) {
       const stepsSent = stepStatuses.filter((s) => s === 'sent').length;
       const stepsFailed = stepStatuses.filter((s) => s === 'failed').length;
       const stepsPending = stepStatuses.filter((s) => s === 'pending' || s === 'processing').length;
-      const readonly_controls = job.owner_user_id !== userId;
       return {
         id: job.id,
         campaign_id: job.campaign_id ?? null,
@@ -195,8 +132,7 @@ export async function GET(req: NextRequest) {
         ended_at: job.ended_at,
         created_at: job.created_at,
         next_scheduled_at: nextScheduledByJob[job.id] || null,
-        /** Não é dono do job: só visualização (pausar/remover bloqueados na UI e na API). */
-        readonly_controls,
+        readonly_controls: false,
       };
     });
     

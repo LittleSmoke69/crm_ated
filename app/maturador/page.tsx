@@ -93,6 +93,8 @@ interface MasterInstance {
   is_locked: boolean;
   available: boolean;
   blocked_from_maturation?: boolean;
+  campaign_id?: string | null;
+  campaign_status_label?: 'em_campanha' | 'sem_campanha';
 }
 
 type JobsDisplayItem =
@@ -1135,6 +1137,7 @@ export default function MaturadorPage() {
                               <p className="text-xs text-slate-500 dark:text-[#888] mt-0.5">
                                 {isOk ? 'OK - Conectada' : instance.status || 'Desconectada'}
                                 {instance.is_locked && hasPhone && ' · Em uso (bloqueada por outro job)'}
+                                {hasPhone && ` · ${instance.campaign_status_label === 'em_campanha' ? 'Em campanha' : 'Sem campanha'}`}
                               </p>
                             </div>
                             <button

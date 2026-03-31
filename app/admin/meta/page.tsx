@@ -151,12 +151,15 @@ export default function AdminMetaPage() {
   const [bancaPickerSearch, setBancaPickerSearch] = useState('');
   const bancaPickerRef = useRef<HTMLDivElement | null>(null);
   const overviewFilterBancaRef = useRef<HTMLDivElement | null>(null);
+  /** Evita re-disparar auto-sync da mesma combinação user+bancas no mesmo mount. */
+  const autoSyncRunKeyRef = useRef<string>('');
   const [configLoadError, setConfigLoadError] = useState<string | null>(null);
   const [config, setConfig] = useState<MetaConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [autoSyncing, setAutoSyncing] = useState(false);
   const [loadingCampaigns, setLoadingCampaigns] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; me?: any; adAccounts?: any[]; error?: string } | null>(null);
   const [syncResult, setSyncResult] = useState<{ success: boolean; campaignsCount?: number; adsetsCount?: number; insightsCount?: number; error?: string } | null>(null);
@@ -196,6 +199,25 @@ export default function AdminMetaPage() {
   const [loadingRedirectSummary, setLoadingRedirectSummary] = useState(false);
   const [redirectSummaryError, setRedirectSummaryError] = useState<string | null>(null);
 
+  /** Agregação live (mesma pilha de fallbacks do sync), todas as integrações, período = filtro da UI. */
+  const [liveAggregate, setLiveAggregate] = useState<{
+    date_from: string | null;
+    date_to: string | null;
+    totals: {
+      campaigns_with_metrics: number;
+      reach: number;
+      impressions: number;
+      clicks: number;
+      leads: number;
+      results: number;
+      spend: number;
+    };
+    campaigns: Array<Record<string, unknown>>;
+    integrations: Array<Record<string, unknown>>;
+  } | null>(null);
+  const [loadingLiveAggregate, setLoadingLiveAggregate] = useState(false);
+  const [liveAggregateError, setLiveAggregateError] = useState<string | null>(null);
+
   // Modal: criar nova integração
   const [newIntegrationOpen, setNewIntegrationOpen] = useState(false);
   const [newIntegrationSaving, setNewIntegrationSaving] = useState(false);
@@ -214,7 +236,8 @@ export default function AdminMetaPage() {
   const [allCampaignsLoading, setAllCampaignsLoading] = useState(false);
   const [allCampaignsError, setAllCampaignsError] = useState<string | null>(null);
   const [allCampaignsSearch, setAllCampaignsSearch] = useState('');
-  const [allCampaignsShowInactive, setAllCampaignsShowInactive] = useState(false);
+  // Default em "true" para mostrar também campanhas PAUSED com métricas (comum em Meta).
+  const [allCampaignsShowInactive, setAllCampaignsShowInactive] = useState(true);
   const [allCampaignsKindFilter, setAllCampaignsKindFilter] = useState<'all' | MetaCampaignKind>('all');
   const [allCampaignsPage, setAllCampaignsPage] = useState(1);
   const [campaignOwnerDraft, setCampaignOwnerDraft] = useState<Record<string, string>>({});
@@ -460,6 +483,7 @@ export default function AdminMetaPage() {
       if (adminMetaInsightsDateRange.dateTo) params.set('date_to', adminMetaInsightsDateRange.dateTo);
       const res = await fetch(`/api/admin/meta/data?${params.toString()}`, {
         headers: { 'X-User-Id': userId },
+        cache: 'no-store',
       });
       const data = await res.json();
       if (data.success && data.data) {
@@ -496,6 +520,7 @@ export default function AdminMetaPage() {
       const url = qs.toString() ? `/api/admin/meta/overview?${qs.toString()}` : '/api/admin/meta/overview';
       const res = await fetch(url, {
         headers: { 'X-User-Id': userId },
+        cache: 'no-store',
       });
       const data = await res.json();
       if (data.success && Array.isArray(data.data?.rows)) {
@@ -559,6 +584,7 @@ export default function AdminMetaPage() {
       const url = qs.toString() ? `/api/admin/meta/redirect-summary?${qs.toString()}` : '/api/admin/meta/redirect-summary';
       const res = await fetch(url, {
         headers: { 'X-User-Id': userId },
+        cache: 'no-store',
       });
       const data = await res.json();
       if (data.success && data.data?.totals && Array.isArray(data.data.projects)) {
@@ -575,6 +601,43 @@ export default function AdminMetaPage() {
     }
   }, [userId, adminMetaInsightsDateRange.dateFrom, adminMetaInsightsDateRange.dateTo]);
 
+  const loadLiveAggregate = useCallback(async () => {
+    if (!userId) return;
+    setLoadingLiveAggregate(true);
+    setLiveAggregateError(null);
+    try {
+      const params = new URLSearchParams();
+      if (adminMetaInsightsDateRange.dateFrom) params.set('date_from', adminMetaInsightsDateRange.dateFrom);
+      if (adminMetaInsightsDateRange.dateTo) params.set('date_to', adminMetaInsightsDateRange.dateTo);
+      if (overviewFilterBancaId) params.set('banca_id', overviewFilterBancaId);
+      if (selectedBancaIds.length > 0) params.set('scope_banca_ids', selectedBancaIds.join(','));
+      params.set('active_only', allCampaignsShowInactive ? '0' : '1');
+      const res = await fetch(`/api/admin/meta/live-aggregate?${params.toString()}`, {
+        headers: { 'X-User-Id': userId },
+        cache: 'no-store',
+      });
+      const data = await res.json();
+      if (data.success && data.data) {
+        setLiveAggregate(data.data);
+      } else {
+        setLiveAggregate(null);
+        setLiveAggregateError(data.error || 'Não foi possível carregar métricas em tempo real da Meta.');
+      }
+    } catch (err: unknown) {
+      setLiveAggregate(null);
+      setLiveAggregateError(err instanceof Error ? err.message : 'Erro ao carregar métricas em tempo real.');
+    } finally {
+      setLoadingLiveAggregate(false);
+    }
+  }, [
+    userId,
+    adminMetaInsightsDateRange.dateFrom,
+    adminMetaInsightsDateRange.dateTo,
+    overviewFilterBancaId,
+    selectedBancaIds,
+    allCampaignsShowInactive,
+  ]);
+
   useEffect(() => {
     if (primaryBancaId) loadSyncedData();
     else setSyncedData(null);
@@ -584,7 +647,8 @@ export default function AdminMetaPage() {
     if (!userId) return;
     void loadOverview();
     void loadRedirectSummary();
-  }, [userId, loadOverview, loadRedirectSummary]);
+    void loadLiveAggregate();
+  }, [userId, loadOverview, loadRedirectSummary, loadLiveAggregate]);
 
   // Remove da seleção IDs que deixaram de existir na visão geral (ex.: após refresh da lista)
   useEffect(() => {
@@ -715,8 +779,7 @@ export default function AdminMetaPage() {
 
   const handleSync = async () => {
     if (!userId || !primaryBancaId) return;
-    setSyncing(true);
-    setSyncResult(null);
+    setAutoSyncing(true);
     try {
       const res = await fetch('/api/admin/meta/sync', {
         method: 'POST',
@@ -736,6 +799,7 @@ export default function AdminMetaPage() {
           loadOverview(),
           loadAllCampaigns(),
           loadRedirectSummary(),
+          loadLiveAggregate(),
         ]);
       } else {
         setSyncResult({ success: false, error: data.error || 'Erro ao sincronizar' });
@@ -746,6 +810,85 @@ export default function AdminMetaPage() {
       setSyncing(false);
     }
   };
+
+  const autoSyncOnPageRefresh = useCallback(async () => {
+    if (!userId) return;
+    const ids = Array.from(new Set(selectedBancaIds.map((x) => String(x).trim()).filter(Boolean)));
+    if (ids.length === 0) return;
+
+    const runKey = `${userId}:${ids.slice().sort().join(',')}`;
+    if (autoSyncRunKeyRef.current === runKey) return;
+    autoSyncRunKeyRef.current = runKey;
+
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      const settled = await Promise.allSettled(
+        ids.map(async (bancaId) => {
+          const res = await fetch('/api/admin/meta/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+            body: JSON.stringify({ banca_id: bancaId, date_preset: 'last_30d' }),
+            cache: 'no-store',
+          });
+          const data = await res.json();
+          if (!(data.success && data.data?.success)) {
+            throw new Error(data?.data?.error || data?.error || `Falha ao sincronizar banca ${bancaId}`);
+          }
+          return {
+            campaignsCount: Number(data.data?.campaignsCount) || 0,
+            adsetsCount: Number(data.data?.adsetsCount) || 0,
+            insightsCount: Number(data.data?.insightsCount) || 0,
+          };
+        })
+      );
+
+      const ok = settled.filter((r) => r.status === 'fulfilled') as PromiseFulfilledResult<{
+        campaignsCount: number;
+        adsetsCount: number;
+        insightsCount: number;
+      }>[];
+      const fail = settled.filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
+
+      const totals = ok.reduce(
+        (acc, r) => {
+          acc.campaignsCount += r.value.campaignsCount;
+          acc.adsetsCount += r.value.adsetsCount;
+          acc.insightsCount += r.value.insightsCount;
+          return acc;
+        },
+        { campaignsCount: 0, adsetsCount: 0, insightsCount: 0 }
+      );
+
+      if (fail.length === 0) {
+        setSyncResult({ success: true, ...totals });
+      } else {
+        const firstErr = fail[0]?.reason;
+        setSyncResult({
+          success: false,
+          error: firstErr instanceof Error ? firstErr.message : 'Uma ou mais integrações falharam ao sincronizar.',
+        });
+      }
+    } catch (err: any) {
+      // Não sobrescreve feedback do sync manual; auto-sync falha de forma silenciosa para o usuário.
+      console.warn('[admin/meta] autoSyncOnPageRefresh falhou:', err?.message || err);
+    } finally {
+      setAllCampaignsPage(1);
+      void Promise.allSettled([
+        loadConfig(selectedBancaIds),
+        loadSyncedData(),
+        loadOverview(),
+        loadRedirectSummary(),
+        loadLiveAggregate(),
+      ]);
+      setAutoSyncing(false);
+    }
+  }, [userId, selectedBancaIds, loadConfig, loadSyncedData, loadOverview, loadRedirectSummary, loadLiveAggregate]);
+
+  useEffect(() => {
+    if (!userId || selectedBancaIds.length === 0) return;
+    void autoSyncOnPageRefresh();
+  }, [userId, selectedBancaIds, autoSyncOnPageRefresh]);
 
   const loadAllCampaigns = useCallback(async () => {
     if (!userId) return;
@@ -765,7 +908,13 @@ export default function AdminMetaPage() {
       if (adminMetaInsightsDateRange.dateTo) params.set('date_to', adminMetaInsightsDateRange.dateTo);
       const res = await fetch(`/api/admin/meta/campaigns-all?${params.toString()}`, {
         headers: { 'X-User-Id': userId },
+        cache: 'no-store',
       });
+      if (!res.ok && offset > 0) {
+        // Em alguns cenários a API pode falhar em página alta após mudança de filtro.
+        // Recuamos para a primeira página para manter a tela funcional.
+        setAllCampaignsPage(1);
+      }
       const data = await res.json();
       if (data.success && data.data?.rows) {
         setAllCampaignsRows(data.data.rows);
@@ -1055,6 +1204,119 @@ export default function AdminMetaPage() {
     },
     { leads: 0, deposited: 0 }
   );
+  /** Campanhas com dados de métricas para seção "Campanhas sincronizadas" (independe de status ACTIVE/PAUSED). */
+  const metricSyncedCampaignRows = useMemo(
+    () =>
+      (allCampaignsRows ?? []).filter((row: any) => {
+        const reach = Number(row?.reach) || 0;
+        const impressions = Number(row?.impressions) || 0;
+        const clicks = Number(row?.clicks) || 0;
+        const leads = Number(row?.leads) || 0;
+        const spend = Number(row?.spend) || 0;
+        return reach > 0 || impressions > 0 || clicks > 0 || leads > 0 || spend > 0;
+      }),
+    [allCampaignsRows]
+  );
+  const activeCampaignCardsTotals = useMemo(
+    () =>
+      metricSyncedCampaignRows.reduce(
+        (acc, row: any) => {
+          acc.campaigns += 1;
+          acc.impressions += Number(row?.impressions) || 0;
+          acc.clicks += Number(row?.clicks) || 0;
+          acc.leads += Number(row?.leads) || 0;
+          acc.spend += Number(row?.spend) || 0;
+          return acc;
+        },
+        { campaigns: 0, impressions: 0, clicks: 0, leads: 0, spend: 0 }
+      ),
+    [metricSyncedCampaignRows]
+  );
+
+  const usingLiveMetaCards = Boolean(liveAggregate && !liveAggregateError);
+
+  const displayCampaignCardsTotals = useMemo(() => {
+    if (usingLiveMetaCards && liveAggregate) {
+      const t = liveAggregate.totals;
+      return {
+        campaigns: t.campaigns_with_metrics,
+        spend: t.spend,
+        leads: t.leads,
+        impressions: t.impressions,
+        clicks: t.clicks,
+        reach: t.reach,
+        results: t.results,
+      };
+    }
+    return {
+      campaigns: activeCampaignCardsTotals.campaigns,
+      spend: activeCampaignCardsTotals.spend,
+      leads: activeCampaignCardsTotals.leads,
+      impressions: activeCampaignCardsTotals.impressions,
+      clicks: activeCampaignCardsTotals.clicks,
+      reach: 0,
+      results: 0,
+    };
+  }, [usingLiveMetaCards, liveAggregate, activeCampaignCardsTotals]);
+
+  /** Linhas da tabela: prioriza métricas live (Graph) cruzadas com cadastro local para tipo/consultores. */
+  const displayMetricCampaignRows = useMemo(() => {
+    if (!usingLiveMetaCards || !liveAggregate) return metricSyncedCampaignRows;
+    const liveList = (liveAggregate.campaigns ?? []) as Array<Record<string, unknown>>;
+    return liveList.map((row) => {
+      const bancaId = String(row.banca_id ?? '');
+      const campaignId = String(row.campaign_id ?? '');
+      const dbRow = (allCampaignsRows ?? []).find(
+        (r: any) => String(r.banca_id) === bancaId && String(r.campaign_id) === campaignId
+      );
+      return {
+        ...(dbRow || {}),
+        id: dbRow?.id ?? campaignId,
+        banca_id: bancaId,
+        banca_name: row.banca_name ?? dbRow?.banca_name,
+        banca_url: row.banca_url ?? dbRow?.banca_url ?? null,
+        campaign_id: campaignId,
+        name: row.name ?? dbRow?.name,
+        objective: row.objective ?? dbRow?.objective ?? null,
+        status: row.status ?? dbRow?.status ?? null,
+        effective_status: row.effective_status ?? dbRow?.effective_status ?? null,
+        daily_budget: row.daily_budget ?? dbRow?.daily_budget ?? null,
+        lifetime_budget: row.lifetime_budget ?? dbRow?.lifetime_budget ?? null,
+        start_time: row.start_time ?? dbRow?.start_time ?? null,
+        stop_time: row.stop_time ?? dbRow?.stop_time ?? null,
+        updated_at: dbRow?.updated_at ?? null,
+        campaign_kind: (dbRow?.campaign_kind as MetaCampaignKind) || 'normal',
+        reach: Number(row.reach) || 0,
+        impressions: Number(row.impressions) || 0,
+        clicks: Number(row.clicks) || 0,
+        leads: Number(row.leads) || 0,
+        spend: Number(row.spend) || 0,
+        results_live: Number(row.results) || 0,
+        assigned_consultors: dbRow?.assigned_consultors ?? [],
+        consultor_total_leads: dbRow?.consultor_total_leads ?? 0,
+        consultor_total_deposited: dbRow?.consultor_total_deposited ?? 0,
+      };
+    });
+  }, [usingLiveMetaCards, liveAggregate, metricSyncedCampaignRows, allCampaignsRows]);
+
+  const funnelMetaValues = useMemo(() => {
+    if (usingLiveMetaCards && liveAggregate) {
+      const t = liveAggregate.totals;
+      return {
+        impressions: t.impressions,
+        reach: t.reach,
+        clicks: t.clicks,
+        leads: t.leads,
+      };
+    }
+    return {
+      impressions: overviewRows.reduce((sum, row) => sum + (Number(row.metrics.impressions) || 0), 0),
+      reach: overviewRows.reduce((sum, row) => sum + (Number(row.metrics.reach) || 0), 0),
+      clicks: overviewRows.reduce((sum, row) => sum + (Number(row.metrics.clicks) || 0), 0),
+      leads: overviewTotals.totalLeads,
+    };
+  }, [usingLiveMetaCards, liveAggregate, overviewRows, overviewTotals.totalLeads]);
+
   const syncedAdsetRows = syncedData?.adsets ?? [];
   const syncedInsightRows = syncedData?.insights ?? [];
   const syncedAdsetTotalPages = Math.max(1, Math.ceil(syncedAdsetRows.length / SYNCED_DATA_PAGE_SIZE));
@@ -1069,10 +1331,13 @@ export default function AdminMetaPage() {
     (syncedInsightPage - 1) * SYNCED_DATA_PAGE_SIZE,
     syncedInsightPage * SYNCED_DATA_PAGE_SIZE
   );
-  const selectedConsultorModalRow = useMemo(
-    () => (allCampaignsRows || []).find((row: any) => `${String(row.banca_id)}:${String(row.campaign_id)}` === consultorModalCampaignKey) ?? null,
-    [allCampaignsRows, consultorModalCampaignKey]
-  );
+  const selectedConsultorModalRow = useMemo(() => {
+    const key = consultorModalCampaignKey;
+    if (!key) return null;
+    const fromDb = (allCampaignsRows || []).find((row: any) => `${String(row.banca_id)}:${String(row.campaign_id)}` === key);
+    if (fromDb) return fromDb;
+    return (displayMetricCampaignRows || []).find((row: any) => `${String(row.banca_id)}:${String(row.campaign_id)}` === key) ?? null;
+  }, [allCampaignsRows, displayMetricCampaignRows, consultorModalCampaignKey]);
   const consultorModalSelectedIds = useMemo(() => {
     if (!selectedConsultorModalRow) return [];
     return campaignConsultorDraft[consultorModalCampaignKey]
@@ -1268,30 +1533,47 @@ export default function AdminMetaPage() {
           </div>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+        <div className="flex flex-wrap items-center gap-2 mb-1 text-xs text-gray-600">
+          {loadingLiveAggregate ? (
+            <span className="inline-flex items-center gap-1 text-[#8CD955]">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              Atualizando métricas direto da Meta…
+            </span>
+          ) : usingLiveMetaCards ? (
+            <span className="text-emerald-700 font-medium">
+              Métricas em tempo real (API Meta) · período do filtro · soma de todas as integrações no escopo
+            </span>
+          ) : null}
+          {liveAggregateError ? <span className="text-amber-700">Live indisponível — exibindo cache local: {liveAggregateError}</span> : null}
+        </div>
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-7">
           <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase">Total gasto (visão geral)</p>
-            <p className="text-2xl font-bold text-gray-800 mt-1">R$ {overviewTotals.totalSpend.toFixed(2)}</p>
+            <p className="text-xs font-semibold text-gray-500 uppercase">Campanhas com dados (métricas)</p>
+            <p className="text-2xl font-bold text-gray-800 mt-1">{displayCampaignCardsTotals.campaigns.toLocaleString('pt-BR')}</p>
           </div>
           <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase">Total de leads</p>
+            <p className="text-xs font-semibold text-gray-500 uppercase">Gasto total</p>
+            <p className="text-2xl font-bold text-gray-800 mt-1">R$ {displayCampaignCardsTotals.spend.toFixed(2)}</p>
+          </div>
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
+            <p className="text-xs font-semibold text-gray-500 uppercase">Leads (Meta, período)</p>
+            <p className="text-2xl font-bold text-gray-800 mt-1">{displayCampaignCardsTotals.leads.toLocaleString('pt-BR')}</p>
+          </div>
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
+            <p className="text-xs font-semibold text-gray-500 uppercase">Resultados (ações Meta)</p>
+            <p className="text-2xl font-bold text-gray-800 mt-1">{displayCampaignCardsTotals.results.toLocaleString('pt-BR')}</p>
+          </div>
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
+            <p className="text-xs font-semibold text-gray-500 uppercase">Impressões</p>
+            <p className="text-2xl font-bold text-gray-800 mt-1">{displayCampaignCardsTotals.impressions.toLocaleString('pt-BR')}</p>
+          </div>
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
+            <p className="text-xs font-semibold text-gray-500 uppercase">Cliques</p>
+            <p className="text-2xl font-bold text-gray-800 mt-1">{displayCampaignCardsTotals.clicks.toLocaleString('pt-BR')}</p>
+          </div>
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
+            <p className="text-xs font-semibold text-gray-500 uppercase">Leads (painel geral / cache)</p>
             <p className="text-2xl font-bold text-gray-800 mt-1">{overviewTotals.totalLeads.toLocaleString('pt-BR')}</p>
-          </div>
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase">Total gasto campanhas de bolão</p>
-            <p className="text-2xl font-bold text-gray-800 mt-1">R$ {overviewKindSummary.bolao.spend.toFixed(2)}</p>
-          </div>
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase">Gasto de campanhas tipo normal</p>
-            <p className="text-2xl font-bold text-gray-800 mt-1">R$ {overviewKindSummary.normal.spend.toFixed(2)}</p>
-          </div>
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase">Resultado campanhas de bolão</p>
-            <p className="text-2xl font-bold text-gray-800 mt-1">{overviewKindSummary.bolao.leads.toLocaleString('pt-BR')}</p>
-          </div>
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase">Resultado campanhas normal</p>
-            <p className="text-2xl font-bold text-gray-800 mt-1">{overviewKindSummary.normal.leads.toLocaleString('pt-BR')}</p>
           </div>
         </div>
 
@@ -1301,22 +1583,24 @@ export default function AdminMetaPage() {
             <h2 className="text-base font-semibold text-gray-800">Funil de campanhas + consultores</h2>
           </div>
           <p className="text-xs text-gray-500 mb-4">
-            Meta por período selecionado + cadastrados/depósito dos consultores atribuídos nas campanhas listadas.
+            {usingLiveMetaCards
+              ? 'Meta em tempo real (API) no período do filtro + consultores ainda do cadastro local.'
+              : 'Meta por período selecionado + cadastrados/depósito dos consultores atribuídos nas campanhas listadas.'}
           </p>
           <div className="bg-gray-50 p-3 rounded-xl border border-gray-100 min-h-[320px]">
             <Funnel3DChart
               data={{
                 stages: ['Impressões', 'Alcance', 'Cliques', 'Leads Meta', 'Cadastros consultores', 'Depósito consultores (R$)'],
                 values: [
-                  overviewRows.reduce((sum, row) => sum + (Number(row.metrics.impressions) || 0), 0),
-                  overviewRows.reduce((sum, row) => sum + (Number(row.metrics.reach) || 0), 0),
-                  overviewRows.reduce((sum, row) => sum + (Number(row.metrics.clicks) || 0), 0),
-                  overviewTotals.totalLeads,
+                  funnelMetaValues.impressions,
+                  funnelMetaValues.reach,
+                  funnelMetaValues.clicks,
+                  funnelMetaValues.leads,
                   consultorTotalsFromCampaignRows.leads,
                   consultorTotalsFromCampaignRows.deposited,
                 ],
               }}
-              showPlaceholder={!overviewRows.length && !allCampaignsRows.length}
+              showPlaceholder={!overviewRows.length && !allCampaignsRows.length && !usingLiveMetaCards}
             />
           </div>
         </div>
@@ -1628,23 +1912,33 @@ export default function AdminMetaPage() {
             <div>
               <h3 className="text-base font-semibold text-gray-800">Campanhas sincronizadas</h3>
               <p className="text-xs text-gray-500 mt-1">
-                Card separado da integração Meta. Período aplicado: {adminMetaInsightsDateRange.label}.
+                Tabela cruzada com Graph (live) + CRM. Período: {adminMetaInsightsDateRange.label}.
+                {usingLiveMetaCards ? ' Métricas de alcance/impressões/leads/gasto vêm da Meta; tipo e consultores do banco.' : null}
               </p>
             </div>
             <div className="flex items-center gap-2">
               <button
                 onClick={() => {
-                  const first = (allCampaignsRows || [])[0];
+                  const first = (displayMetricCampaignRows || [])[0];
                   if (first) {
                     setConsultorModalCampaignKey(`${String(first.banca_id)}:${String(first.campaign_id)}`);
                   }
                   setConsultorModalOpen(true);
                 }}
-                disabled={allCampaignsRows.length === 0}
+                disabled={displayMetricCampaignRows.length === 0}
                 className="text-sm text-blue-700 hover:text-blue-800 font-medium flex items-center gap-1 disabled:opacity-40"
               >
                 <Users className="w-4 h-4" />
                 Atribuir consultores
+              </button>
+              <button
+                type="button"
+                onClick={() => void loadLiveAggregate()}
+                disabled={loadingLiveAggregate || !userId}
+                className="text-sm text-emerald-700 hover:text-emerald-800 font-medium flex items-center gap-1 disabled:opacity-50"
+              >
+                {loadingLiveAggregate ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                Meta live
               </button>
               <button
                 onClick={() => loadSyncedData()}
@@ -1652,7 +1946,7 @@ export default function AdminMetaPage() {
                 className="text-sm text-[#8CD955] hover:text-[#7BC84A] font-medium flex items-center gap-1 disabled:opacity-50"
               >
                 {loadingData ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                Atualizar
+                Cache local
               </button>
             </div>
           </div>
@@ -1672,7 +1966,7 @@ export default function AdminMetaPage() {
                     >
                       <span className="flex items-center gap-2 font-medium text-gray-800">
                         <Target className="w-4 h-4 text-[#8CD955]" />
-                        Campanhas ({allCampaignsRows.length})
+                        Campanhas com dados ({displayMetricCampaignRows.length})
                       </span>
                       {expandedTab === 'campaigns' ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
                     </button>
@@ -1690,6 +1984,7 @@ export default function AdminMetaPage() {
                               <th className="px-4 py-2 text-right">Impressões</th>
                               <th className="px-4 py-2 text-right">Cliques</th>
                               <th className="px-4 py-2 text-right">Leads</th>
+                              <th className="px-4 py-2 text-right">Resultados</th>
                               <th className="px-4 py-2 text-right">Gasto</th>
                               <th className="px-4 py-2 text-right">Leads consultores</th>
                               <th className="px-4 py-2 text-right">Depósito consultores</th>
@@ -1703,13 +1998,14 @@ export default function AdminMetaPage() {
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-gray-100">
-                            {(allCampaignsRows ?? []).map((c: any) => {
+                            {displayMetricCampaignRows.map((c: any) => {
                               const m = {
                                 reach: Number(c.reach) || 0,
                                 impressions: Number(c.impressions) || 0,
                                 clicks: Number(c.clicks) || 0,
                                 leads: Number(c.leads) || 0,
                                 spend: Number(c.spend) || 0,
+                                results: Number(c.results_live) || 0,
                               };
                               const ownerKey = `${String(c.banca_id)}:${String(c.campaign_id)}`;
                               const ownerTarget = campaignOwnerDraft[ownerKey] ?? String(c.banca_id);
@@ -1744,6 +2040,7 @@ export default function AdminMetaPage() {
                                   <td className="px-4 py-2 text-right text-gray-700 tabular-nums">{m.impressions.toLocaleString('pt-BR')}</td>
                                   <td className="px-4 py-2 text-right text-gray-700 tabular-nums">{m.clicks.toLocaleString('pt-BR')}</td>
                                   <td className="px-4 py-2 text-right text-gray-700 tabular-nums">{m.leads.toLocaleString('pt-BR')}</td>
+                                  <td className="px-4 py-2 text-right text-gray-700 tabular-nums">{m.results.toLocaleString('pt-BR')}</td>
                                   <td className="px-4 py-2 text-right text-gray-700 tabular-nums">R$ {m.spend.toFixed(2)}</td>
                                   <td className="px-4 py-2 text-right text-gray-700 tabular-nums">{(Number(c.consultor_total_leads) || 0).toLocaleString('pt-BR')}</td>
                                   <td className="px-4 py-2 text-right text-gray-700 tabular-nums">R$ {(Number(c.consultor_total_deposited) || 0).toFixed(2)}</td>
@@ -1800,10 +2097,14 @@ export default function AdminMetaPage() {
                             })}
                           </tbody>
                         </table>
-                        {(allCampaignsRows?.length ?? 0) === 0 && (
-                          <p className="px-4 py-6 text-center text-gray-500">Nenhuma campanha sincronizada.</p>
+                        {(displayMetricCampaignRows?.length ?? 0) === 0 && (
+                          <p className="px-4 py-6 text-center text-gray-500">
+                            {usingLiveMetaCards
+                              ? 'Nenhuma campanha com métrica no período (Meta live) para o filtro atual.'
+                              : 'Nenhuma campanha sincronizada.'}
+                          </p>
                         )}
-                        {(allCampaignsRows?.length ?? 0) > 0 && (
+                        {!usingLiveMetaCards && (allCampaignsRows?.length ?? 0) > 0 && (
                           <div className="px-4 py-3 border-t border-gray-100 bg-gray-50/40 flex items-center justify-between">
                             <p className="text-xs text-gray-500">Página {allCampaignsPage}</p>
                             <div className="flex items-center gap-2">
