@@ -6,6 +6,7 @@
  * Roda a cada 1 min via cron. Se a fila tem trabalho, processa até o budget acabar.
  */
 import { createClient } from '@supabase/supabase-js';
+import { resolveEvolutionInstanceForActivation } from '../../lib/crm/resolve-evolution-instance-for-activation';
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -224,19 +225,23 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
       continue;
     }
 
-    const { data: instance } = await supabase
-      .from('evolution_instances')
-      .select('id, apikey, instance_name, evolution_apis!inner(base_url)')
-      .eq('instance_name', job.instance_name)
-      .eq('user_id', job.user_id)
-      .eq('is_active', true)
-      .single();
+    const { instance: instRow, queryError: instResolveErr } = await resolveEvolutionInstanceForActivation(
+      supabase,
+      job.instance_name,
+      job.user_id
+    );
 
-    if (!instance) {
+    if (instResolveErr || !instRow) {
       await supabase.from('activation_mass_send_jobs').update({ status: 'failed', last_error: 'Instância não encontrada', locked_at: null, locked_by: null, updated_at: new Date().toISOString() }).eq('id', job.id);
-      console.error(`[MassSend] Job ${shortId(job.id)} instância ${job.instance_name} não encontrada`);
+      console.error(`[MassSend] Job ${shortId(job.id)} instância ${job.instance_name} não encontrada`, instResolveErr || '');
       continue;
     }
+
+    const instance = instRow as {
+      id: string;
+      apikey?: string | null;
+      evolution_apis?: { base_url?: string } | { base_url?: string }[];
+    };
 
     const api = Array.isArray(instance.evolution_apis) ? instance.evolution_apis[0] : instance.evolution_apis;
     const baseUrl = normalizeUrl((api as { base_url?: string })?.base_url || '');

@@ -4,6 +4,7 @@ import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { sanitizeMassSendErrorMessage } from '@/lib/utils/activation-send-errors';
 import { triggerMassSendProcessChained } from '@/lib/crm/trigger-mass-send-chained';
+import { resolveEvolutionInstanceForActivation } from '@/lib/crm/resolve-evolution-instance-for-activation';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300; // 5 minutos
@@ -268,36 +269,38 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 2. Busca detalhes da instância para obter a apikey e base_url
-    const { data: instance, error: instanceError } = await supabaseServiceRole
-      .from('evolution_instances')
-      .select(`
-        *,
-        evolution_apis!inner (
-          id,
-          base_url,
-          is_active
-        )
-      `)
-      .eq('instance_name', instanceName)
-      .eq('user_id', userId)
-      .eq('is_active', true)
-      .single();
+    // 2. Instância: mesma hierarquia que /api/instances e agendamento (dono/gerente → subordinados; admin → todas)
+    const { instance: instanceRow, queryError: instanceResolveError } =
+      await resolveEvolutionInstanceForActivation(supabaseServiceRole, String(instanceName), userId);
 
-    if (instanceError || !instance) {
-      console.warn('[ACTIVATION] 404 INSTANCE_QUERY', {
+    if (instanceResolveError) {
+      console.warn('[ACTIVATION] INSTANCE_RESOLVE_QUERY_ERROR', {
         instanceName: String(instanceName),
         userIdPrefix: `${userId.slice(0, 8)}…`,
-        isCronProcess,
-        supabaseCode: instanceError?.code,
-        supabaseMessage: instanceError?.message,
-        hint:
-          'Verifique: nome exato em evolution_instances, user_id dono, is_active=true, e linha em evolution_apis (join interno).',
+        message: instanceResolveError,
       });
       return errorResponse('Instância não encontrada ou inativa', 404, {
         code: 'INSTANCE_NOT_FOUND_OR_INACTIVE',
       });
     }
+
+    if (!instanceRow) {
+      console.warn('[ACTIVATION] 404 INSTANCE_QUERY', {
+        instanceName: String(instanceName),
+        userIdPrefix: `${userId.slice(0, 8)}…`,
+        isCronProcess,
+        hint:
+          'Verifique: nome em evolution_instances, permissão (dono da instância ou hierarquia), is_active=true e evolution_apis (join).',
+      });
+      return errorResponse('Instância não encontrada ou inativa', 404, {
+        code: 'INSTANCE_NOT_FOUND_OR_INACTIVE',
+      });
+    }
+
+    const instance = instanceRow as typeof instanceRow & {
+      evolution_apis?: unknown;
+      apikey?: string | null;
+    };
 
     const evolutionApi = Array.isArray(instance.evolution_apis) 
       ? instance.evolution_apis[0] 

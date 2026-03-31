@@ -5,6 +5,7 @@
  * Encadeamento: a route /mass-send/process usa after() + triggerMassSendProcessFromOrigin.
  */
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { resolveEvolutionInstanceForActivation } from '@/lib/crm/resolve-evolution-instance-for-activation';
 import { sanitizeMassSendErrorMessage } from '@/lib/utils/activation-send-errors';
 import type { ApiResponse } from '@/lib/utils/response';
 
@@ -219,17 +220,22 @@ async function buildEvolutionContext(
     return { error: `Mensagem ${job.message_id} não encontrada` };
   }
 
-  const { data: instance, error: instErr } = await supabaseServiceRole
-    .from('evolution_instances')
-    .select('id, apikey, instance_name, evolution_apis!inner(base_url)')
-    .eq('instance_name', job.instance_name)
-    .eq('user_id', job.user_id)
-    .eq('is_active', true)
-    .single();
+  const { instance: instRow, queryError: instResolveErr } = await resolveEvolutionInstanceForActivation(
+    supabaseServiceRole,
+    job.instance_name,
+    job.user_id
+  );
 
-  if (instErr || !instance) {
+  if (instResolveErr || !instRow) {
     return { error: `Instância ${job.instance_name} não encontrada ou inativa` };
   }
+
+  const instance = instRow as {
+    id: string;
+    apikey?: string | null;
+    instance_name?: string;
+    evolution_apis?: { base_url?: string } | { base_url?: string }[];
+  };
 
   const api = Array.isArray(instance.evolution_apis) ? instance.evolution_apis[0] : instance.evolution_apis;
   const baseUrl = (api as { base_url?: string })?.base_url;
