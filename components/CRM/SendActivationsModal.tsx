@@ -7,6 +7,7 @@ import { deduplicateGroupsById } from '@/lib/utils/group-utils';
 import { postGroupFetchAndResolve } from '@/lib/utils/group-fetch-client';
 import SendMessageChoiceModal from './SendMessageChoiceModal';
 import ScheduleMessageModal from './ScheduleMessageModal';
+import { selectInstancesForActivationSend } from '@/lib/crm/select-instances-for-activation-send';
 import { useToast } from '@/hooks/useToast';
 import ToastContainer from '@/components/Toast/ToastContainer';
 
@@ -23,6 +24,8 @@ interface SendActivationsModalProps {
   userId: string;
   /** Quando true, pula o modal de escolha e abre direto em modo campanha em massa */
   defaultToMassSend?: boolean;
+  /** Após criar campanha em massa (ou reutilizar job existente), atualiza lista na aba Campanhas */
+  onMassSendComplete?: () => void;
 }
 
 const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
@@ -32,6 +35,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
   messageTitle,
   userId,
   defaultToMassSend = false,
+  onMassSendComplete,
 }) => {
   const [loading, setLoading] = useState(false);
   const [groups, setGroups] = useState<Group[]>([]);
@@ -44,7 +48,8 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
   const [savingAllGroups, setSavingAllGroups] = useState(false);
   const [showChoiceModal, setShowChoiceModal] = useState(false);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
-  const [forceMassSend, setForceMassSend] = useState(false);
+  /** Inicializa a partir da prop para o primeiro paint já enfileirar em massa (evita fluxo síncrono ≤10 grupos antes do effect). */
+  const [forceMassSend, setForceMassSend] = useState(() => defaultToMassSend);
   /** Evita duplo clique antes do React aplicar sending=true (segundo job / envio duplicado). */
   const sendLockedRef = useRef(false);
 
@@ -165,11 +170,9 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
         });
         const data = await response.json();
         if (data.success) {
-          const masterConnected = data.data.filter((i: any) =>
-            i.status === 'connected' && i.is_master === true
-          );
-          setInstances(masterConnected);
-          setSelectedInstance(masterConnected.length > 0 ? masterConnected[0].instance_name : '');
+          const pool = selectInstancesForActivationSend(data.data) as any[];
+          setInstances(pool);
+          setSelectedInstance(pool.length > 0 ? pool[0].instance_name : '');
         } else {
           setInstances([]);
           setSelectedInstance('');
@@ -313,6 +316,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
               : 'Campanha de disparo em massa criada. O envio continuará em segundo plano. Acompanhe em Ativações > Campanhas de disparo.'),
           data.reused_existing_job ? 'info' : 'success'
         );
+        onMassSendComplete?.();
         onClose();
         return;
       }
@@ -366,13 +370,9 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
               .then(res => res.json())
               .then(data => {
                 if (data.success) {
-                  const masterConnected = data.data.filter((i: any) =>
-                    i.status === 'connected' && i.is_master === true
-                  );
-                  setInstances(masterConnected);
-                  if (masterConnected.length > 0) {
-                    setSelectedInstance(masterConnected[0].instance_name);
-                  }
+                  const pool = selectInstancesForActivationSend(data.data) as any[];
+                  setInstances(pool);
+                  if (pool.length > 0) setSelectedInstance(pool[0].instance_name);
                 }
               })
               .catch(err => console.error('Erro ao buscar instâncias:', err));
@@ -390,9 +390,9 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
               .then(res => res.json())
               .then(data => {
                 if (data.success) {
-                  const masterConnected = data.data.filter((i: any) => i.status === 'connected' && i.is_master === true);
-                  setInstances(masterConnected);
-                  if (masterConnected.length > 0) setSelectedInstance(masterConnected[0].instance_name);
+                  const pool = selectInstancesForActivationSend(data.data) as any[];
+                  setInstances(pool);
+                  if (pool.length > 0) setSelectedInstance(pool[0].instance_name);
                 }
               })
               .catch(err => console.error('Erro ao buscar instâncias:', err));

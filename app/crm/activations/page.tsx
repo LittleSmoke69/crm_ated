@@ -2189,6 +2189,7 @@ const ActivationsPage = () => {
             messageTitle={messageToSend.title}
             defaultToMassSend={sendModalDefaultMassSend}
             userId={userId}
+            onMassSendComplete={loadMassSendJobs}
           />
         )}
 
@@ -2563,7 +2564,9 @@ const ActivationsPage = () => {
               <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-md border border-gray-200 dark:border-[#404040] p-12 text-center">
                 <Megaphone className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
                 <p className="text-gray-500 dark:text-gray-400">Nenhuma campanha de disparo em massa.</p>
-                <p className="text-sm text-gray-400 dark:text-gray-500 mt-2">Ao enviar para mais de 10 grupos, uma campanha é criada automaticamente.</p>
+                <p className="text-sm text-gray-400 dark:text-gray-500 mt-2">
+                  Depois de Iniciar campanha, escolha os grupos no modal e confirme com Enviar — a tabela abaixo atualiza assim que o job for criado. Envios com mais de 10 grupos pelo envio imediato também geram campanha.
+                </p>
               </div>
             ) : (
               <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-md border border-gray-200 dark:border-[#404040] overflow-x-auto">
