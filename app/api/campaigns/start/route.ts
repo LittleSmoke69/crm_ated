@@ -803,15 +803,23 @@ export async function POST(req: NextRequest) {
     const jobsToInsert: any[] = [];
     let globalPosition = 1;
 
+    // Modo de delay: random gera intervalo aleatório POR JOB, fixed usa intervalo fixo
+    const delayConfig = strategy.delayConfig || {};
+    const isRandomDelay = delayConfig.delayMode === 'random';
+    const randomMinMs = (delayConfig.randomMinSeconds || 5) * 1000;
+    const randomMaxMs = (delayConfig.randomMaxSeconds || 300) * 1000;
+
+    let cumulativeMs = 0; // Acumulador de tempo para scheduled_at
+
     for (const group of insertedGroups) {
       const groupContacts = contactsByGroup[group.id] || [];
-      
+
       for (let i = 0; i < groupContacts.length; i++) {
         const contact = groupContacts[i];
         const normalizedPhone = normalizePhoneNumber(contact.phone);
-        
-        // scheduled_at: primeiro job = now(), demais = now() + (position-1) * interval
-        const scheduledAt = new Date(now.getTime() + (globalPosition - 1) * intervalMs);
+
+        // Primeiro job = now(), demais = acumulado
+        const scheduledAt = new Date(now.getTime() + cumulativeMs);
 
         jobsToInsert.push({
           campaign_id: campaign.id,
@@ -824,6 +832,14 @@ export async function POST(req: NextRequest) {
           scheduled_at: scheduledAt.toISOString(),
           attempts: 0,
         });
+
+        // Calcula delay para o PRÓXIMO job
+        if (isRandomDelay) {
+          // Delay aleatório entre min e max para cada job
+          cumulativeMs += randomMinMs + Math.random() * (randomMaxMs - randomMinMs);
+        } else {
+          cumulativeMs += intervalMs;
+        }
 
         globalPosition++;
       }
@@ -847,6 +863,15 @@ export async function POST(req: NextRequest) {
     console.log(`✅ [CAMPANHA ${campaign.id}] Criada com ${insertedGroups.length} grupo(s) e ${jobsToInsert.length} job(s)`);
     console.log(`   Primeiro job scheduled_at: ${jobsToInsert[0]?.scheduled_at}`);
     console.log(`   Último job scheduled_at: ${jobsToInsert[jobsToInsert.length - 1]?.scheduled_at}`);
+
+    // Seta next_request_at para o segundo job (o primeiro será processado imediatamente)
+    // Isso faz o timer na UI mostrar a contagem regressiva desde o início
+    if (jobsToInsert.length > 1) {
+      await supabaseServiceRole
+        .from('campaigns')
+        .update({ next_request_at: jobsToInsert[1].scheduled_at })
+        .eq('id', campaign.id);
+    }
 
     // Processa o primeiro job imediatamente para sinalizar início da campanha
     const firstJob = jobsToInsert[0];

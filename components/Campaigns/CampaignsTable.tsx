@@ -118,18 +118,20 @@ const CampaignsTable: React.FC<CampaignsTableProps> = ({
           `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
         );
       } else if (delayConfig.delayMode === 'random') {
-        // Para random, mostra média entre min e max
-        const minSeconds = delayConfig.randomMinSeconds || 550;
-        const maxSeconds = delayConfig.randomMaxSeconds || 950;
-        const avgSeconds = Math.round((minSeconds + maxSeconds) / 2);
+        // Para random, mostra o intervalo min - max
+        const minSec = delayConfig.randomMinSeconds || 5;
+        const maxSec = delayConfig.randomMaxSeconds || 300;
 
-        const hours = Math.floor(avgSeconds / 3600);
-        const minutes = Math.floor((avgSeconds % 3600) / 60);
-        const seconds = avgSeconds % 60;
+        const formatRange = (sec: number) => {
+          if (sec >= 60) {
+            const m = Math.floor(sec / 60);
+            const s = sec % 60;
+            return s > 0 ? `${m}min${s}s` : `${m}min`;
+          }
+          return `${sec}s`;
+        };
 
-        setDelayTime(
-          `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
-        );
+        setDelayTime(`${formatRange(minSec)} - ${formatRange(maxSec)}`);
       } else {
         setDelayTime('00:00:00');
       }

@@ -76,8 +76,8 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
   const [delayMode, setDelayMode] = useState<'random' | 'fixed'>('fixed');
   const [delayValue, setDelayValue] = useState<number>(1);
   const [delayUnit, setDelayUnit] = useState<'seconds' | 'minutes'>('minutes');
-  const [randomMinSeconds, setRandomMinSeconds] = useState<number>(550);
-  const [randomMaxSeconds, setRandomMaxSeconds] = useState<number>(950);
+  const [randomMinSeconds, setRandomMinSeconds] = useState<number>(5);
+  const [randomMaxSeconds, setRandomMaxSeconds] = useState<number>(300);
   const [distributionMode, setDistributionMode] = useState<'sequential' | 'random'>('sequential');
   const [concurrency, setConcurrency] = useState<number>(2);
   const [checkingInstances, setCheckingInstances] = useState(false);
@@ -100,8 +100,8 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
       setDelayMode(delayConfig.delayMode || 'fixed');
       setDelayValue(delayConfig.delayValue || 1);
       setDelayUnit(delayConfig.delayUnit || 'minutes');
-      setRandomMinSeconds(delayConfig.randomMinSeconds || 550);
-      setRandomMaxSeconds(delayConfig.randomMaxSeconds || 950);
+      setRandomMinSeconds(delayConfig.randomMinSeconds || 5);
+      setRandomMaxSeconds(delayConfig.randomMaxSeconds || 300);
       setDistributionMode(strategy.distributionMode || 'sequential');
       setConcurrency(strategy.concurrency || 2);
       setInstanceStatuses([]);
@@ -372,7 +372,7 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
                   </div>
                   <div className="flex items-end">
                     <p className="text-xs text-gray-500 dark:text-gray-400">
-                      Dica: 550s=9min10s e 950s=15min50s
+                      Cada disparo terá um delay aleatório entre min e max. Ex: 5s a 300s (5min).
                     </p>
                   </div>
                 </div>

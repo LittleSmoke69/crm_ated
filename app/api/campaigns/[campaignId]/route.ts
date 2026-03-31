@@ -323,6 +323,11 @@ export async function PATCH(
           const intervalMs = intervalMinutes * 60 * 1000;
           const now = new Date();
 
+          // Detecta modo de delay para respeitar randomização no reagendamento
+          const delayConfig = strategy.delayConfig || {};
+          const isRandomDelay = delayConfig.delayMode === 'random';
+          const randomMinMs = (delayConfig.randomMinSeconds || 5) * 1000;
+          const randomMaxMs = (delayConfig.randomMaxSeconds || 300) * 1000;
 
           // Busca todos os jobs pendentes da campanha (em ordem de posição)
           const { data: pendingJobs, error: jobsError } = await supabaseServiceRole
@@ -335,7 +340,13 @@ export async function PATCH(
           if (!jobsError && pendingJobs && pendingJobs.length > 0) {
             console.log(`📦 [CAMPANHA ${campaignId}] Encontrados ${pendingJobs.length} jobs para reagendar.`);
 
-            // Verifica se algum job já tem scheduled_at no futuro
+            // SEMPRE reagenda jobs com scheduled_at no passado, independente de haver jobs no futuro.
+            const pastJobs = pendingJobs.filter(job => {
+              if (!job.scheduled_at) return true;
+              const scheduled = new Date(job.scheduled_at).getTime();
+              return scheduled <= now.getTime();
+            });
+
             const futureJobs = pendingJobs.filter(job => {
               if (!job.scheduled_at) return false;
               const scheduled = new Date(job.scheduled_at).getTime();
@@ -344,8 +355,39 @@ export async function PATCH(
 
             let firstNextScheduledAt: Date;
 
-            if (futureJobs.length > 0) {
-              // Se há jobs já agendados no futuro, usa o primeiro
+            if (pastJobs.length > 0) {
+              // Reagenda todos os jobs atrasados a partir de agora, respeitando o intervalo
+              // Para random, gera delays aleatórios entre min e max para cada job
+              let cumulativeMs = 0;
+              const scheduledTimes: Date[] = [];
+
+              for (let idx = 0; idx < pastJobs.length; idx++) {
+                if (isRandomDelay) {
+                  cumulativeMs += randomMinMs + Math.random() * (randomMaxMs - randomMinMs);
+                } else {
+                  cumulativeMs += intervalMs;
+                }
+                scheduledTimes.push(new Date(now.getTime() + cumulativeMs));
+              }
+
+              firstNextScheduledAt = scheduledTimes[0];
+
+              const BATCH_SIZE = 50;
+              for (let i = 0; i < pastJobs.length; i += BATCH_SIZE) {
+                const batch = pastJobs.slice(i, i + BATCH_SIZE);
+                await Promise.all(batch.map((job, index) => {
+                  const globalIndex = i + index;
+                  return supabaseServiceRole
+                    .from('campaign_contacts')
+                    .update({
+                      scheduled_at: scheduledTimes[globalIndex].toISOString(),
+                      updated_at: now.toISOString()
+                    })
+                    .eq('id', job.id);
+                }));
+              }
+            } else if (futureJobs.length > 0) {
+              // Todos os jobs ainda estão no futuro — usa o primeiro como referência
               const firstFutureJob = futureJobs.sort((a, b) => {
                 const aTime = new Date(a.scheduled_at!).getTime();
                 const bTime = new Date(b.scheduled_at!).getTime();
@@ -353,34 +395,7 @@ export async function PATCH(
               })[0];
               firstNextScheduledAt = new Date(firstFutureJob.scheduled_at!);
             } else {
-              // Se não há jobs no futuro, agenda a partir de agora
               firstNextScheduledAt = new Date(now.getTime() + intervalMs);
-
-              // Reagenda jobs que estão no passado
-              const pastJobs = pendingJobs.filter(job => {
-                if (!job.scheduled_at) return true;
-                const scheduled = new Date(job.scheduled_at).getTime();
-                return scheduled <= now.getTime();
-              });
-
-              if (pastJobs.length > 0) {
-                // Reagendamento em batches para performance
-                const BATCH_SIZE = 50;
-                for (let i = 0; i < pastJobs.length; i += BATCH_SIZE) {
-                  const batch = pastJobs.slice(i, i + BATCH_SIZE);
-                  await Promise.all(batch.map((job, index) => {
-                    const globalIndex = i + index;
-                    const nextScheduledAt = new Date(now.getTime() + (globalIndex + 1) * intervalMs);
-                    return supabaseServiceRole
-                      .from('campaign_contacts')
-                      .update({
-                        scheduled_at: nextScheduledAt.toISOString(),
-                        updated_at: now.toISOString()
-                      })
-                      .eq('id', job.id);
-                  }));
-                }
-              }
             }
 
             // Atualiza next_request_at da campanha para o tempo do primeiro job
@@ -473,15 +488,72 @@ export async function PATCH(
             ? delayValue
             : Math.ceil(delayValue / 60);
         } else if (mergedStrategy.delayConfig.delayMode === 'random') {
-          // Para random, usa uma média (mínimo + máximo) / 2 em minutos
-          const min = mergedStrategy.delayConfig.randomMinSeconds || 550;
-          const max = mergedStrategy.delayConfig.randomMaxSeconds || 950;
+          // Para random, usa média (mínimo + máximo) / 2 em minutos
+          const min = mergedStrategy.delayConfig.randomMinSeconds || 5;
+          const max = mergedStrategy.delayConfig.randomMaxSeconds || 300;
           const avgSeconds = (min + max) / 2;
           mergedStrategy.interval_minutes = Math.ceil(avgSeconds / 60);
         }
       }
 
       updateData.strategy = mergedStrategy;
+
+      // CRÍTICO: Se a strategy mudou numa campanha ativa (running/paused),
+      // reagenda os jobs pendentes com os novos tempos de delay.
+      // Sem isso, mudar o delay no modal não surte efeito nos jobs já agendados.
+      const effectiveStatus = status || currentCampaign.status;
+      if (effectiveStatus === 'running' || effectiveStatus === 'paused') {
+        const delayConf = mergedStrategy.delayConfig || {};
+        const isRandom = delayConf.delayMode === 'random';
+        const rndMinMs = (delayConf.randomMinSeconds || 5) * 1000;
+        const rndMaxMs = (delayConf.randomMaxSeconds || 300) * 1000;
+        const fixedIntervalMs = (mergedStrategy.interval_minutes || 1) * 60 * 1000;
+        const nowMs = Date.now();
+
+        const { data: pendingJobs } = await supabaseServiceRole
+          .from('campaign_contacts')
+          .select('id, position')
+          .eq('campaign_id', campaignId)
+          .eq('status', 'queued')
+          .order('position', { ascending: true });
+
+        if (pendingJobs && pendingJobs.length > 0) {
+          let cumulativeMs = 0;
+          const BATCH_SIZE = 50;
+          for (let i = 0; i < pendingJobs.length; i += BATCH_SIZE) {
+            const batch = pendingJobs.slice(i, i + BATCH_SIZE);
+            await Promise.all(batch.map((job, index) => {
+              const globalIndex = i + index;
+              if (globalIndex === 0) {
+                // Primeiro job pendente: agenda logo
+                cumulativeMs = isRandom
+                  ? rndMinMs + Math.random() * (rndMaxMs - rndMinMs)
+                  : fixedIntervalMs;
+              }
+              const scheduledAt = new Date(nowMs + cumulativeMs);
+              // Calcula delay para o próximo
+              if (isRandom) {
+                cumulativeMs += rndMinMs + Math.random() * (rndMaxMs - rndMinMs);
+              } else {
+                cumulativeMs += fixedIntervalMs;
+              }
+              return supabaseServiceRole
+                .from('campaign_contacts')
+                .update({
+                  scheduled_at: scheduledAt.toISOString(),
+                  updated_at: new Date().toISOString(),
+                })
+                .eq('id', job.id);
+            }));
+          }
+          // Atualiza next_request_at para o primeiro job pendente
+          const firstScheduled = new Date(nowMs + (isRandom
+            ? rndMinMs + Math.random() * (rndMaxMs - rndMinMs)
+            : fixedIntervalMs));
+          updateData.next_request_at = new Date(nowMs + (isRandom ? rndMinMs : fixedIntervalMs)).toISOString();
+          console.log(`🔄 [CAMPANHA ${campaignId}] Reagendados ${pendingJobs.length} jobs com novo delay.`);
+        }
+      }
     }
 
 

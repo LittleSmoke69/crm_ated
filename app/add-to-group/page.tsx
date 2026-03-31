@@ -38,8 +38,8 @@ function AddToGroupPage() {
   const [addDelayValue, setAddDelayValue] = useState<number>(1);
   const [addDelayUnit, setAddDelayUnit] = useState<DelayUnit>('minutes');
   const [addRandom, setAddRandom] = useState<boolean>(false);
-  const [randomMinSeconds, setRandomMinSeconds] = useState<number>(550);
-  const [randomMaxSeconds, setRandomMaxSeconds] = useState<number>(950);
+  const [randomMinSeconds, setRandomMinSeconds] = useState<number>(5);
+  const [randomMaxSeconds, setRandomMaxSeconds] = useState<number>(300);
   const [addingToGroup, setAddingToGroup] = useState<boolean>(false);
   const [addPaused, setAddPaused] = useState<boolean>(false);
   const [customLists, setCustomLists] = useState<any[]>([]);
@@ -591,7 +591,7 @@ function AddToGroupPage() {
             )}
             {addRandom && (
               <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                Dica: 550s=9min10s e 950s=15min50s. Defina 0 para sem espera (não recomendado).
+                Delay aleatório entre cada disparo. Ex: 5s a 300s (5min). Cada envio terá um tempo diferente dentro desse intervalo.
               </p>
             )}
           </div>

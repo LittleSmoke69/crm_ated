@@ -215,6 +215,30 @@ async function pickBestInstance(
 async function processJob(job: any, workerId: string): Promise<{ success: boolean; error?: string }> {
   const { id, campaign_id, campaign_group_id, phone, contact_id, user_id, attempts, position } = job;
   try {
+    // CRÍTICO: Reivindica o job atomicamente antes de qualquer operação externa.
+    // Se dois workers rodarem ao mesmo tempo e buscarem o mesmo job (queued),
+    // apenas um conseguirá fazer este UPDATE (PostgreSQL garante atomicidade).
+    // O outro receberá 0 linhas e retornará sem processar — eliminando envios duplicados.
+    const { data: claimed, error: claimErr } = await getSupabase()
+      .from('campaign_contacts')
+      .update({
+        status: 'processing',
+        locked_at: new Date().toISOString(),
+        locked_by: workerId,
+        started_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .eq('status', 'queued') // Condição atômica: só atualiza se ainda estiver queued
+      .select('id')
+      .single();
+
+    if (claimErr || !claimed) {
+      // Outro worker já reivindicou este job — pula sem erro
+      console.log(`[WORKER ${workerId}] Job ${id}: já reivindicado por outro worker, pulando.`);
+      return { success: false, error: 'Job já reivindicado por outro worker' };
+    }
+
     // Busca dados da campanha e grupo
     const results = await Promise.all([
       getSupabase()
@@ -936,6 +960,24 @@ export const handler: Handler = async (event, context) => {
       console.warn(`[WORKER ${WORKER_ID}] ⚠️ Aviso ao converter jobs retry:`, convertError.message);
     }
 
+    // PASSO 0.5: Recupera jobs travados em 'processing' há mais de LOCK_TTL_MINUTES.
+    // Isso garante que jobs cujo worker morreu (timeout, crash) voltem para a fila.
+    const staleThreshold = new Date(Date.now() - LOCK_TTL_MINUTES * 60 * 1000).toISOString();
+    const { error: staleError } = await getSupabase()
+      .from('campaign_contacts')
+      .update({
+        status: 'queued',
+        locked_at: null,
+        locked_by: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('status', 'processing')
+      .lt('locked_at', staleThreshold);
+
+    if (staleError) {
+      console.warn(`[WORKER ${WORKER_ID}] ⚠️ Aviso ao recuperar jobs travados:`, staleError.message);
+    }
+
     // PASSO 1: Busca campanhas ativas com status 'running'
     const { data: activeCampaigns, error: campaignsError } = await getSupabase()
       .from('campaigns')
@@ -1036,8 +1078,30 @@ export const handler: Handler = async (event, context) => {
 
     console.log(`[WORKER ${WORKER_ID}] ◼ Concluído em ${duration}ms | ${successCount} ok, ${failedCount} falhas | campanhas: ${Array.from(campaignIds).join(', ')}`);
 
-    // Atualiza agregados para cada campanha única
-    await Promise.all(Array.from(campaignIds).map((id: string) => updateAggregates(id, WORKER_ID)));
+    // Atualiza agregados e next_request_at para cada campanha única
+    await Promise.all(Array.from(campaignIds).map(async (id: string) => {
+      await updateAggregates(id, WORKER_ID);
+
+      // Atualiza next_request_at com o scheduled_at do próximo job pendente
+      // Isso faz o timer na UI mostrar a contagem regressiva correta
+      const { data: nextJob } = await getSupabase()
+        .from('campaign_contacts')
+        .select('scheduled_at')
+        .eq('campaign_id', id)
+        .eq('status', 'queued')
+        .order('position', { ascending: true })
+        .limit(1)
+        .single();
+
+      await getSupabase()
+        .from('campaigns')
+        .update({
+          next_request_at: nextJob?.scheduled_at || null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id)
+        .eq('status', 'running');
+    }));
 
     return {
       statusCode: 200,
