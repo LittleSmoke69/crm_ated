@@ -511,8 +511,7 @@ export async function getMetaInsightsAggregated(
           .from('meta_campaigns')
           .select('campaign_id')
           .eq('banca_id', bancaId)
-          .eq('status', 'ACTIVE')
-          .eq('effective_status', 'ACTIVE')
+          .or('effective_status.eq.ACTIVE,status.eq.ACTIVE')
       : Promise.resolve({ data: null }),
     getMetaCurrencyForBanca(bancaId),
   ]);
@@ -620,7 +619,7 @@ export async function getMetaCampaignsWithInsights(
     .select('campaign_id, name')
     .eq('banca_id', bancaId);
   if (activeOnly) {
-    campaignsQuery = campaignsQuery.eq('status', 'ACTIVE').eq('effective_status', 'ACTIVE');
+    campaignsQuery = campaignsQuery.or('effective_status.eq.ACTIVE,status.eq.ACTIVE');
   }
   const { data: campaigns } = await campaignsQuery;
   if (!campaigns?.length) return [];
@@ -797,7 +796,7 @@ export async function fetchGestorMetaDashboardFromGraph(
 
     const visibleCampaigns = graphCampaigns.filter((c) => {
       if (!activeOnly) return true;
-      return c.status === 'ACTIVE' && c.effective_status === 'ACTIVE';
+      return c.status === 'ACTIVE' || c.effective_status === 'ACTIVE';
     });
     const allowedIds = new Set(visibleCampaigns.map((c) => String(c.id)));
 
@@ -894,6 +893,8 @@ export interface AdminMetaLiveCampaignRow {
   banca_name: string;
   banca_url: string | null;
   campaign_id: string;
+  /** Tipo salvo em `meta_campaigns` (sincronizado). */
+  campaign_kind: 'normal' | 'bolao';
   name: string;
   objective: string | null;
   status: string | null;
@@ -934,6 +935,11 @@ export interface AdminMetaLiveAggregateResult {
     leads: number;
     results: number;
     spend: number;
+    /** Gasto só em campanhas marcadas como bolão no CRM. */
+    spend_bolao: number;
+    /** Soma de resultados (ações Meta) em campanhas tipo normal / bolão. */
+    results_normal: number;
+    results_bolao: number;
   };
   campaigns: AdminMetaLiveCampaignRow[];
   integrations: AdminMetaLiveIntegrationTrace[];
@@ -1037,6 +1043,9 @@ export async function fetchAdminMetaLiveAggregate(opts: {
         leads: 0,
         results: 0,
         spend: 0,
+        spend_bolao: 0,
+        results_normal: 0,
+        results_bolao: 0,
       },
       campaigns: [],
       integrations: [],
@@ -1120,16 +1129,17 @@ export async function fetchAdminMetaLiveAggregate(opts: {
 
       const visible = campaigns.filter((c) => {
         if (!activeOnly) return true;
-        return c.status === 'ACTIVE' && c.effective_status === 'ACTIVE';
+        return c.status === 'ACTIVE' || c.effective_status === 'ACTIVE';
       });
       const visibleIds = new Set(visible.map((c) => String(c.id)));
 
       const fetchedCampaignIds = Array.from(visibleIds);
       const ownerByCampaign = new Map<string, string>();
+      const kindByBancaCampaign = new Map<string, 'normal' | 'bolao'>();
       if (fetchedCampaignIds.length > 0) {
         let ownersQuery = supabaseServiceRole
           .from('meta_campaigns')
-          .select('campaign_id, banca_id, updated_at')
+          .select('campaign_id, banca_id, updated_at, campaign_kind')
           .in('campaign_id', fetchedCampaignIds)
           .in('banca_id', job.linkedBancaIds)
           .order('updated_at', { ascending: false });
@@ -1138,6 +1148,11 @@ export async function fetchAdminMetaLiveAggregate(opts: {
           const campaignId = String((row as { campaign_id: string }).campaign_id);
           const ownerBancaId = String((row as { banca_id: string }).banca_id);
           if (!ownerByCampaign.has(campaignId)) ownerByCampaign.set(campaignId, ownerBancaId);
+          const bk = `${ownerBancaId}:${campaignId}`;
+          if (!kindByBancaCampaign.has(bk)) {
+            const rawKind = (row as { campaign_kind?: string | null }).campaign_kind;
+            kindByBancaCampaign.set(bk, String(rawKind || 'normal') === 'bolao' ? 'bolao' : 'normal');
+          }
         }
       }
 
@@ -1198,11 +1213,15 @@ export async function fetchAdminMetaLiveAggregate(opts: {
         if (overviewBancaId && resolvedBancaId !== overviewBancaId) continue;
         if (scopeBancaIds.length > 0 && !scopeBancaIds.includes(resolvedBancaId)) continue;
 
+        const kindKey = `${resolvedBancaId}:${cid}`;
+        const campaign_kind = kindByBancaCampaign.get(kindKey) ?? 'normal';
+
         campaignRows.push({
           banca_id: resolvedBancaId,
           banca_name: resolvedBancaId,
           banca_url: null,
           campaign_id: cid,
+          campaign_kind,
           name: c.name || cid,
           objective: c.objective ?? null,
           status: c.status ?? null,
@@ -1264,6 +1283,12 @@ export async function fetchAdminMetaLiveAggregate(opts: {
       acc.leads += row.leads;
       acc.results += row.results;
       acc.spend += row.spend;
+      if (row.campaign_kind === 'bolao') {
+        acc.spend_bolao += row.spend;
+        acc.results_bolao += row.results;
+      } else {
+        acc.results_normal += row.results;
+      }
       return acc;
     },
     {
@@ -1274,6 +1299,9 @@ export async function fetchAdminMetaLiveAggregate(opts: {
       leads: 0,
       results: 0,
       spend: 0,
+      spend_bolao: 0,
+      results_normal: 0,
+      results_bolao: 0,
     }
   );
 

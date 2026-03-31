@@ -38,12 +38,16 @@ export async function POST(req: NextRequest) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
-      const heartbeat = setInterval(() => {
+      const safeEnqueue = (chunk: Uint8Array) => {
         try {
-          controller.enqueue(encoder.encode(' '));
+          controller.enqueue(chunk);
         } catch {
-          /* stream fechado */
+          /* cliente desconectou ou controller já fechado (heartbeat) */
         }
+      };
+
+      const heartbeat = setInterval(() => {
+        safeEnqueue(encoder.encode(' '));
       }, HEARTBEAT_MS);
 
       try {
@@ -56,16 +60,22 @@ export async function POST(req: NextRequest) {
           chainState.morePending = true;
         }
         clearInterval(heartbeat);
-        controller.enqueue(encoder.encode(JSON.stringify(payload)));
+        safeEnqueue(encoder.encode(JSON.stringify(payload)));
       } catch (e: unknown) {
         clearInterval(heartbeat);
         const msg = e instanceof Error ? e.message : String(e);
-        console.error('[MassSend] process route — exceção:', msg);
+        if (!/already closed|Invalid state/i.test(msg)) {
+          console.error('[MassSend] process route — exceção:', msg);
+        }
         const fallback = { success: false, data: { processed: false, message: `Erro interno: ${msg}` } };
-        controller.enqueue(encoder.encode(JSON.stringify(fallback)));
+        safeEnqueue(encoder.encode(JSON.stringify(fallback)));
       } finally {
         clearInterval(heartbeat);
-        controller.close();
+        try {
+          controller.close();
+        } catch {
+          /* já fechado */
+        }
         if (chainState.morePending && !afterRegistered) {
           setTimeout(() => triggerMassSendProcessFromOrigin(publicOrigin), CHAIN_FOLLOWUP_MS);
         }

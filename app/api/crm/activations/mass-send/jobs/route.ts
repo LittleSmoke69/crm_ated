@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
 
     const { data: jobs, error } = await supabaseServiceRole
       .from('activation_mass_send_jobs')
-      .select('id, message_id, message_title, instance_name, status, total_groups, sent_count, failed_count, processed_index, last_error, created_at, updated_at')
+      .select('id, message_id, message_title, instance_name, group_ids, status, total_groups, sent_count, failed_count, processed_index, last_error, created_at, updated_at')
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .limit(50);

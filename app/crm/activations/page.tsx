@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { Activity, Heart, Search, Plus, MoreVertical, Paperclip, X, Trash2, Edit2, Star, Info, Upload, ArrowLeft, Video, Phone, MoreVertical as MoreVerticalIcon, Smile, Camera, Mic, Check, CheckCheck, Send, Calendar, Clock, Play, Pause, Eye, Trash, Music, Megaphone, Image, CircleDot } from 'lucide-react';
+import { Activity, Heart, Search, Plus, MoreVertical, Paperclip, X, Trash2, Edit2, Star, Info, Upload, ArrowLeft, Video, Phone, MoreVertical as MoreVerticalIcon, Smile, Camera, Mic, Check, CheckCheck, Send, Calendar, Clock, Play, Pause, Eye, Trash, Music, Megaphone, Image, CircleDot, RefreshCw } from 'lucide-react';
 import SendActivationsModal from '@/components/CRM/SendActivationsModal';
 import ScheduleDetailsModal from '@/components/CRM/ScheduleDetailsModal';
 import MassSendJobDetailModal from '@/components/CRM/MassSendJobDetailModal';
@@ -123,6 +123,11 @@ const ActivationsPage = () => {
   const [showSendModal, setShowSendModal] = useState(false);
   const [messageToSend, setMessageToSend] = useState<Message | null>(null);
   const [sendModalDefaultMassSend, setSendModalDefaultMassSend] = useState(false);
+  /** Pré-preenche instância e grupos ao repetir uma campanha da tabela */
+  const [repeatCampaignSeed, setRepeatCampaignSeed] = useState<{
+    instanceName: string;
+    groupIds: string[];
+  } | null>(null);
   const [massSendSelectedMessageId, setMassSendSelectedMessageId] = useState<string>('');
 
   /** Ao editar mensagem "para este grupo" no card: salvar cria novo modelo e atualiza só esse agendamento */
@@ -2184,10 +2189,12 @@ const ActivationsPage = () => {
               setShowSendModal(false);
               setMessageToSend(null);
               setSendModalDefaultMassSend(false);
+              setRepeatCampaignSeed(null);
             }}
             messageId={messageToSend.id}
             messageTitle={messageToSend.title}
             defaultToMassSend={sendModalDefaultMassSend}
+            repeatCampaignSeed={repeatCampaignSeed}
             userId={userId}
             onMassSendComplete={loadMassSendJobs}
           />
@@ -2642,6 +2649,40 @@ const ActivationsPage = () => {
                           </td>
                           <td className="p-3 text-center">
                             <div className="flex items-center justify-center gap-0.5 flex-wrap">
+                              <button
+                                type="button"
+                                disabled={job.status === 'pending' || job.status === 'processing'}
+                                onClick={() => {
+                                  const raw = job.group_ids;
+                                  const groupIds = Array.isArray(raw)
+                                    ? raw.map((id: unknown) => String(id ?? '').trim()).filter(Boolean)
+                                    : [];
+                                  const msg = messages.find((m) => m.id === job.message_id);
+                                  if (!msg) {
+                                    showToast('Carregue a lista de mensagens ou recarregue a página para repetir esta campanha.', 'error');
+                                    return;
+                                  }
+                                  if (groupIds.length === 0) {
+                                    showToast('Esta campanha não tem grupos salvos para repetir.', 'error');
+                                    return;
+                                  }
+                                  setRepeatCampaignSeed({
+                                    instanceName: String(job.instance_name || '').trim(),
+                                    groupIds: [...new Set(groupIds)],
+                                  });
+                                  setMessageToSend(msg);
+                                  setSendModalDefaultMassSend(true);
+                                  setShowSendModal(true);
+                                }}
+                                className="p-2 rounded-lg text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                                title={
+                                  job.status === 'pending' || job.status === 'processing'
+                                    ? 'Aguarde esta campanha terminar ou pause para criar outra'
+                                    : 'Nova campanha com a mesma mensagem e mesmos grupos'
+                                }
+                              >
+                                <RefreshCw className="w-4 h-4" />
+                              </button>
                               {(job.status === 'pending' || job.status === 'processing') && (
                                 <button
                                   type="button"

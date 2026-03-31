@@ -24,6 +24,8 @@ interface SendActivationsModalProps {
   userId: string;
   /** Quando true, pula o modal de escolha e abre direto em modo campanha em massa */
   defaultToMassSend?: boolean;
+  /** Repetir campanha: pré-seleciona instância e grupos (aba Campanhas de disparo) */
+  repeatCampaignSeed?: { instanceName: string; groupIds: string[] } | null;
   /** Após criar campanha em massa (ou reutilizar job existente), atualiza lista na aba Campanhas */
   onMassSendComplete?: () => void;
 }
@@ -35,6 +37,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
   messageTitle,
   userId,
   defaultToMassSend = false,
+  repeatCampaignSeed = null,
   onMassSendComplete,
 }) => {
   const [loading, setLoading] = useState(false);
@@ -52,6 +55,8 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
   const [forceMassSend, setForceMassSend] = useState(() => defaultToMassSend);
   /** Evita duplo clique antes do React aplicar sending=true (segundo job / envio duplicado). */
   const sendLockedRef = useRef(false);
+  /** Aplica seleção do seed uma vez por abertura (não sobrescreve se o usuário trocar instância). */
+  const repeatSeedAppliedRef = useRef(false);
 
   const { toasts, showToast, removeToast } = useToast();
 
@@ -158,6 +163,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
       setShowChoiceModal(false);
       setShowScheduleModal(false);
     }
+    if (!isOpen) repeatSeedAppliedRef.current = false;
   }, [isOpen, userId, defaultToMassSend]);
 
   // Carrega instâncias e grupos do banco ao abrir (apenas quando for enviar agora)
@@ -172,7 +178,13 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
         if (data.success) {
           const pool = selectInstancesForActivationSend(data.data) as any[];
           setInstances(pool);
-          setSelectedInstance(pool.length > 0 ? pool[0].instance_name : '');
+          const seedName = repeatCampaignSeed?.instanceName?.trim();
+          if (seedName) {
+            const found = pool.find((i: { instance_name?: string }) => i.instance_name === seedName);
+            setSelectedInstance(found ? found.instance_name : seedName);
+          } else {
+            setSelectedInstance(pool.length > 0 ? pool[0].instance_name : '');
+          }
         } else {
           setInstances([]);
           setSelectedInstance('');
@@ -187,7 +199,21 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
     if (isOpen && userId && !showChoiceModal && !showScheduleModal) {
       init();
     }
-  }, [isOpen, userId, showChoiceModal, showScheduleModal]);
+  }, [isOpen, userId, showChoiceModal, showScheduleModal, repeatCampaignSeed?.instanceName]);
+
+  // Repetir campanha: marca os mesmos group_ids após carregar lista do banco (uma vez por abertura)
+  useEffect(() => {
+    if (!isOpen || !userId || showChoiceModal || showScheduleModal) return;
+    if (!repeatCampaignSeed?.groupIds?.length || loading) return;
+    if (repeatSeedAppliedRef.current) return;
+    const ids = [
+      ...new Set(repeatCampaignSeed.groupIds.map((id) => String(id ?? '').trim()).filter(Boolean)),
+    ];
+    if (ids.length) {
+      setSelectedGroups(new Set(ids));
+      repeatSeedAppliedRef.current = true;
+    }
+  }, [isOpen, userId, repeatCampaignSeed, loading, showChoiceModal, showScheduleModal]);
 
   // Carrega grupos da instância selecionada ao abrir o modal ou ao trocar a instância no dropdown
   useEffect(() => {
@@ -308,7 +334,8 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
         throw new Error('Erro ao processar resposta do servidor. Tente novamente.');
       }
 
-      if (response.status === 202 && data.mass_send) {
+      // Disparo em massa: API usa 202, mas alguns ambientes normalizam para 200 — confiar em `mass_send`, não só no status.
+      if (data.mass_send === true && response.ok) {
         showToast(
           data.message ||
             (data.reused_existing_job
@@ -321,18 +348,40 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
         return;
       }
 
-      if (data.success) {
-        const successMsg = data.data.success > 0 
-          ? `Mensagem enviada com sucesso para ${data.data.success} grupo(s)!`
-          : 'Nenhuma mensagem foi enviada.';
-        const failMsg = data.data.failed > 0 
-          ? ` ${data.data.failed} falha(s).` 
-          : '';
-        showToast(successMsg + failMsg, data.data.failed > 0 ? 'error' : 'success');
+      // Envio síncrono (poucos grupos): formato successResponse com data.success / data.failed
+      const sync = data.data;
+      if (
+        data.success &&
+        sync &&
+        typeof sync === 'object' &&
+        typeof sync.success === 'number'
+      ) {
+        const okCount = sync.success;
+        const failCount = typeof sync.failed === 'number' ? sync.failed : 0;
+        const successMsg =
+          okCount > 0
+            ? `Mensagem enviada com sucesso para ${okCount} grupo(s)!`
+            : 'Nenhuma mensagem foi enviada.';
+        const failMsg = failCount > 0 ? ` ${failCount} falha(s).` : '';
+        showToast(successMsg + failMsg, failCount > 0 ? 'error' : 'success');
         onClose();
-      } else {
-        showToast(`Erro ao enviar mensagens: ${data.error || 'Erro desconhecido'}`, 'error');
+        return;
       }
+
+      if (data.success) {
+        console.warn('[SEND] success sem mass_send nem payload síncrono — possível inconsistência de API', {
+          status: response.status,
+          data,
+        });
+        showToast(
+          'Resposta incompleta do servidor. Confira a aba Campanhas de disparo; se não aparecer campanha, tente de novo.',
+          'info'
+        );
+        onMassSendComplete?.();
+        return;
+      }
+
+      showToast(`Erro ao enviar mensagens: ${data.error || 'Erro desconhecido'}`, 'error');
     } catch (error: any) {
       console.error('❌ [SEND] Erro ao enviar mensagens:', error);
       
@@ -569,12 +618,14 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
         {/* Footer Actions - sempre visível */}
         <div className="p-4 border-t border-gray-200 dark:border-[#404040] bg-white dark:bg-[#333] flex gap-3 flex-shrink-0">
           <button
+            type="button"
             onClick={onClose}
             className="flex-1 px-4 py-3 bg-gray-200 dark:bg-[#404040] hover:bg-gray-300 dark:hover:bg-[#505050] text-gray-800 dark:text-white font-bold rounded-xl transition-all"
           >
             Cancelar
           </button>
           <button
+            type="button"
             onClick={handleSend}
             disabled={sending || selectedGroups.size === 0}
             className="flex-1 px-4 py-3 bg-[#8CD955] hover:bg-[#7BC84A] disabled:opacity-50 disabled:hover:bg-[#8CD955] text-white font-bold rounded-xl transition-all shadow-lg shadow-[#8CD955]/20 flex items-center justify-center gap-2"

@@ -147,13 +147,13 @@ export async function POST(req: NextRequest) {
         .select('id, status')
         .eq('user_id', userId)
         .eq('message_id', messageId)
-        .in('status', ['pending', 'processing', 'paused'])
+        .in('status', ['pending', 'processing'])
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
 
       if (existingActive?.id) {
-        console.warn('[ACTIVATION] Campanha em massa já ativa para esta mensagem — evitando job duplicado', {
+        console.warn('[ACTIVATION] Já existe campanha em andamento para esta mensagem — evitando job duplicado', {
           jobId: existingActive.id,
           status: existingActive.status,
         });
@@ -173,7 +173,7 @@ export async function POST(req: NextRequest) {
             mass_send: true,
             reused_existing_job: true,
             message:
-              'Já existe uma campanha em andamento (ou pausada) para esta mensagem. Não criamos outro job; acompanhe o existente em Campanhas de disparo.',
+              'Já existe uma campanha em andamento (pendente ou processando) para esta mensagem. Aguarde concluir, pause ou use Repetir campanha após terminar. Acompanhe o job existente em Campanhas de disparo.',
           }),
           { status: 202, headers: { 'Content-Type': 'application/json' } }
         );

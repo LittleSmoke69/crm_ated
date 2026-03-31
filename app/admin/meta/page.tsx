@@ -30,6 +30,15 @@ import {
 } from 'lucide-react';
 import Funnel3DChart from '@/components/Charts/Funnel3DChart';
 
+function formatBRL(value: number): string {
+  return new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number.isFinite(value) ? value : 0);
+}
+
 interface Banca {
   id: string;
   name: string;
@@ -153,6 +162,10 @@ export default function AdminMetaPage() {
   const overviewFilterBancaRef = useRef<HTMLDivElement | null>(null);
   /** Evita re-disparar auto-sync da mesma combinação user+bancas no mesmo mount. */
   const autoSyncRunKeyRef = useRef<string>('');
+  /** Descarta respostas antigas de live-aggregate quando várias requisições rodam em paralelo (efeito + auto-sync). */
+  const liveAggregateRequestSeqRef = useRef(0);
+  /** Mantém loading enquanto houver pelo menos uma chamada a live-aggregate em andamento. */
+  const liveAggregateInFlightRef = useRef(0);
   const [configLoadError, setConfigLoadError] = useState<string | null>(null);
   const [config, setConfig] = useState<MetaConfig | null>(null);
   const [loading, setLoading] = useState(true);
@@ -211,6 +224,9 @@ export default function AdminMetaPage() {
       leads: number;
       results: number;
       spend: number;
+      spend_bolao?: number;
+      results_normal?: number;
+      results_bolao?: number;
     };
     campaigns: Array<Record<string, unknown>>;
     integrations: Array<Record<string, unknown>>;
@@ -233,10 +249,15 @@ export default function AdminMetaPage() {
 
   // Todas as campanhas (todas as integrações)
   const [allCampaignsRows, setAllCampaignsRows] = useState<any[]>([]);
-  const [allCampaignsLoading, setAllCampaignsLoading] = useState(false);
+  /** Inicia true: o primeiro paint após auth não mostra R$ 0,00 antes do primeiro fetch de campaigns-all. */
+  const [allCampaignsLoading, setAllCampaignsLoading] = useState(true);
   const [allCampaignsError, setAllCampaignsError] = useState<string | null>(null);
   const [allCampaignsSearch, setAllCampaignsSearch] = useState('');
-  // Default em "true" para mostrar também campanhas PAUSED com métricas (comum em Meta).
+  /** Opcional: quando true, inclui campanhas não ACTIVE nas somas, overview e tabelas (active_only=0 na API). */
+  /**
+   * Default true: no admin muitas contas só têm campanhas pausadas na Meta mas ainda precisam ver métricas/sincronização.
+   * Desmarque para restringir a status ou effective_status ACTIVE (alinhado às APIs active_only=1).
+   */
   const [allCampaignsShowInactive, setAllCampaignsShowInactive] = useState(true);
   const [allCampaignsKindFilter, setAllCampaignsKindFilter] = useState<'all' | MetaCampaignKind>('all');
   const [allCampaignsPage, setAllCampaignsPage] = useState(1);
@@ -517,6 +538,7 @@ export default function AdminMetaPage() {
       if (adminMetaInsightsDateRange.dateFrom) qs.set('date_from', adminMetaInsightsDateRange.dateFrom);
       if (adminMetaInsightsDateRange.dateTo) qs.set('date_to', adminMetaInsightsDateRange.dateTo);
       if (overviewFilterBancaId) qs.set('banca_id', overviewFilterBancaId);
+      qs.set('active_only', allCampaignsShowInactive ? '0' : '1');
       const url = qs.toString() ? `/api/admin/meta/overview?${qs.toString()}` : '/api/admin/meta/overview';
       const res = await fetch(url, {
         headers: { 'X-User-Id': userId },
@@ -571,7 +593,13 @@ export default function AdminMetaPage() {
     } finally {
       setLoadingOverview(false);
     }
-  }, [userId, adminMetaInsightsDateRange.dateFrom, adminMetaInsightsDateRange.dateTo, overviewFilterBancaId]);
+  }, [
+    userId,
+    adminMetaInsightsDateRange.dateFrom,
+    adminMetaInsightsDateRange.dateTo,
+    overviewFilterBancaId,
+    allCampaignsShowInactive,
+  ]);
 
   const loadRedirectSummary = useCallback(async () => {
     if (!userId) return;
@@ -603,6 +631,8 @@ export default function AdminMetaPage() {
 
   const loadLiveAggregate = useCallback(async () => {
     if (!userId) return;
+    const seq = ++liveAggregateRequestSeqRef.current;
+    liveAggregateInFlightRef.current += 1;
     setLoadingLiveAggregate(true);
     setLiveAggregateError(null);
     try {
@@ -617,6 +647,7 @@ export default function AdminMetaPage() {
         cache: 'no-store',
       });
       const data = await res.json();
+      if (seq !== liveAggregateRequestSeqRef.current) return;
       if (data.success && data.data) {
         setLiveAggregate(data.data);
       } else {
@@ -624,10 +655,14 @@ export default function AdminMetaPage() {
         setLiveAggregateError(data.error || 'Não foi possível carregar métricas em tempo real da Meta.');
       }
     } catch (err: unknown) {
+      if (seq !== liveAggregateRequestSeqRef.current) return;
       setLiveAggregate(null);
       setLiveAggregateError(err instanceof Error ? err.message : 'Erro ao carregar métricas em tempo real.');
     } finally {
-      setLoadingLiveAggregate(false);
+      liveAggregateInFlightRef.current = Math.max(0, liveAggregateInFlightRef.current - 1);
+      if (liveAggregateInFlightRef.current === 0) {
+        setLoadingLiveAggregate(false);
+      }
     }
   }, [
     userId,
@@ -1204,7 +1239,7 @@ export default function AdminMetaPage() {
     },
     { leads: 0, deposited: 0 }
   );
-  /** Campanhas com dados de métricas para seção "Campanhas sincronizadas" (independe de status ACTIVE/PAUSED). */
+  /** Campanhas com métricas (lista já respeita ACTIVE por padrão via API; opcional incluir pausadas). */
   const metricSyncedCampaignRows = useMemo(
     () =>
       (allCampaignsRows ?? []).filter((row: any) => {
@@ -1217,47 +1252,50 @@ export default function AdminMetaPage() {
       }),
     [allCampaignsRows]
   );
-  const activeCampaignCardsTotals = useMemo(
-    () =>
-      metricSyncedCampaignRows.reduce(
-        (acc, row: any) => {
-          acc.campaigns += 1;
-          acc.impressions += Number(row?.impressions) || 0;
-          acc.clicks += Number(row?.clicks) || 0;
-          acc.leads += Number(row?.leads) || 0;
-          acc.spend += Number(row?.spend) || 0;
-          return acc;
-        },
-        { campaigns: 0, impressions: 0, clicks: 0, leads: 0, spend: 0 }
-      ),
-    [metricSyncedCampaignRows]
-  );
-
   const usingLiveMetaCards = Boolean(liveAggregate && !liveAggregateError);
 
-  const displayCampaignCardsTotals = useMemo(() => {
-    if (usingLiveMetaCards && liveAggregate) {
+  /** Totais vindos do cache (campaigns-all): gasto e leads por tipo — sem API Graph, “resultados” usam leads sincronizados. */
+  const cacheKindSummary = useMemo(() => {
+    return (metricSyncedCampaignRows as any[]).reduce(
+      (acc, row: any) => {
+        const spend = Number(row?.spend) || 0;
+        const leads = Number(row?.leads) || 0;
+        const kind = row?.campaign_kind === 'bolao' ? 'bolao' : 'normal';
+        acc.spendAll += spend;
+        if (kind === 'bolao') acc.spendBolao += spend;
+        if (kind === 'bolao') acc.resultsBolao += leads;
+        else acc.resultsNormal += leads;
+        return acc;
+      },
+      { spendAll: 0, spendBolao: 0, resultsNormal: 0, resultsBolao: 0 }
+    );
+  }, [metricSyncedCampaignRows]);
+
+  const metaSummaryCards = useMemo(() => {
+    if (usingLiveMetaCards && liveAggregate?.totals) {
       const t = liveAggregate.totals;
       return {
-        campaigns: t.campaigns_with_metrics,
-        spend: t.spend,
-        leads: t.leads,
-        impressions: t.impressions,
-        clicks: t.clicks,
-        reach: t.reach,
-        results: t.results,
+        spendAll: Number(t.spend) || 0,
+        spendBolao: Number(t.spend_bolao) || 0,
+        resultsNormal: Number(t.results_normal) || 0,
+        resultsBolao: Number(t.results_bolao) || 0,
+        resultsSub:
+          'Resultados = soma das ações Meta (lead, compra, cadastro completo, etc.) no período, por tipo da campanha no CRM.',
       };
     }
     return {
-      campaigns: activeCampaignCardsTotals.campaigns,
-      spend: activeCampaignCardsTotals.spend,
-      leads: activeCampaignCardsTotals.leads,
-      impressions: activeCampaignCardsTotals.impressions,
-      clicks: activeCampaignCardsTotals.clicks,
-      reach: 0,
-      results: 0,
+      spendAll: cacheKindSummary.spendAll,
+      spendBolao: cacheKindSummary.spendBolao,
+      resultsNormal: cacheKindSummary.resultsNormal,
+      resultsBolao: cacheKindSummary.resultsBolao,
+      resultsSub:
+        'Valores por tipo usam dados salvos no sistema até a próxima atualização bem-sucedida.',
     };
-  }, [usingLiveMetaCards, liveAggregate, activeCampaignCardsTotals]);
+  }, [usingLiveMetaCards, liveAggregate, cacheKindSummary]);
+
+  /** Enquanto busca na Meta ou, sem live, enquanto monta o cache da lista de campanhas. */
+  const metaSummaryCardsLoading =
+    loadingLiveAggregate || (!usingLiveMetaCards && allCampaignsLoading);
 
   /** Linhas da tabela: prioriza métricas live (Graph) cruzadas com cadastro local para tipo/consultores. */
   const displayMetricCampaignRows = useMemo(() => {
@@ -1285,7 +1323,10 @@ export default function AdminMetaPage() {
         start_time: row.start_time ?? dbRow?.start_time ?? null,
         stop_time: row.stop_time ?? dbRow?.stop_time ?? null,
         updated_at: dbRow?.updated_at ?? null,
-        campaign_kind: (dbRow?.campaign_kind as MetaCampaignKind) || 'normal',
+        campaign_kind:
+          (row.campaign_kind as MetaCampaignKind) ||
+          (dbRow?.campaign_kind as MetaCampaignKind) ||
+          'normal',
         reach: Number(row.reach) || 0,
         impressions: Number(row.impressions) || 0,
         clicks: Number(row.clicks) || 0,
@@ -1394,9 +1435,7 @@ export default function AdminMetaPage() {
           <h1 className="text-2xl font-bold text-gray-800">Integração Meta Ads</h1>
         </div>
         <div className="flex flex-wrap items-end justify-between gap-3">
-          <p className="text-gray-600">
-            Gestão geral das integrações Meta Ads por banca, com status, métricas e campanhas sincronizadas.
-          </p>
+          <p className="text-gray-600">Gestão geral das integrações Meta Ads por banca.</p>
           <div className="shrink-0 flex items-end gap-2 flex-wrap">
             <div>
               <label className="block text-[11px] font-semibold text-gray-500 uppercase mb-1">Período Meta</label>
@@ -1511,6 +1550,22 @@ export default function AdminMetaPage() {
                 </div>
               </>
             )}
+            <label className="flex items-center gap-2 cursor-pointer select-none max-w-[220px] pt-6 md:pt-0 md:items-end md:pb-0.5">
+              <input
+                type="checkbox"
+                checked={allCampaignsShowInactive}
+                onChange={(e) => {
+                  setAllCampaignsShowInactive(e.target.checked);
+                  setOverviewPage(1);
+                  setAllCampaignsPage(1);
+                }}
+                className="rounded border-gray-300 text-[#8CD955] focus:ring-[#8CD955] shrink-0"
+              />
+              <span className="text-[11px] text-gray-700 leading-snug">
+                <span className="font-semibold text-gray-600">Padrão do painel:</span> incluir campanhas pausadas
+                <span className="text-gray-500"> (desmarque para só ACTIVE)</span>
+              </span>
+            </label>
             <button
               type="button"
               onClick={() => {
@@ -1533,47 +1588,69 @@ export default function AdminMetaPage() {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 mb-1 text-xs text-gray-600">
-          {loadingLiveAggregate ? (
-            <span className="inline-flex items-center gap-1 text-[#8CD955]">
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              Atualizando métricas direto da Meta…
-            </span>
-          ) : usingLiveMetaCards ? (
-            <span className="text-emerald-700 font-medium">
-              Métricas em tempo real (API Meta) · período do filtro · soma de todas as integrações no escopo
-            </span>
-          ) : null}
-          {liveAggregateError ? <span className="text-amber-700">Live indisponível — exibindo cache local: {liveAggregateError}</span> : null}
-        </div>
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-7">
+        {liveAggregateError ? (
+          <div className="flex flex-wrap items-center gap-2 mb-1 text-xs text-gray-600">
+            <span className="text-amber-700">Não foi possível atualizar agora. Exibindo dados salvos. {liveAggregateError}</span>
+          </div>
+        ) : null}
+        <div className="grid gap-4 md:grid-cols-1 xl:grid-cols-3">
           <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase">Campanhas com dados (métricas)</p>
-            <p className="text-2xl font-bold text-gray-800 mt-1">{displayCampaignCardsTotals.campaigns.toLocaleString('pt-BR')}</p>
+            <p className="text-xs font-semibold text-gray-500 uppercase">Gasto total · campanhas ativas</p>
+            <p className="text-xs text-gray-500 mt-1">Soma do gasto no período selecionado.</p>
+            {metaSummaryCardsLoading ? (
+              <div className="mt-3 flex items-center gap-2 text-gray-600 min-h-[2rem]">
+                <Loader2 className="w-5 h-5 animate-spin text-[#8CD955] shrink-0" />
+                <span className="text-sm">Carregando dados…</span>
+              </div>
+            ) : (
+              <p className="text-2xl font-bold text-gray-800 mt-2 tabular-nums tracking-tight">
+                {formatBRL(metaSummaryCards.spendAll)}
+              </p>
+            )}
           </div>
           <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase">Gasto total</p>
-            <p className="text-2xl font-bold text-gray-800 mt-1">R$ {displayCampaignCardsTotals.spend.toFixed(2)}</p>
+            <p className="text-xs font-semibold text-gray-500 uppercase">Gasto · campanhas tipo bolão</p>
+            <p className="text-xs text-gray-500 mt-1">Marcadas como “Bolão” em campanhas sincronizadas no CRM.</p>
+            {metaSummaryCardsLoading ? (
+              <div className="mt-3 flex items-center gap-2 text-gray-600 min-h-[2rem]">
+                <Loader2 className="w-5 h-5 animate-spin text-[#8CD955] shrink-0" />
+                <span className="text-sm">Carregando dados…</span>
+              </div>
+            ) : (
+              <p className="text-2xl font-bold text-gray-800 mt-2 tabular-nums tracking-tight">
+                {formatBRL(metaSummaryCards.spendBolao)}
+              </p>
+            )}
           </div>
           <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase">Leads (Meta, período)</p>
-            <p className="text-2xl font-bold text-gray-800 mt-1">{displayCampaignCardsTotals.leads.toLocaleString('pt-BR')}</p>
-          </div>
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase">Resultados (ações Meta)</p>
-            <p className="text-2xl font-bold text-gray-800 mt-1">{displayCampaignCardsTotals.results.toLocaleString('pt-BR')}</p>
-          </div>
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase">Impressões</p>
-            <p className="text-2xl font-bold text-gray-800 mt-1">{displayCampaignCardsTotals.impressions.toLocaleString('pt-BR')}</p>
-          </div>
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase">Cliques</p>
-            <p className="text-2xl font-bold text-gray-800 mt-1">{displayCampaignCardsTotals.clicks.toLocaleString('pt-BR')}</p>
-          </div>
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase">Leads (painel geral / cache)</p>
-            <p className="text-2xl font-bold text-gray-800 mt-1">{overviewTotals.totalLeads.toLocaleString('pt-BR')}</p>
+            <p className="text-xs font-semibold text-gray-500 uppercase">Resultado · normal vs bolão</p>
+            {metaSummaryCardsLoading ? (
+              <>
+                <p className="text-[11px] text-gray-500 mt-1 leading-snug">Aguarde enquanto os números são obtidos.</p>
+                <div className="mt-3 flex items-center gap-2 text-gray-600 min-h-[2.5rem]">
+                  <Loader2 className="w-5 h-5 animate-spin text-[#8CD955] shrink-0" />
+                  <span className="text-sm">Carregando dados…</span>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-[11px] text-gray-500 mt-1 leading-snug">{metaSummaryCards.resultsSub}</p>
+                <div className="mt-3 flex flex-wrap gap-6">
+                  <div>
+                    <p className="text-[11px] font-medium text-gray-500 uppercase">Normal</p>
+                    <p className="text-xl font-bold text-gray-800 tabular-nums">
+                      {metaSummaryCards.resultsNormal.toLocaleString('pt-BR')}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-medium text-gray-500 uppercase">Bolão</p>
+                    <p className="text-xl font-bold text-gray-800 tabular-nums">
+                      {metaSummaryCards.resultsBolao.toLocaleString('pt-BR')}
+                    </p>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
 
@@ -1583,9 +1660,7 @@ export default function AdminMetaPage() {
             <h2 className="text-base font-semibold text-gray-800">Funil de campanhas + consultores</h2>
           </div>
           <p className="text-xs text-gray-500 mb-4">
-            {usingLiveMetaCards
-              ? 'Meta em tempo real (API) no período do filtro + consultores ainda do cadastro local.'
-              : 'Meta por período selecionado + cadastrados/depósito dos consultores atribuídos nas campanhas listadas.'}
+            Período selecionado acima e cadastros/depósitos dos consultores atribuídos às campanhas.
           </p>
           <div className="bg-gray-50 p-3 rounded-xl border border-gray-100 min-h-[320px]">
             <Funnel3DChart
@@ -1606,6 +1681,409 @@ export default function AdminMetaPage() {
         </div>
 
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 md:p-5">
+        <div id="dados-sincronizados-section" className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 md:p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="text-base font-semibold text-gray-800">Campanhas sincronizadas</h3>
+              <p className="text-xs text-gray-500 mt-1">
+                Métricas e cadastro no CRM. Período: {adminMetaInsightsDateRange.label}.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  const first = (displayMetricCampaignRows || [])[0];
+                  if (first) {
+                    setConsultorModalCampaignKey(`${String(first.banca_id)}:${String(first.campaign_id)}`);
+                  }
+                  setConsultorModalOpen(true);
+                }}
+                disabled={displayMetricCampaignRows.length === 0}
+                className="text-sm text-blue-700 hover:text-blue-800 font-medium flex items-center gap-1 disabled:opacity-40"
+              >
+                <Users className="w-4 h-4" />
+                Atribuir consultores
+              </button>
+              <button
+                type="button"
+                onClick={() => void loadLiveAggregate()}
+                disabled={loadingLiveAggregate || !userId}
+                className="text-sm text-emerald-700 hover:text-emerald-800 font-medium flex items-center gap-1 disabled:opacity-50"
+              >
+                {loadingLiveAggregate ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                Atualizar na Meta
+              </button>
+              <button
+                onClick={() => loadSyncedData()}
+                disabled={loadingData}
+                className="text-sm text-[#8CD955] hover:text-[#7BC84A] font-medium flex items-center gap-1 disabled:opacity-50"
+              >
+                {loadingData ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                Cache local
+              </button>
+            </div>
+          </div>
+
+          {syncedData ? (
+            <>
+              {loadingData ? (
+                <div className="py-8 flex justify-center">
+                  <Loader2 className="w-6 h-6 animate-spin text-[#8CD955]" />
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="border border-gray-200 rounded-xl overflow-hidden">
+                    <button
+                      onClick={() => setExpandedTab(expandedTab === 'campaigns' ? null : 'campaigns')}
+                      className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition"
+                    >
+                      <span className="flex items-center gap-2 font-medium text-gray-800">
+                        <Target className="w-4 h-4 text-[#8CD955]" />
+                        Campanhas com dados ({displayMetricCampaignRows.length})
+                      </span>
+                      {expandedTab === 'campaigns' ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+                    </button>
+                    {expandedTab === 'campaigns' && (
+                      <div className="overflow-x-auto max-h-80 overflow-y-auto">
+                        <table className="w-full text-sm text-left min-w-[2220px]">
+                          <thead className="bg-gray-100 text-gray-700 sticky top-0">
+                            <tr>
+                              <th className="px-4 py-2">Início</th>
+                              <th className="px-4 py-2">Banca</th>
+                              <th className="px-4 py-2">Nome</th>
+                              <th className="px-4 py-2">Campaign ID</th>
+                              <th className="px-4 py-2">Tipo</th>
+                              <th className="px-4 py-2 text-right">Reach</th>
+                              <th className="px-4 py-2 text-right">Impressões</th>
+                              <th className="px-4 py-2 text-right">Cliques</th>
+                              <th className="px-4 py-2 text-right">Leads</th>
+                              <th className="px-4 py-2 text-right">Resultados</th>
+                              <th className="px-4 py-2 text-right">Gasto</th>
+                              <th className="px-4 py-2 text-right">Leads consultores</th>
+                              <th className="px-4 py-2 text-right">Depósito consultores</th>
+                              <th className="px-4 py-2">Status</th>
+                              <th className="px-4 py-2">Objetivo</th>
+                              <th className="px-4 py-2 text-right">Orçamento diário</th>
+                              <th className="px-4 py-2 text-right">Orçamento total</th>
+                              <th className="px-4 py-2">Fim</th>
+                              <th className="px-4 py-2">Atualizado</th>
+                              <th className="px-4 py-2">Atribuir banca</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {displayMetricCampaignRows.map((c: any) => {
+                              const m = {
+                                reach: Number(c.reach) || 0,
+                                impressions: Number(c.impressions) || 0,
+                                clicks: Number(c.clicks) || 0,
+                                leads: Number(c.leads) || 0,
+                                spend: Number(c.spend) || 0,
+                                results: Number(c.results_live) || 0,
+                              };
+                              const ownerKey = `${String(c.banca_id)}:${String(c.campaign_id)}`;
+                              const ownerTarget = campaignOwnerDraft[ownerKey] ?? String(c.banca_id);
+                              return (
+                                <tr key={c.id ?? c.campaign_id} className="hover:bg-gray-50">
+                                  <td className="px-4 py-2 text-gray-700">{c.start_time ? formatDate(c.start_time) : '-'}</td>
+                                  <td className="px-4 py-2 text-xs text-gray-600">
+                                    <p className="font-medium text-gray-800">{c.banca_name || c.banca_id}</p>
+                                    {c.banca_url ? <p className="text-[11px] text-gray-500 break-all">{c.banca_url}</p> : null}
+                                  </td>
+                                  <td className="px-4 py-2 font-medium text-gray-800">{c.name || c.campaign_id}</td>
+                                  <td className="px-4 py-2 text-xs font-mono text-gray-700">{c.campaign_id || '-'}</td>
+                                  <td className="px-4 py-2 align-top">
+                                    {c.banca_id ? (
+                                      <select
+                                        value={(c.campaign_kind as MetaCampaignKind) || 'normal'}
+                                        disabled={campaignKindSavingKey === `${String(c.banca_id)}:${String(c.campaign_id)}`}
+                                        onChange={(e) => {
+                                          const v = e.target.value as MetaCampaignKind;
+                                          void handleSaveCampaignKind(String(c.banca_id), String(c.campaign_id), v);
+                                        }}
+                                        className="px-2 py-1 rounded-lg border border-gray-200 text-xs text-gray-800 bg-white max-w-[140px] disabled:opacity-50"
+                                      >
+                                        <option value="normal">Normal</option>
+                                        <option value="bolao">Bolão</option>
+                                      </select>
+                                    ) : (
+                                      <span className="text-xs text-gray-500">—</span>
+                                    )}
+                                  </td>
+                                  <td className="px-4 py-2 text-right text-gray-700 tabular-nums">{m.reach.toLocaleString('pt-BR')}</td>
+                                  <td className="px-4 py-2 text-right text-gray-700 tabular-nums">{m.impressions.toLocaleString('pt-BR')}</td>
+                                  <td className="px-4 py-2 text-right text-gray-700 tabular-nums">{m.clicks.toLocaleString('pt-BR')}</td>
+                                  <td className="px-4 py-2 text-right text-gray-700 tabular-nums">{m.leads.toLocaleString('pt-BR')}</td>
+                                  <td className="px-4 py-2 text-right text-gray-700 tabular-nums">{m.results.toLocaleString('pt-BR')}</td>
+                                  <td className="px-4 py-2 text-right text-gray-700 tabular-nums">R$ {m.spend.toFixed(2)}</td>
+                                  <td className="px-4 py-2 text-right text-gray-700 tabular-nums">{(Number(c.consultor_total_leads) || 0).toLocaleString('pt-BR')}</td>
+                                  <td className="px-4 py-2 text-right text-gray-700 tabular-nums">R$ {(Number(c.consultor_total_deposited) || 0).toFixed(2)}</td>
+                                  <td className="px-4 py-2 text-gray-700">{c.effective_status || c.status || '-'}</td>
+                                  <td className="px-4 py-2 text-gray-700">{c.objective || '-'}</td>
+                                  <td className="px-4 py-2 text-right text-gray-700">{c.daily_budget != null ? `R$ ${Number(c.daily_budget).toFixed(2)}` : '-'}</td>
+                                  <td className="px-4 py-2 text-right text-gray-700">{c.lifetime_budget != null ? `R$ ${Number(c.lifetime_budget).toFixed(2)}` : '-'}</td>
+                                  <td className="px-4 py-2 text-gray-700">{c.stop_time ? formatDate(c.stop_time) : '-'}</td>
+                                  <td className="px-4 py-2 text-xs text-gray-600">{c.updated_at ? formatDate(c.updated_at) : '-'}</td>
+                                  <td className="px-4 py-2">
+                                    {c.banca_id ? (
+                                      <div className="flex items-center gap-2">
+                                        <select
+                                          value={ownerTarget ?? ''}
+                                          onChange={(e) =>
+                                            setCampaignOwnerDraft((prev) => ({
+                                              ...prev,
+                                              [ownerKey]: e.target.value,
+                                            }))
+                                          }
+                                          className="px-2 py-1 rounded-lg border border-gray-200 text-xs text-gray-700 bg-white max-w-[220px]"
+                                        >
+                                          {bancas.map((b) => (
+                                            <option key={b.id} value={b.id}>
+                                              {b.name || b.url || b.id}
+                                            </option>
+                                          ))}
+                                        </select>
+                                        <button
+                                          type="button"
+                                          disabled={
+                                            campaignOwnerSavingKey === ownerKey ||
+                                            !ownerTarget ||
+                                            ownerTarget === String(c.banca_id)
+                                          }
+                                          onClick={() =>
+                                            handleAssignCampaignOwner({
+                                              banca_id: String(c.banca_id),
+                                              campaign_id: String(c.campaign_id),
+                                              name: c.name,
+                                            })
+                                          }
+                                          className="px-3 py-1.5 rounded-lg border border-[#8CD955] text-[#6AAE39] hover:bg-[#F1FAE8] text-xs font-medium disabled:opacity-50"
+                                        >
+                                          {campaignOwnerSavingKey === ownerKey ? 'Salvando…' : 'Vincular banca'}
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <span className="text-xs text-gray-500">—</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                        {(displayMetricCampaignRows?.length ?? 0) === 0 && (
+                          <p className="px-4 py-6 text-center text-gray-500">
+                            {usingLiveMetaCards
+                              ? 'Nenhuma campanha com métrica no período para o filtro atual.'
+                              : 'Nenhuma campanha sincronizada.'}
+                          </p>
+                        )}
+                        {!usingLiveMetaCards && (allCampaignsRows?.length ?? 0) > 0 && (
+                          <div className="px-4 py-3 border-t border-gray-100 bg-gray-50/40 flex items-center justify-between">
+                            <p className="text-xs text-gray-500">Página {allCampaignsPage}</p>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setAllCampaignsPage((p) => Math.max(1, p - 1))}
+                                disabled={allCampaignsPage <= 1}
+                                className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                              >
+                                ‹ Anterior
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setAllCampaignsPage((p) => p + 1)}
+                                className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                              >
+                                Próximo ›
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="border border-gray-200 rounded-xl overflow-hidden">
+                    <button
+                      onClick={() => setExpandedTab(expandedTab === 'adsets' ? null : 'adsets')}
+                      className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition"
+                    >
+                      <span className="flex items-center gap-2 font-medium text-gray-800">
+                        <Layers className="w-4 h-4 text-blue-600" />
+                        AdSets ({syncedData.adsets?.length ?? 0})
+                      </span>
+                      {expandedTab === 'adsets' ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+                    </button>
+                    {expandedTab === 'adsets' && (
+                      <div className="overflow-x-auto max-h-80 overflow-y-auto">
+                        <table className="w-full text-sm text-left min-w-[700px]">
+                          <thead className="bg-gray-100 text-gray-700 sticky top-0">
+                            <tr>
+                              <th className="px-4 py-2">Banca</th>
+                              <th className="px-4 py-2">Nome</th>
+                              <th className="px-4 py-2">Status</th>
+                              <th className="px-4 py-2">Campanha ID</th>
+                              <th className="px-4 py-2">Orçamento diário</th>
+                              <th className="px-4 py-2">Otimização</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {pagedSyncedAdsetRows.map((a: any) => (
+                              <tr key={a.id} className="hover:bg-gray-50">
+                                <td className="px-4 py-2 text-xs text-gray-600">{selectedBancaName}</td>
+                                <td className="px-4 py-2 font-medium text-gray-800">{a.name || a.adset_id}</td>
+                                <td className="px-4 py-2 text-gray-700">{a.effective_status || a.status || '-'}</td>
+                                <td className="px-4 py-2 text-xs text-gray-700">{a.campaign_id || '-'}</td>
+                                <td className="px-4 py-2 text-gray-700">{a.daily_budget != null ? `R$ ${Number(a.daily_budget).toFixed(2)}` : '-'}</td>
+                                <td className="px-4 py-2 text-gray-700">{a.optimization_goal || '-'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        {(syncedData.adsets?.length ?? 0) === 0 && (
+                          <p className="px-4 py-6 text-center text-gray-500">Nenhum adset sincronizado.</p>
+                        )}
+                        {(syncedData.adsets?.length ?? 0) > 0 && (
+                          <div className="px-4 py-3 border-t border-gray-100 bg-gray-50/40 flex items-center justify-between">
+                            <p className="text-xs text-gray-500">Página {syncedAdsetPage} de {syncedAdsetTotalPages}</p>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setSyncedDataPage((prev) => ({ ...prev, adsets: Math.max(1, prev.adsets - 1) }))
+                                }
+                                disabled={syncedAdsetPage <= 1}
+                                className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                              >
+                                ‹ Anterior
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setSyncedDataPage((prev) => ({
+                                    ...prev,
+                                    adsets: Math.min(syncedAdsetTotalPages, prev.adsets + 1),
+                                  }))
+                                }
+                                disabled={syncedAdsetPage >= syncedAdsetTotalPages}
+                                className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                              >
+                                Próximo ›
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="border border-gray-200 rounded-xl overflow-hidden">
+                    <button
+                      onClick={() => setExpandedTab(expandedTab === 'insights' ? null : 'insights')}
+                      className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition"
+                    >
+                      <span className="flex items-center gap-2 font-medium text-gray-800">
+                        <TrendingUp className="w-4 h-4 text-purple-600" />
+                        Insights diários ({syncedData.insights?.length ?? 0})
+                      </span>
+                      {expandedTab === 'insights' ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+                    </button>
+                    {expandedTab === 'insights' && (
+                      <div className="overflow-x-auto max-h-96 overflow-y-auto">
+                        <table className="w-full text-sm text-left min-w-[1080px]">
+                          <thead className="bg-gray-100 text-gray-700 sticky top-0">
+                            <tr>
+                              <th className="px-4 py-2">Banca</th>
+                              <th className="px-4 py-2">Data</th>
+                              <th className="px-4 py-2">Campanha</th>
+                              <th className="px-4 py-2"><Eye className="w-4 h-4 inline" /> Alcance</th>
+                              <th className="px-4 py-2"><MousePointer className="w-4 h-4 inline" /> Impressões</th>
+                              <th className="px-4 py-2">Cliques</th>
+                              <th className="px-4 py-2"><DollarSign className="w-4 h-4 inline" /> Gasto</th>
+                              <th className="px-4 py-2">Leads</th>
+                              <th className="px-4 py-2">CPM</th>
+                              <th className="px-4 py-2">CPC</th>
+                              <th className="px-4 py-2">CTR %</th>
+                              <th
+                                className="px-4 py-2 min-w-[200px]"
+                                title="cost_per_action_type (Meta Insights API), armazenado como raw_cost_per_action_type"
+                              >
+                                Custo / tipo de ação
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {pagedSyncedInsightRows.map((i: any) => {
+                              const cpa = formatCostPerActionTypeCell(
+                                i.raw_cost_per_action_type ?? i.cost_per_action_type
+                              );
+                              return (
+                                <tr key={i.id} className="hover:bg-gray-50">
+                                  <td className="px-4 py-2 text-xs text-gray-600">{selectedBancaName}</td>
+                                  <td className="px-4 py-2 text-gray-700">{i.date}</td>
+                                  <td className="px-4 py-2 font-medium text-gray-800">{i.campaign_name || i.campaign_id}</td>
+                                  <td className="px-4 py-2 text-gray-700">{(i.reach ?? 0).toLocaleString('pt-BR')}</td>
+                                  <td className="px-4 py-2 text-gray-700">{(i.impressions ?? 0).toLocaleString('pt-BR')}</td>
+                                  <td className="px-4 py-2 text-gray-700">{(i.clicks ?? 0).toLocaleString('pt-BR')}</td>
+                                  <td className="px-4 py-2 text-gray-700">R$ {(Number(i.spend ?? 0)).toFixed(2)}</td>
+                                  <td className="px-4 py-2 text-gray-700">{(i.leads ?? 0).toLocaleString('pt-BR')}</td>
+                                  <td className="px-4 py-2 text-gray-700">{i.cpm != null ? Number(i.cpm).toFixed(2) : '-'}</td>
+                                  <td className="px-4 py-2 text-gray-700">{i.cpc != null ? Number(i.cpc).toFixed(2) : '-'}</td>
+                                  <td className="px-4 py-2 text-gray-700">{i.ctr != null ? Number(i.ctr).toFixed(2) : '-'}</td>
+                                  <td
+                                    className="px-4 py-2 text-xs text-gray-700 max-w-[280px] truncate align-top"
+                                    title={cpa.title || undefined}
+                                  >
+                                    {cpa.short}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                        {(syncedData.insights?.length ?? 0) === 0 && (
+                          <p className="px-4 py-6 text-center text-gray-500">Nenhum insight sincronizado. Execute a sincronização.</p>
+                        )}
+                        {(syncedData.insights?.length ?? 0) > 0 && (
+                          <div className="px-4 py-3 border-t border-gray-100 bg-gray-50/40 flex items-center justify-between">
+                            <p className="text-xs text-gray-500">Página {syncedInsightPage} de {syncedInsightTotalPages}</p>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setSyncedDataPage((prev) => ({ ...prev, insights: Math.max(1, prev.insights - 1) }))
+                                }
+                                disabled={syncedInsightPage <= 1}
+                                className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                              >
+                                ‹ Anterior
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setSyncedDataPage((prev) => ({
+                                    ...prev,
+                                    insights: Math.min(syncedInsightTotalPages, prev.insights + 1),
+                                  }))
+                                }
+                                disabled={syncedInsightPage >= syncedInsightTotalPages}
+                                className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                              >
+                                Próximo ›
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <p className="py-4 text-sm text-gray-500">Selecione uma banca em &quot;Visão geral&quot; e clique em &quot;Ver dados&quot; para carregar.</p>
+          )}
+        </div>
           <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
             <div className="flex items-center gap-2">
               <Link2 className="w-5 h-5 text-[#8CD955]" />
@@ -1907,410 +2385,6 @@ export default function AdminMetaPage() {
           )}
         </div>
 
-        <div id="dados-sincronizados-section" className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 md:p-5">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="text-base font-semibold text-gray-800">Campanhas sincronizadas</h3>
-              <p className="text-xs text-gray-500 mt-1">
-                Tabela cruzada com Graph (live) + CRM. Período: {adminMetaInsightsDateRange.label}.
-                {usingLiveMetaCards ? ' Métricas de alcance/impressões/leads/gasto vêm da Meta; tipo e consultores do banco.' : null}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => {
-                  const first = (displayMetricCampaignRows || [])[0];
-                  if (first) {
-                    setConsultorModalCampaignKey(`${String(first.banca_id)}:${String(first.campaign_id)}`);
-                  }
-                  setConsultorModalOpen(true);
-                }}
-                disabled={displayMetricCampaignRows.length === 0}
-                className="text-sm text-blue-700 hover:text-blue-800 font-medium flex items-center gap-1 disabled:opacity-40"
-              >
-                <Users className="w-4 h-4" />
-                Atribuir consultores
-              </button>
-              <button
-                type="button"
-                onClick={() => void loadLiveAggregate()}
-                disabled={loadingLiveAggregate || !userId}
-                className="text-sm text-emerald-700 hover:text-emerald-800 font-medium flex items-center gap-1 disabled:opacity-50"
-              >
-                {loadingLiveAggregate ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                Meta live
-              </button>
-              <button
-                onClick={() => loadSyncedData()}
-                disabled={loadingData}
-                className="text-sm text-[#8CD955] hover:text-[#7BC84A] font-medium flex items-center gap-1 disabled:opacity-50"
-              >
-                {loadingData ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                Cache local
-              </button>
-            </div>
-          </div>
-
-          {syncedData ? (
-            <>
-              {loadingData ? (
-                <div className="py-8 flex justify-center">
-                  <Loader2 className="w-6 h-6 animate-spin text-[#8CD955]" />
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <div className="border border-gray-200 rounded-xl overflow-hidden">
-                    <button
-                      onClick={() => setExpandedTab(expandedTab === 'campaigns' ? null : 'campaigns')}
-                      className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition"
-                    >
-                      <span className="flex items-center gap-2 font-medium text-gray-800">
-                        <Target className="w-4 h-4 text-[#8CD955]" />
-                        Campanhas com dados ({displayMetricCampaignRows.length})
-                      </span>
-                      {expandedTab === 'campaigns' ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
-                    </button>
-                    {expandedTab === 'campaigns' && (
-                      <div className="overflow-x-auto max-h-80 overflow-y-auto">
-                        <table className="w-full text-sm text-left min-w-[2220px]">
-                          <thead className="bg-gray-100 text-gray-700 sticky top-0">
-                            <tr>
-                              <th className="px-4 py-2">Início</th>
-                              <th className="px-4 py-2">Banca</th>
-                              <th className="px-4 py-2">Nome</th>
-                              <th className="px-4 py-2">Campaign ID</th>
-                              <th className="px-4 py-2">Tipo</th>
-                              <th className="px-4 py-2 text-right">Reach</th>
-                              <th className="px-4 py-2 text-right">Impressões</th>
-                              <th className="px-4 py-2 text-right">Cliques</th>
-                              <th className="px-4 py-2 text-right">Leads</th>
-                              <th className="px-4 py-2 text-right">Resultados</th>
-                              <th className="px-4 py-2 text-right">Gasto</th>
-                              <th className="px-4 py-2 text-right">Leads consultores</th>
-                              <th className="px-4 py-2 text-right">Depósito consultores</th>
-                              <th className="px-4 py-2">Status</th>
-                              <th className="px-4 py-2">Objetivo</th>
-                              <th className="px-4 py-2 text-right">Orçamento diário</th>
-                              <th className="px-4 py-2 text-right">Orçamento total</th>
-                              <th className="px-4 py-2">Fim</th>
-                              <th className="px-4 py-2">Atualizado</th>
-                              <th className="px-4 py-2">Atribuir banca</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-gray-100">
-                            {displayMetricCampaignRows.map((c: any) => {
-                              const m = {
-                                reach: Number(c.reach) || 0,
-                                impressions: Number(c.impressions) || 0,
-                                clicks: Number(c.clicks) || 0,
-                                leads: Number(c.leads) || 0,
-                                spend: Number(c.spend) || 0,
-                                results: Number(c.results_live) || 0,
-                              };
-                              const ownerKey = `${String(c.banca_id)}:${String(c.campaign_id)}`;
-                              const ownerTarget = campaignOwnerDraft[ownerKey] ?? String(c.banca_id);
-                              return (
-                                <tr key={c.id ?? c.campaign_id} className="hover:bg-gray-50">
-                                  <td className="px-4 py-2 text-gray-700">{c.start_time ? formatDate(c.start_time) : '-'}</td>
-                                  <td className="px-4 py-2 text-xs text-gray-600">
-                                    <p className="font-medium text-gray-800">{c.banca_name || c.banca_id}</p>
-                                    {c.banca_url ? <p className="text-[11px] text-gray-500 break-all">{c.banca_url}</p> : null}
-                                  </td>
-                                  <td className="px-4 py-2 font-medium text-gray-800">{c.name || c.campaign_id}</td>
-                                  <td className="px-4 py-2 text-xs font-mono text-gray-700">{c.campaign_id || '-'}</td>
-                                  <td className="px-4 py-2 align-top">
-                                    {c.banca_id ? (
-                                      <select
-                                        value={(c.campaign_kind as MetaCampaignKind) || 'normal'}
-                                        disabled={campaignKindSavingKey === `${String(c.banca_id)}:${String(c.campaign_id)}`}
-                                        onChange={(e) => {
-                                          const v = e.target.value as MetaCampaignKind;
-                                          void handleSaveCampaignKind(String(c.banca_id), String(c.campaign_id), v);
-                                        }}
-                                        className="px-2 py-1 rounded-lg border border-gray-200 text-xs text-gray-800 bg-white max-w-[140px] disabled:opacity-50"
-                                      >
-                                        <option value="normal">Normal</option>
-                                        <option value="bolao">Bolão</option>
-                                      </select>
-                                    ) : (
-                                      <span className="text-xs text-gray-500">—</span>
-                                    )}
-                                  </td>
-                                  <td className="px-4 py-2 text-right text-gray-700 tabular-nums">{m.reach.toLocaleString('pt-BR')}</td>
-                                  <td className="px-4 py-2 text-right text-gray-700 tabular-nums">{m.impressions.toLocaleString('pt-BR')}</td>
-                                  <td className="px-4 py-2 text-right text-gray-700 tabular-nums">{m.clicks.toLocaleString('pt-BR')}</td>
-                                  <td className="px-4 py-2 text-right text-gray-700 tabular-nums">{m.leads.toLocaleString('pt-BR')}</td>
-                                  <td className="px-4 py-2 text-right text-gray-700 tabular-nums">{m.results.toLocaleString('pt-BR')}</td>
-                                  <td className="px-4 py-2 text-right text-gray-700 tabular-nums">R$ {m.spend.toFixed(2)}</td>
-                                  <td className="px-4 py-2 text-right text-gray-700 tabular-nums">{(Number(c.consultor_total_leads) || 0).toLocaleString('pt-BR')}</td>
-                                  <td className="px-4 py-2 text-right text-gray-700 tabular-nums">R$ {(Number(c.consultor_total_deposited) || 0).toFixed(2)}</td>
-                                  <td className="px-4 py-2 text-gray-700">{c.effective_status || c.status || '-'}</td>
-                                  <td className="px-4 py-2 text-gray-700">{c.objective || '-'}</td>
-                                  <td className="px-4 py-2 text-right text-gray-700">{c.daily_budget != null ? `R$ ${Number(c.daily_budget).toFixed(2)}` : '-'}</td>
-                                  <td className="px-4 py-2 text-right text-gray-700">{c.lifetime_budget != null ? `R$ ${Number(c.lifetime_budget).toFixed(2)}` : '-'}</td>
-                                  <td className="px-4 py-2 text-gray-700">{c.stop_time ? formatDate(c.stop_time) : '-'}</td>
-                                  <td className="px-4 py-2 text-xs text-gray-600">{c.updated_at ? formatDate(c.updated_at) : '-'}</td>
-                                  <td className="px-4 py-2">
-                                    {c.banca_id ? (
-                                      <div className="flex items-center gap-2">
-                                        <select
-                                          value={ownerTarget ?? ''}
-                                          onChange={(e) =>
-                                            setCampaignOwnerDraft((prev) => ({
-                                              ...prev,
-                                              [ownerKey]: e.target.value,
-                                            }))
-                                          }
-                                          className="px-2 py-1 rounded-lg border border-gray-200 text-xs text-gray-700 bg-white max-w-[220px]"
-                                        >
-                                          {bancas.map((b) => (
-                                            <option key={b.id} value={b.id}>
-                                              {b.name || b.url || b.id}
-                                            </option>
-                                          ))}
-                                        </select>
-                                        <button
-                                          type="button"
-                                          disabled={
-                                            campaignOwnerSavingKey === ownerKey ||
-                                            !ownerTarget ||
-                                            ownerTarget === String(c.banca_id)
-                                          }
-                                          onClick={() =>
-                                            handleAssignCampaignOwner({
-                                              banca_id: String(c.banca_id),
-                                              campaign_id: String(c.campaign_id),
-                                              name: c.name,
-                                            })
-                                          }
-                                          className="px-3 py-1.5 rounded-lg border border-[#8CD955] text-[#6AAE39] hover:bg-[#F1FAE8] text-xs font-medium disabled:opacity-50"
-                                        >
-                                          {campaignOwnerSavingKey === ownerKey ? 'Salvando…' : 'Vincular banca'}
-                                        </button>
-                                      </div>
-                                    ) : (
-                                      <span className="text-xs text-gray-500">—</span>
-                                    )}
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                        {(displayMetricCampaignRows?.length ?? 0) === 0 && (
-                          <p className="px-4 py-6 text-center text-gray-500">
-                            {usingLiveMetaCards
-                              ? 'Nenhuma campanha com métrica no período (Meta live) para o filtro atual.'
-                              : 'Nenhuma campanha sincronizada.'}
-                          </p>
-                        )}
-                        {!usingLiveMetaCards && (allCampaignsRows?.length ?? 0) > 0 && (
-                          <div className="px-4 py-3 border-t border-gray-100 bg-gray-50/40 flex items-center justify-between">
-                            <p className="text-xs text-gray-500">Página {allCampaignsPage}</p>
-                            <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => setAllCampaignsPage((p) => Math.max(1, p - 1))}
-                                disabled={allCampaignsPage <= 1}
-                                className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
-                              >
-                                ‹ Anterior
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setAllCampaignsPage((p) => p + 1)}
-                                className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
-                              >
-                                Próximo ›
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="border border-gray-200 rounded-xl overflow-hidden">
-                    <button
-                      onClick={() => setExpandedTab(expandedTab === 'adsets' ? null : 'adsets')}
-                      className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition"
-                    >
-                      <span className="flex items-center gap-2 font-medium text-gray-800">
-                        <Layers className="w-4 h-4 text-blue-600" />
-                        AdSets ({syncedData.adsets?.length ?? 0})
-                      </span>
-                      {expandedTab === 'adsets' ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
-                    </button>
-                    {expandedTab === 'adsets' && (
-                      <div className="overflow-x-auto max-h-80 overflow-y-auto">
-                        <table className="w-full text-sm text-left min-w-[700px]">
-                          <thead className="bg-gray-100 text-gray-700 sticky top-0">
-                            <tr>
-                              <th className="px-4 py-2">Banca</th>
-                              <th className="px-4 py-2">Nome</th>
-                              <th className="px-4 py-2">Status</th>
-                              <th className="px-4 py-2">Campanha ID</th>
-                              <th className="px-4 py-2">Orçamento diário</th>
-                              <th className="px-4 py-2">Otimização</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-gray-100">
-                            {pagedSyncedAdsetRows.map((a: any) => (
-                              <tr key={a.id} className="hover:bg-gray-50">
-                                <td className="px-4 py-2 text-xs text-gray-600">{selectedBancaName}</td>
-                                <td className="px-4 py-2 font-medium text-gray-800">{a.name || a.adset_id}</td>
-                                <td className="px-4 py-2 text-gray-700">{a.effective_status || a.status || '-'}</td>
-                                <td className="px-4 py-2 text-xs text-gray-700">{a.campaign_id || '-'}</td>
-                                <td className="px-4 py-2 text-gray-700">{a.daily_budget != null ? `R$ ${Number(a.daily_budget).toFixed(2)}` : '-'}</td>
-                                <td className="px-4 py-2 text-gray-700">{a.optimization_goal || '-'}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                        {(syncedData.adsets?.length ?? 0) === 0 && (
-                          <p className="px-4 py-6 text-center text-gray-500">Nenhum adset sincronizado.</p>
-                        )}
-                        {(syncedData.adsets?.length ?? 0) > 0 && (
-                          <div className="px-4 py-3 border-t border-gray-100 bg-gray-50/40 flex items-center justify-between">
-                            <p className="text-xs text-gray-500">Página {syncedAdsetPage} de {syncedAdsetTotalPages}</p>
-                            <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setSyncedDataPage((prev) => ({ ...prev, adsets: Math.max(1, prev.adsets - 1) }))
-                                }
-                                disabled={syncedAdsetPage <= 1}
-                                className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
-                              >
-                                ‹ Anterior
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setSyncedDataPage((prev) => ({
-                                    ...prev,
-                                    adsets: Math.min(syncedAdsetTotalPages, prev.adsets + 1),
-                                  }))
-                                }
-                                disabled={syncedAdsetPage >= syncedAdsetTotalPages}
-                                className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
-                              >
-                                Próximo ›
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="border border-gray-200 rounded-xl overflow-hidden">
-                    <button
-                      onClick={() => setExpandedTab(expandedTab === 'insights' ? null : 'insights')}
-                      className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition"
-                    >
-                      <span className="flex items-center gap-2 font-medium text-gray-800">
-                        <TrendingUp className="w-4 h-4 text-purple-600" />
-                        Insights diários ({syncedData.insights?.length ?? 0})
-                      </span>
-                      {expandedTab === 'insights' ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
-                    </button>
-                    {expandedTab === 'insights' && (
-                      <div className="overflow-x-auto max-h-96 overflow-y-auto">
-                        <table className="w-full text-sm text-left min-w-[1080px]">
-                          <thead className="bg-gray-100 text-gray-700 sticky top-0">
-                            <tr>
-                              <th className="px-4 py-2">Banca</th>
-                              <th className="px-4 py-2">Data</th>
-                              <th className="px-4 py-2">Campanha</th>
-                              <th className="px-4 py-2"><Eye className="w-4 h-4 inline" /> Alcance</th>
-                              <th className="px-4 py-2"><MousePointer className="w-4 h-4 inline" /> Impressões</th>
-                              <th className="px-4 py-2">Cliques</th>
-                              <th className="px-4 py-2"><DollarSign className="w-4 h-4 inline" /> Gasto</th>
-                              <th className="px-4 py-2">Leads</th>
-                              <th className="px-4 py-2">CPM</th>
-                              <th className="px-4 py-2">CPC</th>
-                              <th className="px-4 py-2">CTR %</th>
-                              <th
-                                className="px-4 py-2 min-w-[200px]"
-                                title="cost_per_action_type (Meta Insights API), armazenado como raw_cost_per_action_type"
-                              >
-                                Custo / tipo de ação
-                              </th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-gray-100">
-                            {pagedSyncedInsightRows.map((i: any) => {
-                              const cpa = formatCostPerActionTypeCell(
-                                i.raw_cost_per_action_type ?? i.cost_per_action_type
-                              );
-                              return (
-                                <tr key={i.id} className="hover:bg-gray-50">
-                                  <td className="px-4 py-2 text-xs text-gray-600">{selectedBancaName}</td>
-                                  <td className="px-4 py-2 text-gray-700">{i.date}</td>
-                                  <td className="px-4 py-2 font-medium text-gray-800">{i.campaign_name || i.campaign_id}</td>
-                                  <td className="px-4 py-2 text-gray-700">{(i.reach ?? 0).toLocaleString('pt-BR')}</td>
-                                  <td className="px-4 py-2 text-gray-700">{(i.impressions ?? 0).toLocaleString('pt-BR')}</td>
-                                  <td className="px-4 py-2 text-gray-700">{(i.clicks ?? 0).toLocaleString('pt-BR')}</td>
-                                  <td className="px-4 py-2 text-gray-700">R$ {(Number(i.spend ?? 0)).toFixed(2)}</td>
-                                  <td className="px-4 py-2 text-gray-700">{(i.leads ?? 0).toLocaleString('pt-BR')}</td>
-                                  <td className="px-4 py-2 text-gray-700">{i.cpm != null ? Number(i.cpm).toFixed(2) : '-'}</td>
-                                  <td className="px-4 py-2 text-gray-700">{i.cpc != null ? Number(i.cpc).toFixed(2) : '-'}</td>
-                                  <td className="px-4 py-2 text-gray-700">{i.ctr != null ? Number(i.ctr).toFixed(2) : '-'}</td>
-                                  <td
-                                    className="px-4 py-2 text-xs text-gray-700 max-w-[280px] truncate align-top"
-                                    title={cpa.title || undefined}
-                                  >
-                                    {cpa.short}
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                        {(syncedData.insights?.length ?? 0) === 0 && (
-                          <p className="px-4 py-6 text-center text-gray-500">Nenhum insight sincronizado. Execute a sincronização.</p>
-                        )}
-                        {(syncedData.insights?.length ?? 0) > 0 && (
-                          <div className="px-4 py-3 border-t border-gray-100 bg-gray-50/40 flex items-center justify-between">
-                            <p className="text-xs text-gray-500">Página {syncedInsightPage} de {syncedInsightTotalPages}</p>
-                            <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setSyncedDataPage((prev) => ({ ...prev, insights: Math.max(1, prev.insights - 1) }))
-                                }
-                                disabled={syncedInsightPage <= 1}
-                                className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
-                              >
-                                ‹ Anterior
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setSyncedDataPage((prev) => ({
-                                    ...prev,
-                                    insights: Math.min(syncedInsightTotalPages, prev.insights + 1),
-                                  }))
-                                }
-                                disabled={syncedInsightPage >= syncedInsightTotalPages}
-                                className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
-                              >
-                                Próximo ›
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </>
-          ) : (
-            <p className="py-4 text-sm text-gray-500">Selecione uma banca em &quot;Visão geral&quot; e clique em &quot;Ver dados&quot; para carregar.</p>
-          )}
-        </div>
 
         <div id="meta-config-section" className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
           <div className="p-4 border-b border-gray-100 bg-gray-50/50">

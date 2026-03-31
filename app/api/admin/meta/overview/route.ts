@@ -102,6 +102,9 @@ export async function GET(req: NextRequest) {
     const dateFrom = req.nextUrl.searchParams.get('date_from');
     const dateTo = req.nextUrl.searchParams.get('date_to');
     const bancaId = req.nextUrl.searchParams.get('banca_id')?.trim() || null;
+    const activeOnlyParam = (req.nextUrl.searchParams.get('active_only') ?? '1').trim();
+    /** Igual campaigns-all: só campanhas com status ou effective_status ACTIVE (default). Com active_only=0, inclui pausadas. */
+    const activeOnly = !(activeOnlyParam === '0' || activeOnlyParam.toLowerCase() === 'false');
     let appliedDateFrom = dateFrom;
     let appliedDateTo = dateTo;
 
@@ -123,6 +126,9 @@ export async function GET(req: NextRequest) {
           .select(META_OVERVIEW_CAMPAIGNS_FIELDS)
           .order('updated_at', { ascending: false });
         if (bancaId) q = q.eq('banca_id', bancaId);
+        if (activeOnly) {
+          q = q.or('effective_status.eq.ACTIVE,status.eq.ACTIVE');
+        }
         return q;
       })(),
       (() => {
@@ -301,6 +307,15 @@ export async function GET(req: NextRequest) {
       const kind = String(row.campaign_kind || 'normal') === 'bolao' ? 'bolao' : 'normal';
       kindSummary[kind].campaigns += 1;
     }
+    const insightKey = (bid: string, cid: string) => `${bid}:${cid}`;
+    const allowedInsightKeys = activeOnly
+      ? new Set(
+          (campaigns as Array<{ banca_id: string; campaign_id: string }>).map((c) =>
+            insightKey(String(c.banca_id), String(c.campaign_id))
+          )
+        )
+      : null;
+
     const costPerActionByBanca = new Map<string, Map<string, number>>();
     const globalCostPerAction = new Map<string, number>();
 
@@ -308,6 +323,9 @@ export async function GET(req: NextRequest) {
     for (const row of insights) {
       const bid = String((row as { banca_id: string }).banca_id);
       const cid = String((row as { campaign_id?: string | null }).campaign_id ?? '');
+      if (activeOnly && allowedInsightKeys) {
+        if (!cid || !allowedInsightKeys.has(insightKey(bid, cid))) continue;
+      }
       const exactKind = campaignKindByBancaCampaign.get(`${bid}:${cid}`);
       const kindByCampaign = campaignKindByCampaignId.get(cid);
       const kind = exactKind ?? kindByCampaign ?? 'normal';
@@ -437,6 +455,9 @@ export async function GET(req: NextRequest) {
       requested_period: {
         date_from: dateFrom ?? null,
         date_to: dateTo ?? null,
+      },
+      filters: {
+        active_only: activeOnly,
       },
       kind_summary: kindSummary,
     });

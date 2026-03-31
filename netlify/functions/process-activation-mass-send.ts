@@ -274,7 +274,9 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
           const r = await fetch(v);
           const buf = await r.arrayBuffer();
           msg._ptvBase64 = Buffer.from(buf).toString('base64');
-          console.log(`[MassSend] PTV base64: ${Math.round(String(msg._ptvBase64).length / 1024)}KB`);
+          if (process.env.DEBUG_MASS_SEND === '1') {
+            console.log(`[MassSend] PTV base64: ${Math.round(String(msg._ptvBase64).length / 1024)}KB`);
+          }
         } catch (e: any) {
           await supabase.from('activation_mass_send_jobs').update({ status: 'failed', last_error: `PTV download: ${e.message}`, locked_at: null, locked_by: null, updated_at: new Date().toISOString() }).eq('id', job.id);
           continue;
@@ -299,9 +301,12 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
       continue;
     }
 
-    console.log(`[MassSend] Job ${shortId(job.id)} | ${baseUrl} | tipo: ${message.message_type} | ${idx + 1}→${total}`);
+    if (process.env.DEBUG_MASS_SEND === '1') {
+      console.log(`[MassSend] Job ${shortId(job.id)} | ${baseUrl} | tipo: ${message.message_type} | ${idx + 1}→${total}`);
+    }
 
     const succeededGroupIds = await loadSucceededGroupIds(supabase, job.id);
+    const loggedIdempotentSkip = new Set<string>();
 
     // 5. Loop de grupos para este job
     let loopTick = 0;
@@ -352,9 +357,11 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
       let result: SendResult;
 
       if (alreadyOk) {
-        console.log(
-          `[MassSend] [${idx + 1}/${total}] ${groupId} PULAR — já consta envio com sucesso (idempotente)`
-        );
+        const skipKey = `${idx}:${groupId}`;
+        if (!loggedIdempotentSkip.has(skipKey)) {
+          loggedIdempotentSkip.add(skipKey);
+          console.log(`[MassSend] [${idx + 1}/${total}] ${groupId} PULAR (já enviado — idempotente)`);
+        }
         result = { success: true };
       } else {
         const t0 = Date.now();
@@ -368,7 +375,9 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
 
         const ms = Date.now() - t0;
         if (result.success) {
-          console.log(`[MassSend] [${idx + 1}/${total}] ${groupId} OK (${ms}ms)`);
+          if (process.env.DEBUG_MASS_SEND === '1') {
+            console.log(`[MassSend] [${idx + 1}/${total}] ${groupId} OK (${ms}ms)`);
+          }
           totalSent++;
           succeededGroupIds.add(groupId);
         } else {
@@ -399,7 +408,6 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
 
       let persisted = rpcApplied === true;
       if (!rpcErr && rpcApplied === false) {
-        console.warn(`[MassSend] persist ignorado (corrida) job=${shortId(job.id)} esperado_idx=${idx}`);
         persisted = false;
       } else if (rpcErr) {
         console.error(`[MassSend] RPC falhou: ${rpcErr.message}`);

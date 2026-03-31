@@ -256,7 +256,9 @@ async function buildEvolutionContext(
     if (v.startsWith('http://') || v.startsWith('https://')) {
       try {
         ptvVideoPayload = await fetchVideoUrlAsBase64(v);
-        console.log(`[MassSend] PTV base64 baixado: ${Math.round(ptvVideoPayload.length / 1024)}KB`);
+        if (process.env.DEBUG_MASS_SEND === '1') {
+          console.log(`[MassSend] PTV base64: ${Math.round(ptvVideoPayload.length / 1024)}KB`);
+        }
       } catch (e: any) {
         return { error: `Falha ao baixar vídeo PTV: ${e.message}` };
       }
@@ -366,9 +368,10 @@ async function sendGroupToEvolution(ctx: EvolutionContext, groupId: string): Pro
       return { success: false, error: userMsg };
     }
 
-    // Log sucesso com snippet da resposta
     const okBody = await res.text().catch(() => '');
-    console.log(`[MassSend] Evolution OK 200 | url: ${url} | response: ${okBody.slice(0, 200)}`);
+    if (process.env.DEBUG_MASS_SEND === '1') {
+      console.log(`[MassSend] Evolution OK | url: ${url} | body: ${okBody.slice(0, 200)}`);
+    }
     return { success: true };
   } catch (e: any) {
     clearTimeout(tid);
@@ -447,12 +450,8 @@ async function persistGroupResult(
   });
 
   if (!rpcErr && rpcApplied === true) return true;
-  if (!rpcErr && rpcApplied === false) {
-    console.warn(
-      `[MassSend] persist ignorado (índice já avançado por outro worker) job=${shortId(jobId)} esperado=${expectedProcessedIndex}`
-    );
-    return false;
-  }
+  // CAS falso = outro worker avançou o índice; esperado em concorrência — sem log (evita spam no terminal)
+  if (!rpcErr && rpcApplied === false) return false;
 
   console.error(`[MassSend] RPC falhou — fallback com CAS:`, rpcErr?.message);
   const { data: fbRows, error: fbErr } = await supabaseServiceRole
@@ -603,10 +602,14 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
   }
 
   const { ctx } = ctxResult;
-  console.log(`[MassSend] Job ${shortId(job.id)} | Evolution: ${ctx.baseUrl} | tipo: ${ctx.message.message_type} | grupos: ${currentIndex + 1}-?/${total}`);
+  if (process.env.DEBUG_MASS_SEND === '1') {
+    console.log(`[MassSend] Job ${shortId(job.id)} | Evolution: ${ctx.baseUrl} | tipo: ${ctx.message.message_type} | grupos: ${currentIndex + 1}-?/${total}`);
+  }
 
   /** Grupos que já têm linha em job_groups com success=true — não reenvia (idempotência / duplicata na lista). */
   const succeededGroupIds = await loadSucceededGroupIds(job.id);
+  /** Uma linha de log por par índice+grupo para idempotência (evita centenas de linhas iguais). */
+  const loggedIdempotentSkip = new Set<string>();
 
   // 5. Loop: processa grupos enquanto tiver budget
   let totalSent = 0;
@@ -671,9 +674,13 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
     let result: EvolutionSendResult;
 
     if (alreadyOk) {
-      console.log(
-        `[MassSend] [${currentIndex + 1}/${total}] ${groupId} PULAR — já consta envio com sucesso (idempotente; evita duplicar disparo)`
-      );
+      const skipKey = `${currentIndex}:${groupId}`;
+      if (!loggedIdempotentSkip.has(skipKey)) {
+        loggedIdempotentSkip.add(skipKey);
+        console.log(
+          `[MassSend] [${currentIndex + 1}/${total}] ${groupId} PULAR (já enviado — idempotente)`
+        );
+      }
       result = { success: true };
     } else {
       // Envia para Evolution (com retry)
@@ -699,7 +706,9 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
 
       const duration = Date.now() - t0;
       if (result.success) {
-        console.log(`[MassSend] [${currentIndex + 1}/${total}] ${groupId} OK (${duration}ms)`);
+        if (process.env.DEBUG_MASS_SEND === '1') {
+          console.log(`[MassSend] [${currentIndex + 1}/${total}] ${groupId} OK (${duration}ms)`);
+        }
         totalSent++;
         succeededGroupIds.add(groupId);
       } else {
