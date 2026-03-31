@@ -3,6 +3,7 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { normalizationService } from '@/lib/services/normalization-service';
 import { flowExecutorService } from '@/lib/services/flow-executor-service';
 import { participantExitAuditService } from '@/lib/services/participant-exit-audit-service';
+import { EVOLUTION_GROUP_PARTICIPANT_EVENT_TYPES } from '@/lib/utils/evolution-group-participant-event-types';
 
 /** Janela de deduplicação de eventos group-participants no ambiente de teste: 15 segundos */
 const PARTICIPANT_DEDUP_WINDOW_MS = 15_000;
@@ -93,7 +94,7 @@ async function processEventBackground(payload: any): Promise<void> {
         .select('id, payload')
         .eq('instance_name', instanceName)
         .eq('remote_jid', remoteJid)
-        .in('event_type', ['group-participants.update', 'GROUP_PARTICIPANTS_UPDATE'])
+        .in('event_type', EVOLUTION_GROUP_PARTICIPANT_EVENT_TYPES)
         .gte('created_at', since)
         .order('created_at', { ascending: false })
         .limit(10); // Busca últimos 10 para comparar participantes
@@ -175,7 +176,7 @@ async function processEventBackground(payload: any): Promise<void> {
         .select('id, payload')
         .eq('instance_name', instanceName)
         .eq('remote_jid', remoteJid)
-        .in('event_type', ['group-participants.update', 'GROUP_PARTICIPANTS_UPDATE'])
+        .in('event_type', EVOLUTION_GROUP_PARTICIPANT_EVENT_TYPES)
         .gte('created_at', dedupSince)
         .order('created_at', { ascending: true })
         .limit(POST_INSERT_DEDUP_LIMIT);

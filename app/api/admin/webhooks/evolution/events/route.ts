@@ -2,6 +2,10 @@ import { NextRequest } from 'next/server';
 import { requireSuperAdmin } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import {
+  EVOLUTION_GROUP_PARTICIPANT_EVENT_TYPES,
+  isEvolutionGroupParticipantEventType,
+} from '@/lib/utils/evolution-group-participant-event-types';
 
 /**
  * GET /api/admin/webhooks/evolution/events
@@ -56,7 +60,12 @@ export async function GET(req: NextRequest) {
     }
 
     if (eventType) {
-      query = query.eq('event_type', eventType);
+      // Mesmo evento chega como GROUP_PARTICIPANTS_UPDATE (Evolution) ou group-participants.update (template)
+      if (isEvolutionGroupParticipantEventType(eventType)) {
+        query = query.in('event_type', EVOLUTION_GROUP_PARTICIPANT_EVENT_TYPES);
+      } else {
+        query = query.eq('event_type', eventType);
+      }
     }
 
     if (q) {

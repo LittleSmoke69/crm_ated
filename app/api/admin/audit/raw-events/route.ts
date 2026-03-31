@@ -1,6 +1,7 @@
 /**
  * GET /api/admin/audit/raw-events
- * Lista eventos brutos group-participants.update (evolution_webhook_events).
+ * Lista eventos brutos de participantes em grupo (evolution_webhook_events).
+ * Inclui event_type como na Evolution (ex.: GROUP_PARTICIPANTS_UPDATE) e aliases.
  * Acesso: super_admin, admin, auditoria.
  *
  * Query params:
@@ -14,8 +15,7 @@ import { NextRequest } from 'next/server';
 import { requireStatus } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-
-const EVENT_TYPE = 'group-participants.update';
+import { EVOLUTION_GROUP_PARTICIPANT_EVENT_TYPES } from '@/lib/utils/evolution-group-participant-event-types';
 
 export async function GET(req: NextRequest) {
   try {
@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
     let query = supabaseServiceRole
       .from('evolution_webhook_events')
       .select('id, received_at, env, event_type, instance_name, remote_jid, payload', { count: 'exact' })
-      .eq('event_type', EVENT_TYPE);
+      .in('event_type', EVOLUTION_GROUP_PARTICIPANT_EVENT_TYPES);
 
     if (env && (env === 'prod' || env === 'test')) {
       query = query.eq('env', env);

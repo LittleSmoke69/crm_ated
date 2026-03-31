@@ -8,6 +8,10 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { resolveEvolutionInstanceForActivation } from '@/lib/crm/resolve-evolution-instance-for-activation';
 import { sanitizeMassSendErrorMessage } from '@/lib/utils/activation-send-errors';
 import type { ApiResponse } from '@/lib/utils/response';
+import {
+  hasMassSendGroupAlreadySucceeded,
+  isMassSendTransientRetryable,
+} from '@/lib/crm/mass-send-group-idempotency';
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
@@ -86,12 +90,6 @@ async function regenerateSignedUrl(message: DbMessage): Promise<string | null> {
   } catch {
     return url;
   }
-}
-
-function isTransientError(error?: string): boolean {
-  if (!error) return false;
-  const e = error.toLowerCase();
-  return e.includes('timeout') || e.includes('fetch failed') || e.includes('504') || e.includes('502') || e.includes('503') || e.includes('econnreset') || e.includes('econnrefused') || e.includes('enotfound') || e.includes('socket hang up');
 }
 
 function extractErrorCause(e: unknown): string {
@@ -473,6 +471,21 @@ async function persistGroupResult(
     console.warn(`[MassSend] fallback CAS falhou job=${shortId(jobId)} esperado=${expectedProcessedIndex}`);
     return false;
   }
+  // RPC indisponível mas o job avançou: sem esta linha o grupo não entra em job_groups e o próximo worker reenvia.
+  if (result !== null) {
+    const { error: upErr } = await supabaseServiceRole.from('activation_mass_send_job_groups').upsert(
+      {
+        job_id: jobId,
+        group_id: String(groupId).trim(),
+        success: result.success,
+        error_message: result.error ? String(result.error).slice(0, 2000) : null,
+        updated_at: now,
+        created_at: now,
+      },
+      { onConflict: 'job_id,group_id' }
+    );
+    if (upErr) console.warn(`[MassSend] fallback upsert job_groups: ${upErr.message}`);
+  }
   return true;
 }
 
@@ -647,7 +660,14 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
       lastLockTouchMs = Date.now();
     }
 
-    const alreadyOk = succeededGroupIds.has(groupId);
+    let alreadyOk = succeededGroupIds.has(groupId);
+    if (!alreadyOk) {
+      const inDb = await hasMassSendGroupAlreadySucceeded(supabaseServiceRole, job.id, groupId);
+      if (inDb) {
+        alreadyOk = true;
+        succeededGroupIds.add(groupId);
+      }
+    }
     let result: EvolutionSendResult;
 
     if (alreadyOk) {
@@ -660,7 +680,11 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
       const t0 = Date.now();
       result = await sendGroupToEvolution(ctx, groupId);
 
-      for (let attempt = 0; attempt < retryDelays.length && !result.success && isTransientError(result.error); attempt++) {
+      for (
+        let attempt = 0;
+        attempt < retryDelays.length && !result.success && isMassSendTransientRetryable(result.error);
+        attempt++
+      ) {
         const delay = retryDelays[attempt];
         const dbSnap = await evolutionInstanceDbStatusLine(ctx.instanceId);
         const errLower = String(result.error || '').toLowerCase();

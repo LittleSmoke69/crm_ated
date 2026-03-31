@@ -7,6 +7,10 @@
  */
 import { createClient } from '@supabase/supabase-js';
 import { resolveEvolutionInstanceForActivation } from '../../lib/crm/resolve-evolution-instance-for-activation';
+import {
+  hasMassSendGroupAlreadySucceeded,
+  isMassSendTransientRetryable,
+} from '../../lib/crm/mass-send-group-idempotency';
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -44,11 +48,6 @@ async function loadSucceededGroupIds(supabase: ReturnType<typeof getSupabase>, j
     .eq('job_id', jobId)
     .eq('success', true);
   return new Set((data ?? []).map((r: { group_id: string }) => String(r.group_id || '').trim()).filter(Boolean));
-}
-
-function isTransient(err: string): boolean {
-  const e = err.toLowerCase();
-  return e.includes('timeout') || e.includes('fetch failed') || e.includes('504') || e.includes('502') || e.includes('503') || e.includes('econnreset') || e.includes('econnrefused') || e.includes('enotfound') || e.includes('socket');
 }
 
 function sanitizeError(raw: string): string {
@@ -342,7 +341,14 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
         lastLockTouchMs = Date.now();
       }
 
-      const alreadyOk = succeededGroupIds.has(groupId);
+      let alreadyOk = succeededGroupIds.has(groupId);
+      if (!alreadyOk) {
+        const inDb = await hasMassSendGroupAlreadySucceeded(supabase, job.id, groupId);
+        if (inDb) {
+          alreadyOk = true;
+          succeededGroupIds.add(groupId);
+        }
+      }
       let result: SendResult;
 
       if (alreadyOk) {
@@ -354,7 +360,7 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
         const t0 = Date.now();
         result = await sendToEvolution(baseUrl, job.instance_name, apiKey, groupId, msg);
 
-        for (let r = 0; r < RETRY_DELAYS.length && !result.success && isTransient(result.error || ''); r++) {
+        for (let r = 0; r < RETRY_DELAYS.length && !result.success && isMassSendTransientRetryable(result.error); r++) {
           console.warn(`[MassSend] [${idx + 1}/${total}] ${groupId} retry ${r + 1}/${RETRY_DELAYS.length} em ${RETRY_DELAYS[r] / 1000}s | ${result.error}`);
           await new Promise((w) => setTimeout(w, RETRY_DELAYS[r]));
           result = await sendToEvolution(baseUrl, job.instance_name, apiKey, groupId, msg);
@@ -410,6 +416,20 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
           .select('id');
         persisted = !fbErr && Array.isArray(fbRows) && fbRows.length > 0;
         if (!persisted) console.warn(`[MassSend] fallback CAS falhou job=${shortId(job.id)} idx=${idx}`);
+        else if (!alreadyOk) {
+          const { error: upErr } = await supabase.from('activation_mass_send_job_groups').upsert(
+            {
+              job_id: job.id,
+              group_id: String(groupId).trim(),
+              success: result.success,
+              error_message: result.error ? String(result.error).slice(0, 2000) : null,
+              updated_at: pNow,
+              created_at: pNow,
+            },
+            { onConflict: 'job_id,group_id' }
+          );
+          if (upErr) console.warn(`[MassSend] fallback upsert job_groups: ${upErr.message}`);
+        }
       }
 
       lastLockTouchMs = Date.now();
