@@ -13,6 +13,7 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { chatService } from '@/lib/services/chat-service';
+import { messageIndicatesEvolutionSessionDropped, maybeMarkEvolutionInstanceDisconnected } from '@/lib/evolution/mark-instance-disconnected';
 
 function normalizePhone(phone: string): string {
   const digits = String(phone || '').replace(/\D/g, '');
@@ -126,8 +127,11 @@ export async function POST(
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       sendError = msg;
-      // Detecta instância offline (timeout, ECONNREFUSED, etc.)
-      instanceDown = /timeout|ECONNREFUSED|ENOTFOUND|network|socket|offline|disconnected/i.test(msg);
+      await maybeMarkEvolutionInstanceDisconnected(supabaseServiceRole, instance.id, msg, 'chat/broadcast');
+      // Detecta instância offline (timeout, ECONNREFUSED, sessão encerrada na Evolution, etc.)
+      instanceDown =
+        messageIndicatesEvolutionSessionDropped(msg) ||
+        /timeout|ECONNREFUSED|ENOTFOUND|network|socket|offline|disconnected/i.test(msg);
     }
 
     if (sendError) {

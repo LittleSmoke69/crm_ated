@@ -4,6 +4,7 @@
  */
 
 import { SupabaseClient } from '@supabase/supabase-js';
+import { maybeMarkEvolutionInstanceDisconnected } from '@/lib/evolution/mark-instance-disconnected';
 
 /**
  * Quantos steps são reivindicados por lote no RPC claim_maturation_steps.
@@ -342,6 +343,19 @@ async function processStep(supabase: SupabaseClient, step: any): Promise<void> {
           httpStatus: result.httpStatus,
           error: result.error,
         });
+      }
+
+      const mid = (step as { master_instance_id?: string }).master_instance_id;
+      if (mid) {
+        const { data: mi } = await supabase
+          .from('master_instances')
+          .select('evolution_instance_id')
+          .eq('id', mid)
+          .maybeSingle();
+        const evoId = mi?.evolution_instance_id as string | undefined;
+        if (evoId) {
+          await maybeMarkEvolutionInstanceDisconnected(supabase, evoId, result.error, 'maturation');
+        }
       }
       return;
     }
@@ -800,6 +814,7 @@ export async function runJobCatchUp(supabase: SupabaseClient, jobId: string): Pr
       base_url,
       api_key,
       target_chat_id,
+      master_instance_id: job.master_instance_id,
     };
     await processStep(supabase, stepEnriched);
     const { data: updated } = await supabase

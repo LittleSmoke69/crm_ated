@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { normalizeGroupId } from '../utils/group-utils';
+import { maybeMarkEvolutionInstanceDisconnected } from '../evolution/mark-instance-disconnected';
 
 /** Timeout da chamada HTTP à Evolution dentro do worker (background Netlify ~15 min). */
 export const EVOLUTION_GROUP_FETCH_TIMEOUT_MS = 840_000;
@@ -294,6 +295,7 @@ export async function executeGroupFetchJob(supabase: SupabaseClient, jobId: stri
     );
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
+    await maybeMarkEvolutionInstanceDisconnected(supabase, instance.id as string, msg, 'groups/fetch-async');
     await supabase
       .from('group_fetch_jobs')
       .update({

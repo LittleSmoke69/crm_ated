@@ -15,6 +15,7 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
+import { maybeMarkEvolutionInstanceDisconnected } from '../../lib/evolution/mark-instance-disconnected';
 
 interface HandlerResponse {
   statusCode: number;
@@ -273,6 +274,7 @@ async function processOneBroadcast(
       if (isDone) return { sent, done: true };
     } catch (err: any) {
       const msg = err?.message || String(err);
+      await maybeMarkEvolutionInstanceDisconnected(supabase, instance.id, msg, 'netlify/broadcast');
       const isDown =
         /timeout|ECONNREFUSED|ENOTFOUND|network|socket|offline|disconnected/i.test(msg);
 

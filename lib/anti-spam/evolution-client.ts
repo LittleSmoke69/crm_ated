@@ -5,6 +5,7 @@
  */
 
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { maybeMarkEvolutionInstanceDisconnected } from '@/lib/evolution/mark-instance-disconnected';
 import { toWaJid } from '@/lib/utils/phone-utils';
 
 const FETCH_TIMEOUT_MS = 25_000;
@@ -185,6 +186,7 @@ export async function getGroupParticipantsV2(
 
   const result = await _fetchGroupParticipants(creds, groupJid);
   if (result.error !== undefined) {
+    await maybeMarkEvolutionInstanceDisconnected(supabaseServiceRole, instanceId, result.error, 'anti-spam/participants');
     return { success: false, error: result.error };
   }
   return { success: true, participants: result.participants ?? [] };
@@ -205,6 +207,9 @@ export async function fetchAllGroupsWithParticipants(
     return { success: false, error: 'Instância não encontrada ou sem credenciais' };
   }
 
+  const markIfDropped = (err: string | undefined) =>
+    maybeMarkEvolutionInstanceDisconnected(supabaseServiceRole, instanceId, err, 'anti-spam/fetchGroups');
+
   // Evolution API V2: participantes vêm do GET /group/participants por grupo (uma chamada por grupo)
   if (groupJids && groupJids.length > 0) {
     const groupMap = new Map<string, ParticipantInfo[]>();
@@ -217,6 +222,7 @@ export async function fetchAllGroupsWithParticipants(
       if (result.participants !== undefined) {
         groupMap.set(groupJid, [...result.participants]);
       } else if (result.error) {
+        await markIfDropped(result.error);
         errorMap.set(groupJid, result.error);
       }
     }
@@ -251,13 +257,17 @@ export async function fetchAllGroupsWithParticipants(
     try {
       data = JSON.parse(text);
     } catch {
-      return { success: false, error: text || `HTTP ${response.status}`, httpStatus: response.status };
+      const errLine = text || `HTTP ${response.status}`;
+      await markIfDropped(errLine);
+      return { success: false, error: errLine, httpStatus: response.status };
     }
 
     if (!response.ok) {
+      const errLine = String(data?.message || data?.error || `HTTP ${response.status}`);
+      await markIfDropped(errLine);
       return {
         success: false,
-        error: data?.message || data?.error || `HTTP ${response.status}`,
+        error: errLine,
         httpStatus: response.status,
       };
     }
@@ -297,7 +307,9 @@ export async function fetchAllGroupsWithParticipants(
 
     return { success: true, groupMap };
   } catch (err: any) {
-    return { success: false, error: err?.message || String(err) };
+    const errLine = err?.message || String(err);
+    await markIfDropped(errLine);
+    return { success: false, error: errLine };
   }
 }
 
@@ -369,6 +381,7 @@ export async function removeParticipant(
         const backoff = BACKOFF_BASE_MS * Math.pow(2, attempt - 1);
         await new Promise((r) => setTimeout(r, backoff));
       } else {
+        await maybeMarkEvolutionInstanceDisconnected(supabaseServiceRole, instanceId, lastError, 'anti-spam/removeParticipant');
         return { success: false, error: lastError, httpStatus: response.status };
       }
     } catch (err: any) {
@@ -377,11 +390,13 @@ export async function removeParticipant(
         const backoff = BACKOFF_BASE_MS * Math.pow(2, attempt - 1);
         await new Promise((r) => setTimeout(r, backoff));
       } else {
+        await maybeMarkEvolutionInstanceDisconnected(supabaseServiceRole, instanceId, lastError, 'anti-spam/removeParticipant');
         return { success: false, error: lastError };
       }
     }
   }
 
+  await maybeMarkEvolutionInstanceDisconnected(supabaseServiceRole, instanceId, lastError, 'anti-spam/removeParticipant');
   return { success: false, error: lastError || 'Unknown error' };
 }
 
@@ -456,6 +471,7 @@ export async function deleteMessageForEveryone(
         const backoff = BACKOFF_BASE_MS * Math.pow(2, attempt - 1);
         await new Promise((r) => setTimeout(r, backoff));
       } else {
+        await maybeMarkEvolutionInstanceDisconnected(supabaseServiceRole, instanceId, lastError, 'anti-spam/deleteMessage');
         return { success: false, error: lastError, httpStatus: response.status };
       }
     } catch (err: any) {
@@ -464,10 +480,12 @@ export async function deleteMessageForEveryone(
         const backoff = BACKOFF_BASE_MS * Math.pow(2, attempt - 1);
         await new Promise((r) => setTimeout(r, backoff));
       } else {
+        await maybeMarkEvolutionInstanceDisconnected(supabaseServiceRole, instanceId, lastError, 'anti-spam/deleteMessage');
         return { success: false, error: lastError };
       }
     }
   }
 
+  await maybeMarkEvolutionInstanceDisconnected(supabaseServiceRole, instanceId, lastError, 'anti-spam/deleteMessage');
   return { success: false, error: lastError || 'Unknown error' };
 }

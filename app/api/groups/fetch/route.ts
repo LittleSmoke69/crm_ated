@@ -7,6 +7,7 @@ import {
   fetchGroupsFromEvolution,
   persistWhatsappGroupsBatch,
 } from '@/lib/group-fetch/run-group-fetch-job';
+import { maybeMarkEvolutionInstanceDisconnected } from '@/lib/evolution/mark-instance-disconnected';
 
 /** Vercel / ambientes com função longa; no Netlify o limite real costuma ser ~26s na rota Next. */
 export const maxDuration = 300;
@@ -237,6 +238,7 @@ export async function POST(req: NextRequest) {
       const isNetwork = msg === 'fetch failed' || msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND');
       const isConnClosed = msg.toLowerCase().includes('connection closed');
       if (isConnClosed) {
+        await maybeMarkEvolutionInstanceDisconnected(supabaseServiceRole, instance.id, msg, 'groups/fetch');
         return errorResponse('A instância caiu (Connection Closed). Verifique o status da instância.', 503);
       }
       if (msg.startsWith('Evolution fetchAllGroups:')) {

@@ -1,16 +1,18 @@
 /**
  * Netlify Scheduled Function: process-campaign-queue
- * 
- * Roda a cada 1 minuto (configurado no netlify.toml)
- * Processa jobs da fila campaign_contacts que estão devidos (scheduled_at <= now)
- * 
+ *
+ * Roda a cada 1 minuto (configurado no netlify.toml) com timeout de 120s.
+ * Processa jobs da fila campaign_contacts SEQUENCIALMENTE (um por vez).
+ *
  * Fluxo:
- * 1. Filtra campanhas ativas com status 'running'
- * 2. Busca jobs devidos (campaign_contacts) apenas das campanhas ativas
- * 3. Para cada job, chama Evolution API para adicionar ao grupo
- * 4. Atualiza status do job (success/failed)
- * 5. Atualiza agregados (campaigns, campaign_groups)
- * 6. Finaliza campanha se não houver mais jobs pendentes
+ * 1. Recupera jobs travados (stale locks)
+ * 2. Busca campanhas ativas com status 'running'
+ * 3. Loop sequencial com time budget:
+ *    - Busca 1 job devido (scheduled_at <= now, status = queued)
+ *    - Processa o job (Evolution API)
+ *    - Espera 1 segundo
+ *    - Repete até acabar o tempo ou jobs
+ * 4. Atualiza agregados e next_request_at
  */
 
 import { createClient } from '@supabase/supabase-js';
@@ -38,7 +40,6 @@ interface HandlerResponse {
 type Handler = (event: HandlerEvent, context: HandlerContext) => Promise<HandlerResponse>;
 
 // Cliente Supabase inicializado lazy dentro do handler para evitar throw no top-level.
-// Se env estiver faltando, o handler retorna 500 em vez de crashar o cold start inteiro.
 let _supabaseClient: any = null;
 
 function getSupabase(): any {
@@ -53,9 +54,10 @@ function getSupabase(): any {
 }
 
 // Configurações
-const BATCH_LIMIT = 20; // Máximo de jobs por execução
 const LOCK_TTL_MINUTES = 3; // TTL do lock (recupera jobs travados após 3 min)
 const FETCH_TIMEOUT_MS = 25000; // Timeout para Evolution API
+const FUNCTION_TIMEOUT_MS = 110_000; // 110s (margem de 10s do limite de 120s)
+const DELAY_BETWEEN_SENDS_MS = 1000; // 1 segundo entre envios
 
 // Função auxiliar para normalizar telefone
 function normalizePhoneNumber(phone: string): string {
@@ -73,22 +75,19 @@ function normalizePhoneNumber(phone: string): string {
 // Função auxiliar para buscar string em objeto aninhado (incluindo arrays)
 function containsStringInObject(obj: any, searchString: string): boolean {
   if (!obj) return false;
-  
-  // Se for string, verifica diretamente
+
   if (typeof obj === 'string') {
     return obj.includes(searchString);
   }
-  
-  // Se for array, verifica cada elemento
+
   if (Array.isArray(obj)) {
     return obj.some(item => containsStringInObject(item, searchString));
   }
-  
-  // Se for objeto, verifica cada propriedade
+
   if (typeof obj === 'object') {
     return Object.values(obj).some(value => containsStringInObject(value, searchString));
   }
-  
+
   return false;
 }
 
@@ -102,7 +101,6 @@ async function getAvailableInstances(
     return [];
   }
 
-  // Query base: instâncias ativas e conectadas
   let query = getSupabase()
     .from('evolution_instances')
     .select(`
@@ -121,7 +119,6 @@ async function getAvailableInstances(
     .not('apikey', 'is', null)
     .in('instance_name', allowedInstanceNames);
 
-  // Se preferUserBinding, tenta priorizar instâncias do usuário
   if (preferUserBinding && userId) {
     const { data: userBindings } = await getSupabase()
       .from('user_evolution_apis')
@@ -141,7 +138,6 @@ async function getAvailableInstances(
     return [];
   }
 
-  // Filtra por cooldown, daily_limit e bloqueio (maturação virgem)
   const available = candidates.filter((inst: any) => {
     if (inst.is_locked === true) return false;
     if (inst.cooldown_until && new Date(inst.cooldown_until) > new Date()) return false;
@@ -153,8 +149,6 @@ async function getAvailableInstances(
 }
 
 // Seleciona instância baseado no distributionMode
-// distributionMode: 'sequential' ou 'random'
-// position: posição do job na campanha (para distribuição sequencial)
 async function pickInstanceByDistribution(
   userId: string,
   preferUserBinding: boolean,
@@ -168,57 +162,53 @@ async function pickInstanceByDistribution(
     return null;
   }
 
-  // Ordena instâncias pelo nome para garantir ordem consistente na distribuição sequencial
   const sortedInstances = available.sort((a: any, b: any) => {
     return a.instance_name.localeCompare(b.instance_name);
   });
 
   if (distributionMode === 'sequential') {
-    // Distribuição sequencial: rotaciona entre instâncias baseado na posição
-    // Ex: posição 0 -> instância 0, posição 1 -> instância 1, posição 2 -> instância 2, posição 3 -> instância 0...
     const instanceIndex = position % sortedInstances.length;
     return sortedInstances[instanceIndex];
   } else {
-    // Distribuição aleatória: escolhe aleatoriamente entre disponíveis
     const randomIndex = Math.floor(Math.random() * sortedInstances.length);
     return sortedInstances[randomIndex];
   }
 }
 
-// Seleciona melhor instância Evolution disponível (modo padrão/fallback)
-async function pickBestInstance(
-  userId: string, 
-  preferUserBinding: boolean,
-  allowedInstanceNames?: string[]
-): Promise<any> {
-  if (!allowedInstanceNames || allowedInstanceNames.length === 0) {
-    return null;
+// ─── Helper: marca job como failed ───
+async function markJobFailed(jobId: string, contactId: string | null, error: string): Promise<void> {
+  await getSupabase()
+    .from('campaign_contacts')
+    .update({
+      status: 'failed',
+      finished_at: new Date().toISOString(),
+      last_error: error,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', jobId);
+
+  if (contactId) {
+    await getSupabase()
+      .from('searches')
+      .update({
+        status: 'erro',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', contactId);
   }
-
-  const available = await getAvailableInstances(userId, preferUserBinding, allowedInstanceNames);
-
-  if (available.length === 0) {
-    return null;
-  }
-
-  // Seleciona a melhor (menor sent_today, mais tempo desde último uso)
-  const best = available.sort((a: any, b: any) => {
-    const scoreA = (1 / (a.sent_today + 1)) + (a.last_used_at ? (Date.now() - new Date(a.last_used_at).getTime()) / 1000 : 999);
-    const scoreB = (1 / (b.sent_today + 1)) + (b.last_used_at ? (Date.now() - new Date(b.last_used_at).getTime()) / 1000 : 999);
-    return scoreB - scoreA;
-  })[0];
-
-  return best;
 }
 
-// Processa um job individual
-async function processJob(job: any, workerId: string): Promise<{ success: boolean; error?: string }> {
-  const { id, campaign_id, campaign_group_id, phone, contact_id, user_id, attempts, position } = job;
+// ─── Processa um job individual ───
+// NUNCA pausa a campanha. Apenas marca o job como success/failed.
+// Retorna skipCampaign=true quando o problema é de instância (evita gastar tempo em jobs que vão falhar).
+async function processJob(
+  job: any,
+  workerId: string
+): Promise<{ success: boolean; error?: string; skipCampaign?: boolean }> {
+  const { id, campaign_id, campaign_group_id, phone, contact_id, user_id, position } = job;
+
   try {
-    // CRÍTICO: Reivindica o job atomicamente antes de qualquer operação externa.
-    // Se dois workers rodarem ao mesmo tempo e buscarem o mesmo job (queued),
-    // apenas um conseguirá fazer este UPDATE (PostgreSQL garante atomicidade).
-    // O outro receberá 0 linhas e retornará sem processar — eliminando envios duplicados.
+    // ── 1. Claim atômico ──
     const { data: claimed, error: claimErr } = await getSupabase()
       .from('campaign_contacts')
       .update({
@@ -229,18 +219,17 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
         updated_at: new Date().toISOString(),
       })
       .eq('id', id)
-      .eq('status', 'queued') // Condição atômica: só atualiza se ainda estiver queued
+      .eq('status', 'queued')
       .select('id')
       .single();
 
     if (claimErr || !claimed) {
-      // Outro worker já reivindicou este job — pula sem erro
-      console.log(`[WORKER ${workerId}] Job ${id}: já reivindicado por outro worker, pulando.`);
-      return { success: false, error: 'Job já reivindicado por outro worker' };
+      console.log(`[WORKER ${workerId}] Job ${id}: já reivindicado, pulando.`);
+      return { success: false, error: 'Job já reivindicado' };
     }
 
-    // Busca dados da campanha e grupo
-    const results = await Promise.all([
+    // ── 2. Busca dados da campanha e grupo ──
+    const [campaignResult, groupResult] = await Promise.all([
       getSupabase()
         .from('campaigns')
         .select('strategy, instances, group_id')
@@ -252,31 +241,30 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
         .eq('id', campaign_group_id)
         .single(),
     ]);
-    const campaignResult = results[0] as { data: any; error: { message?: string } | null };
-    const groupResult = results[1] as { data: any; error: { message?: string } | null };
 
     if (campaignResult.error || !campaignResult.data) {
-      throw new Error(`Campanha não encontrada: ${campaignResult.error?.message}`);
+      await markJobFailed(id, contact_id, `Campanha não encontrada: ${campaignResult.error?.message}`);
+      return { success: false, error: 'Campanha não encontrada' };
     }
 
     if (groupResult.error || !groupResult.data) {
-      throw new Error(`Grupo não encontrado: ${groupResult.error?.message}`);
+      await markJobFailed(id, contact_id, `Grupo não encontrado: ${groupResult.error?.message}`);
+      return { success: false, error: 'Grupo não encontrado' };
     }
 
     const campaign = campaignResult.data;
     const group = groupResult.data;
     const strategy = campaign.strategy || {};
-    const preferUserBinding = strategy.preferUserBinding === true;
-
-    // CRÍTICO: Pega o array de instâncias permitidas da campanha
     const allowedInstances = campaign.instances || [];
-    
+
     if (!Array.isArray(allowedInstances) || allowedInstances.length === 0) {
-      throw new Error('Campanha sem instâncias configuradas (coluna instances vazia ou inválida)');
+      await markJobFailed(id, contact_id, 'Campanha sem instâncias configuradas');
+      return { success: false, error: 'Sem instâncias configuradas', skipCampaign: true };
     }
 
-    // Seleciona instância baseado no distributionMode
+    // ── 3. Seleciona instância ──
     const distributionMode = strategy.distributionMode || 'sequential';
+    const preferUserBinding = strategy.preferUserBinding === true;
     const instance = await pickInstanceByDistribution(
       user_id,
       preferUserBinding,
@@ -286,159 +274,85 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
     );
 
     if (!instance) {
-      // Verifica se há instâncias disponíveis (mas não estão ok)
-      const availableInstances = await getAvailableInstances(user_id, preferUserBinding, allowedInstances);
-      
-      if (availableInstances.length === 0 && allowedInstances.length === 1) {
-        // Se só tem uma instância e ela não está disponível, PAUSA a campanha
-        console.warn(`[WORKER ${workerId}] ⏸️ Última instância da campanha não está disponível. Pausando campanha ${campaign_id}.`);
-        
-        await getSupabase()
-          .from('campaigns')
-          .update({
-            status: 'paused',
-            observation: `Campanha pausada automaticamente: Última instância não está disponível.`,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', campaign_id);
-
-        // Marca job como failed - sem retry
-        await getSupabase()
-          .from('campaign_contacts')
-          .update({
-            status: 'failed',
-            finished_at: new Date().toISOString(),
-            last_error: 'Última instância não está disponível. Campanha pausada automaticamente.',
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', id);
-
-        return { success: false, error: 'Última instância não está disponível. Campanha pausada automaticamente.' };
-      } else if (availableInstances.length === 0) {
-        // Múltiplas instâncias configuradas mas nenhuma disponível - PAUSA a campanha
-        console.warn(`[WORKER ${workerId}] ⏸️ Todas as instâncias da campanha estão indisponíveis. Pausando campanha ${campaign_id}.`);
-        
-        await getSupabase()
-          .from('campaigns')
-          .update({
-            status: 'paused',
-            observation: `Campanha pausada automaticamente: Todas as instâncias estão indisponíveis no momento.`,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', campaign_id);
-
-        // Marca job como failed - sem retry
-        await getSupabase()
-          .from('campaign_contacts')
-          .update({
-            status: 'failed',
-            finished_at: new Date().toISOString(),
-            last_error: 'Todas as instâncias estão indisponíveis. Campanha pausada automaticamente.',
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', id);
-
-        return { success: false, error: 'Todas as instâncias estão indisponíveis. Campanha pausada automaticamente.' };
-      }
-      
-      // Caso genérico - não deveria chegar aqui, mas trata como erro temporário
-      throw new Error('Nenhuma instância disponível');
+      await markJobFailed(id, contact_id, 'Nenhuma instância disponível no momento');
+      // skipCampaign: não adianta tentar mais jobs desta campanha nesta execução
+      return { success: false, error: 'Nenhuma instância disponível', skipCampaign: true };
     }
 
-    // Extrai dados da Evolution API (já vem no join do pickBestInstance)
-    const evolutionApi = Array.isArray(instance.evolution_apis) 
-      ? instance.evolution_apis[0] 
+    // ── 4. Prepara request para Evolution API ──
+    const evolutionApi = Array.isArray(instance.evolution_apis)
+      ? instance.evolution_apis[0]
       : instance.evolution_apis;
 
-    if (!evolutionApi || !evolutionApi.base_url) {
-      throw new Error('Evolution API não encontrada ou base_url não configurado');
+    if (!evolutionApi?.base_url) {
+      await markJobFailed(id, contact_id, 'Evolution API sem base_url');
+      return { success: false, error: 'API sem base_url', skipCampaign: true };
     }
 
-    // Busca apikey da instância (campo apikey da tabela evolution_instances)
     const instanceApikey = instance.apikey;
-    
     if (!instanceApikey) {
-      throw new Error('Instância sem apikey configurada na tabela evolution_instances');
+      await markJobFailed(id, contact_id, 'Instância sem apikey');
+      return { success: false, error: 'Sem apikey', skipCampaign: true };
     }
 
     const normalizedPhone = normalizePhoneNumber(phone);
     const groupJid = group.group_jid;
-
-    // Normaliza base_url da Evolution API (remove barras finais e duplas)
     const normalizedBaseUrl = evolutionApi.base_url
-      .replace(/\/+$/, '') // Remove barras finais
-      .replace(/([^:]\/)\/+/g, '$1'); // Remove barras duplas (preservando ://)
-    
-    // Monta URL completa para adicionar participante
+      .replace(/\/+$/, '')
+      .replace(/([^:]\/)\/+/g, '$1');
+
     const url = `${normalizedBaseUrl}/group/updateParticipant/${instance.instance_name}?groupJid=${encodeURIComponent(groupJid)}`;
-    
-    const requestBody = {
-      action: 'add',
-      participants: [normalizedPhone],
-    };
 
-    // Timeout de 25 segundos
+    // ── 5. Faz request à Evolution API ──
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => {
-      controller.abort();
-    }, FETCH_TIMEOUT_MS);
+    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        apikey: instanceApikey,
-      },
-      body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    });
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: instanceApikey,
+        },
+        body: JSON.stringify({
+          action: 'add',
+          participants: [normalizedPhone],
+        }),
+        signal: controller.signal,
+      });
+    } catch (fetchError: any) {
+      clearTimeout(timeoutId);
+      const errorMsg = fetchError?.message || String(fetchError);
+      console.error(`[WORKER ${workerId}] Job ${id}: FETCH ERROR - ${errorMsg}`);
+      await markJobFailed(id, contact_id, errorMsg);
+      // Não faz skipCampaign: pode ser erro transitório de rede
+      return { success: false, error: errorMsg };
+    }
 
     clearTimeout(timeoutId);
 
     const responseText = await response.text();
     let responseData: any = {};
-    
     try {
       responseData = JSON.parse(responseText);
     } catch {
       responseData = { message: responseText };
     }
 
+    // ── 6. Trata resposta ──
     if (response.ok) {
-      // Valida se realmente adicionou verificando a resposta da API
       const statusCode = responseData?.updateParticipants?.[0]?.status;
       const isSuccess = statusCode === '200' || statusCode === 200 || (!statusCode && response.ok);
 
-      if(statusCode === '409' || !isSuccess){
+      if (statusCode === '409' || !isSuccess) {
         const errorMsg = responseData?.message || responseText || `Status: ${statusCode}`;
-        console.warn(`[WORKER ${workerId}] Job ${id}: ⚠️ Contato não foi adicionado. Status: ${statusCode}`);
-
-        // Marca como failed imediatamente - sem retry
-        await getSupabase()
-          .from('campaign_contacts')
-          .update({
-            status: 'failed',
-            finished_at: new Date().toISOString(),
-            last_error: errorMsg,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', id);
-
-        // Atualiza contato na tabela searches
-        if (contact_id) {
-          await getSupabase()
-            .from('searches')
-            .update({
-              status: 'erro',
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', contact_id);
-        }
-
+        console.warn(`[WORKER ${workerId}] Job ${id}: contato não adicionado. Status: ${statusCode}`);
+        await markJobFailed(id, contact_id, errorMsg);
         return { success: false, error: errorMsg };
       }
-      
-      // Sucesso confirmado - atualiza job para success
+
+      // ✅ SUCESSO
       await getSupabase()
         .from('campaign_contacts')
         .update({
@@ -449,7 +363,6 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
         })
         .eq('id', id);
 
-      // Atualiza contato na tabela searches
       if (contact_id) {
         await getSupabase()
           .from('searches')
@@ -461,390 +374,100 @@ async function processJob(job: any, workerId: string): Promise<{ success: boolea
           .eq('id', contact_id);
       }
 
-      // Registra uso do rate limit (atualiza contador diário)
-      // Nota: rateLimitService pode ser implementado diretamente aqui se necessário
-
+      console.log(`[WORKER ${workerId}] Job ${id}: ✅ Sucesso (instância: ${instance.instance_name})`);
       return { success: true };
-    } else {
-      const errorMsg = responseData.message || responseText || `HTTP ${response.status}`;
-      
-      // Verifica se contém "Connection Closed" em qualquer lugar da resposta
-      const isConnectionClosed = 
-        containsStringInObject(responseData, 'Connection Closed') ||
-        containsStringInObject(responseData, 'blocked-integrity-enforcement') ||
-        (typeof responseText === 'string' && responseText.includes('Connection Closed')) ||
-        (typeof errorMsg === 'string' && errorMsg.includes('Connection Closed'));
-      
-      if (isConnectionClosed) {
-        console.warn(`[WORKER ${workerId}] ⚠️ Possível "Connection Closed" detectado na instância ${instance.instance_name}. Verificando status real...`);
-        
-        // CRÍTICO: Verifica o status REAL da instância antes de marcar como desconectada
-        // Pode ser apenas um erro temporário na requisição específica
-        try {
-          // Extrai dados da Evolution API (já vem no join do pickBestInstance)
-          const evolutionApi = Array.isArray(instance.evolution_apis) 
-            ? instance.evolution_apis[0] 
-            : instance.evolution_apis;
-
-          if (evolutionApi?.base_url) {
-            // Busca api_key_global para verificar status
-            const { data: apiData } = await getSupabase()
-              .from('evolution_apis')
-              .select('api_key_global')
-              .eq('id', evolutionApi.id)
-              .single();
-
-            if (apiData?.api_key_global) {
-              // Verifica o status real na Evolution API
-              const normalizedBaseUrl = evolutionApi.base_url.replace(/\/+$/, '').replace(/([^:]\/)\/+/g, '$1');
-              const statusUrl = `${normalizedBaseUrl}/instance/connectionState/${instance.instance_name}`;
-              
-              const statusResponse = await fetch(statusUrl, {
-                method: 'GET',
-                headers: {
-                  apikey: apiData.api_key_global,
-                },
-                cache: 'no-store',
-              });
-
-              if (statusResponse.ok) {
-                const statusData = await statusResponse.json();
-                
-                // Extrai estado (simplificado - similar ao evolutionService.extractState)
-                const stateRaw = (statusData?.instance?.status || statusData?.state || statusData?.connection?.state || '').toString().toLowerCase();
-                const hasQrCode = !!(statusData?.base64 || statusData?.qrcode?.base64 || statusData?.qrcode);
-                
-                let realState: 'connected' | 'connecting' | 'disconnected' | 'unknown' = 'unknown';
-                if (hasQrCode) {
-                  realState = 'connecting';
-                } else if (stateRaw === 'open' || stateRaw === 'connected' || stateRaw === 'ready' || stateRaw === 'online') {
-                  realState = 'connected';
-                } else if (stateRaw === 'close' || stateRaw === 'closed' || stateRaw === 'disconnected' || stateRaw === 'logout' || stateRaw === 'offline') {
-                  realState = 'disconnected';
-                }
-
-                console.log(`[WORKER ${workerId}] 🔍 Status real da instância ${instance.instance_name}: ${realState}`);
-
-                // Só marca como desconectada se o status REAL confirmar
-                if (realState === 'disconnected') {
-                  console.error(`[WORKER ${workerId}] 🔌 Status REAL confirmado: Instância ${instance.instance_name} está DESCONECTADA.`);
-                  
-                  // Desliga a instância que realmente caiu
-                  await getSupabase()
-                    .from('evolution_instances')
-                    .update({
-                      status: 'disconnected',
-                      is_active: false,
-                      updated_at: new Date().toISOString(),
-                    })
-                    .eq('instance_name', instance.instance_name);
-                } else {
-                  // Instância ainda está conectada - pode ser apenas um erro temporário
-                  console.log(`[WORKER ${workerId}] ✅ Status REAL: Instância ${instance.instance_name} ainda está ${realState === 'connected' ? 'CONECTADA' : 'CONECTANDO'}. Não marcando como desconectada.`);
-                  
-                  // Marca job como failed - sem retry
-                  await getSupabase()
-                    .from('campaign_contacts')
-                    .update({
-                      status: 'failed',
-                      finished_at: new Date().toISOString(),
-                      last_error: `Erro temporário na requisição. Instância ainda está ${realState}.`,
-                      updated_at: new Date().toISOString(),
-                    })
-                    .eq('id', id);
-
-                  // Atualiza contato na tabela searches
-                  if (contact_id) {
-                    await getSupabase()
-                      .from('searches')
-                      .update({
-                        status: 'erro',
-                        updated_at: new Date().toISOString(),
-                      })
-                      .eq('id', contact_id);
-                  }
-
-                  return { success: false, error: `Erro temporário. Instância ainda está ${realState}.` };
-                }
-              }
-            }
-          }
-        } catch (verifyError: any) {
-          // Se não conseguir verificar, não marca como desconectada
-          console.error(`[WORKER ${workerId}] ❌ Erro ao verificar status real da instância ${instance.instance_name}:`, verifyError.message);
-          console.log(`[WORKER ${workerId}] ⚠️ Não marcando como desconectada por segurança - pode ser erro temporário.`);
-          
-          // Marca job como failed - sem retry
-          await getSupabase()
-            .from('campaign_contacts')
-            .update({
-              status: 'failed',
-              finished_at: new Date().toISOString(),
-              last_error: `Erro temporário. Não foi possível verificar status da instância.`,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', id);
-
-          // Atualiza contato na tabela searches
-          if (contact_id) {
-            await getSupabase()
-              .from('searches')
-              .update({
-                status: 'erro',
-                updated_at: new Date().toISOString(),
-              })
-              .eq('id', contact_id);
-          }
-
-          return { success: false, error: 'Erro temporário. Não foi possível verificar status da instância.' };
-        }
-
-        // Verifica se há outras instâncias disponíveis na campanha
-        const remainingInstances = allowedInstances.filter(name => name !== instance.instance_name);
-        const availableRemaining = await getAvailableInstances(user_id, preferUserBinding, remainingInstances);
-
-        // Atualiza a campanha removendo a instância que caiu
-        if (remainingInstances.length > 0) {
-          await getSupabase()
-            .from('campaigns')
-            .update({
-              instances: remainingInstances,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', campaign_id);
-
-          console.log(`🔄 [WORKER ${workerId}] Instância ${instance.instance_name} removida da campanha. Restantes: ${remainingInstances.join(', ')}`);
-
-          // Se ainda há instâncias disponíveis, PAUSA a campanha para o usuário decidir
-          if (availableRemaining.length > 0) {
-            console.warn(`⏸️ [WORKER ${workerId}] Instância ${instance.instance_name} caiu. Pausando campanha automaticamente. Restam ${availableRemaining.length} instância(s) disponível(eis).`);
-            
-            // PAUSA a campanha automaticamente quando uma instância cai
-            await getSupabase()
-              .from('campaigns')
-              .update({
-                status: 'paused',
-                observation: `Campanha pausada automaticamente: Instância ${instance.instance_name} desconectou. Restam ${availableRemaining.length} instância(s) disponível(eis).`,
-                updated_at: new Date().toISOString(),
-              })
-              .eq('id', campaign_id);
-            
-            // Marca job como failed - sem retry
-            await getSupabase()
-              .from('campaign_contacts')
-              .update({
-                status: 'failed',
-                finished_at: new Date().toISOString(),
-                last_error: `Instância ${instance.instance_name} caiu. Campanha pausada automaticamente.`,
-                updated_at: new Date().toISOString(),
-              })
-              .eq('id', id);
-
-            // Atualiza contato na tabela searches
-            if (contact_id) {
-              await getSupabase()
-                .from('searches')
-                .update({
-                  status: 'erro',
-                  updated_at: new Date().toISOString(),
-                })
-                .eq('id', contact_id);
-            }
-
-            return { success: false, error: `Instância ${instance.instance_name} caiu. Campanha pausada automaticamente.` };
-          }
-        }
-
-        // Se não há mais instâncias disponíveis, PAUSA a campanha (não falha)
-        if (remainingInstances.length === 0 || availableRemaining.length === 0) {
-          console.warn(`⏸️ [WORKER ${workerId}] Última instância da campanha caiu. Pausando campanha ${campaign_id}`);
-          
-          await getSupabase()
-            .from('campaigns')
-            .update({
-              status: 'paused',
-              observation: remainingInstances.length === 0 
-                ? `Campanha pausada automaticamente: Todas as instâncias da campanha caíram. Última: ${instance.instance_name}`
-                : `Campanha pausada automaticamente: Todas as instâncias disponíveis da campanha caíram.`,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', campaign_id);
-
-          // Marca job como failed - sem retry
-          await getSupabase()
-            .from('campaign_contacts')
-            .update({
-              status: 'failed',
-              finished_at: new Date().toISOString(),
-              last_error: `Instância ${instance.instance_name} caiu. Campanha pausada automaticamente.`,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', id);
-
-          // Atualiza contato na tabela searches
-          if (contact_id) {
-            await getSupabase()
-              .from('searches')
-              .update({
-                status: 'erro',
-                updated_at: new Date().toISOString(),
-              })
-              .eq('id', contact_id);
-          }
-
-          return { success: false, error: `Instância ${instance.instance_name} caiu. Campanha pausada automaticamente.` };
-        }
-      }
-      
-        if (response.status === 400) {
-          const badRequest = errorMsg.includes('bad-request') || errorMsg.includes('Bad Request');
-
-          if (badRequest) {
-            // Esgotou tentativas, marca como failed
-            await getSupabase()
-              .from('campaign_contacts')
-              .update({
-                status: 'failed',
-                finished_at: new Date().toISOString(),
-                last_error: errorMsg,
-                updated_at: new Date().toISOString(),
-              })
-              .eq('id', id);
-
-            // Atualiza contato na tabela searches
-            if (contact_id) {
-              await getSupabase()
-                .from('searches')
-                .update({
-                  status: 'erro',
-                  updated_at: new Date().toISOString(),
-                })
-                .eq('id', contact_id);
-            }
-
-            return { success: false, error: errorMsg };
-          }
-
-          return { success: false, error: errorMsg };
-        }
-
-
-      // Marca como failed imediatamente - sem retry
-      await getSupabase()
-        .from('campaign_contacts')
-        .update({
-          status: 'failed',
-          finished_at: new Date().toISOString(),
-          last_error: errorMsg,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', id);
-
-      // Atualiza contato na tabela searches
-      if (contact_id) {
-        await getSupabase()
-          .from('searches')
-          .update({
-            status: 'erro',
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', contact_id);
-      }
-
-      return { success: false, error: errorMsg };
     }
+
+    // ── 7. Resposta HTTP não-ok ──
+    const errorMsg = responseData.message || responseText || `HTTP ${response.status}`;
+
+    // Verifica se Connection Closed indica instância desconectada
+    const isConnectionClosed =
+      containsStringInObject(responseData, 'Connection Closed') ||
+      containsStringInObject(responseData, 'blocked-integrity-enforcement') ||
+      (typeof responseText === 'string' && responseText.includes('Connection Closed'));
+
+    if (isConnectionClosed) {
+      console.warn(`[WORKER ${workerId}] Job ${id}: Connection Closed detectado na instância ${instance.instance_name}. Verificando status real...`);
+
+      // Verifica status real da instância (sem pausar campanha)
+      try {
+        const { data: apiData } = await getSupabase()
+          .from('evolution_apis')
+          .select('api_key_global')
+          .eq('id', evolutionApi.id)
+          .single();
+
+        if (apiData?.api_key_global) {
+          const statusUrl = `${normalizedBaseUrl}/instance/connectionState/${instance.instance_name}`;
+          const statusResponse = await fetch(statusUrl, {
+            method: 'GET',
+            headers: { apikey: apiData.api_key_global },
+            cache: 'no-store',
+          });
+
+          if (statusResponse.ok) {
+            const statusData = await statusResponse.json();
+            const stateRaw = (
+              statusData?.instance?.status ||
+              statusData?.state ||
+              statusData?.connection?.state ||
+              ''
+            ).toString().toLowerCase();
+
+            const isDisconnected = ['close', 'closed', 'disconnected', 'logout', 'offline'].includes(stateRaw);
+
+            if (isDisconnected) {
+              console.error(`[WORKER ${workerId}] Instância ${instance.instance_name} CONFIRMADA desconectada. Marcando no DB.`);
+              await getSupabase()
+                .from('evolution_instances')
+                .update({
+                  status: 'disconnected',
+                  is_active: false,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq('instance_name', instance.instance_name);
+            } else {
+              console.log(`[WORKER ${workerId}] Instância ${instance.instance_name} ainda ${stateRaw}. Erro transitório.`);
+            }
+          }
+        }
+      } catch (verifyError: any) {
+        console.error(`[WORKER ${workerId}] Erro ao verificar status da instância:`, verifyError.message);
+      }
+
+      await markJobFailed(id, contact_id, errorMsg);
+      // skipCampaign: se a instância caiu, não adianta tentar mais nesta execução
+      return { success: false, error: errorMsg, skipCampaign: true };
+    }
+
+    // Erro genérico (400, 500, etc.) - marca failed e continua
+    console.warn(`[WORKER ${workerId}] Job ${id}: HTTP ${response.status} - ${errorMsg}`);
+    await markJobFailed(id, contact_id, errorMsg);
+    return { success: false, error: errorMsg };
+
   } catch (error: any) {
     const errorMsg = error?.message || String(error);
-    console.error(`[WORKER ${workerId}] Job ${id}: ❌ ERRO - ${errorMsg}`);
-
-    // Verifica se é um erro de conexão que indica que a instância caiu
-    const isConnectionError = 
-      errorMsg.toLowerCase().includes('connection closed') ||
-      errorMsg.toLowerCase().includes('econnreset') ||
-      errorMsg.toLowerCase().includes('socket hang up') ||
-      errorMsg.toLowerCase().includes('blocked-integrity-enforcement');
-
-    if (isConnectionError) {
-      console.warn(`[WORKER ${workerId}] ⚠️ Erro de conexão crítico no catch - Pausando campanha ${campaign_id}`);
-      
-      // ⏸️ Pausar a campanha (não falhar)
-      await getSupabase()
-        .from('campaigns')
-        .update({
-          status: 'paused',
-          observation: `Campanha pausada automaticamente: Erro de conexão - ${errorMsg}. A instância pode ter caído.`,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', campaign_id);
-
-      // Marca job como failed - sem retry
-      await getSupabase()
-        .from('campaign_contacts')
-        .update({
-          status: 'failed',
-          finished_at: new Date().toISOString(),
-          last_error: `Erro de conexão: ${errorMsg}. Campanha pausada automaticamente.`,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', id);
-
-      // Atualiza contato na tabela searches
-      if (contact_id) {
-        await getSupabase()
-          .from('searches')
-          .update({
-            status: 'erro',
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', contact_id);
-      }
-
-      return { success: false, error: `Erro de conexão. Campanha pausada automaticamente.` };
-    }
-
-    // Marca como failed imediatamente - sem retry
-    await getSupabase()
-      .from('campaign_contacts')
-      .update({
-        status: 'failed',
-        finished_at: new Date().toISOString(),
-        last_error: errorMsg,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id);
-
-    if (contact_id) {
-      await getSupabase()
-        .from('searches')
-        .update({
-          status: 'erro',
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', contact_id);
-    }
-
+    console.error(`[WORKER ${workerId}] Job ${id}: ERRO - ${errorMsg}`);
+    await markJobFailed(id, contact_id, errorMsg);
     return { success: false, error: errorMsg };
   }
 }
 
-// Atualiza agregados (campaigns e campaign_groups)
-// Recalcula métricas sempre do banco de dados para garantir precisão
+// ─── Atualiza agregados (campaigns e campaign_groups) ───
 async function updateAggregates(campaignId: string, workerId: string): Promise<void> {
   try {
-    // Busca TODOS os jobs da campanha diretamente do banco
-    // Isso garante que as métricas sejam sempre precisas, mesmo se houver processamentos paralelos
     const { data: jobStats, error: statsError } = await getSupabase()
       .from('campaign_contacts')
       .select('status, campaign_group_id')
       .eq('campaign_id', campaignId);
 
     if (statsError) {
-      console.error(`[WORKER ${workerId}] ❌ Erro ao buscar stats:`, statsError);
+      console.error(`[WORKER ${workerId}] Erro ao buscar stats:`, statsError);
       return;
     }
 
     if (!jobStats || jobStats.length === 0) {
-      // Se não há jobs, zera as métricas
       await getSupabase()
         .from('campaigns')
         .update({
@@ -856,23 +479,19 @@ async function updateAggregates(campaignId: string, workerId: string): Promise<v
       return;
     }
 
-    // Agrega por grupo
     const groupStats = new Map<string, { processed: number; failed: number }>();
     let totalProcessed = 0;
     let totalFailed = 0;
-
     let queuedCount = 0;
 
     jobStats.forEach((job: any) => {
       if (!job.campaign_group_id) return;
-      
+
       if (!groupStats.has(job.campaign_group_id)) {
         groupStats.set(job.campaign_group_id, { processed: 0, failed: 0 });
       }
       const stats = groupStats.get(job.campaign_group_id)!;
-      
-      // Conta apenas jobs finalizados (success ou failed)
-      // Jobs com status 'queued' não são contabilizados ainda
+
       if (job.status === 'success') {
         stats.processed++;
         totalProcessed++;
@@ -882,11 +501,9 @@ async function updateAggregates(campaignId: string, workerId: string): Promise<v
       } else if (job.status === 'queued') {
         queuedCount++;
       }
-      // Jobs com status 'retry' não existem mais - foram removidos
     });
 
-    // Log detalhado para debug
-    console.log(`[WORKER ${workerId}] 📊 Métricas da campanha ${campaignId}: ${totalProcessed} processados, ${totalFailed} falhas, ${queuedCount} em fila, total: ${jobStats.length}`);
+    console.log(`[WORKER ${workerId}] 📊 Campanha ${campaignId}: ${totalProcessed} ok, ${totalFailed} falhas, ${queuedCount} na fila, total: ${jobStats.length}`);
 
     // Atualiza campaign_groups
     for (const [groupId, stats] of groupStats.entries()) {
@@ -900,11 +517,11 @@ async function updateAggregates(campaignId: string, workerId: string): Promise<v
         .eq('id', groupId);
 
       if (groupError) {
-        console.error(`[WORKER ${workerId}] ❌ Erro ao atualizar grupo ${groupId}:`, groupError);
+        console.error(`[WORKER ${workerId}] Erro ao atualizar grupo ${groupId}:`, groupError);
       }
     }
 
-    // Atualiza campaigns com os totais recalculados
+    // Atualiza campaigns
     const { error: campaignError } = await getSupabase()
       .from('campaigns')
       .update({
@@ -915,9 +532,7 @@ async function updateAggregates(campaignId: string, workerId: string): Promise<v
       .eq('id', campaignId);
 
     if (campaignError) {
-      console.error(`[WORKER ${workerId}] ❌ Erro ao atualizar campanha ${campaignId}:`, campaignError);
-    } else {
-      console.log(`[WORKER ${workerId}] ✅ Métricas atualizadas: ${totalProcessed} processados, ${totalFailed} falhas para campanha ${campaignId}`);
+      console.error(`[WORKER ${workerId}] Erro ao atualizar campanha ${campaignId}:`, campaignError);
     }
 
     // Verifica se deve finalizar campanha
@@ -927,43 +542,43 @@ async function updateAggregates(campaignId: string, workerId: string): Promise<v
     );
 
     if (finalizeError) {
-      console.error(`[WORKER ${workerId}] ❌ Erro ao verificar finalização: ${finalizeError.message}`);
+      console.error(`[WORKER ${workerId}] Erro ao verificar finalização: ${finalizeError.message}`);
     } else if (finalizeResult) {
       console.log(`[WORKER ${workerId}] ✅ Campanha ${campaignId} finalizada`);
     }
   } catch (error: any) {
-    console.error(`[WORKER ${workerId}] ❌ Erro ao atualizar agregados:`, error?.message || error);
+    console.error(`[WORKER ${workerId}] Erro ao atualizar agregados:`, error?.message || error);
   }
 }
 
-// Handler principal do Netlify Scheduled Function
+// ─── Handler principal ───
+// Processamento SEQUENCIAL com time budget de 110s.
+// Loop: busca 1 job → processa → espera 1s → repete.
 export const handler: Handler = async (event, context) => {
   const WORKER_ID = `netlify-worker-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-  const startTime = new Date().toISOString();
+  const startMs = Date.now();
 
-  console.log(`[WORKER ${WORKER_ID}] ▶ Iniciando execução | ${startTime}`);
+  console.log(`[WORKER ${WORKER_ID}] ▶ Iniciando | ${new Date(startMs).toISOString()}`);
 
   try {
-    // PASSO 0: Converte jobs com status 'retry' para 'failed' (migração)
-    // Isso garante que jobs antigos com retry sejam marcados como failed
+    // PASSO 0: Converte jobs retry → failed (migração)
     const { error: convertError } = await getSupabase()
       .from('campaign_contacts')
       .update({
         status: 'failed',
         finished_at: new Date().toISOString(),
-        last_error: 'Job convertido de retry para failed - sistema de retry removido',
+        last_error: 'Job convertido de retry para failed',
         updated_at: new Date().toISOString(),
       })
       .eq('status', 'retry');
 
     if (convertError) {
-      console.warn(`[WORKER ${WORKER_ID}] ⚠️ Aviso ao converter jobs retry:`, convertError.message);
+      console.warn(`[WORKER ${WORKER_ID}] Aviso ao converter retry:`, convertError.message);
     }
 
-    // PASSO 0.5: Recupera jobs travados em 'processing' há mais de LOCK_TTL_MINUTES.
-    // Isso garante que jobs cujo worker morreu (timeout, crash) voltem para a fila.
+    // PASSO 0.5: Recupera jobs travados em 'processing' há mais de LOCK_TTL_MINUTES
     const staleThreshold = new Date(Date.now() - LOCK_TTL_MINUTES * 60 * 1000).toISOString();
-    const { error: staleError } = await getSupabase()
+    const { data: staleJobs, error: staleError } = await getSupabase()
       .from('campaign_contacts')
       .update({
         status: 'queued',
@@ -972,10 +587,13 @@ export const handler: Handler = async (event, context) => {
         updated_at: new Date().toISOString(),
       })
       .eq('status', 'processing')
-      .lt('locked_at', staleThreshold);
+      .lt('locked_at', staleThreshold)
+      .select('id');
 
     if (staleError) {
-      console.warn(`[WORKER ${WORKER_ID}] ⚠️ Aviso ao recuperar jobs travados:`, staleError.message);
+      console.warn(`[WORKER ${WORKER_ID}] Aviso ao recuperar stale locks:`, staleError.message);
+    } else if (staleJobs && staleJobs.length > 0) {
+      console.log(`[WORKER ${WORKER_ID}] 🔓 ${staleJobs.length} jobs travados recuperados`);
     }
 
     // PASSO 1: Busca campanhas ativas com status 'running'
@@ -985,109 +603,94 @@ export const handler: Handler = async (event, context) => {
       .eq('status', 'running');
 
     if (campaignsError) {
-      console.error(`[WORKER ${WORKER_ID}] ❌ Erro ao buscar campanhas: ${campaignsError.message}`);
+      console.error(`[WORKER ${WORKER_ID}] Erro ao buscar campanhas: ${campaignsError.message}`);
       return {
         statusCode: 500,
-        body: JSON.stringify({ 
-          error: `Erro ao buscar campanhas: ${campaignsError.message}`,
-          workerId: WORKER_ID,
-          timestamp: startTime,
-        }),
+        body: JSON.stringify({ error: campaignsError.message, workerId: WORKER_ID }),
       };
     }
 
     if (!activeCampaigns || activeCampaigns.length === 0) {
       return {
         statusCode: 200,
-        body: JSON.stringify({ 
-          message: 'Nenhuma campanha ativa', 
-          processed: 0,
-          workerId: WORKER_ID,
-          timestamp: startTime,
-        }),
+        body: JSON.stringify({ message: 'Nenhuma campanha ativa', processed: 0, workerId: WORKER_ID }),
       };
     }
 
     const activeCampaignIds = activeCampaigns.map((c: { id: string }) => c.id);
-    console.log(`[WORKER ${WORKER_ID}] Campanhas ativas: ${activeCampaignIds.length} | IDs: ${activeCampaignIds.join(', ')}`);
+    console.log(`[WORKER ${WORKER_ID}] Campanhas ativas: ${activeCampaignIds.length}`);
 
-    // PASSO 2: Busca jobs devidos apenas das campanhas ativas
-    const now = new Date().toISOString();
-    const { data: jobs, error: claimError } = await getSupabase()
-      .from('campaign_contacts')
-      .select(`*`)
-      .eq('status', 'queued')
-      .lte('scheduled_at', now)
-      .in('campaign_id', activeCampaignIds)
-      .order('position', { ascending: true }) // CRÍTICO: Ordena por position para processar grupos sequencialmente
-      .limit(BATCH_LIMIT);
+    // PASSO 2: Loop sequencial com time budget
+    const skippedCampaigns = new Set<string>();
+    const processedCampaigns = new Set<string>();
+    let totalSuccess = 0;
+    let totalFailed = 0;
 
-
-    if (claimError) {
-      console.error(`[WORKER ${WORKER_ID}] ❌ Erro ao buscar jobs: ${claimError.message}`);
-      
-      // Erro específico: função não encontrada
-      if (claimError.code === 'PGRST202') {
-        console.error(`[WORKER ${WORKER_ID}] ⚠️ Função SQL não encontrada - Execute migração: migrations/create_campaign_queue_tables.sql`);
+    while (true) {
+      // Verifica se ainda tem tempo (precisa de pelo menos 8s para processar + atualizar agregados)
+      const elapsed = Date.now() - startMs;
+      if (elapsed > FUNCTION_TIMEOUT_MS - 8000) {
+        console.log(`[WORKER ${WORKER_ID}] ⏱️ Time budget esgotado (${elapsed}ms). Parando loop.`);
+        break;
       }
-      
-      return {
-        statusCode: 500,
-        body: JSON.stringify({ 
-          error: claimError.message,
-          code: claimError.code,
-          details: claimError.details,
-          workerId: WORKER_ID,
-          timestamp: startTime,
-          actionRequired: claimError.code === 'PGRST202' 
-            ? 'Execute a migração SQL: migrations/create_campaign_queue_tables.sql no Supabase Dashboard'
-            : null,
-        }),
-      };
+
+      // Filtra campanhas que não foram skipadas
+      const eligibleIds = activeCampaignIds.filter((id: string) => !skippedCampaigns.has(id));
+      if (eligibleIds.length === 0) {
+        console.log(`[WORKER ${WORKER_ID}] Todas as campanhas foram skipadas nesta execução.`);
+        break;
+      }
+
+      // Busca 1 job devido
+      const now = new Date().toISOString();
+      const { data: job, error: fetchError } = await getSupabase()
+        .from('campaign_contacts')
+        .select('*')
+        .eq('status', 'queued')
+        .lte('scheduled_at', now)
+        .in('campaign_id', eligibleIds)
+        .order('position', { ascending: true })
+        .limit(1)
+        .single();
+
+      if (fetchError || !job) {
+        // Nenhum job devido no momento
+        console.log(`[WORKER ${WORKER_ID}] Nenhum job devido. Encerrando loop.`);
+        break;
+      }
+
+      // Processa o job
+      processedCampaigns.add(job.campaign_id);
+      const result = await processJob(job, WORKER_ID);
+
+      if (result.success) {
+        totalSuccess++;
+      } else {
+        totalFailed++;
+        if (result.skipCampaign) {
+          skippedCampaigns.add(job.campaign_id);
+          console.log(`[WORKER ${WORKER_ID}] ⏭️ Campanha ${job.campaign_id} skipada: ${result.error}`);
+        }
+      }
+
+      // Espera antes do próximo envio (se tiver tempo)
+      const timeLeft = FUNCTION_TIMEOUT_MS - (Date.now() - startMs);
+      if (timeLeft > DELAY_BETWEEN_SENDS_MS + 8000) {
+        await new Promise(resolve => setTimeout(resolve, DELAY_BETWEEN_SENDS_MS));
+      } else {
+        break;
+      }
     }
 
-    if (!jobs || jobs.length === 0) {
-      console.log(`[WORKER ${WORKER_ID}] Nenhum job devido (queued + scheduled_at <= ${now})`);
-      return {
-        statusCode: 200,
-        body: JSON.stringify({ 
-          message: 'Nenhum job devido nas campanhas ativas', 
-          processed: 0,
-          activeCampaigns: activeCampaignIds.length,
-          workerId: WORKER_ID,
-          timestamp: startTime,
-        }),
-      };
-    }
+    // PASSO 3: Atualiza agregados e next_request_at para cada campanha processada
+    for (const campaignId of processedCampaigns) {
+      await updateAggregates(campaignId, WORKER_ID);
 
-    console.log(`[WORKER ${WORKER_ID}] Jobs devidos encontrados: ${jobs.length} | Campanhas: ${[...new Set(jobs.map((j: any) => j.campaign_id))].join(', ')}`);
-
-    // Processa cada job
-    const campaignIds = new Set<string>();
-    const results = await Promise.allSettled(
-      jobs.map((job: any) => {
-        campaignIds.add(job.campaign_id);
-        return processJob(job, WORKER_ID);
-      })
-    );
-
-    const successCount = results.filter(r => r.status === 'fulfilled' && r.value.success).length;
-    const failedCount = results.length - successCount;
-    const endTime = new Date().toISOString();
-    const duration = Date.now() - new Date(startTime).getTime();
-
-    console.log(`[WORKER ${WORKER_ID}] ◼ Concluído em ${duration}ms | ${successCount} ok, ${failedCount} falhas | campanhas: ${Array.from(campaignIds).join(', ')}`);
-
-    // Atualiza agregados e next_request_at para cada campanha única
-    await Promise.all(Array.from(campaignIds).map(async (id: string) => {
-      await updateAggregates(id, WORKER_ID);
-
-      // Atualiza next_request_at com o scheduled_at do próximo job pendente
-      // Isso faz o timer na UI mostrar a contagem regressiva correta
+      // Atualiza next_request_at com o próximo job pendente
       const { data: nextJob } = await getSupabase()
         .from('campaign_contacts')
         .select('scheduled_at')
-        .eq('campaign_id', id)
+        .eq('campaign_id', campaignId)
         .eq('status', 'queued')
         .order('position', { ascending: true })
         .limit(1)
@@ -1099,38 +702,34 @@ export const handler: Handler = async (event, context) => {
           next_request_at: nextJob?.scheduled_at || null,
           updated_at: new Date().toISOString(),
         })
-        .eq('id', id)
+        .eq('id', campaignId)
         .eq('status', 'running');
-    }));
+    }
+
+    const duration = Date.now() - startMs;
+    console.log(`[WORKER ${WORKER_ID}] ◼ Concluído em ${duration}ms | ${totalSuccess} ok, ${totalFailed} falhas | campanhas: ${Array.from(processedCampaigns).join(', ')}`);
 
     return {
       statusCode: 200,
       body: JSON.stringify({
         message: 'Processamento concluído',
-        processed: jobs.length,
-        success: successCount,
-        failed: failedCount,
-        workerId: WORKER_ID,
-        startTime,
-        endTime,
+        success: totalSuccess,
+        failed: totalFailed,
         duration: `${duration}ms`,
-        campaigns: Array.from(campaignIds),
+        workerId: WORKER_ID,
+        campaigns: Array.from(processedCampaigns),
+        skipped: Array.from(skippedCampaigns),
       }),
     };
   } catch (error: any) {
-    const endTime = new Date().toISOString();
-    console.error(`[WORKER ${WORKER_ID}] ❌ ERRO FATAL: ${error?.message || 'Erro desconhecido'}`);
-    
+    console.error(`[WORKER ${WORKER_ID}] ERRO FATAL: ${error?.message || 'Erro desconhecido'}`);
     return {
       statusCode: 500,
-      body: JSON.stringify({ 
+      body: JSON.stringify({
         error: error?.message || 'Erro desconhecido',
         workerId: WORKER_ID,
-        startTime,
-        endTime,
-        stack: error?.stack,
+        duration: `${Date.now() - startMs}ms`,
       }),
     };
   }
 };
-

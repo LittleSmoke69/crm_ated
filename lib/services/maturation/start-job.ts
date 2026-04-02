@@ -387,19 +387,6 @@ export async function runMaturationStart(supabase: SupabaseClient, params: Start
   const preferredForSelect = preferredFiltered.length > 0 ? preferredFiltered : undefined;
 
   const multipleRequested = preferredList.length > 1;
-  const jobTargetTrimmed = finalTargetChatId && String(finalTargetChatId).trim();
-  const stepsHaveResolvedTargets = steps.every((s) => {
-    const st = typeof s.target_chat_id === 'string' && s.target_chat_id.trim();
-    return !!(st || jobTargetTrimmed);
-  });
-  if (!multipleRequested && !stepsHaveResolvedTargets) {
-    return {
-      success: false,
-      error:
-        'Defina o destino das mensagens: informe o Target Chat ID (abaixo), o destino padrão do plano ou o destino em cada step. Sem destino, nada é enviado.',
-      statusCode: 400,
-    };
-  }
 
   /** Constrói os steps com delay cumulativo: cada step usa o intervalo configurado no plano (delaySec). */
   function buildStepsToInsert(jobId: string) {

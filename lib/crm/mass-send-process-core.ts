@@ -12,6 +12,7 @@ import {
   hasMassSendGroupAlreadySucceeded,
   isMassSendTransientRetryable,
 } from '@/lib/crm/mass-send-group-idempotency';
+import { maybeMarkEvolutionInstanceDisconnected } from '@/lib/evolution/mark-instance-disconnected';
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
@@ -357,12 +358,12 @@ async function sendGroupToEvolution(ctx: EvolutionContext, groupId: string): Pro
         errMsg = rawBody.slice(0, 300);
       }
 
-      if (/connection\s*closed/i.test(errMsg)) {
-        await supabaseServiceRole
-          .from('evolution_instances')
-          .update({ status: 'disconnected', updated_at: new Date().toISOString() })
-          .eq('id', ctx.instanceId);
-      }
+      await maybeMarkEvolutionInstanceDisconnected(
+        supabaseServiceRole,
+        ctx.instanceId,
+        errMsg,
+        'activation-mass-send'
+      );
 
       const userMsg = sanitizeMassSendErrorMessage(errMsg) || `Erro ${res.status}: ${res.statusText}`;
       return { success: false, error: userMsg };

@@ -5,6 +5,7 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { sanitizeMassSendErrorMessage } from '@/lib/utils/activation-send-errors';
 import { triggerMassSendProcessChained } from '@/lib/crm/trigger-mass-send-chained';
 import { resolveEvolutionInstanceForActivation } from '@/lib/crm/resolve-evolution-instance-for-activation';
+import { maybeMarkEvolutionInstanceDisconnected, messageIndicatesEvolutionSessionDropped } from '@/lib/evolution/mark-instance-disconnected';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300; // 5 minutos
@@ -565,33 +566,28 @@ export async function POST(req: NextRequest) {
             if (!errorMessage) {
               errorMessage = `Erro ao enviar mensagem: ${response.statusText}`;
             }
+
+            const errStr = String(errorMessage);
             
             // Log do erro
             console.error(`❌ [ACTIVATION] Erro ao enviar para ${groupId}:`, {
               status: response.status,
               statusText: response.statusText,
               errorData,
-              errorMessage,
+              errorMessage: errStr,
             });
 
-            // Se a Evolution API retornou "Connection Closed", a sessão WhatsApp não está mais ativa
-            // Atualiza o status da instância no banco para refletir o estado real (evita mostrar "Conectada" na UI)
-            const isConnectionClosed = errorMessage && /connection\s*closed/i.test(errorMessage);
-            if (isConnectionClosed) {
-              try {
-                await supabaseServiceRole
-                  .from('evolution_instances')
-                  .update({ status: 'disconnected', updated_at: new Date().toISOString() })
-                  .eq('id', instance.id);
-                console.log(`🔄 [ACTIVATION] Instância ${instanceName} marcada como desconectada (Connection Closed na Evolution API)`);
-              } catch (updateErr: any) {
-                console.error(`⚠️ [ACTIVATION] Erro ao atualizar status da instância:`, updateErr?.message);
-              }
-            }
+            await maybeMarkEvolutionInstanceDisconnected(
+              supabaseServiceRole,
+              String(instance.id),
+              errStr,
+              'activation-send'
+            );
+            const isConnectionClosed = messageIndicatesEvolutionSessionDropped(errStr);
 
             const userMessage = isConnectionClosed
               ? `Sessão WhatsApp encerrada (Connection Closed). A instância ${instanceName} foi marcada como desconectada. Reconecte a instância e tente novamente.`
-              : sanitizeMassSendErrorMessage(errorMessage) ||
+              : sanitizeMassSendErrorMessage(errStr) ||
                 `Erro ao enviar mensagem: ${response.status} ${response.statusText}`;
             throw new Error(userMessage);
           }

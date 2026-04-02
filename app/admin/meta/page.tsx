@@ -39,6 +39,11 @@ function formatBRL(value: number): string {
   }).format(Number.isFinite(value) ? value : 0);
 }
 
+/** Cards e painéis — coerente com Layout (`dark:bg-[#1a1a1a]` no main). */
+const metaCard =
+  'bg-white dark:bg-[#252525] rounded-2xl border border-gray-200 dark:border-[#404040] shadow-sm dark:shadow-black/40';
+const metaCardOverflow = `${metaCard} overflow-hidden`;
+
 interface Banca {
   id: string;
   name: string;
@@ -1429,23 +1434,23 @@ export default function AdminMetaPage() {
 
   return (
     <Layout>
-      <div className="p-6 max-w-7xl mx-auto space-y-6">
+      <div className="p-6 max-w-7xl mx-auto space-y-6 text-gray-800 dark:text-gray-200">
         <div className="flex items-center gap-2">
           <BarChart3 className="w-6 h-6 text-[#8CD955]" />
-          <h1 className="text-2xl font-bold text-gray-800">Integração Meta Ads</h1>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-50">Integração Meta Ads</h1>
         </div>
         <div className="flex flex-wrap items-end justify-between gap-3">
-          <p className="text-gray-600">Gestão geral das integrações Meta Ads por banca.</p>
+          <p className="text-gray-600 dark:text-gray-400">Gestão geral das integrações Meta Ads por banca.</p>
           <div className="shrink-0 flex items-end gap-2 flex-wrap">
             <div>
-              <label className="block text-[11px] font-semibold text-gray-500 uppercase mb-1">Período Meta</label>
+              <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">Período Meta</label>
               <select
                 value={metaInsightsPeriod}
                 onChange={(e) => {
                   setMetaInsightsPeriod(e.target.value as typeof metaInsightsPeriod);
                   setOverviewPage(1);
                 }}
-                className="px-3 py-2 border border-gray-200 rounded-xl text-sm text-gray-800 bg-white min-w-[170px]"
+                className="px-3 py-2 border border-gray-200 dark:border-[#404040] rounded-xl text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] min-w-[170px]"
               >
                 <option value="daily">Hoje</option>
                 <option value="yesterday">Ontem</option>
@@ -1457,12 +1462,12 @@ export default function AdminMetaPage() {
               </select>
             </div>
             <div>
-              <label className="block text-[11px] font-semibold text-gray-500 uppercase mb-1">Banca Meta</label>
+              <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">Banca Meta</label>
               <div className="relative min-w-[220px]" ref={overviewFilterBancaRef}>
                 <button
                   type="button"
                   onClick={() => setOverviewFilterBancaOpen((v) => !v)}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm text-gray-800 bg-white flex items-center justify-between gap-2"
+                  className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] rounded-xl text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] flex items-center justify-between gap-2"
                 >
                   <span className="truncate">
                     {overviewFilterBancaId
@@ -1471,16 +1476,16 @@ export default function AdminMetaPage() {
                          overviewFilterBancaId)
                       : 'Todas as bancas'}
                   </span>
-                  <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${overviewFilterBancaOpen ? 'rotate-180' : ''}`} />
+                  <ChevronDown className={`w-4 h-4 text-gray-500 dark:text-gray-400 transition-transform ${overviewFilterBancaOpen ? 'rotate-180' : ''}`} />
                 </button>
                 {overviewFilterBancaOpen ? (
-                  <div className="absolute z-30 left-0 right-0 mt-1 rounded-xl border border-gray-200 bg-white shadow-lg overflow-hidden">
+                  <div className="absolute z-30 left-0 right-0 mt-1 rounded-xl border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] shadow-lg overflow-hidden">
                     <input
                       type="search"
                       value={overviewFilterBancaSearch}
                       onChange={(e) => setOverviewFilterBancaSearch(e.target.value)}
                       placeholder="Buscar banca..."
-                      className="w-full px-3 py-2.5 text-sm border-b border-gray-100 text-gray-800 placeholder:text-gray-400 focus:outline-none"
+                      className="w-full px-3 py-2.5 text-sm border-b border-gray-100 dark:border-[#404040] text-gray-800 dark:text-gray-100 bg-transparent placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none"
                     />
                     <div className="max-h-56 overflow-y-auto p-1">
                       <button
@@ -1492,7 +1497,9 @@ export default function AdminMetaPage() {
                           setOverviewFilterBancaOpen(false);
                         }}
                         className={`w-full text-left px-2.5 py-2 rounded-lg text-sm ${
-                          overviewFilterBancaId === '' ? 'bg-[#F1FAE8] text-[#6AAE39]' : 'text-gray-700 hover:bg-gray-50'
+                          overviewFilterBancaId === ''
+                            ? 'bg-[#F1FAE8] dark:bg-emerald-950/50 text-[#6AAE39] dark:text-emerald-400'
+                            : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
                         }`}
                       >
                         Todas as bancas
@@ -1508,14 +1515,16 @@ export default function AdminMetaPage() {
                             setOverviewFilterBancaOpen(false);
                           }}
                           className={`w-full text-left px-2.5 py-2 rounded-lg text-sm ${
-                            overviewFilterBancaId === b.id ? 'bg-[#F1FAE8] text-[#6AAE39]' : 'text-gray-700 hover:bg-gray-50'
+                            overviewFilterBancaId === b.id
+                              ? 'bg-[#F1FAE8] dark:bg-emerald-950/50 text-[#6AAE39] dark:text-emerald-400'
+                              : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
                           }`}
                         >
                           {b.name || b.url}
                         </button>
                       ))}
                       {bancasForMetaFilter.length === 0 ? (
-                        <p className="px-2.5 py-2 text-xs text-gray-500">Nenhuma banca encontrada.</p>
+                        <p className="px-2.5 py-2 text-xs text-gray-500 dark:text-gray-400">Nenhuma banca encontrada.</p>
                       ) : null}
                     </div>
                   </div>
@@ -1525,7 +1534,7 @@ export default function AdminMetaPage() {
             {metaInsightsPeriod === 'custom' && (
               <>
                 <div>
-                  <label className="block text-[11px] font-semibold text-gray-500 uppercase mb-1">De</label>
+                  <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">De</label>
                   <input
                     type="date"
                     value={metaInsightsCustomFrom}
@@ -1533,11 +1542,11 @@ export default function AdminMetaPage() {
                       setMetaInsightsCustomFrom(e.target.value);
                       setOverviewPage(1);
                     }}
-                    className="px-3 py-2 border border-gray-200 rounded-xl text-sm text-gray-800 bg-white"
+                    className="px-3 py-2 border border-gray-200 dark:border-[#404040] rounded-xl text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a]"
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-semibold text-gray-500 uppercase mb-1">Até</label>
+                  <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">Até</label>
                   <input
                     type="date"
                     value={metaInsightsCustomTo}
@@ -1545,7 +1554,7 @@ export default function AdminMetaPage() {
                       setMetaInsightsCustomTo(e.target.value);
                       setOverviewPage(1);
                     }}
-                    className="px-3 py-2 border border-gray-200 rounded-xl text-sm text-gray-800 bg-white"
+                    className="px-3 py-2 border border-gray-200 dark:border-[#404040] rounded-xl text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a]"
                   />
                 </div>
               </>
@@ -1559,11 +1568,11 @@ export default function AdminMetaPage() {
                   setOverviewPage(1);
                   setAllCampaignsPage(1);
                 }}
-                className="rounded border-gray-300 text-[#8CD955] focus:ring-[#8CD955] shrink-0"
+                className="rounded border-gray-300 dark:border-gray-600 text-[#8CD955] focus:ring-[#8CD955] shrink-0 bg-white dark:bg-[#2a2a2a]"
               />
-              <span className="text-[11px] text-gray-700 leading-snug">
-                <span className="font-semibold text-gray-600">Padrão do painel:</span> incluir campanhas pausadas
-                <span className="text-gray-500"> (desmarque para só ACTIVE)</span>
+              <span className="text-[11px] text-gray-700 dark:text-gray-300 leading-snug">
+                <span className="font-semibold text-gray-600 dark:text-gray-400">Padrão do painel:</span> incluir campanhas pausadas
+                <span className="text-gray-500 dark:text-gray-500"> (desmarque para só ACTIVE)</span>
               </span>
             </label>
             <button
@@ -1589,62 +1598,62 @@ export default function AdminMetaPage() {
         </div>
 
         {liveAggregateError ? (
-          <div className="flex flex-wrap items-center gap-2 mb-1 text-xs text-gray-600">
-            <span className="text-amber-700">Não foi possível atualizar agora. Exibindo dados salvos. {liveAggregateError}</span>
+          <div className="flex flex-wrap items-center gap-2 mb-1 text-xs text-gray-600 dark:text-gray-400">
+            <span className="text-amber-700 dark:text-amber-400">Não foi possível atualizar agora. Exibindo dados salvos. {liveAggregateError}</span>
           </div>
         ) : null}
         <div className="grid gap-4 md:grid-cols-1 xl:grid-cols-3">
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase">Gasto total · campanhas ativas</p>
-            <p className="text-xs text-gray-500 mt-1">Soma do gasto no período selecionado.</p>
+          <div className={`${metaCard} p-4`}>
+            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Gasto total · campanhas ativas</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Soma do gasto no período selecionado.</p>
             {metaSummaryCardsLoading ? (
-              <div className="mt-3 flex items-center gap-2 text-gray-600 min-h-[2rem]">
+              <div className="mt-3 flex items-center gap-2 text-gray-600 dark:text-gray-400 min-h-[2rem]">
                 <Loader2 className="w-5 h-5 animate-spin text-[#8CD955] shrink-0" />
                 <span className="text-sm">Carregando dados…</span>
               </div>
             ) : (
-              <p className="text-2xl font-bold text-gray-800 mt-2 tabular-nums tracking-tight">
+              <p className="text-2xl font-bold text-gray-900 dark:text-gray-50 mt-2 tabular-nums tracking-tight">
                 {formatBRL(metaSummaryCards.spendAll)}
               </p>
             )}
           </div>
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase">Gasto · campanhas tipo bolão</p>
-            <p className="text-xs text-gray-500 mt-1">Marcadas como “Bolão” em campanhas sincronizadas no CRM.</p>
+          <div className={`${metaCard} p-4`}>
+            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Gasto · campanhas tipo bolão</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Marcadas como “Bolão” em campanhas sincronizadas no CRM.</p>
             {metaSummaryCardsLoading ? (
-              <div className="mt-3 flex items-center gap-2 text-gray-600 min-h-[2rem]">
+              <div className="mt-3 flex items-center gap-2 text-gray-600 dark:text-gray-400 min-h-[2rem]">
                 <Loader2 className="w-5 h-5 animate-spin text-[#8CD955] shrink-0" />
                 <span className="text-sm">Carregando dados…</span>
               </div>
             ) : (
-              <p className="text-2xl font-bold text-gray-800 mt-2 tabular-nums tracking-tight">
+              <p className="text-2xl font-bold text-gray-900 dark:text-gray-50 mt-2 tabular-nums tracking-tight">
                 {formatBRL(metaSummaryCards.spendBolao)}
               </p>
             )}
           </div>
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase">Resultado · normal vs bolão</p>
+          <div className={`${metaCard} p-4`}>
+            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Resultado · normal vs bolão</p>
             {metaSummaryCardsLoading ? (
               <>
-                <p className="text-[11px] text-gray-500 mt-1 leading-snug">Aguarde enquanto os números são obtidos.</p>
-                <div className="mt-3 flex items-center gap-2 text-gray-600 min-h-[2.5rem]">
+                <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1 leading-snug">Aguarde enquanto os números são obtidos.</p>
+                <div className="mt-3 flex items-center gap-2 text-gray-600 dark:text-gray-400 min-h-[2.5rem]">
                   <Loader2 className="w-5 h-5 animate-spin text-[#8CD955] shrink-0" />
                   <span className="text-sm">Carregando dados…</span>
                 </div>
               </>
             ) : (
               <>
-                <p className="text-[11px] text-gray-500 mt-1 leading-snug">{metaSummaryCards.resultsSub}</p>
+                <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1 leading-snug">{metaSummaryCards.resultsSub}</p>
                 <div className="mt-3 flex flex-wrap gap-6">
                   <div>
-                    <p className="text-[11px] font-medium text-gray-500 uppercase">Normal</p>
-                    <p className="text-xl font-bold text-gray-800 tabular-nums">
+                    <p className="text-[11px] font-medium text-gray-500 dark:text-gray-400 uppercase">Normal</p>
+                    <p className="text-xl font-bold text-gray-900 dark:text-gray-50 tabular-nums">
                       {metaSummaryCards.resultsNormal.toLocaleString('pt-BR')}
                     </p>
                   </div>
                   <div>
-                    <p className="text-[11px] font-medium text-gray-500 uppercase">Bolão</p>
-                    <p className="text-xl font-bold text-gray-800 tabular-nums">
+                    <p className="text-[11px] font-medium text-gray-500 dark:text-gray-400 uppercase">Bolão</p>
+                    <p className="text-xl font-bold text-gray-900 dark:text-gray-50 tabular-nums">
                       {metaSummaryCards.resultsBolao.toLocaleString('pt-BR')}
                     </p>
                   </div>
@@ -1654,15 +1663,15 @@ export default function AdminMetaPage() {
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 md:p-5">
+        <div className={`${metaCard} p-4 md:p-5`}>
           <div className="flex items-center gap-2 mb-2">
             <BarChart3 className="w-5 h-5 text-[#8CD955]" />
-            <h2 className="text-base font-semibold text-gray-800">Funil de campanhas + consultores</h2>
+            <h2 className="text-base font-semibold text-gray-900 dark:text-gray-50">Funil de campanhas + consultores</h2>
           </div>
-          <p className="text-xs text-gray-500 mb-4">
+          <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
             Período selecionado acima e cadastros/depósitos dos consultores atribuídos às campanhas.
           </p>
-          <div className="bg-gray-50 p-3 rounded-xl border border-gray-100 min-h-[320px]">
+          <div className="bg-gray-50 dark:bg-[#1a1a1a] p-3 rounded-xl border border-gray-100 dark:border-[#383838] min-h-[320px]">
             <Funnel3DChart
               data={{
                 stages: ['Impressões', 'Alcance', 'Cliques', 'Leads Meta', 'Cadastros consultores', 'Depósito consultores (R$)'],
@@ -1680,12 +1689,11 @@ export default function AdminMetaPage() {
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 md:p-5">
-        <div id="dados-sincronizados-section" className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 md:p-5">
+        <div id="dados-sincronizados-section" className={`${metaCard} p-4 md:p-5`}>
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h3 className="text-base font-semibold text-gray-800">Campanhas sincronizadas</h3>
-              <p className="text-xs text-gray-500 mt-1">
+              <h3 className="text-base font-semibold text-gray-900 dark:text-gray-50">Campanhas sincronizadas</h3>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                 Métricas e cadastro no CRM. Período: {adminMetaInsightsDateRange.label}.
               </p>
             </div>
@@ -1699,7 +1707,7 @@ export default function AdminMetaPage() {
                   setConsultorModalOpen(true);
                 }}
                 disabled={displayMetricCampaignRows.length === 0}
-                className="text-sm text-blue-700 hover:text-blue-800 font-medium flex items-center gap-1 disabled:opacity-40"
+                className="text-sm text-blue-700 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 font-medium flex items-center gap-1 disabled:opacity-40"
               >
                 <Users className="w-4 h-4" />
                 Atribuir consultores
@@ -1708,7 +1716,7 @@ export default function AdminMetaPage() {
                 type="button"
                 onClick={() => void loadLiveAggregate()}
                 disabled={loadingLiveAggregate || !userId}
-                className="text-sm text-emerald-700 hover:text-emerald-800 font-medium flex items-center gap-1 disabled:opacity-50"
+                className="text-sm text-emerald-700 dark:text-emerald-400 hover:text-emerald-800 dark:hover:text-emerald-300 font-medium flex items-center gap-1 disabled:opacity-50"
               >
                 {loadingLiveAggregate ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
                 Atualizar na Meta
@@ -1732,10 +1740,10 @@ export default function AdminMetaPage() {
                 </div>
               ) : (
                 <div className="space-y-4">
-                  <div className="border border-gray-200 rounded-xl overflow-hidden">
+                  <div className="border border-gray-200 dark:border-[#404040] rounded-xl overflow-hidden">
                     <button
                       onClick={() => setExpandedTab(expandedTab === 'campaigns' ? null : 'campaigns')}
-                      className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition"
+                      className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 dark:bg-[#2a2a2a] hover:bg-gray-100 dark:hover:bg-[#333] transition text-gray-800 dark:text-gray-100"
                     >
                       <span className="flex items-center gap-2 font-medium text-gray-800">
                         <Target className="w-4 h-4 text-[#8CD955]" />
@@ -1745,8 +1753,8 @@ export default function AdminMetaPage() {
                     </button>
                     {expandedTab === 'campaigns' && (
                       <div className="overflow-x-auto max-h-80 overflow-y-auto">
-                        <table className="w-full text-sm text-left min-w-[2220px]">
-                          <thead className="bg-gray-100 text-gray-700 sticky top-0">
+                        <table className="w-full text-sm text-left min-w-[2220px] text-gray-800 dark:text-gray-200">
+                          <thead className="bg-gray-100 dark:bg-[#2a2a2a] text-gray-700 dark:text-gray-200 sticky top-0">
                             <tr>
                               <th className="px-4 py-2">Início</th>
                               <th className="px-4 py-2">Banca</th>
@@ -1770,7 +1778,7 @@ export default function AdminMetaPage() {
                               <th className="px-4 py-2">Atribuir banca</th>
                             </tr>
                           </thead>
-                          <tbody className="divide-y divide-gray-100">
+                          <tbody className="divide-y divide-gray-100 dark:divide-[#383838]">
                             {displayMetricCampaignRows.map((c: any) => {
                               const m = {
                                 reach: Number(c.reach) || 0,
@@ -1783,14 +1791,14 @@ export default function AdminMetaPage() {
                               const ownerKey = `${String(c.banca_id)}:${String(c.campaign_id)}`;
                               const ownerTarget = campaignOwnerDraft[ownerKey] ?? String(c.banca_id);
                               return (
-                                <tr key={c.id ?? c.campaign_id} className="hover:bg-gray-50">
-                                  <td className="px-4 py-2 text-gray-700">{c.start_time ? formatDate(c.start_time) : '-'}</td>
-                                  <td className="px-4 py-2 text-xs text-gray-600">
-                                    <p className="font-medium text-gray-800">{c.banca_name || c.banca_id}</p>
-                                    {c.banca_url ? <p className="text-[11px] text-gray-500 break-all">{c.banca_url}</p> : null}
+                                <tr key={c.id ?? c.campaign_id} className="hover:bg-gray-50 dark:hover:bg-[#2a2a2a]/80">
+                                  <td className="px-4 py-2 text-gray-700 dark:text-gray-300">{c.start_time ? formatDate(c.start_time) : '-'}</td>
+                                  <td className="px-4 py-2 text-xs text-gray-600 dark:text-gray-400">
+                                    <p className="font-medium text-gray-900 dark:text-gray-50">{c.banca_name || c.banca_id}</p>
+                                    {c.banca_url ? <p className="text-[11px] text-gray-500 dark:text-gray-500 break-all">{c.banca_url}</p> : null}
                                   </td>
-                                  <td className="px-4 py-2 font-medium text-gray-800">{c.name || c.campaign_id}</td>
-                                  <td className="px-4 py-2 text-xs font-mono text-gray-700">{c.campaign_id || '-'}</td>
+                                  <td className="px-4 py-2 font-medium text-gray-900 dark:text-gray-50">{c.name || c.campaign_id}</td>
+                                  <td className="px-4 py-2 text-xs font-mono text-gray-700 dark:text-gray-300">{c.campaign_id || '-'}</td>
                                   <td className="px-4 py-2 align-top">
                                     {c.banca_id ? (
                                       <select
@@ -1800,7 +1808,7 @@ export default function AdminMetaPage() {
                                           const v = e.target.value as MetaCampaignKind;
                                           void handleSaveCampaignKind(String(c.banca_id), String(c.campaign_id), v);
                                         }}
-                                        className="px-2 py-1 rounded-lg border border-gray-200 text-xs text-gray-800 bg-white max-w-[140px] disabled:opacity-50"
+                                        className="px-2 py-1 rounded-lg border border-gray-200 dark:border-[#404040] text-xs text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] max-w-[140px] disabled:opacity-50"
                                       >
                                         <option value="normal">Normal</option>
                                         <option value="bolao">Bolão</option>
@@ -1834,7 +1842,7 @@ export default function AdminMetaPage() {
                                               [ownerKey]: e.target.value,
                                             }))
                                           }
-                                          className="px-2 py-1 rounded-lg border border-gray-200 text-xs text-gray-700 bg-white max-w-[220px]"
+                                          className="px-2 py-1 rounded-lg border border-gray-200 dark:border-[#404040] text-xs text-gray-700 dark:text-gray-200 bg-white dark:bg-[#2a2a2a] max-w-[220px]"
                                         >
                                           {bancas.map((b) => (
                                             <option key={b.id} value={b.id}>
@@ -1885,14 +1893,14 @@ export default function AdminMetaPage() {
                                 type="button"
                                 onClick={() => setAllCampaignsPage((p) => Math.max(1, p - 1))}
                                 disabled={allCampaignsPage <= 1}
-                                className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                                className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-[#404040] text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-50"
                               >
                                 ‹ Anterior
                               </button>
                               <button
                                 type="button"
                                 onClick={() => setAllCampaignsPage((p) => p + 1)}
-                                className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                                className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-[#404040] text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-50"
                               >
                                 Próximo ›
                               </button>
@@ -1903,10 +1911,10 @@ export default function AdminMetaPage() {
                     )}
                   </div>
 
-                  <div className="border border-gray-200 rounded-xl overflow-hidden">
+                  <div className="border border-gray-200 dark:border-[#404040] rounded-xl overflow-hidden">
                     <button
                       onClick={() => setExpandedTab(expandedTab === 'adsets' ? null : 'adsets')}
-                      className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition"
+                      className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 dark:bg-[#2a2a2a] hover:bg-gray-100 dark:hover:bg-[#333] transition text-gray-800 dark:text-gray-100"
                     >
                       <span className="flex items-center gap-2 font-medium text-gray-800">
                         <Layers className="w-4 h-4 text-blue-600" />
@@ -1953,7 +1961,7 @@ export default function AdminMetaPage() {
                                   setSyncedDataPage((prev) => ({ ...prev, adsets: Math.max(1, prev.adsets - 1) }))
                                 }
                                 disabled={syncedAdsetPage <= 1}
-                                className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                                className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-[#404040] text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-50"
                               >
                                 ‹ Anterior
                               </button>
@@ -1966,7 +1974,7 @@ export default function AdminMetaPage() {
                                   }))
                                 }
                                 disabled={syncedAdsetPage >= syncedAdsetTotalPages}
-                                className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                                className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-[#404040] text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-50"
                               >
                                 Próximo ›
                               </button>
@@ -1977,10 +1985,10 @@ export default function AdminMetaPage() {
                     )}
                   </div>
 
-                  <div className="border border-gray-200 rounded-xl overflow-hidden">
+                  <div className="border border-gray-200 dark:border-[#404040] rounded-xl overflow-hidden">
                     <button
                       onClick={() => setExpandedTab(expandedTab === 'insights' ? null : 'insights')}
-                      className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition"
+                      className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 dark:bg-[#2a2a2a] hover:bg-gray-100 dark:hover:bg-[#333] transition text-gray-800 dark:text-gray-100"
                     >
                       <span className="flex items-center gap-2 font-medium text-gray-800">
                         <TrendingUp className="w-4 h-4 text-purple-600" />
@@ -2054,7 +2062,7 @@ export default function AdminMetaPage() {
                                   setSyncedDataPage((prev) => ({ ...prev, insights: Math.max(1, prev.insights - 1) }))
                                 }
                                 disabled={syncedInsightPage <= 1}
-                                className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                                className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-[#404040] text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-50"
                               >
                                 ‹ Anterior
                               </button>
@@ -2067,7 +2075,7 @@ export default function AdminMetaPage() {
                                   }))
                                 }
                                 disabled={syncedInsightPage >= syncedInsightTotalPages}
-                                className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                                className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-[#404040] text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-50"
                               >
                                 Próximo ›
                               </button>
@@ -2081,15 +2089,17 @@ export default function AdminMetaPage() {
               )}
             </>
           ) : (
-            <p className="py-4 text-sm text-gray-500">Selecione uma banca em &quot;Visão geral&quot; e clique em &quot;Ver dados&quot; para carregar.</p>
+            <p className="py-4 text-sm text-gray-500 dark:text-gray-400">Selecione uma banca em &quot;Visão geral&quot; e clique em &quot;Ver dados&quot; para carregar.</p>
           )}
         </div>
+
+        <div className={`${metaCard} p-4 md:p-5`}>
           <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
             <div className="flex items-center gap-2">
               <Link2 className="w-5 h-5 text-[#8CD955]" />
               <div>
-                <h2 className="text-base font-semibold text-gray-800">Redirects VSL (todos os projetos)</h2>
-                <p className="text-sm text-gray-600">
+                <h2 className="text-base font-semibold text-gray-900 dark:text-gray-50">Redirects VSL (todos os projetos)</h2>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
                   Cliques registrados, slugs públicos e grupos de destino agregados no sistema.
                 </p>
               </div>
@@ -2098,59 +2108,59 @@ export default function AdminMetaPage() {
               type="button"
               onClick={() => void loadRedirectSummary()}
               disabled={loadingRedirectSummary}
-              className="px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-xl font-medium text-gray-700 disabled:opacity-50 flex items-center gap-2 text-sm"
+              className="px-3 py-2 bg-gray-100 dark:bg-[#333] hover:bg-gray-200 dark:hover:bg-[#404040] rounded-xl font-medium text-gray-700 dark:text-gray-200 disabled:opacity-50 flex items-center gap-2 text-sm"
             >
               {loadingRedirectSummary ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
               Atualizar redirects
             </button>
           </div>
           {redirectSummaryError && (
-            <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700">
+            <div className="mb-4 p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-sm text-red-700 dark:text-red-300">
               {redirectSummaryError}
             </div>
           )}
           {loadingRedirectSummary && !redirectSummary ? (
-            <div className="flex items-center justify-center py-12 text-gray-500 gap-2">
+            <div className="flex items-center justify-center py-12 text-gray-500 dark:text-gray-400 gap-2">
               <Loader2 className="w-6 h-6 animate-spin text-[#8CD955]" />
               Carregando…
             </div>
           ) : redirectSummary ? (
             <>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 mb-6">
-                <div className="rounded-xl border border-gray-100 bg-gray-50/80 p-3">
-                  <p className="text-[11px] font-semibold text-gray-500 uppercase">Total de cliques</p>
-                  <p className="text-xl font-bold text-gray-800 mt-0.5">
+                <div className="rounded-xl border border-gray-100 dark:border-[#383838] bg-gray-50/80 dark:bg-[#1e1e1e] p-3">
+                  <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase">Total de cliques</p>
+                  <p className="text-xl font-bold text-gray-900 dark:text-gray-50 mt-0.5">
                     {redirectSummary.totals.total_clicks.toLocaleString('pt-BR')}
                   </p>
                 </div>
-                <div className="rounded-xl border border-gray-100 bg-gray-50/80 p-3">
-                  <p className="text-[11px] font-semibold text-gray-500 uppercase">Grupos</p>
-                  <p className="text-xl font-bold text-gray-800 mt-0.5">
+                <div className="rounded-xl border border-gray-100 dark:border-[#383838] bg-gray-50/80 dark:bg-[#1e1e1e] p-3">
+                  <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase">Grupos</p>
+                  <p className="text-xl font-bold text-gray-900 dark:text-gray-50 mt-0.5">
                     {redirectSummary.totals.total_groups.toLocaleString('pt-BR')}
                   </p>
-                  <p className="text-xs text-gray-500 mt-0.5">
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
                     {redirectSummary.totals.active_groups.toLocaleString('pt-BR')} ativos
                   </p>
                 </div>
-                <div className="rounded-xl border border-gray-100 bg-gray-50/80 p-3">
-                  <p className="text-[11px] font-semibold text-gray-500 uppercase">Slugs redirect</p>
-                  <p className="text-xl font-bold text-gray-800 mt-0.5">
+                <div className="rounded-xl border border-gray-100 dark:border-[#383838] bg-gray-50/80 dark:bg-[#1e1e1e] p-3">
+                  <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase">Slugs redirect</p>
+                  <p className="text-xl font-bold text-gray-900 dark:text-gray-50 mt-0.5">
                     {redirectSummary.totals.redirect_slugs.toLocaleString('pt-BR')}
                   </p>
-                  <p className="text-xs text-gray-500 mt-0.5">
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
                     {redirectSummary.totals.active_redirect_slugs.toLocaleString('pt-BR')} ativos
                   </p>
                 </div>
-                <div className="rounded-xl border border-gray-100 bg-gray-50/80 p-3">
-                  <p className="text-[11px] font-semibold text-gray-500 uppercase">Projetos VSL</p>
-                  <p className="text-xl font-bold text-gray-800 mt-0.5">
+                <div className="rounded-xl border border-gray-100 dark:border-[#383838] bg-gray-50/80 dark:bg-[#1e1e1e] p-3">
+                  <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase">Projetos VSL</p>
+                  <p className="text-xl font-bold text-gray-900 dark:text-gray-50 mt-0.5">
                     {redirectSummary.totals.vsl_projects.toLocaleString('pt-BR')}
                   </p>
                 </div>
               </div>
-              <div className="overflow-x-auto max-h-[min(420px,50vh)] overflow-y-auto rounded-xl border border-gray-100">
+              <div className="overflow-x-auto max-h-[min(420px,50vh)] overflow-y-auto rounded-xl border border-gray-100 dark:border-[#383838]">
                 <table className="w-full min-w-[720px] text-sm">
-                  <thead className="sticky top-0 bg-gray-50 text-gray-700 z-10">
+                  <thead className="sticky top-0 bg-gray-50 dark:bg-[#2a2a2a] text-gray-700 dark:text-gray-200 z-10">
                     <tr>
                       <th className="px-3 py-2 text-left font-semibold">Projeto</th>
                       <th className="px-3 py-2 text-left font-semibold">Slug redirect</th>
@@ -2159,7 +2169,7 @@ export default function AdminMetaPage() {
                       <th className="px-3 py-2 text-right font-semibold">Grupos ativos</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-100">
+                  <tbody className="divide-y divide-gray-100 dark:divide-[#383838]">
                     {redirectSummary.projects
                       .filter(
                         (r) =>
@@ -2168,21 +2178,21 @@ export default function AdminMetaPage() {
                           r.groups_total > 0
                       )
                       .map((r) => (
-                        <tr key={r.project_id} className="hover:bg-gray-50/80">
-                          <td className="px-3 py-2 text-gray-800">
+                        <tr key={r.project_id} className="hover:bg-gray-50/80 dark:hover:bg-[#2a2a2a]/80">
+                          <td className="px-3 py-2 text-gray-800 dark:text-gray-100">
                             <span className="font-medium">{r.name}</span>
-                            <span className="block text-xs text-gray-500">{r.project_slug}</span>
+                            <span className="block text-xs text-gray-500 dark:text-gray-400">{r.project_slug}</span>
                           </td>
-                          <td className="px-3 py-2 text-gray-700">
+                          <td className="px-3 py-2 text-gray-700 dark:text-gray-300">
                             {r.redirect_slug ? (
                               <>
-                                <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{r.redirect_slug}</code>
+                                <code className="text-xs bg-gray-100 dark:bg-[#333] px-1.5 py-0.5 rounded text-gray-800 dark:text-gray-200">{r.redirect_slug}</code>
                                 {r.redirect_active === false && (
-                                  <span className="ml-1 text-xs text-amber-600">inativo</span>
+                                  <span className="ml-1 text-xs text-amber-600 dark:text-amber-400">inativo</span>
                                 )}
                               </>
                             ) : (
-                              <span className="text-gray-400">—</span>
+                              <span className="text-gray-400 dark:text-gray-500">—</span>
                             )}
                           </td>
                           <td className="px-3 py-2 text-right tabular-nums">{r.clicks.toLocaleString('pt-BR')}</td>
@@ -2204,18 +2214,18 @@ export default function AdminMetaPage() {
           ) : null}
         </div>
 
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-gray-100 bg-gray-50/50 flex flex-wrap items-center justify-between gap-3">
+        <div className={metaCardOverflow}>
+          <div className="p-4 border-b border-gray-100 dark:border-[#383838] bg-gray-50/50 dark:bg-[#1e1e1e] flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 className="text-base font-semibold text-gray-800">Visão geral de todas as bancas</h2>
-              <p className="text-sm text-gray-600">Acompanhe integração e métricas Meta por banca.</p>
+              <h2 className="text-base font-semibold text-gray-900 dark:text-gray-50">Visão geral de todas as bancas</h2>
+              <p className="text-sm text-gray-600 dark:text-gray-400">Acompanhe integração e métricas Meta por banca.</p>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <input
                 value={overviewSearch}
                 onChange={(e) => { setOverviewSearch(e.target.value); setOverviewPage(1); }}
                 placeholder="Buscar banca por nome ou URL"
-                className="px-3 py-2 border border-gray-200 rounded-xl text-sm text-gray-800 placeholder:text-gray-500 bg-white"
+                className="px-3 py-2 border border-gray-200 dark:border-[#404040] rounded-xl text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-500 bg-white dark:bg-[#2a2a2a]"
               />
               <button
                 type="button"
@@ -2224,7 +2234,7 @@ export default function AdminMetaPage() {
                   void loadRedirectSummary();
                 }}
                 disabled={loadingOverview}
-                className="px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-xl font-medium text-gray-700 disabled:opacity-50 flex items-center gap-2"
+                className="px-3 py-2 bg-gray-100 dark:bg-[#333] hover:bg-gray-200 dark:hover:bg-[#404040] rounded-xl font-medium text-gray-700 dark:text-gray-200 disabled:opacity-50 flex items-center gap-2"
               >
                 {loadingOverview ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
                 Atualizar
@@ -2232,13 +2242,13 @@ export default function AdminMetaPage() {
             </div>
           </div>
           {overviewError && (
-            <div className="mx-4 mt-4 p-3 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700">
+            <div className="mx-4 mt-4 p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-sm text-red-700 dark:text-red-300">
               {overviewError}
             </div>
           )}
           <div className="overflow-x-auto">
             <table className="w-full min-w-[1100px] text-sm">
-              <thead className="bg-gray-50 text-gray-700">
+              <thead className="bg-gray-50 dark:bg-[#2a2a2a] text-gray-700 dark:text-gray-200">
                 <tr>
                   <th className="px-4 py-3 text-left font-semibold">Banca</th>
                   <th className="px-4 py-3 text-left font-semibold">Integração</th>
@@ -2247,21 +2257,21 @@ export default function AdminMetaPage() {
                   <th className="px-4 py-3 text-left font-semibold">Ações</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-gray-100 dark:divide-[#383838]">
                 {pagedOverviewRows.map((row) => (
-                    <tr key={row.banca_id} className="align-top hover:bg-gray-50/60">
+                    <tr key={row.banca_id} className="align-top hover:bg-gray-50/60 dark:hover:bg-[#2a2a2a]/60">
                       <td className="px-4 py-3">
-                        <p className="font-semibold text-gray-800">{row.banca_name}</p>
-                        <p className="text-xs text-gray-500 break-all">{row.banca_url}</p>
+                        <p className="font-semibold text-gray-900 dark:text-gray-50">{row.banca_name}</p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 break-all">{row.banca_url}</p>
                       </td>
                       <td className="px-4 py-3">
                         <span
                           className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${
                             row.configured
                               ? row.is_active
-                                ? 'bg-emerald-100 text-emerald-700'
-                                : 'bg-amber-100 text-amber-700'
-                              : 'bg-gray-100 text-gray-600'
+                                ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300'
+                                : 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300'
+                              : 'bg-gray-100 dark:bg-[#333] text-gray-600 dark:text-gray-300'
                           }`}
                         >
                           {row.configured ? (row.is_active ? 'Configurada e ativa' : 'Configurada (inativa)') : 'Sem integração'}
@@ -2270,15 +2280,15 @@ export default function AdminMetaPage() {
                           <p className="text-xs text-red-600 mt-1 max-w-[220px]">{row.last_sync_error}</p>
                         ) : null}
                       </td>
-                      <td className="px-4 py-3 text-xs text-gray-700">
+                      <td className="px-4 py-3 text-xs text-gray-700 dark:text-gray-300">
                         <p>Base URL: {row.base_url || '-'}</p>
                         <p>Ad Account: {row.ad_account_id || '-'}</p>
                         <p>Pixel: {row.pixel_id || '-'}</p>
                         <p>Token: {row.token_last4 ? `••••${row.token_last4}` : '-'}</p>
                       </td>
-                      <td className="px-4 py-3 text-xs text-gray-600">
+                      <td className="px-4 py-3 text-xs text-gray-600 dark:text-gray-400">
                         <p>{formatDate(row.last_sync_at)}</p>
-                        {row.last_sync_date_preset ? <p className="text-gray-500 mt-0.5">{row.last_sync_date_preset}</p> : null}
+                        {row.last_sync_date_preset ? <p className="text-gray-500 dark:text-gray-500 mt-0.5">{row.last_sync_date_preset}</p> : null}
                       </td>
                       <td className="px-4 py-3">
                         <button
@@ -2302,25 +2312,25 @@ export default function AdminMetaPage() {
           </div>
           {/* Paginação */}
           {filteredOverviewRows.length > 0 && (
-            <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100 bg-gray-50/40">
-              <p className="text-xs text-gray-500">
+            <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100 dark:border-[#383838] bg-gray-50/40 dark:bg-[#1e1e1e]/80">
+              <p className="text-xs text-gray-500 dark:text-gray-400">
                 Exibindo{' '}
-                <span className="font-semibold text-gray-700">
+                <span className="font-semibold text-gray-700 dark:text-gray-200">
                   {(overviewPageSafe - 1) * OVERVIEW_PAGE_SIZE + 1}
                 </span>{' '}
                 a{' '}
-                <span className="font-semibold text-gray-700">
+                <span className="font-semibold text-gray-700 dark:text-gray-200">
                   {Math.min(overviewPageSafe * OVERVIEW_PAGE_SIZE, filteredOverviewRows.length)}
                 </span>{' '}
                 de{' '}
-                <span className="font-semibold text-gray-700">{filteredOverviewRows.length}</span> bancas
+                <span className="font-semibold text-gray-700 dark:text-gray-200">{filteredOverviewRows.length}</span> bancas
               </p>
               <div className="flex items-center gap-1">
                 <button
                   type="button"
                   onClick={() => setOverviewPage(1)}
                   disabled={overviewPageSafe <= 1}
-                  className="px-2 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-600 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="px-2 py-1.5 rounded-lg border border-gray-200 dark:border-[#404040] text-xs text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   «
                 </button>
@@ -2328,7 +2338,7 @@ export default function AdminMetaPage() {
                   type="button"
                   onClick={() => setOverviewPage((p) => Math.max(1, p - 1))}
                   disabled={overviewPageSafe <= 1}
-                  className="px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-600 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-[#404040] text-xs text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   ‹ Anterior
                 </button>
@@ -2343,7 +2353,7 @@ export default function AdminMetaPage() {
                   }, [])
                   .map((item, idx) =>
                     item === '...' ? (
-                      <span key={`ellipsis-${idx}`} className="px-1.5 text-xs text-gray-400">…</span>
+                      <span key={`ellipsis-${idx}`} className="px-1.5 text-xs text-gray-400 dark:text-gray-500">…</span>
                     ) : (
                       <button
                         key={item}
@@ -2352,7 +2362,7 @@ export default function AdminMetaPage() {
                         className={`px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
                           overviewPageSafe === item
                             ? 'bg-[#8CD955] border-[#8CD955] text-white'
-                            : 'border-gray-200 text-gray-600 hover:bg-gray-100'
+                            : 'border-gray-200 dark:border-[#404040] text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#333]'
                         }`}
                       >
                         {item}
@@ -2363,7 +2373,7 @@ export default function AdminMetaPage() {
                   type="button"
                   onClick={() => setOverviewPage((p) => Math.min(overviewTotalPages, p + 1))}
                   disabled={overviewPageSafe >= overviewTotalPages}
-                  className="px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-600 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-[#404040] text-xs text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   Próximo ›
                 </button>
@@ -2371,7 +2381,7 @@ export default function AdminMetaPage() {
                   type="button"
                   onClick={() => setOverviewPage(overviewTotalPages)}
                   disabled={overviewPageSafe >= overviewTotalPages}
-                  className="px-2 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-600 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="px-2 py-1.5 rounded-lg border border-gray-200 dark:border-[#404040] text-xs text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   »
                 </button>
@@ -2379,16 +2389,16 @@ export default function AdminMetaPage() {
             </div>
           )}
           {!loadingOverview && overviewRows.length === 0 && !overviewError && (
-            <div className="p-6 text-sm text-center text-gray-500">
+            <div className="p-6 text-sm text-center text-gray-500 dark:text-gray-400">
               Nenhuma banca encontrada para exibir no painel geral.
             </div>
           )}
         </div>
 
 
-        <div id="meta-config-section" className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-gray-100 bg-gray-50/50">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+        <div id="meta-config-section" className={metaCardOverflow}>
+          <div className="p-4 border-b border-gray-100 dark:border-[#383838] bg-gray-50/50 dark:bg-[#1e1e1e]">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-2">
               <Building2 className="w-4 h-4 inline mr-2" />
               Bancas desta integração
             </label>
@@ -2398,7 +2408,7 @@ export default function AdminMetaPage() {
                 aria-expanded={bancaPickerOpen}
                 aria-haspopup="listbox"
                 onClick={() => setBancaPickerOpen((o) => !o)}
-                className="w-full flex items-center justify-between gap-3 px-4 py-3 border border-gray-200 rounded-xl bg-white text-left text-sm text-gray-800 hover:border-gray-300 transition-colors"
+                className="w-full flex items-center justify-between gap-3 px-4 py-3 border border-gray-200 dark:border-[#404040] rounded-xl bg-white dark:bg-[#2a2a2a] text-left text-sm text-gray-800 dark:text-gray-100 hover:border-gray-300 dark:hover:border-[#505050] transition-colors"
               >
                 <span className="truncate">
                   {selectedBancaIds.length === 0 ? (
@@ -2413,7 +2423,7 @@ export default function AdminMetaPage() {
               </button>
               {bancaPickerOpen ? (
                 <div
-                  className="absolute z-30 left-0 right-0 mt-1 rounded-xl border border-gray-200 bg-white shadow-lg flex flex-col max-h-72 overflow-hidden"
+                  className="absolute z-30 left-0 right-0 mt-1 rounded-xl border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] shadow-lg flex flex-col max-h-72 overflow-hidden"
                   role="listbox"
                   aria-multiselectable="true"
                 >
@@ -2422,7 +2432,7 @@ export default function AdminMetaPage() {
                     value={bancaPickerSearch}
                     onChange={(e) => setBancaPickerSearch(e.target.value)}
                     placeholder="Buscar banca…"
-                    className="w-full px-3 py-2.5 text-sm border-b border-gray-100 text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30"
+                    className="w-full px-3 py-2.5 text-sm border-b border-gray-100 dark:border-[#404040] text-gray-800 dark:text-gray-100 bg-transparent placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30"
                     autoComplete="off"
                   />
                   <div className="overflow-y-auto p-2 space-y-0.5">
@@ -2432,7 +2442,7 @@ export default function AdminMetaPage() {
                       return (
                         <label
                           key={b.id}
-                          className="flex items-start gap-2 text-sm text-gray-800 cursor-pointer rounded-lg px-2 py-2 hover:bg-gray-50"
+                          className="flex items-start gap-2 text-sm text-gray-800 dark:text-gray-100 cursor-pointer rounded-lg px-2 py-2 hover:bg-gray-50 dark:hover:bg-[#333]"
                         >
                           <input
                             type="checkbox"
@@ -2484,14 +2494,14 @@ export default function AdminMetaPage() {
                 </div>
               ) : null}
             </div>
-            <p className="text-xs text-gray-500 mt-2 max-w-xl">
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-2 max-w-xl">
               Selecione no dropdown uma ou mais bancas para a mesma integração Meta (dados de{' '}
-              <code className="text-[11px] bg-gray-100 px-1 rounded">meta_integration_configs</code>
+              <code className="text-[11px] bg-gray-100 dark:bg-[#333] text-gray-800 dark:text-gray-200 px-1 rounded">meta_integration_configs</code>
               ). Se marcar alguma banca que já possui vínculo, os campos abaixo são preenchidos com essa configuração (desde que todas as selecionadas compartilhem a mesma integração). Ao salvar, os vínculos em{' '}
-              <code className="text-[11px] bg-gray-100 px-1 rounded">meta_integration_bancas</code> refletem o conjunto escolhido.
+              <code className="text-[11px] bg-gray-100 dark:bg-[#333] text-gray-800 dark:text-gray-200 px-1 rounded">meta_integration_bancas</code> refletem o conjunto escolhido.
             </p>
             {configLoadError ? (
-              <div className="mt-3 max-w-xl p-3 rounded-xl bg-amber-50 border border-amber-200 text-sm text-amber-900">
+              <div className="mt-3 max-w-xl p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-sm text-amber-900 dark:text-amber-200">
                 {configLoadError}
               </div>
             ) : null}
@@ -2505,17 +2515,17 @@ export default function AdminMetaPage() {
             <div className="p-6 space-y-6">
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Base URL Meta</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">Base URL Meta</label>
                   <input
                     type="text"
                     value={form.base_url}
                     onChange={(e) => setForm((f) => ({ ...f, base_url: e.target.value }))}
                     placeholder="https://graph.facebook.com/v19.0"
-                    className="w-full px-4 py-2 border border-gray-200 rounded-xl text-gray-800 placeholder:text-gray-500"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-[#404040] rounded-xl text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] placeholder:text-gray-500 dark:placeholder:text-gray-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
                     <Key className="w-4 h-4 inline mr-1" />
                     Access Token
                   </label>
@@ -2527,7 +2537,7 @@ export default function AdminMetaPage() {
                           readOnly
                           value={`••••${config.token_last4}`}
                           aria-label="Token salvo (máscara)"
-                          className="w-full min-w-0 px-4 py-2 border border-gray-200 rounded-xl text-gray-800 bg-gray-50 font-mono text-sm"
+                          className="w-full min-w-0 px-4 py-2 border border-gray-200 dark:border-[#404040] rounded-xl text-gray-800 dark:text-gray-100 bg-gray-50 dark:bg-[#1e1e1e] font-mono text-sm"
                         />
                         <button
                           type="button"
@@ -2574,7 +2584,7 @@ export default function AdminMetaPage() {
                             ? 'Novo token (ou deixe em branco ao salvar para manter o atual)'
                             : 'Token do System User'
                         }
-                        className="w-full px-4 py-2 border border-gray-200 rounded-xl text-gray-800 placeholder:text-gray-500 font-mono text-sm"
+                        className="w-full px-4 py-2 border border-gray-200 dark:border-[#404040] rounded-xl text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] placeholder:text-gray-500 dark:placeholder:text-gray-500 font-mono text-sm"
                       />
                       {form.access_token ? (
                         <button
@@ -2589,27 +2599,27 @@ export default function AdminMetaPage() {
                   )}
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Ad Account ID (act_xxx)</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">Ad Account ID (act_xxx)</label>
                   <input
                     type="text"
                     value={form.ad_account_id}
                     onChange={(e) => setForm((f) => ({ ...f, ad_account_id: e.target.value }))}
                     placeholder="act_123456789"
-                    className="w-full px-4 py-2 border border-gray-200 rounded-xl text-gray-800 placeholder:text-gray-500"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-[#404040] rounded-xl text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] placeholder:text-gray-500 dark:placeholder:text-gray-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Pixel ID</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">Pixel ID</label>
                   <input
                     type="text"
                     value={form.pixel_id}
                     onChange={(e) => setForm((f) => ({ ...f, pixel_id: e.target.value }))}
                     placeholder="1234567890"
-                    className="w-full px-4 py-2 border border-gray-200 rounded-xl text-gray-800 placeholder:text-gray-500"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-[#404040] rounded-xl text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] placeholder:text-gray-500 dark:placeholder:text-gray-500"
                   />
                 </div>
                 <div className="sm:col-span-2 lg:col-span-3">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
                     <Hash className="w-4 h-4 inline mr-1" />
                     Campanha padrão (opcional)
                   </label>
@@ -2617,7 +2627,7 @@ export default function AdminMetaPage() {
                     <select
                       value={form.default_campaign_id}
                       onChange={(e) => setForm((f) => ({ ...f, default_campaign_id: e.target.value }))}
-                      className="flex-1 px-4 py-2 border border-gray-200 rounded-xl bg-white text-gray-800"
+                      className="flex-1 px-4 py-2 border border-gray-200 dark:border-[#404040] rounded-xl bg-white dark:bg-[#2a2a2a] text-gray-800 dark:text-gray-100"
                     >
                       <option value="">Nenhuma</option>
                       {campaigns.map((c) => (
@@ -2631,7 +2641,7 @@ export default function AdminMetaPage() {
                       type="button"
                       onClick={handleLoadCampaigns}
                       disabled={loadingCampaigns}
-                      className="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-xl font-medium text-gray-700 disabled:opacity-50 flex items-center gap-2"
+                      className="px-4 py-2 bg-gray-100 dark:bg-[#333] hover:bg-gray-200 dark:hover:bg-[#404040] rounded-xl font-medium text-gray-700 dark:text-gray-200 disabled:opacity-50 flex items-center gap-2"
                     >
                       {loadingCampaigns ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
                       Carregar campanhas
@@ -2667,37 +2677,37 @@ export default function AdminMetaPage() {
                 </button>
                 <a
                   href="/gestor-trafego"
-                  className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-medium flex items-center gap-2"
+                  className="px-4 py-2 bg-gray-100 dark:bg-[#333] hover:bg-gray-200 dark:hover:bg-[#404040] text-gray-700 dark:text-gray-200 rounded-xl font-medium flex items-center gap-2"
                 >
                   <ExternalLink className="w-4 h-4" />
                   Ver Gestor de Tráfego
                 </a>
               </div>
 
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5 border-t border-gray-200 pt-4">
-                <div className="p-3 rounded-xl bg-gray-50 border border-gray-200">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5 border-t border-gray-200 dark:border-[#383838] pt-4">
+                <div className="p-3 rounded-xl bg-gray-50 dark:bg-[#1e1e1e] border border-gray-200 dark:border-[#404040]">
                   <p className="text-[11px] font-semibold text-gray-500 uppercase">Token</p>
                   <p className="text-sm font-medium text-gray-800 mt-1">{config?.token_last4 ? `••••${config.token_last4}` : '-'}</p>
                 </div>
-                <div className="p-3 rounded-xl bg-gray-50 border border-gray-200">
+                <div className="p-3 rounded-xl bg-gray-50 dark:bg-[#1e1e1e] border border-gray-200 dark:border-[#404040]">
                   <p className="text-[11px] font-semibold text-gray-500 uppercase">Pixel</p>
                   <p className="text-sm font-medium text-gray-800 mt-1 break-all">
                     {(form.pixel_id && form.pixel_id.trim()) || config?.pixel_id || '-'}
                   </p>
                 </div>
-                <div className="p-3 rounded-xl bg-gray-50 border border-gray-200">
+                <div className="p-3 rounded-xl bg-gray-50 dark:bg-[#1e1e1e] border border-gray-200 dark:border-[#404040]">
                   <p className="text-[11px] font-semibold text-gray-500 uppercase">Ad Account</p>
                   <p className="text-sm font-medium text-gray-800 mt-1 break-all">
                     {(form.ad_account_id && form.ad_account_id.trim()) || config?.ad_account_id || '-'}
                   </p>
                 </div>
-                <div className="p-3 rounded-xl bg-gray-50 border border-gray-200">
+                <div className="p-3 rounded-xl bg-gray-50 dark:bg-[#1e1e1e] border border-gray-200 dark:border-[#404040]">
                   <p className="text-[11px] font-semibold text-gray-500 uppercase">Base URL</p>
                   <p className="text-sm font-medium text-gray-800 mt-1 break-all">
                     {(form.base_url && form.base_url.trim()) || config?.base_url || '-'}
                   </p>
                 </div>
-                <div className="p-3 rounded-xl bg-gray-50 border border-gray-200">
+                <div className="p-3 rounded-xl bg-gray-50 dark:bg-[#1e1e1e] border border-gray-200 dark:border-[#404040]">
                   <p className="text-[11px] font-semibold text-gray-500 uppercase">Campanha padrão</p>
                   <p className="text-sm font-medium text-gray-800 mt-1 break-all">
                     {(form.default_campaign_id && form.default_campaign_id.trim()) || config?.default_campaign_id || '-'}
@@ -2760,12 +2770,12 @@ export default function AdminMetaPage() {
                 </div>
               )}
 
-              <div className="border-t border-gray-200 pt-4">
-                <h3 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
+              <div className="border-t border-gray-200 dark:border-[#383838] pt-4">
+                <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-200 mb-2 flex items-center gap-2">
                   <Calendar className="w-4 h-4" />
                   Status
                 </h3>
-                <div className="grid gap-2 text-sm text-gray-600">
+                <div className="grid gap-2 text-sm text-gray-600 dark:text-gray-400">
                   <p>Último sync: {formatDate(config?.last_sync_at ?? null)}</p>
                   {config?.last_sync_error && (
                     <p className="text-red-600">Último erro: {config.last_sync_error}</p>
@@ -2786,16 +2796,16 @@ export default function AdminMetaPage() {
 
       {consultorModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
-          <div className="w-full max-w-2xl bg-white rounded-2xl border border-gray-200 shadow-xl">
-            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+          <div className="w-full max-w-2xl bg-white dark:bg-[#252525] rounded-2xl border border-gray-200 dark:border-[#404040] shadow-xl">
+            <div className="px-5 py-4 border-b border-gray-100 dark:border-[#383838] flex items-center justify-between">
               <div>
-                <h3 className="text-base font-semibold text-gray-800">Atribuir consultores à campanha</h3>
-                <p className="text-xs text-gray-500 mt-0.5">Selecione a campanha e os consultores responsáveis.</p>
+                <h3 className="text-base font-semibold text-gray-900 dark:text-gray-50">Atribuir consultores à campanha</h3>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Selecione a campanha e os consultores responsáveis.</p>
               </div>
               <button
                 type="button"
                 onClick={() => setConsultorModalOpen(false)}
-                className="px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-600 hover:bg-gray-50"
+                className="px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-[#404040] text-xs text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]"
               >
                 Fechar
               </button>
@@ -2809,7 +2819,7 @@ export default function AdminMetaPage() {
                     setConsultorModalCampaignKey(e.target.value);
                     setConsultorModalSearch('');
                   }}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm text-gray-800 bg-white"
+                  className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] rounded-xl text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a]"
                 >
                   {(allCampaignsRows || []).map((row: any) => {
                     const key = `${String(row.banca_id)}:${String(row.campaign_id)}`;
@@ -2825,37 +2835,37 @@ export default function AdminMetaPage() {
               {selectedConsultorModalRow ? (
                 <>
                   <div className="grid sm:grid-cols-2 gap-3">
-                    <div className="p-3 rounded-xl border border-gray-100 bg-gray-50">
-                      <p className="text-[11px] font-semibold text-gray-500 uppercase">Leads consultores</p>
-                      <p className="text-xl font-bold text-gray-800 mt-1">
+                    <div className="p-3 rounded-xl border border-gray-100 dark:border-[#383838] bg-gray-50 dark:bg-[#1e1e1e]">
+                      <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase">Leads consultores</p>
+                      <p className="text-xl font-bold text-gray-900 dark:text-gray-50 mt-1">
                         {(Number(selectedConsultorModalRow.consultor_total_leads) || 0).toLocaleString('pt-BR')}
                       </p>
                     </div>
-                    <div className="p-3 rounded-xl border border-gray-100 bg-gray-50">
-                      <p className="text-[11px] font-semibold text-gray-500 uppercase">Depósito consultores</p>
-                      <p className="text-xl font-bold text-gray-800 mt-1">
+                    <div className="p-3 rounded-xl border border-gray-100 dark:border-[#383838] bg-gray-50 dark:bg-[#1e1e1e]">
+                      <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase">Depósito consultores</p>
+                      <p className="text-xl font-bold text-gray-900 dark:text-gray-50 mt-1">
                         R$ {(Number(selectedConsultorModalRow.consultor_total_deposited) || 0).toFixed(2)}
                       </p>
                     </div>
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold uppercase text-gray-500 mb-1">Consultores da banca</label>
+                    <label className="block text-xs font-semibold uppercase text-gray-500 dark:text-gray-400 mb-1">Consultores da banca</label>
                     <input
                       type="search"
                       value={consultorModalSearch}
                       onChange={(e) => setConsultorModalSearch(e.target.value)}
                       placeholder="Buscar consultor por nome ou e-mail…"
-                      className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm text-gray-800 bg-white mb-2"
+                      className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] rounded-xl text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] mb-2"
                     />
-                    <div className="border border-gray-200 rounded-xl bg-white max-h-56 overflow-y-auto divide-y divide-gray-100">
+                    <div className="border border-gray-200 dark:border-[#404040] rounded-xl bg-white dark:bg-[#2a2a2a] max-h-56 overflow-y-auto divide-y divide-gray-100 dark:divide-[#383838]">
                       {consultorModalFilteredOptions.length === 0 ? (
                         <p className="px-3 py-3 text-xs text-gray-500">Nenhum consultor encontrado.</p>
                       ) : (
                         consultorModalFilteredOptions.map((consultor) => {
                           const checked = consultorModalSelectedIds.includes(String(consultor.id));
                           return (
-                            <label key={consultor.id} className="flex items-start gap-2 px-3 py-2 cursor-pointer hover:bg-gray-50">
+                            <label key={consultor.id} className="flex items-start gap-2 px-3 py-2 cursor-pointer hover:bg-gray-50 dark:hover:bg-[#333]">
                               <input
                                 type="checkbox"
                                 checked={checked}
@@ -2870,8 +2880,8 @@ export default function AdminMetaPage() {
                                 className="mt-0.5 rounded border-gray-300 text-[#8CD955] focus:ring-[#8CD955]"
                               />
                               <span className="min-w-0">
-                                <span className="block text-sm text-gray-800">{consultor.full_name || 'Sem nome'}</span>
-                                <span className="block text-xs text-gray-500 break-all">{consultor.email}</span>
+                                <span className="block text-sm text-gray-900 dark:text-gray-50">{consultor.full_name || 'Sem nome'}</span>
+                                <span className="block text-xs text-gray-500 dark:text-gray-400 break-all">{consultor.email}</span>
                               </span>
                             </label>
                           );
@@ -2887,11 +2897,11 @@ export default function AdminMetaPage() {
                 <p className="text-sm text-gray-500">Nenhuma campanha disponível para atribuição.</p>
               )}
             </div>
-            <div className="px-5 py-4 border-t border-gray-100 flex items-center justify-end gap-2">
+            <div className="px-5 py-4 border-t border-gray-100 dark:border-[#383838] flex items-center justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setConsultorModalOpen(false)}
-                className="px-4 py-2 rounded-xl border border-gray-200 text-sm text-gray-600 hover:bg-gray-50"
+                className="px-4 py-2 rounded-xl border border-gray-200 dark:border-[#404040] text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]"
               >
                 Cancelar
               </button>
@@ -2915,29 +2925,29 @@ export default function AdminMetaPage() {
       {/* Modal: Nova integração */}
       {newIntegrationOpen && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
-          <div className="bg-white rounded-2xl shadow-xl border border-gray-200 w-full max-w-2xl overflow-hidden">
-            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-              <h3 className="text-lg font-bold text-gray-800">Criar nova integração Meta</h3>
+          <div className="bg-white dark:bg-[#252525] rounded-2xl shadow-xl border border-gray-200 dark:border-[#404040] w-full max-w-2xl overflow-hidden">
+            <div className="px-5 py-4 border-b border-gray-100 dark:border-[#383838] flex items-center justify-between">
+              <h3 className="text-lg font-bold text-gray-900 dark:text-gray-50">Criar nova integração Meta</h3>
               <button
                 type="button"
                 onClick={() => setNewIntegrationOpen(false)}
-                className="px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm text-gray-700"
+                className="px-3 py-1.5 rounded-lg bg-gray-100 dark:bg-[#333] hover:bg-gray-200 dark:hover:bg-[#404040] text-sm text-gray-700 dark:text-gray-200"
               >
                 Fechar
               </button>
             </div>
             <div className="p-5 space-y-4">
               {newIntegrationError ? (
-                <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700">{newIntegrationError}</div>
+                <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-sm text-red-700 dark:text-red-300">{newIntegrationError}</div>
               ) : null}
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="sm:col-span-2">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Bancas desta integração</label>
-                  <div className="max-h-44 overflow-auto border border-gray-200 rounded-xl p-3 bg-white space-y-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-2">Bancas desta integração</label>
+                  <div className="max-h-44 overflow-auto border border-gray-200 dark:border-[#404040] rounded-xl p-3 bg-white dark:bg-[#2a2a2a] space-y-2">
                     {bancas.map((b) => {
                       const checked = newIntegrationForm.banca_ids.includes(b.id);
                       return (
-                        <label key={b.id} className="flex items-start gap-2 text-sm text-gray-800">
+                        <label key={b.id} className="flex items-start gap-2 text-sm text-gray-800 dark:text-gray-100">
                           <input
                             type="checkbox"
                             checked={checked}
@@ -2963,52 +2973,52 @@ export default function AdminMetaPage() {
                   <p className="text-xs text-gray-500 mt-2">A mesma configuração será aplicada para todas as bancas marcadas.</p>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Base URL Meta</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">Base URL Meta</label>
                   <input
                     type="text"
                     value={newIntegrationForm.base_url}
                     onChange={(e) => setNewIntegrationForm((f) => ({ ...f, base_url: e.target.value }))}
-                    className="w-full px-4 py-2 border border-gray-200 rounded-xl text-gray-800"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-[#404040] rounded-xl text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a]"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Access Token</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">Access Token</label>
                   <input
                     type="password"
                     value={newIntegrationForm.access_token}
                     onChange={(e) => setNewIntegrationForm((f) => ({ ...f, access_token: e.target.value }))}
                     placeholder="Token do System User"
-                    className="w-full px-4 py-2 border border-gray-200 rounded-xl text-gray-800 placeholder:text-gray-500"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-[#404040] rounded-xl text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] placeholder:text-gray-500 dark:placeholder:text-gray-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Ad Account ID (act_xxx)</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">Ad Account ID (act_xxx)</label>
                   <input
                     type="text"
                     value={newIntegrationForm.ad_account_id}
                     onChange={(e) => setNewIntegrationForm((f) => ({ ...f, ad_account_id: e.target.value }))}
                     placeholder="act_123456789"
-                    className="w-full px-4 py-2 border border-gray-200 rounded-xl text-gray-800 placeholder:text-gray-500"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-[#404040] rounded-xl text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] placeholder:text-gray-500 dark:placeholder:text-gray-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Pixel ID</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">Pixel ID</label>
                   <input
                     type="text"
                     value={newIntegrationForm.pixel_id}
                     onChange={(e) => setNewIntegrationForm((f) => ({ ...f, pixel_id: e.target.value }))}
                     placeholder="1234567890"
-                    className="w-full px-4 py-2 border border-gray-200 rounded-xl text-gray-800 placeholder:text-gray-500"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-[#404040] rounded-xl text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] placeholder:text-gray-500 dark:placeholder:text-gray-500"
                   />
                 </div>
                 <div className="sm:col-span-2">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Campanha padrão (opcional)</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">Campanha padrão (opcional)</label>
                   <input
                     type="text"
                     value={newIntegrationForm.default_campaign_id}
                     onChange={(e) => setNewIntegrationForm((f) => ({ ...f, default_campaign_id: e.target.value }))}
                     placeholder="campaign_id"
-                    className="w-full px-4 py-2 border border-gray-200 rounded-xl text-gray-800 placeholder:text-gray-500"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-[#404040] rounded-xl text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] placeholder:text-gray-500 dark:placeholder:text-gray-500"
                   />
                 </div>
               </div>
@@ -3016,7 +3026,7 @@ export default function AdminMetaPage() {
                 <button
                   type="button"
                   onClick={() => setNewIntegrationOpen(false)}
-                  className="px-4 py-2 rounded-xl border border-gray-200 text-gray-700 hover:bg-gray-50"
+                  className="px-4 py-2 rounded-xl border border-gray-200 dark:border-[#404040] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333]"
                 >
                   Cancelar
                 </button>

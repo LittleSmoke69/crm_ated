@@ -585,12 +585,6 @@ export default function MaturadorPage() {
       alert('Nenhuma mensagem configurada no Auto maturador. Configure em Admin > Maturador (fluxo Auto maturador).');
       return;
     }
-    if (useVirgin && selectedInstanceIds.size < 2 && !(targetChatIdInput || '').trim()) {
-      alert(
-        'Informe o Target Chat ID (número ou grupo WhatsApp) para o Auto maturador, ou selecione 2 ou mais instâncias para conversarem entre si.'
-      );
-      return;
-    }
     const plan = useVirgin ? null : plans.find((p) => p.id === selectedPlanId);
     if (!useVirgin && (!plan || (!canUseAllMaturationPlans && plan.created_by !== userId))) {
       alert('Para iniciar, crie e selecione um plano seu. Os planos do admin aparecem apenas como sugestão.');
@@ -1262,7 +1256,7 @@ export default function MaturadorPage() {
                 {useVirginMessages && (
                   <div>
                     <label htmlFor="target-chat-id" className="block text-xs font-medium text-slate-500 dark:text-[#aaa] mb-1">
-                      Target Chat ID {selectedInstanceIds.size >= 2 ? '(opcional com 2+ instâncias)' : '(obrigatório)'}
+                      Target Chat ID (opcional)
                     </label>
                     <input
                       id="target-chat-id"
@@ -1272,11 +1266,10 @@ export default function MaturadorPage() {
                       placeholder="Número ou grupo, ex: 5511999999999 ou 120363...@g.us"
                       className="w-full px-3 py-2 border border-slate-300 dark:border-[#555] rounded-lg text-slate-800 dark:text-white bg-white dark:bg-[#333] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
                     />
-                    {selectedInstanceIds.size < 2 && (
-                      <p className="text-xs text-slate-500 dark:text-[#888] mt-1">
-                        Sem destino, o job encerrava sem enviar. Com 2+ instâncias selecionadas, elas conversam entre si.
-                      </p>
-                    )}
+                    <p className="text-xs text-slate-500 dark:text-[#888] mt-1">
+                      Se vazio: use destino padrão do plano, &quot;Enviar para grupo&quot; em algum passo, ou selecione 2+ instâncias para malha entre elas.
+                      Caso contrário, os envios sem destino resolvido falham no processamento com aviso no job.
+                    </p>
                   </div>
                 )}
                 {!useVirginMessages && selectedPlanId && !myPlans.some((p) => p.id === selectedPlanId) && (
@@ -1848,10 +1841,10 @@ export default function MaturadorPage() {
                     disparar este passo (o primeiro passo também respeita esse tempo após o início do job).
                   </p>
                   <p>
-                    <strong className="font-medium text-slate-700 dark:text-[#ddd]">Para quem envia?</strong> Você define na tela principal ao clicar em
-                    iniciar: com <strong className="font-medium text-slate-700 dark:text-[#ddd]">várias instâncias</strong> selecionadas, cada uma manda
-                    este plano para as outras automaticamente. Com <strong className="font-medium text-slate-700 dark:text-[#ddd]">uma instância</strong>,
-                    use o campo <strong className="font-medium text-slate-700 dark:text-[#ddd]">Target Chat ID</strong> ali mesmo (número ou grupo).
+                    <strong className="font-medium text-slate-700 dark:text-[#ddd]">Para quem envia?</strong> Na tela principal: com{' '}
+                    <strong className="font-medium text-slate-700 dark:text-[#ddd]">várias instâncias</strong>, cada uma envia o plano às outras (malha).
+                    Com <strong className="font-medium text-slate-700 dark:text-[#ddd]">uma instância</strong>, pode usar{' '}
+                    <strong className="font-medium text-slate-700 dark:text-[#ddd]">Target Chat ID</strong> (opcional), destino padrão do plano ou destino por passo.
                   </p>
                 </div>
               </div>

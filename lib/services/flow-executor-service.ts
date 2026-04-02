@@ -1,4 +1,5 @@
 import { supabaseServiceRole } from './supabase-service';
+import { maybeMarkEvolutionInstanceDisconnected, messageIndicatesEvolutionSessionDropped } from '@/lib/evolution/mark-instance-disconnected';
 import { llmService } from './llm-service';
 import { extractGroupParticipantAction } from '@/lib/utils/group-participants-payload';
 import { FlowTemplatesService } from './flow-templates-service';
@@ -1049,16 +1050,14 @@ export class FlowExecutorService {
         }
         if (!errorMsg) errorMsg = `HTTP ${response.status}`;
 
-        if (errorMsg && /connection\s*closed/i.test(errorMsg)) {
-          try {
-            await supabaseServiceRole
-              .from('evolution_instances')
-              .update({ status: 'disconnected', updated_at: new Date().toISOString() })
-              .eq('id', instance.id);
-            console.log(`🔄 [FLOW EXECUTOR] Instância ${instanceName} marcada como desconectada (Connection Closed na Evolution API)`);
-          } catch (updateErr: unknown) {
-            console.error(`⚠️ [FLOW EXECUTOR] Erro ao atualizar status da instância:`, (updateErr as Error)?.message);
-          }
+        if (messageIndicatesEvolutionSessionDropped(errorMsg)) {
+          await maybeMarkEvolutionInstanceDisconnected(
+            supabaseServiceRole,
+            instance.id,
+            errorMsg,
+            'flow-sendMessage'
+          );
+          console.log(`🔄 [FLOW EXECUTOR] Instância ${instanceName} marcada como desconectada (sessão Evolution)`);
         }
 
         const errorDetails = {
@@ -1081,6 +1080,14 @@ export class FlowExecutorService {
         response: responseData,
       };
     } catch (err: any) {
+      if (instance?.id && err?.message) {
+        await maybeMarkEvolutionInstanceDisconnected(
+          supabaseServiceRole,
+          instance.id,
+          String(err.message),
+          'flow-sendMessage-catch'
+        );
+      }
       const errorDetails = {
         nodeId: node.id,
         nodeType: node.type,
@@ -1300,7 +1307,7 @@ export class FlowExecutorService {
       throw new Error(`Recipient (group_jid/number) não resolvido: ${recipient || 'vazio'}`);
     }
 
-    const { apikey, baseUrl } = await this.fetchInstanceCredentials(instanceName);
+    const { apikey, baseUrl, instance: evInstance } = await this.fetchInstanceCredentials(instanceName);
     const url = `${baseUrl}/message/sendMedia/${instanceName}`;
 
     const ext = imageUrl.split('?')[0].split('.').pop()?.toLowerCase() || 'jpg';
@@ -1320,7 +1327,9 @@ export class FlowExecutorService {
 
     if (!response.ok) {
       const msg = responseData.message ?? responseData.error ?? `HTTP ${response.status}`;
-      throw new Error(`Erro ao enviar imagem: ${Array.isArray(msg) ? msg.join('; ') : msg}`);
+      const errText = `Erro ao enviar imagem: ${Array.isArray(msg) ? msg.join('; ') : msg}`;
+      await maybeMarkEvolutionInstanceDisconnected(supabaseServiceRole, evInstance.id, errText, 'flow-sendImage');
+      throw new Error(errText);
     }
 
     console.log(`✅ [FLOW EXECUTOR] Imagem enviada com sucesso`);
@@ -1375,7 +1384,7 @@ export class FlowExecutorService {
       throw new Error(`Recipient (group_jid/number) não resolvido: ${recipient || 'vazio'}`);
     }
 
-    const { apikey, baseUrl } = await this.fetchInstanceCredentials(instanceName);
+    const { apikey, baseUrl, instance: evInstanceAudio } = await this.fetchInstanceCredentials(instanceName);
 
     let url: string;
     let body: Record<string, any>;
@@ -1402,7 +1411,9 @@ export class FlowExecutorService {
 
     if (!response.ok) {
       const msg = responseData.message ?? responseData.error ?? `HTTP ${response.status}`;
-      throw new Error(`Erro ao enviar áudio: ${Array.isArray(msg) ? msg.join('; ') : msg}`);
+      const errText = `Erro ao enviar áudio: ${Array.isArray(msg) ? msg.join('; ') : msg}`;
+      await maybeMarkEvolutionInstanceDisconnected(supabaseServiceRole, evInstanceAudio.id, errText, 'flow-sendAudio');
+      throw new Error(errText);
     }
 
     console.log(`✅ [FLOW EXECUTOR] Áudio enviado com sucesso`);
@@ -1457,7 +1468,7 @@ export class FlowExecutorService {
       throw new Error(`Recipient (group_jid/number) não resolvido: ${recipient || 'vazio'}`);
     }
 
-    const { apikey, baseUrl } = await this.fetchInstanceCredentials(instanceName);
+    const { apikey, baseUrl, instance: evInstanceVideo } = await this.fetchInstanceCredentials(instanceName);
     const url = `${baseUrl}/message/sendMedia/${instanceName}`;
 
     const ext = videoUrl.split('?')[0].split('.').pop()?.toLowerCase() || 'mp4';
@@ -1477,7 +1488,9 @@ export class FlowExecutorService {
 
     if (!response.ok) {
       const msg = responseData.message ?? responseData.error ?? `HTTP ${response.status}`;
-      throw new Error(`Erro ao enviar vídeo: ${Array.isArray(msg) ? msg.join('; ') : msg}`);
+      const errText = `Erro ao enviar vídeo: ${Array.isArray(msg) ? msg.join('; ') : msg}`;
+      await maybeMarkEvolutionInstanceDisconnected(supabaseServiceRole, evInstanceVideo.id, errText, 'flow-sendVideo');
+      throw new Error(errText);
     }
 
     console.log(`✅ [FLOW EXECUTOR] Vídeo enviado com sucesso`);

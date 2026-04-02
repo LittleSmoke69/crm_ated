@@ -37,7 +37,7 @@ export default function Funnel3DChart({
 
   if (items.length === 0) {
     return (
-      <div className="flex items-center justify-center h-64 text-gray-500 text-sm">
+      <div className="flex items-center justify-center h-64 text-gray-500 dark:text-gray-400 text-sm">
         Nenhum dado disponível
       </div>
     );
@@ -49,7 +49,10 @@ export default function Funnel3DChart({
   }
 
   return (
-    <div className="w-full flex flex-col items-center justify-center py-6" style={{ minHeight: 320 }}>
+    <div
+      className="w-full flex flex-col items-center justify-center py-6 text-gray-800 dark:text-gray-200"
+      style={{ minHeight: 320 }}
+    >
       <div className="w-full max-w-lg flex flex-col items-center gap-1">
         {items.map((item, index) => {
           const n = items.length;
@@ -71,12 +74,12 @@ export default function Funnel3DChart({
               }}
             >
               <span
-                className={`text-sm font-medium truncate ${textDark ? 'text-gray-800' : 'text-white'}`}
+                className={`text-sm font-medium truncate ${textDark ? 'text-gray-800 dark:text-gray-900' : 'text-white'}`}
               >
                 {item.label}
               </span>
               <span
-                className={`text-sm tabular-nums shrink-0 ml-2 ${textDark ? 'text-gray-700' : 'text-white/95'}`}
+                className={`text-sm tabular-nums shrink-0 ml-2 ${textDark ? 'text-gray-700 dark:text-gray-800' : 'text-white/95'}`}
               >
                 {item.value > 0 ? item.value.toLocaleString('pt-BR') : '0'}
               </span>
@@ -85,7 +88,7 @@ export default function Funnel3DChart({
         })}
       </div>
       {showPlaceholder && items.every((i) => i.value === 0) && (
-        <p className="text-xs text-gray-500 mt-5 text-center max-w-sm">
+        <p className="text-xs text-gray-500 dark:text-gray-400 mt-5 text-center max-w-sm">
           Dados do funil serão preenchidos após a integração com o Facebook Ads.
         </p>
       )}

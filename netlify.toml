@@ -17,6 +17,7 @@
     timeout = 900
   [functions."process-campaign-queue"]
     schedule = "*/1 * * * *"
+    timeout = 120
   [functions."process-message-queue"]
     schedule = "*/1 * * * *"
   [functions."process-activation-mass-send"]

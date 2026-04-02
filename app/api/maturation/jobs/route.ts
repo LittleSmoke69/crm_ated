@@ -160,7 +160,7 @@ export async function POST(req: NextRequest) {
     const useVirgin = use_virgin_messages === true;
     if (!useVirgin && !plan_id) {
       return NextResponse.json(
-        { error: 'plan_id é obrigatório (ou use use_virgin_messages: true com target_chat_id)' },
+        { error: 'plan_id é obrigatório, ou use use_virgin_messages: true' },
         { status: 400 }
       );
     }
