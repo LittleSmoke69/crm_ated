@@ -5,6 +5,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:fresh": "node scripts/clear-next-dev-lock-stale.mjs && next dev",
+    "dev:unlock": "node scripts/clear-next-dev-lock-stale.mjs",
     "build": "next build",
     "start": "next start",
     "clean": "rm -rf .next && rm -rf node_modules/.cache",
@@ -39,7 +41,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "baseline-browser-mapping": "^2.10.0",
+    "baseline-browser-mapping": "^2.10.13",
     "concurrently": "^9.2.1",
     "tailwindcss": "^4",
     "tsx": "^4.20.6",

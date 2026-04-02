@@ -90,6 +90,24 @@ function isConnectionClosedError(params: { error?: string; httpStatus?: number }
   return msg.includes('connection closed') || msg.includes('conexão fechada') || msg.includes('connection is closed');
 }
 
+/** Evolution / WhatsApp: limite de envio — pausar campanha em vez de martelar retry. */
+function isEvolutionRateLimitError(params: { error?: string; httpStatus?: number }): boolean {
+  if (params.httpStatus === 429) return true;
+  const msg = (params.error || '').toLowerCase();
+  return (
+    msg.includes('rate-overlimit') ||
+    msg.includes('rate overlimit') ||
+    msg.includes('overlimit') ||
+    msg.includes('rate limit') ||
+    msg.includes('too many requests')
+  );
+}
+
+function evolutionErrorIsRateLimit(responseText: string, httpStatus: number): boolean {
+  const err = extractErrorMessage(responseText, `HTTP ${httpStatus}`);
+  return isEvolutionRateLimitError({ error: err, httpStatus });
+}
+
 async function sendText(params: {
   baseUrl: string;
   instanceName: string;
@@ -119,10 +137,11 @@ async function sendText(params: {
     const latencyMs = Date.now() - startTime;
     const responseText = await response.text();
     const evDetail = MATURATION_VERBOSE_LOGS || VERBOSE_EVOLUTION_LOGS;
+    const rateLimited = !response.ok && evolutionErrorIsRateLimit(responseText, response.status);
     if (evDetail) {
       console.log(`${LOG_PREFIX} [Evolution API] sendText - Response: HTTP ${response.status}, latency=${latencyMs}ms`);
       if (!response.ok) console.log(`${LOG_PREFIX} [Evolution API] sendText - Error body: ${responseText?.substring(0, 200)}`);
-    } else if (!response.ok) {
+    } else if (!response.ok && !rateLimited) {
       console.warn(`${LOG_PREFIX} [Evolution API] sendText HTTP ${response.status}: ${responseText?.substring(0, 200)}`);
     }
     if (response.ok) return { success: true, latencyMs, httpStatus: response.status };
@@ -167,10 +186,11 @@ async function sendMedia(params: {
     const latencyMs = Date.now() - startTime;
     const responseText = await response.text();
     const evDetail = MATURATION_VERBOSE_LOGS || VERBOSE_EVOLUTION_LOGS;
+    const rateLimited = !response.ok && evolutionErrorIsRateLimit(responseText, response.status);
     if (evDetail) {
       console.log(`${LOG_PREFIX} [Evolution API] sendMedia - Response: HTTP ${response.status}, latency=${latencyMs}ms`);
       if (!response.ok) console.log(`${LOG_PREFIX} [Evolution API] sendMedia - Error body: ${responseText?.substring(0, 200)}`);
-    } else if (!response.ok) {
+    } else if (!response.ok && !rateLimited) {
       console.warn(`${LOG_PREFIX} [Evolution API] sendMedia HTTP ${response.status}: ${responseText?.substring(0, 200)}`);
     }
     if (response.ok) return { success: true, latencyMs, httpStatus: response.status, mediaUrl };
@@ -211,10 +231,11 @@ async function sendAudio(params: {
     const latencyMs = Date.now() - startTime;
     const responseText = await response.text();
     const evDetail = MATURATION_VERBOSE_LOGS || VERBOSE_EVOLUTION_LOGS;
+    const rateLimited = !response.ok && evolutionErrorIsRateLimit(responseText, response.status);
     if (evDetail) {
       console.log(`${LOG_PREFIX} [Evolution API] sendWhatsAppAudio - Response: HTTP ${response.status}, latency=${latencyMs}ms`);
       if (!response.ok) console.log(`${LOG_PREFIX} [Evolution API] sendWhatsAppAudio - Error body: ${responseText?.substring(0, 200)}`);
-    } else if (!response.ok) {
+    } else if (!response.ok && !rateLimited) {
       console.warn(`${LOG_PREFIX} [Evolution API] sendWhatsAppAudio HTTP ${response.status}: ${responseText?.substring(0, 200)}`);
     }
     if (response.ok) return { success: true, latencyMs, httpStatus: response.status };
@@ -375,6 +396,62 @@ async function processStep(supabase: SupabaseClient, step: any): Promise<void> {
         if (evoId) {
           await maybeMarkEvolutionInstanceDisconnected(supabase, evoId, result.error, 'maturation');
         }
+      }
+      return;
+    }
+
+    if (isEvolutionRateLimitError({ error: result.error, httpStatus: result.httpStatus })) {
+      const nowIso = new Date().toISOString();
+      const pauseReason =
+        'Rate limit (Evolution/WhatsApp). Campanha pausada automaticamente — aguarde e retome quando o limite aliviar.';
+
+      const { data: jobMeta } = await supabase.from('maturation_jobs').select('campaign_id').eq('id', job_id).maybeSingle();
+
+      let jobIdsToPause: string[] = [job_id];
+      const cid = jobMeta?.campaign_id as string | null | undefined;
+      if (cid) {
+        const { data: siblings } = await supabase
+          .from('maturation_jobs')
+          .select('id')
+          .eq('campaign_id', cid)
+          .eq('status', 'running');
+        if (siblings?.length) jobIdsToPause = siblings.map((r) => r.id);
+      }
+
+      const { data: pausedRows } = await supabase
+        .from('maturation_jobs')
+        .update({ status: 'paused', updated_at: nowIso })
+        .in('id', jobIdsToPause)
+        .eq('status', 'running')
+        .select('id');
+
+      await supabase
+        .from('maturation_steps')
+        .update({
+          status: 'pending',
+          locked_at: null,
+          locked_by: null,
+          error: pauseReason,
+        })
+        .in('job_id', jobIdsToPause)
+        .eq('status', 'processing');
+
+      if ((pausedRows?.length || 0) > 0) {
+        const n = pausedRows!.length;
+        console.warn(
+          `${LOG_MANUAL} Rate limit → ${n} job(s) pausado(s)${cid ? ' (campanha/malha)' : ''} · ${instance_name}`
+        );
+        await createMessage(supabase, {
+          jobId: job_id,
+          stepId: id,
+          direction: 'system',
+          type: 'error',
+          title: '⏸️ Rate limit',
+          content: `${pauseReason} Instância: ${instance_name}.`,
+          status: 'failed',
+          httpStatus: result.httpStatus,
+          error: result.error,
+        });
       }
       return;
     }
