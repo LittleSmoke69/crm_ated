@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { Activity, Heart, Search, Plus, MoreVertical, Paperclip, X, Trash2, Edit2, Star, Info, Upload, ArrowLeft, Video, Phone, MoreVertical as MoreVerticalIcon, Smile, Camera, Mic, Check, CheckCheck, Send, Calendar, Clock, Play, Pause, Eye, Trash, Music, Megaphone, Image, CircleDot, RefreshCw, Replace } from 'lucide-react';
+import { Activity, Heart, Search, Plus, MoreVertical, Paperclip, X, Trash2, Edit2, Star, Info, Upload, ArrowLeft, Video, Phone, MoreVertical as MoreVerticalIcon, Smile, Camera, Mic, Check, CheckCheck, Send, Calendar, Clock, Play, Pause, Eye, Trash, Music, Megaphone, Image, CircleDot, RefreshCw } from 'lucide-react';
 import SendActivationsModal from '@/components/CRM/SendActivationsModal';
 import ScheduleDetailsModal from '@/components/CRM/ScheduleDetailsModal';
 import MassSendJobDetailModal from '@/components/CRM/MassSendJobDetailModal';
@@ -43,6 +43,27 @@ interface Message {
 
 /** Ocultar opção "Envio Inteligente" na UI por enquanto (pode ser reativada depois). */
 const HIDE_SMART_SEND = true;
+
+/** group_ids do job pode vir como array JSONB ou string (ex.: realtime). */
+function parseMassSendJobGroupIds(job: Record<string, unknown>): string[] {
+  const raw = job.group_ids;
+  if (Array.isArray(raw)) {
+    return raw.map((id: unknown) => String(id ?? '').trim()).filter(Boolean);
+  }
+  if (typeof raw === 'string') {
+    const s = raw.trim();
+    if (!s) return [];
+    try {
+      const parsed = JSON.parse(s) as unknown;
+      if (Array.isArray(parsed)) {
+        return parsed.map((id: unknown) => String(id ?? '').trim()).filter(Boolean);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return [];
+}
 
 /** Timeout para upload (10 min) — evita travamento em conexões lentas com arquivos grandes. */
 const UPLOAD_XHR_TIMEOUT_MS = 10 * 60 * 1000;
@@ -281,14 +302,34 @@ const ActivationsPage = () => {
     }
   }, [userId]);
 
+  /** Repetir campanha: mesmos grupos e mensagem; instância(s) sempre escolhidas de novo no modal. */
   const openRepeatMassSendCampaign = useCallback(
-    (job: Record<string, unknown>, opts: { reselectInstances: boolean }) => {
-      const raw = job.group_ids;
-      const groupIds = Array.isArray(raw)
-        ? raw.map((id: unknown) => String(id ?? '').trim()).filter(Boolean)
-        : [];
-      const messageId = String(job.message_id ?? '');
-      const msg = messages.find((m) => m.id === messageId);
+    (job: Record<string, unknown>) => {
+      const groupIds = [...new Set(parseMassSendJobGroupIds(job))];
+      const messageId = String(job.message_id ?? '').trim();
+      if (!messageId) {
+        showToast('Esta campanha não tem mensagem vinculada para repetir.', 'error');
+        return;
+      }
+      let msg = messages.find((m) => m.id === messageId);
+      if (!msg && userId) {
+        msg = {
+          id: messageId,
+          user_id: userId,
+          title: String(job.message_title ?? '').trim() || 'Mensagem',
+          content: '',
+          preview: null,
+          category: '',
+          is_favorite: false,
+          has_attachment: false,
+          mention_all: false,
+          attachment_with_caption: false,
+          message_type: 'text',
+          attachment_url: null,
+          created_at: '',
+          updated_at: '',
+        };
+      }
       if (!msg) {
         showToast('Carregue a lista de mensagens ou recarregue a página para repetir esta campanha.', 'error');
         return;
@@ -297,26 +338,15 @@ const ActivationsPage = () => {
         showToast('Esta campanha não tem grupos salvos para repetir.', 'error');
         return;
       }
-      const uniqueIds = [...new Set(groupIds)];
-      if (opts.reselectInstances) {
-        setRepeatCampaignSeed({ groupIds: uniqueIds, reselectInstances: true });
-      } else {
-        const rawNames = job.instance_names;
-        const names = Array.isArray(rawNames)
-          ? [...new Set(rawNames.map((x: unknown) => String(x ?? '').trim()).filter(Boolean))]
-          : [];
-        const primary = String(job.instance_name || '').trim();
-        setRepeatCampaignSeed({
-          groupIds: uniqueIds,
-          instanceName: primary || names[0] || '',
-          ...(names.length > 1 ? { instanceNames: names } : {}),
-        });
-      }
+      setRepeatCampaignSeed({
+        groupIds,
+        reselectInstances: true,
+      });
       setMessageToSend(msg);
       setSendModalDefaultMassSend(true);
       setShowSendModal(true);
     },
-    [messages, showToast]
+    [messages, showToast, userId]
   );
 
   useEffect(() => {
@@ -2222,25 +2252,6 @@ const ActivationsPage = () => {
           </div>
         )}
 
-        {/* Modal de envio de ativação */}
-        {showSendModal && messageToSend && (
-          <SendActivationsModal
-            isOpen={showSendModal}
-            onClose={() => {
-              setShowSendModal(false);
-              setMessageToSend(null);
-              setSendModalDefaultMassSend(false);
-              setRepeatCampaignSeed(null);
-            }}
-            messageId={messageToSend.id}
-            messageTitle={messageToSend.title}
-            defaultToMassSend={sendModalDefaultMassSend}
-            repeatCampaignSeed={repeatCampaignSeed}
-            userId={userId}
-            onMassSendComplete={loadMassSendJobs}
-          />
-        )}
-
         {/* Modal de preview da mídia (imagem, vídeo, áudio, PTV) */}
         {previewingCardMessage && previewingCardMessage.attachment_url && (
           <div
@@ -2708,28 +2719,15 @@ const ActivationsPage = () => {
                               <button
                                 type="button"
                                 disabled={job.status === 'pending' || job.status === 'processing'}
-                                onClick={() => openRepeatMassSendCampaign(job as Record<string, unknown>, { reselectInstances: false })}
+                                onClick={() => openRepeatMassSendCampaign(job as Record<string, unknown>)}
                                 className="p-2 rounded-lg text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
                                 title={
                                   job.status === 'pending' || job.status === 'processing'
                                     ? 'Aguarde esta campanha terminar ou pause para criar outra'
-                                    : 'Repetir campanha: mesma mensagem, mesmos grupos e mesma(s) instância(s)'
+                                    : 'Repetir campanha: mesma mensagem e mesmos grupos — escolha a(s) instância(s) no modal'
                                 }
                               >
                                 <RefreshCw className="w-4 h-4" />
-                              </button>
-                              <button
-                                type="button"
-                                disabled={job.status === 'pending' || job.status === 'processing'}
-                                onClick={() => openRepeatMassSendCampaign(job as Record<string, unknown>, { reselectInstances: true })}
-                                className="p-2 rounded-lg text-cyan-600 hover:bg-cyan-50 dark:hover:bg-cyan-900/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-                                title={
-                                  job.status === 'pending' || job.status === 'processing'
-                                    ? 'Aguarde esta campanha terminar ou pause para criar outra'
-                                    : 'Repetir campanha e escolher outra(s) instância(s) de disparo'
-                                }
-                              >
-                                <Replace className="w-4 h-4" />
                               </button>
                               {(job.status === 'pending' || job.status === 'processing') && (
                                 <button
@@ -2828,6 +2826,25 @@ const ActivationsPage = () => {
           </div>
         )}
       </div>
+
+      {/* Modal de envio: fora das tabs para funcionar na aba Campanhas de disparo */}
+      {showSendModal && messageToSend && (
+        <SendActivationsModal
+          isOpen={showSendModal}
+          onClose={() => {
+            setShowSendModal(false);
+            setMessageToSend(null);
+            setSendModalDefaultMassSend(false);
+            setRepeatCampaignSeed(null);
+          }}
+          messageId={messageToSend.id}
+          messageTitle={messageToSend.title}
+          defaultToMassSend={sendModalDefaultMassSend}
+          repeatCampaignSeed={repeatCampaignSeed}
+          userId={userId ?? ''}
+          onMassSendComplete={loadMassSendJobs}
+        />
+      )}
 
       {/* Modal de Detalhes do Agendamento */}
       {selectedSchedule && (
