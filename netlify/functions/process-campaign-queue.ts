@@ -16,6 +16,10 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
+import {
+  maybeMarkEvolutionInstanceDisconnected,
+  messageIndicatesEvolutionSessionDropped,
+} from '../../lib/evolution/mark-instance-disconnected';
 
 // Tipo para o handler do Netlify
 interface HandlerEvent {
@@ -70,25 +74,6 @@ function normalizePhoneNumber(phone: string): string {
     return cleaned;
   }
   return `55${cleaned}`;
-}
-
-// Função auxiliar para buscar string em objeto aninhado (incluindo arrays)
-function containsStringInObject(obj: any, searchString: string): boolean {
-  if (!obj) return false;
-
-  if (typeof obj === 'string') {
-    return obj.includes(searchString);
-  }
-
-  if (Array.isArray(obj)) {
-    return obj.some(item => containsStringInObject(item, searchString));
-  }
-
-  if (typeof obj === 'object') {
-    return Object.values(obj).some(value => containsStringInObject(value, searchString));
-  }
-
-  return false;
 }
 
 // Busca instâncias disponíveis da campanha
@@ -380,64 +365,20 @@ async function processJob(
 
     // ── 7. Resposta HTTP não-ok ──
     const errorMsg = responseData.message || responseText || `HTTP ${response.status}`;
+    const sessionProbe = `${responseText}\n${typeof errorMsg === 'string' ? errorMsg : ''}\n${JSON.stringify(responseData)}`;
 
-    // Verifica se Connection Closed indica instância desconectada
-    const isConnectionClosed =
-      containsStringInObject(responseData, 'Connection Closed') ||
-      containsStringInObject(responseData, 'blocked-integrity-enforcement') ||
-      (typeof responseText === 'string' && responseText.includes('Connection Closed'));
-
-    if (isConnectionClosed) {
-      console.warn(`[WORKER ${workerId}] Job ${id}: Connection Closed detectado na instância ${instance.instance_name}. Verificando status real...`);
-
-      // Verifica status real da instância (sem pausar campanha)
-      try {
-        const { data: apiData } = await getSupabase()
-          .from('evolution_apis')
-          .select('api_key_global')
-          .eq('id', evolutionApi.id)
-          .single();
-
-        if (apiData?.api_key_global) {
-          const statusUrl = `${normalizedBaseUrl}/instance/connectionState/${instance.instance_name}`;
-          const statusResponse = await fetch(statusUrl, {
-            method: 'GET',
-            headers: { apikey: apiData.api_key_global },
-            cache: 'no-store',
-          });
-
-          if (statusResponse.ok) {
-            const statusData = await statusResponse.json();
-            const stateRaw = (
-              statusData?.instance?.status ||
-              statusData?.state ||
-              statusData?.connection?.state ||
-              ''
-            ).toString().toLowerCase();
-
-            const isDisconnected = ['close', 'closed', 'disconnected', 'logout', 'offline'].includes(stateRaw);
-
-            if (isDisconnected) {
-              console.error(`[WORKER ${workerId}] Instância ${instance.instance_name} CONFIRMADA desconectada. Marcando no DB.`);
-              await getSupabase()
-                .from('evolution_instances')
-                .update({
-                  status: 'disconnected',
-                  is_active: false,
-                  updated_at: new Date().toISOString(),
-                })
-                .eq('instance_name', instance.instance_name);
-            } else {
-              console.log(`[WORKER ${workerId}] Instância ${instance.instance_name} ainda ${stateRaw}. Erro transitório.`);
-            }
-          }
-        }
-      } catch (verifyError: any) {
-        console.error(`[WORKER ${workerId}] Erro ao verificar status da instância:`, verifyError.message);
-      }
+    if (messageIndicatesEvolutionSessionDropped(sessionProbe)) {
+      console.warn(
+        `[WORKER ${workerId}] Job ${id}: sessão Evolution caiu (${instance.instance_name}). Marcando desconectada no painel (sem remover registro).`
+      );
+      await maybeMarkEvolutionInstanceDisconnected(
+        getSupabase(),
+        instance.id,
+        sessionProbe,
+        'netlify/campaign-queue'
+      );
 
       await markJobFailed(id, contact_id, errorMsg);
-      // skipCampaign: se a instância caiu, não adianta tentar mais nesta execução
       return { success: false, error: errorMsg, skipCampaign: true };
     }
 

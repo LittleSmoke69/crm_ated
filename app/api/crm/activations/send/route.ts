@@ -2,10 +2,15 @@ import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { sanitizeMassSendErrorMessage } from '@/lib/utils/activation-send-errors';
+import {
+  massSendInstanceDisconnectedMessage,
+  sanitizeMassSendErrorMessage,
+} from '@/lib/utils/activation-send-errors';
 import { triggerMassSendProcessChained } from '@/lib/crm/trigger-mass-send-chained';
+import { interGroupDelayMsFromRequestBody } from '@/lib/crm/mass-send-inter-group-delay';
 import { resolveEvolutionInstanceForActivation } from '@/lib/crm/resolve-evolution-instance-for-activation';
 import { maybeMarkEvolutionInstanceDisconnected, messageIndicatesEvolutionSessionDropped } from '@/lib/evolution/mark-instance-disconnected';
+import { instanceNameForMassSendGroupIndex } from '@/lib/crm/mass-send-instance-names';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300; // 5 minutos
@@ -87,7 +92,7 @@ async function fetchVideoUrlAsBase64(videoUrl: string): Promise<string> {
 }
 
 
-/** Acima deste número de grupos, o envio é enfileirado e processado em segundo plano (evita timeout na Netlify). */
+/** Acima deste número de grupos, o envio vira campanha em fila sequencial (activation_mass_send_jobs + worker), não envio paralelo na mesma request. */
 const THRESHOLD_MASS_SEND = 10;
 
 
@@ -100,7 +105,8 @@ export async function POST(req: NextRequest) {
     const requestOrigin = req.nextUrl?.origin || new URL(req.url).origin;
     const { userId } = await requireAuth(req);
     const body = await req.json();
-    const { messageId, instanceName, forceMassSend, forceSync } = body;
+    const { messageId, instanceName, instanceNames: instanceNamesBody, forceMassSend, forceSync } = body;
+    const interGroupDelayMs = interGroupDelayMsFromRequestBody(body as Record<string, unknown>);
     const rawGroupIds = body.groupIds;
     const groupIds = [
       ...new Set(
@@ -111,8 +117,39 @@ export async function POST(req: NextRequest) {
     ];
     const isCronProcess = req.headers.get('x-internal-cron-secret') === process.env.CRON_SECRET;
 
-    if (!messageId || groupIds.length === 0 || !instanceName) {
-      return errorResponse('messageId, groupIds e instanceName são obrigatórios', 400);
+    const resolvedInstanceNames = (() => {
+      if (Array.isArray(instanceNamesBody) && instanceNamesBody.length > 0) {
+        return [
+          ...new Set(
+            instanceNamesBody
+              .map((x: unknown) => String(x ?? '').trim())
+              .filter(Boolean)
+          ),
+        ];
+      }
+      const one = typeof instanceName === 'string' ? instanceName.trim() : '';
+      return one ? [one] : [];
+    })();
+
+    if (!messageId || groupIds.length === 0 || resolvedInstanceNames.length === 0) {
+      return errorResponse(
+        'messageId, groupIds e pelo menos uma instância (instanceName ou instanceNames) são obrigatórios',
+        400
+      );
+    }
+
+    for (const iname of resolvedInstanceNames) {
+      const { instance: instOk, queryError: instErr } = await resolveEvolutionInstanceForActivation(
+        supabaseServiceRole,
+        iname,
+        userId
+      );
+      if (!instOk) {
+        return errorResponse(
+          `Instância «${iname}» indisponível ou sem permissão${instErr ? `: ${instErr}` : ''}`,
+          400
+        );
+      }
     }
 
     // 1. Busca os detalhes da mensagem (incluindo mention_all para menção @todos em todos os grupos)
@@ -185,13 +222,15 @@ export async function POST(req: NextRequest) {
         .insert({
           user_id: userId,
           message_id: messageId,
-          instance_name: instanceName,
+          instance_name: resolvedInstanceNames[0],
+          ...(resolvedInstanceNames.length > 1 ? { instance_names: resolvedInstanceNames } : {}),
           message_title: message.title || null,
           group_ids: groupIds,
           status: 'pending',
           total_groups: groupIds.length,
           sent_count: 0,
           failed_count: 0,
+          inter_group_delay_ms: interGroupDelayMs,
         })
         .select('id')
         .single();
@@ -208,7 +247,7 @@ export async function POST(req: NextRequest) {
         (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null);
       const siteUrl = (base ? base.replace(/\/$/, '') : null) || requestOrigin;
 
-      // Todos os grupos são processados pelo worker (1 por vez, delay fixo de 2s).
+      // Worker processa 1 grupo por vez; pausa entre grupos = inter_group_delay_ms no job (0 → padrão 1s ou MASS_SEND_DEFAULT_INTER_GROUP_DELAY_MS).
       // Não fazemos envio imediato aqui para evitar que apenas o grupo 0 seja enviado
       // enquanto os demais ficam presos aguardando o cron.
       if (cronSecret && siteUrl) {
@@ -270,67 +309,61 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 2. Instância: mesma hierarquia que /api/instances e agendamento (dono/gerente → subordinados; admin → todas)
-    const { instance: instanceRow, queryError: instanceResolveError } =
-      await resolveEvolutionInstanceForActivation(supabaseServiceRole, String(instanceName), userId);
-
-    if (instanceResolveError) {
-      console.warn('[ACTIVATION] INSTANCE_RESOLVE_QUERY_ERROR', {
-        instanceName: String(instanceName),
-        userIdPrefix: `${userId.slice(0, 8)}…`,
-        message: instanceResolveError,
-      });
-      return errorResponse('Instância não encontrada ou inativa', 404, {
-        code: 'INSTANCE_NOT_FOUND_OR_INACTIVE',
-      });
-    }
-
-    if (!instanceRow) {
-      console.warn('[ACTIVATION] 404 INSTANCE_QUERY', {
-        instanceName: String(instanceName),
-        userIdPrefix: `${userId.slice(0, 8)}…`,
-        isCronProcess,
-        hint:
-          'Verifique: nome em evolution_instances, permissão (dono da instância ou hierarquia), is_active=true e evolution_apis (join).',
-      });
-      return errorResponse('Instância não encontrada ou inativa', 404, {
-        code: 'INSTANCE_NOT_FOUND_OR_INACTIVE',
-      });
-    }
-
-    const instance = instanceRow as typeof instanceRow & {
-      evolution_apis?: unknown;
-      apikey?: string | null;
+    // 2. Instância(ões) para envio síncrono: credenciais por nome (rotação por índice do grupo)
+    type SyncInstCreds = {
+      instanceName: string;
+      baseUrl: string;
+      apiKey: string;
+      instanceId: string;
     };
+    const credsByInstanceName = new Map<string, SyncInstCreds>();
+    const uniqueForSync = [...new Set(resolvedInstanceNames)];
+    for (const iname of uniqueForSync) {
+      const { instance: instanceRow, queryError: instanceResolveError } =
+        await resolveEvolutionInstanceForActivation(supabaseServiceRole, iname, userId);
 
-    const evolutionApi = Array.isArray(instance.evolution_apis) 
-      ? instance.evolution_apis[0] 
-      : instance.evolution_apis;
+      if (instanceResolveError || !instanceRow) {
+        console.warn('[ACTIVATION] INSTANCE_RESOLVE_SYNC', {
+          instanceName: iname,
+          queryError: instanceResolveError,
+        });
+        return errorResponse(`Instância «${iname}» não encontrada ou inativa`, 404, {
+          code: 'INSTANCE_NOT_FOUND_OR_INACTIVE',
+        });
+      }
 
-    if (!evolutionApi?.base_url) {
-      console.warn('[ACTIVATION] 404 EVOLUTION_API_NO_BASE_URL', {
-        instanceName: String(instanceName),
-        evolutionApiId: evolutionApi && typeof evolutionApi === 'object' ? (evolutionApi as { id?: string }).id : undefined,
-        apiIsActive:
-          evolutionApi && typeof evolutionApi === 'object'
-            ? (evolutionApi as { is_active?: boolean }).is_active
-            : undefined,
-      });
-      return errorResponse('Evolution API sem base_url configurada', 404, {
-        code: 'EVOLUTION_API_NO_BASE_URL',
+      const instance = instanceRow as typeof instanceRow & {
+        evolution_apis?: unknown;
+        apikey?: string | null;
+        id?: string;
+      };
+
+      const evolutionApi = Array.isArray(instance.evolution_apis)
+        ? instance.evolution_apis[0]
+        : instance.evolution_apis;
+
+      if (!evolutionApi?.base_url) {
+        return errorResponse(`Evolution API sem base_url (instância «${iname}»)`, 404, {
+          code: 'EVOLUTION_API_NO_BASE_URL',
+        });
+      }
+
+      const apiKey = instance.apikey;
+      if (!apiKey) {
+        return errorResponse(`Instância «${iname}» sem apikey configurada`, 400);
+      }
+
+      credsByInstanceName.set(iname, {
+        instanceName: iname,
+        baseUrl: evolutionApi.base_url,
+        apiKey,
+        instanceId: String(instance.id),
       });
     }
 
-    const apiKey = instance.apikey;
-    const baseUrl = evolutionApi.base_url;
-
-    if (!apiKey) {
-      return errorResponse('Instância sem apikey configurada', 400);
-    }
-
-    console.log(`🚀 [ACTIVATION] Iniciando envio da mensagem "${message.title}" para ${groupIds.length} grupos na instância ${instanceName}`);
-    console.log(`🔗 [ACTIVATION] Base URL: ${baseUrl}`);
-    console.log(`🔑 [ACTIVATION] Usando apikey da instância para autenticação`);
+    console.log(
+      `🚀 [ACTIVATION] Envio síncrono "${message.title}" → ${groupIds.length} grupo(s), instâncias: ${uniqueForSync.join(', ')}`
+    );
 
     const results = {
       success: 0,
@@ -340,7 +373,6 @@ export async function POST(req: NextRequest) {
 
     // Menção @all: garantir boolean explícito (Evolution API pode aceitar mentionsEveryone ou mentions_everyone)
     const isMentionAll = message.mention_all === true || String(message.mention_all).toLowerCase() === 'true';
-    const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
 
     if (isMentionAll) {
       console.log('[DISPARO] mention_all=true → mentionsEveryOne injetado no payload');
@@ -364,10 +396,18 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 3. Envia para cada grupo.
+    // 3. Envia para cada grupo (rotação: grupo i usa resolvedInstanceNames[i % n]).
     // Para PTV com base64 muito grande, envia em sequência para evitar pico de memória/timeout.
-    const processGroupSend = async (groupId: string) => {
+    const processGroupSend = async (groupId: string, groupIndex: number) => {
       try {
+        const useName = instanceNameForMassSendGroupIndex(resolvedInstanceNames, groupIndex);
+        const creds = credsByInstanceName.get(useName);
+        if (!creds) {
+          throw new Error(`Credenciais ausentes para instância «${useName}»`);
+        }
+        const { baseUrl: instBaseUrl, apiKey, instanceName: instNameForUrl, instanceId } = creds;
+        const normalizedBaseUrl = normalizeBaseUrl(instBaseUrl);
+
         const FETCH_TIMEOUT_MS = 30000; // 30 segundos
         const controller = new AbortController();
         const timeoutId = setTimeout(() => {
@@ -383,7 +423,7 @@ export async function POST(req: NextRequest) {
 
           if (message.message_type === 'ptv' && ptvVideoPayload) {
             // PTV: envio REAL via sendPtv. Enviamos base64 (Evolution faz stat() em path local; URL dá ENOENT).
-            url = `${normalizedBaseUrl}/message/sendPtv/${instanceName}`;
+            url = `${normalizedBaseUrl}/message/sendPtv/${instNameForUrl}`;
             url = url.replace(/([^:]\/)\/+/g, '$1');
             const ptvDelay = typeof message.ptv_delay === 'number' && message.ptv_delay >= 0 ? message.ptv_delay : 1200;
             requestBody = {
@@ -393,7 +433,7 @@ export async function POST(req: NextRequest) {
             };
           } else if (message.message_type === 'audio' && message.attachment_url) {
             // Envio de áudio
-            url = `${normalizedBaseUrl}/message/sendWhatsAppAudio/${instanceName}`;
+            url = `${normalizedBaseUrl}/message/sendWhatsAppAudio/${instNameForUrl}`;
             url = url.replace(/([^:]\/)\/+/g, '$1');
             
             // Valida URL do áudio
@@ -409,7 +449,7 @@ export async function POST(req: NextRequest) {
             };
           } else if (message.message_type === 'text_with_attachment' && message.attachment_url) {
             // Envio de mídia (imagem, vídeo, documento)
-            url = `${normalizedBaseUrl}/message/sendMedia/${instanceName}`;
+            url = `${normalizedBaseUrl}/message/sendMedia/${instNameForUrl}`;
             url = url.replace(/([^:]\/)\/+/g, '$1');
             
             // Usa o attachment_type da mensagem (salvo no banco) como fonte primária
@@ -492,7 +532,7 @@ export async function POST(req: NextRequest) {
             if (!messageContent) {
               throw new Error('Conteúdo da mensagem está vazio — disparo cancelado para evitar mensagem fantasma');
             }
-            url = `${normalizedBaseUrl}/message/sendText/${instanceName}`;
+            url = `${normalizedBaseUrl}/message/sendText/${instNameForUrl}`;
             url = url.replace(/([^:]\/)\/+/g, '$1');
 
             requestBody = {
@@ -503,7 +543,7 @@ export async function POST(req: NextRequest) {
           }
 
           // Log seguro: nunca serializar base64 gigante.
-          console.log(`📤 [ACTIVATION] Enviando para ${groupId}:`, {
+          console.log(`📤 [ACTIVATION] Enviando para ${groupId} via ${instNameForUrl}:`, {
             url,
             body: summarizeRequestBodyForLog(requestBody),
           });
@@ -579,14 +619,14 @@ export async function POST(req: NextRequest) {
 
             await maybeMarkEvolutionInstanceDisconnected(
               supabaseServiceRole,
-              String(instance.id),
+              instanceId,
               errStr,
               'activation-send'
             );
             const isConnectionClosed = messageIndicatesEvolutionSessionDropped(errStr);
 
             const userMessage = isConnectionClosed
-              ? `Sessão WhatsApp encerrada (Connection Closed). A instância ${instanceName} foi marcada como desconectada. Reconecte a instância e tente novamente.`
+              ? massSendInstanceDisconnectedMessage(instNameForUrl)
               : sanitizeMassSendErrorMessage(errStr) ||
                 `Erro ao enviar mensagem: ${response.status} ${response.statusText}`;
             throw new Error(userMessage);
@@ -621,11 +661,11 @@ export async function POST(req: NextRequest) {
       !ptvVideoPayload.startsWith('https://');
 
     if (shouldSendSequentially) {
-      for (const groupId of groupIds) {
-        await processGroupSend(groupId);
+      for (let gi = 0; gi < groupIds.length; gi++) {
+        await processGroupSend(groupIds[gi], gi);
       }
     } else {
-      await Promise.all(groupIds.map((groupId: string) => processGroupSend(groupId)));
+      await Promise.all(groupIds.map((groupId: string, gi: number) => processGroupSend(groupId, gi)));
     }
 
     console.log(`📊 [ACTIVATION] Resultado final: ${results.success} sucessos, ${results.failed} falhas`);

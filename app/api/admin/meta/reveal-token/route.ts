@@ -8,7 +8,11 @@
 import { NextRequest } from 'next/server';
 import { requireAdmin } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
-import { getDecryptedToken } from '@/lib/services/meta-sync-service';
+import {
+  getDecryptedTokenByIntegrationId,
+  getDecryptedTokenForReveal,
+  isMetaIntegrationLinkedToBanca,
+} from '@/lib/services/meta-sync-service';
 
 export async function POST(req: NextRequest) {
   try {
@@ -19,9 +23,30 @@ export async function POST(req: NextRequest) {
       return errorResponse('banca_id é obrigatório.', 400);
     }
 
-    const token = await getDecryptedToken(bancaId);
+    const integrationIdRaw =
+      body?.integration_id != null && String(body.integration_id).trim() !== ''
+        ? String(body.integration_id).trim()
+        : null;
+
+    let token: string | null = null;
+
+    // integration_id só vale se estiver vinculado a esta banca (evita UUID errado na UI bloquear o fallback).
+    if (integrationIdRaw) {
+      const linked = await isMetaIntegrationLinkedToBanca(integrationIdRaw, bancaId);
+      if (linked) {
+        token = await getDecryptedTokenByIntegrationId(integrationIdRaw, { requireActive: false });
+      }
+    }
+
     if (!token) {
-      return errorResponse('Token não encontrado ou não foi possível descriptografar.', 404);
+      token = await getDecryptedTokenForReveal(bancaId);
+    }
+
+    if (!token) {
+      return errorResponse(
+        'Não foi possível revelar o token: nenhum access_token_encrypted encontrado para esta banca, integração inexistente ou falha ao descriptografar (chave ENCRYPTION_KEY alinhada ao ambiente?).',
+        404
+      );
     }
 
     return successResponse({ access_token: token });

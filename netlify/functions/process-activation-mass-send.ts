@@ -1,9 +1,10 @@
 /**
  * Netlify Scheduled Function: process-activation-mass-send
  *
- * Processa campanhas de disparo em massa DIRETAMENTE — sem chamar API route.
- * Timeout: 120s. Budget: 110s. Delay curto entre grupos; lock TTL alinhado ao worker Next.
- * Roda a cada 1 min via cron. Se a fila tem trabalho, processa até o budget acabar.
+ * Reinvocação em cadência estável (cron ~1 min). Mesmo contrato que lib/crm/mass-send-process-core:
+ * um job por vez, grupos em SEQUÊNCIA (processed_index), lock + heartbeat, sem broadcast paralelo.
+ * Implementação inline (Supabase direto); alternativa: POST /api/crm/activations/mass-send/process com CRON_SECRET.
+ * Timeout: 120s. Budget: 110s. Pausa entre grupos = inter_group_delay_ms do job (mesmo padrão que mass-send-process-core).
  */
 import { createClient } from '@supabase/supabase-js';
 import { resolveEvolutionInstanceForActivation } from '../../lib/crm/resolve-evolution-instance-for-activation';
@@ -11,11 +12,17 @@ import {
   hasMassSendGroupAlreadySucceeded,
   isMassSendTransientRetryable,
 } from '../../lib/crm/mass-send-group-idempotency';
+import { resolveInterGroupDelayMs } from '../../lib/crm/mass-send-inter-group-delay';
+import { sanitizeMassSendErrorMessage } from '../../lib/utils/activation-send-errors';
+import { maybeMarkEvolutionInstanceDisconnected } from '../../lib/evolution/mark-instance-disconnected';
+import {
+  instanceNameForMassSendGroupIndex,
+  normalizeActivationMassSendInstanceNames,
+} from '../../lib/crm/mass-send-instance-names';
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 const BUDGET_MS = 110_000;
-const INTER_GROUP_DELAY_MS = 500;
 const EVOLUTION_TIMEOUT_MS = 30_000;
 const LOCK_TTL_MS = 180_000;
 const LOCK_HEARTBEAT_MS = 25_000;
@@ -51,6 +58,8 @@ async function loadSucceededGroupIds(supabase: ReturnType<typeof getSupabase>, j
 }
 
 function sanitizeError(raw: string): string {
+  const s = sanitizeMassSendErrorMessage(raw);
+  if (s) return s;
   if (!raw) return '';
   if (raw.startsWith('<') || /<html/i.test(raw)) return 'Gateway retornou HTML (502/503/504)';
   return raw.length > 400 ? raw.slice(0, 400) + '…' : raw;
@@ -58,7 +67,7 @@ function sanitizeError(raw: string): string {
 
 // ─── Evolution API send ──────────────────────────────────────────────────────
 
-type SendResult = { success: boolean; error?: string };
+type SendResult = { success: boolean; error?: string; rawForDisconnectProbe?: string };
 
 async function sendToEvolution(
   baseUrl: string,
@@ -129,7 +138,12 @@ async function sendToEvolution(
         const src = j.message ?? j.response?.message ?? j.error;
         errMsg = Array.isArray(src) ? src.join('; ') : String(src || '');
       } catch { errMsg = text.slice(0, 300); }
-      return { success: false, error: sanitizeError(errMsg) || `Erro ${res.status}` };
+      const rawProbe = errMsg || text.slice(0, 500);
+      return {
+        success: false,
+        error: sanitizeError(rawProbe) || `Erro ${res.status}`,
+        rawForDisconnectProbe: rawProbe,
+      };
     }
 
     return { success: true };
@@ -139,7 +153,11 @@ async function sendToEvolution(
     const cause = e.cause ? ` | cause: ${e.cause?.code || e.cause?.message || JSON.stringify(e.cause).slice(0, 200)}` : '';
     const detail = `${e.message}${cause} | url: ${url}`;
     console.error(`[MassSend] FETCH FALHOU: ${detail}`);
-    return { success: false, error: detail };
+    return {
+      success: false,
+      error: sanitizeMassSendErrorMessage(detail) || detail.slice(0, 400),
+      rawForDisconnectProbe: detail,
+    };
   }
 }
 
@@ -160,7 +178,9 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
     // 1. Busca próximo job
     const { data: jobs } = await supabase
       .from('activation_mass_send_jobs')
-      .select('id, user_id, message_id, instance_name, group_ids, processed_index, status')
+      .select(
+        'id, user_id, message_id, instance_name, instance_names, group_ids, processed_index, status, inter_group_delay_ms'
+      )
       .in('status', ['pending', 'processing'])
       .or(`locked_at.is.null,locked_at.lt.${lockExpired}`)
       .order('created_at', { ascending: true })
@@ -224,32 +244,73 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
       continue;
     }
 
-    const { instance: instRow, queryError: instResolveErr } = await resolveEvolutionInstanceForActivation(
-      supabase,
-      job.instance_name,
-      job.user_id
+    const rotationNames = normalizeActivationMassSendInstanceNames(
+      (job as { instance_names?: unknown }).instance_names,
+      String(job.instance_name || '')
     );
-
-    if (instResolveErr || !instRow) {
-      await supabase.from('activation_mass_send_jobs').update({ status: 'failed', last_error: 'Instância não encontrada', locked_at: null, locked_by: null, updated_at: new Date().toISOString() }).eq('id', job.id);
-      console.error(`[MassSend] Job ${shortId(job.id)} instância ${job.instance_name} não encontrada`, instResolveErr || '');
+    if (rotationNames.length === 0) {
+      await supabase
+        .from('activation_mass_send_jobs')
+        .update({
+          status: 'failed',
+          last_error: 'Campanha sem instância configurada',
+          locked_at: null,
+          locked_by: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', job.id);
       continue;
     }
 
-    const instance = instRow as {
-      id: string;
-      apikey?: string | null;
-      evolution_apis?: { base_url?: string } | { base_url?: string }[];
-    };
-
-    const api = Array.isArray(instance.evolution_apis) ? instance.evolution_apis[0] : instance.evolution_apis;
-    const baseUrl = normalizeUrl((api as { base_url?: string })?.base_url || '');
-    const apiKey = instance.apikey as string;
-
-    if (!baseUrl || !apiKey) {
-      await supabase.from('activation_mass_send_jobs').update({ status: 'failed', last_error: 'Sem base_url ou apikey', locked_at: null, locked_by: null, updated_at: new Date().toISOString() }).eq('id', job.id);
-      continue;
+    type CronCreds = { baseUrl: string; apiKey: string; instanceId: string };
+    const credsByName = new Map<string, CronCreds>();
+    let credsBuildFailed = false;
+    for (const iname of [...new Set(rotationNames)]) {
+      const { instance: instRow, queryError: instResolveErr } = await resolveEvolutionInstanceForActivation(
+        supabase,
+        iname,
+        job.user_id
+      );
+      if (instResolveErr || !instRow) {
+        await supabase
+          .from('activation_mass_send_jobs')
+          .update({
+            status: 'failed',
+            last_error: `Instância «${iname}» não encontrada`,
+            locked_at: null,
+            locked_by: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', job.id);
+        console.error(`[MassSend] Job ${shortId(job.id)} instância ${iname} não encontrada`, instResolveErr || '');
+        credsBuildFailed = true;
+        break;
+      }
+      const instance = instRow as {
+        id: string;
+        apikey?: string | null;
+        evolution_apis?: { base_url?: string } | { base_url?: string }[];
+      };
+      const api = Array.isArray(instance.evolution_apis) ? instance.evolution_apis[0] : instance.evolution_apis;
+      const baseUrl = normalizeUrl((api as { base_url?: string })?.base_url || '');
+      const apiKey = instance.apikey as string;
+      if (!baseUrl || !apiKey) {
+        await supabase
+          .from('activation_mass_send_jobs')
+          .update({
+            status: 'failed',
+            last_error: `Instância «${iname}» sem base_url ou apikey`,
+            locked_at: null,
+            locked_by: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', job.id);
+        credsBuildFailed = true;
+        break;
+      }
+      credsByName.set(iname, { baseUrl, apiKey, instanceId: instance.id });
     }
+    if (credsBuildFailed) continue;
 
     // Regenera signed URL se necessário
     if (message.attachment_url && String(message.attachment_url).includes('supabase.co/storage/v1')) {
@@ -302,8 +363,15 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
     }
 
     if (process.env.DEBUG_MASS_SEND === '1') {
-      console.log(`[MassSend] Job ${shortId(job.id)} | ${baseUrl} | tipo: ${message.message_type} | ${idx + 1}→${total}`);
+      const sample = [...credsByName.values()][0]?.baseUrl || '';
+      console.log(
+        `[MassSend] Job ${shortId(job.id)} | ${sample} | inst: ${[...new Set(rotationNames)].join(',')} | tipo: ${message.message_type} | ${idx + 1}→${total}`
+      );
     }
+
+    const interGroupDelayMs = resolveInterGroupDelayMs(
+      (job as { inter_group_delay_ms?: number | null }).inter_group_delay_ms
+    );
 
     const succeededGroupIds = await loadSucceededGroupIds(supabase, job.id);
     const loggedIdempotentSkip = new Set<string>();
@@ -322,9 +390,9 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
 
       const groupId = groupIds[idx];
 
-      // Delay 1s entre grupos
-      if (idx > (Number(job.processed_index) || 0)) {
-        await new Promise((r) => setTimeout(r, INTER_GROUP_DELAY_MS));
+      // Pausa entre disparos (personalizado no job ou padrão 1s), inclusive após nova invocação do cron
+      if (idx > 0) {
+        await new Promise((r) => setTimeout(r, interGroupDelayMs));
       }
 
       if (loopTick % PAUSE_POLL_EVERY === 0) {
@@ -364,25 +432,38 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
         }
         result = { success: true };
       } else {
+        const iname = instanceNameForMassSendGroupIndex(rotationNames, idx);
+        const credsThis = credsByName.get(iname);
         const t0 = Date.now();
-        result = await sendToEvolution(baseUrl, job.instance_name, apiKey, groupId, msg);
+        if (!credsThis) {
+          result = { success: false, error: `Sem credenciais para «${iname}»`, rawForDisconnectProbe: iname };
+        } else {
+          result = await sendToEvolution(credsThis.baseUrl, iname, credsThis.apiKey, groupId, msg);
 
-        for (let r = 0; r < RETRY_DELAYS.length && !result.success && isMassSendTransientRetryable(result.error); r++) {
-          console.warn(`[MassSend] [${idx + 1}/${total}] ${groupId} retry ${r + 1}/${RETRY_DELAYS.length} em ${RETRY_DELAYS[r] / 1000}s | ${result.error}`);
-          await new Promise((w) => setTimeout(w, RETRY_DELAYS[r]));
-          result = await sendToEvolution(baseUrl, job.instance_name, apiKey, groupId, msg);
+          for (let r = 0; r < RETRY_DELAYS.length && !result.success && isMassSendTransientRetryable(result.error); r++) {
+            console.warn(
+              `[MassSend] [${idx + 1}/${total}] ${groupId} retry ${r + 1}/${RETRY_DELAYS.length} em ${RETRY_DELAYS[r] / 1000}s | ${result.error}`
+            );
+            await new Promise((w) => setTimeout(w, RETRY_DELAYS[r]));
+            result = await sendToEvolution(credsThis.baseUrl, iname, credsThis.apiKey, groupId, msg);
+          }
         }
 
         const ms = Date.now() - t0;
         if (result.success) {
           if (process.env.DEBUG_MASS_SEND === '1') {
-            console.log(`[MassSend] [${idx + 1}/${total}] ${groupId} OK (${ms}ms)`);
+            console.log(`[MassSend] [${idx + 1}/${total}] ${groupId} OK (${ms}ms) via ${iname}`);
           }
           totalSent++;
           succeededGroupIds.add(groupId);
         } else {
           console.error(`[MassSend] [${idx + 1}/${total}] ${groupId} FALHA (${ms}ms) | ${result.error}`);
           totalFailed++;
+          const probe = result.rawForDisconnectProbe ?? result.error;
+          const markId = credsThis?.instanceId;
+          if (markId) {
+            void maybeMarkEvolutionInstanceDisconnected(supabase, markId, probe, 'netlify/activation-mass-send');
+          }
         }
       }
 

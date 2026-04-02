@@ -8,7 +8,7 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { getUserProfile } from '@/lib/middleware/permissions';
 import { canAccessGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
-import { testConnection } from '@/lib/services/meta-sync-service';
+import { isMetaIntegrationLinkedToBanca, testConnection } from '@/lib/services/meta-sync-service';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 function normalizeBancaUrl(url: string | null | undefined): string {
@@ -84,7 +84,16 @@ export async function POST(req: NextRequest) {
     const canAccess = await userCanAccessBanca(userId, profile, bancaId);
     if (!canAccess) return errorResponse('Você não tem permissão para esta banca.', 403);
 
-    const result = await testConnection(bancaId);
+    const integrationId =
+      body?.integration_id != null && String(body.integration_id).trim() !== ''
+        ? String(body.integration_id).trim()
+        : null;
+    if (integrationId) {
+      const linked = await isMetaIntegrationLinkedToBanca(integrationId, bancaId);
+      if (!linked) return errorResponse('integration_id inválido para esta banca.', 400);
+    }
+
+    const result = await testConnection(bancaId, integrationId);
     if (!result.success) {
       return successResponse({ success: false, error: result.error });
     }

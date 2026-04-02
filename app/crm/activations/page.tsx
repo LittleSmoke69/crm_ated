@@ -7,6 +7,7 @@ import { Activity, Heart, Search, Plus, MoreVertical, Paperclip, X, Trash2, Edit
 import SendActivationsModal from '@/components/CRM/SendActivationsModal';
 import ScheduleDetailsModal from '@/components/CRM/ScheduleDetailsModal';
 import MassSendJobDetailModal from '@/components/CRM/MassSendJobDetailModal';
+import { MassSendJobCountdownCell } from '@/components/CRM/MassSendJobCountdownCell';
 import { useToast } from '@/hooks/useToast';
 import ToastContainer from '@/components/Toast/ToastContainer';
 import { supabaseClient } from '@/lib/supabase/client';
@@ -125,7 +126,8 @@ const ActivationsPage = () => {
   const [sendModalDefaultMassSend, setSendModalDefaultMassSend] = useState(false);
   /** Pré-preenche instância e grupos ao repetir uma campanha da tabela */
   const [repeatCampaignSeed, setRepeatCampaignSeed] = useState<{
-    instanceName: string;
+    instanceName?: string;
+    instanceNames?: string[];
     groupIds: string[];
   } | null>(null);
   const [massSendSelectedMessageId, setMassSendSelectedMessageId] = useState<string>('');
@@ -2582,6 +2584,7 @@ const ActivationsPage = () => {
                     <tr>
                       <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Mensagem</th>
                       <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Instância</th>
+                      <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc] min-w-[7rem]">Entre grupos</th>
                       <th className="text-left p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Status</th>
                       <th className="text-center p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Sucesso</th>
                       <th className="text-center p-3 text-sm font-medium text-gray-700 dark:text-[#ccc]">Falhas</th>
@@ -2599,7 +2602,21 @@ const ActivationsPage = () => {
                       return (
                         <tr key={job.id} className="border-t border-gray-100 dark:border-[#404040]">
                           <td className="p-3 font-medium text-gray-900 dark:text-white">{job.message_title || job.message_id?.slice(0, 8) || '—'}</td>
-                          <td className="p-3 text-sm text-gray-600 dark:text-[#aaa]">{job.instance_name}</td>
+                          <td className="p-3 text-sm text-gray-600 dark:text-[#aaa] max-w-[14rem]">
+                            {(() => {
+                              const raw = job.instance_names;
+                              const multi = Array.isArray(raw)
+                                ? [...new Set(raw.map((x: unknown) => String(x ?? '').trim()).filter(Boolean))]
+                                : [];
+                              if (multi.length > 1) {
+                                return <span title={multi.join(', ')}>{multi.join(', ')}</span>;
+                              }
+                              return job.instance_name || multi[0] || '—';
+                            })()}
+                          </td>
+                          <td className="p-3 align-top">
+                            <MassSendJobCountdownCell job={job} />
+                          </td>
                           <td className="p-3">
                             <span className={`px-2 py-1 rounded text-xs font-medium ${
                               job.status === 'completed' ? 'bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-200' :
@@ -2666,9 +2683,19 @@ const ActivationsPage = () => {
                                     showToast('Esta campanha não tem grupos salvos para repetir.', 'error');
                                     return;
                                   }
+                                  const rawNames = job.instance_names;
+                                  const names = Array.isArray(rawNames)
+                                    ? [
+                                        ...new Set(
+                                          rawNames.map((x: unknown) => String(x ?? '').trim()).filter(Boolean)
+                                        ),
+                                      ]
+                                    : [];
+                                  const primary = String(job.instance_name || '').trim();
                                   setRepeatCampaignSeed({
-                                    instanceName: String(job.instance_name || '').trim(),
                                     groupIds: [...new Set(groupIds)],
+                                    instanceName: primary || names[0] || '',
+                                    ...(names.length > 1 ? { instanceNames: names } : {}),
                                   });
                                   setMessageToSend(msg);
                                   setSendModalDefaultMassSend(true);

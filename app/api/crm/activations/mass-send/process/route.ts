@@ -1,7 +1,11 @@
 /**
  * POST /api/crm/activations/mass-send/process
- * Processa um lote de grupos (budget ~45s). Streaming + heartbeat evita 504 no Netlify.
- * Com trabalho restante, um único follow-up via after() + delay (evita múltiplos POSTs concorrentes).
+ * Autenticação: header x-internal-cron-secret = CRON_SECRET.
+ *
+ * Processa o próximo job elegível: envia grupos em SEQUÊNCIA (processed_index),
+ * até CALL_BUDGET_MS por chamada. Streaming + heartbeat evita 504 no Netlify.
+ * Com trabalho restante (`more_pending`), follow-up único via after() + delay.
+ * Idempotente: lock + RPC com índice esperado; não reenvia grupos já com sucesso.
  */
 import { NextRequest, after } from 'next/server';
 import { errorResponse } from '@/lib/utils/response';

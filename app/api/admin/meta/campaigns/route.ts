@@ -6,7 +6,7 @@
 import { NextRequest } from 'next/server';
 import { requireAdmin } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
-import { loadCampaigns } from '@/lib/services/meta-sync-service';
+import { isMetaIntegrationLinkedToBanca, loadCampaigns } from '@/lib/services/meta-sync-service';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 export async function GET(req: NextRequest) {
@@ -17,7 +17,14 @@ export async function GET(req: NextRequest) {
       return errorResponse('banca_id é obrigatório', 400);
     }
 
-    const result = await loadCampaigns(bancaId);
+    const integrationIdRaw = req.nextUrl.searchParams.get('integration_id')?.trim();
+    let integrationId: string | null = integrationIdRaw || null;
+    if (integrationId) {
+      const linked = await isMetaIntegrationLinkedToBanca(integrationId, bancaId);
+      if (!linked) return errorResponse('integration_id não pertence a esta banca.', 400);
+    }
+
+    const result = await loadCampaigns(bancaId, integrationId);
     if (!result.success) {
       console.log('[admin/meta API] GET campaigns resposta', {
         banca_id: bancaId,

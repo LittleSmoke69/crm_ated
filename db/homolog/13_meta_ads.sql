@@ -122,8 +122,7 @@ CREATE TABLE IF NOT EXISTS public.meta_integration_bancas (
   integration_id UUID NOT NULL REFERENCES public.meta_integration_configs (id) ON DELETE CASCADE,
   banca_id UUID NOT NULL REFERENCES public.crm_bancas (id) ON DELETE CASCADE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  PRIMARY KEY (integration_id, banca_id),
-  UNIQUE (banca_id)
+  PRIMARY KEY (integration_id, banca_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_meta_integration_bancas_banca_id ON public.meta_integration_bancas (banca_id);
@@ -370,7 +369,7 @@ COMMENT ON TABLE public.meta_campaigns IS 'Campanhas Meta Ads sincronizadas por 
 COMMENT ON TABLE public.meta_adsets IS 'AdSets Meta Ads sincronizados por banca';
 COMMENT ON TABLE public.meta_insights_daily IS 'Insights diários Meta Ads por campanha e banca';
 COMMENT ON TABLE public.meta_integration_configs IS 'Configuração Meta Ads compartilhada (várias bancas)';
-COMMENT ON TABLE public.meta_integration_bancas IS 'Vínculo banca ↔ integração Meta compartilhada';
+COMMENT ON TABLE public.meta_integration_bancas IS 'Vínculo banca ↔ integração Meta; uma banca pode ter várias integrações (várias contas de anúncio).';
 COMMENT ON TABLE public.meta_campaign_consultors IS 'Atribuição de consultores a campanhas Meta por banca';
 COMMENT ON COLUMN public.meta_campaigns.campaign_kind IS 'normal | bolao — definido no admin';
 COMMENT ON COLUMN public.meta_insights_daily.raw_cost_per_action_type IS 'Snapshot cost_per_action_type da Graph API';

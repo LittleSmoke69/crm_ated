@@ -4,7 +4,8 @@
  * agregando todas as integrações ativas e respeitando período + filtros de banca.
  *
  * Query:
- * - date_from, date_to (YYYY-MM-DD) — intervalo; se omitido, últimos 30 dias.
+ * - date_from, date_to (YYYY-MM-DD) — intervalo; se ambos informados, a Meta é consultada com esse time_range
+ *   (granularidade diária, time_increment=1) e as linhas são filtradas ao intervalo. Se omitido, comportamento legado (preset last_30d + fallbacks).
  * - banca_id — filtra métricas para uma banca (dropdown Meta).
  * - scope_banca_ids — IDs separados por vírgula; limita integrações que tocam essas bancas.
  * - active_only — 1 (default) só ACTIVE; 0 inclui pausadas.

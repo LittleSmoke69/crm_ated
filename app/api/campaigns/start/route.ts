@@ -17,7 +17,10 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { rateLimitService } from '@/lib/services/rate-limit-service';
-import { evolutionService } from '@/lib/services/evolution-service';
+import {
+  maybeMarkEvolutionInstanceDisconnected,
+  messageIndicatesEvolutionSessionDropped,
+} from '@/lib/evolution/mark-instance-disconnected';
 
 const QUEUE_WORKER_URL = process.env.PROCESS_CAMPAIGN_QUEUE_URL || process.env.NEXT_PUBLIC_PROCESS_CAMPAIGN_QUEUE_URL || '';
 
@@ -78,6 +81,7 @@ async function processFirstJobImmediately(
   campaign: any,
   group: any
 ): Promise<{ success: boolean; error?: string }> {
+  let sessionDropInstance: { id: string } | null = null;
   try {
     const strategy = campaign.strategy || {};
     const preferUserBinding = strategy.preferUserBinding === true;
@@ -145,6 +149,8 @@ async function processFirstJobImmediately(
       const scoreB = (1 / (b.sent_today + 1)) + (b.last_used_at ? (Date.now() - new Date(b.last_used_at).getTime()) / 1000 : 999);
       return scoreB - scoreA;
     })[0];
+
+    sessionDropInstance = { id: instance.id };
 
     const evolutionApi = Array.isArray(instance.evolution_apis) 
       ? instance.evolution_apis[0] 
@@ -327,80 +333,20 @@ async function processFirstJobImmediately(
       
       return { success: true };
     } else {
-      // Verifica se contém "Connection Closed" em qualquer lugar da resposta
       const errorMsg = responseData?.message || responseText || `HTTP ${response.status}`;
-      
-      const isConnectionClosed = 
-        (typeof responseText === 'string' && responseText.toLowerCase().includes('connection closed')) ||
-        (typeof errorMsg === 'string' && errorMsg.toLowerCase().includes('connection closed')) ||
-        (responseData && JSON.stringify(responseData).toLowerCase().includes('connection closed')) ||
-        (typeof errorMsg === 'string' && errorMsg.toLowerCase().includes('blocked-integrity-enforcement'));
+      const sessionProbe = `${responseText}\n${typeof errorMsg === 'string' ? errorMsg : ''}\n${JSON.stringify(responseData)}`;
 
-      if (isConnectionClosed) {
-        console.warn(`⚠️ [CAMPANHA ${campaign.id}] Possível "Connection Closed" detectado no primeiro job na instância ${instance.instance_name}. Verificando status real...`);
-        
-        // CRÍTICO: Verifica o status REAL da instância antes de marcar como desconectada
-        let isReallyDisconnected = false;
-        try {
-          const evolutionApi = Array.isArray(instance.evolution_apis) 
-            ? instance.evolution_apis[0] 
-            : instance.evolution_apis;
+      if (messageIndicatesEvolutionSessionDropped(sessionProbe)) {
+        await maybeMarkEvolutionInstanceDisconnected(
+          supabaseServiceRole,
+          instance.id,
+          sessionProbe,
+          'campaigns/start-first-job'
+        );
+        console.warn(
+          `⚠️ [CAMPANHA ${campaign.id}] Sessão Evolution caiu (${instance.instance_name}). Instância marcada como desconectada em Instâncias WhatsApp (registro preservado).`
+        );
 
-          if (evolutionApi?.base_url) {
-            // Busca api_key_global para verificar status
-            const { data: apiData } = await supabaseServiceRole
-              .from('evolution_apis')
-              .select('api_key_global')
-              .eq('id', evolutionApi.id)
-              .single();
-
-            if (apiData?.api_key_global) {
-              // Verifica o status real na Evolution API
-              const realStateData = await evolutionService.getConnectionState(
-                instance.instance_name,
-                apiData.api_key_global,
-                evolutionApi.base_url
-              );
-              const realState = evolutionService.extractState(realStateData);
-
-              console.log(`🔍 [CAMPANHA ${campaign.id}] Status real da instância ${instance.instance_name}: ${realState}`);
-
-              // Só marca como desconectada se o status REAL confirmar
-              if (realState === 'disconnected') {
-                console.error(`🔌 [CAMPANHA ${campaign.id}] Status REAL confirmado: Instância ${instance.instance_name} está DESCONECTADA.`);
-                isReallyDisconnected = true;
-                
-                // Desliga a instância que realmente caiu
-                await supabaseServiceRole
-                  .from('evolution_instances')
-                  .update({
-                    status: 'disconnected',
-                    is_active: false,
-                    updated_at: new Date().toISOString(),
-                  })
-                  .eq('id', instance.id);
-              } else {
-                // Instância ainda está conectada - pode ser apenas um erro temporário
-                console.log(`✅ [CAMPANHA ${campaign.id}] Status REAL: Instância ${instance.instance_name} ainda está ${realState === 'connected' ? 'CONECTADA' : 'CONECTANDO'}. Não marcando como desconectada.`);
-                
-                // Retorna erro mas não marca como desconectada
-                return { success: false, error: `Erro temporário na requisição. Instância ainda está ${realState}.` };
-              }
-            }
-          }
-        } catch (verifyError: any) {
-          // Se não conseguir verificar, não marca como desconectada
-          console.error(`❌ [CAMPANHA ${campaign.id}] Erro ao verificar status real:`, verifyError.message);
-          console.log(`⚠️ [CAMPANHA ${campaign.id}] Não marcando como desconectada por segurança.`);
-          return { success: false, error: 'Erro temporário. Não foi possível verificar status da instância.' };
-        }
-
-        // Só continua removendo da campanha se realmente estiver desconectada
-        if (!isReallyDisconnected) {
-          return { success: false, error: 'Erro temporário. Instância ainda está conectada.' };
-        }
-
-        // Remove a instância do pool da campanha (só se realmente caiu)
         const remainingInstances = allowedInstances.filter(name => name !== instance.instance_name);
         
         // Verifica se há outras instâncias disponíveis
@@ -564,6 +510,14 @@ async function processFirstJobImmediately(
       errorMsg.toLowerCase().includes('socket hang up');
 
     if (isConnectionError) {
+      if (sessionDropInstance && messageIndicatesEvolutionSessionDropped(errorMsg)) {
+        await maybeMarkEvolutionInstanceDisconnected(
+          supabaseServiceRole,
+          sessionDropInstance.id,
+          errorMsg,
+          'campaigns/start-catch'
+        );
+      }
       console.warn(`⏸️ [CAMPANHA ${campaign.id}] Erro de conexão crítico no primeiro job! Pausando campanha.`);
       
       // ⏸️ Pausar a campanha (não falhar)

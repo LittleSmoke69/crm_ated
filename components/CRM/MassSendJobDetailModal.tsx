@@ -3,6 +3,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { X, Loader2, RotateCcw, Users, CheckCircle2, XCircle, Clock } from 'lucide-react';
 import { sanitizeMassSendErrorMessage } from '@/lib/utils/activation-send-errors';
+import { normalizeActivationMassSendInstanceNames } from '@/lib/crm/mass-send-instance-names';
+import { MassSendJobCountdownCell } from '@/components/CRM/MassSendJobCountdownCell';
 
 export type MassSendGroupOutcome = {
   groupId: string;
@@ -16,11 +18,14 @@ export type MassSendJobDetail = {
   message_id: string;
   message_title: string | null;
   instance_name: string;
+  instance_names?: string[] | null;
   status: string;
   total_groups: number;
   sent_count: number;
   failed_count: number;
   processed_index?: number;
+  inter_group_delay_ms?: number | null;
+  updated_at?: string | null;
   last_error: string | null;
   group_outcomes?: MassSendGroupOutcome[] | null;
   group_results?: MassSendGroupOutcome[] | null;
@@ -185,6 +190,10 @@ const MassSendJobDetailModal: React.FC<MassSendJobDetailModalProps> = ({
     if (!userId || !job || failedIds.length === 0) return;
     setRetrying(true);
     try {
+      const instanceNames = normalizeActivationMassSendInstanceNames(
+        job.instance_names,
+        job.instance_name
+      );
       const res = await fetch('/api/crm/activations/send', {
         method: 'POST',
         headers: {
@@ -194,7 +203,8 @@ const MassSendJobDetailModal: React.FC<MassSendJobDetailModalProps> = ({
         body: JSON.stringify({
           messageId: job.message_id,
           groupIds: failedIds,
-          instanceName: job.instance_name,
+          instanceNames,
+          ...(failedIds.length > 10 ? { forceMassSend: true } : {}),
         }),
       });
       const data = await safeResponseJson(res);
@@ -246,8 +256,9 @@ const MassSendJobDetailModal: React.FC<MassSendJobDetailModalProps> = ({
             <div className="min-w-0">
               <h2 className="text-base sm:text-lg font-semibold text-gray-900 dark:text-white truncate">Grupos da campanha</h2>
               {job && (
-                <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                  {job.message_title || job.message_id?.slice(0, 8)} · {job.instance_name}
+                <p className="text-xs text-gray-500 dark:text-gray-400 truncate" title={normalizeActivationMassSendInstanceNames(job.instance_names, job.instance_name).join(', ')}>
+                  {job.message_title || job.message_id?.slice(0, 8)} ·{' '}
+                  {normalizeActivationMassSendInstanceNames(job.instance_names, job.instance_name).join(', ')}
                 </p>
               )}
             </div>
@@ -284,6 +295,10 @@ const MassSendJobDetailModal: React.FC<MassSendJobDetailModalProps> = ({
                   Campanha em andamento. A lista atualiza conforme os grupos são processados.
                 </p>
               )}
+
+              <div className="rounded-lg border border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#333]/50 px-3 py-2">
+                <MassSendJobCountdownCell job={job} />
+              </div>
 
               {/* Progress bar */}
               <div className="space-y-1.5">

@@ -63,6 +63,15 @@ function ResumoMetricSkeleton() {
   return <div className="h-9 w-24 rounded-md bg-white/25 animate-pulse" aria-hidden />;
 }
 
+type GestorMetaIntegrationRow = {
+  integration_id: string;
+  base_url: string;
+  token_last4: string | null;
+  ad_account_id: string | null;
+  pixel_id: string | null;
+  default_campaign_id: string | null;
+};
+
 interface ConsultorOutraBanca {
   id: string;
   email: string;
@@ -198,6 +207,9 @@ export default function GestorTrafegoClient({
     default_campaign_id: '',
   });
   const [metaConfigLoaded, setMetaConfigLoaded] = useState(false);
+  const [metaIntegrationsList, setMetaIntegrationsList] = useState<GestorMetaIntegrationRow[]>([]);
+  const [metaSelectedIntegrationId, setMetaSelectedIntegrationId] = useState('');
+  const [metaCreateNewIntegration, setMetaCreateNewIntegration] = useState(false);
   const [metaConfigSaving, setMetaConfigSaving] = useState(false);
   const [metaConfigTesting, setMetaConfigTesting] = useState(false);
   const [metaCampaignsList, setMetaCampaignsList] = useState<Array<{ id: string; name?: string }>>([]);
@@ -230,6 +242,10 @@ export default function GestorTrafegoClient({
   const [metaCampaignConsultorDraft, setMetaCampaignConsultorDraft] = useState<Record<string, string[]>>({});
   const [metaCampaignConsultorSavingKey, setMetaCampaignConsultorSavingKey] = useState<string | null>(null);
   const [metaConsultorOptions, setMetaConsultorOptions] = useState<Array<{ id: string; email: string; full_name: string | null }>>([]);
+  // Modal de atribuição de consultores
+  const [consultorModalOpen, setConsultorModalOpen] = useState(false);
+  const [consultorModalCampaignKey, setConsultorModalCampaignKey] = useState<string>('');
+  const [consultorModalSearch, setConsultorModalSearch] = useState('');
   const [top5Consultants, setTop5Consultants] = useState<Array<{ name: string; value: number }>>(initialData?.top5Consultants || []);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -681,6 +697,9 @@ export default function GestorTrafegoClient({
   useEffect(() => {
     if (!effectiveBancaId || !userId) {
       setMetaConfigLoaded(false);
+      setMetaIntegrationsList([]);
+      setMetaSelectedIntegrationId('');
+      setMetaCreateNewIntegration(false);
       return;
     }
     let cancelled = false;
@@ -692,12 +711,34 @@ export default function GestorTrafegoClient({
         const data = await res.json();
         if (cancelled) return;
         if (data.success && data.data) {
+          const d = data.data;
+          const integs: GestorMetaIntegrationRow[] = Array.isArray(d.integrations) ? d.integrations : [];
+          setMetaIntegrationsList(integs);
+          setMetaCreateNewIntegration(false);
+          const storageKey = `gestor_meta_integration:${effectiveBancaId}`;
+          let stored = '';
+          try {
+            stored = typeof window !== 'undefined' ? window.sessionStorage.getItem(storageKey) || '' : '';
+          } catch {
+            /* ignore */
+          }
+          const pickId =
+            stored && integs.some((i) => i.integration_id === stored)
+              ? stored
+              : d.integration_id
+                ? String(d.integration_id)
+                : integs[0]?.integration_id || '';
+          setMetaSelectedIntegrationId(pickId);
+          const row = integs.find((i) => i.integration_id === pickId);
           setMetaConfigForm((f) => ({
             ...f,
-            base_url: data.data.base_url || f.base_url,
-            ad_account_id: data.data.ad_account_id || '',
-            pixel_id: data.data.pixel_id || '',
-            default_campaign_id: data.data.default_campaign_id || '',
+            base_url: (row?.base_url || d.base_url) || f.base_url,
+            ad_account_id: row?.ad_account_id != null ? String(row.ad_account_id) : d.ad_account_id || '',
+            pixel_id: row?.pixel_id != null ? String(row.pixel_id) : d.pixel_id || '',
+            default_campaign_id:
+              row?.default_campaign_id != null
+                ? String(row.default_campaign_id)
+                : d.default_campaign_id || '',
             access_token: '',
           }));
         }
@@ -725,11 +766,60 @@ export default function GestorTrafegoClient({
           pixel_id: metaConfigForm.pixel_id,
           default_campaign_id: metaConfigForm.default_campaign_id || null,
           is_active: true,
+          ...(isAdminOrSuperAdmin && metaCreateNewIntegration
+            ? { create_new_integration: true }
+            : {
+                integration_id:
+                  metaSelectedIntegrationId ||
+                  (metaIntegrationsList[0]?.integration_id
+                    ? String(metaIntegrationsList[0].integration_id)
+                    : undefined),
+              }),
         }),
       });
       const data = await res.json();
       if (data.success) {
         setMetaConfigForm((f) => ({ ...f, access_token: '' }));
+        setMetaCreateNewIntegration(false);
+        try {
+          const r2 = await fetch(`/api/gestor-trafego/meta/config?banca_id=${effectiveBancaId}`, {
+            headers: { 'X-User-Id': userId },
+          });
+          const j2 = await r2.json();
+          if (j2.success && j2.data) {
+            const d = j2.data;
+            const integs: GestorMetaIntegrationRow[] = Array.isArray(d.integrations) ? d.integrations : [];
+            setMetaIntegrationsList(integs);
+            const newId =
+              data.data?.integration_id != null
+                ? String(data.data.integration_id)
+                : d.integration_id
+                  ? String(d.integration_id)
+                  : integs[0]?.integration_id || '';
+            if (newId) {
+              setMetaSelectedIntegrationId(newId);
+              try {
+                window.sessionStorage.setItem(`gestor_meta_integration:${effectiveBancaId}`, newId);
+              } catch {
+                /* ignore */
+              }
+            }
+            const row = integs.find((i) => i.integration_id === newId);
+            setMetaConfigForm((f) => ({
+              ...f,
+              base_url: (row?.base_url || d.base_url) || f.base_url,
+              ad_account_id: row?.ad_account_id != null ? String(row.ad_account_id) : d.ad_account_id || '',
+              pixel_id: row?.pixel_id != null ? String(row.pixel_id) : d.pixel_id || '',
+              default_campaign_id:
+                row?.default_campaign_id != null
+                  ? String(row.default_campaign_id)
+                  : d.default_campaign_id || '',
+              access_token: '',
+            }));
+          }
+        } catch {
+          /* mantém estado atual */
+        }
       } else {
         setMetaTestResult({ success: false, error: data.error || 'Erro ao salvar' });
       }
@@ -745,10 +835,17 @@ export default function GestorTrafegoClient({
     setMetaConfigTesting(true);
     setMetaTestResult(null);
     try {
+      const integ =
+        !metaCreateNewIntegration &&
+        (metaSelectedIntegrationId ||
+          (metaIntegrationsList[0]?.integration_id ? String(metaIntegrationsList[0].integration_id) : ''));
       const res = await fetch('/api/gestor-trafego/meta/test-connection', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-        body: JSON.stringify({ banca_id: effectiveBancaId }),
+        body: JSON.stringify({
+          banca_id: effectiveBancaId,
+          ...(integ ? { integration_id: integ } : {}),
+        }),
       });
       const data = await res.json();
       if (data.success && data.data) {
@@ -767,7 +864,13 @@ export default function GestorTrafegoClient({
     if (!effectiveBancaId || !userId) return;
     setMetaCampaignsLoading(true);
     try {
-      const res = await fetch(`/api/gestor-trafego/meta/campaigns?banca_id=${effectiveBancaId}`, {
+      const integ =
+        !metaCreateNewIntegration &&
+        (metaSelectedIntegrationId ||
+          (metaIntegrationsList[0]?.integration_id ? String(metaIntegrationsList[0].integration_id) : ''));
+      const q = new URLSearchParams({ banca_id: effectiveBancaId });
+      if (integ) q.set('integration_id', integ);
+      const res = await fetch(`/api/gestor-trafego/meta/campaigns?${q.toString()}`, {
         headers: { 'X-User-Id': userId },
       });
       const data = await res.json();
@@ -1294,32 +1397,40 @@ export default function GestorTrafegoClient({
                             {formatMetaSpend(Number(row.consultor_total_deposited) || 0, metaFunnel?.currency)}
                           </td>
                           <td className="px-4 py-3">
-                            <div className="space-y-1">
-                              <select
-                                multiple
-                                value={metaCampaignConsultorDraft[`${effectiveBancaId || ''}:${row.campaign_id}`] || []}
-                                onChange={(e) => {
-                                  const values = Array.from(e.target.selectedOptions).map((o) => o.value);
-                                  const key = `${effectiveBancaId || ''}:${row.campaign_id}`;
-                                  setMetaCampaignConsultorDraft((prev) => ({ ...prev, [key]: values }));
-                                }}
-                                className="px-2 py-1 rounded-lg border border-gray-200 dark:border-gray-600 text-xs text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-800 min-w-[210px] h-[70px]"
-                              >
-                                {metaConsultorOptions.map((consultor) => (
-                                  <option key={consultor.id} value={consultor.id}>
-                                    {consultor.full_name || consultor.email}
-                                  </option>
-                                ))}
-                              </select>
-                              <button
-                                type="button"
-                                onClick={() => handleSaveMetaCampaignConsultors(row.campaign_id)}
-                                disabled={metaCampaignConsultorSavingKey === `${effectiveBancaId || ''}:${row.campaign_id}`}
-                                className="px-2 py-1 rounded-lg border border-blue-200 dark:border-blue-700 text-blue-700 dark:text-blue-300 text-xs hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-50"
-                              >
-                                {metaCampaignConsultorSavingKey === `${effectiveBancaId || ''}:${row.campaign_id}` ? 'Salvando…' : 'Salvar'}
-                              </button>
-                            </div>
+                            {(() => {
+                              const key = `${effectiveBancaId || ''}:${row.campaign_id}`;
+                              const selected = metaCampaignConsultorDraft[key] || [];
+                              const assignedNames = selected.map((id) => {
+                                const c = metaConsultorOptions.find((o) => o.id === id);
+                                return c?.full_name || c?.email || id;
+                              });
+                              return (
+                                <div className="flex flex-col gap-1 min-w-[160px]">
+                                  {assignedNames.length > 0 ? (
+                                    <div className="flex flex-wrap gap-1 mb-1">
+                                      {assignedNames.map((name, i) => (
+                                        <span key={i} className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
+                                          {name}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <span className="text-xs text-gray-400 italic mb-1">Nenhum consultor</span>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setConsultorModalCampaignKey(key);
+                                      setConsultorModalSearch('');
+                                      setConsultorModalOpen(true);
+                                    }}
+                                    className="px-2 py-1 rounded-lg border border-emerald-200 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 text-xs hover:bg-emerald-50 dark:hover:bg-emerald-900/20 w-fit"
+                                  >
+                                    Atribuir consultores
+                                  </button>
+                                </div>
+                              );
+                            })()}
                           </td>
                         </tr>
                       ))}
@@ -1475,6 +1586,70 @@ export default function GestorTrafegoClient({
                     Banca atual: <strong>{bancaName || (bancasGestor.find((b) => b.banca_id === effectiveBancaId)?.banca_name) || 'Selecionada no filtro'}</strong>
                   </span>
                 </div>
+                {metaIntegrationsList.length > 0 ? (
+                  <div className="rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50/60 dark:bg-indigo-950/30 p-4">
+                    <label className="block text-sm font-medium text-gray-800 dark:text-gray-200 mb-1">
+                      Conta de anúncio (integração)
+                    </label>
+                    <select
+                      value={metaCreateNewIntegration ? '__new__' : metaSelectedIntegrationId || metaIntegrationsList[0]?.integration_id || ''}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        const sk = `gestor_meta_integration:${effectiveBancaId}`;
+                        if (v === '__new__') {
+                          if (!isAdminOrSuperAdmin) return;
+                          setMetaCreateNewIntegration(true);
+                          setMetaSelectedIntegrationId('');
+                          try {
+                            window.sessionStorage.removeItem(sk);
+                          } catch {
+                            /* ignore */
+                          }
+                          setMetaConfigForm((f) => ({
+                            ...f,
+                            ad_account_id: '',
+                            pixel_id: '',
+                            default_campaign_id: '',
+                            access_token: '',
+                          }));
+                          return;
+                        }
+                        setMetaCreateNewIntegration(false);
+                        setMetaSelectedIntegrationId(v);
+                        try {
+                          window.sessionStorage.setItem(sk, v);
+                        } catch {
+                          /* ignore */
+                        }
+                        const row = metaIntegrationsList.find((i) => i.integration_id === v);
+                        if (row) {
+                          setMetaConfigForm((f) => ({
+                            ...f,
+                            base_url: row.base_url || f.base_url,
+                            ad_account_id: row.ad_account_id || '',
+                            pixel_id: row.pixel_id || '',
+                            default_campaign_id: row.default_campaign_id || '',
+                            access_token: '',
+                          }));
+                        }
+                      }}
+                      className="w-full max-w-xl px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-gray-800"
+                    >
+                      {metaIntegrationsList.map((i) => (
+                        <option key={i.integration_id} value={i.integration_id}>
+                          {(i.ad_account_id && String(i.ad_account_id).trim()) || 'Sem act_'}{' '}
+                          {i.token_last4 ? `· ${i.token_last4}` : ''}
+                        </option>
+                      ))}
+                      {isAdminOrSuperAdmin ? (
+                        <option value="__new__">+ Nova integração (outra conta/token)</option>
+                      ) : null}
+                    </select>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                      Métricas e sincronização agregam todas as integrações desta banca. Aqui você edita uma conta por vez.
+                    </p>
+                  </div>
+                ) : null}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-800 dark:text-gray-200 mb-1">Base URL Meta</label>
@@ -1544,7 +1719,7 @@ export default function GestorTrafegoClient({
                       <button
                         type="button"
                         onClick={handleLoadMetaCampaigns}
-                        disabled={metaCampaignsLoading}
+                        disabled={metaCampaignsLoading || metaCreateNewIntegration}
                         className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded-xl text-sm font-medium disabled:opacity-50 flex items-center gap-1"
                       >
                         {metaCampaignsLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
@@ -2191,6 +2366,125 @@ export default function GestorTrafegoClient({
             </div>
           </div>
         )}
+      {/* Modal: Atribuir consultores a campanha */}
+      {consultorModalOpen && (() => {
+        const campaignId = consultorModalCampaignKey.split(':').slice(1).join(':');
+        const campaignRow = (metaCampaignsData || []).find((r) => r.campaign_id === campaignId);
+        const selectedIds = metaCampaignConsultorDraft[consultorModalCampaignKey] || [];
+        const filtered = metaConsultorOptions.filter((c) => {
+          const term = consultorModalSearch.trim().toLowerCase();
+          if (!term) return true;
+          return (c.full_name || '').toLowerCase().includes(term) || c.email.toLowerCase().includes(term);
+        });
+        const isSaving = metaCampaignConsultorSavingKey === consultorModalCampaignKey;
+
+        return (
+          <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+            <div className="w-full max-w-lg bg-white dark:bg-[#252525] rounded-2xl border border-gray-200 dark:border-[#404040] shadow-xl flex flex-col max-h-[90vh]">
+              <div className="px-5 py-4 border-b border-gray-100 dark:border-[#383838] flex items-center justify-between shrink-0">
+                <div>
+                  <h3 className="text-base font-semibold text-gray-900 dark:text-gray-50">Atribuir consultores</h3>
+                  {campaignRow && (
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate max-w-xs">
+                      {campaignRow.campaign_name || campaignId}
+                    </p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setConsultorModalOpen(false)}
+                  className="px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-[#404040] text-xs text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]"
+                >
+                  Fechar
+                </button>
+              </div>
+
+              {campaignRow && (
+                <div className="px-5 pt-4 grid grid-cols-2 gap-3 shrink-0">
+                  <div className="p-3 rounded-xl border border-gray-100 dark:border-[#383838] bg-gray-50 dark:bg-[#1e1e1e]">
+                    <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase">Leads consultores</p>
+                    <p className="text-xl font-bold text-gray-900 dark:text-gray-50 mt-1">
+                      {(Number(campaignRow.consultor_total_leads) || 0).toLocaleString('pt-BR')}
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-xl border border-gray-100 dark:border-[#383838] bg-gray-50 dark:bg-[#1e1e1e]">
+                    <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase">Depósito consultores</p>
+                    <p className="text-xl font-bold text-gray-900 dark:text-gray-50 mt-1">
+                      {(Number(campaignRow.consultor_total_deposited) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div className="px-5 pt-4 shrink-0">
+                <input
+                  type="search"
+                  value={consultorModalSearch}
+                  onChange={(e) => setConsultorModalSearch(e.target.value)}
+                  placeholder="Buscar consultor por nome ou e-mail…"
+                  className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] rounded-xl text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a]"
+                />
+              </div>
+
+              <div className="px-5 pt-2 pb-2 overflow-y-auto flex-1">
+                <div className="border border-gray-200 dark:border-[#404040] rounded-xl bg-white dark:bg-[#2a2a2a] divide-y divide-gray-100 dark:divide-[#383838]">
+                  {filtered.length === 0 ? (
+                    <p className="px-3 py-3 text-xs text-gray-500">Nenhum consultor encontrado.</p>
+                  ) : (
+                    filtered.map((consultor) => {
+                      const checked = selectedIds.includes(consultor.id);
+                      return (
+                        <label key={consultor.id} className="flex items-start gap-2 px-3 py-2 cursor-pointer hover:bg-gray-50 dark:hover:bg-[#333]">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => {
+                              setMetaCampaignConsultorDraft((prev) => {
+                                const current = new Set(prev[consultorModalCampaignKey] ?? selectedIds);
+                                if (e.target.checked) current.add(consultor.id);
+                                else current.delete(consultor.id);
+                                return { ...prev, [consultorModalCampaignKey]: Array.from(current) };
+                              });
+                            }}
+                            className="mt-0.5 rounded border-gray-300 text-emerald-500 focus:ring-emerald-500"
+                          />
+                          <span className="min-w-0">
+                            <span className="block text-sm text-gray-900 dark:text-gray-50">{consultor.full_name || 'Sem nome'}</span>
+                            <span className="block text-xs text-gray-500 dark:text-gray-400 break-all">{consultor.email}</span>
+                          </span>
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
+                <p className="text-[11px] text-gray-500 mt-1">Selecionados: <span className="font-semibold text-gray-700 dark:text-gray-300">{selectedIds.length}</span></p>
+              </div>
+
+              <div className="px-5 py-4 border-t border-gray-100 dark:border-[#383838] flex justify-end gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setConsultorModalOpen(false)}
+                  className="px-4 py-2 rounded-xl border border-gray-200 dark:border-[#404040] text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={isSaving}
+                  onClick={async () => {
+                    await handleSaveMetaCampaignConsultors(campaignId);
+                    setConsultorModalOpen(false);
+                  }}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium disabled:opacity-50"
+                >
+                  {isSaving ? 'Salvando…' : 'Salvar'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       </div>
     </Layout>
   );

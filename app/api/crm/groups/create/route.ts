@@ -3,6 +3,7 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { checkInstanceAccess } from '@/lib/utils/instance-access';
+import { maybeMarkEvolutionInstanceDisconnected } from '@/lib/evolution/mark-instance-disconnected';
 
 /**
  * POST /api/crm/groups/create - Cria um grupo via Evolution API
@@ -102,6 +103,12 @@ export async function POST(req: NextRequest) {
         statusText: response.statusText,
         error: errorText,
       });
+      await maybeMarkEvolutionInstanceDisconnected(
+        supabaseServiceRole,
+        instance.id as string,
+        `${errorText}\nHTTP ${response.status}`,
+        'crm/groups/create'
+      );
       return errorResponse(
         `Erro ao criar grupo: ${response.statusText}. ${errorText}`,
         response.status

@@ -9,7 +9,7 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { getUserProfile } from '@/lib/middleware/permissions';
 import { canAccessGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
-import { loadCampaigns } from '@/lib/services/meta-sync-service';
+import { isMetaIntegrationLinkedToBanca, loadCampaigns } from '@/lib/services/meta-sync-service';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 function normalizeBancaUrl(url: string | null | undefined): string {
@@ -84,7 +84,14 @@ export async function GET(req: NextRequest) {
     const canAccess = await userCanAccessBanca(userId, profile, bancaId);
     if (!canAccess) return errorResponse('Você não tem permissão para esta banca.', 403);
 
-    const result = await loadCampaigns(bancaId);
+    const integrationIdRaw = req.nextUrl.searchParams.get('integration_id')?.trim();
+    let integrationId: string | null = integrationIdRaw || null;
+    if (integrationId) {
+      const linked = await isMetaIntegrationLinkedToBanca(integrationId, bancaId);
+      if (!linked) return errorResponse('integration_id inválido para esta banca.', 400);
+    }
+
+    const result = await loadCampaigns(bancaId, integrationId);
     if (!result.success) {
       return successResponse({ campaigns: [], error: result.error });
     }

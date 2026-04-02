@@ -3,8 +3,10 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { rateLimitService } from '@/lib/services/rate-limit-service';
-import { evolutionBalancer } from '@/lib/services/evolution-balancer';
-import { evolutionService } from '@/lib/services/evolution-service';
+import {
+  maybeMarkEvolutionInstanceDisconnected,
+  messageIndicatesEvolutionSessionDropped,
+} from '@/lib/evolution/mark-instance-disconnected';
 
 export const runtime = 'nodejs';
 export const maxDuration = 900; // 15 minutos - máximo suportado pela Netlify para funções serverless
@@ -247,6 +249,80 @@ async function processCampaignQueue(
     }
   };
 
+  async function handleSessionDropped(
+    instanceId: string,
+    instanceName: string,
+    probe: string
+  ): Promise<'stop' | 'none'> {
+    if (!messageIndicatesEvolutionSessionDropped(probe)) {
+      return 'none';
+    }
+    await maybeMarkEvolutionInstanceDisconnected(
+      supabaseServiceRole,
+      instanceId,
+      probe,
+      'campaigns/process'
+    );
+    console.warn(
+      `⚠️ [CAMPANHA ${campaignId}] Sessão Evolution caiu (${instanceName}). Instância marcada como desconectada em Instâncias WhatsApp (registro preservado).`
+    );
+
+    const remainingInstances = allowedInstances.filter((name) => name !== instanceName);
+    const availableRemaining = await getAvailableInstancesForCampaign(
+      userId,
+      preferUserBinding,
+      remainingInstances
+    );
+
+    if (remainingInstances.length > 0) {
+      await supabaseServiceRole
+        .from('campaigns')
+        .update({
+          instances: remainingInstances,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', campaignId);
+      allowedInstances = remainingInstances;
+      console.log(
+        `🔄 [CAMPANHA ${campaignId}] Instância ${instanceName} removida da lista da campanha. Restantes: ${remainingInstances.join(', ')}`
+      );
+
+      if (availableRemaining.length > 0) {
+        await supabaseServiceRole
+          .from('campaigns')
+          .update({
+            status: 'paused',
+            observation: `Campanha pausada automaticamente: instância ${instanceName} desconectou. Restam ${availableRemaining.length} instância(s) disponível(eis). Reconecte em Instâncias WhatsApp e retome quando quiser.`,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', campaignId);
+        failed++;
+        await rateLimitService.recordLeadUsage(campaignId, 1, false);
+        return 'stop';
+      }
+    }
+
+    if (remainingInstances.length === 0 || availableRemaining.length === 0) {
+      await supabaseServiceRole
+        .from('campaigns')
+        .update({
+          status: 'failed',
+          observation:
+            remainingInstances.length === 0
+              ? `Todas as instâncias da campanha caíram. Última: ${instanceName}`
+              : `Nenhuma instância disponível após desconexão de ${instanceName}.`,
+          completed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', campaignId);
+      failed++;
+      await rateLimitService.recordLeadUsage(campaignId, 1, false);
+      return 'stop';
+    }
+
+    return 'none';
+  }
+
   // Contadores
   let processed = 0;
   let failed = 0;
@@ -257,6 +333,7 @@ async function processCampaignQueue(
     const job = jobs[i];
     const jobNumber = i + 1;
     const normalizedPhone = normalizePhoneNumber(job.phone);
+    let jobInstance: { id: string; name: string } | null = null;
 
     // CRÍTICO: Verifica se a campanha foi excluída antes de processar cada job
     const { data: campaignCheck, error: checkError } = await supabaseServiceRole
@@ -389,7 +466,9 @@ async function processCampaignQueue(
         evolutionApiId: instance.evolution_api_id,
         evolutionApiBaseUrl: instance.evolution_api.base_url,
       });
-      
+
+      jobInstance = { id: instance.id, name: instance.instance_name };
+
       // Busca apikey da instância da tabela evolution_instances
       const { data: instanceData, error: instanceDataError } = await supabaseServiceRole
         .from('evolution_instances')
@@ -495,153 +574,12 @@ async function processCampaignQueue(
           })
           .eq('id', job.contactId);
       } else {
-        // Verifica se contém "Connection Closed" em qualquer lugar da resposta (mesmo com erro HTTP)
         const errorMsg = responseData?.message || responseText || `HTTP ${response.status}`;
-        
-        const isConnectionClosed = 
-          (typeof responseText === 'string' && responseText.toLowerCase().includes('connection closed')) ||
-          (typeof errorMsg === 'string' && errorMsg.toLowerCase().includes('connection closed')) ||
-          (responseData && JSON.stringify(responseData).toLowerCase().includes('connection closed'));
+        const sessionProbe = `${responseText}\n${typeof errorMsg === 'string' ? errorMsg : ''}\n${JSON.stringify(responseData)}`;
 
-        if (isConnectionClosed) {
-          console.warn(`⚠️ [CAMPANHA ${campaignId}] Possível "Connection Closed" detectado na instância ${instance.instance_name}. Verificando status real...`);
-          
-          // CRÍTICO: Verifica o status REAL da instância antes de marcar como desconectada
-          // Pode ser apenas um erro temporário na requisição específica
-          try {
-            const { data: instanceWithApi } = await supabaseServiceRole
-              .from('evolution_instances')
-              .select(`
-                *,
-                evolution_apis!inner (
-                  id,
-                  base_url,
-                  api_key_global
-                )
-              `)
-              .eq('id', instance.id)
-              .single();
-
-            if (instanceWithApi?.evolution_apis) {
-              const evolutionApi = Array.isArray(instanceWithApi.evolution_apis)
-                ? instanceWithApi.evolution_apis[0]
-                : instanceWithApi.evolution_apis;
-
-              if (evolutionApi?.api_key_global && evolutionApi?.base_url) {
-                // Verifica o status real na Evolution API
-                const realStateData = await evolutionService.getConnectionState(
-                  instance.instance_name,
-                  evolutionApi.api_key_global,
-                  evolutionApi.base_url
-                );
-                const realState = evolutionService.extractState(realStateData);
-
-                console.log(`🔍 [CAMPANHA ${campaignId}] Status real da instância ${instance.instance_name}: ${realState}`);
-
-                // Marca como desconectada se o status REAL confirmar ou se for "unknown" com Connection Closed
-                // "unknown" com Connection Closed geralmente indica que a instância caiu mas a API não retornou status claro
-                if (realState === 'disconnected' || (realState === 'unknown' && isConnectionClosed)) {
-                  const reason = realState === 'disconnected' 
-                    ? 'Status REAL confirmado: DESCONECTADA'
-                    : 'Status "unknown" com Connection Closed detectado - instância provavelmente caiu';
-                  
-                  console.error(`🔌 [CAMPANHA ${campaignId}] ${reason}. Instância ${instance.instance_name} será marcada como desconectada.`);
-                  
-                  // Desliga a instância que realmente caiu
-                  await supabaseServiceRole
-                    .from('evolution_instances')
-                    .update({
-                      status: 'disconnected',
-                      is_active: false,
-                      updated_at: new Date().toISOString(),
-                    })
-                    .eq('id', instance.id);
-                } else {
-                  // Instância ainda está conectada ou conectando - pode ser apenas um erro temporário
-                  console.log(`✅ [CAMPANHA ${campaignId}] Status REAL: Instância ${instance.instance_name} ainda está ${realState === 'connected' ? 'CONECTADA' : realState === 'connecting' ? 'CONECTANDO' : 'UNKNOWN (mas sem Connection Closed)'}. Não marcando como desconectada.`);
-                  
-                  // Continua o processamento normalmente sem remover a instância
-                  failed++;
-                  continue;
-                }
-              }
-            }
-          } catch (verifyError: any) {
-            // Se não conseguir verificar, não marca como desconectada
-            // Pode ser um erro temporário de rede ao verificar
-            console.error(`❌ [CAMPANHA ${campaignId}] Erro ao verificar status real da instância ${instance.instance_name}:`, verifyError.message);
-            console.log(`⚠️ [CAMPANHA ${campaignId}] Não marcando como desconectada por segurança - pode ser erro temporário.`);
-            
-            // Continua sem remover a instância
-            failed++;
-            continue;
-          }
-
-          // Remove a instância do pool da campanha (só se realmente caiu)
-          const remainingInstances = allowedInstances.filter(name => name !== instance.instance_name);
-          
-          // Verifica se há outras instâncias disponíveis
-          const availableRemaining = await getAvailableInstancesForCampaign(userId, preferUserBinding, remainingInstances);
-
-          // Atualiza a campanha removendo a instância que caiu
-          if (remainingInstances.length > 0) {
-            await supabaseServiceRole
-              .from('campaigns')
-              .update({
-                instances: remainingInstances,
-                updated_at: new Date().toISOString(),
-              })
-              .eq('id', campaignId);
-
-            // Atualiza allowedInstances localmente
-            allowedInstances = remainingInstances;
-
-            console.log(`🔄 [CAMPANHA ${campaignId}] Instância ${instance.instance_name} removida da campanha. Restantes: ${remainingInstances.join(', ')}`);
-
-            // Se ainda há instâncias disponíveis, pausa a campanha para o usuário decidir
-            if (availableRemaining.length > 0) {
-              console.warn(`⏸️ [CAMPANHA ${campaignId}] Instância ${instance.instance_name} caiu. Pausando campanha automaticamente. Restam ${availableRemaining.length} instância(s) disponível(eis).`);
-              
-              // PAUSA a campanha automaticamente quando uma instância cai
-              await supabaseServiceRole
-                .from('campaigns')
-                .update({
-                  status: 'paused',
-                  observation: `Campanha pausada automaticamente: Instância ${instance.instance_name} desconectou. Restam ${availableRemaining.length} instância(s) disponível(eis).`,
-                  updated_at: new Date().toISOString(),
-                })
-                .eq('id', campaignId);
-
-              failed++;
-              await rateLimitService.recordLeadUsage(campaignId, 1, false);
-              
-              // Para o processamento da fila imediatamente
-              break;
-            }
-          }
-
-          // Se não há mais instâncias disponíveis, falha a campanha
-          if (remainingInstances.length === 0 || availableRemaining.length === 0) {
-            console.error(`🚫 [CAMPANHA ${campaignId}] Última instância da campanha caiu. Encerrando campanha.`);
-            
-            await supabaseServiceRole
-              .from('campaigns')
-              .update({
-                status: 'failed',
-                observation: remainingInstances.length === 0 
-                  ? `Todas as instâncias da campanha caíram. Última: ${instance.instance_name}`
-                  : `Todas as instâncias disponíveis da campanha caíram.`,
-                completed_at: new Date().toISOString(),
-                updated_at: new Date().toISOString(),
-              })
-              .eq('id', campaignId);
-
-            failed++;
-            await rateLimitService.recordLeadUsage(campaignId, 1, false);
-            
-            // Para o processamento da fila imediatamente
-            break;
-          }
+        const stopped = await handleSessionDropped(instance.id, instance.instance_name, sessionProbe);
+        if (stopped === 'stop') {
+          break;
         }
 
         failed++;
@@ -747,153 +685,33 @@ async function processCampaignQueue(
     } catch (error: any) {
       const errorMsg = error?.message || String(error);
       console.error(`❌ [CAMPANHA ${campaignId}] Job ${jobNumber}: ERRO:`, errorMsg);
-      
-      // Tenta identificar qual instância estava sendo usada (se houver)
-      let instanceName: string | null = null;
-      try {
-        const testInstance = await pickInstanceByDistributionMode(
-          userId,
-          preferUserBinding,
-          allowedInstances,
-          distributionMode,
-          i
-        );
-        instanceName = testInstance?.instance_name || null;
-      } catch {
-        // Se não conseguir identificar, continua
+
+      if (jobInstance) {
+        const stopped = await handleSessionDropped(jobInstance.id, jobInstance.name, errorMsg);
+        if (stopped === 'stop') {
+          break;
+        }
       }
-      
-      // Verifica se o erro indica que a instância caiu (fetch error)
-      const isConnectionError = 
-        errorMsg.toLowerCase().includes('connection closed') ||
+
+      const isConnectionError =
+        messageIndicatesEvolutionSessionDropped(errorMsg) ||
         errorMsg.toLowerCase().includes('econnreset') ||
         errorMsg.toLowerCase().includes('socket hang up');
 
-      if (isConnectionError && instanceName) {
-        console.error(`🔌 [CAMPANHA ${campaignId}] Erro de conexão crítico detectado no job ${jobNumber}! Instância ${instanceName} pode ter caído.`);
-        
-        // Verifica o status real da instância antes de marcar como desconectada
-        try {
-          const { data: instanceWithApi } = await supabaseServiceRole
-            .from('evolution_instances')
-            .select(`
-              *,
-              evolution_apis!inner (
-                id,
-                base_url,
-                api_key_global
-              )
-            `)
-            .eq('instance_name', instanceName)
-            .single();
-
-          if (instanceWithApi?.evolution_apis) {
-            const evolutionApi = Array.isArray(instanceWithApi.evolution_apis)
-              ? instanceWithApi.evolution_apis[0]
-              : instanceWithApi.evolution_apis;
-
-            if (evolutionApi?.api_key_global && evolutionApi?.base_url) {
-              // Verifica o status real na Evolution API
-              const realStateData = await evolutionService.getConnectionState(
-                instanceName,
-                evolutionApi.api_key_global,
-                evolutionApi.base_url
-              );
-              const realState = evolutionService.extractState(realStateData);
-
-              console.log(`🔍 [CAMPANHA ${campaignId}] Status real da instância ${instanceName} após erro de conexão: ${realState}`);
-
-              // Só marca como desconectada se o status REAL confirmar
-              if (realState === 'disconnected') {
-                // Desliga a instância que realmente caiu
-                await supabaseServiceRole
-                  .from('evolution_instances')
-                  .update({
-                    status: 'disconnected',
-                    is_active: false,
-                    updated_at: new Date().toISOString(),
-                  })
-                  .eq('instance_name', instanceName);
-
-                // Remove a instância do pool da campanha
-                const remainingInstances = allowedInstances.filter(name => name !== instanceName);
-                
-                // Verifica se há outras instâncias disponíveis
-                const availableRemaining = await getAvailableInstancesForCampaign(userId, preferUserBinding, remainingInstances);
-
-                // Atualiza a campanha removendo a instância que caiu
-                if (remainingInstances.length > 0 && availableRemaining.length > 0) {
-                  await supabaseServiceRole
-                    .from('campaigns')
-                    .update({
-                      instances: remainingInstances,
-                      status: 'paused',
-                      observation: `Campanha pausada automaticamente: Instância ${instanceName} desconectou devido a erro de conexão. Restam ${availableRemaining.length} instância(s) disponível(eis).`,
-                      updated_at: new Date().toISOString(),
-                    })
-                    .eq('id', campaignId);
-
-                  allowedInstances = remainingInstances;
-
-                  console.warn(`⏸️ [CAMPANHA ${campaignId}] Instância ${instanceName} desconectou. Campanha pausada automaticamente. Restantes: ${remainingInstances.join(', ')}`);
-                  
-                  failed++;
-                  await rateLimitService.recordLeadUsage(campaignId, 1, false);
-                  
-                  // Para o processamento da fila imediatamente
-                  break;
-                } else {
-                  // Não há mais instâncias disponíveis - falha a campanha
-                  console.error(`🚫 [CAMPANHA ${campaignId}] Última instância caiu por erro de conexão. Encerrando campanha.`);
-                  
-                  await supabaseServiceRole
-                    .from('campaigns')
-                    .update({
-                      status: 'failed',
-                      observation: `Erro crítico de conexão: ${errorMsg}. Todas as instâncias caíram.`,
-                      completed_at: new Date().toISOString(),
-                      updated_at: new Date().toISOString(),
-                    })
-                    .eq('id', campaignId);
-                    
-                  failed++;
-                  await rateLimitService.recordLeadUsage(campaignId, 1, false);
-                  
-                  break;
-                }
-              } else {
-                // Instância ainda está conectada - pode ser apenas um erro temporário
-                console.log(`✅ [CAMPANHA ${campaignId}] Status REAL: Instância ${instanceName} ainda está ${realState === 'connected' ? 'CONECTADA' : 'CONECTANDO'}. Tratando como erro temporário.`);
-                
-                failed++;
-                continue;
-              }
-            }
-          }
-        } catch (verifyError: any) {
-          // Se não conseguir verificar, trata como erro temporário
-          console.error(`❌ [CAMPANHA ${campaignId}] Erro ao verificar status real da instância ${instanceName}:`, verifyError.message);
-          console.log(`⚠️ [CAMPANHA ${campaignId}] Tratando como erro temporário por segurança.`);
-          
-          failed++;
-          continue;
-        }
-      } else if (isConnectionError) {
-        // Erro de conexão mas não conseguiu identificar a instância
-        console.error(`🚫 [CAMPANHA ${campaignId}] Erro de conexão sem instância identificada. Pausando campanha por segurança.`);
-        
+      if (isConnectionError && !jobInstance) {
+        console.error(
+          `🚫 [CAMPANHA ${campaignId}] Erro de rede/sessão sem instância associada ao job. Pausando campanha.`
+        );
         await supabaseServiceRole
           .from('campaigns')
           .update({
             status: 'paused',
-            observation: `Erro crítico de conexão sem instância identificada: ${errorMsg}. Campanha pausada por segurança.`,
+            observation: `Erro crítico sem instância identificada no job: ${errorMsg.slice(0, 240)}`,
             updated_at: new Date().toISOString(),
           })
           .eq('id', campaignId);
-          
         failed++;
         await rateLimitService.recordLeadUsage(campaignId, 1, false);
-        
         break;
       }
 

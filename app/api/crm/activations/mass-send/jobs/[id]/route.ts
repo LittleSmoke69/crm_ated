@@ -13,6 +13,7 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { triggerMassSendProcessChained } from '@/lib/crm/trigger-mass-send-chained';
+import { normalizeActivationMassSendInstanceNames } from '@/lib/crm/mass-send-instance-names';
 
 export const dynamic = 'force-dynamic';
 
@@ -68,17 +69,21 @@ export async function GET(
 
     // Busca nomes dos grupos na tabela whatsapp_groups para exibir no modal.
     const allGroupIds = Array.isArray(job.group_ids) ? (job.group_ids as string[]) : [];
+    const instanceNamesForLookup = normalizeActivationMassSendInstanceNames(
+      job.instance_names,
+      String(job.instance_name || '')
+    );
     let groupNameMap: Record<string, string> = {};
-    if (allGroupIds.length > 0) {
+    if (allGroupIds.length > 0 && instanceNamesForLookup.length > 0) {
       const { data: groupNames } = await supabaseServiceRole
         .from('whatsapp_groups')
         .select('group_id, group_subject')
-        .eq('instance_name', job.instance_name)
+        .in('instance_name', instanceNamesForLookup)
         .eq('user_id', userId)
         .in('group_id', allGroupIds);
       if (Array.isArray(groupNames)) {
         for (const g of groupNames) {
-          if (g.group_id && g.group_subject) {
+          if (g.group_id && g.group_subject && !groupNameMap[g.group_id]) {
             groupNameMap[g.group_id] = g.group_subject;
           }
         }
@@ -171,6 +176,7 @@ export async function PATCH(
       return errorResponse('Só é possível retomar campanhas pausadas.', 400);
     }
 
+    // Retomada: só status → pending; processed_index e group_ids permanecem (fila continua do índice atual).
     const { error: upErr } = await supabaseServiceRole
       .from('activation_mass_send_jobs')
       .update({ status: 'pending', updated_at: now })

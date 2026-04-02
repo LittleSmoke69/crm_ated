@@ -11,6 +11,7 @@ import { canAccessGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import {
   getMetaConfig,
+  listMetaIntegrationsForBanca,
   upsertMetaConfig,
 } from '@/lib/services/meta-sync-service';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
@@ -89,10 +90,11 @@ export async function GET(req: NextRequest) {
     const canAccess = await userCanAccessBanca(userId, profile, bancaId);
     if (!canAccess) return errorResponse('Você não tem permissão para acessar esta banca.', 403);
 
-    const config = await getMetaConfig(bancaId);
-    if (!config) {
+    const integrationsList = await listMetaIntegrationsForBanca(bancaId);
+    if (integrationsList.length === 0) {
       return successResponse({
         configured: false,
+        integrations: [],
         base_url: 'https://graph.facebook.com/v19.0',
         token_last4: null,
         ad_account_id: null,
@@ -105,17 +107,31 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    const primary = integrationsList[0];
     return successResponse({
       configured: true,
-      base_url: config.base_url,
-      token_last4: config.token_last4 ? `••••${config.token_last4}` : null,
-      ad_account_id: config.ad_account_id,
-      pixel_id: config.pixel_id,
-      default_campaign_id: config.default_campaign_id,
-      is_active: config.is_active,
-      last_sync_at: config.last_sync_at,
-      last_sync_error: config.last_sync_error,
-      last_sync_date_preset: config.last_sync_date_preset,
+      integration_id: primary.id,
+      integrations: integrationsList.map((c) => ({
+        integration_id: c.id,
+        base_url: c.base_url,
+        token_last4: c.token_last4 ? `••••${c.token_last4}` : null,
+        ad_account_id: c.ad_account_id,
+        pixel_id: c.pixel_id,
+        default_campaign_id: c.default_campaign_id,
+        is_active: c.is_active,
+        last_sync_at: c.last_sync_at,
+        last_sync_error: c.last_sync_error,
+        last_sync_date_preset: c.last_sync_date_preset,
+      })),
+      base_url: primary.base_url,
+      token_last4: primary.token_last4 ? `••••${primary.token_last4}` : null,
+      ad_account_id: primary.ad_account_id,
+      pixel_id: primary.pixel_id,
+      default_campaign_id: primary.default_campaign_id,
+      is_active: primary.is_active,
+      last_sync_at: primary.last_sync_at,
+      last_sync_error: primary.last_sync_error,
+      last_sync_date_preset: primary.last_sync_date_preset,
     });
   } catch (err: any) {
     if (err?.message?.includes('Acesso negado') || err?.message?.includes('Não autenticado')) {
@@ -154,6 +170,17 @@ export async function PUT(req: NextRequest) {
 
     // Gestor: só pode alterar Ad Account, Pixel e Campanha padrão; URL e token ficam travados (apenas admin)
     const isGestor = profile.status?.trim().toLowerCase() === 'gestor';
+    const integrationIdBody =
+      body?.integration_id != null && String(body.integration_id).trim() !== ''
+        ? String(body.integration_id).trim()
+        : undefined;
+    const createNew = body.create_new_integration === true;
+    const reuseTokenFrom =
+      body.reuse_token_from_integration_id != null &&
+      String(body.reuse_token_from_integration_id).trim() !== ''
+        ? String(body.reuse_token_from_integration_id).trim()
+        : null;
+
     const payload: Record<string, unknown> = {
       ad_account_id: body.ad_account_id,
       pixel_id: body.pixel_id,
@@ -164,15 +191,30 @@ export async function PUT(req: NextRequest) {
       payload.base_url = body.base_url;
       payload.access_token = body.access_token;
     } else {
-      // Mantém URL existente (serviço não deve sobrescrever com default)
-      const existing = await getMetaConfig(bancaId);
-      if (existing?.base_url) payload.base_url = existing.base_url;
+      let keepBase = 'https://graph.facebook.com/v19.0';
+      if (integrationIdBody) {
+        const { data } = await supabaseServiceRole
+          .from('meta_integration_configs')
+          .select('base_url')
+          .eq('id', integrationIdBody)
+          .maybeSingle();
+        if (data?.base_url) keepBase = String(data.base_url);
+      } else {
+        const existing = await getMetaConfig(bancaId);
+        if (existing?.base_url) keepBase = existing.base_url;
+      }
+      payload.base_url = keepBase;
     }
 
-    const config = await upsertMetaConfig(bancaId, payload as Parameters<typeof upsertMetaConfig>[1]);
+    const config = await upsertMetaConfig(bancaId, payload as Parameters<typeof upsertMetaConfig>[1], null, {
+      integration_id: integrationIdBody ?? null,
+      create_new: createNew,
+      reuse_token_from_integration_id: reuseTokenFrom,
+    });
 
     return successResponse({
       configured: true,
+      integration_id: config.id,
       base_url: config.base_url,
       token_last4: config.token_last4 ? `••••${config.token_last4}` : null,
       ad_account_id: config.ad_account_id,

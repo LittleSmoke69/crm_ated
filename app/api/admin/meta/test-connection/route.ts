@@ -6,7 +6,7 @@
 import { NextRequest } from 'next/server';
 import { requireAdmin } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
-import { testConnection } from '@/lib/services/meta-sync-service';
+import { isMetaIntegrationLinkedToBanca, testConnection } from '@/lib/services/meta-sync-service';
 
 export async function POST(req: NextRequest) {
   try {
@@ -17,7 +17,16 @@ export async function POST(req: NextRequest) {
       return errorResponse('banca_id é obrigatório', 400);
     }
 
-    const result = await testConnection(bancaId);
+    const integrationId =
+      body?.integration_id != null && String(body.integration_id).trim() !== ''
+        ? String(body.integration_id).trim()
+        : null;
+    if (integrationId) {
+      const linked = await isMetaIntegrationLinkedToBanca(integrationId, String(bancaId));
+      if (!linked) return errorResponse('integration_id não pertence a esta banca.', 400);
+    }
+
+    const result = await testConnection(String(bancaId), integrationId);
     if (!result.success) {
       console.log('[admin/meta API] POST test-connection resposta', {
         banca_id: bancaId,

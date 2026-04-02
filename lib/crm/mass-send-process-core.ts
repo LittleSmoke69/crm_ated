@@ -1,8 +1,27 @@
 /**
- * Worker de campanhas de disparo em massa (ativações).
- * Cada chamada processa vários grupos até o budget (CALL_BUDGET_MS), persiste via RPC
- * e renova lock enquanto status = processing. Ao esgotar o budget, libera o lock e
- * Encadeamento: a route /mass-send/process usa after() + triggerMassSendProcessFromOrigin.
+ * Worker de campanhas de disparo em massa (ativações CRM / ZapTurboMax).
+ *
+ * CONTRATO — fila SEQUENCIAL por job (não é broadcast paralelo por grupo):
+ * - `activation_mass_send_jobs.group_ids` define a ordem; o próximo destino é
+ *   sempre `group_ids[processed_index]` (0-based).
+ * - Após cada tentativa (sucesso ou falha), `processed_index` avança via RPC
+ *   `increment_mass_send_job_counts` + linha em `activation_mass_send_job_groups`.
+ * - Entre um grupo e o próximo: aguarda `inter_group_delay_ms` no job (0 = padrão
+ *   MASS_SEND_DEFAULT_INTER_GROUP_DELAY_MS ou 1s), inclusive entre invocações HTTP.
+ * - Várias invocações HTTP (cron Netlify, POST /mass-send/process com CRON_SECRET)
+ *   reentram no mesmo job: lock `locked_at`/`locked_by` + TTL evita dois workers;
+ *   heartbeat renova o lock entre grupos no mesmo lote.
+ * - Uma única chamada pode processar VÁRIOS grupos em sequência dentro de
+ *   CALL_BUDGET_MS — mas um envio Evolution por vez no loop (await), nunca
+ *   Promise.all sobre toda a lista.
+ * - Estados: pending → processing → completed | failed | paused. Pausar/retomar
+ *   (PATCH jobs/[id]) NÃO reseta `processed_index` (resume só coloca status pending).
+ * - O cliente que cria a campanha recebe 202 e acompanha na UI; não assumir que
+ *   todos os grupos foram enviados na mesma requisição do usuário.
+ * - Novo job para subset = reenvio explícito; não deduplicar entre campanhas diferentes.
+ *
+ * Encadeamento quando ainda há pendências: route /mass-send/process usa after() +
+ * triggerMassSendProcessFromOrigin (ou cron Netlify chama a mesma lógica).
  */
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { resolveEvolutionInstanceForActivation } from '@/lib/crm/resolve-evolution-instance-for-activation';
@@ -13,6 +32,11 @@ import {
   isMassSendTransientRetryable,
 } from '@/lib/crm/mass-send-group-idempotency';
 import { maybeMarkEvolutionInstanceDisconnected } from '@/lib/evolution/mark-instance-disconnected';
+import { resolveInterGroupDelayMs } from '@/lib/crm/mass-send-inter-group-delay';
+import {
+  instanceNameForMassSendGroupIndex,
+  normalizeActivationMassSendInstanceNames,
+} from '@/lib/crm/mass-send-instance-names';
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
@@ -392,7 +416,9 @@ async function sendGroupToEvolution(ctx: EvolutionContext, groupId: string): Pro
       `instance_id: ${ctx.instanceId}`,
     ].filter(Boolean).join(' | ');
     console.error(`[MassSend] FETCH FALHOU: ${detail}`);
-    return { success: false, error: detail, fetchDiag };
+    void maybeMarkEvolutionInstanceDisconnected(supabaseServiceRole, ctx.instanceId, detail, 'activation-mass-send-fetch');
+    const userFacing = sanitizeMassSendErrorMessage(detail) || detail;
+    return { success: false, error: userFacing, fetchDiag };
   }
 }
 
@@ -525,12 +551,10 @@ async function reconcileFinalCounts(jobId: string): Promise<void> {
 
 /** Budget por API call — margem para timeout ~60s do gateway. */
 const CALL_BUDGET_MS = 45_000;
-/** Intervalo mínimo entre grupos (ritmo estável sem pausas artificiais). */
-const INTER_GROUP_DELAY_MS = 500;
 /** Checagem de pausa no DB a cada N iterações (a RPC renova locked_at a cada grupo). */
 const PAUSE_POLL_EVERY = 5;
 
-// ─── Orquestrador: processa MÚLTIPLOS grupos por chamada (budget 40s) ────────
+// ─── Orquestrador: vários grupos por invocação, um após o outro (mesmo budget) ─
 
 export async function executeMassSendProcess(_publicOrigin?: string | null): Promise<ApiResponse> {
   const callStart = Date.now();
@@ -539,7 +563,9 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
   // 1. Busca próximo job pendente/processing com lock disponível
   const { data: jobs } = await supabaseServiceRole
     .from('activation_mass_send_jobs')
-    .select('id, user_id, message_id, instance_name, group_ids, total_groups, processed_index, status')
+    .select(
+      'id, user_id, message_id, instance_name, instance_names, group_ids, total_groups, processed_index, status, inter_group_delay_ms'
+    )
     .in('status', ['pending', 'processing'])
     .or(`locked_at.is.null,locked_at.lt.${lockExpired}`)
     .order('created_at', { ascending: true })
@@ -591,20 +617,48 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
     return { success: true, data: { processed: true, job_id: job.id, status: 'paused' } };
   }
 
-  // 4. Build context UMA VEZ (mensagem + instância)
-  const ctxResult = await buildEvolutionContext(job);
-  if ('error' in ctxResult) {
-    console.error(`[MassSend] Job ${shortId(job.id)} erro contexto: ${ctxResult.error}`);
+  // 4. Instância(s) em rotação: um EvolutionContext por nome único
+  const rotationNames = normalizeActivationMassSendInstanceNames(
+    (job as { instance_names?: unknown }).instance_names,
+    job.instance_name
+  );
+  if (rotationNames.length === 0) {
+    const msg = 'Campanha sem instância configurada';
     await supabaseServiceRole
       .from('activation_mass_send_jobs')
-      .update({ status: 'failed', last_error: ctxResult.error, locked_at: null, locked_by: null, updated_at: new Date().toISOString() })
+      .update({ status: 'failed', last_error: msg, locked_at: null, locked_by: null, updated_at: new Date().toISOString() })
       .eq('id', job.id);
-    return { success: false, error: ctxResult.error };
+    return { success: false, error: msg };
   }
 
-  const { ctx } = ctxResult;
+  const uniqueRotation = [...new Set(rotationNames)];
+  const ctxByInstanceName = new Map<string, EvolutionContext>();
+  for (const iname of uniqueRotation) {
+    const ctxResult = await buildEvolutionContext({ ...job, instance_name: iname });
+    if ('error' in ctxResult) {
+      console.error(`[MassSend] Job ${shortId(job.id)} erro contexto (${iname}): ${ctxResult.error}`);
+      await supabaseServiceRole
+        .from('activation_mass_send_jobs')
+        .update({
+          status: 'failed',
+          last_error: `${iname}: ${ctxResult.error}`,
+          locked_at: null,
+          locked_by: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', job.id);
+      return { success: false, error: ctxResult.error };
+    }
+    ctxByInstanceName.set(iname, ctxResult.ctx);
+  }
+
+  const interGroupDelayMs = resolveInterGroupDelayMs(
+    (job as { inter_group_delay_ms?: number | null }).inter_group_delay_ms
+  );
   if (process.env.DEBUG_MASS_SEND === '1') {
-    console.log(`[MassSend] Job ${shortId(job.id)} | Evolution: ${ctx.baseUrl} | tipo: ${ctx.message.message_type} | grupos: ${currentIndex + 1}-?/${total}`);
+    console.log(
+      `[MassSend] Job ${shortId(job.id)} | instâncias: ${uniqueRotation.join(', ')} | tipo: ${[...ctxByInstanceName.values()][0]?.message.message_type} | grupos: ${currentIndex + 1}-?/${total} | inter_delay=${interGroupDelayMs}ms`
+    );
   }
 
   /** Grupos que já têm linha em job_groups com success=true — não reenvia (idempotência / duplicata na lista). */
@@ -635,9 +689,9 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
 
     const groupId = groupIds[currentIndex];
 
-    // Delay 1s entre grupos (a partir do 2º nesta call)
-    if (currentIndex > (Number(job.processed_index) || 0)) {
-      await new Promise((r) => setTimeout(r, INTER_GROUP_DELAY_MS));
+    // Pausa entre disparos (personalizado no job ou padrão), inclusive após retomar em nova invocação
+    if (currentIndex > 0) {
+      await new Promise((r) => setTimeout(r, interGroupDelayMs));
     }
 
     if (loopTick % PAUSE_POLL_EVERY === 0) {
@@ -684,41 +738,48 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
       }
       result = { success: true };
     } else {
-      // Envia para Evolution (com retry)
-      const t0 = Date.now();
-      result = await sendGroupToEvolution(ctx, groupId);
-
-      for (
-        let attempt = 0;
-        attempt < retryDelays.length && !result.success && isMassSendTransientRetryable(result.error);
-        attempt++
-      ) {
-        const delay = retryDelays[attempt];
-        const dbSnap = await evolutionInstanceDbStatusLine(ctx.instanceId);
-        const errLower = String(result.error || '').toLowerCase();
-        const hint = interpretEvolutionFetchFailure(result.fetchDiag, errLower);
-        const tech = formatFetchDiagShort(result.fetchDiag);
-        console.warn(
-          `[MassSend] [${currentIndex + 1}/${total}] ${groupId} retry ${attempt + 1}/${retryDelays.length} em ${delay / 1000}s | ${hint} | ${tech} | ${dbSnap} | erro="${String(result.error || '').slice(0, 280)}"`
-        );
-        await new Promise((r) => setTimeout(r, delay));
-        result = await sendGroupToEvolution(ctx, groupId);
-      }
-
-      const duration = Date.now() - t0;
-      if (result.success) {
-        if (process.env.DEBUG_MASS_SEND === '1') {
-          console.log(`[MassSend] [${currentIndex + 1}/${total}] ${groupId} OK (${duration}ms)`);
-        }
-        totalSent++;
-        succeededGroupIds.add(groupId);
-      } else {
-        const dbSnap = await evolutionInstanceDbStatusLine(ctx.instanceId);
-        const hint = interpretEvolutionFetchFailure(result.fetchDiag, String(result.error || '').toLowerCase());
-        console.error(
-          `[MassSend] [${currentIndex + 1}/${total}] ${groupId} FALHA (${duration}ms) | ${hint} | ${dbSnap} | erro="${String(result.error || '').slice(0, 300)}"`
-        );
+      const iname = instanceNameForMassSendGroupIndex(rotationNames, currentIndex);
+      const ctx = ctxByInstanceName.get(iname);
+      if (!ctx) {
+        result = { success: false, error: `Contexto Evolution ausente para «${iname}»` };
         totalFailed++;
+      } else {
+        // Envia para Evolution (com retry)
+        const t0 = Date.now();
+        result = await sendGroupToEvolution(ctx, groupId);
+
+        for (
+          let attempt = 0;
+          attempt < retryDelays.length && !result.success && isMassSendTransientRetryable(result.error);
+          attempt++
+        ) {
+          const delay = retryDelays[attempt];
+          const dbSnap = await evolutionInstanceDbStatusLine(ctx.instanceId);
+          const errLower = String(result.error || '').toLowerCase();
+          const hint = interpretEvolutionFetchFailure(result.fetchDiag, errLower);
+          const tech = formatFetchDiagShort(result.fetchDiag);
+          console.warn(
+            `[MassSend] [${currentIndex + 1}/${total}] ${groupId} retry ${attempt + 1}/${retryDelays.length} em ${delay / 1000}s | ${hint} | ${tech} | ${dbSnap} | erro="${String(result.error || '').slice(0, 280)}"`
+          );
+          await new Promise((r) => setTimeout(r, delay));
+          result = await sendGroupToEvolution(ctx, groupId);
+        }
+
+        const duration = Date.now() - t0;
+        if (result.success) {
+          if (process.env.DEBUG_MASS_SEND === '1') {
+            console.log(`[MassSend] [${currentIndex + 1}/${total}] ${groupId} OK (${duration}ms) via ${iname}`);
+          }
+          totalSent++;
+          succeededGroupIds.add(groupId);
+        } else {
+          const dbSnap = await evolutionInstanceDbStatusLine(ctx.instanceId);
+          const hint = interpretEvolutionFetchFailure(result.fetchDiag, String(result.error || '').toLowerCase());
+          console.error(
+            `[MassSend] [${currentIndex + 1}/${total}] ${groupId} FALHA (${duration}ms) via ${iname} | ${hint} | ${dbSnap} | erro="${String(result.error || '').slice(0, 300)}"`
+          );
+          totalFailed++;
+        }
       }
     }
 

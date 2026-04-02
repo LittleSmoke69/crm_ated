@@ -61,16 +61,17 @@ async function resolveInsightsForMetrics(args: {
   }
 
   const singleDay = dateFrom === dateTo;
-  const canFallback = singleDay && scopeBancaId && (insightsRows?.length ?? 0) === 0;
+  const canFallback = singleDay && (insightsRows?.length ?? 0) === 0;
 
   if (canFallback) {
+    // Fallback: busca o último dia com dados para a banca (ou globalmente para todas as bancas)
     let latestDateQuery = supabaseServiceRole
       .from('meta_insights_daily')
       .select('date')
       .lte('date', dateTo)
       .order('date', { ascending: false })
-      .limit(1)
-      .eq('banca_id', scopeBancaId);
+      .limit(1);
+    if (scopeBancaId) latestDateQuery = latestDateQuery.eq('banca_id', scopeBancaId);
     const latestDateRes = await latestDateQuery.maybeSingle();
     const fallbackDate =
       !latestDateRes.error && latestDateRes.data?.date ? String(latestDateRes.data.date) : null;
@@ -84,7 +85,7 @@ async function resolveInsightsForMetrics(args: {
         console.log('[admin/meta/campaigns-all] fallback período sem insights no dia (métricas por campanha)', {
           requested_date: dateFrom,
           applied_date: fallbackDate,
-          banca_id: scopeBancaId,
+          banca_id: scopeBancaId ?? 'todas',
           insights_rows: insightsRows.length,
         });
       }

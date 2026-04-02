@@ -48,6 +48,12 @@ type OverviewRow = {
   banca_id: string;
   banca_name: string;
   banca_url: string;
+  /** UUID em meta_integration_configs ou meta_integrations (legado); null se sem integração. */
+  integration_id: string | null;
+  /** Quantas integrações distintas esta banca possui (vínculos compartilhados + legado, se aplicável). */
+  integrations_count: number;
+  /** 1..N entre linhas da mesma banca; 0 se sem integração. */
+  integration_index: number;
   configured: boolean;
   is_active: boolean;
   base_url: string | null;
@@ -116,7 +122,8 @@ export async function GET(req: NextRequest) {
       })(),
       supabaseServiceRole
         .from('meta_integration_bancas')
-        .select('banca_id, integration_id'),
+        .select('banca_id, integration_id, created_at')
+        .order('created_at', { ascending: true }),
       supabaseServiceRole
         .from('meta_integration_configs')
         .select('id, is_active, base_url, token_last4, ad_account_id, pixel_id, default_campaign_id, last_sync_at, last_sync_error, last_sync_date_preset'),
@@ -143,7 +150,7 @@ export async function GET(req: NextRequest) {
       supabaseServiceRole
         .from('meta_integrations')
         .select(
-          'banca_id, is_active, base_url, token_last4, ad_account_id, pixel_id, default_campaign_id, last_sync_at, last_sync_error, last_sync_date_preset'
+          'id, banca_id, is_active, base_url, token_last4, ad_account_id, pixel_id, default_campaign_id, last_sync_at, last_sync_error, last_sync_date_preset'
         ),
     ]);
 
@@ -229,16 +236,22 @@ export async function GET(req: NextRequest) {
     const configById = new Map<string, MetaIntegrationConfigRow>(
       (configs as MetaIntegrationConfigRow[]).map((c) => [String(c.id), c])
     );
-    const integrationByBanca = new Map<string, MetaIntegrationConfigRow>();
+    /** Todas as integrações compartilhadas vinculadas à banca (ordem de vínculo). */
+    const integrationsListByBanca = new Map<string, MetaIntegrationConfigRow[]>();
     for (const row of links as { banca_id: string; integration_id: string }[]) {
       const bancaKey = String(row.banca_id);
       const cfg = configById.get(String(row.integration_id));
-      if (cfg) integrationByBanca.set(bancaKey, cfg);
+      if (!cfg) continue;
+      const list = integrationsListByBanca.get(bancaKey) ?? [];
+      const idStr = String(cfg.id);
+      if (!list.some((c) => String(c.id) === idStr)) list.push(cfg);
+      integrationsListByBanca.set(bancaKey, list);
     }
 
-    /** Modelo antigo (por banca): usado quando ainda não há linha em meta_integration_bancas. */
+    /** Legado por banca (meta_integrations), em paralelo ao modelo compartilhado quando existir. */
     const legacyByBanca = new Map<string, MetaIntegrationConfigRow>();
     for (const row of legacyIntegrations as {
+      id?: string;
       banca_id: string;
       is_active?: boolean | null;
       base_url?: string | null;
@@ -253,7 +266,7 @@ export async function GET(req: NextRequest) {
       if (!row?.banca_id) continue;
       const bancaKey = String(row.banca_id);
       legacyByBanca.set(bancaKey, {
-        id: '',
+        id: row.id != null ? String(row.id) : '',
         is_active: row.is_active !== false,
         base_url: row.base_url ?? null,
         token_last4: row.token_last4 ?? null,
@@ -264,6 +277,17 @@ export async function GET(req: NextRequest) {
         last_sync_error: row.last_sync_error ?? null,
         last_sync_date_preset: row.last_sync_date_preset ?? null,
       });
+    }
+
+    function integrationSlicesForBanca(bancaKey: string): MetaIntegrationConfigRow[] {
+      const shared = integrationsListByBanca.get(bancaKey) ?? [];
+      const out = [...shared];
+      const leg = legacyByBanca.get(bancaKey);
+      if (leg && String(leg.id || '').trim() !== '') {
+        const dup = out.some((c) => String(c.id) === String(leg.id));
+        if (!dup) out.push(leg);
+      }
+      return out;
     }
 
     const campaignsByBanca = new Map<string, OverviewRow['campaigns']>();
@@ -365,44 +389,86 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const rows: OverviewRow[] = bancas.map((banca) => {
-      const bancaKey = String(banca.id);
-      const integration = integrationByBanca.get(bancaKey) ?? legacyByBanca.get(bancaKey);
-      return {
-        banca_id: banca.id,
-        banca_name: banca.name || banca.url || banca.id,
-        banca_url: banca.url || '',
-        configured: Boolean(integration),
-        is_active: integration?.is_active ?? false,
-        base_url: integration?.base_url ?? null,
-        // Retorna apenas os 4 últimos dígitos (sem máscara) para o client mascarar uma vez.
-        token_last4: integration?.token_last4 ?? null,
-        ad_account_id: integration?.ad_account_id ?? null,
-        pixel_id: integration?.pixel_id ?? null,
-        default_campaign_id: integration?.default_campaign_id ?? null,
-        last_sync_at: integration?.last_sync_at ?? null,
-        last_sync_error: integration?.last_sync_error ?? null,
-        last_sync_date_preset: integration?.last_sync_date_preset ?? null,
-        metrics: metricsByBanca.get(bancaKey) ?? {
-          reach: 0,
-          impressions: 0,
-          clicks: 0,
-          leads: 0,
-          spend: 0,
-          insights_rows: 0,
-        },
-        campaigns: campaignsByBanca.get(bancaKey) ?? { total: 0, active: 0, sample: [] },
-      };
-    });
+    const bancaNameById = new Map<string, string>(
+      (bancas as { id: string; name?: string | null; url?: string | null }[]).map((b) => [
+        String(b.id),
+        b.name || b.url || b.id,
+      ])
+    );
 
-    const totalsOverview = rows.reduce(
-      (acc, row) => {
-        acc.total_reach += Number(row.metrics.reach) || 0;
-        acc.total_impressions += Number(row.metrics.impressions) || 0;
-        acc.total_clicks += Number(row.metrics.clicks) || 0;
-        acc.total_spend += Number(row.metrics.spend) || 0;
-        acc.total_leads += Number(row.metrics.leads) || 0;
-        acc.insights_rows += Number(row.metrics.insights_rows) || 0;
+    const rows: OverviewRow[] = [];
+    for (const banca of bancas) {
+      const bancaKey = String(banca.id);
+      const slices = integrationSlicesForBanca(bancaKey);
+      const metrics = metricsByBanca.get(bancaKey) ?? {
+        reach: 0,
+        impressions: 0,
+        clicks: 0,
+        leads: 0,
+        spend: 0,
+        insights_rows: 0,
+      };
+      const campaigns = campaignsByBanca.get(bancaKey) ?? { total: 0, active: 0, sample: [] };
+      const n = slices.length;
+
+      if (n === 0) {
+        rows.push({
+          banca_id: banca.id,
+          banca_name: banca.name || banca.url || banca.id,
+          banca_url: banca.url || '',
+          integration_id: null,
+          integrations_count: 0,
+          integration_index: 0,
+          configured: false,
+          is_active: false,
+          base_url: null,
+          token_last4: null,
+          ad_account_id: null,
+          pixel_id: null,
+          default_campaign_id: null,
+          last_sync_at: null,
+          last_sync_error: null,
+          last_sync_date_preset: null,
+          metrics,
+          campaigns,
+        });
+        continue;
+      }
+
+      let idx = 0;
+      for (const integration of slices) {
+        idx += 1;
+        rows.push({
+          banca_id: banca.id,
+          banca_name: banca.name || banca.url || banca.id,
+          banca_url: banca.url || '',
+          integration_id: String(integration.id),
+          integrations_count: n,
+          integration_index: idx,
+          configured: true,
+          is_active: integration.is_active ?? false,
+          base_url: integration.base_url ?? null,
+          token_last4: integration.token_last4 ?? null,
+          ad_account_id: integration.ad_account_id ?? null,
+          pixel_id: integration.pixel_id ?? null,
+          default_campaign_id: integration.default_campaign_id ?? null,
+          last_sync_at: integration.last_sync_at ?? null,
+          last_sync_error: integration.last_sync_error ?? null,
+          last_sync_date_preset: integration.last_sync_date_preset ?? null,
+          metrics,
+          campaigns,
+        });
+      }
+    }
+
+    const totalsOverview = [...metricsByBanca.values()].reduce(
+      (acc, m) => {
+        acc.total_reach += Number(m.reach) || 0;
+        acc.total_impressions += Number(m.impressions) || 0;
+        acc.total_clicks += Number(m.clicks) || 0;
+        acc.total_spend += Number(m.spend) || 0;
+        acc.total_leads += Number(m.leads) || 0;
+        acc.insights_rows += Number(m.insights_rows) || 0;
         return acc;
       },
       {
@@ -414,22 +480,21 @@ export async function GET(req: NextRequest) {
         insights_rows: 0,
       }
     );
-    const topContributors = rows
-      .filter((row) => (Number(row.metrics.spend) || 0) > 0 || (Number(row.metrics.leads) || 0) > 0)
-      .sort((a, b) => (Number(b.metrics.spend) || 0) - (Number(a.metrics.spend) || 0))
+    const topContributors = [...metricsByBanca.entries()]
+      .filter(([, m]) => (Number(m.spend) || 0) > 0 || (Number(m.leads) || 0) > 0)
+      .sort((a, b) => (Number(b[1].spend) || 0) - (Number(a[1].spend) || 0))
       .slice(0, 10)
-      .map((row) => {
-        const bid = String(row.banca_id);
+      .map(([bid, rowMetrics]) => {
         const cpaMap = costPerActionByBanca.get(bid);
         return {
-          banca_id: row.banca_id,
-          banca_name: row.banca_name,
-          reach: Number(row.metrics.reach) || 0,
-          impressions: Number(row.metrics.impressions) || 0,
-          clicks: Number(row.metrics.clicks) || 0,
-          leads: Number(row.metrics.leads) || 0,
-          spend: Number(row.metrics.spend) || 0,
-          insights_rows: Number(row.metrics.insights_rows) || 0,
+          banca_id: bid,
+          banca_name: bancaNameById.get(bid) ?? bid,
+          reach: Number(rowMetrics.reach) || 0,
+          impressions: Number(rowMetrics.impressions) || 0,
+          clicks: Number(rowMetrics.clicks) || 0,
+          leads: Number(rowMetrics.leads) || 0,
+          spend: Number(rowMetrics.spend) || 0,
+          insights_rows: Number(rowMetrics.insights_rows) || 0,
           cost_per_action_type: cpaMap ? costPerActionMapForLog(cpaMap) : {},
         };
       });
@@ -446,8 +511,25 @@ export async function GET(req: NextRequest) {
       },
     });
 
+    // Conta campanhas com insights (mesma regra da soma de métricas — evita “1 sincronizada” com cards zerados)
+    const campaignsWithInsights = new Set<string>();
+    for (const row of insights) {
+      const bid = String((row as { banca_id: string }).banca_id);
+      const cid = String((row as { campaign_id?: string | null }).campaign_id ?? '');
+      if (activeOnly && allowedInsightKeys) {
+        if (!cid || !allowedInsightKeys.has(insightKey(bid, cid))) continue;
+      }
+      if (cid) campaignsWithInsights.add(`${bid}:${cid}`);
+    }
+
     return successResponse({
       rows,
+      totals: {
+        ...totalsOverview,
+        cost_per_action_type: costPerActionMapForLog(globalCostPerAction),
+      },
+      top_contributors: topContributors,
+      campaigns_synchronized: campaignsWithInsights.size,
       period: {
         date_from: appliedDateFrom ?? null,
         date_to: appliedDateTo ?? null,
