@@ -25,8 +25,14 @@ interface SendActivationsModalProps {
   userId: string;
   /** Quando true, pula o modal de escolha e abre direto em modo campanha em massa */
   defaultToMassSend?: boolean;
-  /** Repetir campanha: pré-seleciona instância(s) e grupos (aba Campanhas de disparo) */
-  repeatCampaignSeed?: { instanceName?: string; instanceNames?: string[]; groupIds: string[] } | null;
+  /** Repetir campanha: pré-seleciona grupos; instância(s) vêm do seed salvo, exceto se `reselectInstances`. */
+  repeatCampaignSeed?: {
+    instanceName?: string;
+    instanceNames?: string[];
+    groupIds: string[];
+    /** true = não pré-preenche instância; usuário escolhe antes de enviar (repetir com outra instância). */
+    reselectInstances?: boolean;
+  } | null;
   /** Após criar campanha em massa (ou reutilizar job existente), atualiza lista na aba Campanhas */
   onMassSendComplete?: () => void;
 }
@@ -44,6 +50,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [groups, setGroups] = useState<Group[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [instanceSearchQuery, setInstanceSearchQuery] = useState('');
   const [selectedGroups, setSelectedGroups] = useState<Set<string>>(new Set());
   const [sending, setSending] = useState(false);
   const [instances, setInstances] = useState<any[]>([]);
@@ -185,7 +192,10 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
       setShowChoiceModal(false);
       setShowScheduleModal(false);
     }
-    if (!isOpen) repeatSeedAppliedRef.current = false;
+    if (!isOpen) {
+      repeatSeedAppliedRef.current = false;
+      setInstanceSearchQuery('');
+    }
   }, [isOpen, userId, defaultToMassSend]);
 
   // Carrega instâncias e grupos do banco ao abrir (apenas quando for enviar agora)
@@ -200,19 +210,20 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
         if (data.success) {
           const pool = selectInstancesForActivationSend(data.data) as any[];
           setInstances(pool);
+          const reselect = repeatCampaignSeed?.reselectInstances === true;
           const seedMulti = (repeatCampaignSeed?.instanceNames || [])
             .map((x) => String(x ?? '').trim())
             .filter(Boolean);
           const seedName = repeatCampaignSeed?.instanceName?.trim();
           const poolNames = new Set(pool.map((i: { instance_name?: string }) => i.instance_name).filter(Boolean));
-          if (seedMulti.length > 0) {
+          if (reselect) {
+            setSelectedInstanceNames(new Set());
+          } else if (seedMulti.length > 0) {
             const valid = seedMulti.filter((n) => poolNames.has(n));
             setSelectedInstanceNames(new Set(valid.length ? valid : seedMulti));
           } else if (seedName) {
             const found = pool.find((i: { instance_name?: string }) => i.instance_name === seedName);
             setSelectedInstanceNames(new Set([found ? found.instance_name : seedName]));
-          } else if (pool.length > 0) {
-            setSelectedInstanceNames(new Set([pool[0].instance_name]));
           } else {
             setSelectedInstanceNames(new Set());
           }
@@ -237,6 +248,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
     showScheduleModal,
     repeatCampaignSeed?.instanceName,
     repeatCampaignSeed?.instanceNames,
+    repeatCampaignSeed?.reselectInstances,
   ]);
 
   // Repetir campanha: marca os mesmos group_ids após carregar lista do banco (uma vez por abertura)
@@ -264,6 +276,14 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
       setGroups([]);
     }
   }, [isOpen, userId, selectedInstancesKey, showChoiceModal, showScheduleModal]);
+
+  const filteredInstances = React.useMemo(() => {
+    const q = instanceSearchQuery.trim().toLowerCase();
+    if (!q) return instances;
+    return instances.filter((inst: { instance_name?: string }) =>
+      String(inst.instance_name || '').toLowerCase().includes(q)
+    );
+  }, [instances, instanceSearchQuery]);
 
   const filteredGroups = groups.filter(g => 
     g.subject.toLowerCase().includes(searchQuery.toLowerCase())
@@ -298,12 +318,8 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
   const toggleInstanceName = (name: string) => {
     setSelectedInstanceNames((prev) => {
       const next = new Set(prev);
-      if (next.has(name)) {
-        if (next.size <= 1) return prev;
-        next.delete(name);
-      } else {
-        next.add(name);
-      }
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
       return next;
     });
   };
@@ -494,7 +510,6 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
                 if (data.success) {
                   const pool = selectInstancesForActivationSend(data.data) as any[];
                   setInstances(pool);
-                  if (pool.length > 0) setSelectedInstanceNames(new Set([pool[0].instance_name]));
                 }
               })
               .catch(err => console.error('Erro ao buscar instâncias:', err));
@@ -514,7 +529,6 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
                 if (data.success) {
                   const pool = selectInstancesForActivationSend(data.data) as any[];
                   setInstances(pool);
-                  if (pool.length > 0) setSelectedInstanceNames(new Set([pool[0].instance_name]));
                 }
               })
               .catch(err => console.error('Erro ao buscar instâncias:', err));
@@ -563,31 +577,58 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
 
         {/* Instâncias (uma ou mais; rotação por grupo na campanha) */}
         <div className="p-4 border-b border-gray-200 dark:border-[#404040] flex-shrink-0">
+          {repeatCampaignSeed?.reselectInstances && (
+            <p className="mb-3 text-xs text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-900/25 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2">
+              Troca de instância: marque abaixo qual(is) número(s) usar neste disparo. Os mesmos grupos da campanha
+              continuam selecionados ({selectedGroups.size}); a lista de nomes aparece após escolher a(s)
+              instância(s) e carregar do banco.
+            </p>
+          )}
           <label className="text-gray-700 dark:text-gray-300 text-xs font-semibold mb-2 block uppercase tracking-wider">
             Instância(s) *
           </label>
           {instances.length === 0 ? (
             <p className="text-sm text-gray-500 dark:text-gray-400 py-2">Nenhuma instância conectada</p>
           ) : (
-            <div className="max-h-36 overflow-y-auto space-y-2 rounded-xl border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] p-2">
-              {instances.map((inst: { id: string; instance_name: string }) => (
-                <label
-                  key={inst.id}
-                  className="flex items-center gap-2 cursor-pointer rounded-lg px-2 py-1.5 hover:bg-gray-100 dark:hover:bg-[#404040]"
-                >
-                  <input
-                    type="checkbox"
-                    className="rounded border-gray-400 text-[#8CD955] focus:ring-[#8CD955]"
-                    checked={selectedInstanceNames.has(inst.instance_name)}
-                    onChange={() => toggleInstanceName(inst.instance_name)}
-                  />
-                  <span className="text-sm text-gray-800 dark:text-white">{inst.instance_name}</span>
-                </label>
-              ))}
-            </div>
+            <>
+              <div className="relative mb-2">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
+                <input
+                  type="text"
+                  value={instanceSearchQuery}
+                  onChange={(e) => setInstanceSearchQuery(e.target.value)}
+                  placeholder="Pesquisar instâncias..."
+                  className="w-full bg-white dark:bg-[#333] border border-gray-300 dark:border-[#555] rounded-xl pl-10 pr-4 py-2 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] placeholder:text-gray-500 dark:placeholder:text-gray-400"
+                  aria-label="Pesquisar instâncias"
+                />
+              </div>
+              <div className="max-h-36 overflow-y-auto space-y-2 rounded-xl border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] p-2">
+                {filteredInstances.length === 0 ? (
+                  <p className="text-sm text-gray-500 dark:text-gray-400 px-2 py-3 text-center">
+                    Nenhuma instância corresponde à pesquisa
+                  </p>
+                ) : (
+                  filteredInstances.map((inst: { id: string; instance_name: string }) => (
+                    <label
+                      key={inst.id}
+                      className="flex items-center gap-2 cursor-pointer rounded-lg px-2 py-1.5 hover:bg-gray-100 dark:hover:bg-[#404040]"
+                    >
+                      <input
+                        type="checkbox"
+                        className="rounded border-gray-400 text-[#8CD955] focus:ring-[#8CD955]"
+                        checked={selectedInstanceNames.has(inst.instance_name)}
+                        onChange={() => toggleInstanceName(inst.instance_name)}
+                      />
+                      <span className="text-sm text-gray-800 dark:text-white break-all">{inst.instance_name}</span>
+                    </label>
+                  ))
+                )}
+              </div>
+            </>
           )}
           <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-2">
-            Várias instâncias: o disparo alterna por grupo (1º grupo → 1ª inst., 2º → 2ª, e assim por diante).
+            Marque ao menos uma instância para carregar os grupos. Várias instâncias: o disparo alterna por grupo
+            (1º grupo → 1ª inst., 2º → 2ª, e assim por diante).
           </p>
         </div>
 

@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { Activity, Heart, Search, Plus, MoreVertical, Paperclip, X, Trash2, Edit2, Star, Info, Upload, ArrowLeft, Video, Phone, MoreVertical as MoreVerticalIcon, Smile, Camera, Mic, Check, CheckCheck, Send, Calendar, Clock, Play, Pause, Eye, Trash, Music, Megaphone, Image, CircleDot, RefreshCw } from 'lucide-react';
+import { Activity, Heart, Search, Plus, MoreVertical, Paperclip, X, Trash2, Edit2, Star, Info, Upload, ArrowLeft, Video, Phone, MoreVertical as MoreVerticalIcon, Smile, Camera, Mic, Check, CheckCheck, Send, Calendar, Clock, Play, Pause, Eye, Trash, Music, Megaphone, Image, CircleDot, RefreshCw, Replace } from 'lucide-react';
 import SendActivationsModal from '@/components/CRM/SendActivationsModal';
 import ScheduleDetailsModal from '@/components/CRM/ScheduleDetailsModal';
 import MassSendJobDetailModal from '@/components/CRM/MassSendJobDetailModal';
@@ -129,6 +129,7 @@ const ActivationsPage = () => {
     instanceName?: string;
     instanceNames?: string[];
     groupIds: string[];
+    reselectInstances?: boolean;
   } | null>(null);
   const [massSendSelectedMessageId, setMassSendSelectedMessageId] = useState<string>('');
 
@@ -279,6 +280,44 @@ const ActivationsPage = () => {
       setLoadingMassSendJobs(false);
     }
   }, [userId]);
+
+  const openRepeatMassSendCampaign = useCallback(
+    (job: Record<string, unknown>, opts: { reselectInstances: boolean }) => {
+      const raw = job.group_ids;
+      const groupIds = Array.isArray(raw)
+        ? raw.map((id: unknown) => String(id ?? '').trim()).filter(Boolean)
+        : [];
+      const messageId = String(job.message_id ?? '');
+      const msg = messages.find((m) => m.id === messageId);
+      if (!msg) {
+        showToast('Carregue a lista de mensagens ou recarregue a página para repetir esta campanha.', 'error');
+        return;
+      }
+      if (groupIds.length === 0) {
+        showToast('Esta campanha não tem grupos salvos para repetir.', 'error');
+        return;
+      }
+      const uniqueIds = [...new Set(groupIds)];
+      if (opts.reselectInstances) {
+        setRepeatCampaignSeed({ groupIds: uniqueIds, reselectInstances: true });
+      } else {
+        const rawNames = job.instance_names;
+        const names = Array.isArray(rawNames)
+          ? [...new Set(rawNames.map((x: unknown) => String(x ?? '').trim()).filter(Boolean))]
+          : [];
+        const primary = String(job.instance_name || '').trim();
+        setRepeatCampaignSeed({
+          groupIds: uniqueIds,
+          instanceName: primary || names[0] || '',
+          ...(names.length > 1 ? { instanceNames: names } : {}),
+        });
+      }
+      setMessageToSend(msg);
+      setSendModalDefaultMassSend(true);
+      setShowSendModal(true);
+    },
+    [messages, showToast]
+  );
 
   useEffect(() => {
     if (userId && activeTab === 'mass_send') {
@@ -2669,46 +2708,28 @@ const ActivationsPage = () => {
                               <button
                                 type="button"
                                 disabled={job.status === 'pending' || job.status === 'processing'}
-                                onClick={() => {
-                                  const raw = job.group_ids;
-                                  const groupIds = Array.isArray(raw)
-                                    ? raw.map((id: unknown) => String(id ?? '').trim()).filter(Boolean)
-                                    : [];
-                                  const msg = messages.find((m) => m.id === job.message_id);
-                                  if (!msg) {
-                                    showToast('Carregue a lista de mensagens ou recarregue a página para repetir esta campanha.', 'error');
-                                    return;
-                                  }
-                                  if (groupIds.length === 0) {
-                                    showToast('Esta campanha não tem grupos salvos para repetir.', 'error');
-                                    return;
-                                  }
-                                  const rawNames = job.instance_names;
-                                  const names = Array.isArray(rawNames)
-                                    ? [
-                                        ...new Set(
-                                          rawNames.map((x: unknown) => String(x ?? '').trim()).filter(Boolean)
-                                        ),
-                                      ]
-                                    : [];
-                                  const primary = String(job.instance_name || '').trim();
-                                  setRepeatCampaignSeed({
-                                    groupIds: [...new Set(groupIds)],
-                                    instanceName: primary || names[0] || '',
-                                    ...(names.length > 1 ? { instanceNames: names } : {}),
-                                  });
-                                  setMessageToSend(msg);
-                                  setSendModalDefaultMassSend(true);
-                                  setShowSendModal(true);
-                                }}
+                                onClick={() => openRepeatMassSendCampaign(job as Record<string, unknown>, { reselectInstances: false })}
                                 className="p-2 rounded-lg text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
                                 title={
                                   job.status === 'pending' || job.status === 'processing'
                                     ? 'Aguarde esta campanha terminar ou pause para criar outra'
-                                    : 'Nova campanha com a mesma mensagem e mesmos grupos'
+                                    : 'Repetir campanha: mesma mensagem, mesmos grupos e mesma(s) instância(s)'
                                 }
                               >
                                 <RefreshCw className="w-4 h-4" />
+                              </button>
+                              <button
+                                type="button"
+                                disabled={job.status === 'pending' || job.status === 'processing'}
+                                onClick={() => openRepeatMassSendCampaign(job as Record<string, unknown>, { reselectInstances: true })}
+                                className="p-2 rounded-lg text-cyan-600 hover:bg-cyan-50 dark:hover:bg-cyan-900/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                                title={
+                                  job.status === 'pending' || job.status === 'processing'
+                                    ? 'Aguarde esta campanha terminar ou pause para criar outra'
+                                    : 'Repetir campanha e escolher outra(s) instância(s) de disparo'
+                                }
+                              >
+                                <Replace className="w-4 h-4" />
                               </button>
                               {(job.status === 'pending' || job.status === 'processing') && (
                                 <button
