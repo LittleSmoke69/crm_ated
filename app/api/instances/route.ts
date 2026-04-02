@@ -97,7 +97,7 @@ export async function GET(req: NextRequest) {
     } else {
       // IMPORTANTE: Mostra TODAS as instâncias do usuário (user_id/Owner)
       // Independente de estarem conectadas, desconectadas ou bloqueadas
-      // Filtra apenas por is_active=true para não mostrar instâncias deletadas
+      // is_active=false = registro arquivado (não uso para “caiu”); desconexão usa status
       const filteredData = (data || []).filter((inst: any) => 
         inst.is_active === true
       );

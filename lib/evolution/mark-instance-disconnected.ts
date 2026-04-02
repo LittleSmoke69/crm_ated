@@ -3,6 +3,10 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 /**
  * Detecta erros da Evolution/sessão WhatsApp em que a instância deve aparecer como
  * desconectada na lista (Reconectar), alinhando o banco ao estado real.
+ *
+ * Contrato: nunca desativar o registro (`is_active`) aqui — disparo em massa, chat, etc.
+ * só devem atualizar `status` para `disconnected`. A UI /instancias filtra `is_active`;
+ * remoção da lista = exclusão explícita (DELETE), não queda de sessão.
  */
 export function messageIndicatesEvolutionSessionDropped(message: string): boolean {
   const msg = String(message || '');
@@ -29,11 +33,12 @@ export async function markEvolutionInstanceDisconnected(
   instanceId: string,
   context?: string
 ): Promise<void> {
+  // Só atualiza status: is_active permanece true para a linha continuar na lista
+  // (Instâncias WhatsApp) e em webhooks/workers. Exclusão real = DELETE em evolution_instances.
   const { error } = await supabase
     .from('evolution_instances')
     .update({
       status: 'disconnected',
-      is_active: false,
       updated_at: new Date().toISOString(),
     })
     .eq('id', instanceId);

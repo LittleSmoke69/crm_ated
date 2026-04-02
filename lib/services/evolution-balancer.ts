@@ -826,7 +826,7 @@ export class EvolutionBalancer {
           console.warn(`⚠️ [BALANCEADOR] Marcando instância ${instance.instance_name} como desconectada - Connection Closed ou Bloqueio confirmado`);
           newStatus = 'disconnected';
           updates.status = 'disconnected';
-          updates.is_active = false;
+          // Não alterar is_active: instância continua na lista /instancias como desconectada (exclusão = DELETE explícito).
 
           await supabaseServiceRole
             .from('evolution_instance_logs')

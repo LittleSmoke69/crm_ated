@@ -16,6 +16,11 @@
  *   Promise.all sobre toda a lista.
  * - Estados: pending → processing → completed | failed | paused. Pausar/retomar
  *   (PATCH jobs/[id]) NÃO reseta `processed_index` (resume só coloca status pending).
+ * - Se Evolution devolver sessão caída (ex.: Connection Closed / mensagem de instância
+ *   desconectada), o job passa a `paused` com `last_error` explicando — não segue
+ *   nos grupos seguintes na mesma execução (evita dezenas de falhas iguais).
+ * - Anti-duplicata: `claim_activation_mass_send_group` reserva o grupo no DB antes do POST;
+ *   não há retry automático do HTTP (risco de mensagem já entregue + cliente só ver erro de rede).
  * - O cliente que cria a campanha recebe 202 e acompanha na UI; não assumir que
  *   todos os grupos foram enviados na mesma requisição do usuário.
  * - Novo job para subset = reenvio explícito; não deduplicar entre campanhas diferentes.
@@ -25,11 +30,16 @@
  */
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { resolveEvolutionInstanceForActivation } from '@/lib/crm/resolve-evolution-instance-for-activation';
-import { sanitizeMassSendErrorMessage } from '@/lib/utils/activation-send-errors';
+import {
+  isMassSendFatalInstanceDroppedError,
+  massSendInstanceDisconnectedMessage,
+  sanitizeMassSendErrorMessage,
+} from '@/lib/utils/activation-send-errors';
 import type { ApiResponse } from '@/lib/utils/response';
 import {
+  claimMassSendGroupBeforeSend,
   hasMassSendGroupAlreadySucceeded,
-  isMassSendTransientRetryable,
+  normalizeMassSendGroupId,
 } from '@/lib/crm/mass-send-group-idempotency';
 import { maybeMarkEvolutionInstanceDisconnected } from '@/lib/evolution/mark-instance-disconnected';
 import { resolveInterGroupDelayMs } from '@/lib/crm/mass-send-inter-group-delay';
@@ -46,7 +56,8 @@ const PTV_FETCH_TIMEOUT_MS = 45_000;
  * TTL do lock na query de “job disponível”. Precisa cobrir 1 grupo lento + retries
  * (ex.: 30s timeout × tentativas + 3s + 5s) sem outro worker assumir o mesmo job.
  */
-const LOCK_TTL_MS = 180_000;
+/** Cobrir PTV + rede lenta + claim IN_FLIGHT sem outro worker roubar o job no meio. */
+const LOCK_TTL_MS = 900_000;
 /** Renova locked_at no DB se o último touch foi há mais que isso (antes do fetch Evolution). */
 const LOCK_HEARTBEAT_MS = 25_000;
 
@@ -445,7 +456,11 @@ async function loadSucceededGroupIds(jobId: string): Promise<Set<string>> {
     .select('group_id')
     .eq('job_id', jobId)
     .eq('success', true);
-  return new Set((data ?? []).map((r: { group_id: string }) => String(r.group_id || '').trim()).filter(Boolean));
+  return new Set(
+    (data ?? [])
+      .map((r: { group_id: string }) => normalizeMassSendGroupId(r.group_id))
+      .filter(Boolean)
+  );
 }
 
 // ─── Persistir resultado de um grupo ──────────────────────────────────────────
@@ -460,9 +475,10 @@ async function persistGroupResult(
 ): Promise<boolean> {
   const now = new Date().toISOString();
   const skipOutcomes = result === null;
+  const gidKey = normalizeMassSendGroupId(groupId) || String(groupId).trim();
   const outcome = skipOutcomes
     ? null
-    : [{ groupId, success: result.success, ...(result.error ? { error: result.error } : {}) }];
+    : [{ groupId: gidKey, success: result.success, ...(result.error ? { error: result.error } : {}) }];
 
   const { data: rpcApplied, error: rpcErr } = await supabaseServiceRole.rpc('increment_mass_send_job_counts', {
     p_job_id: jobId,
@@ -502,7 +518,7 @@ async function persistGroupResult(
     const { error: upErr } = await supabaseServiceRole.from('activation_mass_send_job_groups').upsert(
       {
         job_id: jobId,
-        group_id: String(groupId).trim(),
+        group_id: normalizeMassSendGroupId(groupId) || String(groupId).trim(),
         success: result.success,
         error_message: result.error ? String(result.error).slice(0, 2000) : null,
         updated_at: now,
@@ -672,7 +688,6 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
   let paused = false;
   let loopTick = 0;
   let lastLockTouchMs = Date.now();
-  const retryDelays = [3_000, 5_000];
 
   while (currentIndex < total && (Date.now() - callStart) < CALL_BUDGET_MS) {
     const { data: idxSnap } = await supabaseServiceRole
@@ -687,7 +702,8 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
       if (currentIndex >= total) break;
     }
 
-    const groupId = groupIds[currentIndex];
+    const groupIdRaw = groupIds[currentIndex];
+    const groupId = normalizeMassSendGroupId(groupIdRaw);
 
     // Pausa entre disparos (personalizado no job ou padrão), inclusive após retomar em nova invocação
     if (currentIndex > 0) {
@@ -718,8 +734,10 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
       lastLockTouchMs = Date.now();
     }
 
-    let alreadyOk = succeededGroupIds.has(groupId);
-    if (!alreadyOk) {
+    const groupKeyForLog = groupId || String(groupIdRaw ?? '').trim() || '(vazio)';
+
+    let alreadyOk = groupId ? succeededGroupIds.has(groupId) : false;
+    if (groupId && !alreadyOk) {
       const inDb = await hasMassSendGroupAlreadySucceeded(supabaseServiceRole, job.id, groupId);
       if (inDb) {
         alreadyOk = true;
@@ -728,57 +746,59 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
     }
     let result: EvolutionSendResult;
 
-    if (alreadyOk) {
+    if (!groupId) {
+      result = { success: false, error: 'ID do grupo inválido ou vazio' };
+      totalFailed++;
+    } else if (alreadyOk) {
       const skipKey = `${currentIndex}:${groupId}`;
       if (!loggedIdempotentSkip.has(skipKey)) {
         loggedIdempotentSkip.add(skipKey);
         console.log(
-          `[MassSend] [${currentIndex + 1}/${total}] ${groupId} PULAR (já enviado — idempotente)`
+          `[MassSend] [${currentIndex + 1}/${total}] ${groupKeyForLog} PULAR (já enviado — idempotente)`
         );
       }
       result = { success: true };
     } else {
-      const iname = instanceNameForMassSendGroupIndex(rotationNames, currentIndex);
-      const ctx = ctxByInstanceName.get(iname);
-      if (!ctx) {
-        result = { success: false, error: `Contexto Evolution ausente para «${iname}»` };
+      const claim = await claimMassSendGroupBeforeSend(supabaseServiceRole, job.id, groupId);
+      if (claim === 'already_ok') {
+        alreadyOk = true;
+        succeededGroupIds.add(groupId);
+        result = { success: true };
+        const skipKey = `${currentIndex}:${groupId}`;
+        if (!loggedIdempotentSkip.has(skipKey)) {
+          loggedIdempotentSkip.add(skipKey);
+          console.log(
+            `[MassSend] [${currentIndex + 1}/${total}] ${groupKeyForLog} PULAR (claim já_ok — outro worker gravou)`
+          );
+        }
+      } else if (claim === 'invalid_group') {
+        result = { success: false, error: 'ID do grupo inválido' };
         totalFailed++;
       } else {
-        // Envia para Evolution (com retry)
-        const t0 = Date.now();
-        result = await sendGroupToEvolution(ctx, groupId);
-
-        for (
-          let attempt = 0;
-          attempt < retryDelays.length && !result.success && isMassSendTransientRetryable(result.error);
-          attempt++
-        ) {
-          const delay = retryDelays[attempt];
-          const dbSnap = await evolutionInstanceDbStatusLine(ctx.instanceId);
-          const errLower = String(result.error || '').toLowerCase();
-          const hint = interpretEvolutionFetchFailure(result.fetchDiag, errLower);
-          const tech = formatFetchDiagShort(result.fetchDiag);
-          console.warn(
-            `[MassSend] [${currentIndex + 1}/${total}] ${groupId} retry ${attempt + 1}/${retryDelays.length} em ${delay / 1000}s | ${hint} | ${tech} | ${dbSnap} | erro="${String(result.error || '').slice(0, 280)}"`
-          );
-          await new Promise((r) => setTimeout(r, delay));
-          result = await sendGroupToEvolution(ctx, groupId);
-        }
-
-        const duration = Date.now() - t0;
-        if (result.success) {
-          if (process.env.DEBUG_MASS_SEND === '1') {
-            console.log(`[MassSend] [${currentIndex + 1}/${total}] ${groupId} OK (${duration}ms) via ${iname}`);
-          }
-          totalSent++;
-          succeededGroupIds.add(groupId);
-        } else {
-          const dbSnap = await evolutionInstanceDbStatusLine(ctx.instanceId);
-          const hint = interpretEvolutionFetchFailure(result.fetchDiag, String(result.error || '').toLowerCase());
-          console.error(
-            `[MassSend] [${currentIndex + 1}/${total}] ${groupId} FALHA (${duration}ms) via ${iname} | ${hint} | ${dbSnap} | erro="${String(result.error || '').slice(0, 300)}"`
-          );
+        const iname = instanceNameForMassSendGroupIndex(rotationNames, currentIndex);
+        const ctx = ctxByInstanceName.get(iname);
+        if (!ctx) {
+          result = { success: false, error: `Contexto Evolution ausente para «${iname}»` };
           totalFailed++;
+        } else {
+          // Sem retry automático: a Evolution pode ter aceitado o 1º POST e o cliente só viu erro de rede — retry duplicaria no grupo.
+          const t0 = Date.now();
+          result = await sendGroupToEvolution(ctx, groupId);
+          const duration = Date.now() - t0;
+          if (result.success) {
+            if (process.env.DEBUG_MASS_SEND === '1') {
+              console.log(`[MassSend] [${currentIndex + 1}/${total}] ${groupKeyForLog} OK (${duration}ms) via ${iname}`);
+            }
+            totalSent++;
+            succeededGroupIds.add(groupId);
+          } else {
+            const dbSnap = await evolutionInstanceDbStatusLine(ctx.instanceId);
+            const hint = interpretEvolutionFetchFailure(result.fetchDiag, String(result.error || '').toLowerCase());
+            console.error(
+              `[MassSend] [${currentIndex + 1}/${total}] ${groupKeyForLog} FALHA (${duration}ms) via ${iname} | ${hint} | ${dbSnap} | erro="${String(result.error || '').slice(0, 300)}"`
+            );
+            totalFailed++;
+          }
         }
       }
     }
@@ -786,10 +806,14 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
     const newIdx = currentIndex + 1;
     const isComplete = newIdx >= total;
 
+    const persistGroupId =
+      groupId ||
+      `invalid_${shortId(job.id)}_${currentIndex}_${String(groupIdRaw ?? '').replace(/[^a-zA-Z0-9@-]/g, '_').slice(0, 48)}`;
+
     // Persiste: null result no RPC = só avança índice sem nova linha/contagem (já havia sucesso para esse grupo)
     const persisted = await persistGroupResult(
       job.id,
-      groupId,
+      persistGroupId,
       alreadyOk ? null : result,
       newIdx,
       currentIndex,
@@ -798,6 +822,22 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
     lastLockTouchMs = Date.now();
 
     if (!persisted) {
+      if (!alreadyOk && result.success && groupId) {
+        const repairNow = new Date().toISOString();
+        const { error: repErr } = await supabaseServiceRole.from('activation_mass_send_job_groups').upsert(
+          {
+            job_id: job.id,
+            group_id: groupId,
+            success: true,
+            error_message: null,
+            updated_at: repairNow,
+            created_at: repairNow,
+          },
+          { onConflict: 'job_id,group_id' }
+        );
+        if (repErr) console.warn(`[MassSend] upsert sucesso após CAS falhar: ${repErr.message}`);
+        else succeededGroupIds.add(groupId);
+      }
       const { data: snap } = await supabaseServiceRole
         .from('activation_mass_send_jobs')
         .select('processed_index')
@@ -806,6 +846,43 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
       currentIndex = Number(snap?.processed_index) || 0;
       loopTick++;
       continue;
+    }
+
+    const rotationInst = instanceNameForMassSendGroupIndex(rotationNames, currentIndex);
+    if (
+      !alreadyOk &&
+      !result.success &&
+      isMassSendFatalInstanceDroppedError(result.error) &&
+      !isComplete
+    ) {
+      const lastErr = massSendInstanceDisconnectedMessage(rotationInst);
+      const pauseAt = new Date().toISOString();
+      await supabaseServiceRole
+        .from('activation_mass_send_jobs')
+        .update({
+          status: 'paused',
+          last_error: lastErr,
+          locked_at: null,
+          locked_by: null,
+          updated_at: pauseAt,
+        })
+        .eq('id', job.id);
+      console.error(
+        `[MassSend] Campanha PAUSADA — instância caiu/desconectada | job=${shortId(job.id)} | inst=«${rotationInst}» | progresso=${newIdx}/${total} grupos`
+      );
+      return {
+        success: true,
+        data: {
+          processed: true,
+          job_id: job.id,
+          sent: totalSent,
+          failed: totalFailed,
+          current_index: newIdx,
+          total,
+          status: 'paused',
+          stopped_reason: 'instance_disconnected',
+        },
+      };
     }
 
     // Se completou, reconcilia

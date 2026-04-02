@@ -11,6 +11,7 @@ import { interGroupDelayMsFromRequestBody } from '@/lib/crm/mass-send-inter-grou
 import { resolveEvolutionInstanceForActivation } from '@/lib/crm/resolve-evolution-instance-for-activation';
 import { maybeMarkEvolutionInstanceDisconnected, messageIndicatesEvolutionSessionDropped } from '@/lib/evolution/mark-instance-disconnected';
 import { instanceNameForMassSendGroupIndex } from '@/lib/crm/mass-send-instance-names';
+import { normalizeMassSendGroupId } from '@/lib/crm/mass-send-group-idempotency';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300; // 5 minutos
@@ -111,7 +112,7 @@ export async function POST(req: NextRequest) {
     const groupIds = [
       ...new Set(
         (Array.isArray(rawGroupIds) ? rawGroupIds : [])
-          .map((id: unknown) => String(id ?? '').trim())
+          .map((id: unknown) => normalizeMassSendGroupId(id))
           .filter(Boolean)
       ),
     ];

@@ -264,7 +264,8 @@ export class RateLimitService {
       .from('evolution_instances')
       .update({
         status: newStatus,
-        is_active: errorType === 'connection_closed' ? false : instance.is_active,
+        // Desconexão só muda status; is_active não vira false (lista /instancias / campanhas).
+        is_active: instance.is_active,
         error_today: instance.error_today + 1,
         updated_at: new Date().toISOString(),
       })

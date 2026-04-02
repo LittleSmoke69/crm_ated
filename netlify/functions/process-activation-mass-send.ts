@@ -9,11 +9,16 @@
 import { createClient } from '@supabase/supabase-js';
 import { resolveEvolutionInstanceForActivation } from '../../lib/crm/resolve-evolution-instance-for-activation';
 import {
+  claimMassSendGroupBeforeSend,
   hasMassSendGroupAlreadySucceeded,
-  isMassSendTransientRetryable,
+  normalizeMassSendGroupId,
 } from '../../lib/crm/mass-send-group-idempotency';
 import { resolveInterGroupDelayMs } from '../../lib/crm/mass-send-inter-group-delay';
-import { sanitizeMassSendErrorMessage } from '../../lib/utils/activation-send-errors';
+import {
+  isMassSendFatalInstanceDroppedError,
+  massSendInstanceDisconnectedMessage,
+  sanitizeMassSendErrorMessage,
+} from '../../lib/utils/activation-send-errors';
 import { maybeMarkEvolutionInstanceDisconnected } from '../../lib/evolution/mark-instance-disconnected';
 import {
   instanceNameForMassSendGroupIndex,
@@ -26,7 +31,6 @@ const BUDGET_MS = 110_000;
 const EVOLUTION_TIMEOUT_MS = 30_000;
 const LOCK_TTL_MS = 180_000;
 const LOCK_HEARTBEAT_MS = 25_000;
-const RETRY_DELAYS = [3_000, 5_000];
 const PAUSE_POLL_EVERY = 5;
 
 // ─── Supabase client (service role) ──────────────────────────────────────────
@@ -54,7 +58,11 @@ async function loadSucceededGroupIds(supabase: ReturnType<typeof getSupabase>, j
     .select('group_id')
     .eq('job_id', jobId)
     .eq('success', true);
-  return new Set((data ?? []).map((r: { group_id: string }) => String(r.group_id || '').trim()).filter(Boolean));
+  return new Set(
+    (data ?? [])
+      .map((r: { group_id: string }) => normalizeMassSendGroupId(r.group_id))
+      .filter(Boolean)
+  );
 }
 
 function sanitizeError(raw: string): string {
@@ -388,7 +396,9 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
         if (idx >= total) break;
       }
 
-      const groupId = groupIds[idx];
+      const groupIdRaw = groupIds[idx];
+      const groupId = normalizeMassSendGroupId(groupIdRaw);
+      const groupKeyForLog = groupId || String(groupIdRaw ?? '').trim() || '(vazio)';
 
       // Pausa entre disparos (personalizado no job ou padrão 1s), inclusive após nova invocação do cron
       if (idx > 0) {
@@ -414,8 +424,8 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
         lastLockTouchMs = Date.now();
       }
 
-      let alreadyOk = succeededGroupIds.has(groupId);
-      if (!alreadyOk) {
+      let alreadyOk = groupId ? succeededGroupIds.has(groupId) : false;
+      if (groupId && !alreadyOk) {
         const inDb = await hasMassSendGroupAlreadySucceeded(supabase, job.id, groupId);
         if (inDb) {
           alreadyOk = true;
@@ -423,46 +433,57 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
         }
       }
       let result: SendResult;
+      let credsThis: { baseUrl: string; apiKey: string; instanceId: string } | undefined;
 
-      if (alreadyOk) {
+      if (!groupId) {
+        result = { success: false, error: 'ID do grupo inválido ou vazio' };
+        totalFailed++;
+      } else if (alreadyOk) {
         const skipKey = `${idx}:${groupId}`;
         if (!loggedIdempotentSkip.has(skipKey)) {
           loggedIdempotentSkip.add(skipKey);
-          console.log(`[MassSend] [${idx + 1}/${total}] ${groupId} PULAR (já enviado — idempotente)`);
+          console.log(`[MassSend] [${idx + 1}/${total}] ${groupKeyForLog} PULAR (já enviado — idempotente)`);
         }
         result = { success: true };
       } else {
-        const iname = instanceNameForMassSendGroupIndex(rotationNames, idx);
-        const credsThis = credsByName.get(iname);
-        const t0 = Date.now();
-        if (!credsThis) {
-          result = { success: false, error: `Sem credenciais para «${iname}»`, rawForDisconnectProbe: iname };
+        const claim = await claimMassSendGroupBeforeSend(supabase, job.id, groupId);
+        if (claim === 'already_ok') {
+          alreadyOk = true;
+          succeededGroupIds.add(groupId);
+          result = { success: true };
+          const skipKey = `${idx}:${groupId}`;
+          if (!loggedIdempotentSkip.has(skipKey)) {
+            loggedIdempotentSkip.add(skipKey);
+            console.log(`[MassSend] [${idx + 1}/${total}] ${groupKeyForLog} PULAR (claim já_ok)`);
+          }
+        } else if (claim === 'invalid_group') {
+          result = { success: false, error: 'ID do grupo inválido' };
+          totalFailed++;
         } else {
-          result = await sendToEvolution(credsThis.baseUrl, iname, credsThis.apiKey, groupId, msg);
-
-          for (let r = 0; r < RETRY_DELAYS.length && !result.success && isMassSendTransientRetryable(result.error); r++) {
-            console.warn(
-              `[MassSend] [${idx + 1}/${total}] ${groupId} retry ${r + 1}/${RETRY_DELAYS.length} em ${RETRY_DELAYS[r] / 1000}s | ${result.error}`
-            );
-            await new Promise((w) => setTimeout(w, RETRY_DELAYS[r]));
+          const iname = instanceNameForMassSendGroupIndex(rotationNames, idx);
+          credsThis = credsByName.get(iname);
+          const t0 = Date.now();
+          if (!credsThis) {
+            result = { success: false, error: `Sem credenciais para «${iname}»`, rawForDisconnectProbe: iname };
+          } else {
             result = await sendToEvolution(credsThis.baseUrl, iname, credsThis.apiKey, groupId, msg);
           }
-        }
 
-        const ms = Date.now() - t0;
-        if (result.success) {
-          if (process.env.DEBUG_MASS_SEND === '1') {
-            console.log(`[MassSend] [${idx + 1}/${total}] ${groupId} OK (${ms}ms) via ${iname}`);
-          }
-          totalSent++;
-          succeededGroupIds.add(groupId);
-        } else {
-          console.error(`[MassSend] [${idx + 1}/${total}] ${groupId} FALHA (${ms}ms) | ${result.error}`);
-          totalFailed++;
-          const probe = result.rawForDisconnectProbe ?? result.error;
-          const markId = credsThis?.instanceId;
-          if (markId) {
-            void maybeMarkEvolutionInstanceDisconnected(supabase, markId, probe, 'netlify/activation-mass-send');
+          const ms = Date.now() - t0;
+          if (result.success) {
+            if (process.env.DEBUG_MASS_SEND === '1') {
+              console.log(`[MassSend] [${idx + 1}/${total}] ${groupKeyForLog} OK (${ms}ms) via ${instanceNameForMassSendGroupIndex(rotationNames, idx)}`);
+            }
+            totalSent++;
+            succeededGroupIds.add(groupId);
+          } else {
+            console.error(`[MassSend] [${idx + 1}/${total}] ${groupKeyForLog} FALHA (${ms}ms) | ${result.error}`);
+            totalFailed++;
+            const probe = result.rawForDisconnectProbe ?? result.error;
+            const markId = credsThis?.instanceId;
+            if (markId) {
+              void maybeMarkEvolutionInstanceDisconnected(supabase, markId, probe, 'netlify/activation-mass-send');
+            }
           }
         }
       }
@@ -472,9 +493,10 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
 
       const pNow = new Date().toISOString();
       const skipRpcOutcomes = alreadyOk;
+      const persistGid = normalizeMassSendGroupId(groupId) || String(groupIdRaw ?? '').trim() || `invalid_${shortId(job.id)}_${idx}`;
       const outcome = skipRpcOutcomes
         ? null
-        : [{ groupId, success: result.success, ...(result.error ? { error: result.error } : {}) }];
+        : [{ groupId: persistGid, success: result.success, ...(result.error ? { error: result.error } : {}) }];
       const { data: rpcApplied, error: rpcErr } = await supabase.rpc('increment_mass_send_job_counts', {
         p_job_id: job.id,
         p_sent: skipRpcOutcomes ? 0 : result.success ? 1 : 0,
@@ -509,7 +531,7 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
           const { error: upErr } = await supabase.from('activation_mass_send_job_groups').upsert(
             {
               job_id: job.id,
-              group_id: String(groupId).trim(),
+              group_id: persistGid,
               success: result.success,
               error_message: result.error ? String(result.error).slice(0, 2000) : null,
               updated_at: pNow,
@@ -524,10 +546,50 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
       lastLockTouchMs = Date.now();
 
       if (!persisted) {
+        if (!alreadyOk && result.success && groupId) {
+          const rNow = new Date().toISOString();
+          const { error: repErr } = await supabase.from('activation_mass_send_job_groups').upsert(
+            {
+              job_id: job.id,
+              group_id: groupId,
+              success: true,
+              error_message: null,
+              updated_at: rNow,
+              created_at: rNow,
+            },
+            { onConflict: 'job_id,group_id' }
+          );
+          if (repErr) console.warn(`[MassSend] upsert sucesso após CAS: ${repErr.message}`);
+          else succeededGroupIds.add(groupId);
+        }
         const { data: snap } = await supabase.from('activation_mass_send_jobs').select('processed_index').eq('id', job.id).maybeSingle();
         idx = Number(snap?.processed_index) || 0;
         loopTick++;
         continue;
+      }
+
+      const rotationInstNl = instanceNameForMassSendGroupIndex(rotationNames, idx);
+      if (
+        !alreadyOk &&
+        !result.success &&
+        isMassSendFatalInstanceDroppedError(result.error) &&
+        !isComplete
+      ) {
+        const lastErr = massSendInstanceDisconnectedMessage(rotationInstNl);
+        await supabase
+          .from('activation_mass_send_jobs')
+          .update({
+            status: 'paused',
+            last_error: lastErr,
+            locked_at: null,
+            locked_by: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', job.id);
+        console.error(
+          `[MassSend] Campanha PAUSADA — instância caiu/desconectada | job=${shortId(job.id)} | inst=«${rotationInstNl}» | progresso=${newIdx}/${total} grupos`
+        );
+        return done(startTime, groupsProcessed, totalSent, totalFailed);
       }
 
       if (isComplete) {

@@ -19,6 +19,20 @@ export function massSendInstanceDisconnectedMessage(instanceName?: string | null
 }
 
 /**
+ * Erros em que a sessão WhatsApp/Evolution caiu: a campanha em massa deve parar (pausar),
+ * não seguir tentando os demais grupos na mesma instância.
+ */
+export function isMassSendFatalInstanceDroppedError(error: string | null | undefined): boolean {
+  if (error == null || typeof error !== 'string') return false;
+  const t = error.trim();
+  if (!t) return false;
+  if (t === MASS_SEND_INSTANCE_DISCONNECTED_USER_MESSAGE) return true;
+  if (/caiu ou foi desconectada/i.test(t) && /reconecte/i.test(t)) return true;
+  if (/«[^»]+».*caiu ou foi desconectada/i.test(t)) return true;
+  return messageIndicatesEvolutionSessionDropped(t);
+}
+
+/**
  * Converte respostas HTML (502/503/504), páginas nginx, etc. em texto legível.
  */
 export function sanitizeMassSendErrorMessage(raw: string | null | undefined): string {

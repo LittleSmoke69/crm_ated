@@ -267,6 +267,25 @@ async function processStep(supabase: SupabaseClient, step: any): Promise<void> {
   logVerbose(
     `${LOG_MANUAL} Step job=${job_id} step_index=${step_index} type=${type} instance=${instance_name} destino=${target_chat_id ? `${String(target_chat_id).slice(0, 20)}...` : 'vazio'}`
   );
+
+  /**
+   * O RPC claim_maturation_steps só enxerga jobs `running` no momento do claim, mas o mesmo tick
+   * pode processar o lote segundos depois — se o usuário pausar nesse intervalo, sem este check
+   * as mensagens ainda seriam enviadas. Também cobre catch-up longo e ticks encadeados.
+   */
+  const { data: jobSnap } = await supabase.from('maturation_jobs').select('status').eq('id', job_id).maybeSingle();
+  if (!jobSnap || jobSnap.status !== 'running') {
+    await supabase
+      .from('maturation_steps')
+      .update({ status: 'pending', locked_at: null, locked_by: null })
+      .eq('id', id)
+      .eq('status', 'processing');
+    logVerbose(
+      `${LOG_MANUAL} Step job=${job_id} step_index=${step_index} ignorado: job.status=${jobSnap?.status ?? 'missing'} (esperado running)`
+    );
+    return;
+  }
+
   if (!target_chat_id) {
     const msg = 'Destino não definido para este step.';
     await supabase.from('maturation_steps').update({ status: 'failed', error: msg }).eq('id', id);
