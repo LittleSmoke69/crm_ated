@@ -4,7 +4,8 @@
  *
  * Processa o próximo job elegível: envia grupos em SEQUÊNCIA (processed_index),
  * até CALL_BUDGET_MS por chamada. Streaming + heartbeat evita 504 no Netlify.
- * Com trabalho restante (`more_pending`), follow-up único via after() + delay.
+ * Delays longos entre grupos usam `next_group_eligible_at` + `schedule_followup_ms` (não sleep de minutos na request).
+ * Com trabalho restante (`more_pending`), follow-up via after() com delay configurável.
  * Idempotente: lock + RPC com índice esperado; não reenvia grupos já com sucesso.
  */
 import { NextRequest, after } from 'next/server';
@@ -26,12 +27,13 @@ export async function POST(req: NextRequest) {
 
   const publicOrigin = req.nextUrl?.origin || new URL(req.url).origin;
   /** Backup único após fechar a resposta (evita POST duplicado imediato + after + finally). */
-  const chainState = { morePending: false };
+  const chainState = { morePending: false, scheduleFollowupMs: null as number | null };
   let afterRegistered = false;
   try {
     after(() => {
       if (chainState.morePending) {
-        setTimeout(() => triggerMassSendProcessFromOrigin(publicOrigin), CHAIN_FOLLOWUP_MS);
+        const ms = chainState.scheduleFollowupMs ?? CHAIN_FOLLOWUP_MS;
+        setTimeout(() => triggerMassSendProcessFromOrigin(publicOrigin), ms);
       }
     });
     afterRegistered = true;
@@ -62,6 +64,10 @@ export async function POST(req: NextRequest) {
             : null;
         if (data?.more_pending === true && publicOrigin) {
           chainState.morePending = true;
+          const sched = (data as { schedule_followup_ms?: unknown }).schedule_followup_ms;
+          if (typeof sched === 'number' && sched > 0 && Number.isFinite(sched)) {
+            chainState.scheduleFollowupMs = Math.min(Math.floor(sched), 86_400_000);
+          }
         }
         clearInterval(heartbeat);
         safeEnqueue(encoder.encode(JSON.stringify(payload)));
@@ -81,7 +87,8 @@ export async function POST(req: NextRequest) {
           /* já fechado */
         }
         if (chainState.morePending && !afterRegistered) {
-          setTimeout(() => triggerMassSendProcessFromOrigin(publicOrigin), CHAIN_FOLLOWUP_MS);
+          const ms = chainState.scheduleFollowupMs ?? CHAIN_FOLLOWUP_MS;
+          setTimeout(() => triggerMassSendProcessFromOrigin(publicOrigin), ms);
         }
       }
     },

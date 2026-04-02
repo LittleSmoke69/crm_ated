@@ -32,6 +32,8 @@ const EVOLUTION_TIMEOUT_MS = 30_000;
 const LOCK_TTL_MS = 180_000;
 const LOCK_HEARTBEAT_MS = 25_000;
 const PAUSE_POLL_EVERY = 5;
+const MAX_INLINE_INTER_GROUP_WAIT_MS = 25_000;
+const RESERVE_MS_FOR_SEND = 15_000;
 
 // ─── Supabase client (service role) ──────────────────────────────────────────
 
@@ -187,7 +189,7 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
     const { data: jobs } = await supabase
       .from('activation_mass_send_jobs')
       .select(
-        'id, user_id, message_id, instance_name, instance_names, group_ids, processed_index, status, inter_group_delay_ms'
+        'id, user_id, message_id, instance_name, instance_names, group_ids, processed_index, status, inter_group_delay_ms, next_group_eligible_at'
       )
       .in('status', ['pending', 'processing'])
       .or(`locked_at.is.null,locked_at.lt.${lockExpired}`)
@@ -400,16 +402,67 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
       const groupId = normalizeMassSendGroupId(groupIdRaw);
       const groupKeyForLog = groupId || String(groupIdRaw ?? '').trim() || '(vazio)';
 
-      // Pausa entre disparos (personalizado no job ou padrão 1s), inclusive após nova invocação do cron
-      if (idx > 0) {
-        await new Promise((r) => setTimeout(r, interGroupDelayMs));
+      // Delays longos: não dar await na function (timeout); agenda reentrada via next_group_eligible_at + trigger.
+      if (idx > 0 && interGroupDelayMs > 0) {
+        const { data: delayRow } = await supabase
+          .from('activation_mass_send_jobs')
+          .select('next_group_eligible_at')
+          .eq('id', job.id)
+          .maybeSingle();
+        const rawAt = delayRow?.next_group_eligible_at;
+        const eligibleMs = rawAt != null ? new Date(String(rawAt)).getTime() : NaN;
+        const nowMs = Date.now();
+
+        if (rawAt != null && Number.isFinite(eligibleMs) && eligibleMs > nowMs) {
+          const waitMs = Math.min(eligibleMs - nowMs, 86_400_000);
+          const remainingBudget = BUDGET_MS - (nowMs - startTime);
+          if (
+            waitMs <= MAX_INLINE_INTER_GROUP_WAIT_MS &&
+            waitMs + RESERVE_MS_FOR_SEND < remainingBudget
+          ) {
+            await new Promise((r) => setTimeout(r, waitMs));
+            await supabase
+              .from('activation_mass_send_jobs')
+              .update({ next_group_eligible_at: null, updated_at: new Date().toISOString() })
+              .eq('id', job.id);
+          } else {
+            await supabase
+              .from('activation_mass_send_jobs')
+              .update({ locked_at: null, locked_by: null, updated_at: new Date().toISOString() })
+              .eq('id', job.id);
+            console.log(`[MassSend] Job ${shortId(job.id)} aguardando ${Math.round(waitMs / 1000)}s entre grupos — reagendando worker`);
+            setTimeout(() => triggerMassSendWorkerFromDeployUrl(), waitMs);
+            return done(startTime, groupsProcessed, totalSent, totalFailed);
+          }
+        } else if (rawAt != null) {
+          await supabase
+            .from('activation_mass_send_jobs')
+            .update({ next_group_eligible_at: null, updated_at: new Date().toISOString() })
+            .eq('id', job.id);
+        } else {
+          const remainingBudget = BUDGET_MS - (nowMs - startTime);
+          if (
+            interGroupDelayMs <= MAX_INLINE_INTER_GROUP_WAIT_MS &&
+            interGroupDelayMs + RESERVE_MS_FOR_SEND < remainingBudget
+          ) {
+            await new Promise((r) => setTimeout(r, interGroupDelayMs));
+          }
+        }
       }
 
       if (loopTick % PAUSE_POLL_EVERY === 0) {
         const { data: pc } = await supabase.from('activation_mass_send_jobs').select('status').eq('id', job.id).single();
         if (pc?.status === 'paused') {
           console.log(`[MassSend] [${idx + 1}/${total}] PAUSADO`);
-          await supabase.from('activation_mass_send_jobs').update({ locked_at: null, locked_by: null, updated_at: new Date().toISOString() }).eq('id', job.id);
+          await supabase
+            .from('activation_mass_send_jobs')
+            .update({
+              locked_at: null,
+              locked_by: null,
+              next_group_eligible_at: null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', job.id);
           return done(startTime, groupsProcessed, totalSent, totalFailed);
         }
       }
@@ -583,6 +636,7 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
             last_error: lastErr,
             locked_at: null,
             locked_by: null,
+            next_group_eligible_at: null,
             updated_at: new Date().toISOString(),
           })
           .eq('id', job.id);
@@ -595,6 +649,14 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
       if (isComplete) {
         await reconcile(supabase, job.id);
         console.log(`[MassSend] Job ${shortId(job.id)} COMPLETO: ${totalSent} OK, ${totalFailed} falha`);
+      } else if (persisted && interGroupDelayMs > 0) {
+        await supabase
+          .from('activation_mass_send_jobs')
+          .update({
+            next_group_eligible_at: new Date(Date.now() + interGroupDelayMs).toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', job.id);
       }
 
       idx = newIdx;
@@ -621,7 +683,13 @@ async function reconcile(supabase: any, jobId: string) {
   let s = 0, f = 0;
   for (const r of rows) { if (r.success === true) s++; else f++; }
   await supabase.from('activation_mass_send_jobs').update({
-    sent_count: s, failed_count: f, status: 'completed', locked_at: null, locked_by: null, updated_at: new Date().toISOString(),
+    sent_count: s,
+    failed_count: f,
+    status: 'completed',
+    locked_at: null,
+    locked_by: null,
+    next_group_eligible_at: null,
+    updated_at: new Date().toISOString(),
   }).eq('id', jobId);
   console.log(`[MassSend] Job ${shortId(jobId)} RECONCILIADO: ${s} OK, ${f} falha (${rows.length} total)`);
 }

@@ -402,12 +402,12 @@ async function processStep(supabase: SupabaseClient, step: any): Promise<void> {
 
     if (isEvolutionRateLimitError({ error: result.error, httpStatus: result.httpStatus })) {
       const nowIso = new Date().toISOString();
-      const pauseReason =
-        'Rate limit (Evolution/WhatsApp). Campanha pausada automaticamente — aguarde e retome quando o limite aliviar.';
+      const failReason =
+        'Maturação encerrada: rate limit (Evolution/WhatsApp). Os passos não enviados foram cancelados.';
 
       const { data: jobMeta } = await supabase.from('maturation_jobs').select('campaign_id').eq('id', job_id).maybeSingle();
 
-      let jobIdsToPause: string[] = [job_id];
+      let jobIdsToEnd: string[] = [job_id];
       const cid = jobMeta?.campaign_id as string | null | undefined;
       if (cid) {
         const { data: siblings } = await supabase
@@ -415,39 +415,53 @@ async function processStep(supabase: SupabaseClient, step: any): Promise<void> {
           .select('id')
           .eq('campaign_id', cid)
           .eq('status', 'running');
-        if (siblings?.length) jobIdsToPause = siblings.map((r) => r.id);
+        if (siblings?.length) jobIdsToEnd = siblings.map((r) => r.id);
       }
 
-      const { data: pausedRows } = await supabase
+      const { data: jobsBefore } = await supabase
         .from('maturation_jobs')
-        .update({ status: 'paused', updated_at: nowIso })
-        .in('id', jobIdsToPause)
+        .select('id, master_instance_id')
+        .in('id', jobIdsToEnd)
+        .eq('status', 'running');
+
+      const { data: endedRows } = await supabase
+        .from('maturation_jobs')
+        .update({ status: 'failed', updated_at: nowIso, ended_at: nowIso })
+        .in('id', jobIdsToEnd)
         .eq('status', 'running')
         .select('id');
 
-      await supabase
-        .from('maturation_steps')
-        .update({
-          status: 'pending',
-          locked_at: null,
-          locked_by: null,
-          error: pauseReason,
-        })
-        .in('job_id', jobIdsToPause)
-        .eq('status', 'processing');
+      if ((endedRows?.length || 0) > 0) {
+        const masterIds = [...new Set((jobsBefore || []).map((r) => r.master_instance_id).filter(Boolean))] as string[];
+        for (const mid of masterIds) {
+          await supabase
+            .from('master_instances')
+            .update({ is_locked: false, locked_job_id: null, locked_at: null })
+            .eq('id', mid);
+        }
 
-      if ((pausedRows?.length || 0) > 0) {
-        const n = pausedRows!.length;
-        console.warn(
-          `${LOG_MANUAL} Rate limit → ${n} job(s) pausado(s)${cid ? ' (campanha/malha)' : ''} · ${instance_name}`
+        await supabase
+          .from('maturation_steps')
+          .update({
+            status: 'failed',
+            locked_at: null,
+            locked_by: null,
+            error: failReason,
+          })
+          .in('job_id', jobIdsToEnd)
+          .in('status', ['pending', 'processing']);
+
+        const n = endedRows!.length;
+        logVerbose(
+          `${LOG_MANUAL} Rate limit → ${n} job(s) finalizado(s) (failed)${cid ? ' campanha/malha' : ''} · ${instance_name}`
         );
         await createMessage(supabase, {
           jobId: job_id,
           stepId: id,
           direction: 'system',
           type: 'error',
-          title: '⏸️ Rate limit',
-          content: `${pauseReason} Instância: ${instance_name}.`,
+          title: '⛔ Maturação encerrada (rate limit)',
+          content: `${failReason} Instância: ${instance_name}.`,
           status: 'failed',
           httpStatus: result.httpStatus,
           error: result.error,
@@ -480,13 +494,17 @@ async function updateJobProgress(supabase: SupabaseClient, jobId: string): Promi
   /** progress_done = apenas steps enviados com sucesso (UI e barra; falhas não aparecem como “concluído”) */
   const terminalDone = sentN + failedN;
   await supabase.from('maturation_jobs').update({ progress_done: sentN }).eq('id', jobId);
-  if (totalN && terminalDone >= totalN) {
-    logVerbose(`${LOG_MANUAL} Job ${jobId} finalizado: ${terminalDone}/${totalN} steps (sent=${sentN}, failed=${failedN})`);
-    await supabase.from('maturation_jobs').update({ status: 'finished', ended_at: new Date().toISOString() }).eq('id', jobId);
-    const { data: j } = await supabase.from('maturation_jobs').select('master_instance_id').eq('id', jobId).single();
-    if (j) await supabase.from('master_instances').update({ is_locked: false, locked_job_id: null, locked_at: null }).eq('id', j.master_instance_id);
-    await createMessage(supabase, { jobId, direction: 'system', type: 'info', title: '✅ Job finalizado', content: 'Todos os steps processados', status: 'info' });
-  }
+  if (!totalN || terminalDone < totalN) return;
+
+  const { data: jobSt } = await supabase.from('maturation_jobs').select('status').eq('id', jobId).maybeSingle();
+  /** Não promover para finished se o job já foi failed/aborted/pausado (ex.: rate limit). */
+  if (jobSt?.status !== 'running') return;
+
+  logVerbose(`${LOG_MANUAL} Job ${jobId} finalizado: ${terminalDone}/${totalN} steps (sent=${sentN}, failed=${failedN})`);
+  await supabase.from('maturation_jobs').update({ status: 'finished', ended_at: new Date().toISOString() }).eq('id', jobId);
+  const { data: j } = await supabase.from('maturation_jobs').select('master_instance_id').eq('id', jobId).single();
+  if (j) await supabase.from('master_instances').update({ is_locked: false, locked_job_id: null, locked_at: null }).eq('id', j.master_instance_id);
+  await createMessage(supabase, { jobId, direction: 'system', type: 'info', title: '✅ Job finalizado', content: 'Todos os steps processados', status: 'info' });
 }
 
 /**

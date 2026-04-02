@@ -556,6 +556,7 @@ async function reconcileFinalCounts(jobId: string): Promise<void> {
       status: 'completed',
       locked_at: null,
       locked_by: null,
+      next_group_eligible_at: null,
       updated_at: new Date().toISOString(),
     })
     .eq('id', jobId);
@@ -567,6 +568,9 @@ async function reconcileFinalCounts(jobId: string): Promise<void> {
 
 /** Budget por API call — margem para timeout ~60s do gateway. */
 const CALL_BUDGET_MS = 45_000;
+/** Espera entre grupos só na mesma request se couber no budget (delays longos vão para next_group_eligible_at + chain). */
+const MAX_INLINE_INTER_GROUP_WAIT_MS = 25_000;
+const RESERVE_MS_FOR_SEND = 15_000;
 /** Checagem de pausa no DB a cada N iterações (a RPC renova locked_at a cada grupo). */
 const PAUSE_POLL_EVERY = 5;
 
@@ -580,7 +584,7 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
   const { data: jobs } = await supabaseServiceRole
     .from('activation_mass_send_jobs')
     .select(
-      'id, user_id, message_id, instance_name, instance_names, group_ids, total_groups, processed_index, status, inter_group_delay_ms'
+      'id, user_id, message_id, instance_name, instance_names, group_ids, total_groups, processed_index, status, inter_group_delay_ms, next_group_eligible_at'
     )
     .in('status', ['pending', 'processing'])
     .or(`locked_at.is.null,locked_at.lt.${lockExpired}`)
@@ -627,7 +631,12 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
   if (freshJob?.status === 'paused') {
     await supabaseServiceRole
       .from('activation_mass_send_jobs')
-      .update({ locked_at: null, locked_by: null, updated_at: new Date().toISOString() })
+      .update({
+        locked_at: null,
+        locked_by: null,
+        next_group_eligible_at: null,
+        updated_at: new Date().toISOString(),
+      })
       .eq('id', job.id);
     console.log(`[MassSend] Job ${shortId(job.id)} [${currentIndex + 1}/${total}] PAUSADO`);
     return { success: true, data: { processed: true, job_id: job.id, status: 'paused' } };
@@ -705,9 +714,64 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
     const groupIdRaw = groupIds[currentIndex];
     const groupId = normalizeMassSendGroupId(groupIdRaw);
 
-    // Pausa entre disparos (personalizado no job ou padrão), inclusive após retomar em nova invocação
-    if (currentIndex > 0) {
-      await new Promise((r) => setTimeout(r, interGroupDelayMs));
+    // Entre grupos: delay longo (ex.: 503s) não pode ser await na mesma request — timeout do gateway mata antes do próximo envio.
+    if (currentIndex > 0 && interGroupDelayMs > 0) {
+      const { data: delayRow } = await supabaseServiceRole
+        .from('activation_mass_send_jobs')
+        .select('next_group_eligible_at')
+        .eq('id', job.id)
+        .maybeSingle();
+      const rawAt = delayRow?.next_group_eligible_at;
+      const eligibleMs = rawAt != null ? new Date(String(rawAt)).getTime() : NaN;
+      const nowMs = Date.now();
+
+      if (rawAt != null && Number.isFinite(eligibleMs) && eligibleMs > nowMs) {
+        const waitMs = Math.min(eligibleMs - nowMs, 86_400_000);
+        const remainingBudget = CALL_BUDGET_MS - (nowMs - callStart);
+        if (
+          waitMs <= MAX_INLINE_INTER_GROUP_WAIT_MS &&
+          waitMs + RESERVE_MS_FOR_SEND < remainingBudget
+        ) {
+          await new Promise((r) => setTimeout(r, waitMs));
+          await supabaseServiceRole
+            .from('activation_mass_send_jobs')
+            .update({ next_group_eligible_at: null, updated_at: new Date().toISOString() })
+            .eq('id', job.id);
+        } else {
+          await supabaseServiceRole
+            .from('activation_mass_send_jobs')
+            .update({ locked_at: null, locked_by: null, updated_at: new Date().toISOString() })
+            .eq('id', job.id);
+          return {
+            success: true,
+            data: {
+              processed: true,
+              job_id: job.id,
+              sent: totalSent,
+              failed: totalFailed,
+              current_index: currentIndex,
+              total,
+              status: 'processing',
+              more_pending: true,
+              schedule_followup_ms: waitMs,
+            },
+          };
+        }
+      } else if (rawAt != null) {
+        await supabaseServiceRole
+          .from('activation_mass_send_jobs')
+          .update({ next_group_eligible_at: null, updated_at: new Date().toISOString() })
+          .eq('id', job.id);
+      } else {
+        // Job antigo ou recovery (sem next_group_eligible_at): não adiar minutos aqui — segue o envio.
+        const remainingBudget = CALL_BUDGET_MS - (nowMs - callStart);
+        if (
+          interGroupDelayMs <= MAX_INLINE_INTER_GROUP_WAIT_MS &&
+          interGroupDelayMs + RESERVE_MS_FOR_SEND < remainingBudget
+        ) {
+          await new Promise((r) => setTimeout(r, interGroupDelayMs));
+        }
+      }
     }
 
     if (loopTick % PAUSE_POLL_EVERY === 0) {
@@ -719,6 +783,10 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
 
       if (pauseCheck?.status === 'paused') {
         console.log(`[MassSend] [${currentIndex + 1}/${total}] PAUSADO pelo usuario`);
+        await supabaseServiceRole
+          .from('activation_mass_send_jobs')
+          .update({ next_group_eligible_at: null, updated_at: new Date().toISOString() })
+          .eq('id', job.id);
         paused = true;
         break;
       }
@@ -864,6 +932,7 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
           last_error: lastErr,
           locked_at: null,
           locked_by: null,
+          next_group_eligible_at: null,
           updated_at: pauseAt,
         })
         .eq('id', job.id);
@@ -893,6 +962,17 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
         success: true,
         data: { processed: true, job_id: job.id, sent: totalSent, failed: totalFailed, current_index: newIdx, total, status: 'completed' },
       };
+    }
+
+    if (persisted && interGroupDelayMs > 0) {
+      const eligibleIso = new Date(Date.now() + interGroupDelayMs).toISOString();
+      await supabaseServiceRole
+        .from('activation_mass_send_jobs')
+        .update({
+          next_group_eligible_at: eligibleIso,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', job.id);
     }
 
     currentIndex = newIdx;
