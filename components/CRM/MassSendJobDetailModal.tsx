@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { X, Loader2, RotateCcw, Users, CheckCircle2, XCircle, Clock } from 'lucide-react';
-import { sanitizeMassSendErrorMessage } from '@/lib/utils/activation-send-errors';
+import { sanitizeMassSendErrorMessage, stringifyMassSendUnknownError } from '@/lib/utils/activation-send-errors';
 import { normalizeActivationMassSendInstanceNames } from '@/lib/crm/mass-send-instance-names';
 import { MassSendJobCountdownCell } from '@/components/CRM/MassSendJobCountdownCell';
 
@@ -68,11 +68,16 @@ function normalizeOutcomes(raw: unknown, nameMap?: Record<string, string> | null
       const groupId = String(r.groupId ?? r.group_id ?? '').trim();
       if (!groupId) return null;
       const groupName = (r.groupName as string) || nameMap?.[groupId] || null;
+      const rawErr = r.error ?? r.error_message;
+      const errText =
+        rawErr != null && String(rawErr).trim() !== ''
+          ? stringifyMassSendUnknownError(rawErr, 2000)
+          : '';
       return {
         groupId,
         ...(groupName ? { groupName } : {}),
         success: r.success === true,
-        ...(r.error ? { error: String(r.error) } : {}),
+        ...(errText ? { error: errText } : {}),
       } as MassSendGroupOutcome;
     })
     .filter(Boolean) as MassSendGroupOutcome[];

@@ -34,6 +34,7 @@ import {
   isMassSendFatalInstanceDroppedError,
   massSendInstanceDisconnectedMessage,
   sanitizeMassSendErrorMessage,
+  stringifyMassSendUnknownError,
 } from '@/lib/utils/activation-send-errors';
 import type { ApiResponse } from '@/lib/utils/response';
 import {
@@ -386,9 +387,11 @@ async function sendGroupToEvolution(ctx: EvolutionContext, groupId: string): Pro
 
       let errMsg = '';
       try {
-        const j = JSON.parse(rawBody);
-        const src = j.message ?? j.response?.message ?? j.error;
-        errMsg = Array.isArray(src) ? src.join('; ') : String(src || '');
+        const j = JSON.parse(rawBody) as Record<string, unknown>;
+        const src = j.message ?? (j.response as Record<string, unknown> | undefined)?.message ?? j.error;
+        errMsg = Array.isArray(src)
+          ? src.map((x) => stringifyMassSendUnknownError(x, 600)).filter(Boolean).join('; ')
+          : stringifyMassSendUnknownError(src, 1200);
       } catch {
         errMsg = rawBody.slice(0, 300);
       }
@@ -476,9 +479,13 @@ async function persistGroupResult(
   const now = new Date().toISOString();
   const skipOutcomes = result === null;
   const gidKey = normalizeMassSendGroupId(groupId) || String(groupId).trim();
+  const errStr =
+    skipOutcomes || result.error == null || String(result.error).trim() === ''
+      ? null
+      : stringifyMassSendUnknownError(result.error, 2000);
   const outcome = skipOutcomes
     ? null
-    : [{ groupId: gidKey, success: result.success, ...(result.error ? { error: result.error } : {}) }];
+    : [{ groupId: gidKey, success: result.success, ...(errStr ? { error: errStr } : {}) }];
 
   const { data: rpcApplied, error: rpcErr } = await supabaseServiceRole.rpc('increment_mass_send_job_counts', {
     p_job_id: jobId,
@@ -486,7 +493,7 @@ async function persistGroupResult(
     p_failed: skipOutcomes ? 0 : result.success ? 0 : 1,
     p_processed_index: newProcessedIndex,
     p_expected_processed_index: expectedProcessedIndex,
-    p_last_error: skipOutcomes ? null : result.error || null,
+    p_last_error: skipOutcomes ? null : errStr,
     p_status: isComplete ? 'completed' : 'processing',
     p_now: now,
     p_group_outcomes: outcome,
@@ -520,7 +527,7 @@ async function persistGroupResult(
         job_id: jobId,
         group_id: normalizeMassSendGroupId(groupId) || String(groupId).trim(),
         success: result.success,
-        error_message: result.error ? String(result.error).slice(0, 2000) : null,
+        error_message: errStr,
         updated_at: now,
         created_at: now,
       },
@@ -861,9 +868,10 @@ export async function executeMassSendProcess(_publicOrigin?: string | null): Pro
             succeededGroupIds.add(groupId);
           } else {
             const dbSnap = await evolutionInstanceDbStatusLine(ctx.instanceId);
-            const hint = interpretEvolutionFetchFailure(result.fetchDiag, String(result.error || '').toLowerCase());
+            const errLine = stringifyMassSendUnknownError(result.error, 400);
+            const hint = interpretEvolutionFetchFailure(result.fetchDiag, errLine.toLowerCase());
             console.error(
-              `[MassSend] [${currentIndex + 1}/${total}] ${groupKeyForLog} FALHA (${duration}ms) via ${iname} | ${hint} | ${dbSnap} | erro="${String(result.error || '').slice(0, 300)}"`
+              `[MassSend] [${currentIndex + 1}/${total}] ${groupKeyForLog} FALHA (${duration}ms) via ${iname} | ${hint} | ${dbSnap} | erro="${errLine.slice(0, 300)}"`
             );
             totalFailed++;
           }

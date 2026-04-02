@@ -6,6 +6,64 @@ import { messageIndicatesEvolutionSessionDropped } from '@/lib/evolution/mark-in
 
 const MAX_LEN = 500;
 
+/**
+ * Converte payloads de erro da Evolution (string | objeto | array aninhado) em texto para DB/UI.
+ * Evita `[object Object]` quando `j.error` ou `j.message` vêm como objeto JSON.
+ */
+export function stringifyMassSendUnknownError(value: unknown, maxLen = 2000): string {
+  if (value == null) return '';
+  if (typeof value === 'string') {
+    const t = value.trim();
+    if (!t) return '';
+    return maxLen > 0 && t.length > maxLen ? `${t.slice(0, maxLen)}…` : t;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value).slice(0, maxLen);
+  }
+  if (value instanceof Error) {
+    const m = value.message?.trim() || '';
+    const out = m || 'Error';
+    return maxLen > 0 && out.length > maxLen ? `${out.slice(0, maxLen)}…` : out;
+  }
+  if (Array.isArray(value)) {
+    const cap = Math.min(800, maxLen);
+    const parts = value
+      .map((x) => stringifyMassSendUnknownError(x, cap))
+      .filter((p) => p.length > 0);
+    const joined = parts.join('; ');
+    return maxLen > 0 && joined.length > maxLen ? `${joined.slice(0, maxLen)}…` : joined;
+  }
+  if (typeof value === 'object') {
+    const o = value as Record<string, unknown>;
+    if (typeof o.message === 'string' && o.message.trim()) {
+      return stringifyMassSendUnknownError(o.message, maxLen);
+    }
+    if (typeof o.error === 'string' && o.error.trim()) {
+      return stringifyMassSendUnknownError(o.error, maxLen);
+    }
+    if (o.error != null && typeof o.error === 'object') {
+      const nested = stringifyMassSendUnknownError(o.error, maxLen);
+      if (nested) return nested;
+    }
+    const resp = o.response;
+    if (resp != null && typeof resp === 'object') {
+      const rm = (resp as Record<string, unknown>).message;
+      if (rm != null) {
+        const fromResp = stringifyMassSendUnknownError(rm, maxLen);
+        if (fromResp) return fromResp;
+      }
+    }
+    try {
+      const s = JSON.stringify(value);
+      const out = maxLen > 0 && s.length > maxLen ? `${s.slice(0, maxLen)}…` : s;
+      return out;
+    } catch {
+      return '[erro não serializável]';
+    }
+  }
+  return String(value).slice(0, maxLen);
+}
+
 /** Texto único para UI (disparo em massa, ativações, detalhe do job) quando a sessão Evolution cai. */
 export const MASS_SEND_INSTANCE_DISCONNECTED_USER_MESSAGE =
   'A instância caiu ou foi desconectada. Reconecte o WhatsApp em Instâncias (QR) e tente o disparo novamente.';
@@ -39,6 +97,10 @@ export function sanitizeMassSendErrorMessage(raw: string | null | undefined): st
   if (raw == null || typeof raw !== 'string') return '';
   const t = raw.trim();
   if (!t) return '';
+
+  if (t === '[object Object]' || /^\[object \w+\]$/.test(t)) {
+    return 'A Evolution API retornou um erro sem mensagem legível (objeto). Verifique os logs do servidor [MassSend] e a instância.';
+  }
 
   if (messageIndicatesEvolutionSessionDropped(t)) {
     return MASS_SEND_INSTANCE_DISCONNECTED_USER_MESSAGE;

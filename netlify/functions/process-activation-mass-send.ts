@@ -18,6 +18,7 @@ import {
   isMassSendFatalInstanceDroppedError,
   massSendInstanceDisconnectedMessage,
   sanitizeMassSendErrorMessage,
+  stringifyMassSendUnknownError,
 } from '../../lib/utils/activation-send-errors';
 import { maybeMarkEvolutionInstanceDisconnected } from '../../lib/evolution/mark-instance-disconnected';
 import {
@@ -144,10 +145,14 @@ async function sendToEvolution(
       console.error(`[MassSend] Evolution HTTP ${res.status} | ${url} | body: ${text.slice(0, 300)}`);
       let errMsg = '';
       try {
-        const j = JSON.parse(text);
-        const src = j.message ?? j.response?.message ?? j.error;
-        errMsg = Array.isArray(src) ? src.join('; ') : String(src || '');
-      } catch { errMsg = text.slice(0, 300); }
+        const j = JSON.parse(text) as Record<string, unknown>;
+        const src = j.message ?? (j.response as Record<string, unknown> | undefined)?.message ?? j.error;
+        errMsg = Array.isArray(src)
+          ? src.map((x) => stringifyMassSendUnknownError(x, 600)).filter(Boolean).join('; ')
+          : stringifyMassSendUnknownError(src, 1200);
+      } catch {
+        errMsg = text.slice(0, 300);
+      }
       const rawProbe = errMsg || text.slice(0, 500);
       return {
         success: false,
@@ -530,7 +535,9 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
             totalSent++;
             succeededGroupIds.add(groupId);
           } else {
-            console.error(`[MassSend] [${idx + 1}/${total}] ${groupKeyForLog} FALHA (${ms}ms) | ${result.error}`);
+            console.error(
+              `[MassSend] [${idx + 1}/${total}] ${groupKeyForLog} FALHA (${ms}ms) | ${stringifyMassSendUnknownError(result.error, 500)}`
+            );
             totalFailed++;
             const probe = result.rawForDisconnectProbe ?? result.error;
             const markId = credsThis?.instanceId;
@@ -547,16 +554,20 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
       const pNow = new Date().toISOString();
       const skipRpcOutcomes = alreadyOk;
       const persistGid = normalizeMassSendGroupId(groupId) || String(groupIdRaw ?? '').trim() || `invalid_${shortId(job.id)}_${idx}`;
+      const errStr =
+        skipRpcOutcomes || result.error == null || String(result.error).trim() === ''
+          ? null
+          : stringifyMassSendUnknownError(result.error, 2000);
       const outcome = skipRpcOutcomes
         ? null
-        : [{ groupId: persistGid, success: result.success, ...(result.error ? { error: result.error } : {}) }];
+        : [{ groupId: persistGid, success: result.success, ...(errStr ? { error: errStr } : {}) }];
       const { data: rpcApplied, error: rpcErr } = await supabase.rpc('increment_mass_send_job_counts', {
         p_job_id: job.id,
         p_sent: skipRpcOutcomes ? 0 : result.success ? 1 : 0,
         p_failed: skipRpcOutcomes ? 0 : result.success ? 0 : 1,
         p_processed_index: newIdx,
         p_expected_processed_index: idx,
-        p_last_error: skipRpcOutcomes ? null : result.error || null,
+        p_last_error: skipRpcOutcomes ? null : errStr,
         p_status: isComplete ? 'completed' : 'processing',
         p_now: pNow,
         p_group_outcomes: outcome,
@@ -586,7 +597,7 @@ export const handler = async (): Promise<{ statusCode: number; body: string }> =
               job_id: job.id,
               group_id: persistGid,
               success: result.success,
-              error_message: result.error ? String(result.error).slice(0, 2000) : null,
+              error_message: errStr,
               updated_at: pNow,
               created_at: pNow,
             },
