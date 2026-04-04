@@ -1,7 +1,7 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import GestorTrafegoClient from './GestorTrafegoClient';
-import { getEffectiveDonoIdForGestor } from '@/lib/middleware/gestor-owner';
+import { getEffectiveDonoIdForGestorTrafegoViewer } from '@/lib/middleware/gestor-owner';
 import { getUserProfile, hasSidebarPermission } from '@/lib/middleware/permissions';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
@@ -14,7 +14,7 @@ export default async function GestorTrafegoPage() {
   }
 
   const profile = await getUserProfile(userId);
-  const allowedStatuses: string[] = ['gestor', 'admin', 'super_admin'];
+  const allowedStatuses: string[] = ['gestor', 'gerente', 'admin', 'super_admin'];
   const normalizedStatus = profile?.status?.trim().toLowerCase();
   const hasStatusAccess = profile && normalizedStatus != null && allowedStatuses.includes(normalizedStatus);
   const hasSidebarAccess = profile ? await hasSidebarPermission(profile, 'gestao_trafego') : false;
@@ -29,14 +29,15 @@ export default async function GestorTrafegoPage() {
     );
   }
 
-  const userStatusForClient = (normalizedStatus === 'gestor' || normalizedStatus === 'admin' || normalizedStatus === 'super_admin')
-    ? (normalizedStatus as 'gestor' | 'admin' | 'super_admin')
+  const userStatusForClient = (normalizedStatus === 'gestor' || normalizedStatus === 'gerente' || normalizedStatus === 'admin' || normalizedStatus === 'super_admin')
+    ? (normalizedStatus as 'gestor' | 'gerente' | 'admin' | 'super_admin')
     : null;
 
   // Admin/Super Admin: seletor de qualquer dono. Cargo personalizado com gestao_trafego: seletor só dos donos/bancas permitidos (API /donos filtra).
   const customGestaoTrafegoOnly =
     hasSidebarAccess &&
     normalizedStatus !== 'gestor' &&
+    normalizedStatus !== 'gerente' &&
     normalizedStatus !== 'admin' &&
     normalizedStatus !== 'super_admin';
   if (normalizedStatus === 'admin' || normalizedStatus === 'super_admin' || hasSidebarAccess) {
@@ -50,8 +51,11 @@ export default async function GestorTrafegoPage() {
     );
   }
 
-  // Gestor: dono efetivo é o enroller (dono da banca) ou pode usar seletor (vinculado a Admin ou atribuído a bancas)
-  const donoId = normalizedStatus === 'gestor' ? await getEffectiveDonoIdForGestor(userId) : null;
+  // Gestor / Gerente: dono efetivo (enroller dono) ou seletor se tiver bancas em user_bancas / enroller admin
+  const donoId =
+    normalizedStatus === 'gestor' || normalizedStatus === 'gerente'
+      ? await getEffectiveDonoIdForGestorTrafegoViewer(userId)
+      : null;
   if (!donoId) {
     let canSelectDono = false;
     let userBancas: { banca_id: string }[] = [];

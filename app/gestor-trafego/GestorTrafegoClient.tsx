@@ -137,7 +137,7 @@ interface ChartData {
   };
 }
 
-type UserStatusGestor = 'gestor' | 'admin' | 'super_admin' | null;
+type UserStatusGestor = 'gestor' | 'gerente' | 'admin' | 'super_admin' | null;
 
 interface DonoOption {
   id: string;
@@ -179,6 +179,9 @@ export default function GestorTrafegoClient({
   const checking = serverUserId ? false : authChecking;
   const isAdminOrSuperAdmin = serverUserStatus === 'admin' || serverUserStatus === 'super_admin';
   const showDonoSelector = isAdminOrSuperAdmin || canSelectDono;
+  /** Mesma UX de seletor por banca que o gestor (lista /api/gestor-trafego/bancas). */
+  const usesBancaSelectorAsGestor = serverUserStatus === 'gestor' || serverUserStatus === 'gerente';
+  const isGerenteViewer = serverUserStatus === 'gerente';
   
   const [loading, setLoading] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
@@ -298,7 +301,7 @@ export default function GestorTrafegoClient({
   // Gestor: carrega bancas às quais está atribuído. Admin/Super Admin: carrega lista de donos.
   useEffect(() => {
     if (!userId || !showDonoSelector || authError) return;
-    if (serverUserStatus === 'gestor') {
+    if (usesBancaSelectorAsGestor) {
       if (bancasGestor.length > 0) return;
       setLoadingDonos(true);
       fetch('/api/gestor-trafego/bancas', { headers: { 'X-User-Id': userId }, credentials: 'include' })
@@ -331,7 +334,7 @@ export default function GestorTrafegoClient({
         })
         .finally(() => setLoadingDonos(false));
     }
-  }, [userId, showDonoSelector, authError, initialData, serverUserStatus, bancasGestor.length, donos.length]);
+  }, [userId, showDonoSelector, authError, initialData, serverUserStatus, usesBancaSelectorAsGestor, bancasGestor.length, donos.length]);
 
   useEffect(() => {
     if (!userId) return;
@@ -1000,9 +1003,14 @@ export default function GestorTrafegoClient({
               <Shield className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />
               Gestão de Tráfego
             </h1>
-            <p className="text-gray-500 dark:text-gray-400">Painel do Gestor de Tráfego — mesma hierarquia e métricas da banca</p>
+            <p className="text-gray-500 dark:text-gray-400">
+              {isGerenteViewer
+                ? 'Métricas e funil Meta apenas das bancas às quais você está vinculado no perfil.'
+                : 'Painel do Gestor de Tráfego — mesma hierarquia e métricas da banca'}
+            </p>
           </div>
           
+          {!isGerenteViewer && (
           <button 
             onClick={() => setIsModalOpen(true)}
             className="flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl font-bold transition-all shadow-md shadow-emerald-100"
@@ -1010,6 +1018,7 @@ export default function GestorTrafegoClient({
             <UserPlus className="w-5 h-5" />
             Cadastrar Usuário
           </button>
+          )}
         </div>
 
         {/* KPIs da API Externa */}
@@ -1017,7 +1026,7 @@ export default function GestorTrafegoClient({
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
             <h2 className="text-xl font-bold text-gray-800 dark:text-gray-100 flex items-center gap-2">
               <BarChart3 className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />
-              Métricas da Banca {bancaName ? `- ${bancaName}` : showDonoSelector && !selectedDonoId ? (serverUserStatus === 'gestor' ? '(selecione uma banca)' : '(selecione uma banca)') : ''}
+              Métricas da Banca {bancaName ? `- ${bancaName}` : showDonoSelector && !selectedDonoId ? '(selecione uma banca)' : ''}
             </h2>
             
             {/* Filtro de Data + Seletor: Gestor = bancas atribuídas; Admin/Super Admin = dono da banca */}
@@ -1025,7 +1034,7 @@ export default function GestorTrafegoClient({
               {showDonoSelector && (
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium text-gray-600 dark:text-gray-400 hidden sm:inline">
-                    {serverUserStatus === 'gestor' ? 'Banca' : 'Dono da Banca'}
+                    {usesBancaSelectorAsGestor ? 'Banca' : 'Dono da Banca'}
                   </span>
                   {loadingDonos ? (
                     <div className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2 rounded-xl text-sm text-gray-500 dark:text-gray-400">
@@ -1057,11 +1066,11 @@ export default function GestorTrafegoClient({
                       className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2 rounded-xl text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm min-w-[180px]"
                     >
                       <option value="">
-                        {serverUserStatus === 'gestor'
+                        {usesBancaSelectorAsGestor
                           ? (bancasGestor.length === 0 ? 'Nenhuma banca atribuída' : 'Selecione uma banca')
                           : 'Selecione um dono de banca'}
                       </option>
-                      {serverUserStatus === 'gestor'
+                      {usesBancaSelectorAsGestor
                         ? bancasGestor.map((b) => (
                             <option
                               key={b.banca_id}

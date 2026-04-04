@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { getUserProfile } from '@/lib/middleware/permissions';
 import { requireGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
-import { getEffectiveDonoIdForGestor } from '@/lib/middleware/gestor-owner';
+import { resolveGestorTrafegoEffectiveDonoId } from '@/lib/middleware/gestor-owner';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { isInHierarchy } from '@/lib/utils/hierarchy';
@@ -20,10 +20,11 @@ export async function GET(
     const profile = await getUserProfile(userId);
     if (!profile) return errorResponse('Perfil não encontrado', 403);
     const statusNorm = profile.status?.trim().toLowerCase();
-    // Gestor (status): dono do enroller. Admin/Super Admin/cargo gestao_trafego: header X-Effective-Dono-Id
-    let ownerId: string | null = statusNorm === 'gestor'
-      ? await getEffectiveDonoIdForGestor(userId)
-      : req.headers.get('X-Effective-Dono-Id');
+    const ownerId = await resolveGestorTrafegoEffectiveDonoId(
+      req.headers.get('X-Effective-Dono-Id'),
+      userId,
+      statusNorm
+    );
     if (!ownerId) return errorResponse('Gestor vinculado a um Dono ou informe X-Effective-Dono-Id.', 403);
 
     const resolvedParams = await params;

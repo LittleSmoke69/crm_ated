@@ -2,11 +2,11 @@ import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { getUserProfile, hasSidebarPermission, UserProfile } from '@/lib/middleware/permissions';
 
-const GESTOR_TRAFEGO_STATUSES = ['gestor', 'admin', 'super_admin'] as const;
+const GESTOR_TRAFEGO_STATUSES = ['gestor', 'gerente', 'admin', 'super_admin'] as const;
 
 /**
  * Verifica se o perfil pode acessar o módulo Gestão de Tráfego:
- * - status gestor, admin ou super_admin; ou
+ * - status gestor, gerente (dados limitados às bancas vinculadas), admin ou super_admin; ou
  * - cargo com permissão de sidebar gestao_trafego.
  */
 export async function canAccessGestorTrafego(profile: UserProfile | null): Promise<boolean> {

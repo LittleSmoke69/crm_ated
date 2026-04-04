@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { getUserProfile } from '@/lib/middleware/permissions';
 import { canAccessGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
-import { getEffectiveDonoIdForGestor } from '@/lib/middleware/gestor-owner';
+import { getEffectiveDonoIdForGestorTrafegoViewer } from '@/lib/middleware/gestor-owner';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { getDonoBancaDashboardData, getDashboardDataByBancaId, fetchDashboardMetrics } from '@/lib/services/dashboard/dono-banca';
 import {
@@ -11,6 +11,7 @@ import {
   getMetaCampaignsWithInsights,
 } from '@/lib/services/meta-sync-service';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { getHierarchyPath } from '@/lib/utils/hierarchy';
 
 export const maxDuration = 120;
 
@@ -137,7 +138,7 @@ export async function GET(req: NextRequest) {
         }
       }
       if (!bancaId && !donoId) {
-        donoId = await getEffectiveDonoIdForGestor(profile.id);
+        donoId = await getEffectiveDonoIdForGestorTrafegoViewer(profile.id);
       }
       if (!bancaId && !donoId && profile.enroller) {
         const { data: encProfile } = await supabaseServiceRole
@@ -209,6 +210,11 @@ export async function GET(req: NextRequest) {
             donoId = null; // usar bancaId em vez de donoId sem banca_url
           }
         }
+      }
+      if (!donoId && !bancaUrl && (normalizedStatus === 'gerente' || normalizedStatus === 'gestor')) {
+        const path = await getHierarchyPath(profile.id);
+        const donoInPath = path.find((p) => p.status?.trim().toLowerCase() === 'dono_banca');
+        if (donoInPath?.id) donoId = donoInPath.id;
       }
       if (!bancaUrl && donoId) {
         const { data: dono } = await supabaseServiceRole

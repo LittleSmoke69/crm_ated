@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { validateHierarchy, UserStatus, getUserProfile } from '@/lib/middleware/permissions';
 import { requireGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
-import { getEffectiveDonoIdForGestor } from '@/lib/middleware/gestor-owner';
+import { resolveGestorTrafegoEffectiveDonoId } from '@/lib/middleware/gestor-owner';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { isInHierarchy } from '@/lib/utils/hierarchy';
@@ -17,9 +17,17 @@ export async function POST(req: NextRequest) {
     const { userId, profile } = await requireGestorTrafego(req);
     if (!profile) return errorResponse('Perfil não encontrado', 403);
     const statusNorm = profile.status?.trim().toLowerCase();
-    let ownerId: string | null = statusNorm === 'gestor'
-      ? await getEffectiveDonoIdForGestor(userId)
-      : req.headers.get('X-Effective-Dono-Id');
+    if (statusNorm === 'gerente') {
+      return errorResponse(
+        'Cadastro de usuários nesta tela é exclusivo de Gestor de Tráfego ou administradores. Use Gestão de Consultores para sua equipe.',
+        403
+      );
+    }
+    const ownerId = await resolveGestorTrafegoEffectiveDonoId(
+      req.headers.get('X-Effective-Dono-Id'),
+      userId,
+      statusNorm
+    );
     if (!ownerId) {
       return errorResponse('Gestor vinculado a um Dono de Banca ou informe X-Effective-Dono-Id para cadastrar usuários.', 403);
     }

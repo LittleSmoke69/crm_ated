@@ -1,9 +1,10 @@
 import { NextRequest } from 'next/server';
 import { getUserProfile } from '@/lib/middleware/permissions';
 import { requireGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
-import { getEffectiveDonoIdForGestor } from '@/lib/middleware/gestor-owner';
+import { getEffectiveDonoIdForGestorTrafegoViewer } from '@/lib/middleware/gestor-owner';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { getHierarchyPath } from '@/lib/utils/hierarchy';
 
 function normalizeBancaUrl(url: string | null | undefined): string {
   if (!url) return '';
@@ -57,7 +58,7 @@ export async function GET(req: NextRequest) {
     // Gestor: donos que pode acessar = enroller (se dono) + donos das bancas em user_bancas
     const donoIds = new Set<string>();
 
-    const effectiveDonoId = await getEffectiveDonoIdForGestor(profile.id);
+    const effectiveDonoId = await getEffectiveDonoIdForGestorTrafegoViewer(profile.id);
     if (effectiveDonoId) {
       donoIds.add(effectiveDonoId);
     }
@@ -103,6 +104,13 @@ export async function GET(req: NextRequest) {
       (donosFromBancas || []).forEach((d: { id: string; banca_url?: string | null }) => {
         if (urls.has(normalizeBancaUrl(d.banca_url))) donoIds.add(d.id);
       });
+    }
+
+    if (donoIds.size === 0 && (statusNorm === 'gerente' || statusNorm === 'gestor')) {
+      const path = await getHierarchyPath(profile.id);
+      for (const p of path) {
+        if (p.status?.trim().toLowerCase() === 'dono_banca' && p.id) donoIds.add(p.id);
+      }
     }
 
     if (donoIds.size === 0) {

@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { getUserProfile } from '@/lib/middleware/permissions';
 import { requireGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
-import { getEffectiveDonoIdForGestor } from '@/lib/middleware/gestor-owner';
+import { resolveGestorTrafegoEffectiveDonoId } from '@/lib/middleware/gestor-owner';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { isInHierarchy } from '@/lib/utils/hierarchy';
@@ -33,13 +33,11 @@ export async function GET(
     if (!profile) return errorResponse('Perfil não encontrado', 403);
     const statusNorm = profile.status?.trim().toLowerCase();
 
-    let ownerId: string | null = null;
-    if (statusNorm === 'gestor') {
-      ownerId = await getEffectiveDonoIdForGestor(userId);
-    } else {
-      // Admin, Super Admin ou cargo com gestao_trafego: usam seletor (X-Effective-Dono-Id)
-      ownerId = req.headers.get('X-Effective-Dono-Id');
-    }
+    const ownerId = await resolveGestorTrafegoEffectiveDonoId(
+      req.headers.get('X-Effective-Dono-Id'),
+      userId,
+      statusNorm
+    );
     if (!ownerId) {
       return errorResponse('Gestor deve estar vinculado a um Dono de Banca ou informe X-Effective-Dono-Id.', 403);
     }
