@@ -28,8 +28,9 @@ function normalizeBancaUrl(url: string | null | undefined): string {
  * Busca dados da banca e Meta Ads da mesma forma que a gestão de consultores (dono-banca):
  * - Com donoId: getDonoBancaDashboardData (dashboard-metrics + get-indicateds-by-consultant + Meta Ads).
  * - Com bancaId apenas: getDashboardDataByBancaId (mesma lógica por banca).
- * Gestor: dados do dono vinculado (enroller) ou header X-Effective-Dono-Id / X-Effective-Banca-Id.
- * Admin/Super Admin: header X-Effective-Dono-Id.
+ * Não-admin (gestor, cargo personalizado com gestao_trafego, etc.): mesma resolução — dono/enroller,
+ * user_bancas, headers X-Effective-*.
+ * Admin/Super Admin: header X-Effective-Dono-Id ou X-Effective-Banca-Id.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -72,7 +73,49 @@ export async function GET(req: NextRequest) {
     let bancaUrl: string | null = null;
     let bancaName: string | null = null;
 
-    if (normalizedStatus === 'gestor') {
+    if (normalizedStatus === 'admin' || normalizedStatus === 'super_admin') {
+      const effectiveBancaIdHeader = (req.headers.get('X-Effective-Banca-Id') ?? req.headers.get('x-effective-banca-id'))?.trim();
+      if (effectiveBancaIdHeader) {
+        const { data: banca } = await supabaseServiceRole
+          .from('crm_bancas')
+          .select('id, url, name')
+          .eq('id', effectiveBancaIdHeader)
+          .single();
+        if (banca?.url) {
+          bancaId = banca.id;
+          bancaUrl = banca.url;
+          bancaName = banca.name || banca.url || 'Banca';
+        }
+      }
+      if (!bancaUrl) {
+        const effectiveDonoId = (req.headers.get('X-Effective-Dono-Id') ?? req.headers.get('x-effective-dono-id'))?.trim();
+        if (!effectiveDonoId) {
+          return errorResponse('Informe o Dono de Banca (header X-Effective-Dono-Id) ou a Banca (X-Effective-Banca-Id).', 400);
+        }
+        const { data: dono } = await supabaseServiceRole
+          .from('profiles')
+          .select('id, banca_url, banca_name')
+          .eq('id', effectiveDonoId)
+          .eq('status', 'dono_banca')
+          .single();
+        if (!dono) {
+          return errorResponse('Dono de Banca não encontrado ou inválido.', 400);
+        }
+        donoId = dono.id;
+        if (!dono.banca_url) {
+          return errorResponse('Dono sem banca_url configurado.', 400);
+        }
+        bancaUrl = dono.banca_url;
+        bancaName = dono.banca_name || dono.banca_url || 'Banca';
+        const { data: bancas } = await supabaseServiceRole.from('crm_bancas').select('id, url, name');
+        const norm = normalizeBancaUrl(dono.banca_url);
+        const match = (bancas || []).find((b: { url: string }) => normalizeBancaUrl(b.url) === norm);
+        if (match) {
+          bancaId = match.id;
+          if (match.name) bancaName = match.name;
+        }
+      }
+    } else {
       const effectiveBancaIdHeader = (req.headers.get('X-Effective-Banca-Id') ?? req.headers.get('x-effective-banca-id'))?.trim();
       if (effectiveBancaIdHeader) {
         const { data: banca } = await supabaseServiceRole
@@ -95,6 +138,16 @@ export async function GET(req: NextRequest) {
       }
       if (!bancaId && !donoId) {
         donoId = await getEffectiveDonoIdForGestor(profile.id);
+      }
+      if (!bancaId && !donoId && profile.enroller) {
+        const { data: encProfile } = await supabaseServiceRole
+          .from('profiles')
+          .select('id, status')
+          .eq('id', profile.enroller)
+          .single();
+        if (encProfile?.status?.trim().toLowerCase() === 'dono_banca') {
+          donoId = encProfile.id;
+        }
       }
       if (!bancaId && !donoId) {
         const effectiveDonoId = (req.headers.get('X-Effective-Dono-Id') ?? req.headers.get('x-effective-dono-id'))?.trim();
@@ -179,51 +232,9 @@ export async function GET(req: NextRequest) {
       }
       if (!bancaUrl) {
         return errorResponse(
-          'Gestor deve estar vinculado a um Dono de Banca ou ter bancas atribuídas para visualizar os dados.',
+          'Você precisa estar vinculado a um Dono de Banca ou ter bancas atribuídas para visualizar os dados.',
           403
         );
-      }
-    } else if (normalizedStatus === 'admin' || normalizedStatus === 'super_admin') {
-      const effectiveBancaIdHeader = (req.headers.get('X-Effective-Banca-Id') ?? req.headers.get('x-effective-banca-id'))?.trim();
-      if (effectiveBancaIdHeader) {
-        const { data: banca } = await supabaseServiceRole
-          .from('crm_bancas')
-          .select('id, url, name')
-          .eq('id', effectiveBancaIdHeader)
-          .single();
-        if (banca?.url) {
-          bancaId = banca.id;
-          bancaUrl = banca.url;
-          bancaName = banca.name || banca.url || 'Banca';
-        }
-      }
-      if (!bancaUrl) {
-        const effectiveDonoId = (req.headers.get('X-Effective-Dono-Id') ?? req.headers.get('x-effective-dono-id'))?.trim();
-        if (!effectiveDonoId) {
-          return errorResponse('Informe o Dono de Banca (header X-Effective-Dono-Id) ou a Banca (X-Effective-Banca-Id).', 400);
-        }
-        const { data: dono } = await supabaseServiceRole
-          .from('profiles')
-          .select('id, banca_url, banca_name')
-          .eq('id', effectiveDonoId)
-          .eq('status', 'dono_banca')
-          .single();
-        if (!dono) {
-          return errorResponse('Dono de Banca não encontrado ou inválido.', 400);
-        }
-        donoId = dono.id;
-        if (!dono.banca_url) {
-          return errorResponse('Dono sem banca_url configurado.', 400);
-        }
-        bancaUrl = dono.banca_url;
-        bancaName = dono.banca_name || dono.banca_url || 'Banca';
-        const { data: bancas } = await supabaseServiceRole.from('crm_bancas').select('id, url, name');
-        const norm = normalizeBancaUrl(dono.banca_url);
-        const match = (bancas || []).find((b: { url: string }) => normalizeBancaUrl(b.url) === norm);
-        if (match) {
-          bancaId = match.id;
-          if (match.name) bancaName = match.name;
-        }
       }
     }
 

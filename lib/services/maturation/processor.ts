@@ -7,6 +7,7 @@ import { SupabaseClient } from '@supabase/supabase-js';
 import { maybeMarkEvolutionInstanceDisconnected } from '@/lib/evolution/mark-instance-disconnected';
 import { VIRGIN_AUTO_MATURATION_PLAN_ID } from '@/lib/maturation/job-lifecycle';
 import { reconcileOrphanedMasterInstanceLocks } from '@/lib/maturation/reconcile-master-instance-locks';
+import { MATURATION_MIN_STEP_DELAY_SEC } from '@/lib/maturation/min-step-delay';
 
 /**
  * Quantos steps são reivindicados por lote no RPC claim_maturation_steps.
@@ -108,6 +109,115 @@ function isEvolutionRateLimitError(params: { error?: string; httpStatus?: number
 function evolutionErrorIsRateLimit(responseText: string, httpStatus: number): boolean {
   const err = extractErrorMessage(responseText, `HTTP ${httpStatus}`);
   return isEvolutionRateLimitError({ error: err, httpStatus });
+}
+
+/**
+ * Proxy/nginx/Evolution fora do ar — não adianta retry com backoff (martela 502).
+ * Encerra jobs em execução e libera master_instances.
+ */
+function isEvolutionGatewayOrUpstreamError(params: { error?: string; httpStatus?: number }): boolean {
+  const s = params.httpStatus;
+  if (s === 502 || s === 503 || s === 504) return true;
+  const msg = (params.error || '').toLowerCase();
+  if (msg.includes('bad gateway') || msg.includes('502')) return true;
+  if (msg.includes('service unavailable') || msg.includes('503')) return true;
+  if (msg.includes('gateway timeout') || msg.includes('504')) return true;
+  if (/<\s*html[\s>]/i.test(params.error || '') || /<\s*!doctype/i.test(params.error || '')) return true;
+  return false;
+}
+
+/**
+ * Encerra job(s) de maturação (e irmãos de campanha) como failed, cancela steps pendentes e libera locks.
+ */
+async function terminateMaturationJobsInfrastructureFailure(
+  supabase: SupabaseClient,
+  params: {
+    triggerJobId: string;
+    stepId: string;
+    instanceName: string;
+    failReason: string;
+    logLabel: string;
+    userTitle: string;
+    userContent: string;
+    httpStatus?: number;
+    errorDetail?: string;
+  }
+): Promise<boolean> {
+  const {
+    triggerJobId,
+    stepId,
+    instanceName,
+    failReason,
+    logLabel,
+    userTitle,
+    userContent,
+    httpStatus,
+    errorDetail,
+  } = params;
+  const nowIso = new Date().toISOString();
+
+  const { data: jobMeta } = await supabase.from('maturation_jobs').select('campaign_id').eq('id', triggerJobId).maybeSingle();
+
+  let jobIdsToEnd: string[] = [triggerJobId];
+  const cid = jobMeta?.campaign_id as string | null | undefined;
+  if (cid) {
+    const { data: siblings } = await supabase
+      .from('maturation_jobs')
+      .select('id')
+      .eq('campaign_id', cid)
+      .eq('status', 'running');
+    if (siblings?.length) jobIdsToEnd = siblings.map((r) => r.id);
+  }
+
+  const { data: jobsBefore } = await supabase
+    .from('maturation_jobs')
+    .select('id, master_instance_id')
+    .in('id', jobIdsToEnd)
+    .eq('status', 'running');
+
+  const { data: endedRows } = await supabase
+    .from('maturation_jobs')
+    .update({ status: 'failed', updated_at: nowIso, ended_at: nowIso })
+    .in('id', jobIdsToEnd)
+    .eq('status', 'running')
+    .select('id');
+
+  if ((endedRows?.length || 0) === 0) return false;
+
+  const masterIds = [...new Set((jobsBefore || []).map((r) => r.master_instance_id).filter(Boolean))] as string[];
+  for (const mid of masterIds) {
+    await supabase
+      .from('master_instances')
+      .update({ is_locked: false, locked_job_id: null, locked_at: null })
+      .eq('id', mid);
+  }
+
+  await supabase
+    .from('maturation_steps')
+    .update({
+      status: 'failed',
+      locked_at: null,
+      locked_by: null,
+      error: failReason,
+    })
+    .in('job_id', jobIdsToEnd)
+    .in('status', ['pending', 'processing']);
+
+  console.warn(
+    `${LOG_MANUAL} ${logLabel} → ${endedRows!.length} job(s) finalizado(s) (failed)${cid ? ' campanha/malha' : ''} · ${instanceName}`
+  );
+  await createMessage(supabase, {
+    jobId: triggerJobId,
+    stepId,
+    direction: 'system',
+    type: 'error',
+    title: userTitle,
+    content: userContent,
+    status: 'failed',
+    httpStatus,
+    error: errorDetail,
+  });
+  return true;
 }
 
 async function sendText(params: {
@@ -432,72 +542,36 @@ async function processStep(supabase: SupabaseClient, step: any): Promise<void> {
     }
 
     if (isEvolutionRateLimitError({ error: result.error, httpStatus: result.httpStatus })) {
-      const nowIso = new Date().toISOString();
       const failReason =
         'Maturação encerrada: rate limit (Evolution/WhatsApp). Os passos não enviados foram cancelados.';
+      await terminateMaturationJobsInfrastructureFailure(supabase, {
+        triggerJobId: job_id,
+        stepId: id,
+        instanceName: instance_name,
+        failReason,
+        logLabel: 'Rate limit',
+        userTitle: '⛔ Maturação encerrada (rate limit)',
+        userContent: `${failReason} Instância: ${instance_name}.`,
+        httpStatus: result.httpStatus,
+        errorDetail: result.error,
+      });
+      return;
+    }
 
-      const { data: jobMeta } = await supabase.from('maturation_jobs').select('campaign_id').eq('id', job_id).maybeSingle();
-
-      let jobIdsToEnd: string[] = [job_id];
-      const cid = jobMeta?.campaign_id as string | null | undefined;
-      if (cid) {
-        const { data: siblings } = await supabase
-          .from('maturation_jobs')
-          .select('id')
-          .eq('campaign_id', cid)
-          .eq('status', 'running');
-        if (siblings?.length) jobIdsToEnd = siblings.map((r) => r.id);
-      }
-
-      const { data: jobsBefore } = await supabase
-        .from('maturation_jobs')
-        .select('id, master_instance_id')
-        .in('id', jobIdsToEnd)
-        .eq('status', 'running');
-
-      const { data: endedRows } = await supabase
-        .from('maturation_jobs')
-        .update({ status: 'failed', updated_at: nowIso, ended_at: nowIso })
-        .in('id', jobIdsToEnd)
-        .eq('status', 'running')
-        .select('id');
-
-      if ((endedRows?.length || 0) > 0) {
-        const masterIds = [...new Set((jobsBefore || []).map((r) => r.master_instance_id).filter(Boolean))] as string[];
-        for (const mid of masterIds) {
-          await supabase
-            .from('master_instances')
-            .update({ is_locked: false, locked_job_id: null, locked_at: null })
-            .eq('id', mid);
-        }
-
-        await supabase
-          .from('maturation_steps')
-          .update({
-            status: 'failed',
-            locked_at: null,
-            locked_by: null,
-            error: failReason,
-          })
-          .in('job_id', jobIdsToEnd)
-          .in('status', ['pending', 'processing']);
-
-        const n = endedRows!.length;
-        logVerbose(
-          `${LOG_MANUAL} Rate limit → ${n} job(s) finalizado(s) (failed)${cid ? ' campanha/malha' : ''} · ${instance_name}`
-        );
-        await createMessage(supabase, {
-          jobId: job_id,
-          stepId: id,
-          direction: 'system',
-          type: 'error',
-          title: '⛔ Maturação encerrada (rate limit)',
-          content: `${failReason} Instância: ${instance_name}.`,
-          status: 'failed',
-          httpStatus: result.httpStatus,
-          error: result.error,
-        });
-      }
+    if (isEvolutionGatewayOrUpstreamError({ error: result.error, httpStatus: result.httpStatus })) {
+      const failReason =
+        'Maturação encerrada: Evolution ou proxy retornou erro (502/503/504 ou HTML). Job finalizado — sem novas tentativas automáticas.';
+      await terminateMaturationJobsInfrastructureFailure(supabase, {
+        triggerJobId: job_id,
+        stepId: id,
+        instanceName: instance_name,
+        failReason,
+        logLabel: 'Gateway/upstream',
+        userTitle: '⛔ Maturação encerrada (serviço indisponível)',
+        userContent: `${failReason} Instância: ${instance_name}. Verifique Evolution API e proxy.`,
+        httpStatus: result.httpStatus,
+        errorDetail: result.error,
+      });
       return;
     }
 
@@ -533,11 +607,37 @@ async function updateJobProgress(supabase: SupabaseClient, jobId: string): Promi
   /** Não promover para finished se o job já foi failed/aborted/pausado (ex.: rate limit). */
   if (jobSt?.status !== 'running') return;
 
-  logVerbose(`${LOG_MANUAL} Job ${jobId} finalizado: ${terminalDone}/${totalN} steps (sent=${sentN}, failed=${failedN})`);
-  await supabase.from('maturation_jobs').update({ status: 'finished', ended_at: new Date().toISOString() }).eq('id', jobId);
+  const endedAt = new Date().toISOString();
+  const hasFailures = failedN > 0;
+  const nextStatus = hasFailures ? 'failed' : 'finished';
+  logVerbose(
+    `${LOG_MANUAL} Job ${jobId} encerrado (${nextStatus}): ${terminalDone}/${totalN} steps (sent=${sentN}, failed=${failedN}, skipped=${skippedN})`
+  );
+  await supabase
+    .from('maturation_jobs')
+    .update({ status: nextStatus, ended_at: endedAt })
+    .eq('id', jobId);
   const { data: j } = await supabase.from('maturation_jobs').select('master_instance_id').eq('id', jobId).single();
   if (j) await supabase.from('master_instances').update({ is_locked: false, locked_job_id: null, locked_at: null }).eq('id', j.master_instance_id);
-  await createMessage(supabase, { jobId, direction: 'system', type: 'info', title: '✅ Job finalizado', content: 'Todos os steps processados', status: 'info' });
+  if (hasFailures) {
+    await createMessage(supabase, {
+      jobId,
+      direction: 'system',
+      type: 'error',
+      title: '⛔ Job encerrado com falhas',
+      content: `${failedN} passo(s) falharam após tentativas. Status: failed — não há mais envios agendados para este job.`,
+      status: 'failed',
+    });
+  } else {
+    await createMessage(supabase, {
+      jobId,
+      direction: 'system',
+      type: 'info',
+      title: '✅ Job finalizado',
+      content: 'Todos os steps processados',
+      status: 'info',
+    });
+  }
 }
 
 /**
@@ -743,7 +843,40 @@ async function ensureVirginWarmupJob(supabase: SupabaseClient, inst: any, now: D
 
   const masterInstanceId = masterRow.id as string;
 
-  // Verifica se já há job running para este master
+  /**
+   * Um job de warmup por fase de maturação virgem. Antes: ao terminar (finished), o próximo tick criava
+   * outro job igual — envio contínuo via Evolution mesmo “sem plano” aparente na UI.
+   */
+  const { data: evoPhase } = await supabase
+    .from('evolution_instances')
+    .select('maturation_phase_started_at, maturation_started_at')
+    .eq('id', instanceId)
+    .maybeSingle();
+  const phaseStart =
+    evoPhase?.maturation_phase_started_at || evoPhase?.maturation_started_at || null;
+  if (phaseStart) {
+    const { data: jobsThisPhase } = await supabase
+      .from('maturation_jobs')
+      .select('id, status')
+      .eq('master_instance_id', masterInstanceId)
+      .eq('plan_id', VIRGIN_AUTO_MATURATION_PLAN_ID)
+      .gte('created_at', phaseStart);
+
+    const jl = jobsThisPhase || [];
+    const hasActiveLike = jl.some((j) => ['running', 'queued', 'paused'].includes(j.status));
+    if (hasActiveLike) {
+      return;
+    }
+    const hasTerminal = jl.some((j) => ['finished', 'failed', 'aborted'].includes(j.status));
+    if (hasTerminal) {
+      logVerbose(
+        `${LOG_AUTO} ${inst.instance_name}: warmup já rodou nesta fase (finished/failed/aborted) — não recriar job`
+      );
+      return;
+    }
+  }
+
+  // Verifica se já há job running para este master (redundante com o bloco acima, mantém segurança)
   const { data: activeJob } = await supabase
     .from('maturation_jobs')
     .select('id')
@@ -752,7 +885,6 @@ async function ensureVirginWarmupJob(supabase: SupabaseClient, inst: any, now: D
     .maybeSingle();
 
   if (activeJob) {
-    // Já há job ativo, não precisa criar outro
     return;
   }
 
@@ -816,7 +948,7 @@ async function ensureVirginWarmupJob(supabase: SupabaseClient, inst: any, now: D
   const planId = plan?.id ?? VIRGIN_AUTO_MATURATION_PLAN_ID;
 
   // Cria os steps a partir das mensagens configuradas
-  const delaySec = 10;
+  const delaySec = MATURATION_MIN_STEP_DELAY_SEC;
   const stepsToInsert: any[] = [];
   let cumulativeDelay = 0;
 

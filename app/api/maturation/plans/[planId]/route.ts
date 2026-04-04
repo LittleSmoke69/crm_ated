@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { isAdmin } from '@/lib/middleware/permissions';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { clampMaturationStepDelaySec } from '@/lib/maturation/min-step-delay';
 
 interface RouteParams {
   params: Promise<{ planId: string }>;
@@ -148,7 +149,7 @@ export async function PUT(req: NextRequest, { params }: RouteParams) {
       updateData.steps_json = steps.map((step: any, index: number) => ({
         index,
         type: step.type,
-        delaySec: step.delay_seconds || 5,
+        delaySec: clampMaturationStepDelaySec(step.delay_seconds ?? step.delaySec),
         target_chat_id: typeof step.target_chat_id === 'string' && step.target_chat_id.trim() ? step.target_chat_id.trim() : null,
         payload: step.payload || {},
       }));

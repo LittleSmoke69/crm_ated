@@ -30,6 +30,7 @@ import {
   Zap,
   Ban,
 } from 'lucide-react';
+import { clampMaturationStepDelaySec, MATURATION_MIN_STEP_DELAY_SEC } from '@/lib/maturation/min-step-delay';
 
 interface MaturationPlan {
   id: string;
@@ -473,7 +474,7 @@ export default function MaturadorSection({ userId }: Props) {
     setFormName('');
     setFormDescription('');
     setFormTargetChatId('');
-    setFormSteps([{ type: 'text', delay_seconds: 5, payload: { text: '' } }]);
+    setFormSteps([{ type: 'text', delay_seconds: MATURATION_MIN_STEP_DELAY_SEC, payload: { text: '' } }]);
     setShowModal(true);
   }
 
@@ -485,7 +486,7 @@ export default function MaturadorSection({ userId }: Props) {
     setFormSteps(
       plan.steps_json.map((step) => ({
         type: step.type,
-        delay_seconds: step.delaySec,
+        delay_seconds: clampMaturationStepDelaySec(step.delaySec),
         target_chat_id: step.target_chat_id ?? '',
         payload: step.payload,
       }))
@@ -494,7 +495,7 @@ export default function MaturadorSection({ userId }: Props) {
   }
 
   function addStep() {
-    setFormSteps([...formSteps, { type: 'text', delay_seconds: 5, target_chat_id: '', payload: { text: '' } }]);
+    setFormSteps([...formSteps, { type: 'text', delay_seconds: MATURATION_MIN_STEP_DELAY_SEC, target_chat_id: '', payload: { text: '' } }]);
   }
 
   function removeStep(index: number) {
@@ -514,7 +515,10 @@ export default function MaturadorSection({ userId }: Props) {
         payload: value === 'text' ? { text: '' } : { media_url: '', caption: '' },
       };
     } else if (field === 'delay_seconds') {
-      newSteps[index] = { ...newSteps[index], delay_seconds: value };
+      newSteps[index] = {
+        ...newSteps[index],
+        delay_seconds: clampMaturationStepDelaySec(typeof value === 'number' ? value : Number(value)),
+      };
     } else if (field === 'target_chat_id') {
       newSteps[index] = { ...newSteps[index], target_chat_id: value };
     } else {
@@ -569,7 +573,10 @@ export default function MaturadorSection({ userId }: Props) {
           name: formName.trim(),
           description: formDescription.trim() || null,
           default_target_chat_id: formTargetChatId.trim() || null,
-          steps: formSteps,
+          steps: formSteps.map((s) => ({
+            ...s,
+            delay_seconds: clampMaturationStepDelaySec(s.delay_seconds),
+          })),
         }),
       });
       
@@ -1988,12 +1995,12 @@ export default function MaturadorSection({ userId }: Props) {
                           </select>
                         </div>
                         <div>
-                          <label className="block text-xs text-gray-500 mb-1">Delay (segundos)</label>
+                          <label className="block text-xs text-gray-500 mb-1">Delay (segundos, mín. 30)</label>
                           <input
                             type="number"
                             value={step.delay_seconds}
-                            onChange={(e) => updateStep(index, 'delay_seconds', parseInt(e.target.value) || 5)}
-                            min={1}
+                            onChange={(e) => updateStep(index, 'delay_seconds', parseInt(e.target.value, 10))}
+                            min={MATURATION_MIN_STEP_DELAY_SEC}
                             className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-700 text-sm"
                           />
                         </div>

@@ -57,28 +57,38 @@ export async function GET(req: NextRequest) {
     // Gestor: donos que pode acessar = enroller (se dono) + donos das bancas em user_bancas
     const donoIds = new Set<string>();
 
-    const effectiveDonoId = await getEffectiveDonoIdForGestor(userId);
+    const effectiveDonoId = await getEffectiveDonoIdForGestor(profile.id);
     if (effectiveDonoId) {
       donoIds.add(effectiveDonoId);
     }
 
     if (profile.enroller) {
       const enrollerProfile = await getUserProfile(profile.enroller);
-      if (enrollerProfile?.status === 'admin' || enrollerProfile?.status === 'super_admin') {
+      const encSt = enrollerProfile?.status?.trim().toLowerCase();
+      if (encSt === 'admin' || encSt === 'super_admin') {
         const { data: allDonos } = await supabaseServiceRole
           .from('profiles')
           .select('id, email, full_name, banca_name')
           .eq('status', 'dono_banca')
           .order('full_name', { ascending: true });
         (allDonos || []).forEach((d: { id: string }) => donoIds.add(d.id));
+      } else if (encSt === 'dono_banca' && enrollerProfile?.id) {
+        donoIds.add(enrollerProfile.id);
       }
     }
 
-    const { data: ubRow } = await supabaseServiceRole
+    const profileId = profile.id;
+    let { data: ubRow } = await supabaseServiceRole
       .from('user_bancas')
       .select('banca_ids')
-      .eq('user_id', userId)
+      .eq('user_id', profileId)
       .maybeSingle();
+    if (!Array.isArray(ubRow?.banca_ids) || ubRow.banca_ids.length === 0) {
+      if (userId !== profileId) {
+        const { data: fallback } = await supabaseServiceRole.from('user_bancas').select('banca_ids').eq('user_id', userId).maybeSingle();
+        ubRow = fallback ?? ubRow;
+      }
+    }
     const bancaIds = Array.isArray(ubRow?.banca_ids) ? (ubRow.banca_ids as string[]) : [];
     if (bancaIds.length > 0) {
       const { data: bancas } = await supabaseServiceRole

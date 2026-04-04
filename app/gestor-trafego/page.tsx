@@ -33,13 +33,19 @@ export default async function GestorTrafegoPage() {
     ? (normalizedStatus as 'gestor' | 'admin' | 'super_admin')
     : null;
 
-  // Admin, Super Admin ou cargo personalizado com gestao_trafego: carregam dados via seletor no client
+  // Admin/Super Admin: seletor de qualquer dono. Cargo personalizado com gestao_trafego: seletor só dos donos/bancas permitidos (API /donos filtra).
+  const customGestaoTrafegoOnly =
+    hasSidebarAccess &&
+    normalizedStatus !== 'gestor' &&
+    normalizedStatus !== 'admin' &&
+    normalizedStatus !== 'super_admin';
   if (normalizedStatus === 'admin' || normalizedStatus === 'super_admin' || hasSidebarAccess) {
     return (
       <GestorTrafegoClient
         initialData={null}
         userId={userId}
         userStatus={userStatusForClient}
+        canSelectDono={customGestaoTrafegoOnly}
       />
     );
   }

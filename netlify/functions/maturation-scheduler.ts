@@ -14,6 +14,7 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
+import { clampMaturationStepDelaySec } from '../../lib/maturation/min-step-delay';
 
 interface HandlerEvent {
   httpMethod?: string;
@@ -230,7 +231,7 @@ async function createMaturationJobForInstance(
     let cumulativeDelay = 0;
     
     const stepsToInsert = steps.map((step: { type: string; delaySec: number; payload: any; target_chat_id?: string }, index: number) => {
-      cumulativeDelay += step.delaySec || 0;
+      cumulativeDelay += clampMaturationStepDelaySec(step.delaySec);
       const scheduledAt = new Date(baseTime.getTime() + cumulativeDelay * 1000);
       const stepTargetChatId = (typeof step.target_chat_id === 'string' && step.target_chat_id.trim()) ? step.target_chat_id.trim() : null;
       return {
@@ -286,7 +287,7 @@ async function createMaturationJobForInstance(
   let cumulativeDelay = 0;
   
   const stepsToInsert = steps.map((step: { type: string; delaySec: number; payload: any; target_chat_id?: string }, index: number) => {
-    cumulativeDelay += step.delaySec || 0;
+    cumulativeDelay += clampMaturationStepDelaySec(step.delaySec);
     const scheduledAt = new Date(baseTime.getTime() + cumulativeDelay * 1000);
     const stepTargetChatId = (typeof step.target_chat_id === 'string' && step.target_chat_id.trim()) ? step.target_chat_id.trim() : null;
     return {

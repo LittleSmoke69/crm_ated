@@ -6,6 +6,7 @@
 import { randomUUID } from 'crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { canUseAnyMaturationPlan } from '@/lib/maturation/plan-access';
+import { clampMaturationStepDelaySec, MATURATION_MIN_STEP_DELAY_SEC } from '@/lib/maturation/min-step-delay';
 
 export const PLAN_ID_VIRGIN_MESSAGES = 'a0000000-0000-0000-0000-000000000001';
 
@@ -47,7 +48,7 @@ async function getVirginMessagesAsSteps(supabase: SupabaseClient): Promise<Array
   if (error || !data?.value_json) return [];
   const arr = Array.isArray(data.value_json) ? data.value_json : [];
   const messages = arr.map(normalizeVirginMessage).filter((x): x is VirginMessageItem => x != null);
-  const delaySec = 10;
+  const delaySec = MATURATION_MIN_STEP_DELAY_SEC;
   return messages.map((msg) => {
     if (msg.type === 'text') {
       return { type: 'text' as const, delaySec, payload: { text: msg.text } };
@@ -281,7 +282,7 @@ function buildMeshStepsToInsert(
     if (!phone) continue;
     const jid = phone.includes('@') ? phone : `${phone}@s.whatsapp.net`;
     for (const step of planSteps) {
-      const stepDelay = step.delaySec ?? 5;
+      const stepDelay = clampMaturationStepDelaySec(step.delaySec);
       cumulativeDelay += stepDelay;
       const scheduledAt = new Date(baseTime.getTime() + cumulativeDelay * 1000);
       const explicit = typeof step.target_chat_id === 'string' && step.target_chat_id.trim();
@@ -361,7 +362,7 @@ export async function runMaturationStart(supabase: SupabaseClient, params: Start
     }
     steps = planSteps.map((s: Record<string, unknown>) => ({
       type: String(s.type || 'text'),
-      delaySec: Math.max(1, Number(s.delaySec ?? s.delay_seconds ?? 5) || 5),
+      delaySec: clampMaturationStepDelaySec(s.delaySec ?? s.delay_seconds),
       payload: (s.payload as Record<string, unknown>) || {},
       target_chat_id:
         typeof s.target_chat_id === 'string' && s.target_chat_id.trim() ? s.target_chat_id.trim() : null,
@@ -393,7 +394,7 @@ export async function runMaturationStart(supabase: SupabaseClient, params: Start
     const baseTime = new Date();
     let cumulativeDelay = 0;
     return steps.map((step, index) => {
-      const stepDelay = step.delaySec ?? 5;
+      const stepDelay = clampMaturationStepDelaySec(step.delaySec);
       cumulativeDelay += stepDelay;
       const scheduledAt = new Date(baseTime.getTime() + cumulativeDelay * 1000);
       // Per-step target tem prioridade; se não tiver, usa o override passado (target do job)
@@ -526,7 +527,7 @@ export async function runMaturationStart(supabase: SupabaseClient, params: Start
     const meshBaseTime = new Date();
     const planRows: PlanStepRow[] = steps.map((s) => ({
       type: s.type,
-      delaySec: s.delaySec ?? 5,
+      delaySec: clampMaturationStepDelaySec(s.delaySec),
       payload: s.payload || {},
       target_chat_id: s.target_chat_id,
     }));

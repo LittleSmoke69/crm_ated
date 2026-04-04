@@ -27,6 +27,7 @@ import {
   ChevronUp,
   Info,
 } from 'lucide-react';
+import { clampMaturationStepDelaySec, MATURATION_MIN_STEP_DELAY_SEC } from '@/lib/maturation/min-step-delay';
 
 type MaturationStepStatus = 'pending' | 'processing' | 'sent' | 'failed';
 
@@ -63,6 +64,8 @@ interface PlanStepJson {
   index?: number;
   type: 'text' | 'video' | 'image' | 'audio';
   delaySec: number;
+  /** Alias eventual em JSON legado */
+  delay_seconds?: number;
   target_chat_id?: string | null;
   payload: { text?: string; media_url?: string; caption?: string };
 }
@@ -332,11 +335,11 @@ export default function MaturadorPage() {
     setPlanFormDescription(plan.description ?? '');
     const steps = plan.steps_json?.length
       ? plan.steps_json
-      : [{ type: 'text' as const, delaySec: 5, payload: { text: '' } }];
+      : [{ type: 'text' as const, delaySec: MATURATION_MIN_STEP_DELAY_SEC, payload: { text: '' } }];
     setPlanFormSteps(
       steps.map((s) => ({
         type: s.type,
-        delay_seconds: s.delaySec ?? 5,
+        delay_seconds: clampMaturationStepDelaySec(s.delaySec ?? s.delay_seconds),
         target_chat_id: s.target_chat_id ?? '',
         payload: s.payload || { text: '', media_url: '', caption: '' },
       }))
@@ -348,11 +351,11 @@ export default function MaturadorPage() {
     setEditingPlan(plan);
     setPlanFormName(plan.name);
     setPlanFormDescription(plan.description ?? '');
-    const steps = plan.steps_json?.length ? plan.steps_json : [{ type: 'text' as const, delaySec: 5, payload: { text: '' } }];
+    const steps = plan.steps_json?.length ? plan.steps_json : [{ type: 'text' as const, delaySec: MATURATION_MIN_STEP_DELAY_SEC, payload: { text: '' } }];
     setPlanFormSteps(
       steps.map((s) => ({
         type: s.type,
-        delay_seconds: s.delaySec ?? 5,
+        delay_seconds: clampMaturationStepDelaySec(s.delaySec ?? s.delay_seconds),
         target_chat_id: s.target_chat_id ?? '',
         payload: s.payload || { text: '', media_url: '', caption: '' },
       }))
@@ -361,7 +364,7 @@ export default function MaturadorPage() {
   }
 
   function addPlanStep() {
-    setPlanFormSteps([...planFormSteps, { type: 'text', delay_seconds: 5, payload: { text: '' } }]);
+    setPlanFormSteps([...planFormSteps, { type: 'text', delay_seconds: MATURATION_MIN_STEP_DELAY_SEC, payload: { text: '' } }]);
   }
 
   function removePlanStep(index: number) {
@@ -374,7 +377,10 @@ export default function MaturadorPage() {
     if (field === 'type') {
       next[index] = { ...next[index], type: value as PlanStepForm['type'], payload: value === 'text' ? { text: '' } : { media_url: '', caption: '' } };
     } else if (field === 'delay_seconds') {
-      next[index] = { ...next[index], delay_seconds: Number(value) || 5 };
+      next[index] = {
+        ...next[index],
+        delay_seconds: clampMaturationStepDelaySec(typeof value === 'number' ? value : Number(value)),
+      };
     } else if (field === 'target_chat_id') {
       next[index] = { ...next[index], target_chat_id: String(value) };
     } else {
@@ -410,7 +416,7 @@ export default function MaturadorPage() {
         default_target_chat_id: null,
         steps: planFormSteps.map((s) => ({
           type: s.type,
-          delay_seconds: s.delay_seconds,
+          delay_seconds: clampMaturationStepDelaySec(s.delay_seconds),
           target_chat_id: s.target_chat_id?.trim() || undefined,
           payload: s.payload,
         })),
@@ -1909,10 +1915,10 @@ export default function MaturadorPage() {
                           <label className="block text-xs text-slate-500 dark:text-[#aaa] mb-0.5">Esperar (s)</label>
                           <input
                             type="number"
-                            min={1}
+                            min={MATURATION_MIN_STEP_DELAY_SEC}
                             value={step.delay_seconds}
                             onChange={(e) => updatePlanStep(index, 'delay_seconds', e.target.value)}
-                            title="Segundos desde o envio anterior até este passo"
+                            title="Segundos desde o envio anterior até este passo (mínimo 30)"
                             className="w-full px-2 py-1.5 border border-slate-300 dark:border-[#555] rounded text-slate-800 dark:text-white bg-white dark:bg-[#2a2a2a] text-sm"
                           />
                           <p className="text-[10px] text-slate-400 dark:text-[#777] mt-0.5 leading-tight">Intervalo após o passo anterior</p>
