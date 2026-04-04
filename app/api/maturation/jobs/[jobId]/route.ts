@@ -9,6 +9,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import {
+  pauseVirginInstanceAfterAutoJobAbort,
+  skipOpenStepsOnJobAbort,
+} from '@/lib/maturation/job-lifecycle';
 
 export async function GET(
   req: NextRequest,
@@ -114,7 +118,7 @@ export async function PATCH(
     // Verifica se job pertence ao usuário
     const { data: job, error: jobError } = await supabaseServiceRole
       .from('maturation_jobs')
-      .select('id, status, master_instance_id')
+      .select('id, status, master_instance_id, plan_id')
       .eq('id', jobId)
       .eq('owner_user_id', userId)
       .single();
@@ -134,8 +138,22 @@ export async function PATCH(
     
     if (status === 'aborted') {
       updateData.ended_at = new Date().toISOString();
-      
-      // Libera lock da instância mestre
+    }
+
+    const { error: updateError } = await supabaseServiceRole
+      .from('maturation_jobs')
+      .update(updateData)
+      .eq('id', jobId);
+
+    if (updateError) {
+      return NextResponse.json(
+        { error: 'Erro ao atualizar job' },
+        { status: 500 }
+      );
+    }
+
+    if (status === 'aborted') {
+      await skipOpenStepsOnJobAbort(supabaseServiceRole, jobId);
       await supabaseServiceRole
         .from('master_instances')
         .update({
@@ -144,20 +162,13 @@ export async function PATCH(
           locked_at: null,
         })
         .eq('id', job.master_instance_id);
-    }
-    
-    const { error: updateError } = await supabaseServiceRole
-      .from('maturation_jobs')
-      .update(updateData)
-      .eq('id', jobId);
-    
-    if (updateError) {
-      return NextResponse.json(
-        { error: 'Erro ao atualizar job' },
-        { status: 500 }
+      await pauseVirginInstanceAfterAutoJobAbort(
+        supabaseServiceRole,
+        job.master_instance_id,
+        String((job as { plan_id?: string }).plan_id || '')
       );
     }
-    
+
     return NextResponse.json({
       success: true,
       job_id: jobId,

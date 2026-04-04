@@ -5,6 +5,8 @@
 
 import { SupabaseClient } from '@supabase/supabase-js';
 import { maybeMarkEvolutionInstanceDisconnected } from '@/lib/evolution/mark-instance-disconnected';
+import { VIRGIN_AUTO_MATURATION_PLAN_ID } from '@/lib/maturation/job-lifecycle';
+import { reconcileOrphanedMasterInstanceLocks } from '@/lib/maturation/reconcile-master-instance-locks';
 
 /**
  * Quantos steps são reivindicados por lote no RPC claim_maturation_steps.
@@ -296,13 +298,24 @@ async function processStep(supabase: SupabaseClient, step: any): Promise<void> {
    */
   const { data: jobSnap } = await supabase.from('maturation_jobs').select('status').eq('id', job_id).maybeSingle();
   if (!jobSnap || jobSnap.status !== 'running') {
+    const jst = jobSnap?.status;
+    const revertPending = jst === 'paused';
     await supabase
       .from('maturation_steps')
-      .update({ status: 'pending', locked_at: null, locked_by: null })
+      .update({
+        status: revertPending ? 'pending' : 'skipped',
+        error: revertPending
+          ? null
+          : jst === 'aborted'
+            ? 'Job abortado'
+            : 'Job não está em execução',
+        locked_at: null,
+        locked_by: null,
+      })
       .eq('id', id)
       .eq('status', 'processing');
     logVerbose(
-      `${LOG_MANUAL} Step job=${job_id} step_index=${step_index} ignorado: job.status=${jobSnap?.status ?? 'missing'} (esperado running)`
+      `${LOG_MANUAL} Step job=${job_id} step_index=${step_index} ignorado: job.status=${jst ?? 'missing'} (esperado running)`
     );
     return;
   }
@@ -314,7 +327,25 @@ async function processStep(supabase: SupabaseClient, step: any): Promise<void> {
     return;
   }
   await createMessage(supabase, { jobId: job_id, stepId: id, direction: 'system', instanceLabel: instance_name, type: 'info', title: `⏳ Enviando ${type}...`, content: `Enviando ${type} pela instância ${instance_name}`, status: 'info' });
-  
+
+  const { data: jobBeforeSend } = await supabase.from('maturation_jobs').select('status').eq('id', job_id).maybeSingle();
+  if (!jobBeforeSend || jobBeforeSend.status !== 'running') {
+    const jst = jobBeforeSend?.status;
+    const revertPending = jst === 'paused';
+    await supabase
+      .from('maturation_steps')
+      .update({
+        status: revertPending ? 'pending' : 'skipped',
+        error: revertPending ? null : jst === 'aborted' ? 'Job abortado antes do envio' : 'Job interrompido antes do envio',
+        locked_at: null,
+        locked_by: null,
+      })
+      .eq('id', id)
+      .eq('status', 'processing');
+    logVerbose(`${LOG_MANUAL} Step job=${job_id} step_index=${step_index} cancelado antes da Evolution: job.status=${jst ?? 'missing'}`);
+    return;
+  }
+
   let result: any;
   if (type === 'text') {
     result = await sendText({ baseUrl: base_url, instanceName: instance_name, apiKey: api_key, number: target_chat_id, text: payload_json?.text || '' });
@@ -487,12 +518,14 @@ async function processStep(supabase: SupabaseClient, step: any): Promise<void> {
 async function updateJobProgress(supabase: SupabaseClient, jobId: string): Promise<void> {
   const { count: sent } = await supabase.from('maturation_steps').select('id', { count: 'exact', head: true }).eq('job_id', jobId).eq('status', 'sent');
   const { count: failed } = await supabase.from('maturation_steps').select('id', { count: 'exact', head: true }).eq('job_id', jobId).eq('status', 'failed');
+  const { count: skipped } = await supabase.from('maturation_steps').select('id', { count: 'exact', head: true }).eq('job_id', jobId).eq('status', 'skipped');
   const { count: total } = await supabase.from('maturation_steps').select('id', { count: 'exact', head: true }).eq('job_id', jobId);
   const sentN = sent || 0;
   const failedN = failed || 0;
+  const skippedN = skipped || 0;
   const totalN = total || 0;
   /** progress_done = apenas steps enviados com sucesso (UI e barra; falhas não aparecem como “concluído”) */
-  const terminalDone = sentN + failedN;
+  const terminalDone = sentN + failedN + skippedN;
   await supabase.from('maturation_jobs').update({ progress_done: sentN }).eq('id', jobId);
   if (!totalN || terminalDone < totalN) return;
 
@@ -698,6 +731,16 @@ async function ensureVirginWarmupJob(supabase: SupabaseClient, inst: any, now: D
     return;
   }
 
+  const { data: evoPause } = await supabase
+    .from('evolution_instances')
+    .select('maturation_paused_at')
+    .eq('id', instanceId)
+    .maybeSingle();
+  if (evoPause?.maturation_paused_at) {
+    logVerbose(`${LOG_AUTO} ${inst.instance_name}: auto maturação pausada — não cria job de warmup`);
+    return;
+  }
+
   const masterInstanceId = masterRow.id as string;
 
   // Verifica se já há job running para este master
@@ -763,16 +806,14 @@ async function ensureVirginWarmupJob(supabase: SupabaseClient, inst: any, now: D
     return;
   }
 
-  // Busca o plano auto-maturador (UUID fixo)
-  const PLAN_ID_VIRGIN = 'a0000000-0000-0000-0000-000000000001';
   const { data: plan } = await supabase
     .from('maturation_plans')
     .select('id')
-    .eq('id', PLAN_ID_VIRGIN)
+    .eq('id', VIRGIN_AUTO_MATURATION_PLAN_ID)
     .eq('is_active', true)
     .maybeSingle();
 
-  const planId = plan?.id ?? PLAN_ID_VIRGIN;
+  const planId = plan?.id ?? VIRGIN_AUTO_MATURATION_PLAN_ID;
 
   // Cria os steps a partir das mensagens configuradas
   const delaySec = 10;
@@ -988,6 +1029,8 @@ export async function runMaturationTick(supabase: SupabaseClient): Promise<any> 
   const processedJobIds = new Set<string>();
 
   logVerbose(`${LOG_PREFIX} ========== Tick Maturador ==========`);
+
+  await reconcileOrphanedMasterInstanceLocks(supabase);
 
   // Fase 0: Recuperar steps travados em 'processing' de ticks anteriores
   await recoverStuckSteps(supabase);

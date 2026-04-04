@@ -46,6 +46,8 @@
     timeout = 26
   [functions."maturation-tick"]
     schedule = "*/1 * * * *"
+    # Resposta do cron-tick volta rápido (tick em after()); margem para cold start + fetch.
+    timeout = 60
   [functions."flow-question-timeouts"]
     schedule = "*/1 * * * *"
   # [functions."maturation-scheduler"]

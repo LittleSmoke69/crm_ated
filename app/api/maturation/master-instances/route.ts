@@ -10,6 +10,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { reconcileOrphanedMasterInstanceLocks } from '@/lib/maturation/reconcile-master-instance-locks';
 
 const isConnectedStatus = (status: string | null) =>
   status === 'ok' || status === 'open' || status === 'connected';
@@ -73,6 +74,8 @@ export async function GET(req: NextRequest) {
         { status: 200 }
       );
     }
+
+    await reconcileOrphanedMasterInstanceLocks(supabaseServiceRole);
 
     // Busca master_instances para is_locked e available (só para as que estão no maturador)
     const { data: masterRows } = await supabaseServiceRole

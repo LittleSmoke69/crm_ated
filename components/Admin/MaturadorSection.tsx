@@ -26,7 +26,9 @@ import {
   Wifi,
   MessageSquare,
   Play,
+  Pause,
   Zap,
+  Ban,
 } from 'lucide-react';
 
 interface MaturationPlan {
@@ -58,6 +60,20 @@ interface MasterInstance {
   status: string | null;
   available: boolean;
   health_score: number;
+}
+
+interface AdminActiveMaturationJob {
+  id: string;
+  owner_user_id: string;
+  owner_label: string;
+  plan_name: string;
+  instance_name: string;
+  target_chat_id: string | null;
+  status: string;
+  progress_total: number;
+  progress_done: number;
+  started_at: string | null;
+  created_at: string;
 }
 
 interface VirginInstance {
@@ -132,6 +148,10 @@ export default function MaturadorSection({ userId }: Props) {
   const virginBlobUrlsRef = React.useRef<Set<string>>(new Set());
   const [instancesPage, setInstancesPage] = useState(1);
 
+  const [adminActiveJobs, setAdminActiveJobs] = useState<AdminActiveMaturationJob[]>([]);
+  const [loadingAdminJobs, setLoadingAdminJobs] = useState(false);
+  const [adminJobActioning, setAdminJobActioning] = useState<string | null>(null);
+
   const INSTANCES_PER_PAGE = 6;
   const totalInstancesPages = Math.max(1, Math.ceil(allEvolutionInstances.length / INSTANCES_PER_PAGE));
   const paginatedInstances = allEvolutionInstances.slice(
@@ -156,6 +176,56 @@ export default function MaturadorSection({ userId }: Props) {
       loadAdminData();
     }
   }, [userId]);
+
+  useEffect(() => {
+    if (userId) {
+      loadAdminMaturationJobs();
+    }
+  }, [userId]);
+
+  async function loadAdminMaturationJobs() {
+    setLoadingAdminJobs(true);
+    try {
+      const res = await fetch('/api/admin/maturation/jobs');
+      const data = await res.json();
+      if (res.ok && data.success && Array.isArray(data.data?.jobs)) {
+        setAdminActiveJobs(data.data.jobs);
+      } else {
+        setAdminActiveJobs([]);
+      }
+    } catch (e) {
+      console.error('Erro ao listar maturações ativas:', e);
+      setAdminActiveJobs([]);
+    } finally {
+      setLoadingAdminJobs(false);
+    }
+  }
+
+  async function adminMaturationJobPatch(jobId: string, status: 'paused' | 'running' | 'aborted') {
+    if (status === 'aborted' && !window.confirm('Abortar esta maturação para todos? O auto‑maturador virgem será pausado se for job automático.')) {
+      return;
+    }
+    setAdminJobActioning(jobId);
+    try {
+      const res = await fetch(`/api/admin/maturation/jobs/${jobId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || 'Erro ao atualizar job');
+        return;
+      }
+      await loadAdminMaturationJobs();
+      await loadData();
+    } catch (e) {
+      console.error(e);
+      alert('Erro de rede');
+    } finally {
+      setAdminJobActioning(null);
+    }
+  }
 
   useEffect(() => {
     const totalPages = Math.max(1, Math.ceil(allEvolutionInstances.length / INSTANCES_PER_PAGE));
@@ -945,6 +1015,112 @@ export default function MaturadorSection({ userId }: Props) {
               </div>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* Maturações em andamento — todos os usuários */}
+      <div className="bg-white rounded-xl shadow-sm border border-amber-200/80 overflow-hidden">
+        <div className="p-4 border-b border-gray-200 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-800">Maturações em andamento</h3>
+            <p className="text-sm text-gray-500 mt-0.5">
+              Jobs com status em execução, pausados ou na fila, de qualquer usuário. Abortar interrompe envios e, no auto‑maturador virgem, pausa a instância para não recriar mensagens.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => loadAdminMaturationJobs()}
+            disabled={loadingAdminJobs}
+            className="text-sm px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          >
+            {loadingAdminJobs ? 'Atualizando…' : 'Atualizar lista'}
+          </button>
+        </div>
+        <div className="p-4 overflow-x-auto">
+          {loadingAdminJobs && adminActiveJobs.length === 0 ? (
+            <div className="flex justify-center py-8 text-gray-500">
+              <Loader2 className="w-6 h-6 animate-spin" />
+            </div>
+          ) : adminActiveJobs.length === 0 ? (
+            <p className="text-sm text-gray-500 text-center py-6">Nenhuma maturação ativa no momento.</p>
+          ) : (
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="text-left text-gray-500 border-b">
+                  <th className="pb-2 pr-3 font-medium">Instância</th>
+                  <th className="pb-2 pr-3 font-medium">Plano</th>
+                  <th className="pb-2 pr-3 font-medium">Usuário</th>
+                  <th className="pb-2 pr-3 font-medium">Status</th>
+                  <th className="pb-2 pr-3 font-medium">Progresso</th>
+                  <th className="pb-2 font-medium text-right">Ações</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {adminActiveJobs.map((j) => (
+                  <tr key={j.id} className="text-gray-800">
+                    <td className="py-2 pr-3 font-mono text-xs">{j.instance_name}</td>
+                    <td className="py-2 pr-3">{j.plan_name}</td>
+                    <td className="py-2 pr-3 max-w-[200px] truncate" title={j.owner_label}>
+                      {j.owner_label}
+                    </td>
+                    <td className="py-2 pr-3">
+                      <span
+                        className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${
+                          j.status === 'running'
+                            ? 'bg-green-100 text-green-800'
+                            : j.status === 'paused'
+                              ? 'bg-amber-100 text-amber-900'
+                              : 'bg-gray-100 text-gray-700'
+                        }`}
+                      >
+                        {j.status}
+                      </span>
+                    </td>
+                    <td className="py-2 pr-3 tabular-nums">
+                      {j.progress_done}/{j.progress_total}
+                    </td>
+                    <td className="py-2 text-right whitespace-nowrap">
+                      <div className="flex justify-end gap-1 flex-wrap">
+                        {j.status === 'running' && (
+                          <button
+                            type="button"
+                            disabled={adminJobActioning === j.id}
+                            onClick={() => adminMaturationJobPatch(j.id, 'paused')}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded border border-amber-300 text-amber-900 text-xs hover:bg-amber-50 disabled:opacity-50"
+                          >
+                            <Pause className="w-3.5 h-3.5" />
+                            Pausar
+                          </button>
+                        )}
+                        {j.status === 'paused' && (
+                          <button
+                            type="button"
+                            disabled={adminJobActioning === j.id}
+                            onClick={() => adminMaturationJobPatch(j.id, 'running')}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded border border-green-500 text-green-800 text-xs hover:bg-green-50 disabled:opacity-50"
+                          >
+                            <Play className="w-3.5 h-3.5" />
+                            Retomar
+                          </button>
+                        )}
+                        {(j.status === 'running' || j.status === 'paused' || j.status === 'queued') && (
+                          <button
+                            type="button"
+                            disabled={adminJobActioning === j.id}
+                            onClick={() => adminMaturationJobPatch(j.id, 'aborted')}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded border border-red-300 text-red-700 text-xs hover:bg-red-50 disabled:opacity-50"
+                          >
+                            <Ban className="w-3.5 h-3.5" />
+                            Abortar
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
 

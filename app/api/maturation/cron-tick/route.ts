@@ -14,11 +14,16 @@
  * Isso permite que planos com muitos steps sejam processados sem esperar o próximo cron de 1 min.
  */
 
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { runMaturationTick } from '@/lib/services/maturation/processor';
 
-export const maxDuration = 55; // segundos — limite seguro abaixo do corte do Netlify
+/**
+ * O tick pode levar dezenas de segundos; proxies (504 Inactivity Timeout) cortam se não houver resposta.
+ * Modo assíncrono (padrão): responde na hora e executa `runMaturationTick` em `after()`.
+ * Modo síncrono: env `MATURATION_CRON_TICK_SYNC=1` ou header `x-maturation-tick-mode: sync`.
+ */
+export const maxDuration = 120;
 
 /** Profundidade máxima de encadeamento de ticks para não criar loop infinito */
 const MAX_CHAIN_DEPTH = 4;
@@ -39,18 +44,16 @@ export async function POST(req: NextRequest) {
 
   // Profundidade atual de encadeamento (0 = tick original do cron/process-now)
   const chainDepth = parseInt(req.headers.get('x-chain-depth') || '0', 10);
+  const origin = req.nextUrl?.origin || new URL(req.url).origin || 'http://localhost:3000';
 
-  try {
+  const syncMode =
+    process.env.MATURATION_CRON_TICK_SYNC === '1' ||
+    req.headers.get('x-maturation-tick-mode') === 'sync';
+
+  const runTickAndMaybeChain = async () => {
     const result = await runMaturationTick(supabaseServiceRole);
-
-    /**
-     * Se há mais steps pendentes (o tick saiu por limite de tempo) e ainda não atingimos
-     * a profundidade máxima, encadeia outro tick em segundo plano (fire-and-forget).
-     * Isso garante que planos longos continuem sendo processados sem aguardar o próximo cron.
-     */
     if (result.hasMorePending && chainDepth < MAX_CHAIN_DEPTH) {
       const nextDepth = chainDepth + 1;
-      const origin = req.nextUrl?.origin || 'http://localhost:3000';
       const nextTickUrl = `${origin}/api/maturation/cron-tick`;
       if (MATURATION_VERBOSE_LOGS) {
         console.log(`[cron-tick] hasMorePending=true, encadeando tick (depth=${nextDepth}/${MAX_CHAIN_DEPTH})`);
@@ -70,13 +73,36 @@ export async function POST(req: NextRequest) {
         `[cron-tick] hasMorePending=true mas chain depth=${chainDepth} atingiu limite (${MAX_CHAIN_DEPTH}). Próximo cron de 1min processará o restante.`
       );
     }
+    return result;
+  };
+
+  try {
+    if (syncMode) {
+      const result = await runTickAndMaybeChain();
+      return NextResponse.json({
+        success: true,
+        mode: 'sync',
+        processed: result.processed,
+        virginCount: result.virginCount ?? 0,
+        jobs: result.jobs ?? [],
+        hasMorePending: result.hasMorePending ?? false,
+        chainDepth,
+      });
+    }
+
+    after(async () => {
+      try {
+        await runTickAndMaybeChain();
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'Erro inesperado';
+        console.error('[cron-tick] after() erro:', message);
+      }
+    });
 
     return NextResponse.json({
       success: true,
-      processed: result.processed,
-      virginCount: result.virginCount ?? 0,
-      jobs: result.jobs ?? [],
-      hasMorePending: result.hasMorePending ?? false,
+      queued: true,
+      message: 'Tick agendado em segundo plano (evita 504 por inatividade no proxy).',
       chainDepth,
     });
   } catch (error: unknown) {

@@ -54,7 +54,7 @@ export const handler = async (_event: HandlerEvent, _context: HandlerContext): P
     try { body = JSON.parse(text); } catch { /* mantém texto */ }
 
     if (!res.ok) {
-      console.error('[maturation-tick] API retornou', res.status, text);
+      console.error('[maturation-tick] API retornou', res.status, text?.slice(0, 500));
       return {
         statusCode: 200,
         body: JSON.stringify({ ok: false, status: res.status, body }),
@@ -62,7 +62,13 @@ export const handler = async (_event: HandlerEvent, _context: HandlerContext): P
       };
     }
 
-    if (verbose) console.log('[maturation-tick] Tick concluído:', JSON.stringify(body).substring(0, 200));
+    if (verbose) {
+      const preview =
+        typeof body === 'object' && body !== null && 'queued' in body
+          ? '[queued — tick em segundo plano]'
+          : JSON.stringify(body).substring(0, 200);
+      console.log('[maturation-tick] Tick concluído:', preview);
+    }
     return {
       statusCode: 200,
       body: JSON.stringify({ ok: true, body }),
