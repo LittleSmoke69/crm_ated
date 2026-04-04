@@ -133,7 +133,7 @@ async function terminateMaturationJobsInfrastructureFailure(
   supabase: SupabaseClient,
   params: {
     triggerJobId: string;
-    stepId: string;
+    stepId: string | null;
     instanceName: string;
     failReason: string;
     logLabel: string;
@@ -208,7 +208,7 @@ async function terminateMaturationJobsInfrastructureFailure(
   );
   await createMessage(supabase, {
     jobId: triggerJobId,
-    stepId,
+    stepId: stepId ?? undefined,
     direction: 'system',
     type: 'error',
     title: userTitle,
@@ -218,6 +218,54 @@ async function terminateMaturationJobsInfrastructureFailure(
     error: errorDetail,
   });
   return true;
+}
+
+/**
+ * Jobs em running cujo plano foi desativado não são mais elegíveis ao claim (migration),
+ * mas ficariam presos para sempre. Finaliza em lote no início do tick.
+ */
+async function failRunningMaturationJobsWithInactivePlans(supabase: SupabaseClient): Promise<void> {
+  const { data: running, error } = await supabase.from('maturation_jobs').select('id, plan_id, campaign_id').eq('status', 'running');
+  if (error || !running?.length) return;
+
+  const planIds = [...new Set(running.map((r) => r.plan_id).filter(Boolean))] as string[];
+  if (planIds.length === 0) return;
+
+  const { data: plans } = await supabase.from('maturation_plans').select('id, is_active').in('id', planIds);
+  const planById = new Map((plans || []).map((p) => [p.id, p.is_active === true]));
+  const inactiveOrMissing = new Set<string>();
+  for (const pid of planIds) {
+    if (!planById.get(pid)) inactiveOrMissing.add(pid);
+  }
+
+  const badJobs = running.filter((j) => !j.plan_id || inactiveOrMissing.has(j.plan_id as string));
+  if (badJobs.length === 0) return;
+
+  const seenKey = new Set<string>();
+  for (const row of badJobs) {
+    const ck = row.campaign_id != null ? `c:${row.campaign_id}` : `j:${row.id}`;
+    if (seenKey.has(ck)) continue;
+    seenKey.add(ck);
+
+    const { data: labelRow } = await supabase
+      .from('maturation_jobs')
+      .select(`master_instances ( evolution_instances ( instance_name ) )`)
+      .eq('id', row.id)
+      .maybeSingle();
+    const mi = (labelRow as { master_instances?: { evolution_instances?: { instance_name?: string } } })?.master_instances;
+    const instanceLabel = mi?.evolution_instances?.instance_name ?? '—';
+
+    await terminateMaturationJobsInfrastructureFailure(supabase, {
+      triggerJobId: row.id,
+      stepId: null,
+      instanceName: instanceLabel,
+      failReason: 'Plano de maturação inativo ou removido. Envios cancelados.',
+      logLabel: 'Plano inativo',
+      userTitle: '⛔ Plano de maturação inativo',
+      userContent: `O plano deste job não está mais ativo. A maturação foi encerrada.`,
+      errorDetail: 'maturation_plans.is_active = false',
+    });
+  }
 }
 
 async function sendText(params: {
@@ -406,7 +454,7 @@ async function processStep(supabase: SupabaseClient, step: any): Promise<void> {
    * pode processar o lote segundos depois — se o usuário pausar nesse intervalo, sem este check
    * as mensagens ainda seriam enviadas. Também cobre catch-up longo e ticks encadeados.
    */
-  const { data: jobSnap } = await supabase.from('maturation_jobs').select('status').eq('id', job_id).maybeSingle();
+  const { data: jobSnap } = await supabase.from('maturation_jobs').select('status, plan_id').eq('id', job_id).maybeSingle();
   if (!jobSnap || jobSnap.status !== 'running') {
     const jst = jobSnap?.status;
     const revertPending = jst === 'paused';
@@ -436,6 +484,37 @@ async function processStep(supabase: SupabaseClient, step: any): Promise<void> {
     await createMessage(supabase, { jobId: job_id, stepId: id, direction: 'system', type: 'error', title: 'Step ignorado', content: msg, status: 'failed' });
     return;
   }
+
+  const planId = jobSnap.plan_id as string | null | undefined;
+  if (planId) {
+    const { data: planRow } = await supabase.from('maturation_plans').select('is_active').eq('id', planId).maybeSingle();
+    if (!planRow || planRow.is_active !== true) {
+      await terminateMaturationJobsInfrastructureFailure(supabase, {
+        triggerJobId: job_id,
+        stepId: id,
+        instanceName: instance_name,
+        failReason: 'Plano de maturação inativo ou removido. Envios cancelados.',
+        logLabel: 'Plano inativo',
+        userTitle: '⛔ Plano de maturação inativo',
+        userContent: `O plano deste job não está mais ativo. A maturação foi encerrada. Instância: ${instance_name}.`,
+        errorDetail: 'maturation_plans.is_active = false',
+      });
+      return;
+    }
+  } else {
+    await terminateMaturationJobsInfrastructureFailure(supabase, {
+      triggerJobId: job_id,
+      stepId: id,
+      instanceName: instance_name,
+      failReason: 'Job sem plan_id válido. Envios cancelados.',
+      logLabel: 'Plano ausente',
+      userTitle: '⛔ Plano inválido',
+      userContent: `Este job não está vinculado a um plano. Instância: ${instance_name}.`,
+      errorDetail: 'maturation_jobs.plan_id ausente',
+    });
+    return;
+  }
+
   await createMessage(supabase, { jobId: job_id, stepId: id, direction: 'system', instanceLabel: instance_name, type: 'info', title: `⏳ Enviando ${type}...`, content: `Enviando ${type} pela instância ${instance_name}`, status: 'info' });
 
   const { data: jobBeforeSend } = await supabase.from('maturation_jobs').select('status').eq('id', job_id).maybeSingle();
@@ -570,6 +649,25 @@ async function processStep(supabase: SupabaseClient, step: any): Promise<void> {
         userTitle: '⛔ Maturação encerrada (serviço indisponível)',
         userContent: `${failReason} Instância: ${instance_name}. Verifique Evolution API e proxy.`,
         httpStatus: result.httpStatus,
+        errorDetail: result.error,
+      });
+      return;
+    }
+
+    const { data: planForRetry } = await supabase
+      .from('maturation_plans')
+      .select('is_active')
+      .eq('id', planId as string)
+      .maybeSingle();
+    if (!planForRetry || planForRetry.is_active !== true) {
+      await terminateMaturationJobsInfrastructureFailure(supabase, {
+        triggerJobId: job_id,
+        stepId: id,
+        instanceName: instance_name,
+        failReason: 'Plano de maturação inativo ou removido antes de nova tentativa. Envios cancelados.',
+        logLabel: 'Plano inativo (pré-retry)',
+        userTitle: '⛔ Plano de maturação inativo',
+        userContent: `O plano foi desativado; novas tentativas automáticas foram canceladas. Instância: ${instance_name}.`,
         errorDetail: result.error,
       });
       return;
@@ -945,7 +1043,11 @@ async function ensureVirginWarmupJob(supabase: SupabaseClient, inst: any, now: D
     .eq('is_active', true)
     .maybeSingle();
 
-  const planId = plan?.id ?? VIRGIN_AUTO_MATURATION_PLAN_ID;
+  if (!plan?.id) {
+    logVerbose(`${LOG_AUTO} ${inst.instance_name}: plano auto-maturador inativo ou ausente — não cria job de warmup`);
+    return;
+  }
+  const planId = plan.id;
 
   // Cria os steps a partir das mensagens configuradas
   const delaySec = MATURATION_MIN_STEP_DELAY_SEC;
@@ -1041,7 +1143,8 @@ export async function runJobCatchUp(supabase: SupabaseClient, jobId: string): Pr
       id,
       target_chat_id,
       master_instance_id,
-      status
+      status,
+      plan_id
     `)
     .eq('id', jobId)
     .single();
@@ -1050,6 +1153,32 @@ export async function runJobCatchUp(supabase: SupabaseClient, jobId: string): Pr
     logVerbose(`${LOG_MANUAL} runJobCatchUp job=${jobId} ignorado (não encontrado ou não running)`);
     return { sent: 0, failed: 0, results: [] };
   }
+
+  const pid = (job as { plan_id?: string }).plan_id;
+  if (pid) {
+    const { data: planRow } = await supabase.from('maturation_plans').select('is_active').eq('id', pid).maybeSingle();
+    if (!planRow || planRow.is_active !== true) {
+      const { data: labelRow } = await supabase
+        .from('maturation_jobs')
+        .select(`master_instances ( evolution_instances ( instance_name ) )`)
+        .eq('id', jobId)
+        .maybeSingle();
+      const mi = (labelRow as { master_instances?: { evolution_instances?: { instance_name?: string } } })?.master_instances;
+      const instanceLabel = mi?.evolution_instances?.instance_name ?? '—';
+      await terminateMaturationJobsInfrastructureFailure(supabase, {
+        triggerJobId: jobId,
+        stepId: null,
+        instanceName: instanceLabel,
+        failReason: 'Plano de maturação inativo ou removido. Envios cancelados.',
+        logLabel: 'Plano inativo (catch-up)',
+        userTitle: '⛔ Plano de maturação inativo',
+        userContent: 'O plano deste job não está mais ativo. A maturação foi encerrada.',
+        errorDetail: 'maturation_plans.is_active = false',
+      });
+      return { sent: 0, failed: 0, results: [] };
+    }
+  }
+
   logVerbose(`${LOG_MANUAL} runJobCatchUp job=${jobId} processando steps atrasados`);
 
   const { data: steps, error: stepsErr } = await supabase
@@ -1166,6 +1295,8 @@ export async function runMaturationTick(supabase: SupabaseClient): Promise<any> 
 
   // Fase 0: Recuperar steps travados em 'processing' de ticks anteriores
   await recoverStuckSteps(supabase);
+
+  await failRunningMaturationJobsWithInactivePlans(supabase);
 
   logVerbose(`${LOG_MANUAL} Fase 1: Maturador (manual) - jobs com steps agendados`);
 
