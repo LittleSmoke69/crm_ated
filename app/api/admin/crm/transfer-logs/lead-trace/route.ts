@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { requireLeadTransferApiAccess } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { getLeadTransferBancaAccess } from '@/lib/server/crm/adminLeadTransferContext';
+import { getLeadTransferBancaAccess, gerenteLeadTransferOwnActionsOnly } from '@/lib/server/crm/adminLeadTransferContext';
 
 const LOG_PREFIX = '[admin][lead-trace]';
 
@@ -56,6 +56,10 @@ export async function GET(req: NextRequest) {
       .eq('banca_id', resolvedBancaId)
       .order('created_at', { ascending: false })
       .limit(200);
+
+    if (gerenteLeadTransferOwnActionsOnly(profile)) {
+      logsQuery = logsQuery.eq('performed_by_user_id', userId);
+    }
 
     if (logId) {
       logsQuery = logsQuery.eq('id', logId);
@@ -132,18 +136,36 @@ export async function GET(req: NextRequest) {
         .order('transfer_log_id', { ascending: false });
 
       if (!allEntriesError && Array.isArray(allLeadEntries)) {
+        let rows = allLeadEntries as EntryRow[];
+        if (gerenteLeadTransferOwnActionsOnly(profile)) {
+          const uids = [...new Set(rows.map((e) => e.transfer_log_id).filter(Boolean))];
+          if (uids.length === 0) {
+            rows = [];
+          } else {
+            const { data: meta } = await supabaseServiceRole
+              .from('admin_lead_transfer_logs')
+              .select('id')
+              .in('id', uids)
+              .eq('performed_by_user_id', userId);
+            const allowed = new Set((meta ?? []).map((m: { id: string }) => m.id));
+            rows = rows.filter((e) => allowed.has(e.transfer_log_id));
+          }
+        }
+
         // Buscar logs relacionados a essas entries (podem ser de consultores diferentes)
-        const extraLogIds = [...new Set(
-          (allLeadEntries as EntryRow[]).map((e) => e.transfer_log_id).filter(Boolean)
-        )].filter((id) => !logIds.includes(id));
+        const extraLogIds = [...new Set(rows.map((e) => e.transfer_log_id).filter(Boolean))].filter((id) => !logIds.includes(id));
 
         let extraLogs: LogRow[] = [];
         if (extraLogIds.length > 0) {
-          const { data: extraLogsData } = await supabaseServiceRole
+          let extraQ = supabaseServiceRole
             .from('admin_lead_transfer_logs')
             .select('id, banca_id, source_consultant_email, target_consultant_email, transfer_type, deadline_days, created_at, leads_ids')
             .eq('banca_id', resolvedBancaId)
             .in('id', extraLogIds);
+          if (gerenteLeadTransferOwnActionsOnly(profile)) {
+            extraQ = extraQ.eq('performed_by_user_id', userId);
+          }
+          const { data: extraLogsData } = await extraQ;
           extraLogs = Array.isArray(extraLogsData) ? (extraLogsData as LogRow[]) : [];
         }
 
@@ -151,7 +173,7 @@ export async function GET(req: NextRequest) {
           [...allLogs, ...extraLogs].map((l) => [l.id, l])
         );
 
-        leadHistory = (allLeadEntries as EntryRow[]).map((e) => {
+        leadHistory = rows.map((e) => {
           const log = allLogsMap.get(e.transfer_log_id);
           return {
             lead_id: e.lead_id,

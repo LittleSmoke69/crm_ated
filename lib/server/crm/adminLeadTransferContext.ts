@@ -138,6 +138,14 @@ export async function getAdminBancaId(
   };
 }
 
+/**
+ * Gerente na tela de histórico/conversão: só deve ver pacotes executados por ele
+ * (`performed_by_user_id`), não transferências de admin/outros na mesma banca.
+ */
+export function gerenteLeadTransferOwnActionsOnly(profile: UserProfile): boolean {
+  return profile.status === 'gerente';
+}
+
 /** Bancas vinculadas ao gerente em `user_bancas.banca_ids`. */
 export async function getGerenteUserBancaIds(userId: string): Promise<string[]> {
   const { data: row } = await supabaseServiceRole

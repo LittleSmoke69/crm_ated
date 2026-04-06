@@ -566,6 +566,8 @@ export default function AdminLeadTransferPage() {
   const [desvincularTodosLoading, setDesvincularTodosLoading] = useState(false);
   /** Reverter resolvidas para pendente (aba Histórico): loading */
   const [revertResolvedLoading, setRevertResolvedLoading] = useState(false);
+  /** Desvincular todos / reverter resolvidas: só super_admin (via /api/admin/check, mesma fonte do painel admin) */
+  const [isSuperAdminLeadTransfer, setIsSuperAdminLeadTransfer] = useState(false);
   /** Transferências já resolvidas no banco (card verde persistente) */
   const [resolvedStats, setResolvedStats] = useState<{ total_resolved_logs: number; total_disponivel: number; total_vinculado: number; total_lucro_realizado: number; total_aposta_realizado: number; total_depositado_antes: number; total_depositado_depois: number; by_type: Record<string, number> }>({ total_resolved_logs: 0, total_disponivel: 0, total_vinculado: 0, total_lucro_realizado: 0, total_aposta_realizado: 0, total_depositado_antes: 0, total_depositado_depois: 0, by_type: { TF: 0, TF1: 0, TF2: 0, TF3: 0 } });
   const [loadingResolvedStats, setLoadingResolvedStats] = useState(false);
@@ -875,6 +877,35 @@ export default function AdminLeadTransferPage() {
     'Content-Type': 'application/json',
     'X-User-Id': userId ?? '',
   });
+
+  useEffect(() => {
+    if (!userId) {
+      setIsSuperAdminLeadTransfer(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/admin/check', {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-User-Id': userId,
+          },
+          credentials: 'include',
+        });
+        const json = await res.json();
+        if (cancelled) return;
+        setIsSuperAdminLeadTransfer(!!json?.success && !!json?.data?.isSuperAdmin);
+      } catch {
+        if (!cancelled) setIsSuperAdminLeadTransfer(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
+
   const lastCrmWarningRef = useRef<string | null>(null);
   const notifyCrmWarning = useCallback((warning?: string | null) => {
     const message = String(warning ?? '').trim();
@@ -958,6 +989,15 @@ export default function AdminLeadTransferPage() {
     };
     loadBancas();
   }, [userId]);
+
+  /** Gerente: histórico/conversão sempre por uma banca da equipe (sem agregado "Todas as Bancas"). */
+  useEffect(() => {
+    if (!isGerenteLeadTransferViewer || bancas.length === 0) return;
+    setHistoryBancaFilter((prev) => {
+      if (prev && bancas.some((b) => b.id === prev)) return prev;
+      return bancas[0].id;
+    });
+  }, [isGerenteLeadTransferViewer, bancas]);
 
   /**
    * Hidrata fluxo "Ir para transferir" via URL (suporta refresh/entrada direta):
@@ -3508,6 +3548,10 @@ export default function AdminLeadTransferPage() {
 
   /** Desvincula todos os leads vinculados aos consultores (aba Histórico). Escopo: banca do filtro ou todas as bancas. */
   const desvincularTodosLeads = useCallback(async () => {
+    if (!isSuperAdminLeadTransfer) {
+      showToast('Apenas super administrador pode usar esta ação.', 'error');
+      return;
+    }
     const scopeLabel = historyBancaFilter
       ? (bancas.find((b) => b.id === historyBancaFilter)?.name || bancas.find((b) => b.id === historyBancaFilter)?.url || historyBancaFilter)
       : 'Todas as bancas';
@@ -3518,7 +3562,7 @@ export default function AdminLeadTransferPage() {
       const body = historyBancaFilter ? { banca_id: historyBancaFilter } : {};
       const res = await fetch('/api/admin/crm/transfer-logs/unlink-all-vinculados', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...headers() },
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId ?? '' },
         body: JSON.stringify(body),
       });
       const json = await res.json();
@@ -3536,10 +3580,14 @@ export default function AdminLeadTransferPage() {
     } finally {
       setDesvincularTodosLoading(false);
     }
-  }, [historyBancaFilter, bancas, loadResolvedStats, loadResolvedList, loadTransferLogs]);
+  }, [isSuperAdminLeadTransfer, historyBancaFilter, bancas, loadResolvedStats, loadResolvedList, loadTransferLogs, showToast, userId]);
 
   /** Reverte todas as entries resolvidas (vinculado/disponivel) para pending; transferências passam a aparecer como expiradas para nova análise. */
   const revertResolvedToPending = useCallback(async () => {
+    if (!isSuperAdminLeadTransfer) {
+      showToast('Apenas super administrador pode usar esta ação.', 'error');
+      return;
+    }
     const scopeLabel = historyBancaFilter
       ? (bancas.find((b) => b.id === historyBancaFilter)?.name || bancas.find((b) => b.id === historyBancaFilter)?.url || historyBancaFilter)
       : 'Todas as bancas';
@@ -3550,7 +3598,7 @@ export default function AdminLeadTransferPage() {
       const body = historyBancaFilter ? { banca_id: historyBancaFilter } : {};
       const res = await fetch('/api/admin/crm/transfer-logs/revert-resolved-to-pending', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...headers() },
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId ?? '' },
         body: JSON.stringify(body),
       });
       const json = await res.json();
@@ -3571,7 +3619,7 @@ export default function AdminLeadTransferPage() {
     } finally {
       setRevertResolvedLoading(false);
     }
-  }, [historyBancaFilter, bancas, loadResolvedStats, loadResolvedList, loadExpiredLogs, loadTransferLogs]);
+  }, [isSuperAdminLeadTransfer, historyBancaFilter, bancas, loadResolvedStats, loadResolvedList, loadExpiredLogs, loadTransferLogs, showToast, userId]);
 
   const loadResolveBatchDetailEntries = useCallback(async (log: { log_id: string; banca_id: string }) => {
     setLoadingResolveBatchDetail(true);
@@ -4930,7 +4978,11 @@ export default function AdminLeadTransferPage() {
                   <BarChart3 className="w-5 h-5 text-[#8CD955]" />
                   Histórico e conversão
                 </h2>
-                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">Por padrão são carregadas todas as transferências. Use os filtros de período, tipo, consultor e prazo para refinar.</p>
+                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                  {isGerenteLeadTransferViewer
+                    ? 'Você vê apenas as transferências executadas por você nesta banca (incluindo repasses do seu estoque aos consultores da equipe). Use os filtros para refinar período, tipo e consultores.'
+                    : 'Por padrão são carregadas todas as transferências. Use os filtros de período, tipo, consultor e prazo para refinar.'}
+                </p>
               </div>
               {/* Filtros: mesmo layout para todos (label + controle + legenda) */}
               <div className="p-4 rounded-xl border border-gray-200 dark:border-[#404040] mb-6 bg-gray-50/50 dark:bg-[#1f1f1f]/50">
@@ -4948,7 +5000,7 @@ export default function AdminLeadTransferPage() {
                       }}
                       className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
                     >
-                      <option value="">Todas as Bancas</option>
+                      {!isGerenteLeadTransferViewer && <option value="">Todas as Bancas</option>}
                       {historyBancaFromSolicitation && historyBancaFilter === historyBancaFromSolicitation.id && !bancas.some((b) => b.id === historyBancaFromSolicitation.id) && (
                         <option value={historyBancaFromSolicitation.id}>
                           {historyBancaFromSolicitation.name}
@@ -4960,7 +5012,9 @@ export default function AdminLeadTransferPage() {
                         </option>
                       ))}
                     </select>
-                    <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">Filtrar por banca ou ver todas</p>
+                    <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">
+                      {isGerenteLeadTransferViewer ? 'Uma banca por vez (suas bancas na equipe)' : 'Filtrar por banca ou ver todas'}
+                    </p>
                   </div>
                   {/* Período — layout igual ao Prazo */}
                   <div className="lg:col-span-3">
@@ -6304,7 +6358,7 @@ export default function AdminLeadTransferPage() {
                       <p className="text-2xl font-bold text-gray-600 mt-1">{transferStats?.transferidos_sem_saldo ?? 0}</p>
                     </div>
                   </div>
-                  {userStatus === 'super_admin' && (
+                  {isSuperAdminLeadTransfer && (
                   <>
                   {/* Botão desvincular todos os leads dos consultores (escopo: banca do filtro ou todas) — apenas super_admin */}
                   <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-amber-200 dark:border-amber-800/50 bg-amber-50/30 dark:bg-amber-950/20 px-4 py-3">

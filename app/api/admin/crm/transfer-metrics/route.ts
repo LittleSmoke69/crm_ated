@@ -5,6 +5,7 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import {
   getLeadTransferBancaAccess,
   resolveLeadTransferQueryBancaIds,
+  gerenteLeadTransferOwnActionsOnly,
 } from '@/lib/server/crm/adminLeadTransferContext';
 import { createCrmRedistributionClient } from '@/lib/server/crm/crmRedistributionClient';
 import { normalizeDateParam, dateToStartOfDaySãoPauloISO, dateToEndOfDaySãoPauloISO } from '@/lib/server/crm/transfer-date-utils';
@@ -93,6 +94,9 @@ export async function GET(req: NextRequest) {
         ['standard', 'admin_to_gerente_stock', 'gerente_stock_to_consultant'].includes(transferKindParam)
       ) {
         q = q.eq('transfer_kind', transferKindParam);
+      }
+      if (gerenteLeadTransferOwnActionsOnly(profile)) {
+        q = q.eq('performed_by_user_id', userId);
       }
       const { data: page } = await q;
       const rows = (Array.isArray(page) ? page : []) as LogRow[];

@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { requireLeadTransferApiAccess } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { getLeadTransferBancaAccess } from '@/lib/server/crm/adminLeadTransferContext';
+import { getLeadTransferBancaAccess, gerenteLeadTransferOwnActionsOnly } from '@/lib/server/crm/adminLeadTransferContext';
 import { createCrmRedistributionClient } from '@/lib/server/crm/crmRedistributionClient';
 
 const LOG_PREFIX = '[admin][transfer-logs-entries]';
@@ -43,6 +43,20 @@ export async function GET(req: NextRequest) {
     const resolved = await getLeadTransferBancaAccess(userId, profile, bancaId);
     if (!resolved) {
       return errorResponse('Banca não encontrada ou sem permissão.');
+    }
+
+    if (gerenteLeadTransferOwnActionsOnly(profile)) {
+      const { data: logMeta, error: logMetaErr } = await supabaseServiceRole
+        .from('admin_lead_transfer_logs')
+        .select('performed_by_user_id')
+        .eq('id', logId)
+        .maybeSingle();
+      if (logMetaErr || !logMeta) {
+        return errorResponse('Pacote de transferência não encontrado.', 404);
+      }
+      if ((logMeta as { performed_by_user_id?: string | null }).performed_by_user_id !== userId) {
+        return errorResponse('Sem permissão para este pacote de transferência.', 403);
+      }
     }
 
     let { data: entries, error } = await supabaseServiceRole

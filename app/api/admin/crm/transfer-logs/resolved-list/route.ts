@@ -10,7 +10,7 @@ import { NextRequest } from 'next/server';
 import { requireLeadTransferApiAccess } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { resolveLeadTransferQueryBancaIds } from '@/lib/server/crm/adminLeadTransferContext';
+import { resolveLeadTransferQueryBancaIds, gerenteLeadTransferOwnActionsOnly } from '@/lib/server/crm/adminLeadTransferContext';
 import { isTransferExpired } from '@/lib/server/crm/resolveTransferLog';
 
 const DEFAULT_DEADLINE_DAYS = 10;
@@ -42,6 +42,9 @@ export async function GET(req: NextRequest) {
       .in('banca_id', bancaIds)
       .order('created_at', { ascending: false });
     if (sourceConsultantEmail) logsQuery = logsQuery.ilike('source_consultant_email', sourceConsultantEmail);
+    if (gerenteLeadTransferOwnActionsOnly(profile)) {
+      logsQuery = logsQuery.eq('performed_by_user_id', userId);
+    }
     const { data: logs, error: logsError } = await logsQuery;
 
     if (logsError || !logs?.length) return successResponse([]);

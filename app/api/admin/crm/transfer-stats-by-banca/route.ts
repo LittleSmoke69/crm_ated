@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { requireLeadTransferApiAccess } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { getLeadTransferBancaAccess } from '@/lib/server/crm/adminLeadTransferContext';
+import { getLeadTransferBancaAccess, gerenteLeadTransferOwnActionsOnly } from '@/lib/server/crm/adminLeadTransferContext';
 import { normalizeDateParam, dateToStartOfDaySãoPauloISO, dateToEndOfDaySãoPauloISO } from '@/lib/server/crm/transfer-date-utils';
 
 const LOG_PREFIX = '[admin][transfer-stats-by-banca]';
@@ -37,6 +37,9 @@ export async function GET(req: NextRequest) {
         .eq('banca_id', banca.id);
       if (fromParam) logQuery = logQuery.gte('created_at', dateToStartOfDaySãoPauloISO(fromParam));
       if (toParam) logQuery = logQuery.lte('created_at', dateToEndOfDaySãoPauloISO(toParam));
+      if (gerenteLeadTransferOwnActionsOnly(profile)) {
+        logQuery = logQuery.eq('performed_by_user_id', userId);
+      }
       const { data: logs } = await logQuery;
       const logIds = (logs ?? []).map((r: { id: string }) => r.id);
       if (logIds.length === 0) {

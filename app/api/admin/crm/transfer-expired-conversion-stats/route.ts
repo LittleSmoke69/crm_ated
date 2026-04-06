@@ -5,6 +5,7 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import {
   getLeadTransferBancaAccess,
   resolveLeadTransferQueryBancaIds,
+  gerenteLeadTransferOwnActionsOnly,
 } from '@/lib/server/crm/adminLeadTransferContext';
 import { normalizeDateParam, dateToStartOfDaySãoPauloISO, dateToEndOfDaySãoPauloISO } from '@/lib/server/crm/transfer-date-utils';
 
@@ -121,6 +122,7 @@ async function getConversionByConsultant(
 export async function GET(req: NextRequest) {
   try {
     const { userId, profile } = await requireLeadTransferApiAccess(req);
+    const gerenteOwnOnly = gerenteLeadTransferOwnActionsOnly(profile);
     const { searchParams } = req.nextUrl;
 
     const bancaId = searchParams.get('banca_id')?.trim() || null;
@@ -141,6 +143,7 @@ export async function GET(req: NextRequest) {
       if (fromParam) logsQuery = logsQuery.gte('created_at', dateToStartOfDaySãoPauloISO(fromParam));
       if (toParam) logsQuery = logsQuery.lte('created_at', dateToEndOfDaySãoPauloISO(toParam));
       if (sourceConsultantEmail) logsQuery = logsQuery.ilike('source_consultant_email', sourceConsultantEmail);
+      if (gerenteOwnOnly) logsQuery = logsQuery.eq('performed_by_user_id', userId);
       const { data: logs } = await logsQuery.order('created_at', { ascending: false });
       const logIds = (logs ?? []).map((r: { id: string }) => r.id);
       const byConsultant = await getConversionByConsultant(resolved.bancaId, resolved.crmBaseUrl, logIds);
@@ -174,6 +177,7 @@ export async function GET(req: NextRequest) {
       if (fromParam) logsQuery = logsQuery.gte('created_at', dateToStartOfDaySãoPauloISO(fromParam));
       if (toParam) logsQuery = logsQuery.lte('created_at', dateToEndOfDaySãoPauloISO(toParam));
       if (sourceConsultantEmail) logsQuery = logsQuery.ilike('source_consultant_email', sourceConsultantEmail);
+      if (gerenteOwnOnly) logsQuery = logsQuery.eq('performed_by_user_id', userId);
       const { data: logs } = await logsQuery.order('created_at', { ascending: false });
       const logIds = (logs ?? []).map((r: { id: string }) => r.id);
       const byConsultant = await getConversionByConsultant(resolved.bancaId, resolved.crmBaseUrl, logIds);

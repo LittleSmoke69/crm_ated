@@ -15,7 +15,7 @@ import { NextRequest } from 'next/server';
 import { requireLeadTransferApiAccess } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { resolveLeadTransferQueryBancaIds } from '@/lib/server/crm/adminLeadTransferContext';
+import { resolveLeadTransferQueryBancaIds, gerenteLeadTransferOwnActionsOnly } from '@/lib/server/crm/adminLeadTransferContext';
 import { normalizeDateParam, dateToStartOfDaySãoPauloISO, dateToEndOfDaySãoPauloISO } from '@/lib/server/crm/transfer-date-utils';
 
 const EMPTY_RESPONSE = {
@@ -37,15 +37,26 @@ async function countLeadsVinculados(
   bancaIds: string[],
   fromParam: string | null,
   toParam: string | null,
-  sourceConsultantEmail: string | null
+  sourceConsultantEmail: string | null,
+  performedByUserId: string | null
 ): Promise<number> {
   let transferLogIdsFilter: string[] | null = null;
   if (sourceConsultantEmail) {
-    const { data: logs } = await supabaseServiceRole
+    let logQ = supabaseServiceRole
       .from('admin_lead_transfer_logs')
       .select('id')
       .in('banca_id', bancaIds)
       .ilike('source_consultant_email', sourceConsultantEmail);
+    if (performedByUserId) logQ = logQ.eq('performed_by_user_id', performedByUserId);
+    const { data: logs } = await logQ;
+    transferLogIdsFilter = (logs ?? []).map((r: { id: string }) => r.id);
+    if (transferLogIdsFilter.length === 0) return 0;
+  } else if (performedByUserId) {
+    const { data: logs } = await supabaseServiceRole
+      .from('admin_lead_transfer_logs')
+      .select('id')
+      .in('banca_id', bancaIds)
+      .eq('performed_by_user_id', performedByUserId);
     transferLogIdsFilter = (logs ?? []).map((r: { id: string }) => r.id);
     if (transferLogIdsFilter.length === 0) return 0;
   }
@@ -78,14 +89,17 @@ export async function GET(req: NextRequest) {
     const bancaIds = scope.bancaIds;
     if (!bancaIds.length) return successResponse(EMPTY_RESPONSE);
 
+    const performedByFilter = gerenteLeadTransferOwnActionsOnly(profile) ? userId : null;
+
     const [rpcResult, total_vinculado] = await Promise.all([
       supabaseServiceRole.rpc('get_resolved_transfer_stats', {
         p_banca_ids: bancaIds,
         p_from: fromParam || null,
         p_to: toParam || null,
         p_source_consultant_email: sourceConsultantEmail || null,
+        p_performed_by_user_id: performedByFilter,
       }),
-      countLeadsVinculados(bancaIds, fromParam, toParam, sourceConsultantEmail),
+      countLeadsVinculados(bancaIds, fromParam, toParam, sourceConsultantEmail, performedByFilter),
     ]);
 
     if (rpcResult.error) {

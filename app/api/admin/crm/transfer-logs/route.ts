@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { requireLeadTransferApiAccess } from '@/lib/middleware/permissions';
-import { getGerenteUserBancaIds } from '@/lib/server/crm/adminLeadTransferContext';
+import { getGerenteUserBancaIds, gerenteLeadTransferOwnActionsOnly } from '@/lib/server/crm/adminLeadTransferContext';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { isTransferExpired } from '@/lib/server/crm/resolveTransferLog';
@@ -81,6 +81,9 @@ export async function GET(req: NextRequest) {
         ['standard', 'admin_to_gerente_stock', 'gerente_stock_to_consultant'].includes(transferKind)
       ) {
         q = q.eq('transfer_kind', transferKind);
+      }
+      if (gerenteLeadTransferOwnActionsOnly(profile)) {
+        q = q.eq('performed_by_user_id', userId);
       }
       const { data: logs, error } = await q;
       if (error) {

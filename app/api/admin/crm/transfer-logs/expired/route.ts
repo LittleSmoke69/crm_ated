@@ -15,7 +15,7 @@ import { NextRequest } from 'next/server';
 import { requireLeadTransferApiAccess } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { resolveLeadTransferQueryBancaIds } from '@/lib/server/crm/adminLeadTransferContext';
+import { resolveLeadTransferQueryBancaIds, gerenteLeadTransferOwnActionsOnly } from '@/lib/server/crm/adminLeadTransferContext';
 
 export async function GET(req: NextRequest) {
   try {
@@ -31,9 +31,11 @@ export async function GET(req: NextRequest) {
       return successResponse({ list: [], total_expired_logs: 0, total_pending_entries: 0 });
     }
 
+    const performedByFilter = gerenteLeadTransferOwnActionsOnly(profile) ? userId : null;
     const { data, error } = await supabaseServiceRole.rpc('get_expired_transfer_stats', {
       p_banca_ids: bancaIds,
       p_source_consultant_email: sourceConsultantEmail || null,
+      p_performed_by_user_id: performedByFilter,
     });
 
     if (error) {
