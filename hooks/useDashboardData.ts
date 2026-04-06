@@ -24,6 +24,8 @@ export interface WhatsAppInstance {
   qr_code?: string | null;
   connected_at?: string | null;
   user_id?: string;
+  /** Nome amigável do dono da instância (perfil em `user_id`), preenchido pela API. */
+  owner_display_name?: string | null;
   proxy_id?: string | null;
   webhook_configured?: boolean;
   is_blocked_for_instances?: boolean; // Indica se a API Evolution está bloqueada para criação de instâncias

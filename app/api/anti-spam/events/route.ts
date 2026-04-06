@@ -8,6 +8,8 @@ import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { createAntiSpamGroupLabelResolver, subjectFromParticipantsPayload } from '@/lib/anti-spam/event-group-label';
+import { normalizeToE164BR } from '@/lib/utils/phone-utils';
 
 export const runtime = 'nodejs';
 
@@ -88,7 +90,14 @@ export async function GET(req: NextRequest) {
 
     if (error) return errorResponse(error.message, 500);
 
-    const items: { id: string; received_at: string; group_id: string; group_subject: string | null; phone: string }[] = [];
+    const items: {
+      id: string;
+      received_at: string;
+      group_id: string;
+      phone: string;
+      instance_name: string;
+      payload_subject: string | null;
+    }[] = [];
     const seen = new Set<string>();
 
     for (const r of rows || []) {
@@ -97,36 +106,45 @@ export async function GET(req: NextRequest) {
       const groupId = getGroupId(payload, r.remote_jid);
       if (!groupId || !groupId.includes('@g.us')) continue;
 
+      const instanceName = String((r as { instance_name?: string }).instance_name || '');
+      const payloadSubject = subjectFromParticipantsPayload(payload);
+
       for (const phone of getPhones(payload)) {
         if (!phone) continue;
-        const key = `${groupId}|${phone}|${r.received_at}`;
+        const brE164 = normalizeToE164BR(phone);
+        if (!brE164) continue;
+        const phoneDigits = brE164.replace(/^\+/, '');
+        const key = `${groupId}|${phoneDigits}|${r.received_at}`;
         if (seen.has(key)) continue;
         seen.add(key);
         items.push({
           id: r.id,
           received_at: r.received_at,
           group_id: groupId,
-          group_subject: null,
-          phone,
+          phone: phoneDigits,
+          instance_name: instanceName,
+          payload_subject: payloadSubject,
         });
       }
     }
 
     const groupIds = [...new Set(items.map((i) => i.group_id))];
-    const nameByKey = new Map<string, string>();
-    if (groupIds.length > 0) {
-      const { data: names } = await supabaseServiceRole
-        .from('audit_group_names')
-        .select('group_id, instance_name, group_subject')
-        .in('group_id', groupIds);
-      for (const n of names || []) {
-        nameByKey.set(`${n.group_id}|${n.instance_name}`, n.group_subject || '');
-      }
-    }
+    const resolveLabel = await createAntiSpamGroupLabelResolver(supabaseServiceRole, {
+      configId,
+      groupIds,
+      userId,
+    });
 
     const enriched = items.map((r) => {
-      const instanceName = (rows || []).find((x: any) => x.id === r.id)?.instance_name || '';
-      return { ...r, group_subject: nameByKey.get(`${r.group_id}|${instanceName}`) ?? null };
+      const resolved = resolveLabel(r.group_id, r.instance_name);
+      const group_subject = resolved || r.payload_subject || null;
+      return {
+        id: r.id,
+        received_at: r.received_at,
+        group_id: r.group_id,
+        group_subject,
+        phone: r.phone,
+      };
     });
 
     const total = enriched.length;

@@ -1,9 +1,11 @@
 import { NextRequest } from 'next/server';
-import { requireAdmin } from '@/lib/middleware/permissions';
+import { requireLeadTransferApiAccess } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { getAdminBancaId, getAdminAllowedBancaIds } from '@/lib/server/crm/adminLeadTransferContext';
-import { getEffectiveZaplotoId } from '@/lib/tenant-context';
+import {
+  getLeadTransferBancaAccess,
+  resolveLeadTransferQueryBancaIds,
+} from '@/lib/server/crm/adminLeadTransferContext';
 import { createCrmRedistributionClient } from '@/lib/server/crm/crmRedistributionClient';
 import { normalizeDateParam, dateToStartOfDaySãoPauloISO, dateToEndOfDaySãoPauloISO } from '@/lib/server/crm/transfer-date-utils';
 
@@ -35,7 +37,7 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
  */
 export async function GET(req: NextRequest) {
   try {
-    const { userId, profile } = await requireAdmin(req);
+    const { userId, profile } = await requireLeadTransferApiAccess(req);
     const { searchParams } = req.nextUrl;
 
     const bancaId = searchParams.get('banca_id')?.trim() || null;
@@ -44,14 +46,14 @@ export async function GET(req: NextRequest) {
     let singleResolved: { bancaId: string; crmBaseUrl: string } | null = null;
 
     if (bancaId) {
-      const resolved = await getAdminBancaId(userId, profile, bancaId);
+      const resolved = await getLeadTransferBancaAccess(userId, profile, bancaId);
       if (!resolved) return errorResponse('Banca não encontrada ou sem permissão.');
       bancaIds = [resolved.bancaId];
       singleResolved = { bancaId: resolved.bancaId, crmBaseUrl: resolved.crmBaseUrl };
     } else {
-      const zaplotoId = await getEffectiveZaplotoId(req, profile);
-      const allowed = await getAdminAllowedBancaIds(profile, zaplotoId);
-      if (!allowed?.length) {
+      const scope = await resolveLeadTransferQueryBancaIds(req, userId, profile, null);
+      if (scope.error) return errorResponse(scope.error);
+      if (!scope.bancaIds.length) {
         return successResponse({
           transferidos_total: 0,
           transferidos_com_saldo: 0,
@@ -61,13 +63,14 @@ export async function GET(req: NextRequest) {
           convertedCount: undefined,
         });
       }
-      bancaIds = allowed;
+      bancaIds = scope.bancaIds;
     }
 
     const fromParam = normalizeDateParam(searchParams.get('from'));
     const toParam = normalizeDateParam(searchParams.get('to'));
     const transferType = searchParams.get('transfer_type')?.trim();
     const targetConsultantEmail = searchParams.get('target_consultant_email')?.trim() || null;
+    const transferKindParam = searchParams.get('transfer_kind')?.trim() || null;
 
     // 1) Trazer todos os logs do escopo (paginado), com id e transfer_type para by_type
     type LogRow = { id: string; transfer_type?: string | null };
@@ -85,6 +88,12 @@ export async function GET(req: NextRequest) {
       if (toParam) q = q.lte('created_at', dateToEndOfDaySãoPauloISO(toParam));
       if (transferType && ['TF', 'TF1', 'TF2', 'TF3'].includes(transferType)) q = q.eq('transfer_type', transferType);
       if (sourceConsultantEmail) q = q.ilike('source_consultant_email', sourceConsultantEmail);
+      if (
+        transferKindParam &&
+        ['standard', 'admin_to_gerente_stock', 'gerente_stock_to_consultant'].includes(transferKindParam)
+      ) {
+        q = q.eq('transfer_kind', transferKindParam);
+      }
       const { data: page } = await q;
       const rows = (Array.isArray(page) ? page : []) as LogRow[];
       allLogs.push(...rows);

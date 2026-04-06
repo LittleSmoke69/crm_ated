@@ -142,6 +142,28 @@ export async function requireAdmin(req: NextRequest): Promise<{ userId: string; 
 }
 
 /**
+ * APIs da página Transferência de leads (histórico/métricas): super_admin, admin, auditoria e gerente (escopo por bancas).
+ */
+export async function requireLeadTransferApiAccess(
+  req: NextRequest
+): Promise<{ userId: string; profile: UserProfile }> {
+  const { userId } = await requireAuth(req);
+  let profile = await getUserProfile(userId);
+  if (!profile) {
+    await new Promise((r) => setTimeout(r, 400));
+    profile = await getUserProfile(userId);
+  }
+  if (!profile) {
+    throw new Error('Perfil não encontrado');
+  }
+  const s = profile.status;
+  if (s === 'super_admin' || s === 'admin' || s === 'auditoria' || s === 'gerente') {
+    return { userId, profile };
+  }
+  throw new Error('Acesso negado.');
+}
+
+/**
  * Requer que o usuário seja SuperAdmin, Admin, Suporte ou cargo com permissão hierarquia na sidebar.
  * Garante que cargos com permissão de hierarquia tenham acesso sem exceção.
  */
@@ -163,6 +185,34 @@ export async function requireAdminOrSuporte(req: NextRequest): Promise<{ userId:
     return { userId, profile };
   }
   throw new Error('Acesso negado. Apenas SuperAdmin, Admin, Suporte ou cargo com permissão de hierarquia podem acessar.');
+}
+
+/**
+ * Lista de bancas CRM: hierarquia (admin/suporte) ou gerente (para telas como transferência de leads).
+ */
+export async function requireAdminOrSuporteOrGerente(
+  req: NextRequest
+): Promise<{ userId: string; profile: UserProfile }> {
+  const { userId } = await requireAuth(req);
+  let profile = await getUserProfile(userId);
+  if (!profile) {
+    await new Promise((r) => setTimeout(r, 400));
+    profile = await getUserProfile(userId);
+  }
+  if (!profile) {
+    throw new Error('Perfil não encontrado');
+  }
+  if (hasHierarchyAccess(profile)) {
+    return { userId, profile };
+  }
+  const hasHierarchyPermission = await hasSidebarPermission(profile, 'hierarquia');
+  if (hasHierarchyPermission) {
+    return { userId, profile };
+  }
+  if (profile.status === 'gerente') {
+    return { userId, profile };
+  }
+  throw new Error('Acesso negado. Apenas SuperAdmin, Admin, Suporte, cargo com hierarquia ou Gerente podem acessar.');
 }
 
 /**

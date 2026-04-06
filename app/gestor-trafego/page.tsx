@@ -33,6 +33,14 @@ export default async function GestorTrafegoPage() {
     ? (normalizedStatus as 'gestor' | 'gerente' | 'admin' | 'super_admin')
     : null;
 
+  const profileIdUb = profile.id;
+  let { data: ubRowGlobal } = await supabaseServiceRole.from('user_bancas').select('banca_ids').eq('user_id', profileIdUb).maybeSingle();
+  if (!ubRowGlobal?.banca_ids?.length && userId !== profileIdUb) {
+    const { data: ubFallback } = await supabaseServiceRole.from('user_bancas').select('banca_ids').eq('user_id', userId).maybeSingle();
+    ubRowGlobal = ubFallback ?? ubRowGlobal;
+  }
+  const assignedBancaIds = Array.isArray(ubRowGlobal?.banca_ids) ? (ubRowGlobal.banca_ids as string[]) : [];
+
   // Admin/Super Admin: seletor de qualquer dono. Cargo personalizado com gestao_trafego: seletor só dos donos/bancas permitidos (API /donos filtra).
   const customGestaoTrafegoOnly =
     hasSidebarAccess &&
@@ -46,7 +54,7 @@ export default async function GestorTrafegoPage() {
         initialData={null}
         userId={userId}
         userStatus={userStatusForClient}
-        canSelectDono={customGestaoTrafegoOnly}
+        canSelectDono={customGestaoTrafegoOnly || normalizedStatus === 'gerente'}
       />
     );
   }
@@ -65,13 +73,7 @@ export default async function GestorTrafegoPage() {
       canSelectDono = enrollerStatus === 'admin' || enrollerStatus === 'super_admin';
     }
     if (!canSelectDono) {
-      const profileIdToUse = profile.id;
-      let { data: ubRow } = await supabaseServiceRole.from('user_bancas').select('banca_ids').eq('user_id', profileIdToUse).maybeSingle();
-      if (!ubRow?.banca_ids?.length && userId !== profileIdToUse) {
-        const { data: fallback } = await supabaseServiceRole.from('user_bancas').select('banca_ids').eq('user_id', userId).maybeSingle();
-        ubRow = fallback ?? ubRow;
-      }
-      const ids = Array.isArray(ubRow?.banca_ids) ? (ubRow.banca_ids as string[]) : [];
+      const ids = assignedBancaIds;
       userBancas = ids.map((banca_id: string) => ({ banca_id }));
       canSelectDono = userBancas.length > 0;
     }
@@ -97,5 +99,13 @@ export default async function GestorTrafegoPage() {
   }
 
   // Não pré-carrega no servidor — evita timeout no Netlify. Client busca em duas chamadas paralelas.
-  return <GestorTrafegoClient initialData={null} userId={userId} userStatus={userStatusForClient} />;
+  // Gerente: sempre exibe filtro de banca ao lado do período (/bancas inclui user_bancas ou fallback hierárquico).
+  return (
+    <GestorTrafegoClient
+      initialData={null}
+      userId={userId}
+      userStatus={userStatusForClient}
+      canSelectDono={normalizedStatus === 'gerente'}
+    />
+  );
 }

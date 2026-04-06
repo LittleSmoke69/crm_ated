@@ -9,6 +9,7 @@ import { NextRequest } from 'next/server';
 import { requireAdmin } from '@/lib/middleware/permissions';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import type { UserProfile } from '@/lib/middleware/permissions';
+import { getEffectiveZaplotoId } from '@/lib/tenant-context';
 
 export interface AdminLeadTransferContext {
   userId: string;
@@ -85,8 +86,9 @@ export async function getAdminAllowedBancaIds(
   profile: UserProfile,
   zaplotoId: string | null
 ): Promise<string[] | null> {
-  const isAdminOrSuper = profile.status === 'admin' || profile.status === 'super_admin';
-  if (!isAdminOrSuper) return null;
+  const isFullScope =
+    profile.status === 'admin' || profile.status === 'super_admin' || profile.status === 'auditoria';
+  if (!isFullScope) return null;
 
   const base = supabaseServiceRole
     .from('crm_bancas')
@@ -134,6 +136,81 @@ export async function getAdminBancaId(
     crmBaseUrl,
     bancaName: banca.name ?? undefined,
   };
+}
+
+/** Bancas vinculadas ao gerente em `user_bancas.banca_ids`. */
+export async function getGerenteUserBancaIds(userId: string): Promise<string[]> {
+  const { data: row } = await supabaseServiceRole
+    .from('user_bancas')
+    .select('banca_ids')
+    .eq('user_id', userId)
+    .maybeSingle();
+  return Array.isArray(row?.banca_ids) ? (row.banca_ids as string[]) : [];
+}
+
+/**
+ * Resolve banca para leitura (histórico, métricas, entries): admin/super, auditoria ou gerente nas suas bancas.
+ */
+export async function getLeadTransferBancaAccess(
+  userId: string,
+  profile: UserProfile,
+  bancaIdFromRequest: string | null
+): Promise<{ bancaId: string; crmBaseUrl: string; bancaName?: string } | null> {
+  if (!bancaIdFromRequest?.trim()) return null;
+  const bancaId = bancaIdFromRequest.trim();
+
+  if (profile.status === 'admin' || profile.status === 'super_admin') {
+    return getAdminBancaId(userId, profile, bancaId);
+  }
+
+  if (profile.status === 'auditoria') {
+    const { data: banca, error } = await supabaseServiceRole
+      .from('crm_bancas')
+      .select('id, url, name')
+      .eq('id', bancaId)
+      .maybeSingle();
+    if (error || !banca?.url) return null;
+    const crmBaseUrl = (banca.url as string).trim().replace(/\/+$/, '');
+    return { bancaId: banca.id, crmBaseUrl, bancaName: banca.name ?? undefined };
+  }
+
+  if (profile.status === 'gerente') {
+    const allowed = await getGerenteUserBancaIds(userId);
+    if (!allowed.includes(bancaId)) return null;
+    const { data: banca, error } = await supabaseServiceRole
+      .from('crm_bancas')
+      .select('id, url, name')
+      .eq('id', bancaId)
+      .maybeSingle();
+    if (error || !banca?.url) return null;
+    const crmBaseUrl = (banca.url as string).trim().replace(/\/+$/, '');
+    return { bancaId: banca.id, crmBaseUrl, bancaName: banca.name ?? undefined };
+  }
+
+  return null;
+}
+
+/**
+ * Lista de banca_ids para queries de métricas/histórico (sem banca_id no filtro = todas as permitidas ao papel).
+ */
+export async function resolveLeadTransferQueryBancaIds(
+  req: NextRequest,
+  userId: string,
+  profile: UserProfile,
+  bancaIdParam: string | null
+): Promise<{ bancaIds: string[]; error?: string }> {
+  if (bancaIdParam?.trim()) {
+    const resolved = await getLeadTransferBancaAccess(userId, profile, bancaIdParam);
+    if (!resolved) return { bancaIds: [], error: 'Banca não encontrada ou sem permissão.' };
+    return { bancaIds: [resolved.bancaId] };
+  }
+  if (profile.status === 'gerente') {
+    const ids = await getGerenteUserBancaIds(userId);
+    return { bancaIds: ids };
+  }
+  const zaplotoId = await getEffectiveZaplotoId(req, profile);
+  const allowed = await getAdminAllowedBancaIds(profile, zaplotoId);
+  return { bancaIds: allowed ?? [] };
 }
 
 /**

@@ -1,8 +1,8 @@
 import { NextRequest } from 'next/server';
-import { requireAdmin } from '@/lib/middleware/permissions';
+import { requireLeadTransferApiAccess } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { getAdminBancaId } from '@/lib/server/crm/adminLeadTransferContext';
+import { getLeadTransferBancaAccess } from '@/lib/server/crm/adminLeadTransferContext';
 import { createCrmRedistributionClient } from '@/lib/server/crm/crmRedistributionClient';
 
 const LOG_PREFIX = '[admin][transfer-logs-entries]';
@@ -30,7 +30,7 @@ export type EntryLeadDetail = {
  */
 export async function GET(req: NextRequest) {
   try {
-    const { userId, profile } = await requireAdmin(req);
+    const { userId, profile } = await requireLeadTransferApiAccess(req);
     const { searchParams } = req.nextUrl;
 
     const logId = searchParams.get('log_id')?.trim() || null;
@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
       return errorResponse('log_id e banca_id são obrigatórios.');
     }
 
-    const resolved = await getAdminBancaId(userId, profile, bancaId);
+    const resolved = await getLeadTransferBancaAccess(userId, profile, bancaId);
     if (!resolved) {
       return errorResponse('Banca não encontrada ou sem permissão.');
     }

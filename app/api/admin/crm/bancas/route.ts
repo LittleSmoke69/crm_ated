@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { requireAdmin, requireAdminOrSuporte } from '@/lib/middleware/permissions';
+import { requireAdmin, requireAdminOrSuporteOrGerente } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { getEffectiveZaplotoId } from '@/lib/tenant-context';
@@ -14,7 +14,7 @@ const LOG_PREFIX = '[admin][crm][bancas]';
  */
 export async function GET(req: NextRequest) {
   try {
-    const { userId, profile } = await requireAdminOrSuporte(req);
+    const { userId, profile } = await requireAdminOrSuporteOrGerente(req);
     const zaplotoId = await getEffectiveZaplotoId(req, profile);
 
     const { searchParams } = new URL(req.url);
@@ -74,6 +74,16 @@ export async function GET(req: NextRequest) {
         }
         bancas = (list ?? []) as unknown as BancaRow[];
       }
+    }
+
+    if (profile.status === 'gerente') {
+      const { data: row } = await supabaseServiceRole
+        .from('user_bancas')
+        .select('banca_ids')
+        .eq('user_id', userId)
+        .maybeSingle();
+      const allowed = new Set(Array.isArray(row?.banca_ids) ? (row.banca_ids as string[]) : []);
+      bancas = bancas.filter((b) => allowed.has(b.id));
     }
 
     if (!withUsers || !bancas?.length) {

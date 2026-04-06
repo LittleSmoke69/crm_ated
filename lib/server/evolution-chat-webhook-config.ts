@@ -42,6 +42,41 @@ export function normalizeEvolutionChatWebhookEvent(raw: string): string {
   return map[key] ?? raw;
 }
 
+/**
+ * Nome da instância Evolution no payload (string na raiz, objeto `instance` ou em `data`).
+ * Alinhado a `extractMetadata` em `app/api/webhooks/evolution/prod/route.ts`.
+ */
+export function extractEvolutionWebhookInstanceName(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const p = payload as Record<string, unknown>;
+
+  const inst = p.instance;
+  if (typeof inst === 'string' && inst.trim()) return inst.trim();
+  if (inst && typeof inst === 'object' && !Array.isArray(inst)) {
+    const o = inst as Record<string, unknown>;
+    for (const k of ['instanceName', 'name'] as const) {
+      const v = o[k];
+      if (typeof v === 'string' && v.trim()) return v.trim();
+    }
+  }
+
+  const data = p.data as Record<string, unknown> | undefined;
+  for (const v of [p.instanceName, data?.instance, data?.instanceName]) {
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+
+  const dataInst = data?.instance;
+  if (dataInst && typeof dataInst === 'object' && !Array.isArray(dataInst)) {
+    const o = dataInst as Record<string, unknown>;
+    for (const k of ['instanceName', 'name'] as const) {
+      const v = o[k];
+      if (typeof v === 'string' && v.trim()) return v.trim();
+    }
+  }
+
+  return null;
+}
+
 /** Indica se o evento normalizado deve persistir em `chat_conversations` / `chat_messages`. */
 export function isEvolutionChatPersistenceEvent(normalized: string): boolean {
   return (EVOLUTION_CHAT_WEBHOOK_MESSAGE_EVENTS as readonly string[]).includes(normalized);

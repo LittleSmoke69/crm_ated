@@ -6,7 +6,8 @@
 
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { extractPhones, normalizeToE164BR, toWaJid } from '@/lib/utils/phone-utils';
-import { removeParticipant } from './evolution-client';
+import { removeParticipant, deleteMessageForEveryone } from './evolution-client';
+import { extractMessageBodyText, extractMessageKey } from './evolution-message-extract';
 import type { AntiSpamConfig, WebhookEventRow } from './types';
 
 const POLL_INTERVAL_MS = Number(process.env.ANTI_SPAM_POLL_MS) || 800;
@@ -34,7 +35,8 @@ async function loadActiveConfigs(): Promise<AntiSpamConfig[]> {
       master_instance_id,
       watcher_instance_id,
       denuncia_group_jid,
-      scan_mode
+      scan_mode,
+      suspicious_messages_enabled
     `)
     .eq('is_enabled', true);
 
@@ -60,6 +62,7 @@ async function loadActiveConfigs(): Promise<AntiSpamConfig[]> {
     owner_id: c.owner_id || null,
     banca_id: c.banca_id || null,
     denuncia_group_jid: c.denuncia_group_jid || null,
+    suspicious_messages_enabled: !!c.suspicious_messages_enabled,
     master_instance_name: nameById.get(c.master_instance_id),
     watcher_instance_name: c.watcher_instance_id ? nameById.get(c.watcher_instance_id) : null,
   }));
@@ -431,6 +434,91 @@ async function handleDenunciaMessage(
   }
 }
 
+async function loadEnabledKeywordsLower(configId: string): Promise<string[]> {
+  const { data, error } = await supabaseServiceRole
+    .from('anti_spam_suspicious_keywords')
+    .select('keyword')
+    .eq('config_id', configId)
+    .eq('is_enabled', true);
+  if (error || !data?.length) return [];
+  const out: string[] = [];
+  for (const r of data) {
+    const k = String((r as { keyword: string }).keyword || '')
+      .trim()
+      .toLowerCase();
+    if (k) out.push(k);
+  }
+  return out;
+}
+
+function firstKeywordMatch(textLower: string, keywords: string[]): string | null {
+  for (const kw of keywords) {
+    if (textLower.includes(kw)) return kw;
+  }
+  return null;
+}
+
+/**
+ * Mensagens em grupos que contenham palavra cadastrada → delete para todos (Evolution).
+ */
+async function handleSuspiciousMessage(
+  event: WebhookEventRow,
+  config: AntiSpamConfig,
+  bancaId: string | null,
+  userId: string | null,
+  payload: any
+): Promise<void> {
+  if (!config.suspicious_messages_enabled) return;
+
+  const key = extractMessageKey(payload);
+  if (!key?.id || !key.remoteJid) return;
+  if (key.fromMe) return;
+  if (!key.remoteJid.includes('@g.us')) return;
+
+  const text = extractMessageBodyText(payload);
+  if (!text.trim()) return;
+
+  const keywords = await loadEnabledKeywordsLower(config.id);
+  if (keywords.length === 0) return;
+
+  const matched = firstKeywordMatch(text.toLowerCase(), keywords);
+  if (!matched) return;
+
+  const dedupePhone = `msg:${key.id}`;
+  const already = await actionAlreadyDone(
+    config.id,
+    event.id,
+    'delete_message',
+    key.remoteJid,
+    dedupePhone
+  );
+  if (already) return;
+
+  const del = await deleteMessageForEveryone(config.master_instance_id, {
+    id: key.id,
+    remoteJid: key.remoteJid,
+    fromMe: key.fromMe,
+    participant: key.participant || '',
+  });
+
+  await recordAction(
+    config.id,
+    bancaId,
+    userId,
+    event.id,
+    key.remoteJid,
+    dedupePhone,
+    'delete_message',
+    del.success ? 'success' : 'fail',
+    del.error ?? null,
+    {
+      keyword_matched: matched,
+      message_preview: text.slice(0, 500),
+      message_id: key.id,
+    }
+  );
+}
+
 /**
  * Processa um evento (roteamento por tipo).
  */
@@ -460,6 +548,63 @@ async function processEvent(
     if (config.denuncia_group_jid && remoteJid === config.denuncia_group_jid) {
       await handleDenunciaMessage(event, config, bancaId, userId, payload);
     }
+    await handleSuspiciousMessage(event, config, bancaId, userId, payload);
+  }
+}
+
+/**
+ * Processa um payload bruto em tempo real (síncrono ao webhook).
+ * Encontra a config pela instance_name, processa participante ou denúncia e retorna.
+ * Usado pelo webhook de produção para remover imediatamente após o evento chegar.
+ */
+export async function processEventForAntiSpam(
+  rawPayload: any,
+  normalizedPayload: any,
+  eventType: string,
+  instanceName: string,
+  remoteJid: string | null,
+  eventId: string
+): Promise<void> {
+  const configs = await loadActiveConfigs();
+  if (configs.length === 0) return;
+
+  // Encontra config que usa essa instância
+  const config = configs.find(
+    (c) => (c.master_instance_name === instanceName || c.watcher_instance_name === instanceName)
+  );
+  if (!config) return;
+
+  const bancaId = config.owner_type === 'banca' ? (config.banca_id ?? null) : null;
+  const userId = config.owner_type === 'user' ? (config.owner_id ?? null) : null;
+
+  const payload = normalizedPayload ?? rawPayload;
+  const eventTypeNorm = normalizeEventType(eventType);
+
+  // Monta EventRow com o event_id real do insert para idempotência correta
+  const eventRow: WebhookEventRow = {
+    id: eventId,
+    received_at: new Date().toISOString(),
+    env: 'prod',
+    event_type: eventType,
+    instance_name: instanceName,
+    remote_jid: remoteJid,
+    message_id: null,
+    payload: rawPayload,
+    payload_normalized: normalizedPayload,
+  };
+
+  if (EVENT_TYPES_PARTICIPANTS.some((t) => normalizeEventType(t) === eventTypeNorm)) {
+    await handleParticipantAdd(eventRow, config, bancaId, userId, payload);
+    return;
+  }
+
+  if (EVENT_TYPES_MESSAGES.some((t) => normalizeEventType(t) === eventTypeNorm)) {
+    const data = payload && typeof payload === 'object' && 'data' in payload ? (payload as { data?: { key?: { remoteJid?: string } } }).data : undefined;
+    const msgRemoteJid = data?.key?.remoteJid ?? remoteJid ?? '';
+    if (config.denuncia_group_jid && msgRemoteJid === config.denuncia_group_jid) {
+      await handleDenunciaMessage(eventRow, config, bancaId, userId, payload);
+    }
+    await handleSuspiciousMessage(eventRow, config, bancaId, userId, payload);
   }
 }
 

@@ -12,11 +12,10 @@
  */
 
 import { NextRequest } from 'next/server';
-import { requireAdmin } from '@/lib/middleware/permissions';
+import { requireLeadTransferApiAccess } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { getAdminBancaId, getAdminAllowedBancaIds } from '@/lib/server/crm/adminLeadTransferContext';
-import { getEffectiveZaplotoId } from '@/lib/tenant-context';
+import { resolveLeadTransferQueryBancaIds } from '@/lib/server/crm/adminLeadTransferContext';
 import { normalizeDateParam, dateToStartOfDaySãoPauloISO, dateToEndOfDaySãoPauloISO } from '@/lib/server/crm/transfer-date-utils';
 
 const EMPTY_RESPONSE = {
@@ -67,24 +66,17 @@ async function countLeadsVinculados(
 
 export async function GET(req: NextRequest) {
   try {
-    const { userId, profile } = await requireAdmin(req);
+    const { userId, profile } = await requireLeadTransferApiAccess(req);
     const searchParams = req.nextUrl.searchParams;
     const bancaId = searchParams.get('banca_id')?.trim() || null;
     const fromParam = normalizeDateParam(searchParams.get('from'));
     const toParam = normalizeDateParam(searchParams.get('to'));
     const sourceConsultantEmail = searchParams.get('source_consultant_email')?.trim() || null;
 
-    let bancaIds: string[];
-    if (bancaId) {
-      const resolved = await getAdminBancaId(userId, profile, bancaId);
-      if (!resolved) return errorResponse('Banca não encontrada ou sem permissão.', 403);
-      bancaIds = [resolved.bancaId];
-    } else {
-      const zaplotoId = await getEffectiveZaplotoId(req, profile);
-      const allowed = await getAdminAllowedBancaIds(profile, zaplotoId);
-      if (!allowed?.length) return successResponse(EMPTY_RESPONSE);
-      bancaIds = allowed;
-    }
+    const scope = await resolveLeadTransferQueryBancaIds(req, userId, profile, bancaId);
+    if (scope.error) return errorResponse(scope.error, 403);
+    const bancaIds = scope.bancaIds;
+    if (!bancaIds.length) return successResponse(EMPTY_RESPONSE);
 
     const [rpcResult, total_vinculado] = await Promise.all([
       supabaseServiceRole.rpc('get_resolved_transfer_stats', {

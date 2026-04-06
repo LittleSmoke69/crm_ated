@@ -35,6 +35,7 @@ import {
   Unlink,
   Pencil,
   Trash2,
+  Package,
 } from 'lucide-react';
 import { DateInputDDMMYYYY, getTodaySãoPaulo, getLast30DaysRangeSãoPaulo } from '@/components/Admin/CRMSection';
 import { ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, LabelList } from 'recharts';
@@ -382,7 +383,7 @@ interface GerenteLeadRequest {
 
 export default function AdminLeadTransferPage() {
   const router = useRouter();
-  const { checking, userId } = useRequireAuth();
+  const { checking, userId, userStatus } = useRequireAuth();
   const { toasts, showToast, removeToast } = useToast();
 
   const [bancas, setBancas] = useState<Banca[]>([]);
@@ -390,6 +391,11 @@ export default function AdminLeadTransferPage() {
   const [consultants, setConsultants] = useState<Consultant[]>([]);
   const [sourceEmail, setSourceEmail] = useState('');
   const [targetEmail, setTargetEmail] = useState('');
+  /** Destino: consultor direto ou estoque CRM do gerente (admin envia para o e-mail pool). */
+  const [destinoModo, setDestinoModo] = useState<'consultor' | 'estoque_gerente'>('consultor');
+  const [estoqueGerenteId, setEstoqueGerenteId] = useState('');
+  const [gerentesForStockOptions, setGerentesForStockOptions] = useState<{ id: string; email: string; full_name: string | null }[]>([]);
+  const [loadingGerentesForStock, setLoadingGerentesForStock] = useState(false);
   /** Prazo em dias para expiração deste pacote de leads (passo Destino). Selecionado pelo usuário; padrão 10. */
   const [transferDeadlineDays, setTransferDeadlineDays] = useState<number>(10);
   const [tags, setTags] = useState<string[]>([]);
@@ -438,6 +444,8 @@ export default function AdminLeadTransferPage() {
   const [managementFrom, setManagementFrom] = useState('');
   const [managementTo, setManagementTo] = useState('');
   const [managementTransferType, setManagementTransferType] = useState('');
+  /** Filtro de fluxo no histórico / métricas: vazio = todos. */
+  const [managementTransferKind, setManagementTransferKind] = useState('');
   /** Filtro de prazo por dias: 'all' | '1' | '5' | '10' | 'custom' | 'expired'. Valores numéricos = faltando até N dias. */
   const [managementPrazoFilter, setManagementPrazoFilter] = useState<'all' | '1' | '5' | '10' | 'custom' | 'expired'>('all');
   /** Quando managementPrazoFilter === 'custom', dias restantes máximos (ex.: 7 = faltando até 7 dias). */
@@ -715,7 +723,8 @@ export default function AdminLeadTransferPage() {
   const recalcPollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [currentStep, setCurrentStep] = useState(1);
-  const [activeTab, setActiveTab] = useState<'transfer' | 'history' | 'solicitations' | 'analysis'>('transfer');
+  const [activeTab, setActiveTab] = useState<'transfer' | 'transfer_stock' | 'history' | 'solicitations' | 'analysis'>('transfer');
+  const isTransferWizardTab = activeTab === 'transfer' || activeTab === 'transfer_stock';
   /** Bloqueio da aba Análise: false = tab oculta e conteúdo não exibido (reverter para true para reativar). */
   const ANALYSIS_TAB_ENABLED = false;
   /** Aba Análise: banca selecionada, período de inatividade (dias) e resultados por consultor */
@@ -916,6 +925,14 @@ export default function AdminLeadTransferPage() {
     loadPermission();
   }, [userId, router]);
 
+  const isGerenteLeadTransferViewer = userStatus === 'gerente';
+
+  useEffect(() => {
+    if (isGerenteLeadTransferViewer && activeTab !== 'history') {
+      setActiveTab('history');
+    }
+  }, [isGerenteLeadTransferViewer, activeTab]);
+
   useEffect(() => {
     if (typeof window === 'undefined' || !userId) return;
     const loadBancas = async () => {
@@ -988,7 +1005,13 @@ export default function AdminLeadTransferPage() {
       name: bancaNameFromUrl || bancaIdFromUrl,
     });
     setHistoryBancaFilter(bancaIdFromUrl);
-    setActiveTab(tab === 'history' || tab === 'solicitations' || tab === 'analysis' ? tab : 'transfer');
+    setActiveTab(
+      tab === 'history' || tab === 'solicitations' || tab === 'analysis'
+        ? tab
+        : tab === 'transfer_stock'
+          ? 'transfer_stock'
+          : 'transfer'
+    );
   }, []);
 
   const loadConsultants = useCallback(async () => {
@@ -1037,7 +1060,7 @@ export default function AdminLeadTransferPage() {
   /** Garante banca da solicitação selecionada na aba Transferir (ex.: quando lista de bancas carrega depois do clique) */
   useEffect(() => {
     const pendingBancaId = transferFromSolicitationBancaIdRef.current;
-    if (activeTab !== 'transfer' || !pendingBancaId || bancas.length === 0) return;
+    if (!isTransferWizardTab || !pendingBancaId || bancas.length === 0) return;
     const banca = bancas.find((b) => b.id === pendingBancaId);
     if (!banca) return;
     if (bancaId !== pendingBancaId) {
@@ -1045,7 +1068,7 @@ export default function AdminLeadTransferPage() {
       setBancaSearchQuery(banca.name || banca.url || pendingBancaId);
     }
     transferFromSolicitationBancaIdRef.current = null;
-  }, [activeTab, bancas, bancaId]);
+  }, [isTransferWizardTab, bancas, bancaId]);
 
   /** Ao redirecionar da solicitação: preenche consultor origem (doador) e dispara busca de leads. */
   useEffect(() => {
@@ -2151,24 +2174,77 @@ export default function AdminLeadTransferPage() {
     setLeadsPage(1);
   }, [leadSearchQuery, leadFilterStatus, leadFilterTemperature, balanceFilter, leadFilterSaldoMin, leadFilterSaldoMax, leadFilterAposta, leadFilterApostaMin, leadFilterApostaMax, leadFilterTotalDepositado, leadFilterTotalDepositadoMin, leadFilterTotalDepositadoMax, leadFilterSaqueDisponivel, leadFilterSaqueDisponivelMin, leadFilterSaqueDisponivelMax, leadFilterTotalPremio, leadFilterTotalPremioMin, leadFilterTotalPremioMax, leadsPageSize, customPageSizeInput]);
 
+  /** Ao trocar de banca, o gerente do estoque deve ser escolhido de novo (lista é por banca). */
+  useEffect(() => {
+    setEstoqueGerenteId('');
+  }, [bancaId]);
+
+  /** Aba dedicada: consultor vs estoque do gerente. */
+  useEffect(() => {
+    if (activeTab === 'transfer_stock') {
+      setDestinoModo('estoque_gerente');
+      setTargetEmail('');
+    } else if (activeTab === 'transfer') {
+      setDestinoModo('consultor');
+      setEstoqueGerenteId('');
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (!bancaId || !userId) {
+      setGerentesForStockOptions([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setLoadingGerentesForStock(true);
+      try {
+        const res = await fetch(`/api/admin/crm/gerentes-for-banca?banca_id=${encodeURIComponent(bancaId)}`, { headers: headers() });
+        const json = await res.json();
+        if (!cancelled && res.ok && json.success && Array.isArray(json.data)) {
+          setGerentesForStockOptions(json.data);
+        }
+      } catch {
+        if (!cancelled) setGerentesForStockOptions([]);
+      } finally {
+        if (!cancelled) setLoadingGerentesForStock(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bancaId, userId]);
+
   const openConfirmModal = () => {
     if (selectedLeadIds.size === 0) {
       showToast('Selecione pelo menos um lead', 'error');
       return;
     }
-    if (!targetEmail?.trim()) {
-      showToast('Selecione o consultor destino', 'error');
-      return;
-    }
-    if (sourceEmail?.trim()?.toLowerCase() === targetEmail?.trim()?.toLowerCase()) {
-      showToast('Origem e destino devem ser diferentes', 'error');
-      return;
+    if (destinoModo === 'estoque_gerente') {
+      if (!estoqueGerenteId.trim()) {
+        showToast('Selecione o gerente que receberá no estoque', 'error');
+        return;
+      }
+    } else {
+      if (!targetEmail?.trim()) {
+        showToast('Selecione o consultor destino', 'error');
+        return;
+      }
+      if (sourceEmail?.trim()?.toLowerCase() === targetEmail?.trim()?.toLowerCase()) {
+        showToast('Origem e destino devem ser diferentes', 'error');
+        return;
+      }
     }
     setShowConfirmModal(true);
   };
 
   const confirmTransfer = async () => {
-    if (selectedLeadIds.size === 0 || !targetEmail?.trim() || !userId) return;
+    if (selectedLeadIds.size === 0 || !userId) return;
+    if (destinoModo === 'estoque_gerente') {
+      if (!estoqueGerenteId.trim()) return;
+    } else if (!targetEmail?.trim()) {
+      return;
+    }
     setTransferring(true);
     try {
       const leadIdsArr = Array.from(selectedLeadIds);
@@ -2220,26 +2296,31 @@ export default function AdminLeadTransferPage() {
         min_sum_balance: minSumBalance.trim() || null,
         transferred_filter: 'no',
       };
+      const redistributeBody: Record<string, unknown> = {
+        banca_id: bancaId,
+        source_consultant_email: sourceEmail.trim(),
+        leads_ids: leadIdsArr,
+        transfer_type: transferType,
+        transfer_deadline_days: transferDeadlineDays,
+        filters_snapshot: transferFiltersSnapshot,
+        lead_snapshots: leadSnapshots,
+      };
+      if (destinoModo === 'estoque_gerente') {
+        redistributeBody.to_gerente_stock_gerente_id = estoqueGerenteId.trim();
+      } else {
+        redistributeBody.target_consultant_email = targetEmail.trim();
+      }
       const res = await fetch('/api/admin/crm/redistribute-leads', {
         method: 'POST',
         headers: headers(),
-        body: JSON.stringify({
-          banca_id: bancaId,
-          source_consultant_email: sourceEmail.trim(),
-          target_consultant_email: targetEmail.trim(),
-          leads_ids: leadIdsArr,
-          transfer_type: transferType,
-          transfer_deadline_days: transferDeadlineDays,
-          filters_snapshot: transferFiltersSnapshot,
-          lead_snapshots: leadSnapshots,
-        }),
+        body: JSON.stringify(redistributeBody),
       });
       const json = await res.json();
       if (res.ok && json.success) {
         const count = json?.data?.count ?? selectedLeadIds.size;
         const newTransferLogId = json?.data?.transfer_log_id ?? null;
         const requestIdToApprove = transferFromSolicitationRequestIdRef.current;
-        if (requestIdToApprove) {
+        if (requestIdToApprove && destinoModo !== 'estoque_gerente') {
           const sourceConsultant = consultants.find((c) => (c.email ?? '').trim().toLowerCase() === (sourceEmail ?? '').trim().toLowerCase());
           const sourceConsultantId = transferFromSolicitationSourceIdRef.current?.trim() || sourceConsultant?.id?.trim();
           const targetConsultant = consultants.find((c) => (c.email ?? '').trim().toLowerCase() === targetEmail.trim().toLowerCase());
@@ -2280,7 +2361,21 @@ export default function AdminLeadTransferPage() {
           transferFromSolicitationRequestIdRef.current = null;
           transferFromSolicitationSourceIdRef.current = null;
         } else {
-          showToast(`${count} lead(s) transferido(s) de ${sourceEmail} para ${targetEmail}. Aba Histórico atualizada.`, 'success');
+          const clearedSolic = !!transferFromSolicitationRequestIdRef.current && destinoModo === 'estoque_gerente';
+          if (clearedSolic) {
+            transferFromSolicitationRequestIdRef.current = null;
+            transferFromSolicitationSourceIdRef.current = null;
+          }
+          const destinoLabel =
+            destinoModo === 'estoque_gerente'
+              ? `estoque: ${gerentesForStockOptions.find((g) => g.id === estoqueGerenteId)?.full_name || gerentesForStockOptions.find((g) => g.id === estoqueGerenteId)?.email || estoqueGerenteId}`
+              : targetEmail;
+          showToast(
+            clearedSolic
+              ? `${count} lead(s) enviados ao estoque (${destinoLabel}). Solicitação não auto-aprovada neste fluxo.`
+              : `${count} lead(s) transferido(s) de ${sourceEmail} para ${destinoLabel}. Aba Histórico atualizada.`,
+            'success'
+          );
           if (Number(json?.data?.crm_count) === 0 && count > 0) {
             showToast('O CRM informou 0 leads redistribuídos. Os leads aparecerão na tela "Leads Transferidos" do Zaploto (complemento pelos nossos registros).', 'info');
           }
@@ -2338,6 +2433,12 @@ export default function AdminLeadTransferPage() {
       if (managementTransferType.trim()) params.set('transfer_type', managementTransferType.trim());
       if (conversionConsultant.trim()) params.set('target_consultant_email', conversionConsultant.trim());
       if (historyDonorConsultantFilter.trim()) params.set('source_consultant_email', historyDonorConsultantFilter.trim());
+      if (
+        managementTransferKind.trim() &&
+        ['standard', 'admin_to_gerente_stock', 'gerente_stock_to_consultant'].includes(managementTransferKind.trim())
+      ) {
+        params.set('transfer_kind', managementTransferKind.trim());
+      }
       params.set('offset', String(offset));
       params.set('limit', String(limit));
       return params;
@@ -3006,6 +3107,12 @@ export default function AdminLeadTransferPage() {
       if (managementTransferType.trim()) params.set('transfer_type', managementTransferType.trim());
       if (conversionConsultant.trim()) params.set('target_consultant_email', conversionConsultant.trim());
       if (historyDonorConsultantFilter.trim()) params.set('source_consultant_email', historyDonorConsultantFilter.trim());
+      if (
+        managementTransferKind.trim() &&
+        ['standard', 'admin_to_gerente_stock', 'gerente_stock_to_consultant'].includes(managementTransferKind.trim())
+      ) {
+        params.set('transfer_kind', managementTransferKind.trim());
+      }
       const url = `/api/admin/crm/transfer-metrics?${params.toString()}`;
       const res = await fetch(url, { headers: headers() });
       const json = await res.json();
@@ -4017,7 +4124,18 @@ export default function AdminLeadTransferPage() {
     loadExpiredLogs();
     loadResolvedStats();
     if (historyBancaFilter === '') loadResolvedList();
-  }, [activeTab, historyBancaFilter, loadResolvedStats, loadResolvedList]);
+  }, [
+    activeTab,
+    historyBancaFilter,
+    loadResolvedStats,
+    loadResolvedList,
+    managementTransferKind,
+    managementTransferType,
+    conversionConsultant,
+    historyDonorConsultantFilter,
+    managementFrom,
+    managementTo,
+  ]);
 
   // Leads transferidos mais de uma vez: contar por lead_id nos logs
   const leadTransferCountMap = React.useMemo(() => {
@@ -4357,10 +4475,10 @@ export default function AdminLeadTransferPage() {
           <div className="flex items-center gap-2 text-sm">
             <button
               type="button"
-              onClick={() => router.push('/admin')}
+              onClick={() => router.push(isGerenteLeadTransferViewer ? '/gerente' : '/admin')}
               className="text-[#8CD955] dark:text-[#00ff00] font-medium hover:underline"
             >
-              Admin
+              {isGerenteLeadTransferViewer ? 'Gerência' : 'Admin'}
             </button>
             <span className="text-gray-400 dark:text-[#666]">/</span>
             <span className="text-gray-600 dark:text-[#aaa] font-medium">Transferência de Leads</span>
@@ -4375,20 +4493,34 @@ export default function AdminLeadTransferPage() {
                 Transferência de Leads
               </h1>
               <p className="text-gray-600 dark:text-[#aaa] text-sm mt-1.5 max-w-xl">
-                Redistribua leads de um consultor para outro na mesma banca.
+                {isGerenteLeadTransferViewer
+                  ? 'Visualize histórico, conversão e métricas das transferências nas suas bancas.'
+                  : 'Envie leads para um consultor ou para o estoque CRM do gerente (mesma banca; usa o e-mail do perfil do gerente).'}
               </p>
             </div>
           </div>
 
           {/* Abas: Transferir | Histórico | Solicitações | Análise (bloqueável por flag) */}
           <div className="flex gap-1 p-1 bg-gray-100 dark:bg-[#333] rounded-xl w-fit">
-            <button
-              type="button"
-              onClick={() => setActiveTab('transfer')}
-              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'transfer' ? 'bg-white dark:bg-[#2a2a2a] text-gray-900 dark:text-white shadow-sm' : 'text-gray-600 dark:text-[#aaa] hover:text-gray-900 dark:hover:text-white'}`}
-            >
-              Transferir
-            </button>
+            {!isGerenteLeadTransferViewer && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('transfer')}
+                className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'transfer' ? 'bg-white dark:bg-[#2a2a2a] text-gray-900 dark:text-white shadow-sm' : 'text-gray-600 dark:text-[#aaa] hover:text-gray-900 dark:hover:text-white'}`}
+              >
+                Para consultor
+              </button>
+            )}
+            {!isGerenteLeadTransferViewer && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('transfer_stock')}
+                className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5 ${activeTab === 'transfer_stock' ? 'bg-white dark:bg-[#2a2a2a] text-gray-900 dark:text-white shadow-sm' : 'text-gray-600 dark:text-[#aaa] hover:text-gray-900 dark:hover:text-white'}`}
+              >
+                <Package className="w-4 h-4 flex-shrink-0" />
+                Transferir estoque
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setActiveTab('history')}
@@ -4396,14 +4528,16 @@ export default function AdminLeadTransferPage() {
             >
               Histórico & Conversão
             </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('solicitations')}
-              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'solicitations' ? 'bg-white dark:bg-[#2a2a2a] text-gray-900 dark:text-white shadow-sm' : 'text-gray-600 dark:text-[#aaa] hover:text-gray-900 dark:hover:text-white'}`}
-            >
-              Solicitações
-            </button>
-            {ANALYSIS_TAB_ENABLED && (
+            {!isGerenteLeadTransferViewer && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('solicitations')}
+                className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'solicitations' ? 'bg-white dark:bg-[#2a2a2a] text-gray-900 dark:text-white shadow-sm' : 'text-gray-600 dark:text-[#aaa] hover:text-gray-900 dark:hover:text-white'}`}
+              >
+                Solicitações
+              </button>
+            )}
+            {!isGerenteLeadTransferViewer && ANALYSIS_TAB_ENABLED && (
               <button
                 type="button"
                 onClick={() => setActiveTab('analysis')}
@@ -4868,6 +5002,22 @@ export default function AdminLeadTransferPage() {
                     </select>
                     <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">TF, TF1, TF2, TF3</p>
                   </div>
+                  <div className="lg:col-span-2">
+                    <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1.5 flex items-center gap-1">
+                      <ArrowRightLeft className="w-3.5 h-3.5" /> Fluxo
+                    </label>
+                    <select
+                      value={managementTransferKind}
+                      onChange={(e) => setManagementTransferKind(e.target.value)}
+                      className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                    >
+                      <option value="">Todos</option>
+                      <option value="standard">Padrão</option>
+                      <option value="admin_to_gerente_stock">→ Estoque gerente</option>
+                      <option value="gerente_stock_to_consultant">Estoque → consultor</option>
+                    </select>
+                    <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">Filtra histórico e KPIs</p>
+                  </div>
                   {/* Consultor (conversão) — layout igual ao Prazo */}
                   <div className="lg:col-span-3">
                     <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1.5 flex items-center gap-1">
@@ -5055,7 +5205,7 @@ export default function AdminLeadTransferPage() {
                         <button
                           type="button"
                           onClick={() => runResolveBatch()}
-                          disabled={loadingExpiredLogs}
+                          disabled={loadingExpiredLogs || !canExecuteTransfer}
                           className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold bg-amber-500 text-amber-950 hover:bg-amber-400 border border-amber-600/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
                         >
                           <RotateCcw className="w-4 h-4" />
@@ -5125,7 +5275,7 @@ export default function AdminLeadTransferPage() {
                                             loadResolvedList();
                                             loadLeadRequests();
                                           }}
-                                          disabled={r.disponivel_retransferencia <= 0}
+                                          disabled={r.disponivel_retransferencia <= 0 || !canExecuteTransfer}
                                           className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/25 border border-emerald-500/40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                           title="Abrir modal para mover leads desta transferência"
                                         >
@@ -5194,6 +5344,7 @@ export default function AdminLeadTransferPage() {
                       </div>
                       <div className="flex flex-wrap items-center justify-between gap-2 mt-2">
                         <p className="text-[10px] text-emerald-600 dark:text-emerald-400">Use &quot;Mover para próximo&quot; no modal de cada transferência ou use o botão abaixo.</p>
+                        {canExecuteTransfer && (
                         <button
                           type="button"
                           onClick={() => {
@@ -5211,6 +5362,7 @@ export default function AdminLeadTransferPage() {
                         >
                           Mover leads
                         </button>
+                        )}
                       </div>
                       <div className="mt-4 pt-4 border-t border-emerald-200/50 dark:border-emerald-700/30 grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
@@ -6152,7 +6304,9 @@ export default function AdminLeadTransferPage() {
                       <p className="text-2xl font-bold text-gray-600 mt-1">{transferStats?.transferidos_sem_saldo ?? 0}</p>
                     </div>
                   </div>
-                  {/* Botão desvincular todos os leads dos consultores (escopo: banca do filtro ou todas) */}
+                  {userStatus === 'super_admin' && (
+                  <>
+                  {/* Botão desvincular todos os leads dos consultores (escopo: banca do filtro ou todas) — apenas super_admin */}
                   <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-amber-200 dark:border-amber-800/50 bg-amber-50/30 dark:bg-amber-950/20 px-4 py-3">
                     <p className="text-sm text-gray-700 dark:text-gray-300">
                       Todos os leads atualmente vinculados aos consultores ficarão disponíveis para repasse.
@@ -6186,6 +6340,8 @@ export default function AdminLeadTransferPage() {
                       {revertResolvedLoading ? 'Revertendo…' : 'Reverter resolvidas para expirado (nova análise)'}
                     </button>
                   </div>
+                  </>
+                  )}
                   {SHOW_BAR_CHART_BY_BANCA && (
                     <div className="mb-6">
                       <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-2xl p-5 shadow-sm">
@@ -7310,6 +7466,18 @@ export default function AdminLeadTransferPage() {
           ) : (
             /* Aba Transferir: Stepper + conteúdo por passo */
             <>
+              {activeTab === 'transfer_stock' && (
+                <div className="mb-3 rounded-xl border border-violet-200 dark:border-violet-800/50 bg-violet-50/40 dark:bg-violet-950/20 px-4 py-3 text-sm text-violet-900 dark:text-violet-100">
+                  <p className="font-semibold flex items-center gap-2">
+                    <Package className="w-4 h-4" />
+                    Modo estoque do gerente
+                  </p>
+                  <p className="text-xs text-violet-800/90 dark:text-violet-200/90 mt-1">
+                    Os leads vão para o e-mail de estoque CRM do gerente escolhido (o mesmo e-mail do cadastro do gerente na banca). O gerente repassa depois aos consultores em{' '}
+                    <span className="font-medium">Estoque → consultores</span>.
+                  </p>
+                </div>
+              )}
               <div className="flex flex-wrap items-center gap-2 py-3 overflow-x-auto">
                 {STEPS.map((step, idx) => {
                   const isActive = currentStep === step.id;
@@ -7670,12 +7838,53 @@ export default function AdminLeadTransferPage() {
                   {currentStep >= 5 && (
                     <div className="mb-5 pb-5 border-b border-gray-200 dark:border-[#404040]">
                       <label className="flex items-center gap-2 text-sm font-bold text-gray-800 dark:text-white mb-2">
-                        <Users className="w-4 h-4 text-[#8CD955]" />
-                        Consultor destino
+                        {activeTab === 'transfer_stock' ? (
+                          <>
+                            <Package className="w-4 h-4 text-[#8CD955]" />
+                            Destino: estoque do gerente
+                          </>
+                        ) : (
+                          <>
+                            <Users className="w-4 h-4 text-[#8CD955]" />
+                            Destino: consultor
+                          </>
+                        )}
                       </label>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 mb-3">Para quem os leads serão transferidos (todos da mesma banca, com cargo e gerente)</p>
+                      {activeTab === 'transfer' && (
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 mb-3">
+                          Transferência direta para a carteira do consultor na banca. Para enviar ao estoque CRM do gerente, use a aba{' '}
+                          <button type="button" className="text-[#8CD955] hover:underline font-medium" onClick={() => setActiveTab('transfer_stock')}>
+                            Transferir estoque
+                          </button>
+                          .
+                        </p>
+                      )}
+                      {activeTab === 'transfer_stock' && (
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 mb-3">
+                          Escolha o gerente que receberá os leads no estoque CRM desta banca (usa o e-mail do perfil do gerente vinculado à banca).
+                        </p>
+                      )}
+                      {activeTab === 'transfer_stock' && (
+                        <div className="mb-4">
+                          <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Gerente (recebe no estoque CRM)</label>
+                          <select
+                            value={estoqueGerenteId}
+                            onChange={(e) => setEstoqueGerenteId(e.target.value)}
+                            disabled={!bancaId || loadingGerentesForStock}
+                            className="w-full max-w-md border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm"
+                          >
+                            <option value="">{loadingGerentesForStock ? 'Carregando...' : 'Selecione o gerente'}</option>
+                            {gerentesForStockOptions.map((g) => (
+                              <option key={g.id} value={g.id}>
+                                {(g.full_name || g.email || g.id) as string}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
                       <div className="flex flex-wrap items-center gap-4">
                         <div className="flex items-center gap-3 flex-wrap">
+                          {activeTab === 'transfer' && (
                           <button
                             type="button"
                             onClick={openConsultantDestinoModal}
@@ -7688,6 +7897,7 @@ export default function AdminLeadTransferPage() {
                             </span>
                             <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0 ml-auto" />
                           </button>
+                          )}
                           <div className="flex items-center gap-2">
                             <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 whitespace-nowrap">Prazo (dias):</label>
                             <select
@@ -7706,7 +7916,12 @@ export default function AdminLeadTransferPage() {
                         <button
                           type="button"
                           onClick={openConfirmModal}
-                          disabled={selectedCount === 0 || !targetEmail?.trim() || sourceEmail?.trim()?.toLowerCase() === targetEmail?.trim()?.toLowerCase()}
+                          disabled={
+                            selectedCount === 0 ||
+                            (destinoModo === 'consultor' &&
+                              (!targetEmail?.trim() || sourceEmail?.trim()?.toLowerCase() === targetEmail?.trim()?.toLowerCase())) ||
+                            (destinoModo === 'estoque_gerente' && !estoqueGerenteId.trim())
+                          }
                           className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           <CheckSquare className="w-4 h-4" />
@@ -8495,7 +8710,13 @@ export default function AdminLeadTransferPage() {
             </div>
             <div className="space-y-3 text-sm text-gray-700 dark:text-gray-300 mb-4">
               <p><strong>Banca:</strong> {bancaName || bancaId}</p>
-              <p><strong>Origem → Destino:</strong> {sourceEmail} → {targetEmail}</p>
+              <p>
+                <strong>Origem → Destino:</strong>{' '}
+                {sourceEmail} →{' '}
+                {destinoModo === 'estoque_gerente'
+                  ? `estoque gerente (${gerentesForStockOptions.find((g) => g.id === estoqueGerenteId)?.full_name || gerentesForStockOptions.find((g) => g.id === estoqueGerenteId)?.email || estoqueGerenteId || '—'})`
+                  : targetEmail}
+              </p>
               <p><strong>Quantidade:</strong> {selectedCount} lead(s)</p>
               <p><strong>Tipo:</strong>
                 <select value={transferType} onChange={(e) => setTransferType(e.target.value as 'TF' | 'TF1' | 'TF2' | 'TF3')} className="ml-2 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1 text-gray-800">

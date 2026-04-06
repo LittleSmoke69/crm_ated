@@ -65,7 +65,6 @@ import {
   Edit as EditIcon,
   LogIn,
   ExternalLink,
-  ArrowRightLeft,
   Headphones as HeadphonesIcon,
   Unplug
 } from 'lucide-react';
@@ -293,7 +292,7 @@ export default function AdminDashboard() {
     setUserId(id);
   }, []);
 
-  // Admin (não super_admin): seções permitidas. Auditoria: apenas overview (Transferência via link).
+  // Admin (não super_admin): seções permitidas. Auditoria: apenas overview (transferência de leads pela sidebar).
   useEffect(() => {
     if (isSuperAdmin) return;
     const adminAllowed = ['overview', 'users', 'crm', 'disparo', 'loto_assistencia', 'settings'];
@@ -877,17 +876,6 @@ export default function AdminDashboard() {
             >
               <LayoutIcon className="w-4 h-4 sm:w-5 sm:h-5" />
               <span>CRM</span>
-            </button>
-          )}
-
-          {/* Transferência de Leads: super_admin, admin e auditoria (auditoria: apenas visualização do histórico) */}
-          {(isSuperAdmin || adminStatus === 'admin' || adminStatus === 'auditoria') && (
-            <button
-              onClick={() => router.push('/admin/crm/lead-transfer')}
-              className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]"
-            >
-              <ArrowRightLeft className="w-4 h-4 sm:w-5 sm:h-5" />
-              <span>Transferência de Leads</span>
             </button>
           )}
 

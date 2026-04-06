@@ -41,6 +41,7 @@ export async function POST(req: NextRequest) {
       watcher_instance_id,
       denuncia_group_jid,
       scan_mode,
+      suspicious_messages_enabled,
     } = body;
 
     if (!master_instance_id) {
@@ -56,6 +57,7 @@ export async function POST(req: NextRequest) {
       watcher_instance_id: watcher_instance_id || null,
       denuncia_group_jid: denuncia_group_jid || '',
       scan_mode: scan_mode === 'selected_groups' ? 'selected_groups' : 'all_groups',
+      suspicious_messages_enabled: !!suspicious_messages_enabled,
     };
 
     if (id) {

@@ -18,6 +18,8 @@ import {
   CheckCircle2,
   XCircle,
   AlertCircle,
+  Scan,
+  Clock,
 } from 'lucide-react';
 import VerifyGroupsOverlay from '@/components/anti-spam/VerifyGroupsOverlay';
 import { postGroupFetchAndResolve } from '@/lib/utils/group-fetch-client';
@@ -95,7 +97,7 @@ export default function AdminAntiSpamPage() {
   const [blacklistPage, setBlacklistPage] = useState(1);
   const [blacklistTotal, setBlacklistTotal] = useState(0);
   const BLACKLIST_PAGE_SIZE = 10;
-  const [activeTab, setActiveTab] = useState<'config' | 'groups' | 'blacklist' | 'events' | 'logs'>('config');
+  const [activeTab, setActiveTab] = useState<'config' | 'groups' | 'blacklist' | 'events' | 'logs' | 'scanner'>('config');
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [savedGroups, setSavedGroups] = useState<{ group_id: string; group_subject: string; instance_name?: string }[]>([]);
   const [protectedGroupIds, setProtectedGroupIds] = useState<Set<string>>(new Set());
@@ -104,6 +106,28 @@ export default function AdminAntiSpamPage() {
   const [togglingGroupId, setTogglingGroupId] = useState<string | null>(null);
   const [verifyingGroups, setVerifyingGroups] = useState(false);
   const [markingAllGroups, setMarkingAllGroups] = useState(false);
+  // Scanner states
+  const [scanning, setScanning] = useState(false);
+  const [scanResult, setScanResult] = useState<{ configs_scanned: number; total_groups: number; total_removed: number; total_errors: number } | null>(null);
+  const [scanLogs, setScanLogs] = useState<
+    Array<{
+      id: string;
+      config_id: string;
+      owner_id: string;
+      status: string;
+      result: any;
+      error: string | null;
+      created_at: string;
+      updated_at: string;
+      total_groups_scanned?: number | null;
+      total_removed?: number | null;
+      total_errors?: number | null;
+    }>
+  >([]);
+  const [scanLogsPage, setScanLogsPage] = useState(1);
+  const SCAN_LOGS_PAGE_SIZE = 20;
+  const [loadingScanLogs, setLoadingScanLogs] = useState(false);
+
   const [verifyGroupsResult, setVerifyGroupsResult] = useState<{
     report: { phone_e164: string; groups_count: number; group_jids: string[] }[];
     removals: { phone_e164: string; group_jid: string; success: boolean; error?: string }[];
@@ -551,6 +575,30 @@ export default function AdminAntiSpamPage() {
     }
   };
 
+  // Scanner
+
+  const loadScanLogs = useCallback(async () => {
+    if (!userId) return;
+    setLoadingScanLogs(true);
+    try {
+      const res = await fetch(`/api/admin/anti-spam/scan-logs?page=${scanLogsPage}&limit=${SCAN_LOGS_PAGE_SIZE}`, {
+        headers: { 'X-User-Id': userId },
+      });
+      const json = await res.json();
+      if (json.success) {
+        setScanLogs(Array.isArray(json.data) ? json.data : []);
+      }
+    } catch (e) {
+      setScanLogs([]);
+    } finally {
+      setLoadingScanLogs(false);
+    }
+  }, [userId, scanLogsPage]);
+
+  useEffect(() => {
+    if (activeTab === 'scanner') loadScanLogs();
+  }, [activeTab, loadScanLogs]);
+
   const handleVerifyGroups = useCallback(async () => {
     if (!userId || !selectedConfigId) return;
     setVerifyingGroups(true);
@@ -691,7 +739,7 @@ export default function AdminAntiSpamPage() {
 
         <div className="mb-6 border-b border-gray-200 dark:border-[#404040]">
           <nav className="flex gap-1 flex-wrap" aria-label="Abas">
-            {(['config', 'groups', 'blacklist', 'events', 'logs'] as const).map((tab) => (
+            {(['config', 'groups', 'blacklist', 'events', 'logs', 'scanner'] as const).map((tab) => (
               <button
                 key={tab}
                 type="button"
@@ -707,6 +755,7 @@ export default function AdminAntiSpamPage() {
                 {tab === 'blacklist' && 'Lista negra'}
                 {tab === 'events' && 'Quem entrou'}
                 {tab === 'logs' && 'Números removidos'}
+                {tab === 'scanner' && 'Scanner de grupos'}
               </button>
             ))}
           </nav>
@@ -1038,7 +1087,7 @@ export default function AdminAntiSpamPage() {
               Números que entraram recentemente nos grupos. Clique em &quot;Bloquear&quot; para adicionar à lista negra e removê-los automaticamente.
             </p>
             <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">
-              Os eventos vêm do webhook do Zaploto de produção.
+              Os eventos vêm do webhook do Zaploto de produção. Números que não forem válidos no formato brasileiro (55 + DDD + 8 ou 9 dígitos), como identificadores internacionais longos, são omitidos desta lista.
             </p>
             <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-[#404040]">
               <table className="w-full text-sm">
@@ -1317,6 +1366,148 @@ export default function AdminAntiSpamPage() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {activeTab === 'scanner' && (
+          <div className="rounded-xl border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] p-6 shadow-sm">
+            <header className="mb-6">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                    <Scan className="h-5 w-5 text-[#8CD955]" /> Scanner de grupos
+                  </h2>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 space-y-2">
+                    <span className="block">
+                      Varredura automática dos grupos monitorados <strong>a cada 20 minutos</strong> (quando o agendamento do ambiente estiver ativo). Remove números que estão na lista negra ou que não atendem às regras configuradas (ex.: inválidos).
+                    </span>
+                    <span className="block text-gray-600 dark:text-gray-300">
+                      Um grupo pode ter <strong>vários admins</strong> no WhatsApp, em contas diferentes; o que importa para a remoção é a <strong>instância mestre</strong> da config e o cumprimento das <strong>condições</strong> de bloqueio — não quem é admin no app.
+                    </span>
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!userId) return;
+                    setScanning(true);
+                    setScanResult(null);
+                    try {
+                      const res = await fetch('/api/admin/anti-spam/scan-groups', {
+                        method: 'POST',
+                        headers: { 'X-User-Id': userId, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({}),
+                      });
+                      const json = await res.json();
+                      if (json.success) {
+                        setScanResult(json.data);
+                        showToast('success', `Scanner concluído: ${json.data.total_removed} removidos em ${json.data.total_groups} grupos.`);
+                        loadScanLogs();
+                      } else {
+                        showToast('error', json.error || 'Erro ao escanear');
+                      }
+                    } catch (e: any) {
+                      showToast('error', e?.message || 'Erro');
+                    } finally {
+                      setScanning(false);
+                    }
+                  }}
+                  disabled={scanning}
+                  className="inline-flex items-center gap-2 rounded-lg bg-[#8CD955] px-4 py-2 text-sm font-medium text-white hover:bg-[#7BC84A] disabled:opacity-50 shrink-0 transition"
+                >
+                  {scanning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Scan className="w-4 h-4" />}
+                  {scanning ? 'Escaneando...' : 'Escanear agora'}
+                </button>
+              </div>
+            </header>
+
+            {scanResult && (
+              <div className="mb-6 grid grid-cols-2 md:grid-cols-4 gap-3">
+                {[
+                  { label: 'Configs', value: scanResult.configs_scanned },
+                  { label: 'Grupos', value: scanResult.total_groups },
+                  { label: 'Removidos', value: scanResult.total_removed, color: 'text-emerald-600 dark:text-emerald-400' },
+                  { label: 'Erros', value: scanResult.total_errors, color: 'text-red-600 dark:text-red-400' },
+                ].map((s) => (
+                  <div key={s.label} className="rounded-lg border border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#333] p-3 text-center">
+                    <div className={`text-2xl font-bold ${s.color ?? 'text-gray-800 dark:text-gray-200'}`}>{s.value}</div>
+                    <div className="text-xs text-gray-500 dark:text-gray-400">{s.label}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1">
+                <Clock className="w-4 h-4" /> Histórico de scans
+              </h3>
+              <button
+                type="button"
+                onClick={loadScanLogs}
+                className="rounded-lg border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] px-3 py-1 text-xs font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] transition"
+              >
+                <RefreshCw className="w-3 h-3 inline mr-1" /> Atualizar
+              </button>
+            </div>
+            <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-[#404040]">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#333] text-left">
+                    <th className="py-3 px-3 font-medium text-gray-700 dark:text-gray-300">Data</th>
+                    <th className="py-3 px-3 font-medium text-gray-700 dark:text-gray-300">Grupos</th>
+                    <th className="py-3 px-3 font-medium text-gray-700 dark:text-gray-300">Removidos</th>
+                    <th className="py-3 px-3 font-medium text-gray-700 dark:text-gray-300">Erros</th>
+                    <th className="py-3 px-3 font-medium text-gray-700 dark:text-gray-300">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {scanLogs.map((r) => {
+                    const res = r.result || {};
+                    const batchRange = res.batch_range || '';
+                    const totalGroups = res.total_groups ?? 0;
+                    const totalRemoved = res.total_removed ?? 0;
+                    const totalErrors = res.total_errors ?? 0;
+                    return (
+                      <tr key={r.id} className="border-b border-gray-100 dark:border-[#404040] hover:bg-gray-50/50 dark:hover:bg-[#333]/50">
+                        <td className="py-3 px-3 text-gray-600 dark:text-gray-400">{new Date(r.created_at).toLocaleString('pt-BR')}</td>
+                        <td className="py-3 px-3 text-gray-800 dark:text-gray-200">
+                          {r.total_groups_scanned != null ? r.total_groups_scanned : `${batchRange || totalGroups}`}
+                        </td>
+                        <td className="py-3 px-3">
+                          <span className="text-emerald-600 dark:text-emerald-400 font-medium">
+                            {r.total_removed ?? totalRemoved}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3">
+                          <span className={`${totalErrors > 0 ? 'text-red-600' : 'text-gray-500 dark:text-gray-400'}`}>
+                            {r.total_errors ?? totalErrors}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3">
+                          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
+                            r.status === 'completed' ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300'
+                            : r.status === 'partial' ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300'
+                            : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'
+                          }`}>
+                            {r.status === 'completed' && <CheckCircle2 className="w-3 h-3" />}
+                            {r.status === 'partial' && <AlertCircle className="w-3 h-3" />}
+                            {r.status}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {scanLogs.length === 0 && !loadingScanLogs && (
+                <p className="text-gray-500 dark:text-gray-400 py-8 text-center text-sm">Nenhum scan registrado ainda.</p>
+              )}
+              {loadingScanLogs && (
+                <p className="text-gray-500 dark:text-gray-400 py-8 text-center text-sm flex items-center justify-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Carregando...
+                </p>
+              )}
+            </div>
           </div>
         )}
       </div>

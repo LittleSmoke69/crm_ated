@@ -50,5 +50,9 @@
     timeout = 60
   [functions."flow-question-timeouts"]
     schedule = "*/1 * * * *"
+  [functions."anti-spam-group-scanner"]
+    schedule = "*/20 * * * *"
+    # Timeout alto: escaneia grupos em lotes de 5, com rate limit de 1 req/s. Pode demorar dependendo do nº de grupos.
+    timeout = 300
   # [functions."maturation-scheduler"]
   #   schedule = "*/10 * * * *"

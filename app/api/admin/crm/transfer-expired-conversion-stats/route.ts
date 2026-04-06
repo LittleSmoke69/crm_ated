@@ -1,9 +1,11 @@
 import { NextRequest } from 'next/server';
-import { requireAdmin } from '@/lib/middleware/permissions';
+import { requireLeadTransferApiAccess } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { getAdminBancaId, getAdminAllowedBancaIds } from '@/lib/server/crm/adminLeadTransferContext';
-import { getEffectiveZaplotoId } from '@/lib/tenant-context';
+import {
+  getLeadTransferBancaAccess,
+  resolveLeadTransferQueryBancaIds,
+} from '@/lib/server/crm/adminLeadTransferContext';
 import { normalizeDateParam, dateToStartOfDaySãoPauloISO, dateToEndOfDaySãoPauloISO } from '@/lib/server/crm/transfer-date-utils';
 
 const LOG_PREFIX = '[admin][transfer-expired-conversion-stats]';
@@ -118,7 +120,7 @@ async function getConversionByConsultant(
  */
 export async function GET(req: NextRequest) {
   try {
-    const { userId, profile } = await requireAdmin(req);
+    const { userId, profile } = await requireLeadTransferApiAccess(req);
     const { searchParams } = req.nextUrl;
 
     const bancaId = searchParams.get('banca_id')?.trim() || null;
@@ -128,7 +130,7 @@ export async function GET(req: NextRequest) {
     const expiredCutoff = getExpiredCutoffISO();
 
     if (bancaId) {
-      const resolved = await getAdminBancaId(userId, profile, bancaId);
+      const resolved = await getLeadTransferBancaAccess(userId, profile, bancaId);
       if (!resolved) return errorResponse('Banca não encontrada ou sem permissão.');
 
       let logsQuery = supabaseServiceRole
@@ -145,9 +147,10 @@ export async function GET(req: NextRequest) {
       return successResponse({ by_banca: null, by_consultant: byConsultant });
     }
 
-    const zaplotoId = await getEffectiveZaplotoId(req, profile);
-    const allowedBancaIds = await getAdminAllowedBancaIds(profile, zaplotoId);
-    if (!allowedBancaIds || allowedBancaIds.length === 0) {
+    const scope = await resolveLeadTransferQueryBancaIds(req, userId, profile, null);
+    if (scope.error) return errorResponse(scope.error);
+    const allowedBancaIds = scope.bancaIds;
+    if (!allowedBancaIds.length) {
       return successResponse({ by_banca: [], by_consultant: null });
     }
 
@@ -160,7 +163,7 @@ export async function GET(req: NextRequest) {
 
     for (const b of bancaList) {
       const bid = b.id as string;
-      const resolved = await getAdminBancaId(userId, profile, bid);
+      const resolved = await getLeadTransferBancaAccess(userId, profile, bid);
       if (!resolved) continue;
 
       let logsQuery = supabaseServiceRole

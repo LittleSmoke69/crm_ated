@@ -1029,12 +1029,22 @@ export default function GestorTrafegoClient({
               Métricas da Banca {bancaName ? `- ${bancaName}` : showDonoSelector && !selectedDonoId ? '(selecione uma banca)' : ''}
             </h2>
             
-            {/* Filtro de Data + Seletor: Gestor = bancas atribuídas; Admin/Super Admin = dono da banca */}
+            {/* Filtro de período + banca: gerente = data à esquerda, banca ao lado; demais = banca antes da data */}
             <div className="flex flex-wrap items-center gap-2 date-filter-container">
               {showDonoSelector && (
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-gray-600 dark:text-gray-400 hidden sm:inline">
-                    {usesBancaSelectorAsGestor ? 'Banca' : 'Dono da Banca'}
+                <div
+                  className={`flex items-center gap-2 ${isGerenteViewer ? 'order-2' : 'order-1'}`}
+                >
+                  <span
+                    className={`text-sm font-medium text-gray-600 dark:text-gray-400 ${
+                      isGerenteViewer ? 'inline' : 'hidden sm:inline'
+                    }`}
+                  >
+                    {!usesBancaSelectorAsGestor
+                      ? 'Dono da Banca'
+                      : isGerenteViewer
+                        ? 'Suas bancas'
+                        : 'Banca'}
                   </span>
                   {loadingDonos ? (
                     <div className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2 rounded-xl text-sm text-gray-500 dark:text-gray-400">
@@ -1091,8 +1101,9 @@ export default function GestorTrafegoClient({
                   )}
                 </div>
               )}
-              <div className="relative">
+              <div className={`relative ${isGerenteViewer ? 'order-1' : 'order-2'}`}>
                 <button
+                  type="button"
                   onClick={() => setShowDatePicker(!showDatePicker)}
                   className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2 rounded-xl text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm"
                 >

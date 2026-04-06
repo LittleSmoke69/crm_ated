@@ -12,6 +12,8 @@ export interface AntiSpamConfig {
   watcher_instance_id: string | null;
   denuncia_group_jid: string | null;
   scan_mode: 'all_groups' | 'selected_groups';
+  /** Apaga mensagens em grupos que contenham palavras cadastradas */
+  suspicious_messages_enabled?: boolean;
   master_instance_name?: string;
   watcher_instance_name?: string | null;
 }

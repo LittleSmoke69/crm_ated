@@ -37,6 +37,7 @@ import {
   Link2,
   Headphones,
   UserPlus,
+  Package,
 } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import Logo from '@/components/Logo';
@@ -138,7 +139,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const iconMap: Record<string, any> = {
     LayoutDashboard, MessageSquare, Rocket, Users, Plus, Shield, Webhook, Workflow, Bot, Layout,
     Kanban, Activity, BarChart3, Briefcase, Settings, FlaskConical, User, ListOrdered, ClipboardList,
-    ArrowLeftToLine, ExternalLink, ArrowRightLeft, BookOpen, Link2, UserPlus, Headphones,
+    ArrowLeftToLine, ExternalLink, ArrowRightLeft, BookOpen, Link2, UserPlus, Headphones, Package,
   };
 
   useEffect(() => {
@@ -301,6 +302,8 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const itemVslRedirect: MenuItem = { href: '/admin/vsl', icon: ExternalLink, label: 'VSL & Redirect' };
   const itemZaplink: MenuItem = { href: '/admin/zaplink', icon: Link2, label: 'Zaplink' };
   const itemZaplinkGerente: MenuItem = { href: '/gerente/zaplink', icon: Link2, label: 'Zaplink' };
+  const itemLeadStockGerente: MenuItem = { href: '/gerente/crm/lead-stock-transfer', icon: Package, label: 'Estoque → consultores' };
+  const itemLeadTransfer: MenuItem = { href: '/admin/crm/lead-transfer', icon: ArrowRightLeft, label: 'Transferência de Leads' };
   const itemZaplinkGestorTrafego: MenuItem = { href: '/gestor-trafego/zaplink', icon: Link2, label: 'Zaplink' };
   const itemAcademy: MenuItem = {
     href: '/admin/academy',
@@ -332,6 +335,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemAgentesIAAdmin,
         itemChatInterno,
         itemGestaoChat,
+        itemLeadTransfer,
         itemCRM,
         itemCampanhas,
         itemContatosAtivos,
@@ -373,6 +377,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemGestaoBanca,
         itemGestaoTrafego,
         itemGestaoConsultores,
+        itemLeadTransfer,
         itemMeuDesempenho,
       ];
     }
@@ -410,6 +415,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemImportarContatos,
         itemAuditoria,
         itemAntiSpam,
+        itemLeadTransfer,
         itemProfile,
       ];
     }
@@ -456,6 +462,8 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
     if (userStatus === 'gerente') {
       return [
         itemGestaoConsultores,
+        itemLeadTransfer,
+        itemLeadStockGerente,
         itemGestaoTrafego,
         itemZaplinkGerente,
         itemDashboard,

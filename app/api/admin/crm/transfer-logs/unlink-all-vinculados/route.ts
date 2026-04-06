@@ -16,6 +16,9 @@ import { getEffectiveZaplotoId } from '@/lib/tenant-context';
 export async function POST(req: NextRequest) {
   try {
     const { userId, profile } = await requireAdmin(req);
+    if (profile.status !== 'super_admin') {
+      return errorResponse('Apenas super administrador pode executar esta ação.', 403);
+    }
 
     let body: { banca_id?: string } = {};
     try {

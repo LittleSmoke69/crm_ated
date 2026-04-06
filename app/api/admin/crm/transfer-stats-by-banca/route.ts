@@ -1,8 +1,8 @@
 import { NextRequest } from 'next/server';
-import { requireAdmin } from '@/lib/middleware/permissions';
+import { requireLeadTransferApiAccess } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { getAdminBancaId } from '@/lib/server/crm/adminLeadTransferContext';
+import { getLeadTransferBancaAccess } from '@/lib/server/crm/adminLeadTransferContext';
 import { normalizeDateParam, dateToStartOfDaySãoPauloISO, dateToEndOfDaySãoPauloISO } from '@/lib/server/crm/transfer-date-utils';
 
 const LOG_PREFIX = '[admin][transfer-stats-by-banca]';
@@ -14,7 +14,7 @@ const LOG_PREFIX = '[admin][transfer-stats-by-banca]';
  */
 export async function GET(req: NextRequest) {
   try {
-    const { userId, profile } = await requireAdmin(req);
+    const { userId, profile } = await requireLeadTransferApiAccess(req);
     const { searchParams } = req.nextUrl;
     const fromParam = normalizeDateParam(searchParams.get('from'));
     const toParam = normalizeDateParam(searchParams.get('to'));
@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
     const result: { banca_id: string; banca_name: string; total_leads: number }[] = [];
 
     for (const banca of list) {
-      const resolved = await getAdminBancaId(userId, profile, banca.id);
+      const resolved = await getLeadTransferBancaAccess(userId, profile, banca.id);
       if (!resolved) continue;
 
       let logQuery = supabaseServiceRole

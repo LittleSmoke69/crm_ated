@@ -4,6 +4,7 @@ import { normalizationService } from '@/lib/services/normalization-service';
 import { flowExecutorService } from '@/lib/services/flow-executor-service';
 import { participantExitAuditService } from '@/lib/services/participant-exit-audit-service';
 import { EVOLUTION_GROUP_PARTICIPANT_EVENT_TYPES } from '@/lib/utils/evolution-group-participant-event-types';
+import { processEventForAntiSpam } from '@/lib/anti-spam/antiSpamWorker';
 
 /** Janela de deduplicação de eventos group-participants: 30 segundos */
 const PARTICIPANT_DEDUP_WINDOW_MS = 30_000;
@@ -220,6 +221,14 @@ async function processEventBackground(payload: any): Promise<void> {
         }
       }
     }
+  }
+
+  // ── Anti-Spam (processamento em tempo real) ──────────────────────────────
+  if (isGroupParticipants || evtNorm === 'messages.upsert' || evtNorm === 'messages-upsert') {
+    processEventForAntiSpam(payload, normalizedPayload, eventType, instanceName, remoteJid, event.id)
+      .catch((err) => {
+        console.error('❌ [WEBHOOK PROD] Erro anti-spam:', err?.message || err);
+      });
   }
 
   // ── Auditoria de saída de participantes ───────────────────────────────────

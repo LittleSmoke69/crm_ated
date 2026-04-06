@@ -2,8 +2,10 @@ import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { getUserProfile } from '@/lib/middleware/permissions';
 import { canAccessGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
+import { getEffectiveDonoIdForGestorTrafegoViewer } from '@/lib/middleware/gestor-owner';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { getHierarchyPath } from '@/lib/utils/hierarchy';
 
 function normalizeBancaUrl(url: string | null | undefined): string {
   if (!url) return '';
@@ -14,10 +16,36 @@ function normalizeBancaUrl(url: string | null | undefined): string {
   return s.trim().toLowerCase();
 }
 
+/** Gerente sem linha em user_bancas: uma banca a partir do dono na hierarquia (crm_bancas por URL). */
+async function resolveGerenteBancaIdsFromHierarchy(profileId: string): Promise<string[]> {
+  const { data: allBancas } = await supabaseServiceRole.from('crm_bancas').select('id, url');
+  const byNorm = new Map<string, string>();
+  (allBancas || []).forEach((b: { id: string; url?: string | null }) => {
+    const n = normalizeBancaUrl(b.url);
+    if (n) byNorm.set(n, b.id);
+  });
+  const donoId = await getEffectiveDonoIdForGestorTrafegoViewer(profileId);
+  if (donoId) {
+    const { data: dono } = await supabaseServiceRole
+      .from('profiles')
+      .select('banca_url')
+      .eq('id', donoId)
+      .single();
+    const bid = dono?.banca_url ? byNorm.get(normalizeBancaUrl(dono.banca_url)) : undefined;
+    if (bid) return [bid];
+  }
+  const path = await getHierarchyPath(profileId);
+  for (const p of path) {
+    if (p.status?.trim().toLowerCase() !== 'dono_banca' || !p.banca_url) continue;
+    const bid = byNorm.get(normalizeBancaUrl(p.banca_url));
+    if (bid) return [bid];
+  }
+  return [];
+}
+
 /**
  * GET /api/gestor-trafego/bancas
- * Lista as bancas às quais o gestor está atribuído (user_bancas), com dono_id para cada uma.
- * Apenas para usuários com status 'gestor'. Resolve perfil por id ou user_id para compatibilidade.
+ * Lista bancas em user_bancas (gestor/gerente). Gerente sem escolha em perfil: fallback pela hierarquia (dono).
  */
 export async function GET(req: NextRequest) {
   try {
@@ -54,7 +82,11 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const bancaIds = Array.isArray(ubRow?.banca_ids) ? (ubRow.banca_ids as string[]) : [];
+    let bancaIds = Array.isArray(ubRow?.banca_ids) ? ([...(ubRow.banca_ids as string[])] as string[]) : [];
+    const statusNorm = profile.status?.trim().toLowerCase();
+    if (statusNorm === 'gerente' && bancaIds.length === 0) {
+      bancaIds = await resolveGerenteBancaIdsFromHierarchy(profileId);
+    }
     if (bancaIds.length === 0) {
       return successResponse([]);
     }

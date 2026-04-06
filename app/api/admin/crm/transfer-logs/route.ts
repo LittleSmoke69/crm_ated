@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
-import { requireAdmin } from '@/lib/middleware/permissions';
+import { requireLeadTransferApiAccess } from '@/lib/middleware/permissions';
+import { getGerenteUserBancaIds } from '@/lib/server/crm/adminLeadTransferContext';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { isTransferExpired } from '@/lib/server/crm/resolveTransferLog';
@@ -40,15 +41,27 @@ type TransferLogRow = {
  */
 export async function GET(req: NextRequest) {
   try {
-    await requireAdmin(req);
+    const { profile, userId } = await requireLeadTransferApiAccess(req);
     const { searchParams } = req.nextUrl;
 
     const bancaId = searchParams.get('banca_id')?.trim() || null;
     const transferType = searchParams.get('transfer_type')?.trim() || null;
     const targetConsultant = searchParams.get('target_consultant_email')?.trim() || null;
     const sourceConsultant = searchParams.get('source_consultant_email')?.trim() || null;
+    const transferKind = searchParams.get('transfer_kind')?.trim() || null;
     // Período (from/to) não é aplicado aqui: a API retorna sempre todas as transferências do escopo.
     // O frontend filtra por data em memória (managementFrom/managementTo).
+
+    let gerenteBancaIds: string[] | null = null;
+    if (profile.status === 'gerente') {
+      gerenteBancaIds = await getGerenteUserBancaIds(userId);
+      if (gerenteBancaIds.length === 0) {
+        return successResponse([]);
+      }
+      if (bancaId && !gerenteBancaIds.includes(bancaId)) {
+        return errorResponse('Sem permissão para esta banca.', 403);
+      }
+    }
 
     const allLogs: TransferLogRow[] = [];
     let offset = 0;
@@ -59,9 +72,16 @@ export async function GET(req: NextRequest) {
         .order('created_at', { ascending: false })
         .range(offset, offset + LOGS_PAGE_SIZE - 1);
       if (bancaId) q = q.eq('banca_id', bancaId);
+      else if (gerenteBancaIds) q = q.in('banca_id', gerenteBancaIds);
       if (transferType && ['TF', 'TF1', 'TF2', 'TF3'].includes(transferType)) q = q.eq('transfer_type', transferType);
       if (targetConsultant) q = q.ilike('target_consultant_email', targetConsultant);
       if (sourceConsultant) q = q.ilike('source_consultant_email', sourceConsultant);
+      if (
+        transferKind &&
+        ['standard', 'admin_to_gerente_stock', 'gerente_stock_to_consultant'].includes(transferKind)
+      ) {
+        q = q.eq('transfer_kind', transferKind);
+      }
       const { data: logs, error } = await q;
       if (error) {
         console.error(`${LOG_PREFIX} GET error:`, error);

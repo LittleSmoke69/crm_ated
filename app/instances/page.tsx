@@ -219,7 +219,7 @@ const InstancesPage = () => {
         .select('status')
         .eq('id', userId)
         .single();
-      setIsAdmin(data?.status === 'admin');
+      setIsAdmin(data?.status === 'admin' || data?.status === 'super_admin');
       setIsConsultor(data?.status === 'consultor');
       setIsGerente(data?.status === 'gerente');
       setIsDonoBanca(data?.status === 'dono_banca');
@@ -1411,6 +1411,26 @@ const InstancesPage = () => {
                                     {connected ? 'Conectado' : 'Desconectado'}
                                   </span>
                                 </div>
+                                {isAdmin && inst.owner_display_name && (
+                                  <p className="text-sm text-gray-600 dark:text-[#aaa] mb-2 truncate" title={inst.owner_display_name}>
+                                    Dono: {inst.owner_display_name}
+                                  </p>
+                                )}
+                                {isGerente && (
+                                  <p
+                                    className="text-sm text-gray-600 dark:text-[#aaa] mb-2 truncate"
+                                    title={
+                                      atendimentoAssignmentByInstanceId[inst.id!]?.consultorLabel?.trim() ||
+                                      inst.owner_display_name ||
+                                      undefined
+                                    }
+                                  >
+                                    Consultor:{' '}
+                                    {atendimentoAssignmentByInstanceId[inst.id!]?.consultorLabel?.trim() ||
+                                      inst.owner_display_name ||
+                                      '—'}
+                                  </p>
+                                )}
                                 {inst.number && (
                                   <p className="text-sm text-gray-600 dark:text-[#aaa] mb-2 flex items-center gap-1">
                                     <Phone className="w-3 h-3 text-indigo-500" />

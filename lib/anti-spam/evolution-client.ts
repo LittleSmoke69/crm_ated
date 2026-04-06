@@ -400,10 +400,13 @@ export async function removeParticipant(
   return { success: false, error: lastError || 'Unknown error' };
 }
 
-export interface DeleteMessageKey {
-  remoteJid: string;
+/** Corpo esperado por DELETE /chat/deleteMessageForEveryone/{instance} (Evolution API). */
+export interface DeleteMessageForEveryonePayload {
   id: string;
+  remoteJid: string;
   fromMe: boolean;
+  /** Em grupos costuma ser o JID de quem enviou; se vazio, a API pode aceitar string vazia conforme versão. */
+  participant: string;
 }
 
 export interface DeleteMessageResult {
@@ -413,12 +416,11 @@ export interface DeleteMessageResult {
 }
 
 /**
- * Deleta mensagem para todos (opcional).
- * key: { remoteJid, id, fromMe } do payload da mensagem.
+ * Apaga mensagem para todos via DELETE /chat/deleteMessageForEveryone/{instance}
  */
 export async function deleteMessageForEveryone(
   instanceId: string,
-  key: DeleteMessageKey
+  params: DeleteMessageForEveryonePayload
 ): Promise<DeleteMessageResult> {
   const creds = await getInstanceCredentials(instanceId);
   if (!creds) {
@@ -428,17 +430,14 @@ export async function deleteMessageForEveryone(
   await waitRateLimit(instanceId);
 
   const baseUrl = normalizeBaseUrl(creds.baseUrl);
-  // Endpoint comum em Evolution API v1/v2
-  const url = `${baseUrl}/chat/sendMessage/${creds.instanceName}`;
-  const finalUrl = url.replace(/([^:]\/)\/+/g, '$1');
+  const enc = encodeURIComponent(creds.instanceName);
+  const url = `${baseUrl}/chat/deleteMessageForEveryone/${enc}`.replace(/([^:]\/)\/+/g, '$1');
 
-  // Payload para "delete message for everyone" (varia por versão da API)
   const body = {
-    deleteMessage: {
-      remoteJid: key.remoteJid,
-      id: key.id,
-      fromMe: key.fromMe,
-    },
+    id: params.id,
+    remoteJid: params.remoteJid,
+    fromMe: params.fromMe,
+    participant: params.participant ?? '',
   };
 
   let lastError: string | undefined;
@@ -446,8 +445,8 @@ export async function deleteMessageForEveryone(
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-      const response = await fetch(finalUrl, {
-        method: 'POST',
+      const response = await fetch(url, {
+        method: 'DELETE',
         headers: { 'Content-Type': 'application/json', apikey: creds.apikey },
         body: JSON.stringify(body),
         signal: controller.signal,

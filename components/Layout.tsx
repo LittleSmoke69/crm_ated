@@ -280,6 +280,7 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
 
   const isChat = pathname === '/chat' || pathname === '/chat-atendimento';
   const isFlowEditor = typeof pathname === 'string' && /^\/admin\/flows\/[^/]+$/.test(pathname);
+  const isAntiSpamPage = typeof pathname === 'string' && pathname.startsWith('/anti-spam');
   const isFullScreen = isChat || isFlowEditor;
 
   return (
@@ -311,7 +312,13 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
             {children}
           </div>
         ) : (
-          <div className="p-4 sm:p-6 lg:p-8">
+          <div
+            className={
+              isAntiSpamPage
+                ? 'w-full min-w-0 flex-1 py-4 sm:py-6 lg:py-8 px-0'
+                : 'p-4 sm:p-6 lg:p-8'
+            }
+          >
             {children}
           </div>
         )}

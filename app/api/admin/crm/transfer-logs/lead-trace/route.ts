@@ -1,8 +1,8 @@
 import { NextRequest } from 'next/server';
-import { requireAdmin } from '@/lib/middleware/permissions';
+import { requireLeadTransferApiAccess } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { getAdminBancaId } from '@/lib/server/crm/adminLeadTransferContext';
+import { getLeadTransferBancaAccess } from '@/lib/server/crm/adminLeadTransferContext';
 
 const LOG_PREFIX = '[admin][lead-trace]';
 
@@ -20,7 +20,7 @@ const LOG_PREFIX = '[admin][lead-trace]';
  */
 export async function GET(req: NextRequest) {
   try {
-    const { userId, profile } = await requireAdmin(req);
+    const { userId, profile } = await requireLeadTransferApiAccess(req);
     const { searchParams } = req.nextUrl;
 
     const bancaId = searchParams.get('banca_id')?.trim() || null;
@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
 
     if (!bancaId) return errorResponse('banca_id é obrigatório.');
 
-    const resolved = await getAdminBancaId(userId, profile, bancaId);
+    const resolved = await getLeadTransferBancaAccess(userId, profile, bancaId);
     if (!resolved) return errorResponse('Banca não encontrada ou sem permissão.', 403);
 
     const resolvedBancaId = resolved.bancaId;

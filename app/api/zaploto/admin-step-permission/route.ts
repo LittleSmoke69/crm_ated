@@ -7,7 +7,8 @@ import { hasFullAdminAccess } from '@/lib/middleware/permissions';
 /**
  * GET /api/zaploto/admin-step-permission?step=lead_transfer
  * Retorna { visible, can_execute } para o step indicado.
- * Super_admin/admin/auditoria: acesso total. Cargos personalizados: permissão conforme atribuição do cargo (sem exceção).
+ * Super_admin/admin/auditoria: acesso total. Gerente: lead_transfer visível sem executar transferências admin.
+ * Cargos personalizados: permissão conforme atribuição do cargo (sem exceção).
  */
 export async function GET(req: NextRequest) {
   try {
@@ -18,6 +19,10 @@ export async function GET(req: NextRequest) {
 
     if (hasFullAdminAccess(profile)) {
       return successResponse({ visible: true, can_execute: true });
+    }
+
+    if (step === 'lead_transfer' && profile.status === 'gerente') {
+      return successResponse({ visible: true, can_execute: false });
     }
 
     const hasTables = await hasZaplotoTables();

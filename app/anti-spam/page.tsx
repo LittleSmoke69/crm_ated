@@ -16,8 +16,12 @@ import {
   ChevronDown,
   ChevronRight,
   Wifi,
+  Clock,
+  RefreshCw,
+  MessageSquare,
+  Search,
+  X,
 } from 'lucide-react';
-import VerifyGroupsOverlay from '@/components/anti-spam/VerifyGroupsOverlay';
 import { formatPhoneToList } from '@/lib/utils/phone-utils';
 import { postGroupFetchAndResolve } from '@/lib/utils/group-fetch-client';
 
@@ -28,6 +32,27 @@ interface AntiSpamConfigRow {
   watcher_instance_id: string | null;
   denuncia_group_jid: string | null;
   scan_mode: 'all_groups' | 'selected_groups';
+  suspicious_messages_enabled?: boolean;
+}
+
+interface SuspiciousKeywordRow {
+  id: string;
+  keyword: string;
+  is_enabled: boolean;
+  created_at: string;
+}
+
+interface MessageEventRow {
+  id: string;
+  received_at: string;
+  instance_name: string | null;
+  remote_jid: string | null;
+  /** Nome amigável do grupo (@g.us), quando existir no anti_spam_groups / whatsapp_groups / audit */
+  group_name: string | null;
+  message_id: string | null;
+  from_me: boolean;
+  participant: string | null;
+  preview: string;
 }
 
 interface EvolutionInstance {
@@ -92,6 +117,56 @@ interface ScanResult {
   message?: string;
 }
 
+/** Job persistido (varredura agendada, lote ou scan manual da aba Grupos) */
+interface ScanLogRow {
+  id: string;
+  config_id: string;
+  owner_id: string;
+  status: string;
+  result: Record<string, unknown> | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function scanLogTypeLabel(result: Record<string, unknown> | null): string {
+  if (!result) return 'Sem detalhes';
+  if (typeof result.batch_range === 'string') return 'Scanner automático (lote)';
+  if (result.total_groups_scanned != null && !result.batch_range && !result.instance) {
+    return 'Scanner automático (resumo)';
+  }
+  if (result.instance && result.summary) return 'Escanear grupos (aba)';
+  return 'Registro';
+}
+
+function scanLogTableStats(row: ScanLogRow): { groups: string; removed: string; errors: string } {
+  const res = row.result;
+  if (!res) return { groups: '—', removed: '—', errors: '—' };
+  if (typeof res.batch_range === 'string') {
+    return {
+      groups: `${Number(res.total_groups ?? 0)} (${res.batch_range})`,
+      removed: String(res.total_removed ?? 0),
+      errors: String(res.total_errors ?? 0),
+    };
+  }
+  if (res.total_groups_scanned != null && !res.batch_range && !res.instance) {
+    return {
+      groups: String(res.total_groups_scanned),
+      removed: String(res.total_removed ?? 0),
+      errors: String(res.total_errors ?? 0),
+    };
+  }
+  if (res.instance && res.summary && typeof res.summary === 'object' && res.summary !== null) {
+    const s = res.summary as Record<string, unknown>;
+    return {
+      groups: String(s.groups_scanned ?? 0),
+      removed: `${Number(s.invalid_total ?? 0)} invál. / ${Number(s.blacklisted_total ?? 0)} lista`,
+      errors: '—',
+    };
+  }
+  return { groups: '—', removed: '—', errors: '—' };
+}
+
 const SCAN_MESSAGES = [
   'Monitorando grupos…',
   'Verificando participantes…',
@@ -146,20 +221,13 @@ export default function AntiSpamPage() {
   const [blacklistPage, setBlacklistPage] = useState(1);
   const [blacklistTotal, setBlacklistTotal] = useState(0);
   const BLACKLIST_PAGE_SIZE = 10;
-  const [activeTab, setActiveTab] = useState<'config' | 'groups' | 'blacklist' | 'events' | 'logs'>('config');
+  const [activeTab, setActiveTab] = useState<'config' | 'groups' | 'scans' | 'suspicious' | 'blacklist' | 'events' | 'logs'>('config');
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [savedGroups, setSavedGroups] = useState<{ group_id: string; group_subject: string; instance_name?: string }[]>([]);
   const [protectedGroupIds, setProtectedGroupIds] = useState<Set<string>>(new Set());
   const [loadingGroups, setLoadingGroups] = useState(false);
   const [fetchingGroups, setFetchingGroups] = useState(false);
   const [togglingGroupId, setTogglingGroupId] = useState<string | null>(null);
-  const [verifyingGroups, setVerifyingGroups] = useState(false);
-  const [verifyGroupsResult, setVerifyGroupsResult] = useState<{
-    report: { phone_e164: string; groups_count: number; group_jids: string[]; reason: string }[];
-    removals: { phone_e164: string; group_jid: string; success: boolean; error?: string; reason: string }[];
-    groupErrors?: { groupJid: string; error: string }[];
-    summary: { totalInGroups: number; totalRemovals: number; success: number; failed: number; invalid_removed?: number; blacklisted_removed?: number };
-  } | null>(null);
   const [scanningGroups, setScanningGroups] = useState(false);
   const [scanJobId, setScanJobId] = useState<string | null>(null);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
@@ -168,6 +236,22 @@ export default function AntiSpamPage() {
   const [removingInvalids, setRemovingInvalids] = useState(false);
   const [removeInvalidResult, setRemoveInvalidResult] = useState<{ total: number; removed: number; failed: number } | null>(null);
   const [removingInvalidGroupId, setRemovingInvalidGroupId] = useState<string | null>(null);
+  const [scanLogs, setScanLogs] = useState<ScanLogRow[]>([]);
+  const [scanLogsPage, setScanLogsPage] = useState(1);
+  const [scanLogsTotal, setScanLogsTotal] = useState(0);
+  const [loadingScanLogs, setLoadingScanLogs] = useState(false);
+  const [expandedScanLogId, setExpandedScanLogId] = useState<string | null>(null);
+  const SCAN_LOGS_PAGE_SIZE = 12;
+  const [suspiciousKeywords, setSuspiciousKeywords] = useState<SuspiciousKeywordRow[]>([]);
+  const [messageEvents, setMessageEvents] = useState<MessageEventRow[]>([]);
+  const [msgEventsPage, setMsgEventsPage] = useState(1);
+  const [msgEventsTotal, setMsgEventsTotal] = useState(0);
+  const [loadingSuspicious, setLoadingSuspicious] = useState(false);
+  const [newKeyword, setNewKeyword] = useState('');
+  const MSG_EVENTS_PAGE_SIZE = 15;
+  const [msgEventsSearchInput, setMsgEventsSearchInput] = useState('');
+  const [msgEventsSearchApplied, setMsgEventsSearchApplied] = useState('');
+  const [msgEventsFetchError, setMsgEventsFetchError] = useState<string | null>(null);
 
   const SCAN_CONTACTS_PAGE_SIZE = 20;
 
@@ -262,6 +346,76 @@ export default function AntiSpamPage() {
     }
   }, [userId, configs, actionsPage]);
 
+  const loadScanLogs = useCallback(async () => {
+    if (!userId || !configs[0]) return;
+    setLoadingScanLogs(true);
+    try {
+      const res = await fetch(
+        `/api/anti-spam/scan-logs?config_id=${encodeURIComponent(configs[0].id)}&page=${scanLogsPage}&limit=${SCAN_LOGS_PAGE_SIZE}`,
+        { headers: { 'X-User-Id': userId } }
+      );
+      const json = await res.json();
+      if (json.success && Array.isArray(json.data)) {
+        setScanLogs(json.data as ScanLogRow[]);
+        setScanLogsTotal(json.pagination?.total ?? 0);
+      } else {
+        setScanLogs([]);
+        setScanLogsTotal(0);
+      }
+    } catch {
+      setScanLogs([]);
+      setScanLogsTotal(0);
+    } finally {
+      setLoadingScanLogs(false);
+    }
+  }, [userId, configs, scanLogsPage]);
+
+  const loadSuspiciousKeywords = useCallback(async () => {
+    if (!userId || !configs[0]) return;
+    try {
+      const res = await fetch(`/api/anti-spam/suspicious-keywords?config_id=${encodeURIComponent(configs[0].id)}`, {
+        headers: { 'X-User-Id': userId },
+      });
+      const json = await res.json();
+      setSuspiciousKeywords(json.success && Array.isArray(json.data) ? json.data : []);
+    } catch {
+      setSuspiciousKeywords([]);
+    }
+  }, [userId, configs]);
+
+  const loadMessageEvents = useCallback(async () => {
+    if (!userId || !configs[0]) return;
+    setLoadingSuspicious(true);
+    try {
+      const params = new URLSearchParams({
+        config_id: configs[0].id,
+        page: String(msgEventsPage),
+        limit: String(MSG_EVENTS_PAGE_SIZE),
+      });
+      const q = msgEventsSearchApplied.trim();
+      if (q) params.set('q', q);
+      const res = await fetch(`/api/anti-spam/message-events?${params.toString()}`, {
+        headers: { 'X-User-Id': userId },
+      });
+      const json = await res.json();
+      if (json.success && Array.isArray(json.data)) {
+        setMsgEventsFetchError(null);
+        setMessageEvents(json.data as MessageEventRow[]);
+        setMsgEventsTotal(json.pagination?.total ?? 0);
+      } else {
+        setMessageEvents([]);
+        setMsgEventsTotal(0);
+        setMsgEventsFetchError(typeof json.error === 'string' ? json.error : 'Não foi possível carregar os eventos.');
+      }
+    } catch {
+      setMessageEvents([]);
+      setMsgEventsTotal(0);
+      setMsgEventsFetchError('Falha de rede ao carregar eventos.');
+    } finally {
+      setLoadingSuspicious(false);
+    }
+  }, [userId, configs, msgEventsPage, msgEventsSearchApplied]);
+
   useEffect(() => {
     loadInstances();
   }, [loadInstances]);
@@ -348,6 +502,13 @@ export default function AntiSpamPage() {
   const toggleGroupProtected = useCallback(
     async (groupId: string, groupName: string, isCurrentlyProtected: boolean) => {
       if (!userId || !configs[0]) return;
+      const masterName = instances.find((i) => i.id === configs[0].master_instance_id)?.instance_name;
+      const row = savedGroups.find((g) => g.group_id === groupId);
+      const isMasterGroup = !!masterName && row?.instance_name === masterName;
+      if (configs[0].scan_mode === 'all_groups' && isMasterGroup) {
+        showToast('error', 'No modo "Todos os grupos da instância", todos os grupos desta instância já estão protegidos. Mude para "Apenas grupos que eu escolher" para marcar um por um.');
+        return;
+      }
       setTogglingGroupId(groupId);
       try {
         if (isCurrentlyProtected) {
@@ -380,38 +541,8 @@ export default function AntiSpamPage() {
         setTogglingGroupId(null);
       }
     },
-    [userId, configs]
+    [userId, configs, instances, savedGroups]
   );
-
-  const handleVerifyGroups = useCallback(async () => {
-    if (!userId || !configs[0]) return;
-    setVerifyingGroups(true);
-    setVerifyGroupsResult(null);
-    try {
-      const res = await fetch('/api/anti-spam/verify-groups', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-        body: JSON.stringify({ config_id: configs[0].id }),
-      });
-      const json = await res.json();
-      if (json.success && json.data) {
-        setVerifyGroupsResult(json.data);
-        const s = json.data.summary;
-        if (s.totalRemovals > 0) {
-          showToast(s.failed === 0 ? 'success' : 'error', `Verificação: ${s.success} sucesso${s.failed > 0 ? `, ${s.failed} falha(s)` : ''}.`);
-        } else {
-          showToast('success', json.data.message || 'Nenhum número da blacklist encontrado nos grupos.');
-        }
-        loadActions();
-      } else {
-        showToast('error', json.error || 'Erro ao verificar grupos');
-      }
-    } catch (e: any) {
-      showToast('error', e?.message || 'Erro ao verificar grupos');
-    } finally {
-      setVerifyingGroups(false);
-    }
-  }, [userId, configs, loadActions]);
 
   const handleScanGroups = useCallback(async () => {
     if (!userId || !configs[0]) return;
@@ -644,11 +775,30 @@ export default function AntiSpamPage() {
     if (activeTab === 'events') loadJoinEvents();
     if (activeTab === 'logs') loadActions();
     if (activeTab === 'groups') loadGroupsTabData();
-  }, [activeTab, loadBlacklist, loadJoinEvents, loadActions, loadGroupsTabData]);
+    if (activeTab === 'scans') loadScanLogs();
+    if (activeTab === 'suspicious') {
+      loadSuspiciousKeywords();
+      loadMessageEvents();
+    }
+  }, [
+    activeTab,
+    loadBlacklist,
+    loadJoinEvents,
+    loadActions,
+    loadGroupsTabData,
+    loadScanLogs,
+    loadSuspiciousKeywords,
+    loadMessageEvents,
+  ]);
 
   useEffect(() => {
     setEventsPage(1);
     setBlacklistPage(1);
+    setScanLogsPage(1);
+    setMsgEventsPage(1);
+    setMsgEventsSearchInput('');
+    setMsgEventsSearchApplied('');
+    setMsgEventsFetchError(null);
   }, [configs[0]?.id]);
 
   const handleSaveConfig = async (payload: Partial<AntiSpamConfigRow>) => {
@@ -694,6 +844,59 @@ export default function AntiSpamPage() {
     }
   };
 
+  const handleAddSuspiciousKeyword = async () => {
+    if (!userId || !configs[0] || !newKeyword.trim()) return;
+    try {
+      const res = await fetch('/api/anti-spam/suspicious-keywords', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({ config_id: configs[0].id, keyword: newKeyword.trim() }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        showToast('success', json.message || 'Palavra adicionada');
+        setNewKeyword('');
+        loadSuspiciousKeywords();
+      } else {
+        showToast('error', json.error || 'Erro');
+      }
+    } catch (e: any) {
+      showToast('error', e?.message || 'Erro');
+    }
+  };
+
+  const handleMsgEventsSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setMsgEventsSearchApplied(msgEventsSearchInput.trim());
+    setMsgEventsPage(1);
+  };
+
+  const handleMsgEventsSearchClear = () => {
+    setMsgEventsSearchInput('');
+    setMsgEventsSearchApplied('');
+    setMsgEventsPage(1);
+    setMsgEventsFetchError(null);
+  };
+
+  const handleRemoveSuspiciousKeyword = async (id: string) => {
+    if (!userId || !configs[0]) return;
+    try {
+      const res = await fetch(
+        `/api/anti-spam/suspicious-keywords?config_id=${encodeURIComponent(configs[0].id)}&id=${encodeURIComponent(id)}`,
+        { method: 'DELETE', headers: { 'X-User-Id': userId } }
+      );
+      const json = await res.json();
+      if (json.success) {
+        showToast('success', 'Palavra removida');
+        loadSuspiciousKeywords();
+      } else {
+        showToast('error', json.error || 'Erro');
+      }
+    } catch (e: any) {
+      showToast('error', e?.message || 'Erro');
+    }
+  };
+
   if (checking) {
     return (
       <Layout>
@@ -707,6 +910,11 @@ export default function AntiSpamPage() {
   const config = configs[0] ?? null;
   const totalPages = Math.ceil(actionsTotal / 25);
   const scanInProgress = scanningGroups || scanJobId !== null;
+  const masterInstance = config ? instances.find((i) => i.id === config.master_instance_id) : undefined;
+  const masterInstanceName = masterInstance?.instance_name ?? '';
+  const groupsOfMasterInstance = masterInstanceName
+    ? savedGroups.filter((g) => g.instance_name === masterInstanceName)
+    : [];
 
   const inputClass =
     'mt-1 block w-full rounded-lg border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] px-3 py-2 text-sm text-gray-800 dark:text-gray-200 placeholder:text-gray-500 dark:placeholder-gray-400 focus:border-[#8CD955] focus:ring-2 focus:ring-[#8CD955]/20 [color-scheme:light] dark:[color-scheme:dark]';
@@ -715,13 +923,7 @@ export default function AntiSpamPage() {
 
   return (
     <Layout>
-      <div className="p-4 md:p-6 lg:p-8 max-w-5xl mx-auto">
-        {verifyingGroups && (
-          <div className="sticky top-0 z-20 -mx-4 -mt-4 px-4 pt-4 pb-2 md:-mx-6 md:-mt-6 md:px-6 md:pt-6 lg:-mx-8 lg:-mt-8 lg:px-8 lg:pt-8 mb-4 flex items-center justify-center gap-2 rounded-b-lg bg-[#8CD955]/15 dark:bg-[#8CD955]/20 border-b-2 border-[#8CD955]/50 shadow-sm">
-            <Loader2 className="h-5 w-5 animate-spin text-[#8CD955]" />
-            <span className="text-sm font-medium text-gray-800 dark:text-gray-200">Verificação de grupos em andamento em segundo plano</span>
-          </div>
-        )}
+      <div className="box-border w-full min-w-0 max-w-none min-h-[calc(100dvh-6rem)] px-4 pb-10 sm:px-6 lg:px-8">
         {scanJobId && <ScanProgressBanner />}
         {removingInvalids && (
           <div className="sticky top-0 z-20 -mx-4 -mt-4 px-4 pt-4 pb-2 md:-mx-6 md:-mt-6 md:px-6 md:pt-6 lg:-mx-8 lg:-mt-8 lg:px-8 lg:pt-8 mb-4 flex items-center justify-center gap-2 rounded-b-lg bg-red-50 dark:bg-red-900/20 border-b-2 border-red-300 dark:border-red-700 shadow-sm">
@@ -752,21 +954,26 @@ export default function AntiSpamPage() {
           </div>
         )}
 
-        <div className="mb-6 border-b border-gray-200 dark:border-[#404040]">
-          <nav className="flex gap-1 flex-wrap" aria-label="Abas">
-            {(['config', 'groups', 'blacklist', 'events', 'logs'] as const).map((tab) => (
+        <div className="mb-6 w-full min-w-0 rounded-xl border border-gray-200 dark:border-[#404040] bg-gray-100/90 dark:bg-[#222] p-1 sm:p-1.5 shadow-sm">
+          <nav
+            className="flex flex-nowrap gap-1 overflow-x-auto scroll-smooth overscroll-x-contain py-0.5 [-webkit-overflow-scrolling:touch] [scrollbar-width:thin] [scrollbar-color:rgba(156,163,175,0.6)_transparent] dark:[scrollbar-color:rgba(115,115,115,0.5)_transparent]"
+            aria-label="Abas do anti-spam"
+          >
+            {(['config', 'groups', 'scans', 'suspicious', 'blacklist', 'events', 'logs'] as const).map((tab) => (
               <button
                 key={tab}
                 type="button"
                 onClick={() => setActiveTab(tab)}
-                className={`px-4 py-3 text-sm font-medium rounded-t-lg border-b-2 transition-colors ${
+                className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-2 sm:px-3.5 sm:py-2.5 text-xs sm:text-sm font-medium transition-all duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8CD955] focus-visible:ring-offset-2 focus-visible:ring-offset-gray-100 dark:focus-visible:ring-offset-[#222] ${
                   activeTab === tab
-                    ? 'border-[#8CD955] text-[#8CD955] bg-[#8CD955]/10 dark:bg-[#8CD955]/15'
-                    : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
+                    ? 'bg-white dark:bg-[#2a2a2a] text-[#8CD955] shadow-sm ring-1 ring-black/[0.06] dark:ring-white/10'
+                    : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-white/70 dark:hover:bg-[#333]/80'
                 }`}
               >
                 {tab === 'config' && 'Configuração'}
                 {tab === 'groups' && 'Grupos protegidos'}
+                {tab === 'scans' && 'Scans automáticos'}
+                {tab === 'suspicious' && 'Mensagens suspeitas'}
                 {tab === 'blacklist' && 'Lista negra'}
                 {tab === 'events' && 'Quem entrou'}
                 {tab === 'logs' && 'Números removidos'}
@@ -776,7 +983,7 @@ export default function AntiSpamPage() {
         </div>
 
         {activeTab === 'config' && (
-          <div className="rounded-xl border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] p-6 shadow-sm">
+          <div className="w-full min-w-0 rounded-xl border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] p-6 shadow-sm">
             <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-6">Configuração</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <label className="block">
@@ -805,6 +1012,7 @@ export default function AntiSpamPage() {
                         is_enabled: false,
                         denuncia_group_jid: '',
                         scan_mode: 'all_groups',
+                        suspicious_messages_enabled: false,
                       });
                     }
                   }}
@@ -818,6 +1026,9 @@ export default function AntiSpamPage() {
                     </option>
                   ))}
                 </select>
+                <p className="mt-1.5 text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
+                  Esta é a instância <strong>mestre</strong> que executa as remoções. No grupo podem existir outros administradores no WhatsApp; o anti-spam age pelas <strong>condições</strong> (lista negra, número inválido etc.), usando esta conexão.
+                </p>
               </label>
               <label className="block md:col-span-2">
                 <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Quais grupos proteger</span>
@@ -843,6 +1054,7 @@ export default function AntiSpamPage() {
                       master_instance_id: instances[0]?.id ?? '',
                       denuncia_group_jid: '',
                       scan_mode: 'all_groups',
+                      suspicious_messages_enabled: false,
                     })
                   }
                   disabled={saving || !instances.length}
@@ -857,14 +1069,18 @@ export default function AntiSpamPage() {
         )}
 
         {activeTab === 'groups' && (
-          <div className="rounded-xl border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] p-6 shadow-sm">
-            {verifyingGroups && <VerifyGroupsOverlay isActive={verifyingGroups} />}
+          <div className="w-full min-w-0 rounded-xl border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] p-6 shadow-sm">
             <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
               <div>
                 <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Grupos protegidos</h2>
                 <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-                  Use &quot;Escanear grupos&quot; para ver os contatos de cada grupo e quantos violam as regras. Use &quot;Remover violações&quot; para expulsar inválidos e bloqueados.
+                  Lista apenas os grupos da instância configurada para remoção. Use &quot;Escanear grupos&quot; para analisar participantes e violações. Números bloqueados continuam sendo removidos automaticamente ao entrarem nos grupos protegidos.
                 </p>
+                {config?.scan_mode === 'all_groups' && masterInstanceName && (
+                  <p className="text-xs text-[#5a9e2f] dark:text-[#8CD955] mt-2 font-medium">
+                    Modo atual: todos os grupos desta instância estão protegidos (caixas marcadas e fixas).
+                  </p>
+                )}
               </div>
               {config && (() => {
                 const inst = instances.find((i) => i.id === config.master_instance_id);
@@ -893,20 +1109,11 @@ export default function AntiSpamPage() {
                   <button
                     type="button"
                     onClick={handleScanGroups}
-                    disabled={scanInProgress || verifyingGroups || loadingGroups}
+                    disabled={scanInProgress || loadingGroups}
                     className="inline-flex items-center gap-2 rounded-lg border border-blue-400 dark:border-blue-500 bg-blue-50 dark:bg-blue-900/20 px-4 py-2 text-sm font-medium text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/40 disabled:opacity-50 transition"
                   >
                     {scanningGroups ? <Loader2 className="w-4 h-4 animate-spin" /> : <ScanLine className="w-4 h-4" />}
                     {scanJobId ? 'Escaneando…' : 'Escanear grupos'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleVerifyGroups}
-                    disabled={verifyingGroups || scanInProgress || loadingGroups}
-                    className="inline-flex items-center gap-2 rounded-lg bg-[#8CD955] px-4 py-2 text-sm font-medium text-white hover:bg-[#7BC84A] disabled:opacity-50 transition"
-                  >
-                    {verifyingGroups ? <Loader2 className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
-                    Remover violações
                   </button>
                   {loadingGroups && (
                     <span className="text-sm text-gray-500 dark:text-gray-400 flex items-center gap-1">
@@ -934,7 +1141,7 @@ export default function AntiSpamPage() {
                           <button
                             type="button"
                             onClick={handleRemoveInvalids}
-                            disabled={removingInvalids || verifyingGroups || scanInProgress}
+                            disabled={removingInvalids || scanInProgress}
                             className="inline-flex items-center gap-1 rounded-lg bg-red-500 hover:bg-red-600 disabled:opacity-50 px-3 py-1 text-xs font-medium text-white transition"
                           >
                             {removingInvalids ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
@@ -1131,58 +1338,25 @@ export default function AntiSpamPage() {
                   </div>
                 )}
 
-                {/* Resultado da remoção de violações */}
-                {verifyGroupsResult && (
-                  <div className="mb-6 rounded-xl border border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#333] p-4 space-y-3">
-                    <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200">Resultado da remoção</h3>
-                    <div className="flex flex-wrap gap-4 text-sm">
-                      <span className="text-gray-600 dark:text-gray-300">
-                        Violações encontradas: <strong>{verifyGroupsResult.summary.totalInGroups}</strong>
-                      </span>
-                      <span className="text-gray-600 dark:text-gray-300">
-                        Removidos: <strong className="text-emerald-600 dark:text-emerald-400">{verifyGroupsResult.summary.success}</strong>
-                        {verifyGroupsResult.summary.failed > 0 && (
-                          <> / <strong className="text-red-600 dark:text-red-400">{verifyGroupsResult.summary.failed} falha(s)</strong></>
-                        )}
-                      </span>
-                      {(verifyGroupsResult.summary.invalid_removed ?? 0) > 0 && (
-                        <span className="text-red-600 dark:text-red-400 text-xs">
-                          {verifyGroupsResult.summary.invalid_removed} inválido(s) removido(s)
-                        </span>
-                      )}
-                      {(verifyGroupsResult.summary.blacklisted_removed ?? 0) > 0 && (
-                        <span className="text-orange-600 dark:text-orange-400 text-xs">
-                          {verifyGroupsResult.summary.blacklisted_removed} bloqueado(s) removido(s)
-                        </span>
-                      )}
-                    </div>
-                    {verifyGroupsResult.removals?.length > 0 && (
-                      <ul className="text-xs max-h-40 overflow-y-auto space-y-1 mt-2">
-                        {verifyGroupsResult.removals.map((m, i) => (
-                          <li key={i} className="flex items-center gap-2">
-                            {m.success ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" /> : <XCircle className="w-3.5 h-3.5 text-red-500 shrink-0" />}
-                            <span className="font-mono text-gray-700 dark:text-gray-300">{m.phone_e164}</span>
-                            <span className="text-gray-400 dark:text-gray-500 truncate max-w-[140px]">{m.group_jid}</span>
-                            <span className={`text-xs rounded-full px-1.5 py-0.5 ${m.reason === 'invalid_number' ? 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400' : 'bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400'}`}>
-                              {m.reason === 'invalid_number' ? 'inválido' : 'blacklist'}
-                            </span>
-                            {!m.success && m.error && <span className="text-red-600 dark:text-red-400">{m.error}</span>}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                )}
-
-                {/* Lista de grupos para marcar como protegidos */}
+                {/* Lista de grupos da instância (marcar como protegidos) */}
                 <div className="mt-4">
-                  <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Marcar grupos como protegidos</h3>
-                  {savedGroups.length === 0 ? (
-                    <p className="text-sm text-gray-500 dark:text-gray-400">Nenhum grupo salvo. Use &quot;Buscar grupos&quot;.</p>
+                  <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Grupos da instância {masterInstanceName ? `“${masterInstanceName}”` : ''}
+                  </h3>
+                  {!masterInstanceName ? (
+                    <p className="text-sm text-gray-500 dark:text-gray-400">Defina a instância que remove dos grupos na aba Configuração.</p>
+                  ) : groupsOfMasterInstance.length === 0 ? (
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      Nenhum grupo desta instância na lista salva. Use &quot;Buscar grupos&quot;.
+                    </p>
                   ) : (
                     <ul className="space-y-1.5 max-h-[320px] overflow-y-auto rounded-lg border border-gray-200 dark:border-[#404040] p-3">
-                      {Array.from(new Map(savedGroups.map((g) => [g.group_id, g])).values()).map((g) => {
-                        const isProtected = protectedGroupIds.has(g.group_id);
+                      {Array.from(new Map(groupsOfMasterInstance.map((g) => [g.group_id, g])).values()).map((g) => {
+                        const isMasterGroup = g.instance_name === masterInstanceName;
+                        const allGroupsMode = config?.scan_mode === 'all_groups';
+                        const isProtected =
+                          (allGroupsMode && isMasterGroup) || protectedGroupIds.has(g.group_id);
+                        const checkboxLocked = allGroupsMode && isMasterGroup;
                         const busy = togglingGroupId === g.group_id;
                         const scan = scanResult?.groups?.find((sg) => sg.group_jid === g.group_id);
                         return (
@@ -1190,8 +1364,8 @@ export default function AntiSpamPage() {
                             <button
                               type="button"
                               onClick={() => toggleGroupProtected(g.group_id, g.group_subject, isProtected)}
-                              disabled={busy}
-                              className="flex items-center gap-2 text-left min-w-0 flex-1"
+                              disabled={busy || checkboxLocked}
+                              className={`flex items-center gap-2 text-left min-w-0 flex-1 ${checkboxLocked ? 'cursor-default opacity-90' : ''}`}
                             >
                               {busy ? <Loader2 className="w-4 h-4 animate-spin shrink-0 text-[#8CD955]" /> : (
                                 <span className={`shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center ${isProtected ? 'bg-[#8CD955] border-[#8CD955] text-white' : 'border-gray-400 dark:border-gray-500'}`}>
@@ -1199,7 +1373,6 @@ export default function AntiSpamPage() {
                                 </span>
                               )}
                               <span className="text-sm text-gray-800 dark:text-gray-200 truncate">{g.group_subject || g.group_id}</span>
-                              {g.instance_name && <span className="text-xs text-gray-500 dark:text-gray-400 shrink-0">({g.instance_name})</span>}
                             </button>
                             {scan && (scan.invalid_count > 0 || scan.blacklisted_count > 0) && (
                               <span className="text-xs text-red-600 dark:text-red-400 shrink-0">
@@ -1217,14 +1390,263 @@ export default function AntiSpamPage() {
           </div>
         )}
 
+        {activeTab === 'scans' && (
+          <div className="w-full min-w-0 rounded-xl border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] p-6 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                  <Clock className="h-5 w-5 text-[#8CD955]" />
+                  Scans automáticos
+                </h2>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 max-w-2xl space-y-2">
+                  <span className="block">
+                    A varredura automática roda <strong>a cada 20 minutos</strong> (no ambiente configurado para isso). Neste histórico entram também os lotes internos dessa verificação e os scans que você inicia com &quot;Escanear grupos&quot; na aba Grupos protegidos.
+                    Expanda uma linha para ver grupos e números removidos quando o registro trouxer esse detalhe.
+                  </span>
+                  <span className="block text-gray-600 dark:text-gray-300">
+                    No WhatsApp, um grupo pode ter <strong>vários administradores</strong> em contas diferentes; isso não impede a proteção. O que define as remoções é a <strong>instância mestre</strong> que você escolheu e as <strong>condições</strong> (lista negra, número inválido etc.) — o sistema remove quem atender a essas regras.
+                  </span>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => loadScanLogs()}
+                disabled={loadingScanLogs || !config}
+                className="inline-flex items-center gap-2 rounded-lg border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50 shrink-0 transition"
+              >
+                {loadingScanLogs ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                Atualizar
+              </button>
+            </div>
+
+            {!config ? (
+              <p className="text-sm text-amber-600 dark:text-amber-400">Configure o anti-spam na aba Configuração para ver o histórico.</p>
+            ) : (
+              <>
+                <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-[#404040]">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#333] text-left">
+                        <th className="py-3 px-2 w-8" aria-label="Expandir" />
+                        <th className="py-3 px-2 font-medium text-gray-700 dark:text-gray-300">Data</th>
+                        <th className="py-3 px-2 font-medium text-gray-700 dark:text-gray-300">Tipo</th>
+                        <th className="py-3 px-2 font-medium text-gray-700 dark:text-gray-300">Status</th>
+                        <th className="py-3 px-2 font-medium text-gray-700 dark:text-gray-300">Grupos</th>
+                        <th className="py-3 px-2 font-medium text-gray-700 dark:text-gray-300">Removidos / violações</th>
+                        <th className="py-3 px-2 font-medium text-gray-700 dark:text-gray-300">Erros</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {scanLogs.map((r) => {
+                        const stats = scanLogTableStats(r);
+                        const expanded = expandedScanLogId === r.id;
+                        const res = r.result;
+                        const showManualScanSummary =
+                          !!res &&
+                          res.instance != null &&
+                          res.summary != null &&
+                          typeof res.summary === 'object';
+                        return (
+                          <React.Fragment key={r.id}>
+                            <tr className="border-b border-gray-100 dark:border-[#404040] hover:bg-gray-50/50 dark:hover:bg-[#333]/50 align-top">
+                              <td className="py-2 px-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setExpandedScanLogId(expanded ? null : r.id)}
+                                  className="p-1 rounded hover:bg-gray-200 dark:hover:bg-[#404040] text-gray-600 dark:text-gray-400"
+                                  aria-expanded={expanded}
+                                  title={expanded ? 'Recolher' : 'Ver grupos e detalhes'}
+                                >
+                                  {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                                </button>
+                              </td>
+                              <td className="py-2 px-2 text-gray-600 dark:text-gray-400 whitespace-nowrap">
+                                {new Date(r.created_at).toLocaleString('pt-BR')}
+                              </td>
+                              <td className="py-2 px-2 text-gray-800 dark:text-gray-200">{scanLogTypeLabel(res)}</td>
+                              <td className="py-2 px-2">
+                                <span
+                                  className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
+                                    r.status === 'completed'
+                                      ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300'
+                                      : r.status === 'partial'
+                                        ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300'
+                                        : r.status === 'failed'
+                                          ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
+                                          : r.status === 'running' || r.status === 'pending'
+                                            ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
+                                            : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'
+                                  }`}
+                                >
+                                  {r.status === 'completed' && <CheckCircle2 className="w-3 h-3" />}
+                                  {r.status === 'partial' && <AlertCircle className="w-3 h-3" />}
+                                  {r.status === 'failed' && <XCircle className="w-3 h-3" />}
+                                  {(r.status === 'running' || r.status === 'pending') && <Loader2 className="w-3 h-3 animate-spin" />}
+                                  {r.status}
+                                </span>
+                              </td>
+                              <td className="py-2 px-2 text-gray-800 dark:text-gray-200">{stats.groups}</td>
+                              <td className="py-2 px-2 text-gray-800 dark:text-gray-200">{stats.removed}</td>
+                              <td className="py-2 px-2">
+                                <span className={Number(stats.errors) > 0 ? 'text-red-600 dark:text-red-400 font-medium' : 'text-gray-500 dark:text-gray-400'}>
+                                  {stats.errors}
+                                </span>
+                              </td>
+                            </tr>
+                            {expanded && (
+                              <tr className="border-b border-gray-200 dark:border-[#404040] bg-gray-50/80 dark:bg-[#2f2f2f]">
+                                <td colSpan={7} className="py-3 px-4 text-xs text-gray-700 dark:text-gray-300">
+                                  {r.status === 'failed' && r.error && (
+                                    <p className="text-red-600 dark:text-red-400 font-medium mb-2">Erro: {r.error}</p>
+                                  )}
+                                  {res && typeof res.batch_range === 'string' && Array.isArray(res.groups) && (
+                                    <div className="space-y-3">
+                                      <p className="font-semibold text-gray-800 dark:text-gray-200">Lote {res.batch_range}</p>
+                                      {(res.groups as Array<Record<string, unknown>>).map((g) => {
+                                        const removed = Array.isArray(g.removed) ? g.removed : [];
+                                        const errs = Array.isArray(g.errors) ? g.errors : [];
+                                        return (
+                                          <div key={String(g.group_jid)} className="rounded-lg border border-gray-200 dark:border-[#505050] p-3 bg-white dark:bg-[#333]">
+                                            <div className="font-medium text-sm text-gray-900 dark:text-gray-100">
+                                              {String(g.group_name || g.group_jid || 'Grupo')}
+                                            </div>
+                                            <div className="text-gray-500 dark:text-gray-400 mt-0.5">
+                                              {Number(g.participants_total ?? 0)} participante(s)
+                                            </div>
+                                            {removed.length > 0 && (
+                                              <ul className="mt-2 space-y-1 list-disc list-inside text-emerald-700 dark:text-emerald-300">
+                                                {removed.map((item: unknown, idx: number) => {
+                                                  const it = item as { phone_e164?: string; reason?: string };
+                                                  return (
+                                                    <li key={idx}>
+                                                      <span className="font-mono">{formatPhoneToList(it.phone_e164 || '')}</span>
+                                                      {' — '}
+                                                      {it.reason === 'blacklist' ? 'lista negra' : it.reason === 'invalid_number' ? 'número inválido' : String(it.reason || '')}
+                                                    </li>
+                                                  );
+                                                })}
+                                              </ul>
+                                            )}
+                                            {removed.length === 0 && errs.length === 0 && (
+                                              <p className="mt-2 text-gray-500 dark:text-gray-400">Nenhuma remoção neste grupo.</p>
+                                            )}
+                                            {errs.length > 0 && (
+                                              <ul className="mt-2 space-y-1 text-red-600 dark:text-red-400">
+                                                {errs.map((e: unknown, idx: number) => (
+                                                  <li key={idx}>{String(e)}</li>
+                                                ))}
+                                              </ul>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                  {res &&
+                                    res.total_groups_scanned != null &&
+                                    !res.batch_range &&
+                                    !res.instance && (
+                                      <div className="space-y-1">
+                                        <p className="font-semibold text-gray-800 dark:text-gray-200">Resumo do ciclo automático</p>
+                                        <p>Grupos escaneados: <strong>{String(res.total_groups_scanned)}</strong></p>
+                                        <p>Total removidos: <strong className="text-emerald-600 dark:text-emerald-400">{String(res.total_removed ?? 0)}</strong></p>
+                                        <p>
+                                          Lista negra: <strong>{String(res.total_removed_blacklist ?? 0)}</strong> · Inválidos:{' '}
+                                          <strong>{String(res.total_removed_invalid ?? 0)}</strong>
+                                        </p>
+                                        {typeof res.total_errors === 'number' && res.total_errors > 0 && (
+                                          <p className="text-amber-600 dark:text-amber-400">Avisos/erros no ciclo: {res.total_errors}</p>
+                                        )}
+                                      </div>
+                                    )}
+                                  {showManualScanSummary ? (
+                                    <div className="space-y-3">
+                                      <p className="font-semibold text-gray-800 dark:text-gray-200">
+                                        Scan manual — instância {(res.instance as { name?: string }).name || '—'}
+                                      </p>
+                                      {typeof (res as { message?: string }).message === 'string' && (res as { message: string }).message && (
+                                        <p className="text-gray-600 dark:text-gray-400">{(res as { message: string }).message}</p>
+                                      )}
+                                      {Array.isArray(res.groups) &&
+                                        (res.groups as Array<Record<string, unknown>>).map((g) => (
+                                          <div
+                                            key={String(g.group_jid)}
+                                            className="rounded-lg border border-gray-200 dark:border-[#505050] p-3 bg-white dark:bg-[#333]"
+                                          >
+                                            <div className="font-medium text-sm">{String(g.group_name || g.group_jid)}</div>
+                                            {g.fetch_error ? (
+                                              <p className="text-red-600 dark:text-red-400 mt-1">{String(g.fetch_error)}</p>
+                                            ) : (
+                                              <p className="mt-1 text-gray-600 dark:text-gray-400">
+                                                {Number(g.participants_total ?? 0)} participantes ·{' '}
+                                                <span className="text-red-600 dark:text-red-400">{Number(g.invalid_count ?? 0)} inválido(s)</span> ·{' '}
+                                                <span className="text-orange-600 dark:text-orange-400">{Number(g.blacklisted_count ?? 0)} na lista</span>
+                                              </p>
+                                            )}
+                                          </div>
+                                        ))}
+                                    </div>
+                                  ) : null}
+                                  {!res && r.status !== 'failed' && (
+                                    <p className="text-gray-500 dark:text-gray-400">Sem resultado ainda (job em fila ou em execução).</p>
+                                  )}
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  {scanLogs.length === 0 && !loadingScanLogs && (
+                    <p className="text-gray-500 dark:text-gray-400 py-10 text-center text-sm">
+                      Nenhum scan registrado ainda. A varredura automática (a cada 20 minutos) e o botão &quot;Escanear grupos&quot; passam a gravar entradas aqui quando houver execução.
+                    </p>
+                  )}
+                  {loadingScanLogs && (
+                    <p className="text-gray-500 dark:text-gray-400 py-10 text-center text-sm flex items-center justify-center gap-2">
+                      <Loader2 className="w-4 h-4 animate-spin" /> Carregando histórico…
+                    </p>
+                  )}
+                </div>
+                {scanLogsTotal > SCAN_LOGS_PAGE_SIZE && (
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-sm text-gray-600 dark:text-gray-400">
+                    <span>
+                      Página {scanLogsPage} de {Math.ceil(scanLogsTotal / SCAN_LOGS_PAGE_SIZE) || 1} ({scanLogsTotal} registro(s))
+                    </span>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setScanLogsPage((p) => Math.max(1, p - 1))}
+                        disabled={scanLogsPage <= 1 || loadingScanLogs}
+                        className="rounded-lg border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] px-3 py-1.5 font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50 transition"
+                      >
+                        Anterior
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setScanLogsPage((p) => p + 1)}
+                        disabled={scanLogsPage >= Math.ceil(scanLogsTotal / SCAN_LOGS_PAGE_SIZE) || loadingScanLogs}
+                        className="rounded-lg border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] px-3 py-1.5 font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50 transition"
+                      >
+                        Próxima
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
         {activeTab === 'events' && (
-          <div className="rounded-xl border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] p-6 shadow-sm">
+          <div className="w-full min-w-0 rounded-xl border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] p-6 shadow-sm">
             <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">Quem entrou nos grupos</h2>
             <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">
               Números que entraram recentemente. Clique em &quot;Bloquear&quot; para adicionar à sua lista negra.
             </p>
             <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">
-              Os eventos vêm do webhook do Zaploto de produção.
+              Os eventos vêm do webhook do Zaploto de produção. Entradas com número que não for válido no formato brasileiro (55 + DDD + 8 ou 9 dígitos), como modelos internacionais longos, não aparecem nesta lista.
             </p>
             {config ? (
               <>
@@ -1326,8 +1748,247 @@ export default function AntiSpamPage() {
           </div>
         )}
 
+        {activeTab === 'suspicious' && (
+          <div className="w-full min-w-0 rounded-xl border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] p-6 shadow-sm space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                  <MessageSquare className="h-5 w-5 text-[#8CD955]" />
+                  Mensagens suspeitas
+                </h2>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 max-w-2xl">
+                  Cadastre palavras: se alguém enviar mensagem em <strong>grupo</strong> (JID @g.us) contendo a palavra, o anti-spam tenta{' '}
+                  <strong>apagar para todos</strong> via Evolution (<code className="text-xs bg-gray-100 dark:bg-[#333] px-1 rounded">DELETE /chat/deleteMessageForEveryone</code>), usando a instância mestre.
+                  Não processa mensagens suas (<code className="text-xs">fromMe</code>) nem mídia sem texto.
+                </p>
+              </div>
+              {config && (
+                <label className="flex items-center gap-2 shrink-0 text-sm font-medium text-gray-700 dark:text-gray-300">
+                  <span>Exclusão automática ativa</span>
+                  <select
+                    value={config.suspicious_messages_enabled ? '1' : '0'}
+                    onChange={(e) =>
+                      handleSaveConfig({ ...config, suspicious_messages_enabled: e.target.value === '1' })
+                    }
+                    disabled={saving}
+                    className={inputClassInline}
+                  >
+                    <option value="0">Não</option>
+                    <option value="1">Sim</option>
+                  </select>
+                </label>
+              )}
+            </div>
+
+            {!config ? (
+              <p className="text-sm text-amber-600 dark:text-amber-400">Configure o anti-spam na aba Configuração.</p>
+            ) : (
+              <>
+                <div className="rounded-lg border border-gray-200 dark:border-[#404040] p-4">
+                  <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200 mb-3">Palavras monitoradas</h3>
+                  <div className="flex flex-wrap gap-2 mb-3">
+                    <input
+                      type="text"
+                      value={newKeyword}
+                      onChange={(e) => setNewKeyword(e.target.value)}
+                      placeholder="Ex.: promoção, link proibido…"
+                      className={`${inputClassInline} flex-1 min-w-[200px] max-w-md`}
+                      onKeyDown={(e) => e.key === 'Enter' && handleAddSuspiciousKeyword()}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleAddSuspiciousKeyword}
+                      disabled={!newKeyword.trim()}
+                      className="inline-flex items-center gap-2 rounded-lg bg-[#8CD955] px-4 py-2 text-sm font-medium text-white hover:bg-[#7BC84A] disabled:opacity-50 transition"
+                    >
+                      <Plus className="w-4 h-4" /> Adicionar
+                    </button>
+                  </div>
+                  {suspiciousKeywords.length === 0 ? (
+                    <p className="text-sm text-gray-500 dark:text-gray-400">Nenhuma palavra. A exclusão automática só age se houver palavras cadastradas.</p>
+                  ) : (
+                    <ul className="flex flex-wrap gap-2">
+                      {suspiciousKeywords.map((k) => (
+                        <li
+                          key={k.id}
+                          className="inline-flex items-center gap-1 rounded-full border border-gray-200 dark:border-[#505050] bg-gray-50 dark:bg-[#333] pl-3 pr-1 py-1 text-sm"
+                        >
+                          <span className="text-gray-800 dark:text-gray-200">{k.keyword}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveSuspiciousKeyword(k.id)}
+                            className="p-1 rounded-full hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600"
+                            title="Remover"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+
+                <div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                    <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200">Eventos de mensagem da instância</h3>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        loadSuspiciousKeywords();
+                        loadMessageEvents();
+                      }}
+                      disabled={loadingSuspicious}
+                      className="inline-flex items-center gap-2 rounded-lg border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] px-3 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50"
+                    >
+                      {loadingSuspicious ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                      Atualizar
+                    </button>
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                    Lista <code className="text-[10px]">messages.upsert</code> em produção para a instância mestre e watcher desta config. Prévia: texto ou legenda de mídia; sem texto, mostramos o tipo (ex.: figurinha, áudio). Tipos desconhecidos ou payload incompleto ficam vazios (—). A pesquisa filtra pelo texto no JSON do evento (inclui prévia e campos da mensagem).
+                  </p>
+                  <form
+                    onSubmit={handleMsgEventsSearchSubmit}
+                    className="mb-3 flex flex-wrap items-center gap-2"
+                  >
+                    <input
+                      type="search"
+                      value={msgEventsSearchInput}
+                      onChange={(e) => setMsgEventsSearchInput(e.target.value)}
+                      placeholder="Buscar palavra na prévia / conteúdo…"
+                      maxLength={200}
+                      className={`${inputClassInline} flex-1 min-w-[12rem] max-w-xl`}
+                      aria-label="Buscar em mensagens"
+                    />
+                    <button
+                      type="submit"
+                      disabled={loadingSuspicious}
+                      className="inline-flex items-center gap-2 rounded-lg bg-[#8CD955] px-4 py-2 text-sm font-medium text-white hover:bg-[#7BC84A] disabled:opacity-50 transition"
+                    >
+                      <Search className="w-4 h-4" />
+                      Pesquisar
+                    </button>
+                    {(msgEventsSearchApplied || msgEventsSearchInput) && (
+                      <button
+                        type="button"
+                        onClick={handleMsgEventsSearchClear}
+                        disabled={loadingSuspicious}
+                        className="inline-flex items-center gap-1 rounded-lg border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50"
+                      >
+                        <X className="w-4 h-4" />
+                        Limpar
+                      </button>
+                    )}
+                  </form>
+                  {msgEventsFetchError && (
+                    <p className="mb-2 text-sm text-red-600 dark:text-red-400">{msgEventsFetchError}</p>
+                  )}
+                  {msgEventsSearchApplied ? (
+                    <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">
+                      Filtro ativo: <strong className="text-gray-800 dark:text-gray-200">&quot;{msgEventsSearchApplied}&quot;</strong>
+                      {' · '}
+                      {msgEventsTotal} resultado(s)
+                    </p>
+                  ) : null}
+                  <div className="w-full min-w-0 overflow-x-auto rounded-lg border border-gray-200 dark:border-[#404040]">
+                    <table className="w-full min-w-[52rem] table-fixed text-sm">
+                      <colgroup>
+                        <col className="w-[9.5rem]" />
+                        <col className="w-[7rem]" />
+                        <col className="w-[22%]" />
+                        <col className="w-[7.5rem]" />
+                        <col className="w-[3.5rem]" />
+                        <col />
+                      </colgroup>
+                      <thead>
+                        <tr className="border-b border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#333] text-left">
+                          <th className="py-2 px-2 font-medium text-gray-700 dark:text-gray-300">Data</th>
+                          <th className="py-2 px-2 font-medium text-gray-700 dark:text-gray-300">Instância</th>
+                          <th className="py-2 px-2 font-medium text-gray-700 dark:text-gray-300">Grupo</th>
+                          <th className="py-2 px-2 font-medium text-gray-700 dark:text-gray-300">ID msg</th>
+                          <th className="py-2 px-2 font-medium text-gray-700 dark:text-gray-300">Eu?</th>
+                          <th className="py-2 px-2 font-medium text-gray-700 dark:text-gray-300">Prévia</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {messageEvents.map((m) => (
+                          <tr key={m.id} className="border-b border-gray-100 dark:border-[#404040] hover:bg-gray-50/50 dark:hover:bg-[#333]/50">
+                            <td className="py-2 px-2 text-gray-600 dark:text-gray-400 whitespace-nowrap text-xs">
+                              {new Date(m.received_at).toLocaleString('pt-BR')}
+                            </td>
+                            <td className="py-2 px-2 text-xs text-gray-700 dark:text-gray-300">{m.instance_name || '—'}</td>
+                            <td
+                              className="py-2 px-2 text-xs text-gray-700 dark:text-gray-300 truncate align-top"
+                              title={m.remote_jid ? `${m.remote_jid}${m.group_name ? ` · ${m.group_name}` : ''}` : ''}
+                            >
+                              {m.remote_jid?.endsWith('@g.us') ? (
+                                m.group_name ? (
+                                  <span className="font-medium text-gray-800 dark:text-gray-200">{m.group_name}</span>
+                                ) : (
+                                  <span className="font-mono text-gray-600 dark:text-gray-400">{m.remote_jid}</span>
+                                )
+                              ) : (
+                                <span className="font-mono">{m.remote_jid || '—'}</span>
+                              )}
+                            </td>
+                            <td className="py-2 px-2 text-xs font-mono text-gray-600 dark:text-gray-400 truncate align-top" title={m.message_id || ''}>
+                              {m.message_id || '—'}
+                            </td>
+                            <td className="py-2 px-2 align-top">{m.from_me ? 'Sim' : 'Não'}</td>
+                            <td className="py-2 px-2 min-w-0 align-top text-gray-700 dark:text-gray-300 break-words hyphens-auto" title={m.preview}>
+                              {m.preview || '—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {messageEvents.length === 0 && !loadingSuspicious && (
+                      <p className="text-gray-500 dark:text-gray-400 py-8 text-center text-sm">
+                        {msgEventsSearchApplied
+                          ? `Nenhuma mensagem contém “${msgEventsSearchApplied}”.`
+                          : 'Nenhum evento de mensagem encontrado.'}
+                      </p>
+                    )}
+                    {loadingSuspicious && messageEvents.length === 0 && (
+                      <p className="text-gray-500 dark:text-gray-400 py-8 text-center text-sm flex items-center justify-center gap-2">
+                        <Loader2 className="w-4 h-4 animate-spin" /> Carregando…
+                      </p>
+                    )}
+                  </div>
+                  {msgEventsTotal > MSG_EVENTS_PAGE_SIZE && (
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm text-gray-600 dark:text-gray-400">
+                      <span>
+                        Página {msgEventsPage} de {Math.ceil(msgEventsTotal / MSG_EVENTS_PAGE_SIZE) || 1}
+                        {msgEventsSearchApplied ? ` · ${msgEventsTotal} com filtro` : ` (${msgEventsTotal} evento(s))`}
+                      </span>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setMsgEventsPage((p) => Math.max(1, p - 1))}
+                          disabled={msgEventsPage <= 1 || loadingSuspicious}
+                          className="rounded-lg border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] px-3 py-1.5 font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50"
+                        >
+                          Anterior
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setMsgEventsPage((p) => p + 1)}
+                          disabled={msgEventsPage >= Math.ceil(msgEventsTotal / MSG_EVENTS_PAGE_SIZE) || loadingSuspicious}
+                          className="rounded-lg border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] px-3 py-1.5 font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50"
+                        >
+                          Próxima
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
         {activeTab === 'blacklist' && (
-          <div className="rounded-xl border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] p-6 shadow-sm">
+          <div className="w-full min-w-0 rounded-xl border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] p-6 shadow-sm">
             <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">Sua lista negra</h2>
             <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
               Números bloqueados são removidos automaticamente ao entrar nos grupos protegidos.
@@ -1451,7 +2112,7 @@ export default function AntiSpamPage() {
         )}
 
         {activeTab === 'logs' && (
-          <div className="rounded-xl border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] p-6 shadow-sm">
+          <div className="w-full min-w-0 rounded-xl border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] p-6 shadow-sm">
             <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">Números removidos</h2>
             <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
               Histórico de remoções feitas pelo seu anti-spam.

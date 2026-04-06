@@ -143,6 +143,8 @@ add_observations_to_gerente_lead_requests.sql
 add_rejection_observation_to_gerente_lead_requests.sql
 add_anti_spam_remove_jobs.sql
 add_anti_spam_scan_jobs.sql
+add_anti_spam_suspicious_messages.sql
+add_anti_spam_message_events_search_rpc.sql
 group_fetch_jobs.sql
 add_chat_conversations_profile_pic_url.sql
 trigger_evolution_webhook_messages_upsert_conversation.sql
@@ -183,3 +185,6 @@ mass_send_idempotent_group_skip.sql
 meta_integration_bancas_allow_multiple.sql
 add_evolution_instances_bloked.sql
 claim_maturation_steps_active_plan_only.sql
+create_gerente_lead_stock_pools.sql
+add_transfer_kind_to_admin_lead_transfer_logs.sql
+add_sidebar_lead_transfer_item.sql

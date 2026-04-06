@@ -14,6 +14,10 @@ import { NextRequest, after } from 'next/server';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { chatService } from '@/lib/services/chat-service';
 import { normalizationService } from '@/lib/services/normalization-service';
+import {
+  extractEvolutionWebhookInstanceName,
+  normalizeEvolutionChatWebhookEvent,
+} from '@/lib/server/evolution-chat-webhook-config';
 
 // ── Utilitários ───────────────────────────────────────────────────────────────
 
@@ -283,20 +287,16 @@ export async function POST(req: NextRequest) {
       return new Response('Invalid JSON', { status: 400 });
     }
 
-    const event = pickFirstString(
+    const rawEvent = pickFirstString(
       payload?.event,
       payload?.eventType,
       payload?.type,
       payload?.data?.event,
     );
-    const instanceName = pickFirstString(
-      payload?.instance,
-      payload?.instanceName,
-      payload?.data?.instance,
-      payload?.data?.instanceName,
-    );
+    const normalizedEvent = rawEvent ? normalizeEvolutionChatWebhookEvent(rawEvent) : '';
+    const instanceName = extractEvolutionWebhookInstanceName(payload);
 
-    if (!event || !instanceName) {
+    if (!rawEvent || !normalizedEvent || !instanceName) {
       return new Response('Invalid payload', { status: 400 });
     }
 
@@ -318,10 +318,10 @@ export async function POST(req: NextRequest) {
     // ── Processa em background — retorna 200 imediatamente ─────────────────
     after(async () => {
       try {
-        switch (event) {
+        switch (normalizedEvent) {
           case 'MESSAGES_UPSERT':
           case 'SEND_MESSAGE':
-            await handleMessageUpsert(dbInstance, data, event === 'SEND_MESSAGE', payload);
+            await handleMessageUpsert(dbInstance, data, normalizedEvent === 'SEND_MESSAGE', payload);
             break;
 
           case 'MESSAGES_UPDATE':
@@ -336,7 +336,7 @@ export async function POST(req: NextRequest) {
             break;
         }
       } catch (err: any) {
-        console.error(`❌ [WEBHOOK] Erro ao processar evento ${event}:`, err?.message || err);
+        console.error(`❌ [WEBHOOK] Erro ao processar evento ${normalizedEvent}:`, err?.message || err);
       }
     });
 

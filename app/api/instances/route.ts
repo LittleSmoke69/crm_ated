@@ -164,6 +164,23 @@ export async function GET(req: NextRequest) {
         
         return instanceData;
       });
+
+      const ownerIds = [...new Set(instances.map((i: { user_id?: string }) => i.user_id).filter(Boolean))] as string[];
+      if (ownerIds.length > 0) {
+        const { data: ownerProfiles } = await supabaseServiceRole
+          .from('profiles')
+          .select('id, full_name, email')
+          .in('id', ownerIds);
+        const displayByUserId = new Map<string, string>();
+        for (const p of ownerProfiles || []) {
+          const name = (p.full_name && String(p.full_name).trim()) || (p.email && String(p.email).trim()) || '';
+          if (name) displayByUserId.set(p.id, name);
+        }
+        instances = instances.map((inst: { user_id?: string }) => ({
+          ...inst,
+          owner_display_name: inst.user_id ? displayByUserId.get(inst.user_id) ?? null : null,
+        }));
+      }
     }
 
     return successResponse(instances, 'Instâncias carregadas com sucesso');

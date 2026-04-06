@@ -9,7 +9,10 @@
 
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { chatService } from '@/lib/services/chat-service';
-import { normalizeEvolutionChatWebhookEvent } from '@/lib/server/evolution-chat-webhook-config';
+import {
+  extractEvolutionWebhookInstanceName,
+  normalizeEvolutionChatWebhookEvent,
+} from '@/lib/server/evolution-chat-webhook-config';
 
 /** Tipos de evento da Evolution que são relevantes para o chat. */
 const CHAT_EVENT_TYPES = new Set([
@@ -191,7 +194,7 @@ export async function processEvolutionPayloadToChat(
 
   const rawEvent = pickFirstString(p.event, p.eventType, p.event_type, p.type, (p.data as Record<string, unknown>)?.event);
   const event = rawEvent ? normalizeEvolutionChatWebhookEvent(rawEvent) : '';
-  const instanceName = pickFirstString(p.instance, p.instanceName, (p.data as Record<string, unknown>)?.instance, (p.data as Record<string, unknown>)?.instanceName);
+  const instanceName = extractEvolutionWebhookInstanceName(payload);
   const data = (p.data ?? p) as Record<string, unknown>;
 
   if (!event || !instanceName) return { processed: false, skipped: true };
