@@ -31,8 +31,9 @@ export default function AcademyHomePage() {
   useEffect(() => {
     (async () => {
       try {
+        const modHeaders: HeadersInit = userId ? { 'x-user-id': userId } : {};
         const [modRes, progRes] = await Promise.all([
-          fetch('/api/academy/modules'),
+          fetch('/api/academy/modules', { headers: modHeaders }),
           userId ? fetch('/api/academy/progress', { headers: { 'x-user-id': userId } }) : null,
         ]);
         if (modRes.ok) {

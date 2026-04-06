@@ -40,8 +40,9 @@ export default function AcademyModulePage() {
     setModuleNotFound(false);
     (async () => {
       try {
+        const hdr: HeadersInit = userId ? { 'x-user-id': userId } : {};
         const [lessRes, progRes] = await Promise.all([
-          fetch(`/api/academy/lessons?moduleSlug=${encodeURIComponent(moduleSlug)}`),
+          fetch(`/api/academy/lessons?moduleSlug=${encodeURIComponent(moduleSlug)}`, { headers: hdr }),
           userId ? fetch('/api/academy/progress', { headers: { 'x-user-id': userId } }).then((r) => r.ok ? r.json() : []) : Promise.resolve([]),
         ]);
         if (lessRes.ok) {

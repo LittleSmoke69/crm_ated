@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { isLessonVisibleForProfile } from '@/lib/academy/lesson-role-access';
 
 function getUserId(req: NextRequest): string | null {
   return (
@@ -59,6 +60,32 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'status inválido' }, { status: 400 });
   }
   try {
+    const { data: profile } = await supabaseServiceRole
+      .from('profiles')
+      .select('status')
+      .eq('id', userId)
+      .maybeSingle();
+    const { data: lessonRow } = await supabaseServiceRole
+      .from('academy_lessons')
+      .select('id, allowed_role_codes')
+      .eq('id', lessonId)
+      .eq('is_published', true)
+      .maybeSingle();
+    if (!lessonRow) {
+      return NextResponse.json({ error: 'Aula não encontrada' }, { status: 404 });
+    }
+    if (
+      !isLessonVisibleForProfile(
+        lessonRow.allowed_role_codes as string[] | null,
+        profile?.status ?? null
+      )
+    ) {
+      return NextResponse.json(
+        { error: 'Você não tem permissão para registrar progresso nesta aula.' },
+        { status: 403 }
+      );
+    }
+
     const now = new Date().toISOString();
     const payload = {
       user_id: userId,

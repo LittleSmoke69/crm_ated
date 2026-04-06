@@ -1,12 +1,13 @@
 'use client';
 
-import { Suspense, useEffect, useState, useCallback } from 'react';
+import { Suspense, useEffect, useState, useCallback, useRef } from 'react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Plus, Pencil, Trash2, Loader2, Eye, EyeOff, GripVertical, ArrowLeft, FileVideo, Clock, Filter } from 'lucide-react';
+import { Plus, Pencil, Trash2, Loader2, Eye, EyeOff, GripVertical, ArrowLeft, FileVideo, Clock, Filter, Users, X } from 'lucide-react';
 import { getStoredUserId } from '@/lib/utils/stored-user-id';
+import { ZAPLOTO_ACADEMY_ROLE_OPTIONS } from '@/lib/academy/lesson-role-access';
 
 type Lesson = {
   id: string;
@@ -17,7 +18,15 @@ type Lesson = {
   is_published: boolean;
   content_type: string;
   estimated_minutes: number | null;
+  allowed_role_codes?: string[] | null;
 };
+
+function roleRestrictionLabel(codes: string[] | null | undefined): string {
+  if (!codes?.length) return '';
+  return codes
+    .map((c) => ZAPLOTO_ACADEMY_ROLE_OPTIONS.find((o) => o.code === c)?.label ?? c)
+    .join(', ');
+}
 
 type Module = { id: string; title: string; slug: string };
 
@@ -37,6 +46,11 @@ function AdminAcademyAulasContent() {
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [reordering, setReordering] = useState(false);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bulkModalOpen, setBulkModalOpen] = useState(false);
+  const [bulkRoleDraft, setBulkRoleDraft] = useState<string[]>([]);
+  const [bulkSaving, setBulkSaving] = useState(false);
+  const masterCheckboxRef = useRef<HTMLInputElement>(null);
 
   const fetchData = useCallback(() => {
     const h = { 'x-user-id': getStoredUserId() ?? '' };
@@ -47,6 +61,7 @@ function AdminAcademyAulasContent() {
       setLessons(lessonsData);
       setModules(modulesData);
       setLoading(false);
+      setSelectedIds((prev) => prev.filter((id) => (lessonsData as Lesson[]).some((l) => l.id === id)));
     });
   }, [moduleId]);
 
@@ -54,6 +69,65 @@ function AdminAcademyAulasContent() {
     if (!userId) return;
     fetchData();
   }, [userId, fetchData]);
+
+  const allVisibleSelected =
+    lessons.length > 0 && lessons.every((l) => selectedIds.includes(l.id));
+  const someVisibleSelected = selectedIds.length > 0 && !allVisibleSelected;
+
+  useEffect(() => {
+    const el = masterCheckboxRef.current;
+    if (el) el.indeterminate = someVisibleSelected;
+  }, [someVisibleSelected]);
+
+  const toggleLessonSelected = (id: string) => {
+    setSelectedIds((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
+  };
+
+  const toggleSelectAllVisible = () => {
+    if (allVisibleSelected) {
+      const visible = new Set(lessons.map((l) => l.id));
+      setSelectedIds((s) => s.filter((id) => !visible.has(id)));
+    } else {
+      setSelectedIds((s) => [...new Set([...s, ...lessons.map((l) => l.id)])]);
+    }
+  };
+
+  const openBulkModal = () => {
+    setBulkRoleDraft([]);
+    setBulkModalOpen(true);
+  };
+
+  const applyBulkRoles = async () => {
+    if (selectedIds.length === 0) return;
+    setBulkSaving(true);
+    try {
+      const res = await fetch('/api/admin/academy/lessons/bulk-roles', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': getStoredUserId() ?? '',
+        },
+        body: JSON.stringify({
+          lessonIds: selectedIds,
+          allowed_role_codes: bulkRoleDraft.length > 0 ? bulkRoleDraft : null,
+        }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(j.error || 'Erro ao atualizar');
+        return;
+      }
+      setBulkModalOpen(false);
+      setSelectedIds([]);
+      fetchData();
+    } finally {
+      setBulkSaving(false);
+    }
+  };
+
+  const toggleBulkRole = (code: string) => {
+    setBulkRoleDraft((cur) => (cur.includes(code) ? cur.filter((c) => c !== code) : [...cur, code]));
+  };
 
   const getModuleTitle = (mid: string) => modules.find((m) => m.id === mid)?.title ?? '—';
   const currentModule = moduleId ? modules.find((m) => m.id === moduleId) : null;
@@ -193,6 +267,43 @@ function AdminAcademyAulasContent() {
           </div>
         )}
 
+        {!loading && lessons.length > 0 && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
+            <label className="flex cursor-pointer items-center gap-2 text-sm">
+              <input
+                ref={masterCheckboxRef}
+                type="checkbox"
+                checked={allVisibleSelected}
+                onChange={toggleSelectAllVisible}
+                className="rounded"
+              />
+              <span className="text-[var(--foreground)]">Selecionar todas nesta lista</span>
+            </label>
+            {selectedIds.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium text-[var(--zaploto-green)]">
+                  {selectedIds.length} selecionada{selectedIds.length !== 1 ? 's' : ''}
+                </span>
+                <button
+                  type="button"
+                  onClick={openBulkModal}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--zaploto-green)] px-3 py-1.5 text-sm font-medium text-white hover:opacity-90"
+                >
+                  <Users className="h-4 w-4" />
+                  Definir cargos em lote
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedIds([])}
+                  className="text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                >
+                  Limpar seleção
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         {loading ? (
           <div className="flex justify-center py-16">
             <Loader2 className="h-8 w-8 animate-spin text-[var(--zaploto-green)]" />
@@ -215,9 +326,6 @@ function AdminAcademyAulasContent() {
               return (
                 <li
                   key={l.id}
-                  draggable={!!moduleId}
-                  onDragStart={moduleId ? (e) => handleDragStart(e, l.id) : undefined}
-                  onDragEnd={moduleId ? handleDragEnd : undefined}
                   onDragOver={moduleId ? handleDragOver : undefined}
                   onDrop={moduleId ? (e) => handleDrop(e, l.id) : undefined}
                   className={`flex items-center gap-3 rounded-xl border bg-[var(--card-bg)] p-3 transition ${
@@ -226,9 +334,28 @@ function AdminAcademyAulasContent() {
                       : 'border-[var(--card-border)] hover:border-[var(--zaploto-green-border)]'
                   } ${reordering ? 'pointer-events-none' : ''}`}
                 >
+                  <label
+                    className="flex shrink-0 cursor-pointer items-center py-1"
+                    onClick={(e) => e.stopPropagation()}
+                    onMouseDown={(e) => e.stopPropagation()}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.includes(l.id)}
+                      onChange={() => toggleLessonSelected(l.id)}
+                      className="rounded"
+                      aria-label={`Selecionar ${l.title}`}
+                    />
+                  </label>
                   {/* Drag handle or index */}
                   {moduleId ? (
-                    <span className="cursor-grab active:cursor-grabbing text-[var(--muted-foreground)] shrink-0" title="Arraste para reordenar">
+                    <span
+                      draggable
+                      onDragStart={(e) => handleDragStart(e, l.id)}
+                      onDragEnd={handleDragEnd}
+                      className="cursor-grab active:cursor-grabbing text-[var(--muted-foreground)] shrink-0 touch-none"
+                      title="Arraste para reordenar"
+                    >
                       <GripVertical className="h-5 w-5" />
                     </span>
                   ) : (
@@ -251,6 +378,11 @@ function AdminAcademyAulasContent() {
                       }`}>
                         {l.is_published ? 'Publicado' : 'Rascunho'}
                       </span>
+                      {l.allowed_role_codes && l.allowed_role_codes.length > 0 && (
+                        <span className="shrink-0 rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400" title={roleRestrictionLabel(l.allowed_role_codes)}>
+                          Por cargo
+                        </span>
+                      )}
                     </div>
                     <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-[var(--muted-foreground)]">
                       <span>{getModuleTitle(l.module_id)}</span>
@@ -298,6 +430,76 @@ function AdminAcademyAulasContent() {
               );
             })}
           </ul>
+        )}
+
+        {bulkModalOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-4 sm:items-center"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="bulk-roles-title"
+          >
+            <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-5 shadow-xl">
+              <div className="mb-4 flex items-start justify-between gap-2">
+                <div>
+                  <h2 id="bulk-roles-title" className="text-lg font-bold">
+                    Cargos em lote
+                  </h2>
+                  <p className="mt-1 text-sm text-[var(--muted-foreground)]">
+                    Aplicar aos mesmos cargos em <strong>{selectedIds.length}</strong> aula
+                    {selectedIds.length !== 1 ? 's' : ''} selecionada{selectedIds.length !== 1 ? 's' : ''}.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setBulkModalOpen(false)}
+                  className="rounded-lg p-2 hover:bg-[var(--input-bg)]"
+                  aria-label="Fechar"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <p className="mb-3 text-xs text-[var(--muted-foreground)]">
+                Nenhum cargo marcado = aula visível para <strong>todos</strong> os perfis. Marque um ou mais para
+                restringir (substitui a configuração atual de cada aula selecionada).
+              </p>
+              <div className="mb-6 grid gap-2 sm:grid-cols-2">
+                {ZAPLOTO_ACADEMY_ROLE_OPTIONS.map(({ code, label }) => (
+                  <label
+                    key={code}
+                    className="flex cursor-pointer items-center gap-2 rounded-lg border border-[var(--card-border)] bg-[var(--input-bg)] px-3 py-2 text-sm"
+                  >
+                    <input
+                      type="checkbox"
+                      className="rounded"
+                      checked={bulkRoleDraft.includes(code)}
+                      onChange={() => toggleBulkRole(code)}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={bulkSaving}
+                  onClick={applyBulkRoles}
+                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-[var(--zaploto-green)] px-4 py-2.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50 sm:flex-none"
+                >
+                  {bulkSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  Aplicar
+                </button>
+                <button
+                  type="button"
+                  disabled={bulkSaving}
+                  onClick={() => setBulkModalOpen(false)}
+                  className="rounded-lg border border-[var(--card-border)] px-4 py-2.5 text-sm"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </Layout>

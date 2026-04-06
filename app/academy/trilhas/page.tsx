@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { BookOpen, Play, Loader2, ChevronRight } from 'lucide-react';
+import { useRequireAuth } from '@/utils/useRequireAuth';
 
 // thumbnail_url já vem resolvida pelo servidor
 function getThumbnailSrc(url: string | null): string | null {
@@ -33,15 +34,17 @@ const BOKEH = [
 ];
 
 export default function AcademyTrilhasPage() {
+  const { userId } = useRequireAuth();
   const [modules, setModules] = useState<Module[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch('/api/academy/modules')
+    const h: HeadersInit = userId ? { 'x-user-id': userId } : {};
+    fetch('/api/academy/modules', { headers: h })
       .then((r) => r.ok ? r.json() : [])
       .then(setModules)
       .finally(() => setLoading(false));
-  }, []);
+  }, [userId]);
 
   return (
     <div className="mx-auto max-w-screen-xl px-4 py-10 sm:px-6 lg:px-10">

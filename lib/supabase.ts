@@ -551,6 +551,7 @@ export interface Database {
           cta_type: 'internal' | 'external' | null;
           cta_url: string | null;
           cta_target: '_self' | '_blank';
+          allowed_role_codes: string[] | null;
           created_at: string;
           updated_at: string;
         };
@@ -573,6 +574,7 @@ export interface Database {
           cta_type?: 'internal' | 'external' | null;
           cta_url?: string | null;
           cta_target?: '_self' | '_blank';
+          allowed_role_codes?: string[] | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -595,6 +597,7 @@ export interface Database {
           cta_type?: 'internal' | 'external' | null;
           cta_url?: string | null;
           cta_target?: '_self' | '_blank';
+          allowed_role_codes?: string[] | null;
           created_at?: string;
           updated_at?: string;
         };

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { isLessonVisibleForProfile } from '@/lib/academy/lesson-role-access';
 
 const BUCKET = 'academy-assets';
 const SIGNED_URL_TTL = 14400; // 4 horas
@@ -54,9 +55,21 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Módulo não encontrado' }, { status: 404 });
     }
 
+    const viewerId =
+      req.headers.get('x-user-id') || req.nextUrl.searchParams.get('userId') || null;
+    let profileStatus: string | null = null;
+    if (viewerId) {
+      const { data: prof } = await supabaseServiceRole
+        .from('profiles')
+        .select('status')
+        .eq('id', viewerId)
+        .maybeSingle();
+      profileStatus = prof?.status ?? null;
+    }
+
     const { data, error } = await supabaseServiceRole
       .from('academy_lessons')
-      .select('id, title, slug, description, order_index, estimated_minutes, content_type, thumbnail_url')
+      .select('id, title, slug, description, order_index, estimated_minutes, content_type, thumbnail_url, allowed_role_codes')
       .eq('module_id', mod.id)
       .eq('is_published', true)
       .order('order_index', { ascending: true });
@@ -66,7 +79,16 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    const rows = data ?? [];
+    const rows = (data ?? [])
+      .filter((row) =>
+        isLessonVisibleForProfile(row.allowed_role_codes as string[] | null, profileStatus)
+      )
+      .map((row) => {
+        const { allowed_role_codes: _omit, ...pub } = row as typeof row & {
+          allowed_role_codes?: string[] | null;
+        };
+        return pub;
+      });
 
     // Resolve signed URLs em lote — uma única chamada para todas as thumbnails
     const paths = rows

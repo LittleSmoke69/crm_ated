@@ -61,38 +61,52 @@ export default function AcademyLessonPage() {
   const [markingComplete, setMarkingComplete] = useState(false);
   const [completed, setCompleted] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [loadError, setLoadError] = useState<'forbidden' | 'notfound' | null>(null);
 
   useEffect(() => {
     if (!lessonSlug) return;
+    setLoading(true);
+    setLoadError(null);
+    setLesson(null);
+    setLessonsInModule([]);
     (async () => {
       try {
+        const hdr: HeadersInit = userId ? { 'x-user-id': userId } : {};
         const [lessonRes, progRes] = await Promise.all([
-          fetch(`/api/academy/lessons/${lessonSlug}`),
+          fetch(`/api/academy/lessons/${lessonSlug}`, { headers: hdr }),
           userId
             ? fetch('/api/academy/progress', { headers: { 'x-user-id': userId } }).then((r) => r.ok ? r.json() : [])
             : Promise.resolve([]),
         ]);
-        if (lessonRes.ok) {
-          const data = await lessonRes.json();
-          setLesson(data);
-          setCompleted(data.id && progRes.some((p: ProgressItem) => p.lesson_id === data.id && p.status === 'completed'));
-          if (data.module?.slug) {
-            const listRes = await fetch(`/api/academy/lessons?moduleSlug=${encodeURIComponent(data.module.slug)}`);
-            if (listRes.ok) {
-              const listJson = await listRes.json();
-              const lessonsRows = Array.isArray(listJson?.lessons) ? listJson.lessons : [];
-              // Mantém apenas o shape que o componente usa para navegação
-              const mapped: LessonListItem[] = lessonsRows.map((l: any) => ({
-                id: String(l.id),
-                title: String(l.title ?? ''),
-                slug: String(l.slug ?? ''),
-                estimated_minutes: l.estimated_minutes ?? null,
-              }));
-              setLessonsInModule(mapped);
-            }
+        setProgress(progRes);
+        if (lessonRes.status === 403) {
+          setLoadError('forbidden');
+          return;
+        }
+        if (!lessonRes.ok) {
+          setLoadError('notfound');
+          return;
+        }
+        const data = await lessonRes.json();
+        setLesson(data);
+        setCompleted(data.id && progRes.some((p: ProgressItem) => p.lesson_id === data.id && p.status === 'completed'));
+        if (data.module?.slug) {
+          const listRes = await fetch(
+            `/api/academy/lessons?moduleSlug=${encodeURIComponent(data.module.slug)}`,
+            { headers: hdr }
+          );
+          if (listRes.ok) {
+            const listJson = await listRes.json();
+            const lessonsRows = Array.isArray(listJson?.lessons) ? listJson.lessons : [];
+            const mapped: LessonListItem[] = lessonsRows.map((l: { id: string; title?: string; slug?: string; estimated_minutes?: number | null }) => ({
+              id: String(l.id),
+              title: String(l.title ?? ''),
+              slug: String(l.slug ?? ''),
+              estimated_minutes: l.estimated_minutes ?? null,
+            }));
+            setLessonsInModule(mapped);
           }
         }
-        setProgress(progRes);
       } finally {
         setLoading(false);
       }
@@ -168,10 +182,40 @@ export default function AcademyLessonPage() {
     return null;
   };
 
-  if (loading || !lesson) {
+  if (loading) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-[var(--zaploto-green)]" />
+      </div>
+    );
+  }
+
+  if (loadError === 'forbidden') {
+    return (
+      <div className="mx-auto max-w-lg px-4 py-16 text-center">
+        <Lock className="mx-auto mb-4 h-12 w-12 text-[var(--muted-foreground)]" />
+        <h1 className="text-xl font-bold text-[var(--foreground)]">Aula não disponível para o seu perfil</h1>
+        <p className="mt-2 text-sm text-[var(--muted-foreground)]">
+          Este conteúdo é exclusivo para determinados cargos. Se acredita que deveria ter acesso, fale com o administrador.
+        </p>
+        <Link
+          href="/academy/trilhas"
+          className="mt-6 inline-flex rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] px-5 py-2.5 text-sm font-medium text-[var(--zaploto-green)] hover:border-[#4ade80]/50"
+        >
+          Ver trilhas disponíveis
+        </Link>
+      </div>
+    );
+  }
+
+  if (loadError === 'notfound' || !lesson) {
+    return (
+      <div className="mx-auto max-w-lg px-4 py-16 text-center">
+        <h1 className="text-xl font-bold">Aula não encontrada</h1>
+        <p className="mt-2 text-sm text-[var(--muted-foreground)]">Verifique o link ou volte às trilhas.</p>
+        <Link href="/academy/trilhas" className="mt-6 inline-block text-sm text-[var(--zaploto-green)] hover:underline">
+          ← Trilhas
+        </Link>
       </div>
     );
   }

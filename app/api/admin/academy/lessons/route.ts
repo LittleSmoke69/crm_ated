@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/middleware/permissions';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { parseAllowedRoleCodesFromBody } from '@/lib/academy/lesson-role-access';
 
 export async function GET(req: NextRequest) {
   try {
@@ -46,6 +47,7 @@ export async function POST(req: NextRequest) {
     cta_url?: string;
     cta_target?: '_self' | '_blank';
     thumbnail_url?: string | null;
+    allowed_role_codes?: string[] | null;
   };
   try {
     body = await req.json();
@@ -57,6 +59,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'module_id, title, slug e content_type obrigatórios' }, { status: 400 });
   }
   try {
+    const roleCodes = parseAllowedRoleCodesFromBody(body.allowed_role_codes);
     const insert = {
       module_id: body.module_id,
       title: body.title,
@@ -76,6 +79,7 @@ export async function POST(req: NextRequest) {
       cta_type: body.cta_type ?? null,
       cta_url: body.cta_url ?? null,
       cta_target: body.cta_target ?? '_self',
+      allowed_role_codes: roleCodes === undefined ? null : roleCodes,
     };
     const { data, error } = await supabaseServiceRole.from('academy_lessons').insert(insert).select().single();
     if (error) throw error;

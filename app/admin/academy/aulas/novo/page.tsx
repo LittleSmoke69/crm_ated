@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Save, Loader2 } from 'lucide-react';
 import { getStoredUserId } from '@/lib/utils/stored-user-id';
+import { ZAPLOTO_ACADEMY_ROLE_OPTIONS } from '@/lib/academy/lesson-role-access';
 
 type Module = { id: string; title: string; slug: string };
 
@@ -17,14 +18,33 @@ function AdminAcademyAulaNovaContent() {
   const { checking, userId } = useRequireAuth();
   const [modules, setModules] = useState<Module[]>([]);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<{
+    module_id: string;
+    title: string;
+    slug: string;
+    description: string;
+    order_index: number;
+    is_published: boolean;
+    content_type: 'vturb' | 'iframe' | 'text';
+    estimated_minutes: string;
+    vturb_project_id: string;
+    vturb_player_id: string;
+    vturb_aspect_ratio: string;
+    vturb_use_sdk: boolean;
+    iframe_html: string;
+    cta_label: string;
+    cta_type: 'internal' | 'external';
+    cta_url: string;
+    cta_target: '_self' | '_blank';
+    allowed_role_codes: string[] | null;
+  }>({
     module_id: defaultModuleId || '',
     title: '',
     slug: '',
     description: '',
     order_index: 0,
     is_published: false,
-    content_type: 'vturb' as 'vturb' | 'iframe' | 'text',
+    content_type: 'vturb',
     estimated_minutes: '',
     vturb_project_id: '',
     vturb_player_id: '',
@@ -32,9 +52,10 @@ function AdminAcademyAulaNovaContent() {
     vturb_use_sdk: true,
     iframe_html: '',
     cta_label: '',
-    cta_type: 'internal' as 'internal' | 'external',
+    cta_type: 'internal',
     cta_url: '',
-    cta_target: '_self' as '_self' | '_blank',
+    cta_target: '_self',
+    allowed_role_codes: null,
   });
 
   useEffect(() => {
@@ -73,6 +94,10 @@ function AdminAcademyAulaNovaContent() {
         cta_type: form.cta_type,
         cta_url: form.cta_url.trim() || null,
         cta_target: form.cta_target,
+        allowed_role_codes:
+          form.allowed_role_codes && form.allowed_role_codes.length > 0
+            ? form.allowed_role_codes
+            : null,
       };
       const res = await fetch('/api/admin/academy/lessons', {
         method: 'POST',
@@ -194,6 +219,31 @@ function AdminAcademyAulaNovaContent() {
               <option value="_self">_self</option>
               <option value="_blank">_blank</option>
             </select>
+          </div>
+          <hr className="border-[var(--card-border)]" />
+          <div>
+            <p className="mb-1 text-sm font-medium">Disponibilidade por cargo</p>
+            <p className="mb-3 text-xs text-[var(--muted-foreground)]">Nenhum marcado = todos os cargos.</p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {ZAPLOTO_ACADEMY_ROLE_OPTIONS.map(({ code, label }) => (
+                <label key={code} className="flex cursor-pointer items-center gap-2 rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="rounded"
+                    checked={!!form.allowed_role_codes?.includes(code)}
+                    onChange={() => {
+                      setForm((f) => {
+                        const cur = f.allowed_role_codes ? [...f.allowed_role_codes] : [];
+                        const has = cur.includes(code);
+                        const next = has ? cur.filter((c) => c !== code) : [...cur, code];
+                        return { ...f, allowed_role_codes: next.length === 0 ? null : next };
+                      });
+                    }}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
           </div>
           <label className="flex items-center gap-2">
             <input type="checkbox" checked={form.is_published} onChange={(e) => setForm({ ...form, is_published: e.target.checked })} />

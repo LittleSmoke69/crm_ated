@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/middleware/permissions';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { parseAllowedRoleCodesFromBody } from '@/lib/academy/lesson-role-access';
 
 export async function GET(
   _req: NextRequest,
@@ -52,6 +53,8 @@ export async function PATCH(
   for (const k of allowed) {
     if (body[k] !== undefined) update[k] = body[k];
   }
+  const roleCodes = parseAllowedRoleCodesFromBody(body.allowed_role_codes);
+  if (roleCodes !== undefined) update.allowed_role_codes = roleCodes;
   if (Object.keys(update).length === 0) return NextResponse.json({ error: 'Nenhum campo para atualizar' }, { status: 400 });
   update.updated_at = new Date().toISOString();
   try {

@@ -1,5 +1,6 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { isLessonVisibleForProfile } from '@/lib/academy/lesson-role-access';
 
 const BUCKET = 'academy-assets';
 const SIGNED_URL_TTL = 14400; // 4 horas
@@ -10,8 +11,20 @@ const SIGNED_URL_TTL = 14400; // 4 horas
  * Resolve signed URLs das thumbnails no servidor para o cliente não precisar
  * de um segundo round-trip por imagem.
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
+    const viewerId =
+      req.headers.get('x-user-id') || req.nextUrl.searchParams.get('userId') || null;
+    let profileStatus: string | null = null;
+    if (viewerId) {
+      const { data: prof } = await supabaseServiceRole
+        .from('profiles')
+        .select('status')
+        .eq('id', viewerId)
+        .maybeSingle();
+      profileStatus = prof?.status ?? null;
+    }
+
     const { data, error } = await supabaseServiceRole
       .from('academy_modules')
       .select('id, title, slug, description, order_index, thumbnail_url, tags')
@@ -23,7 +36,21 @@ export async function GET() {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    const rows = data ?? [];
+    const { data: lessonRows } = await supabaseServiceRole
+      .from('academy_lessons')
+      .select('module_id, allowed_role_codes')
+      .eq('is_published', true);
+
+    const moduleHasVisibleLesson = new Set<string>();
+    for (const l of lessonRows ?? []) {
+      if (
+        isLessonVisibleForProfile(l.allowed_role_codes as string[] | null, profileStatus)
+      ) {
+        moduleHasVisibleLesson.add(l.module_id);
+      }
+    }
+
+    const rows = (data ?? []).filter((m) => moduleHasVisibleLesson.has(m.id));
 
     // Coleta paths que ainda não são URLs públicas (http)
     const paths = rows
@@ -45,10 +72,13 @@ export async function GET() {
       }
     }
 
+    const cacheControl = viewerId
+      ? 'private, no-store'
+      : 'public, max-age=600, stale-while-revalidate=300';
+
     return NextResponse.json(rows, {
       headers: {
-        // Cache no browser por 10 min; CDN pode revalidar
-        'Cache-Control': 'public, max-age=600, stale-while-revalidate=300',
+        'Cache-Control': cacheControl,
       },
     });
   } catch (e) {

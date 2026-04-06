@@ -8,6 +8,7 @@ import Link from 'next/link';
 import { Save, Loader2, Plus, Trash2, Upload } from 'lucide-react';
 import { getStoredUserId } from '@/lib/utils/stored-user-id';
 import VturbPlayer from '@/components/academy/VturbPlayer';
+import { ZAPLOTO_ACADEMY_ROLE_OPTIONS } from '@/lib/academy/lesson-role-access';
 
 type Lesson = {
   id: string;
@@ -29,6 +30,7 @@ type Lesson = {
   cta_url: string | null;
   cta_target: '_self' | '_blank';
   thumbnail_url: string | null;
+  allowed_role_codes?: string[] | null;
 };
 
 type Module = { id: string; title: string };
@@ -79,6 +81,10 @@ export default function AdminAcademyAulaEditPage() {
           cta_url: lessonData.cta_url ?? '',
           cta_target: lessonData.cta_target ?? '_self',
           thumbnail_url: lessonData.thumbnail_url ?? '',
+          allowed_role_codes:
+            Array.isArray(lessonData.allowed_role_codes) && lessonData.allowed_role_codes.length > 0
+              ? lessonData.allowed_role_codes
+              : null,
         });
       }
       setModules(modulesData ?? []);
@@ -98,6 +104,10 @@ export default function AdminAcademyAulaEditPage() {
       if (payload.vturb_aspect_ratio === '') payload.vturb_aspect_ratio = null;
       else if (typeof payload.vturb_aspect_ratio === 'string') payload.vturb_aspect_ratio = parseFloat(payload.vturb_aspect_ratio as string);
       if (payload.thumbnail_url === '') payload.thumbnail_url = null;
+      if (payload.allowed_role_codes !== undefined && payload.allowed_role_codes !== null) {
+        if (!Array.isArray(payload.allowed_role_codes)) payload.allowed_role_codes = null;
+        else if ((payload.allowed_role_codes as string[]).length === 0) payload.allowed_role_codes = null;
+      }
       const res = await fetch(`/api/admin/academy/lessons/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', ...h() },
@@ -301,6 +311,39 @@ export default function AdminAcademyAulaEditPage() {
                 <option value="internal">Link interno</option>
                 <option value="external">Link externo</option>
               </select>
+            </div>
+          </section>
+
+          {/* Cargos */}
+          <section className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+            <h3 className="mb-2 text-sm font-semibold text-[var(--muted-foreground)]">Disponibilidade por cargo</h3>
+            <p className="mb-4 text-xs text-[var(--muted-foreground)]">
+              Nenhum cargo marcado = aula visível para <strong>todos</strong>. Marque um ou mais cargos para restringir (usa o mesmo código do perfil: <code className="text-[10px]">status</code>).
+            </p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {ZAPLOTO_ACADEMY_ROLE_OPTIONS.map(({ code, label }) => (
+                <label key={code} className="flex cursor-pointer items-center gap-2 rounded-lg border border-[var(--card-border)] bg-[var(--input-bg)] px-3 py-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="rounded"
+                    checked={
+                      Array.isArray(form.allowed_role_codes) &&
+                      (form.allowed_role_codes as string[]).includes(code)
+                    }
+                    onChange={() => {
+                      setForm((f) => {
+                        const cur = Array.isArray(f.allowed_role_codes)
+                          ? [...(f.allowed_role_codes as string[])]
+                          : [];
+                        const has = cur.includes(code);
+                        const next = has ? cur.filter((c) => c !== code) : [...cur, code];
+                        return { ...f, allowed_role_codes: next.length === 0 ? null : next };
+                      });
+                    }}
+                  />
+                  <span>{label}</span>
+                </label>
+              ))}
             </div>
           </section>
 

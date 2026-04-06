@@ -92,6 +92,7 @@ enforce_tenant_isolation.sql
 seed_zaploto_default_roles_and_sidebar.sql
 add_academy_lesson_thumbnail_and_comments.sql
 add_academy_to_zaploto_sidebar.sql
+add_academy_lesson_allowed_role_codes.sql
 add_anti_spam_user_level.sql
 add_is_central_to_zaploto_tenants.sql
 add_list_cleaning_dedup_whatsapp_permissions.sql
