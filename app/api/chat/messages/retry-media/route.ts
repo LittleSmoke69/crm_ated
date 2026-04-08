@@ -9,19 +9,12 @@ import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import {
+  extensionForWhatsAppMedia,
+  storageContentTypeForWhatsAppMedia,
+} from '@/lib/services/whatsapp-official-media-mime';
 
 const CHAT_MEDIA_BUCKET = 'chat-media';
-
-const MIME_TO_EXT: Record<string, string> = {
-  'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif',
-  'audio/ogg': '.ogg', 'audio/mpeg': '.mp3', 'audio/mp4': '.m4a',
-  'video/mp4': '.mp4', 'video/3gpp': '.3gp', 'application/pdf': '.pdf',
-};
-
-function getExtension(mimeType: string | undefined): string {
-  if (!mimeType) return '.bin';
-  return MIME_TO_EXT[mimeType.toLowerCase()] || '.bin';
-}
 
 interface WaMediaObj {
   id?: string;
@@ -76,7 +69,7 @@ export async function POST(req: NextRequest) {
       return successResponse({ media_url: chatMsg.media_url }, 'Mídia já disponível');
     }
 
-    if (chatMsg.provider !== 'whatsapp_official' || !chatMsg.whatsapp_config_id) {
+    if (!chatMsg.whatsapp_config_id) {
       return errorResponse('Retry de mídia disponível apenas para mensagens do WhatsApp Oficial', 400);
     }
 
@@ -148,8 +141,10 @@ export async function POST(req: NextRequest) {
     }
 
     const buffer = Buffer.from(await downloadRes.arrayBuffer());
-    const contentType = metaJson.mime_type || mediaObj.mime_type || 'application/octet-stream';
-    const ext = getExtension(metaJson.mime_type || mediaObj.mime_type);
+    const mimeCombined = metaJson.mime_type || mediaObj.mime_type;
+    const mediaCat = chatMsg.media_type as 'image' | 'audio' | 'video' | 'document';
+    const ext = extensionForWhatsAppMedia(mimeCombined, mediaCat);
+    const contentType = storageContentTypeForWhatsAppMedia(mimeCombined, ext, mediaCat);
     const storagePath = `${config.id}/${mediaObj.id}${ext}`;
 
     const { error: uploadError } = await supabaseServiceRole.storage

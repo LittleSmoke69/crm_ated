@@ -1,4 +1,4 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
@@ -169,18 +169,31 @@ export async function POST(req: NextRequest) {
 
       const jobId = inserted.id as string;
       const requestOrigin = req.nextUrl.origin || req.headers.get('origin') || '';
-      const trigger = await triggerBackgroundWorker(requestOrigin, jobId);
 
-      return successResponse(
+      // Não aguarda o HTTP do worker: o trigger pode levar até ~12s e o cliente precisa
+      // da resposta em poucos segundos (Netlify/proxy). O cron `process-group-fetch-jobs`
+      // reprocessa jobs `pending` se o disparo falhar.
+      void triggerBackgroundWorker(requestOrigin, jobId).then((t) => {
+        if (!t.ok) {
+          console.warn(`[GROUPS] Background trigger finished without success jobId=${jobId} status=${t.status ?? 'n/a'}`);
+        }
+      });
+
+      return NextResponse.json(
         {
-          jobId,
-          async: true,
-          workerTriggered: trigger.ok,
-          message: trigger.ok
-            ? 'Busca iniciada. Use GET /api/groups/fetch?jobId=... até status completed.'
-            : 'Job criado; o processamento será retomado em até ~1 min (cron de fallback).',
+          success: true,
+          data: {
+            jobId,
+            async: true,
+            message:
+              'Job criado. Faça polling em GET /api/groups/fetch?jobId=... até status completed ou failed. O worker foi disparado em segundo plano; se falhar, o agendamento Netlify reinvoca em até ~1 min.',
+          },
+          message: 'Busca de grupos aceita para processamento assíncrono (202).',
         },
-        trigger.ok ? 'Busca de grupos iniciada em segundo plano.' : 'Busca agendada (worker será reinvocado).',
+        {
+          status: 202,
+          headers: { 'Retry-After': '2', 'Content-Type': 'application/json' },
+        },
       );
     }
 

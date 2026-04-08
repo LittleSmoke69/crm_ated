@@ -57,6 +57,7 @@ interface Message {
   timestamp: number;
   created_at: string;
   from_me: boolean;
+  instance_id?: string | null;
   media_type?: 'text' | 'image' | 'audio' | 'video' | 'document' | null;
   media_url?: string | null;
   caption?: string | null;
@@ -344,6 +345,7 @@ function AudioMessagePlayer({ src, fromMe }: { src: string; fromMe: boolean }) {
   const [duration, setDuration] = useState(0);
   const [waveform, setWaveform] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
+  const [elementError, setElementError] = useState(false);
   const barCount = 36;
 
   // Carregar duração e waveform ao montar
@@ -351,22 +353,36 @@ function AudioMessagePlayer({ src, fromMe }: { src: string; fromMe: boolean }) {
     const audio = audioRef.current;
     if (!audio || !src) return;
 
-    const onLoadedMetadata = () => setDuration(audio.duration);
+    setElementError(false);
+    setLoading(true);
+
+    const onLoadedMetadata = () => {
+      setElementError(false);
+      if (Number.isFinite(audio.duration) && audio.duration > 0) {
+        setDuration(audio.duration);
+      }
+    };
     const onTimeUpdate = () => setCurrentTime(audio.currentTime);
     const onEnded = () => setPlaying(false);
+    const onAudioError = () => {
+      setElementError(true);
+      setLoading(false);
+    };
 
     audio.addEventListener('loadedmetadata', onLoadedMetadata);
     audio.addEventListener('timeupdate', onTimeUpdate);
     audio.addEventListener('ended', onEnded);
+    audio.addEventListener('error', onAudioError);
 
     (async () => {
       try {
-        const res = await fetch(src, { mode: 'cors' });
+        const res = await fetch(src, { mode: 'cors', credentials: 'omit' });
+        if (!res.ok) throw new Error(String(res.status));
         const buf = await res.arrayBuffer();
         const ctx = new AudioContext();
         const decoded = await ctx.decodeAudioData(buf);
         const channel = decoded.getChannelData(0);
-        const blockSize = Math.floor(channel.length / barCount);
+        const blockSize = Math.max(1, Math.floor(channel.length / barCount));
         const peaks: number[] = [];
         for (let i = 0; i < barCount; i++) {
           let sum = 0;
@@ -389,18 +405,25 @@ function AudioMessagePlayer({ src, fromMe }: { src: string; fromMe: boolean }) {
       audio.removeEventListener('loadedmetadata', onLoadedMetadata);
       audio.removeEventListener('timeupdate', onTimeUpdate);
       audio.removeEventListener('ended', onEnded);
+      audio.removeEventListener('error', onAudioError);
     };
   }, [src]);
 
   const togglePlay = () => {
     const audio = audioRef.current;
-    if (!audio) return;
+    if (!audio || elementError) return;
     if (playing) {
       audio.pause();
-    } else {
-      audio.play().catch(() => {});
+      setPlaying(false);
+      return;
     }
-    setPlaying(!playing);
+    void audio
+      .play()
+      .then(() => setPlaying(true))
+      .catch(() => {
+        setElementError(true);
+        setPlaying(false);
+      });
   };
 
   const onWaveformClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -427,11 +450,12 @@ function AudioMessagePlayer({ src, fromMe }: { src: string; fromMe: boolean }) {
 
   return (
     <div className="flex items-center gap-2 min-w-[200px] max-w-[280px]">
-      <audio ref={audioRef} src={src} preload="metadata" />
+      <audio ref={audioRef} src={src} preload="metadata" crossOrigin="anonymous" />
       <button
         type="button"
         onClick={togglePlay}
-        className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center shadow-md ${fromMe ? 'bg-white/20 hover:bg-white/30 text-white' : 'bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500 text-gray-800 dark:text-gray-100'}`}
+        disabled={elementError}
+        className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center shadow-md disabled:opacity-40 disabled:cursor-not-allowed ${fromMe ? 'bg-white/20 hover:bg-white/30 text-white' : 'bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500 text-gray-800 dark:text-gray-100'}`}
         aria-label={playing ? 'Pausar' : 'Reproduzir'}
       >
         {playing ? <Pause className="w-5 h-5" fill="currentColor" /> : <Play className="w-5 h-5 ml-0.5" fill="currentColor" />}
@@ -480,6 +504,11 @@ function AudioMessagePlayer({ src, fromMe }: { src: string; fromMe: boolean }) {
           <span>{formatT(currentTime)}</span>
           <span>{formatT(duration)}</span>
         </div>
+        {elementError && (
+          <p className={`text-[10px] leading-snug ${fromMe ? 'text-white/75' : 'text-red-500 dark:text-red-400'}`}>
+            Áudio não reproduziu (rede ou formato). Se a mensagem tiver a opção, use &quot;Tentar baixar novamente&quot;.
+          </p>
+        )}
       </div>
     </div>
   );
@@ -499,7 +528,6 @@ function MessageContent({
   onMediaResolved?: (messageId: string, url: string) => void;
 }) {
   const [resolvedUrl, setResolvedUrl] = useState<string | null>(null);
-  const [autoRetried, setAutoRetried] = useState(false);
   const mediaUrl = resolvedUrl || msg.media_url;
   const textClass = fromMe ? 'text-white/90' : 'text-gray-600 dark:text-gray-300';
 
@@ -508,14 +536,19 @@ function MessageContent({
     onMediaResolved?.(msg.id, url);
   };
 
-  // Auto-retry: para mídia da API Oficial sem URL, tenta resolver automaticamente 1x ao montar
+  // Auto-retry: mídia oficial sem URL (webhook salvou antes do download). Áudio: 2 tentativas com intervalo maior (Meta/Storage lentos).
   useEffect(() => {
-    if (mediaUrl || autoRetried) return;
-    if (msg.provider !== 'whatsapp_official') return;
+    if (mediaUrl) return;
+    const isOfficial =
+      msg.provider === 'whatsapp_official' ||
+      (!!msg.whatsapp_config_id && msg.instance_id == null);
+    if (!isOfficial) return;
     if (!msg.media_type || msg.media_type === 'text') return;
 
-    const timer = setTimeout(async () => {
-      setAutoRetried(true);
+    const delays = msg.media_type === 'audio' ? [2000, 9000] : [1500];
+    const timers: ReturnType<typeof setTimeout>[] = [];
+
+    const run = async () => {
       try {
         const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') || '' : '';
         const res = await fetch('/api/chat/messages/retry-media', {
@@ -528,14 +561,20 @@ function MessageContent({
           handleMediaResolved(json.data.media_url);
         }
       } catch {
-        // silencioso — o botão de retry manual continua disponível
+        // silencioso — retry manual continua disponível
       }
-    }, 1500);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mediaUrl, autoRetried, msg.id, msg.provider, msg.media_type]);
+    };
 
-  const canRetry = msg.provider === 'whatsapp_official';
+    for (const ms of delays) {
+      timers.push(setTimeout(() => void run(), ms));
+    }
+    return () => timers.forEach(clearTimeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mediaUrl, msg.id, msg.provider, msg.media_type, msg.whatsapp_config_id, msg.instance_id]);
+
+  const canRetry =
+    msg.provider === 'whatsapp_official' ||
+    (!!msg.whatsapp_config_id && msg.instance_id == null);
 
   const retryFallback = (mediaType: string) =>
     canRetry ? (
@@ -2178,8 +2217,39 @@ export default function ChatPage() {
     });
   };
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
+  /**
+   * Ícone de entrega (bolhas enviadas).
+   * - `from_me` pode vir boolean ou string do JSON/Realtime.
+   * - WhatsApp Oficial: qualquer status que não seja falha explícita conta como ≥ enviado (evita relógio em
+   *   received/pending/updated/valores crus da Meta). delivered/read/played → ticks.
+   */
+  const getStatusIcon = (msg: Message) => {
+    const fromMe =
+      msg.from_me === true ||
+      (msg as { from_me?: unknown }).from_me === 'true' ||
+      (msg as { from_me?: unknown }).from_me === 1;
+    const raw = String(msg.status ?? 'pending')
+      .trim()
+      .toLowerCase();
+    let s = raw || 'pending';
+
+    const isOfficialChannel =
+      msg.provider === 'whatsapp_official' ||
+      (!!msg.whatsapp_config_id && msg.instance_id == null);
+
+    const isOfficialOutbound = fromMe && isOfficialChannel;
+
+    const failed = new Set(['failed', 'error', 'undelivered', 'rejected']);
+    const readLike = new Set(['read', 'played', 'listened']);
+    if (isOfficialOutbound && !failed.has(s)) {
+      if (readLike.has(s)) s = 'read';
+      else if (s === 'delivered') s = 'delivered';
+      else s = 'sent';
+    } else if (readLike.has(s)) {
+      s = 'read';
+    }
+
+    switch (s) {
       case 'sent': return <Check className="w-4 h-4" />;
       case 'delivered': return <CheckCheck className="w-4 h-4" />;
       case 'read': return <CheckCheck className="w-4 h-4" style={{ color: '#8CD955' }} />;
@@ -3476,7 +3546,7 @@ export default function ChatPage() {
                                   }`}
                                 >
                                   <span className="text-xs">{formatMessageTime(msg.timestamp)}</span>
-                                  {msg.from_me && getStatusIcon(msg.status)}
+                                  {msg.from_me && getStatusIcon(msg)}
                                 </div>
                               </div>
                               {/* Botão apagar — aparece no hover */}

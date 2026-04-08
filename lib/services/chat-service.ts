@@ -46,6 +46,52 @@ export interface ChatConversation {
 
 import { supabaseServiceRole } from './supabase-service';
 
+const SAVE_MESSAGE_MAX_RETRIES = 4;
+const SAVE_MESSAGE_BASE_DELAY_MS = 400;
+const CONVERSATION_UPDATE_MAX_RETRIES = 3;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Erros de rede / indisponibilidade temporária do PostgREST (undici, CF, etc.). */
+function isTransientSupabaseOrNetworkError(err: unknown): boolean {
+  const parts: string[] = [];
+  let e: unknown = err;
+  for (let depth = 0; depth < 10 && e != null; depth += 1) {
+    if (typeof e === 'object' && e !== null) {
+      const o = e as Record<string, unknown>;
+      if (typeof o.message === 'string') parts.push(o.message);
+      if (o.code != null) parts.push(String(o.code));
+      if (typeof o.details === 'string') parts.push(o.details);
+      e = o.cause;
+    } else {
+      parts.push(String(e));
+      break;
+    }
+  }
+  const text = parts.join(' ').toLowerCase();
+  return (
+    text.includes('fetch failed') ||
+    text.includes('econnreset') ||
+    text.includes('etimedout') ||
+    text.includes('enotfound') ||
+    text.includes('network') ||
+    text.includes('socket') ||
+    text.includes('bad gateway') ||
+    text.includes('service unavailable') ||
+    text.includes('gateway timeout') ||
+    text.includes('cloudflare') ||
+    text.includes('502') ||
+    text.includes('503') ||
+    text.includes('504') ||
+    text.includes('525') ||
+    text.includes('connect timeout') ||
+    text.includes('und_err_connect_timeout') ||
+    text.includes('connection terminated')
+  );
+}
+
 function toTimestampNumber(ts: number | string | null | undefined): number {
   if (!ts) return Math.floor(Date.now() / 1000);
   return typeof ts === 'string' ? parseInt(ts, 10) : ts;
@@ -164,21 +210,32 @@ export class ChatService {
 
   async upsertConversation(conversation: ChatConversation) {
     // conflict_key é coluna gerada (i-{instance_id} ou w-{whatsapp_config_id}); evita índices parciais no ON CONFLICT
-    const { data, error } = await supabaseServiceRole
-      .from('chat_conversations')
-      .upsert(conversation, { onConflict: 'conflict_key,remote_jid' })
-      .select()
-      .single();
+    for (let attempt = 1; attempt <= SAVE_MESSAGE_MAX_RETRIES; attempt += 1) {
+      const { data, error } = await supabaseServiceRole
+        .from('chat_conversations')
+        .upsert(conversation, { onConflict: 'conflict_key,remote_jid' })
+        .select()
+        .single();
 
-    if (error) throw error;
-    return data;
+      if (!error && data) return data;
+
+      const transient = error != null && isTransientSupabaseOrNetworkError(error);
+      if (transient && attempt < SAVE_MESSAGE_MAX_RETRIES) {
+        const jitterMs = Math.floor(Math.random() * 120);
+        await sleep(SAVE_MESSAGE_BASE_DELAY_MS * 2 ** (attempt - 1) + jitterMs);
+        continue;
+      }
+
+      if (error) throw error;
+    }
+    throw new Error('upsertConversation: falha após retentativas');
   }
 
   /**
-   * Persiste uma mensagem com deduplicação automática (ignoreDuplicates).
-   * Após inserção bem-sucedida, atualiza last_message_preview, last_message_at
-   * e, se direction='in', last_customer_message_at na conversa.
-   * Retorna null quando a mensagem já existia (duplicata ignorada).
+   * Persiste mensagem com upsert em (conversation_id, message_id).
+   * Usa ON CONFLICT DO UPDATE para que envios pela API (ex.: WhatsApp Oficial) sobrescrevam
+   * linhas criadas antes pelo webhook com o mesmo wamid (status received/pending → sent).
+   * Retorna null só em casos excepcionais (ex.: PGRST116 / violação de unicidade legada).
    */
   async saveMessage(message: ChatMessage): Promise<ChatMessage | null> {
     const normalized: ChatMessage = {
@@ -186,21 +243,45 @@ export class ChatService {
       timestamp: toTimestampNumber(message.timestamp as number | string),
     };
 
-    const { data: msg, error } = await supabaseServiceRole
-      .from('chat_messages')
-      .upsert(normalized, {
-        onConflict: 'conversation_id,message_id',
-        ignoreDuplicates: true,
-      })
-      .select()
-      .single();
+    let msg: ChatMessage | null = null;
 
-    // PGRST116 = no rows returned (ignoreDuplicates suprimiu o INSERT)
-    // 23505 = unique_violation (fallback de segurança)
-    if (error?.code === 'PGRST116' || error?.code === '23505') {
-      return null; // duplicata esperada — sem log
+    for (let attempt = 1; attempt <= SAVE_MESSAGE_MAX_RETRIES; attempt += 1) {
+      const { data: row, error } = await supabaseServiceRole
+        .from('chat_messages')
+        .upsert(normalized, {
+          onConflict: 'conversation_id,message_id',
+          ignoreDuplicates: false,
+        })
+        .select()
+        .single();
+
+      // PGRST116 = nenhuma linha retornada (raro com upsert update)
+      // 23505 = unique_violation em outro índice (fallback)
+      if (error?.code === 'PGRST116' || error?.code === '23505') {
+        return null;
+      }
+
+      if (!error && row) {
+        msg = row as ChatMessage;
+        break;
+      }
+
+      const transient = error != null && isTransientSupabaseOrNetworkError(error);
+      if (transient && attempt < SAVE_MESSAGE_MAX_RETRIES) {
+        const jitterMs = Math.floor(Math.random() * 120);
+        const delayMs = SAVE_MESSAGE_BASE_DELAY_MS * 2 ** (attempt - 1) + jitterMs;
+        console.warn(
+          `[Zaploto Chat] saveMessage: falha transitória (tentativa ${attempt}/${SAVE_MESSAGE_MAX_RETRIES}), nova tentativa em ${delayMs}ms`,
+          error instanceof Error ? error.message : error
+        );
+        await sleep(delayMs);
+        continue;
+      }
+
+      if (error) throw error;
+      return null;
     }
-    if (error) throw error;
+
     if (!msg) return null;
 
     // Atualizar campos de resumo na conversa pai
@@ -221,10 +302,22 @@ export class ChatService {
         updateFields.last_customer_message_at = lastMessageAt;
       }
 
-      await supabaseServiceRole
-        .from('chat_conversations')
-        .update(updateFields)
-        .eq('id', normalized.conversation_id);
+      for (let attempt = 1; attempt <= CONVERSATION_UPDATE_MAX_RETRIES; attempt += 1) {
+        const { error: updErr } = await supabaseServiceRole
+          .from('chat_conversations')
+          .update(updateFields)
+          .eq('id', normalized.conversation_id);
+
+        if (!updErr) break;
+
+        const transient = isTransientSupabaseOrNetworkError(updErr);
+        if (transient && attempt < CONVERSATION_UPDATE_MAX_RETRIES) {
+          const jitterMs = Math.floor(Math.random() * 80);
+          await sleep(SAVE_MESSAGE_BASE_DELAY_MS * attempt + jitterMs);
+          continue;
+        }
+        throw updErr;
+      }
     }
 
     return msg as ChatMessage;

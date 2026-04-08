@@ -7,6 +7,10 @@
 
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { chatService } from '@/lib/services/chat-service';
+import {
+  extensionForWhatsAppMedia,
+  storageContentTypeForWhatsAppMedia,
+} from '@/lib/services/whatsapp-official-media-mime';
 
 // ---------------------------------------------------------------------------
 // Tipos (espelho do payload Meta)
@@ -166,18 +170,6 @@ class WhatsAppOfficialProcessingError extends Error {
   }
 }
 
-const MIME_TO_EXT: Record<string, string> = {
-  'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif',
-  'audio/ogg': '.ogg', 'audio/mpeg': '.mp3', 'audio/mp4': '.m4a',
-  'video/mp4': '.mp4', 'video/3gpp': '.3gp', 'application/pdf': '.pdf',
-};
-
-function getExtension(mimeType: string | undefined): string {
-  if (!mimeType) return '.bin';
-  const ext = MIME_TO_EXT[mimeType.toLowerCase()];
-  return ext || '.bin';
-}
-
 function parseWhatsAppPayload(value: WaValue): ParsedMessage | null {
   const msg = value.messages?.[0];
   const contact = value.contacts?.[0];
@@ -224,12 +216,31 @@ function fetchWithTimeout(url: string, opts: RequestInit, timeoutMs: number): Pr
   return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(timer));
 }
 
+/** Timeouts de TCP/TLS para graph.facebook.com (undici) — permite nova tentativa em vez de falhar o webhook. */
+function isMetaConnectTimeoutError(err: unknown): boolean {
+  let e: unknown = err;
+  for (let i = 0; i < 12 && e != null; i += 1) {
+    if (typeof e === 'object' && e !== null) {
+      const o = e as { code?: string; name?: string; message?: string; cause?: unknown };
+      if (o.code === 'UND_ERR_CONNECT_TIMEOUT') return true;
+      if (o.name === 'ConnectTimeoutError') return true;
+      const msg = (o.message ?? '').toLowerCase();
+      if (msg.includes('connect timeout')) return true;
+      e = o.cause;
+    } else {
+      break;
+    }
+  }
+  return false;
+}
+
 async function resolveAndStoreMediaOnce(
   mediaId: string,
   accessToken: string,
   graphVersion: string,
   mimeType: string | undefined,
-  configId: string
+  configId: string,
+  mediaCategory: 'audio' | 'image' | 'video' | 'document' | 'sticker'
 ): Promise<string | null> {
   const version = graphVersion.replace(/^v/, '');
   const mediaApiUrl = `https://graph.facebook.com/v${version}/${mediaId}`;
@@ -270,8 +281,9 @@ async function resolveAndStoreMediaOnce(
     return null;
   }
   const buffer = Buffer.from(await downloadRes.arrayBuffer());
-  const contentType = metaJson.mime_type || mimeType || 'application/octet-stream';
-  const ext = getExtension(metaJson.mime_type || mimeType);
+  const mimeFromMeta = metaJson.mime_type || mimeType;
+  const ext = extensionForWhatsAppMedia(mimeFromMeta, mediaCategory);
+  const contentType = storageContentTypeForWhatsAppMedia(mimeFromMeta, ext, mediaCategory);
   const storagePath = `${configId}/${mediaId}${ext}`;
   const { error: uploadError } = await supabaseServiceRole.storage
     .from(CHAT_MEDIA_BUCKET)
@@ -289,11 +301,19 @@ async function resolveAndStoreMedia(
   accessToken: string,
   graphVersion: string,
   mimeType: string | undefined,
-  configId: string
+  configId: string,
+  mediaCategory: 'audio' | 'image' | 'video' | 'document' | 'sticker'
 ): Promise<string | null> {
   for (let attempt = 0; attempt <= MEDIA_MAX_RETRIES; attempt++) {
     try {
-      const url = await resolveAndStoreMediaOnce(mediaId, accessToken, graphVersion, mimeType, configId);
+      const url = await resolveAndStoreMediaOnce(
+        mediaId,
+        accessToken,
+        graphVersion,
+        mimeType,
+        configId,
+        mediaCategory
+      );
       if (url) return url;
       if (attempt < MEDIA_MAX_RETRIES) {
         await new Promise((r) => setTimeout(r, MEDIA_RETRY_DELAY_MS));
@@ -307,6 +327,16 @@ async function resolveAndStoreMedia(
           await new Promise((r) => setTimeout(r, MEDIA_RETRY_DELAY_MS));
         }
         continue;
+      }
+      if (isMetaConnectTimeoutError(err) || msg.toLowerCase().includes('fetch failed')) {
+        console.warn(
+          `[Zaploto Chat] Rede/timeout ao falar com a Meta para mídia ${mediaId} (tentativa ${attempt + 1}/${MEDIA_MAX_RETRIES + 1})`
+        );
+        if (attempt < MEDIA_MAX_RETRIES) {
+          await new Promise((r) => setTimeout(r, MEDIA_RETRY_DELAY_MS));
+          continue;
+        }
+        return null;
       }
       throw err;
     }
@@ -391,7 +421,14 @@ async function handleInboundMessages(value: WaValue): Promise<{ tokenAlert: bool
         const mimeType = mediaObj?.mime_type;
         if (mediaId && accessToken) {
           try {
-            mediaUrl = await resolveAndStoreMedia(mediaId, accessToken, graphVersion, mimeType, config.id);
+            mediaUrl = await resolveAndStoreMedia(
+              mediaId,
+              accessToken,
+              graphVersion,
+              mimeType,
+              config.id,
+              msg.type as 'image' | 'audio' | 'video' | 'document' | 'sticker'
+            );
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
             if (errMsg.includes(WHATSAPP_OFFICIAL_TOKEN_ERROR_MSG)) {
@@ -440,12 +477,27 @@ async function handleInboundMessages(value: WaValue): Promise<{ tokenAlert: bool
   return { tokenAlert, errors };
 }
 
-const STATUS_MAP: Record<string, string> = { sent: 'sent', delivered: 'delivered', read: 'read', failed: 'failed' };
+/** Statuses da Meta → valores da UI / coluna chat_messages.status (evita gravar "updated" e quebrar ícones). */
+const STATUS_MAP: Record<string, string> = {
+  sent: 'sent',
+  delivered: 'delivered',
+  read: 'read',
+  failed: 'failed',
+  deleted: 'failed',
+  /** Áudio: destinatário reproduziu — equivalente a "lido" para ticks. */
+  played: 'read',
+  listened: 'read',
+  pending: 'sent',
+};
 
 async function handleStatusUpdates(value: WaValue): Promise<void> {
   const statuses = value.statuses ?? [];
   for (const st of statuses) {
-    const newStatus = STATUS_MAP[st.status ?? ''] ?? st.status ?? 'updated';
+    const raw = String(st.status ?? '')
+      .trim()
+      .toLowerCase();
+    const newStatus =
+      raw && STATUS_MAP[raw] !== undefined ? STATUS_MAP[raw] : raw ? raw : 'sent';
     await supabaseServiceRole
       .from('chat_messages')
       .update({ status: newStatus })
@@ -461,7 +513,7 @@ function isWhatsAppOfficialPayload(payload: unknown): payload is { object: strin
 /**
  * Processa o payload bruto da Meta (objeto com entry[].changes[].value)
  * e organiza os dados em chat_conversations e chat_messages.
- * Idempotente para mensagens (saveMessage usa upsert com ignoreDuplicates).
+ * Idempotente para mensagens (saveMessage usa upsert com ON CONFLICT UPDATE).
  * Retorna tokenAlert: true se houve erro de token ao baixar mídia (para a API sinalizar alerta na UI).
  */
 export async function processMetaPayloadToChat(payload: unknown): Promise<{ tokenAlert?: boolean }> {

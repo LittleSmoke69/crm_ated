@@ -77,9 +77,17 @@ async function postMessages(
   }
 
   if (parsed && typeof parsed === 'object') {
-    return parsed as { messages: Array<{ id: string }> };
+    const obj = parsed as { messages?: Array<{ id?: string }> };
+    const mid = obj.messages?.[0]?.id;
+    if (typeof mid !== 'string' || !mid.trim()) {
+      throw new Error(
+        `Resposta da Meta sem messages[0].id (envio não pode ser confirmado). Corpo: ${safeText}`
+      );
+    }
+    return { messages: [{ id: mid }] };
   }
-  return { messages: [] };
+
+  throw new Error(`Resposta inválida da Meta após envio: ${safeText}`);
 }
 
 export async function sendText(

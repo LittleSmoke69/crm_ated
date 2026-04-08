@@ -195,7 +195,9 @@ export default function MaturadorPage() {
     const tp = Math.max(1, Math.ceil(masterInstances.length / instancesPerPage) || 1);
     setInstancesPage((p) => (p > tp ? tp : p));
   }, [masterInstances.length, instancesPerPage]);
-  const loadDataRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  const loadDataRef = useRef<(opts?: { background?: boolean }) => Promise<void>>(() => Promise.resolve());
+  /** Após o primeiro GET bem-sucedido, recarregamentos usam modo silencioso (sem trocar a lista inteira por “Carregando…”). */
+  const dataReadyRef = useRef(false);
 
   useEffect(() => {
     setMounted(true);
@@ -216,7 +218,7 @@ export default function MaturadorPage() {
   // Carrega dados quando confirmado que pode acessar
   useEffect(() => {
     if (canAccess && userId) {
-      loadData();
+      loadData({ background: dataReadyRef.current });
     }
   }, [canAccess, userId, statusFilter]);
 
@@ -237,7 +239,7 @@ export default function MaturadorPage() {
   useEffect(() => {
     if (!canAccess || !userId || !hasRunningJobs) return;
     const interval = setInterval(async () => {
-      await loadDataRef.current?.();
+      await loadDataRef.current?.({ background: true });
 
       // Auto-dispara process-now se algum job running tiver steps atrasados ou pendentes
       // Garante continuidade mesmo que o cron de 1 min não esteja ativo ou o tick anterior tenha encadeado
@@ -309,7 +311,7 @@ export default function MaturadorPage() {
             results: data.results ?? [],
           },
         }));
-        await loadData();
+        await loadData({ background: true });
       } else {
         alert(data.error || 'Erro ao processar atrasados');
       }
@@ -432,7 +434,7 @@ export default function MaturadorPage() {
         return;
       }
       setShowPlanModal(false);
-      await loadData();
+      await loadData({ background: true });
     } catch (e) {
       console.error(e);
       alert('Erro ao salvar plano');
@@ -453,7 +455,7 @@ export default function MaturadorPage() {
         alert(data.error || 'Erro ao excluir');
         return;
       }
-      await loadData();
+      await loadData({ background: true });
     } catch (e) {
       console.error(e);
       alert('Erro ao excluir plano');
@@ -492,9 +494,12 @@ export default function MaturadorPage() {
     }
   }
 
-  async function loadData() {
+  async function loadData(opts?: { background?: boolean }) {
+    const background = opts?.background === true;
     try {
-      setLoading(true);
+      if (!background) {
+        setLoading(true);
+      }
 
       const [jobsRes, plansRes, instancesRes, virginCountRes] = await Promise.all([
         fetch(`/api/maturation/jobs?status=${statusFilter === 'all' ? '' : statusFilter}`, {
@@ -540,10 +545,13 @@ export default function MaturadorPage() {
         return next;
       });
       setVirginMessagesCount(typeof virginCountData?.count === 'number' ? virginCountData.count : 0);
+      dataReadyRef.current = true;
     } catch (error) {
       console.error('Erro ao carregar dados:', error);
     } finally {
-      setLoading(false);
+      if (!background) {
+        setLoading(false);
+      }
     }
   }
 
@@ -563,7 +571,7 @@ export default function MaturadorPage() {
       const isConnected = uiStatus === 'connected';
       
       // Refaz o carregamento da lista para trazer o status atualizado do banco (API já atualizou para 'ok')
-      await loadData();
+      await loadData({ background: true });
       
       if (isConnected) {
         alert(`✅ ${instanceName} está conectada!`);
@@ -626,7 +634,7 @@ export default function MaturadorPage() {
       const data = await res.json();
 
       if (res.ok && data.job_id) {
-        await loadData();
+        await loadData({ background: true });
         setSelectedPlanId('');
         const count = data.job_ids?.length ?? 1;
         if (data.campaign_id && count > 1) {
@@ -665,7 +673,7 @@ export default function MaturadorPage() {
         },
         body: JSON.stringify({ status: 'paused' }),
       });
-      await loadData();
+      await loadData({ background: true });
     } catch (error) {
       console.error('Erro ao pausar job:', error);
     }
@@ -681,7 +689,7 @@ export default function MaturadorPage() {
         },
         body: JSON.stringify({ status: 'running' }),
       });
-      await loadData();
+      await loadData({ background: true });
     } catch (error) {
       console.error('Erro ao retomar job:', error);
     }
@@ -701,7 +709,7 @@ export default function MaturadorPage() {
         },
         body: JSON.stringify({ status: 'aborted' }),
       });
-      await loadData();
+      await loadData({ background: true });
     } catch (error) {
       console.error('Erro ao abortar job:', error);
     }
@@ -724,7 +732,7 @@ export default function MaturadorPage() {
         delete next[jobId];
         return next;
       });
-      await loadData();
+      await loadData({ background: true });
     } catch (e) {
       console.error(e);
       alert('Erro ao remover');
@@ -743,7 +751,7 @@ export default function MaturadorPage() {
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
           alert((data as { error?: string }).error || `Erro ao remover job ${j.instance_name || j.id}`);
-          await loadData();
+          await loadData({ background: true });
           return;
         }
         setCatchUpResults((prev) => {
@@ -752,7 +760,7 @@ export default function MaturadorPage() {
           return next;
         });
       }
-      await loadData();
+      await loadData({ background: true });
     } catch (e) {
       console.error(e);
       alert('Erro ao remover campanha');
@@ -907,7 +915,7 @@ export default function MaturadorPage() {
         console.error(e);
       }
     }
-    await loadData();
+    await loadData({ background: true });
   }
 
   async function handleResumeCampaign(cj: MaturationJob[]) {
@@ -923,7 +931,7 @@ export default function MaturadorPage() {
         console.error(e);
       }
     }
-    await loadData();
+    await loadData({ background: true });
   }
 
   async function handleAbortCampaign(cj: MaturationJob[]) {
@@ -940,7 +948,13 @@ export default function MaturadorPage() {
         console.error(e);
       }
     }
-    await loadData();
+    await loadData({ background: true });
+  }
+
+  /** Índice 0-based do step em `processing`, ou -1. */
+  function findMaturationProcessingStepIndex(stepStatuses: MaturationStepStatus[] | undefined): number {
+    if (!stepStatuses?.length) return -1;
+    return stepStatuses.findIndex((s) => s === 'processing');
   }
 
   // Sem permissão (nem admin nem cargo com Maturador na sidebar): acesso negado
@@ -1501,6 +1515,18 @@ export default function MaturadorPage() {
                       const anyRunning = item.jobs.some((j) => j.status === 'running');
                       const anyPaused = item.jobs.some((j) => j.status === 'paused');
                       const campaignReadonly = item.jobs.some((j) => j.readonly_controls === true);
+                      const campaignProcessingLines = item.jobs
+                        .filter((j) => j.status === 'running')
+                        .map((j) => {
+                          const pIdx = findMaturationProcessingStepIndex(j.step_statuses);
+                          if (pIdx < 0) return null;
+                          return {
+                            jobId: j.id,
+                            instanceLabel: j.instance_name || j.id.slice(0, 8),
+                            stepNum: pIdx + 1,
+                          };
+                        })
+                        .filter(Boolean) as { jobId: string; instanceLabel: string; stepNum: number }[];
                       return (
                         <div key={item.campaign_id} className="p-4 hover:bg-slate-50/50 dark:hover:bg-[#333]/80 transition-colors">
                           <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
@@ -1537,6 +1563,27 @@ export default function MaturadorPage() {
                                   style={{ width: `${agg.progress_percent}%` }}
                                 />
                               </div>
+                              {campaignProcessingLines.length > 0 && (
+                                <div
+                                  className="mt-2 rounded-lg border border-amber-200/90 dark:border-amber-800/55 bg-amber-50/90 dark:bg-amber-950/35 px-3 py-2 text-xs text-amber-950 dark:text-amber-100"
+                                  role="status"
+                                  aria-live="polite"
+                                >
+                                  <div className="flex items-start gap-2">
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 mt-0.5 text-amber-700 dark:text-amber-300" aria-hidden />
+                                    <div className="min-w-0 space-y-1">
+                                      <p className="font-medium text-amber-900 dark:text-amber-50">Envio em andamento</p>
+                                      {campaignProcessingLines.map((line) => (
+                                        <p key={line.jobId} className="text-amber-900/95 dark:text-amber-100/95">
+                                          Instância <span className="font-semibold">{line.instanceLabel}</span>
+                                          {' · '}
+                                          step <span className="font-mono font-semibold tabular-nums">{line.stepNum}</span>
+                                        </p>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
                               {agg.status === 'running' && agg.next_scheduled_at != null && (
                                 <div className="mt-2 flex flex-wrap items-center gap-2">
                                   <span className="inline-flex items-center gap-1.5 text-xs text-slate-600 dark:text-[#aaa]">
@@ -1559,7 +1606,9 @@ export default function MaturadorPage() {
                               </button>
                               {expanded && (
                                 <ul className="mt-2 space-y-2 border-t border-slate-100 dark:border-[#404040] pt-2">
-                                  {item.jobs.map((sj) => (
+                                  {item.jobs.map((sj) => {
+                                    const meshProcIdx = findMaturationProcessingStepIndex(sj.step_statuses);
+                                    return (
                                     <li
                                       key={sj.id}
                                       className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 dark:text-[#aaa]"
@@ -1567,12 +1616,21 @@ export default function MaturadorPage() {
                                       <span className="font-medium text-slate-700 dark:text-[#ccc]">
                                         {sj.instance_name || sj.id.slice(0, 8)}
                                       </span>
-                                      <span>
-                                        {sj.steps_sent ?? sj.progress_done}/{sj.progress_total} enviados ·{' '}
-                                        <span>{getMaturationStatusLabelPt(sj.status)}</span>
+                                      <span className="flex flex-wrap items-center gap-1">
+                                        {meshProcIdx >= 0 && (
+                                          <span className="inline-flex items-center gap-1 text-amber-800 dark:text-amber-200 font-medium">
+                                            <Loader2 className="w-3 h-3 animate-spin shrink-0" aria-hidden />
+                                            enviando step {meshProcIdx + 1}
+                                          </span>
+                                        )}
+                                        <span>
+                                          {sj.steps_sent ?? sj.progress_done}/{sj.progress_total} enviados ·{' '}
+                                          <span>{getMaturationStatusLabelPt(sj.status)}</span>
+                                        </span>
                                       </span>
                                     </li>
-                                  ))}
+                                    );
+                                  })}
                                 </ul>
                               )}
                             </div>
@@ -1639,6 +1697,8 @@ export default function MaturadorPage() {
                         ? job.steps_pending
                         : Math.max(0, job.progress_total - sentCount - (job.steps_failed ?? 0));
                     const jobReadonly = job.readonly_controls === true;
+                    const processingStepIdx = findMaturationProcessingStepIndex(stepStatuses);
+                    const instanceLabel = job.instance_name || 'instância';
 
                     return (
                     <div key={job.id} className="p-4 hover:bg-slate-50/50 dark:hover:bg-[#333]/80 transition-colors">
@@ -1684,7 +1744,7 @@ export default function MaturadorPage() {
                                   : st === 'failed'
                                     ? `Step ${stepNum}: falhou`
                                     : st === 'processing'
-                                      ? `Step ${stepNum}: enviando…`
+                                      ? `Step ${stepNum}: enviando agora (${instanceLabel})`
                                       : isNextToSend
                                         ? `Step ${stepNum}: aguardando horário de envio`
                                         : `Step ${stepNum}: pendente`;
@@ -1694,7 +1754,15 @@ export default function MaturadorPage() {
                                   className={`inline-flex items-center justify-center w-6 h-6 rounded text-xs font-medium ${cls}`}
                                   title={title}
                                 >
-                                  {st === 'sent' ? '✓' : st === 'failed' ? '✗' : stepNum}
+                                  {st === 'sent' ? (
+                                    '✓'
+                                  ) : st === 'failed' ? (
+                                    '✗'
+                                  ) : st === 'processing' ? (
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" aria-label={`Step ${stepNum} enviando`} />
+                                  ) : (
+                                    stepNum
+                                  )}
                                 </span>
                               );
                             })}
@@ -1704,6 +1772,22 @@ export default function MaturadorPage() {
                               {(job.steps_failed ?? 0) > 0 ? ` · ${job.steps_failed} falha(s)` : ''}
                             </span>
                           </div>
+                          {job.status === 'running' && processingStepIdx >= 0 && (
+                            <div
+                              className="mt-2 rounded-lg border border-amber-200/90 dark:border-amber-800/55 bg-amber-50/90 dark:bg-amber-950/35 px-3 py-2 text-xs text-amber-950 dark:text-amber-100 flex items-start gap-2"
+                              role="status"
+                              aria-live="polite"
+                            >
+                              <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 mt-0.5 text-amber-700 dark:text-amber-300" aria-hidden />
+                              <p>
+                                <span className="font-medium">Enviando agora</span>
+                                {' · '}
+                                step <span className="font-mono font-semibold tabular-nums">{processingStepIdx + 1}</span>
+                                {' · '}
+                                instância <span className="font-semibold">{instanceLabel}</span>
+                              </p>
+                            </div>
+                          )}
                           <div className="mt-2 w-full bg-slate-200 dark:bg-[#404040] rounded-full h-1.5">
                             <div
                               className="bg-[#8CD955] h-1.5 rounded-full transition-all duration-300"

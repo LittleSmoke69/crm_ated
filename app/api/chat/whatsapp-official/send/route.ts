@@ -10,12 +10,12 @@ import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { chatService } from '@/lib/services/chat-service';
 import * as whatsappOfficial from '@/lib/services/whatsapp-official-service';
+import {
+  extensionForWhatsAppMedia,
+  storageContentTypeForWhatsAppMedia,
+} from '@/lib/services/whatsapp-official-media-mime';
 
 const CHAT_MEDIA_BUCKET = 'chat-media';
-const MIME_TO_EXT: Record<string, string> = {
-  'audio/ogg': '.ogg', 'audio/mpeg': '.mp3', 'audio/mp4': '.m4a',
-  'audio/webm': '.webm', 'audio/aac': '.aac',
-};
 
 async function resolveMetaMediaInBackground(
   metaId: string,
@@ -35,11 +35,12 @@ async function resolveMetaMediaInBackground(
     const downloadRes = await fetch(tempUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
     if (!downloadRes.ok) return;
     const buffer = Buffer.from(await downloadRes.arrayBuffer());
-    const ext = MIME_TO_EXT[mime_type?.toLowerCase() ?? ''] || '.ogg';
+    const ext = extensionForWhatsAppMedia(mime_type, 'audio');
+    const contentType = storageContentTypeForWhatsAppMedia(mime_type, ext, 'audio');
     const storagePath = `${configId}/${metaId}${ext}`;
     const { error } = await supabaseServiceRole.storage
       .from(CHAT_MEDIA_BUCKET)
-      .upload(storagePath, buffer, { contentType: mime_type || 'audio/ogg', upsert: true });
+      .upload(storagePath, buffer, { contentType, upsert: true });
     if (error) return;
     const { data } = supabaseServiceRole.storage.from(CHAT_MEDIA_BUCKET).getPublicUrl(storagePath);
     await supabaseServiceRole
@@ -155,7 +156,7 @@ export async function POST(req: NextRequest) {
       access_token: config.access_token,
     };
 
-    let metaResponse: { messages?: Array<{ id: string }> };
+    let metaResponse: { messages: Array<{ id: string }> };
     try {
       if (sendType === 'text') {
         metaResponse = await whatsappOfficial.sendText(
@@ -221,7 +222,7 @@ export async function POST(req: NextRequest) {
       return errorResponse(e?.message || 'Falha ao enviar mensagem', 502);
     }
 
-    const externalMessageId = metaResponse?.messages?.[0]?.id || `wamid_${Date.now()}`;
+    const externalMessageId = metaResponse.messages[0].id;
 
     const conversationData = {
       whatsapp_config_id: config.id,
