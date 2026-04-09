@@ -64,6 +64,7 @@ export default function AdminAcademyAulaEditPage() {
       if (lessonData) {
         setLesson(lessonData);
         setForm({
+          module_id: lessonData.module_id,
           title: lessonData.title,
           slug: lessonData.slug,
           description: lessonData.description ?? '',
@@ -250,6 +251,24 @@ export default function AdminAcademyAulaEditPage() {
           <section className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
             <h3 className="mb-4 text-sm font-semibold text-[var(--muted-foreground)]">Informações básicas</h3>
             <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">Módulo *</label>
+                <select
+                  value={String(form.module_id ?? '')}
+                  onChange={(e) => setForm({ ...form, module_id: e.target.value })}
+                  className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2"
+                  required
+                >
+                  {modules.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.title}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                  Ao trocar o módulo, a aula passa para o final da lista daquele módulo.
+                </p>
+              </div>
               <div>
                 <label className="block text-sm font-medium mb-1">Título *</label>
                 <input type="text" value={String(form.title ?? '')} onChange={(e) => setForm({ ...form, title: e.target.value })} className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2" required />

@@ -5,7 +5,7 @@ import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Plus, Pencil, Trash2, Loader2, Eye, EyeOff, GripVertical, ArrowLeft, FileVideo, Clock, Filter, Users, X } from 'lucide-react';
+import { Plus, Pencil, Trash2, Loader2, Eye, EyeOff, GripVertical, ArrowLeft, FileVideo, Clock, Filter, Users, X, ArrowRightLeft } from 'lucide-react';
 import { getStoredUserId } from '@/lib/utils/stored-user-id';
 import { ZAPLOTO_ACADEMY_ROLE_OPTIONS } from '@/lib/academy/lesson-role-access';
 
@@ -50,6 +50,9 @@ function AdminAcademyAulasContent() {
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
   const [bulkRoleDraft, setBulkRoleDraft] = useState<string[]>([]);
   const [bulkSaving, setBulkSaving] = useState(false);
+  const [moveModalIds, setMoveModalIds] = useState<string[] | null>(null);
+  const [moveTargetModuleId, setMoveTargetModuleId] = useState('');
+  const [moveSaving, setMoveSaving] = useState(false);
   const masterCheckboxRef = useRef<HTMLInputElement>(null);
 
   const fetchData = useCallback(() => {
@@ -127,6 +130,44 @@ function AdminAcademyAulasContent() {
 
   const toggleBulkRole = (code: string) => {
     setBulkRoleDraft((cur) => (cur.includes(code) ? cur.filter((c) => c !== code) : [...cur, code]));
+  };
+
+  const openMoveModal = (ids: string[]) => {
+    if (ids.length === 0) return;
+    setMoveTargetModuleId('');
+    setMoveModalIds(ids);
+  };
+
+  const applyMoveToModule = async () => {
+    if (!moveModalIds?.length || !moveTargetModuleId) return;
+    setMoveSaving(true);
+    try {
+      const res = await fetch('/api/admin/academy/lessons/move', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': getStoredUserId() ?? '',
+        },
+        body: JSON.stringify({
+          lessonIds: moveModalIds,
+          targetModuleId: moveTargetModuleId,
+        }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(j.error || 'Erro ao mover aulas');
+        return;
+      }
+      if (typeof j.message === 'string' && j.moved === 0) {
+        alert(j.message);
+      }
+      const movedIds = moveModalIds;
+      setMoveModalIds(null);
+      setSelectedIds((prev) => prev.filter((id) => !movedIds.includes(id)));
+      fetchData();
+    } finally {
+      setMoveSaving(false);
+    }
   };
 
   const getModuleTitle = (mid: string) => modules.find((m) => m.id === mid)?.title ?? '—';
@@ -286,6 +327,14 @@ function AdminAcademyAulasContent() {
                 </span>
                 <button
                   type="button"
+                  onClick={() => openMoveModal([...selectedIds])}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--card-border)] bg-[var(--input-bg)] px-3 py-1.5 text-sm font-medium hover:bg-[var(--card-bg)]"
+                >
+                  <ArrowRightLeft className="h-4 w-4" />
+                  Mover de módulo
+                </button>
+                <button
+                  type="button"
                   onClick={openBulkModal}
                   className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--zaploto-green)] px-3 py-1.5 text-sm font-medium text-white hover:opacity-90"
                 >
@@ -414,6 +463,14 @@ function AdminAcademyAulasContent() {
                         <EyeOff className="h-4 w-4 text-[var(--muted-foreground)]" />
                       )}
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => openMoveModal([l.id])}
+                      className="rounded-lg p-2 hover:bg-[var(--input-bg)] transition"
+                      title="Mover para outro módulo"
+                    >
+                      <ArrowRightLeft className="h-4 w-4 text-[var(--muted-foreground)]" />
+                    </button>
                     <Link href={`/admin/academy/aulas/${l.id}`} className="rounded-lg p-2 hover:bg-[var(--input-bg)] transition" title="Editar">
                       <Pencil className="h-4 w-4" />
                     </Link>
@@ -430,6 +487,71 @@ function AdminAcademyAulasContent() {
               );
             })}
           </ul>
+        )}
+
+        {moveModalIds && (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-4 sm:items-center"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="move-module-title"
+          >
+            <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-5 shadow-xl">
+              <div className="mb-4 flex items-start justify-between gap-2">
+                <div>
+                  <h2 id="move-module-title" className="text-lg font-bold">
+                    Mover para outro módulo
+                  </h2>
+                  <p className="mt-1 text-sm text-[var(--muted-foreground)]">
+                    {moveModalIds.length} aula{moveModalIds.length !== 1 ? 's' : ''} — serão adicionadas ao{' '}
+                    <strong>final</strong> do módulo escolhido, mantendo a ordem relativa entre elas.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setMoveModalIds(null)}
+                  className="rounded-lg p-2 hover:bg-[var(--input-bg)]"
+                  aria-label="Fechar"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <label className="mb-4 block text-sm font-medium">
+                Módulo de destino
+                <select
+                  value={moveTargetModuleId}
+                  onChange={(e) => setMoveTargetModuleId(e.target.value)}
+                  className="mt-1.5 w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2"
+                >
+                  <option value="">Selecione…</option>
+                  {modules.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={moveSaving || !moveTargetModuleId}
+                  onClick={applyMoveToModule}
+                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-[var(--zaploto-green)] px-4 py-2.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50 sm:flex-none"
+                >
+                  {moveSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  Mover
+                </button>
+                <button
+                  type="button"
+                  disabled={moveSaving}
+                  onClick={() => setMoveModalIds(null)}
+                  className="rounded-lg border border-[var(--card-border)] px-4 py-2.5 text-sm"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
         {bulkModalOpen && (

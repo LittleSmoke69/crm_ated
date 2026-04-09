@@ -44,6 +44,7 @@ export async function PATCH(
     return NextResponse.json({ error: 'Body inválido' }, { status: 400 });
   }
   const allowed = [
+    'module_id',
     'title', 'slug', 'description', 'order_index', 'is_published', 'content_type', 'estimated_minutes',
     'thumbnail_url',
     'vturb_player_id', 'vturb_project_id', 'vturb_aspect_ratio', 'vturb_use_sdk', 'iframe_html',
@@ -55,6 +56,27 @@ export async function PATCH(
   }
   const roleCodes = parseAllowedRoleCodesFromBody(body.allowed_role_codes);
   if (roleCodes !== undefined) update.allowed_role_codes = roleCodes;
+
+  if (typeof update.module_id === 'string' && update.module_id) {
+    const { data: cur, error: curErr } = await supabaseServiceRole
+      .from('academy_lessons')
+      .select('module_id')
+      .eq('id', id)
+      .single();
+    if (curErr) {
+      return NextResponse.json({ error: 'Aula não encontrada' }, { status: 404 });
+    }
+    if (cur && cur.module_id !== update.module_id) {
+      const { data: inTarget, error: tErr } = await supabaseServiceRole
+        .from('academy_lessons')
+        .select('order_index')
+        .eq('module_id', update.module_id);
+      if (tErr) throw tErr;
+      const maxOrder = Math.max(-1, ...((inTarget ?? []).map((r) => r.order_index ?? 0)));
+      update.order_index = maxOrder + 1;
+    }
+  }
+
   if (Object.keys(update).length === 0) return NextResponse.json({ error: 'Nenhum campo para atualizar' }, { status: 400 });
   update.updated_at = new Date().toISOString();
   try {
