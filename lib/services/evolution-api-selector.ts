@@ -156,6 +156,29 @@ export class EvolutionApiSelector {
       return [];
     }
   }
+
+  /**
+   * APIs ativas (não bloqueadas) para reciclar instância, exceto a atual — ordenadas por menor número de instâncias.
+   * Usado quando connect/reconnect na API atual não devolve QR ou create retorna Forbidden.
+   */
+  async listApisForRecycleExcluding(excludeApiId: string): Promise<
+    Array<{
+      id: string;
+      name: string;
+      base_url: string;
+      api_key_global: string;
+      instanceCount: number;
+    }>
+  > {
+    const all = await this.getAllActiveApis();
+    const filtered = all.filter(
+      (a) =>
+        a.id !== excludeApiId &&
+        typeof a.api_key_global === 'string' &&
+        a.api_key_global.trim().length > 0
+    );
+    return filtered.sort((a, b) => a.instanceCount - b.instanceCount);
+  }
 }
 
 export const evolutionApiSelector = new EvolutionApiSelector();

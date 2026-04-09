@@ -10,7 +10,7 @@
  * Fluxo:
  * 1. Busca todas as instâncias ativas (is_active = true)
  * 2. Processa em lotes (BATCH_SIZE instâncias por vez)
- * 3. Para cada instância, usa evolutionService.getConnectionState() e extractState()
+ * 3. Para cada instância, consulta connectionState na Evolution (fetch) e extractState local
  * 4. Atualiza status no banco usando a mesma lógica do endpoint de verificação
  * 5. Loga resultados para monitoramento
  */
@@ -397,6 +397,7 @@ export const handler: Handler = async (event, context) => {
             }
 
             console.log(`[WORKER ${WORKER_ID}] ✅ Instância ${instance.instance_name}: ${instance.status} → ${result.newStatus} (${result.state})`);
+
             if (result.newStatus === 'disconnected' && instance.status === 'ok' && instance.user_id) {
               notifyDisconnectViaLoto({ instance_name: instance.instance_name, user_id: instance.user_id }, WORKER_ID).catch(() => {});
             }

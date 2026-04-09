@@ -7,7 +7,6 @@ import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { evolutionService } from '@/lib/services/evolution-service';
 import { getSubordinates } from '@/lib/middleware/permissions';
 import { sendVerificationReport } from '@/lib/services/loto-notify-service';
 

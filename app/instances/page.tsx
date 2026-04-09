@@ -79,6 +79,40 @@ function isEvolutionApiConnecting(data: InstanceStatusApiData | undefined): bool
   return connectingSet.includes(ev) || connectingSet.includes(st);
 }
 
+/**
+ * Pede novo pareamento na Evolution (POST connect) e, se o QR não vier na hora,
+ * consulta connectionState (GET) — mesmo comportamento necessário após instância cair.
+ */
+async function fetchQrViaPostThenGet(
+  instanceName: string,
+  userId: string
+): Promise<
+  | { ok: true; payload: InstanceStatusApiData; from: 'post' | 'get' }
+  | { ok: false; error: string }
+> {
+  const postRes = await fetchStatusWithTimeout(`/api/instances/${instanceName}/status`, {
+    method: 'POST',
+    headers: { 'X-User-Id': userId },
+  });
+  const postJson = await postRes.json();
+  if (!postJson.success || !postJson.data) {
+    return { ok: false, error: postJson.error || 'Erro ao reconectar instância' };
+  }
+  const postPayload = postJson.data as InstanceStatusApiData;
+  if (isEvolutionApiConnected(postPayload) || postPayload.qrCode) {
+    return { ok: true, payload: postPayload, from: 'post' };
+  }
+  const getRes = await fetchStatusWithTimeout(`/api/instances/${instanceName}/status`, {
+    method: 'GET',
+    headers: { 'X-User-Id': userId },
+  });
+  const getJson = await getRes.json();
+  if (!getJson.success || !getJson.data) {
+    return { ok: false, error: getJson.error || 'Erro ao obter status após reconectar' };
+  }
+  return { ok: true, payload: getJson.data as InstanceStatusApiData, from: 'get' };
+}
+
 const InstancesPage = () => {
   const { checking } = useRequireAuth();
   const { isCollapsed, setIsCollapsed, isMobileOpen, setIsMobileOpen } = useSidebar();
@@ -517,42 +551,37 @@ const InstancesPage = () => {
     setLoading(true);
     try {
       addLog(`Reconectando instância ${inst.instance_name}...`, 'info');
-      const response = await fetchStatusWithTimeout(`/api/instances/${inst.instance_name}/status`, {
-        method: 'POST',
-        headers: { 'X-User-Id': userId },
-      });
-      const data = await response.json();
-      
-      if (data.success && data.data) {
-        const payload = data.data as InstanceStatusApiData;
-        if (isEvolutionApiConnected(payload)) {
-          // Se já está conectada, apenas atualiza
-          setIsQRModalOpen(false);
-          setQrCode('');
-          setQrTimer(0);
-          setQrExpired(false);
-          setCurrentConnectingInstance(null);
-          showToast('Instância já está conectada!', 'success');
-          await loadInitialData();
-        } else if (payload.qrCode) {
-          // Se tem QR code, abre o modal para reconexão
-          // O base64 já vem como data URL completo, não precisa processar
-          const qrCodeValue = payload.qrCode;
-          setQrExpired(false);
-          setQrCode(qrCodeValue);
-          setCurrentConnectingInstance(inst.instance_name);
-          setIsReconnecting(true); // Marca como reconexão
-          setQrTimer(QR_WINDOW_SECONDS);
-          setIsQRModalOpen(true);
-          showToast('QR Code de reconexão gerado! Escaneie o código para reconectar.', 'success');
-          addLog(`QR Code de reconexão gerado para ${inst.instance_name}`, 'success');
-        } else {
-          showToast('Reconexão solicitada, mas QR Code não disponível. Verifique o status.', 'info');
-          await loadInitialData();
-        }
+      const result = await fetchQrViaPostThenGet(inst.instance_name, userId);
+
+      if (!result.ok) {
+        showToast(result.error, 'error');
+        addLog(`Erro ao reconectar: ${result.error}`, 'error');
+        return;
+      }
+
+      const payload = result.payload;
+      if (isEvolutionApiConnected(payload)) {
+        setIsQRModalOpen(false);
+        setQrCode('');
+        setQrTimer(0);
+        setQrExpired(false);
+        setCurrentConnectingInstance(null);
+        setIsReconnecting(false);
+        showToast('Instância já está conectada!', 'success');
+        await loadInitialData();
+      } else if (payload.qrCode) {
+        const qrCodeValue = payload.qrCode;
+        setQrExpired(false);
+        setQrCode(qrCodeValue);
+        setCurrentConnectingInstance(inst.instance_name);
+        setIsReconnecting(true);
+        setQrTimer(QR_WINDOW_SECONDS);
+        setIsQRModalOpen(true);
+        showToast('QR Code de reconexão gerado! Escaneie o código para reconectar.', 'success');
+        addLog(`QR Code de reconexão gerado para ${inst.instance_name} (${result.from})`, 'success');
       } else {
-        showToast(data.error || 'Erro ao reconectar instância', 'error');
-        addLog(`Erro ao reconectar: ${data.error || 'Erro desconhecido'}`, 'error');
+        showToast('Reconexão solicitada, mas QR Code não disponível. Verifique o status.', 'info');
+        await loadInitialData();
       }
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Erro ao reconectar instância', 'error');
@@ -832,136 +861,83 @@ const InstancesPage = () => {
     }
   }, [isQRModalOpen]);
 
-  // Quando o timer expira e a instância não conectou, busca um novo QR code
-  // MAS: Se for reconexão, não gera novo QR code - apenas verifica status
+  // Quando o timer expira: mesmo fluxo para criação e reconexão (POST connect + GET se precisar de QR).
   useEffect(() => {
     if (!qrExpired || !isQRModalOpen || !currentConnectingInstance || !userId) {
       return;
     }
 
-    // Timer expirou e instância não conectou
     const refreshExpiredQrCode = async () => {
+      const instanceName = currentConnectingInstance;
+      const wasReconnecting = isReconnecting;
       try {
-        // Se for reconexão, apenas verifica status (não gera novo QR)
-        if (isReconnecting) {
-          console.log(`⏰ Timer expirado para reconexão ${currentConnectingInstance}. Verificando status (GET)...`);
-          const response = await fetchStatusWithTimeout(`/api/instances/${currentConnectingInstance}/status`, {
-            method: 'GET',
-            headers: { 'X-User-Id': userId },
-          });
-          const data = await response.json();
-          
-          if (data.success && data.data) {
-            const payload = data.data as InstanceStatusApiData;
-            if (isEvolutionApiConnected(payload)) {
-              console.log(`✅ Instância ${currentConnectingInstance} conectou durante reconexão. Fechando modal.`);
-              setIsQRModalOpen(false);
-              setQrCode('');
-              setQrTimer(0);
-              setQrExpired(false);
-              setCurrentConnectingInstance(null);
-              const wasReconnecting = isReconnecting;
-              setIsReconnecting(false);
-              
-              // Não mostra modal para reconexões
-              await loadInitialData();
-            } else {
-              // Ainda não conectou, mas não gera novo QR - fecha modal e atualiza página
-              console.log(`⏰ QR Code de reconexão expirado para ${currentConnectingInstance}. Fechando modal e atualizando página...`);
-              setIsQRModalOpen(false);
-              setQrCode('');
-              setQrTimer(0);
-              setQrExpired(false);
-              setCurrentConnectingInstance(null);
-              setIsReconnecting(false);
-              showToast('QR Code expirado. Verifique o status da instância.', 'info');
-              await loadInitialData();
-              window.location.reload();
-            }
-          } else {
-            // Se a resposta não foi bem-sucedida na reconexão, fecha modal e atualiza página
-            console.log('⚠️ Resposta não foi bem-sucedida na reconexão após expiração. Fechando modal e atualizando página...');
+        console.log(
+          `⏰ Timer expirado para ${instanceName}. Solicitando novo QR (POST + GET se necessário)...`
+        );
+
+        const response = await fetchStatusWithTimeout(`/api/instances/${instanceName}/status`, {
+          method: 'POST',
+          headers: { 'X-User-Id': userId },
+        });
+        const data = await response.json();
+
+        if (data.success && data.data) {
+          const payload = data.data as InstanceStatusApiData;
+          if (isEvolutionApiConnected(payload)) {
+            console.log(`✅ Instância ${instanceName} já conectou. Fechando modal.`);
             setIsQRModalOpen(false);
             setQrCode('');
             setQrTimer(0);
             setQrExpired(false);
             setCurrentConnectingInstance(null);
             setIsReconnecting(false);
+            showExtractGroupsModalIfNeeded(instanceName, !wasReconnecting);
             await loadInitialData();
-            window.location.reload();
-          }
-        } else {
-          // Para criação, busca novo QR code
-          console.log(`⏰ Timer expirado para instância ${currentConnectingInstance}. Solicitando novo QR Code (POST)...`);
-          
-          // Usa POST para forçar a reconexão/geração de novo QR (com timeout)
-          const response = await fetchStatusWithTimeout(`/api/instances/${currentConnectingInstance}/status`, {
-            method: 'POST',
-            headers: { 'X-User-Id': userId },
-          });
-          const data = await response.json();
-          
-          if (data.success && data.data) {
-            const payload = data.data as InstanceStatusApiData;
-            if (isEvolutionApiConnected(payload)) {
-              console.log(`✅ Instância ${currentConnectingInstance} já conectou. Fechando modal.`);
-              setIsQRModalOpen(false);
-              setQrCode('');
-              setQrTimer(0);
-              setQrExpired(false);
-              setCurrentConnectingInstance(null);
-              const wasReconnecting = isReconnecting;
-              setIsReconnecting(false);
-              
-              // Mostra modal apenas para novas instâncias (não reconexões) e apenas uma vez
-              showExtractGroupsModalIfNeeded(currentConnectingInstance, !wasReconnecting);
-              await loadInitialData();
-            } else if (data.data.qrCode) {
-              console.log(`🔄 Novo QR Code recebido para ${currentConnectingInstance}. Reiniciando timer.`);
-              setQrCode(data.data.qrCode);
-              setQrTimer(QR_WINDOW_SECONDS); // Isso deve disparar o useEffect do timer
+          } else if (payload.qrCode) {
+            console.log(`🔄 Novo QR Code recebido para ${instanceName}. Reiniciando timer.`);
+            setQrCode(payload.qrCode);
+            setQrTimer(QR_WINDOW_SECONDS);
+            setQrExpired(false);
+            showToast('QR Code atualizado automaticamente.', 'info');
+          } else {
+            console.log('⚠️ POST não retornou QR imediato, tentando GET status...');
+            const getRes = await fetchStatusWithTimeout(`/api/instances/${instanceName}/status`, {
+              method: 'GET',
+              headers: { 'X-User-Id': userId },
+            });
+            const getData = await getRes.json();
+            if (getData.success && getData.data?.qrCode) {
+              setQrCode(getData.data.qrCode);
+              setQrTimer(QR_WINDOW_SECONDS);
               setQrExpired(false);
               showToast('QR Code atualizado automaticamente.', 'info');
             } else {
-              // Se não retornou QR imediato no POST, tenta um GET em seguida (com timeout)
-              console.log('⚠️ POST não retornou QR imediato, tentando GET status...');
-              const getRes = await fetchStatusWithTimeout(`/api/instances/${currentConnectingInstance}/status`, {
-                headers: { 'X-User-Id': userId },
-              });
-              const getData = await getRes.json();
-              if (getData.success && getData.data?.qrCode) {
-                setQrCode(getData.data.qrCode);
-                setQrTimer(QR_WINDOW_SECONDS);
-                setQrExpired(false);
-              } else {
-                // Se não conseguiu obter novo QR code após expiração, fecha modal e atualiza página
-                console.log('⚠️ Não foi possível obter novo QR code após expiração. Fechando modal e atualizando página...');
-                setIsQRModalOpen(false);
-                setQrCode('');
-                setQrTimer(0);
-                setQrExpired(false);
-                setCurrentConnectingInstance(null);
-                setIsReconnecting(false);
-                await loadInitialData();
-                window.location.reload();
-              }
+              console.log(
+                '⚠️ Não foi possível obter novo QR code após expiração. Fechando modal e atualizando página...'
+              );
+              setIsQRModalOpen(false);
+              setQrCode('');
+              setQrTimer(0);
+              setQrExpired(false);
+              setCurrentConnectingInstance(null);
+              setIsReconnecting(false);
+              await loadInitialData();
+              window.location.reload();
             }
-          } else {
-            // Se a resposta não foi bem-sucedida, fecha modal e atualiza página
-            console.log('⚠️ Resposta não foi bem-sucedida após expiração. Fechando modal e atualizando página...');
-            setIsQRModalOpen(false);
-            setQrCode('');
-            setQrTimer(0);
-            setQrExpired(false);
-            setCurrentConnectingInstance(null);
-            setIsReconnecting(false);
-            await loadInitialData();
-            window.location.reload();
           }
+        } else {
+          console.log('⚠️ Resposta não foi bem-sucedida após expiração. Fechando modal e atualizando página...');
+          setIsQRModalOpen(false);
+          setQrCode('');
+          setQrTimer(0);
+          setQrExpired(false);
+          setCurrentConnectingInstance(null);
+          setIsReconnecting(false);
+          await loadInitialData();
+          window.location.reload();
         }
       } catch (error) {
         console.error('❌ Erro ao atualizar QR Code expirado:', error);
-        // Em caso de erro, fecha o modal e atualiza a página
         console.log('🔄 Fechando modal QR code e atualizando página devido a erro...');
         setIsQRModalOpen(false);
         setQrCode('');
@@ -969,9 +945,7 @@ const InstancesPage = () => {
         setQrExpired(false);
         setCurrentConnectingInstance(null);
         setIsReconnecting(false);
-        // Recarrega os dados da página
         await loadInitialData();
-        // Atualiza a página para garantir sincronização
         window.location.reload();
       }
     };
@@ -1018,14 +992,11 @@ const InstancesPage = () => {
             
             // Recarrega dados após conectar (o banco já foi atualizado pela API)
             await loadInitialData();
-          } else if (isEvolutionApiConnecting(payload) && payload.qrCode && !isReconnecting) {
-            // Se ainda está conectando e tem novo QR code, atualiza APENAS se não for reconexão
-            // Na reconexão, mantém o QR code original e não atualiza
-            // Mas NÃO fecha o modal - continua aguardando
+          } else if (isEvolutionApiConnecting(payload) && payload.qrCode) {
+            // Evolution pode renovar o QR no connectionState; atualiza criação e reconexão.
             setQrCode(payload.qrCode);
-            setQrTimer(QR_WINDOW_SECONDS); // Reseta o timer se houver novo QR
+            setQrTimer(QR_WINDOW_SECONDS);
           }
-          // Se for reconexão e tiver novo QR code, IGNORA - mantém o QR original
         }
       } catch (error) {
         console.error('Erro ao verificar status da instância:', error);

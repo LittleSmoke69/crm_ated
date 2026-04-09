@@ -26,20 +26,31 @@ export class EvolutionService {
     number: string,
     baseUrl: string,
     apiKey: string,
-    qrcode: boolean = true
+    qrcode: boolean = true,
+    options?: {
+      webhook?: { enabled: boolean; url: string; events: readonly string[]; base64?: boolean };
+    }
   ): Promise<EvolutionInstance> {
-    const response = await fetch(`${baseUrl}/instance/create`, {
+    const normalizedBaseUrl = this.normalizeBaseUrl(baseUrl);
+    const requestUrl = `${normalizedBaseUrl}/instance/create`.replace(/([^:]\/)\/+/g, '$1');
+
+    const body: Record<string, unknown> = {
+      instanceName,
+      qrcode,
+      number: number || '',
+      integration: 'WHATSAPP-BAILEYS',
+    };
+    if (options?.webhook) {
+      body.webhook = options.webhook;
+    }
+
+    const response = await fetch(requestUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         apikey: apiKey,
       },
-      body: JSON.stringify({
-        instanceName,
-        qrcode,
-        number,
-        integration: 'WHATSAPP-BAILEYS',
-      }),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {
@@ -222,6 +233,25 @@ export class EvolutionService {
     if (!response.ok) {
       const error = await response.text().catch(() => '');
       throw new Error(`Erro ao deletar: ${response.status} ${error}`);
+    }
+  }
+
+  /**
+   * Remove a instância na Evolution; ignora falha (ex.: já removida, connection closed).
+   */
+  async deleteInstanceBestEffort(
+    instanceName: string,
+    apiKey: string,
+    baseUrl: string,
+    context?: string
+  ): Promise<void> {
+    try {
+      await this.deleteInstance(instanceName, apiKey, baseUrl);
+    } catch (e: unknown) {
+      console.warn(
+        `⚠️ [Evolution delete best-effort] ${instanceName}${context ? ` (${context})` : ''}:`,
+        e instanceof Error ? e.message : e
+      );
     }
   }
 

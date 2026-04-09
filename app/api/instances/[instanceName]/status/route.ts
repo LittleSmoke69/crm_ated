@@ -6,6 +6,64 @@ import { evolutionService } from '@/lib/services/evolution-service';
 import { getUserEvolutionApi } from '@/lib/services/evolution-api-helper';
 import { proxyAutoAssign } from '@/lib/services/proxy-auto-assign';
 import { notifyInstanceDisconnected } from '@/lib/services/loto-notify-service';
+import {
+  EVOLUTION_INSTANCE_WEBHOOK_EVENTS,
+  ZAPLOTO_EVOLUTION_PROD_WEBHOOK_URL,
+  shouldConfigureMasterChatWebhook,
+} from '@/lib/server/evolution-chat-webhook-config';
+import { evolutionApiSelector } from '@/lib/services/evolution-api-selector';
+
+/**
+ * O endpoint `instance/connect` da Evolution costuma devolver só `{ instance: { state: "open" } }`
+ * quando o *processo* da instância está ativo — isso NÃO garante sessão WhatsApp pareada.
+ * Só `connectionState` reflete se precisa de QR / está desconectado de fato.
+ */
+async function resolveReconnectStatus(
+  instanceName: string,
+  apiKey: string,
+  baseUrl: string,
+  connectResponse: unknown
+): Promise<{
+  state: ReturnType<typeof evolutionService.extractState>;
+  qrCode: string | null;
+  rawConnect: unknown;
+  rawConnectionState: unknown | null;
+}> {
+  let connectionStatePayload: unknown | null = null;
+  try {
+    connectionStatePayload = await evolutionService.getConnectionState(
+      instanceName,
+      apiKey,
+      baseUrl
+    );
+  } catch (err: unknown) {
+    console.warn(
+      `⚠️ [POST /status] getConnectionState após connect falhou:`,
+      err instanceof Error ? err.message : err
+    );
+  }
+
+  const qrFromConnect = evolutionService.extractQr(connectResponse);
+  let state: ReturnType<typeof evolutionService.extractState>;
+  let qrCode: string | null;
+
+  if (connectionStatePayload != null) {
+    state = evolutionService.extractState(connectionStatePayload);
+    qrCode = evolutionService.extractQr(connectionStatePayload) ?? qrFromConnect;
+  } else {
+    qrCode = qrFromConnect;
+    const fromConnect = evolutionService.extractState(connectResponse);
+    // Sem connectionState não podemos cravar "connected": evita falso positivo do connect.
+    state = fromConnect === 'connected' ? 'disconnected' : fromConnect;
+  }
+
+  return {
+    state,
+    qrCode,
+    rawConnect: connectResponse,
+    rawConnectionState: connectionStatePayload,
+  };
+}
 
 /**
  * GET /api/instances/[instanceName]/status - Verifica status de conexão
@@ -38,6 +96,7 @@ export async function GET(
         *,
         evolution_apis!inner (
           id,
+          name,
           base_url,
           api_key_global,
           is_active
@@ -225,6 +284,7 @@ export async function POST(
         *,
         evolution_apis!inner (
           id,
+          name,
           base_url,
           api_key_global,
           is_active
@@ -253,34 +313,212 @@ export async function POST(
     console.log(`🔄 [POST /status] Base URL: ${evolutionApi.base_url}`);
     console.log(`🔄 [POST /status] API Key Global: ${evolutionApi.api_key_global?.substring(0, 10)}...${evolutionApi.api_key_global?.substring(evolutionApi.api_key_global.length - 4)}`);
     
-    const evolutionData = await evolutionService.connectInstance(instanceName, evolutionApi.api_key_global, evolutionApi.base_url);
-    
-    console.log(`📥 [POST /status] Dados brutos recebidos da Evolution API (SEM CORTES):`, JSON.stringify(evolutionData, null, 2));
-    
-    const state = evolutionService.extractState(evolutionData);
-    const qrCode = evolutionService.extractQr(evolutionData);
-    
-    console.log(`📊 [POST /status] Estado extraído:`, state);
-    console.log(`🔲 [POST /status] QR Code extraído (length: ${qrCode?.length || 0}):`, qrCode ? `${qrCode.substring(0, 50)}...` : 'null');
+    const connectResponse = await evolutionService.connectInstance(
+      instanceName,
+      evolutionApi.api_key_global,
+      evolutionApi.base_url
+    );
 
-    // Atualiza no banco: 'ok' só quando realmente conectado; demais casos = 'disconnected' (lista mostra Reconectar)
+    console.log(
+      `📥 [POST /status] Resposta do connect (SEM CORTES):`,
+      JSON.stringify(connectResponse, null, 2)
+    );
+
+    let { state, qrCode, rawConnect, rawConnectionState } = await resolveReconnectStatus(
+      instanceName,
+      evolutionApi.api_key_global,
+      evolutionApi.base_url,
+      connectResponse
+    );
+
+    if (rawConnectionState != null) {
+      console.log(
+        `📥 [POST /status] connectionState após connect (SEM CORTES):`,
+        JSON.stringify(rawConnectionState, null, 2)
+      );
+    }
+
+    let recycled = false;
+    let chosenRecycleApi: {
+      id: string;
+      name: string;
+      base_url: string;
+      api_key_global: string;
+    } | null = null;
+    let createDataAfterRecycle: unknown = null;
+    const hasQr = !!(qrCode && String(qrCode).trim());
+
+    if (!hasQr) {
+      console.log(
+        `🔄 [POST /status] Sem QR após reconectar — reciclando (delete na API atual + create mesmo nome, priorizando outras APIs)`
+      );
+
+      await evolutionService.deleteInstanceBestEffort(
+        instanceName,
+        evolutionApi.api_key_global,
+        evolutionApi.base_url,
+        'reconnect-recycle-old-api'
+      );
+
+      const phoneDigits = String(instance.phone_number ?? '').replace(/\D/g, '');
+      const createOptions =
+        instance.is_master === true && shouldConfigureMasterChatWebhook()
+          ? {
+              webhook: {
+                enabled: true,
+                url: ZAPLOTO_EVOLUTION_PROD_WEBHOOK_URL,
+                events: [...EVOLUTION_INSTANCE_WEBHOOK_EVENTS],
+                base64: true,
+              },
+            }
+          : undefined;
+
+      const currentApiId = String(evolutionApi.id);
+      const otherApis = await evolutionApiSelector.listApisForRecycleExcluding(currentApiId);
+      const tryApis =
+        otherApis.length > 0
+          ? otherApis
+          : [
+              {
+                id: currentApiId,
+                name: 'API atual',
+                base_url: evolutionApi.base_url,
+                api_key_global: evolutionApi.api_key_global,
+                instanceCount: 0,
+              },
+            ];
+
+      if (otherApis.length > 0) {
+        console.log(
+          `🔄 [POST /status] Ordem de tentativa (outras APIs primeiro): ${tryApis.map((a) => `${a.name} (${a.id})`).join(' → ')}`
+        );
+      }
+
+      let createData: unknown = null;
+      let chosenApi: (typeof tryApis)[number] | null = null;
+      let lastCreateErr = '';
+
+      for (const api of tryApis) {
+        try {
+          createData = await evolutionService.createInstance(
+            instanceName,
+            phoneDigits,
+            api.base_url,
+            api.api_key_global.trim(),
+            true,
+            createOptions
+          );
+          chosenApi = api;
+          console.log(`✅ [POST /status] Instância recriada na Evolution API: ${api.name} (${api.id})`);
+          break;
+        } catch (e: unknown) {
+          lastCreateErr = e instanceof Error ? e.message : String(e);
+          console.warn(
+            `⚠️ [POST /status] create em "${api.name}" (${api.id}) falhou: ${lastCreateErr}`
+          );
+        }
+      }
+
+      if (!chosenApi || !createData) {
+        return errorResponse(
+          lastCreateErr ||
+            'Nenhuma Evolution API conseguiu recriar a instância (tentativas esgotadas).',
+          502
+        );
+      }
+
+      recycled = true;
+      chosenRecycleApi = {
+        id: chosenApi.id,
+        name: chosenApi.name,
+        base_url: chosenApi.base_url,
+        api_key_global: chosenApi.api_key_global,
+      };
+      createDataAfterRecycle = createData;
+      rawConnect = createData;
+      rawConnectionState = null;
+      qrCode = evolutionService.extractQr(createData);
+      state = evolutionService.extractState(createData);
+
+      if (!qrCode || !String(qrCode).trim()) {
+        try {
+          const poll = await evolutionService.getConnectionState(
+            instanceName,
+            chosenApi.api_key_global.trim(),
+            chosenApi.base_url
+          );
+          rawConnectionState = poll;
+          qrCode = evolutionService.extractQr(poll) ?? qrCode;
+          state = evolutionService.extractState(poll);
+        } catch (pollErr: unknown) {
+          console.warn(
+            `⚠️ [POST /status] connectionState após recreate:`,
+            pollErr instanceof Error ? pollErr.message : pollErr
+          );
+        }
+      }
+
+      console.log(`📊 [POST /status] Pós-reciclagem: state=${state}, qr length=${qrCode?.length ?? 0}`);
+    } else {
+      console.log(`📊 [POST /status] Estado final (via connectionState quando disponível):`, state);
+      console.log(
+        `🔲 [POST /status] QR Code extraído (length: ${qrCode?.length || 0}):`,
+        qrCode ? `${qrCode.substring(0, 50)}...` : 'null'
+      );
+    }
+
+    // Atualiza no banco: 'ok' só quando sessão WhatsApp ativa; após recreate sem parear = disconnected
     const newStatus = state === 'connected' ? 'ok' : 'disconnected';
-    await supabaseServiceRole
+    const updatePayload: Record<string, unknown> = {
+      status: newStatus,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (recycled && chosenRecycleApi) {
+      if (chosenRecycleApi.id !== evolutionApi.id) {
+        updatePayload.evolution_api_id = chosenRecycleApi.id;
+        console.log(
+          `📝 [POST /status] evolution_instances.evolution_api_id → ${chosenRecycleApi.id} (${chosenRecycleApi.name})`
+        );
+      }
+      const newHash = (createDataAfterRecycle as { hash?: string } | null)?.hash;
+      if (typeof newHash === 'string' && newHash.trim()) {
+        updatePayload.apikey = newHash.trim();
+      } else {
+        console.warn(
+          `⚠️ [POST /status] Reciclagem sem hash na resposta — mantendo apikey atual (pode exigir novo pareamento manual se o balanceador falhar).`
+        );
+      }
+    }
+
+    const { error: updateErr } = await supabaseServiceRole
       .from('evolution_instances')
-      .update({
-        status: newStatus,
-        updated_at: new Date().toISOString(),
-      })
+      .update(updatePayload)
       .eq('id', instance.id);
 
+    if (updateErr) {
+      console.error('❌ [POST /status] Erro ao atualizar instância após reconexão/reciclagem:', updateErr);
+      return errorResponse(updateErr.message || 'Erro ao salvar status da instância', 500);
+    }
+
     const uiStatus = state === 'connected' ? 'connected' : 'disconnected';
+    const migratedApi = recycled && chosenRecycleApi && chosenRecycleApi.id !== evolutionApi.id;
     const responseData = {
       status: uiStatus,
       state,
       evolutionState: state,
       qrCode,
-      message: 'Reconexão solicitada',
-      raw: evolutionData, // Inclui dados brutos para debug
+      message: recycled
+        ? migratedApi && chosenRecycleApi
+          ? `Instância recriada na API "${chosenRecycleApi.name}"; escaneie o novo QR Code.`
+          : 'Instância recriada na Evolution; escaneie o novo QR Code.'
+        : 'Reconexão solicitada',
+      recycled,
+      evolutionApiMigrated: migratedApi === true,
+      evolutionApiId: chosenRecycleApi?.id ?? evolutionApi.id,
+      raw: recycled ? rawConnect : rawConnectionState ?? rawConnect,
+      rawConnect,
+      rawConnectionState,
     };
 
     console.log(`📤 [POST /status] Resposta FINAL que será enviada ao frontend (SEM CORTES):`, JSON.stringify(responseData, null, 2));
