@@ -253,7 +253,9 @@ async function recordAction(
   errorMessage?: string | null,
   meta?: Record<string, unknown>
 ): Promise<void> {
-  const actionKey = `${eventId}:${action}:${groupJid ?? ''}:${phoneE164 ?? ''}`;
+  const keySuffix =
+    meta && typeof meta.idKey === 'string' && meta.idKey.length > 0 ? meta.idKey : phoneE164 ?? '';
+  const actionKey = `${eventId}:${action}:${groupJid ?? ''}:${keySuffix}`;
   await supabaseServiceRole.from('anti_spam_actions').insert({
     config_id: configId,
     banca_id: bancaId,

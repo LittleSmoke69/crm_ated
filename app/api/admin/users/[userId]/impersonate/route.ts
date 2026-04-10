@@ -37,8 +37,16 @@ export async function POST(
       return errorResponse('Usuário não encontrado', 404);
     }
 
-    // 3. Não permite impersonar outro admin ou super_admin (por segurança)
-    if ((targetProfile.status === 'admin' || targetProfile.status === 'super_admin') && adminUserId !== targetUserId) {
+    // 3. Super Admin não pode acessar conta de outro Super Admin (exceto a própria)
+    if (targetProfile.status === 'super_admin' && adminUserId !== targetUserId) {
+      return errorResponse('Não é possível acessar a conta de outro Super Admin por segurança.', 403);
+    }
+    // Admin comum não pode acessar conta de outro admin nem de super_admin
+    if (
+      adminProfile.status !== 'super_admin' &&
+      (targetProfile.status === 'admin' || targetProfile.status === 'super_admin') &&
+      adminUserId !== targetUserId
+    ) {
       return errorResponse('Não é possível acessar a conta de outro administrador por segurança.', 403);
     }
 

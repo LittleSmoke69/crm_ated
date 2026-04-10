@@ -406,12 +406,13 @@ export async function getSubordinateIds(userId: string): Promise<string[]> {
     return [];
   }
 
-  // Super_admin e admin retornam todos os usuários (exceto outros admins)
+  // Super_admin: todos os perfis. Admin: todos exceto outros admin
   if (profile.status === 'super_admin' || profile.status === 'admin') {
-    const { data } = await supabaseServiceRole
-      .from('profiles')
-      .select('id')
-      .neq('status', 'admin');
+    let q = supabaseServiceRole.from('profiles').select('id');
+    if (profile.status === 'admin') {
+      q = q.neq('status', 'admin');
+    }
+    const { data } = await q;
     return data?.map(u => u.id) || [];
   }
 
@@ -435,12 +436,15 @@ export async function getSubordinates(userId: string): Promise<UserProfile[]> {
     return [];
   }
 
-  // Super_admin e admin retornam todos os usuários (exceto outros admins)
+  // Super_admin: todos os perfis. Admin: todos exceto outros admin
   if (profile.status === 'super_admin' || profile.status === 'admin') {
-    const { data } = await supabaseServiceRole
+    let q = supabaseServiceRole
       .from('profiles')
-      .select('id, email, full_name, status, enroller, created_at')
-      .neq('status', 'admin');
+      .select('id, email, full_name, status, enroller, created_at');
+    if (profile.status === 'admin') {
+      q = q.neq('status', 'admin');
+    }
+    const { data } = await q;
     return (data as UserProfile[]) || [];
   }
 

@@ -6,6 +6,7 @@ import { getBancaUrl } from '@/lib/utils/hierarchy';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { calculateLeadTemperature } from '@/lib/utils/temperature';
 import { getBancasVisiveis } from '@/app/api/crm/bancas/route';
+import { COMBO_AVULSO_EMAIL_MARKER, isComboAvulsoEmail } from '@/lib/crm/combo-avulso';
 
 const LOG_PREFIX = '[CRM Transferred Leads]';
 const TAG_LOOKUP_CHUNK_SIZE = 120;
@@ -213,6 +214,7 @@ export async function GET(req: NextRequest) {
         lead.transferred === true || lead.transferred === 'true' || lead.transferred === 1;
       const rawFirstPage = pageLeads
         .filter((l: any) => isTransferred(l))
+        .filter((l: any) => !isComboAvulsoEmail(l.email))
         .map((l: any) => ({ ...l, _originalId: l.id, _bancaKey: firstBanca.id }));
 
       // Tags para formatação: limitar por leads do lote atual evita inconsistências em bases muito grandes
@@ -862,6 +864,17 @@ export async function GET(req: NextRequest) {
         if (toParam && leadDateStr > toParam) return false;
         return true;
       });
+    }
+
+    // E-mail @combo.avulso: exclusivo do /crm/avulsos — não exibir em transferidos
+    {
+      const beforeCombo = filteredLeads.length;
+      filteredLeads = filteredLeads.filter((lead: any) => !isComboAvulsoEmail(lead.email));
+      if (beforeCombo > filteredLeads.length) {
+        console.log(
+          `${LOG_PREFIX} Excluídos ${beforeCombo - filteredLeads.length} lead(s) e-mail ${COMBO_AVULSO_EMAIL_MARKER} (somente em /crm/avulsos).`
+        );
+      }
     }
 
     // Não filtra clientes fantasma na tela CRM transferido: o consultor deve ver todos os leads transferidos e vinculados à carteira dele.

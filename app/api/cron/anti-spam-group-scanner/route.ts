@@ -1,7 +1,7 @@
 /**
  * POST /api/cron/anti-spam-group-scanner
  *
- * Cron de scanner de grupos — roda a cada 20 minutos (crontab: passo de 20 no campo minuto).
+ * Cron de scanner de grupos — roda a cada 1 minuto (agendamento no netlify.toml).
  * Escaneia todos os grupos das configs ativas, remove números na blacklist e internacionais.
  * Salva logs em anti_spam_scan_jobs para controle via admin.
  *

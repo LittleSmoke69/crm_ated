@@ -7,6 +7,7 @@ import { useRequireAuth } from '@/utils/useRequireAuth';
 import { useToast } from '@/hooks/useToast';
 import ToastContainer from '@/components/Toast/ToastContainer';
 import { ArrowRightLeft, AlertCircle, Eye, RefreshCw, X, MessageSquare } from 'lucide-react';
+import CrmSubNav from '@/components/CRM/CrmSubNav';
 import FilterBar from '@/components/CRM/FilterBar';
 import KanbanColumn from '@/components/CRM/KanbanColumn';
 import SortColumnModal from '@/components/CRM/SortColumnModal';
@@ -787,6 +788,8 @@ const TransferidoContent = () => {
               Informações de Status
             </button>
           </div>
+
+          <CrmSubNav />
 
           {/* Quick Metrics */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6 animate-in fade-in slide-in-from-top-2 duration-500 relative">

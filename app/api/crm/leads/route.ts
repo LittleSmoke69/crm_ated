@@ -6,6 +6,7 @@ import { getBancaUrl } from '@/lib/utils/hierarchy';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { calculateLeadTemperature } from '@/lib/utils/temperature';
 import { getBancasVisiveis } from '@/app/api/crm/bancas/route';
+import { COMBO_AVULSO_EMAIL_MARKER, isComboAvulsoEmail } from '@/lib/crm/combo-avulso';
 
 /**
  * GET /api/crm/leads - Busca leads para o Kanban
@@ -315,6 +316,24 @@ export async function GET(req: NextRequest) {
       filteredLeads = filteredLeads.filter((lead: any) => !isTransferred(lead));
       if (beforeTransferred > filteredLeads.length) {
         console.log(`[CRM Leads] Excluídos ${beforeTransferred - filteredLeads.length} lead(s) transferido(s) (visíveis em /crm/transferido).`);
+      }
+
+      const comboAvulsoOnly =
+        searchParams.get('combo_avulso') === '1' || searchParams.get('combo_avulso') === 'true';
+      if (comboAvulsoOnly) {
+        const beforeCombo = filteredLeads.length;
+        filteredLeads = filteredLeads.filter((lead: any) => isComboAvulsoEmail(lead.email));
+        console.log(
+          `[CRM Leads] combo_avulso: ${filteredLeads.length} leads com e-mail ${COMBO_AVULSO_EMAIL_MARKER} (de ${beforeCombo} após demais filtros)`
+        );
+      } else {
+        const beforeExclude = filteredLeads.length;
+        filteredLeads = filteredLeads.filter((lead: any) => !isComboAvulsoEmail(lead.email));
+        if (beforeExclude > filteredLeads.length) {
+          console.log(
+            `[CRM Leads] Excluídos ${beforeExclude - filteredLeads.length} lead(s) combo avulso (${COMBO_AVULSO_EMAIL_MARKER}); listados apenas em /crm/avulsos.`
+          );
+        }
       }
 
       // Filtra por tag se tag_id foi fornecido

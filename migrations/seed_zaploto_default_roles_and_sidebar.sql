@@ -54,6 +54,7 @@ BEGIN
     (v_zaploto_id, 'crm', 'CRM', NULL, 'Layout', NULL, 10),
     (v_zaploto_id, 'crm_kanban', 'Kanban', '/crm/kanban', 'Kanban', 'crm', 0),
     (v_zaploto_id, 'crm_transferido', 'Transferido', '/crm/transferido', 'ArrowRightLeft', 'crm', 1),
+    (v_zaploto_id, 'crm_avulsos', 'Avulsos', '/crm/avulsos', 'UserPlus', 'crm', 2),
     (v_zaploto_id, 'campanhas', 'Campanhas', NULL, 'Rocket', NULL, 11),
     (v_zaploto_id, 'campanha_add_group', 'Adição em Grupo', '/add-to-group', 'Rocket', 'campanhas', 0),
     (v_zaploto_id, 'campanha_mensagem', 'Mensagem', '/crm/activations', 'Activity', 'campanhas', 1),
@@ -103,7 +104,7 @@ BEGIN
   INSERT INTO zaploto_role_sidebar (zaploto_id, role_id, sidebar_item_id, visible)
   SELECT v_zaploto_id, v_role_suporte, si.id, true
   FROM zaploto_sidebar_items si WHERE si.zaploto_id = v_zaploto_id
-  AND si.code IN ('dashboard', 'hierarquia', 'instances', 'maturador', 'ai_agents', 'chat', 'crm', 'crm_kanban', 'crm_transferido', 
+  AND si.code IN ('dashboard', 'hierarquia', 'instances', 'maturador', 'ai_agents', 'chat', 'crm', 'crm_kanban', 'crm_transferido', 'crm_avulsos',
     'campanhas', 'campanha_add_group', 'campanha_mensagem', 'campanha_grupos', 'contacts', 'import_contacts', 'meu_anti_spam', 'profile')
   ON CONFLICT (role_id, sidebar_item_id) DO UPDATE SET visible = true;
 
@@ -111,7 +112,7 @@ BEGIN
   INSERT INTO zaploto_role_sidebar (zaploto_id, role_id, sidebar_item_id, visible)
   SELECT v_zaploto_id, v_role_auditoria, si.id, true
   FROM zaploto_sidebar_items si WHERE si.zaploto_id = v_zaploto_id
-  AND si.code IN ('dashboard', 'instances', 'maturador', 'ai_agents', 'crm', 'crm_kanban', 'crm_transferido', 
+  AND si.code IN ('dashboard', 'instances', 'maturador', 'ai_agents', 'crm', 'crm_kanban', 'crm_transferido', 'crm_avulsos',
     'campanhas', 'campanha_add_group', 'campanha_mensagem', 'campanha_grupos', 'contacts', 'import_contacts', 'auditoria', 'anti_spam', 'profile')
   ON CONFLICT (role_id, sidebar_item_id) DO UPDATE SET visible = true;
 
@@ -119,7 +120,7 @@ BEGIN
   INSERT INTO zaploto_role_sidebar (zaploto_id, role_id, sidebar_item_id, visible)
   SELECT v_zaploto_id, v_role_dono, si.id, true
   FROM zaploto_sidebar_items si WHERE si.zaploto_id = v_zaploto_id
-  AND si.code IN ('gestao_banca', 'dashboard', 'instances', 'maturador', 'ai_agents', 'crm', 'crm_kanban', 'crm_transferido',
+  AND si.code IN ('gestao_banca', 'dashboard', 'instances', 'maturador', 'ai_agents', 'crm', 'crm_kanban', 'crm_transferido', 'crm_avulsos',
     'campanhas', 'campanha_add_group', 'campanha_mensagem', 'campanha_grupos', 'contacts', 'import_contacts', 'meu_anti_spam', 'profile')
   ON CONFLICT (role_id, sidebar_item_id) DO UPDATE SET visible = true;
 
@@ -127,7 +128,7 @@ BEGIN
   INSERT INTO zaploto_role_sidebar (zaploto_id, role_id, sidebar_item_id, visible)
   SELECT v_zaploto_id, v_role_gestor, si.id, true
   FROM zaploto_sidebar_items si WHERE si.zaploto_id = v_zaploto_id
-  AND si.code IN ('gestao_trafego', 'vsl_redirect', 'dashboard', 'instances', 'maturador', 'ai_agents', 'crm', 'crm_kanban', 'crm_transferido',
+  AND si.code IN ('gestao_trafego', 'vsl_redirect', 'dashboard', 'instances', 'maturador', 'ai_agents', 'crm', 'crm_kanban', 'crm_transferido', 'crm_avulsos',
     'campanhas', 'campanha_add_group', 'campanha_mensagem', 'campanha_grupos', 'contacts', 'import_contacts', 'meu_anti_spam', 'profile')
   ON CONFLICT (role_id, sidebar_item_id) DO UPDATE SET visible = true;
 
@@ -135,7 +136,7 @@ BEGIN
   INSERT INTO zaploto_role_sidebar (zaploto_id, role_id, sidebar_item_id, visible)
   SELECT v_zaploto_id, v_role_gerente, si.id, true
   FROM zaploto_sidebar_items si WHERE si.zaploto_id = v_zaploto_id
-  AND si.code IN ('gestao_consultores', 'dashboard', 'instances', 'ai_agents', 'crm', 'crm_kanban', 'crm_transferido',
+  AND si.code IN ('gestao_consultores', 'dashboard', 'instances', 'ai_agents', 'crm', 'crm_kanban', 'crm_transferido', 'crm_avulsos',
     'campanhas', 'campanha_add_group', 'campanha_mensagem', 'campanha_grupos', 'contacts', 'import_contacts', 'list_cleaning', 'meu_anti_spam', 'profile')
   ON CONFLICT (role_id, sidebar_item_id) DO UPDATE SET visible = true;
 
@@ -143,7 +144,7 @@ BEGIN
   INSERT INTO zaploto_role_sidebar (zaploto_id, role_id, sidebar_item_id, visible)
   SELECT v_zaploto_id, v_role_consultor, si.id, true
   FROM zaploto_sidebar_items si WHERE si.zaploto_id = v_zaploto_id
-  AND si.code IN ('meu_desempenho', 'instances', 'crm', 'crm_kanban', 'crm_transferido', 'campanha_consultor', 'campanha_consultor_msg', 'campanha_consultor_grupos', 'ai_agents', 'meu_anti_spam', 'profile')
+  AND si.code IN ('meu_desempenho', 'instances', 'crm', 'crm_kanban', 'crm_transferido', 'crm_avulsos', 'campanha_consultor', 'campanha_consultor_msg', 'campanha_consultor_grupos', 'ai_agents', 'meu_anti_spam', 'profile')
   ON CONFLICT (role_id, sidebar_item_id) DO UPDATE SET visible = true;
 
   -- Admin steps

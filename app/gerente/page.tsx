@@ -1141,7 +1141,7 @@ export default function GerentePage() {
     setSolicitationModalOpen(true);
   };
 
-  // Ao selecionar o consultor: busca bancas em que ele faz parte (API) e filtra as bancas já carregadas da página
+  // Ao selecionar o consultor: busca bancas (API). Resposta já vem escopada; não cruzar com lista da página (evita lista vazia por divergência admin/gerente).
   useEffect(() => {
     if (!solicitationModalOpen || !userId) return;
     if (!solicitationConsultorId?.trim()) {
@@ -1152,15 +1152,18 @@ export default function GerentePage() {
     let cancelled = false;
     setSolicitationBancasLoading(true);
     setSolicitationBancaId('');
-    fetch(`/api/gerente/consultores/${solicitationConsultorId.trim()}/bancas`, { headers: { 'X-User-Id': userId } })
+    const isAdmin = userStatus === 'super_admin' || userStatus === 'admin';
+    const gerenteQs =
+      isAdmin && selectedGerente?.trim()
+        ? `?gerente_id=${encodeURIComponent(selectedGerente.trim())}`
+        : '';
+    fetch(`/api/gerente/consultores/${solicitationConsultorId.trim()}/bancas${gerenteQs}`, { headers: { 'X-User-Id': userId } })
       .then((res) => res.json())
       .then((data) => {
         if (cancelled) return;
         const apiBancas = (data?.success && Array.isArray(data?.data) ? data.data : []) as { id: string; name: string; url: string }[];
-        const idsFromApi = new Set(apiBancas.map((b) => b.id));
-        const filtered = bancas.filter((b) => idsFromApi.has(b.id));
-        setSolicitationBancasForConsultant(filtered);
-        if (filtered.length > 0) setSolicitationBancaId(filtered[0].id);
+        setSolicitationBancasForConsultant(apiBancas);
+        if (apiBancas.length > 0) setSolicitationBancaId(apiBancas[0].id);
       })
       .catch(() => {
         if (!cancelled) setSolicitationBancasForConsultant([]);
@@ -1169,7 +1172,7 @@ export default function GerentePage() {
         if (!cancelled) setSolicitationBancasLoading(false);
       });
     return () => { cancelled = true; };
-  }, [solicitationModalOpen, solicitationConsultorId, userId, bancas]);
+  }, [solicitationModalOpen, solicitationConsultorId, userId, userStatus, selectedGerente]);
 
   const handleSolicitationSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1186,6 +1189,7 @@ export default function GerentePage() {
     setSolicitationSuccess('');
     setSolicitationSubmitting(true);
     try {
+      const isAdminCaller = userStatus === 'super_admin' || userStatus === 'admin';
       const response = await fetch('/api/gerente/lead-request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-User-Id': userId as string },
@@ -1195,6 +1199,7 @@ export default function GerentePage() {
           consultores: [{ consultor_id: solicitationConsultorId.trim(), quantity: qty }],
           deadline_days: Math.max(1, Number(solicitationDeadlineDays) || 10),
           observations: solicitationObservations?.trim() || undefined,
+          ...(isAdminCaller && selectedGerente?.trim() ? { gerente_id: selectedGerente.trim() } : {}),
         }),
       });
       const result = await response.json();

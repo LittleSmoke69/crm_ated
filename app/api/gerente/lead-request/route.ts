@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
-import { requireStatus, getUserProfile } from '@/lib/middleware/permissions';
+import { requireAuth } from '@/lib/middleware/auth';
+import { getUserProfile } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { getConsultorsByManager } from '@/lib/utils/hierarchy';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
@@ -10,10 +11,16 @@ const LEAD_TYPES = ['registered', 'with_balance', 'has_won', 'has_withdrawn'] as
  * POST /api/gerente/lead-request
  * Recebe solicitação de leads do gerente: tipo de lead e lista de consultores com quantidade cada.
  * Persiste em gerente_lead_requests para o admin aprovar em admin/crm/lead-transfer.
+ * super_admin/admin: enviam em nome do gerente (body.gerente_id ou enroller do primeiro consultor).
  */
 export async function POST(req: NextRequest) {
   try {
-    const { userId: gerenteId } = await requireStatus(req, ['gerente']);
+    const { userId } = await requireAuth(req);
+    const profile = await getUserProfile(userId);
+    if (!profile?.status) {
+      return errorResponse('Perfil não encontrado.', 401);
+    }
+
     const body = await req.json();
     const { banca_id: bancaId, lead_type: leadTypeParam, consultores, observations } = body;
 
@@ -22,8 +29,8 @@ export async function POST(req: NextRequest) {
     }
 
     const leadTypes = Array.isArray(leadTypeParam)
-      ? leadTypeParam.filter((t: unknown) => typeof t === 'string' && LEAD_TYPES.includes(t as typeof LEAD_TYPES[number]))
-      : typeof leadTypeParam === 'string' && LEAD_TYPES.includes(leadTypeParam as typeof LEAD_TYPES[number])
+      ? leadTypeParam.filter((t: unknown) => typeof t === 'string' && LEAD_TYPES.includes(t as (typeof LEAD_TYPES)[number]))
+      : typeof leadTypeParam === 'string' && LEAD_TYPES.includes(leadTypeParam as (typeof LEAD_TYPES)[number])
         ? [leadTypeParam]
         : [];
     if (leadTypes.length === 0) {
@@ -35,7 +42,34 @@ export async function POST(req: NextRequest) {
       return errorResponse('Informe ao menos um consultor com quantidade de leads', 400);
     }
 
-    const consultorsUnderGerente = await getConsultorsByManager(gerenteId);
+    const firstConsultorRaw = consultores[0]?.consultor_id;
+    const firstConsultorId = typeof firstConsultorRaw === 'string' ? firstConsultorRaw.trim() : '';
+
+    let gerenteIdForRequest: string;
+    if (profile.status === 'gerente') {
+      gerenteIdForRequest = userId;
+    } else if (profile.status === 'super_admin' || profile.status === 'admin') {
+      let gid = typeof body.gerente_id === 'string' ? body.gerente_id.trim() : '';
+      if (!gid && firstConsultorId) {
+        const consultorProfile = await getUserProfile(firstConsultorId);
+        gid = (consultorProfile?.enroller ?? '').trim();
+      }
+      if (!gid) {
+        return errorResponse(
+          'Selecione um gerente no filtro da página ou informe gerente_id no corpo da requisição.',
+          400
+        );
+      }
+      const gerenteProfile = await getUserProfile(gid);
+      if (gerenteProfile?.status !== 'gerente') {
+        return errorResponse('O gerente indicado não é válido (perfil deve ser gerente).', 400);
+      }
+      gerenteIdForRequest = gid;
+    } else {
+      return errorResponse('Acesso negado. Apenas gerente, admin ou super_admin podem solicitar leads.', 403);
+    }
+
+    const consultorsUnderGerente = await getConsultorsByManager(gerenteIdForRequest);
     const allowedIds = new Set(consultorsUnderGerente.map((c) => c.id));
 
     const payload: { consultor_id: string; quantity: number }[] = [];
@@ -46,19 +80,19 @@ export async function POST(req: NextRequest) {
         return errorResponse('Cada item deve ter consultor_id e quantity (número >= 1)', 400);
       }
       if (!allowedIds.has(consultorId)) {
-        return errorResponse(`Consultor não pertence à sua equipe: ${consultorId}`, 403);
+        return errorResponse(`Consultor não pertence à equipe do gerente indicado: ${consultorId}`, 403);
       }
       payload.push({ consultor_id: consultorId, quantity });
     }
 
-    const profile = await getUserProfile(gerenteId);
-    const gerenteName = (profile?.full_name ?? profile?.email ?? '').trim() || (profile?.email ?? 'Gerente');
+    const gerenteProfile = await getUserProfile(gerenteIdForRequest);
+    const gerenteName = (gerenteProfile?.full_name ?? gerenteProfile?.email ?? '').trim() || (gerenteProfile?.email ?? 'Gerente');
 
     const observationsTrimmed = typeof observations === 'string' ? observations.trim() : '';
     const { data: row, error } = await supabaseServiceRole
       .from('gerente_lead_requests')
       .insert({
-        gerente_id: gerenteId,
+        gerente_id: gerenteIdForRequest,
         gerente_name: gerenteName,
         lead_type: leadTypeStored,
         consultores: payload,

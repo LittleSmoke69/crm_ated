@@ -1,7 +1,7 @@
 /**
  * Netlify Scheduled Function: anti-spam-group-scanner
  *
- * Cron: a cada 20 minutos (configurado no netlify.toml)
+ * Cron: a cada 1 minuto (configurado no netlify.toml)
  * Escaneia todos os grupos das configs ativas, remove blacklist e internacionais.
  * Salva logs em anti_spam_scan_jobs para controle via admin.
  * Processa em lotes de 5 grupos: retorna parcial conforme avança.
@@ -9,6 +9,7 @@
 
 import type { Handler } from '@netlify/functions';
 import { createClient } from '@supabase/supabase-js';
+import { normalizeToE164BR } from '../../lib/utils/phone-utils';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '';
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
@@ -174,19 +175,6 @@ async function getGroupParticipantsV2(instanceId: string, groupJid: string) {
   }
 }
 
-function isBrValid(digits: string): boolean {
-  return digits.length === 12 || digits.length === 13;
-}
-
-function toE164(phone: string): string | null {
-  let d = phone.replace(/\D/g, '').replace(/^0+/, '');
-  if (!d) return null;
-  if (d.startsWith('55') && d.length === 14 && d[2] === '0') d = d.slice(0, 2) + d.slice(3);
-  if (!d.startsWith('55')) d = '55' + d;
-  if (isBrValid(d)) return '+' + d;
-  return null;
-}
-
 async function recordAction(configId: string, bancaId: string | null, userId: string | null, groupJid: string, phoneE164: string, action: string, result: string, error: string | null, reason: string) {
   await supabase().from('anti_spam_actions').insert({
     config_id: configId, banca_id: bancaId, user_id: userId,
@@ -259,7 +247,7 @@ async function scanGroup(config: AntiSpamConfig, groupJid: string, groupName: st
     const raw = p.phone || '';
     if (!raw) continue;
 
-    const phoneE164 = toE164(raw);
+    const phoneE164 = normalizeToE164BR(raw);
 
     if (!phoneE164) {
       // internacional / inválido

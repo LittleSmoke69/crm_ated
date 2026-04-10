@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import Link from 'next/link';
 import { 
   Globe, 
   Layout as LayoutIcon,
@@ -25,7 +26,10 @@ import {
   Search,
   ChevronDown,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Kanban,
+  ArrowRightLeft,
+  UserPlus
 } from 'lucide-react';
 import StatusDistributionChart from '@/components/Charts/StatusDistributionChart';
 import TemporalEvolutionChart from '@/components/Charts/TemporalEvolutionChart';
@@ -667,6 +671,29 @@ export default function CRMSection({ userId }: CRMSectionProps) {
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
+      <nav className="flex flex-wrap gap-2" aria-label="Atalhos do CRM">
+        <Link
+          href="/crm/kanban"
+          className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold text-gray-600 transition-all hover:border-[#8CD955]/50 hover:bg-[#8CD955]/10 hover:text-[#6AB83D] dark:border-[#404040] dark:bg-[#2a2a2a] dark:text-gray-300 dark:hover:bg-[#8CD955]/15 dark:hover:text-[#8CD955]"
+        >
+          <Kanban className="h-3.5 w-3.5 shrink-0" />
+          Kanban
+        </Link>
+        <Link
+          href="/crm/transferido"
+          className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold text-gray-600 transition-all hover:border-[#8CD955]/50 hover:bg-[#8CD955]/10 hover:text-[#6AB83D] dark:border-[#404040] dark:bg-[#2a2a2a] dark:text-gray-300 dark:hover:bg-[#8CD955]/15 dark:hover:text-[#8CD955]"
+        >
+          <ArrowRightLeft className="h-3.5 w-3.5 shrink-0" />
+          Transferido
+        </Link>
+        <Link
+          href="/crm/avulsos"
+          className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold text-gray-600 transition-all hover:border-[#8CD955]/50 hover:bg-[#8CD955]/10 hover:text-[#6AB83D] dark:border-[#404040] dark:bg-[#2a2a2a] dark:text-gray-300 dark:hover:bg-[#8CD955]/15 dark:hover:text-[#8CD955]"
+        >
+          <UserPlus className="h-3.5 w-3.5 shrink-0" />
+          Avulsos
+        </Link>
+      </nav>
       {/* Filters Header */}
       <div className="bg-white dark:bg-[#2a2a2a] p-4 rounded-xl shadow-sm border border-gray-100 dark:border-[#404040] flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-3">

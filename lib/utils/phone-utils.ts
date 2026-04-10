@@ -48,36 +48,56 @@ export function extractPhones(text: string): string[] {
 }
 
 /**
+ * Parte nacional BR após o código 55: fixo DDD+8 ou móvel DDD+9+8.
+ * Evita tratar internacionais (ex. +62) como BR quando o payload vem sem código de país
+ * e o prefixo 55 era concatenado só pelo comprimento (12/13 dígitos).
+ */
+function isBrazilianNationalPart(national: string): boolean {
+  if (national.length === 10) {
+    return /^[1-9][1-9]\d{8}$/.test(national);
+  }
+  if (national.length === 11) {
+    return /^[1-9][1-9]9\d{8}$/.test(national);
+  }
+  return false;
+}
+
+/**
  * Normaliza número para E.164 Brasil (+55...).
  * Aceita: 31999887766, 31 99988-7766, +55 31 999887766, JIDs WhatsApp.
- * Rejeita números que não correspondam ao formato BR válido:
- *   - Fixo:   55 + DDD(2) + 8 dígitos  = 12 dígitos total
- *   - Móvel:  55 + DDD(2) + 9XXXXXXXX  = 13 dígitos total
+ * Rejeita internacionais explícitos (ex. 62… Indonésia) e formatos que só batem
+ * no comprimento mas não na estrutura BR (DDD + fixo/móvel).
  */
 export function normalizeToE164BR(phone: string): string | null {
   if (!phone || typeof phone !== 'string') return null;
   let digits = phone.replace(/\D/g, '');
   if (!digits.length) return null;
 
-  // Remove zeros à esquerda (ex.: 05531999887766 -> 5531999887766)
   digits = digits.replace(/^0+/, '');
 
-  // Adiciona prefixo 55 se ausente (ex.: 31999887766 -> 5531999887766)
+  // Indonésia (+62): nunca prefixar 55 — antes virava "falso" +55 com 12/13 dígitos
+  if (digits.startsWith('62') && digits.length >= 10) {
+    return null;
+  }
+
   if (!digits.startsWith('55')) {
     digits = '55' + digits;
   }
 
-  // 55 seguido de 0 (código de saída) + 11 dígitos: remove o 0 (ex.: 55031999887766 -> 5531999887766)
   if (digits.length === 14 && digits.startsWith('55') && digits[2] === '0') {
     digits = digits.slice(0, 2) + digits.slice(3);
   }
 
-  // Apenas 12 (fixo) ou 13 (móvel) dígitos são válidos para BR
-  if (digits.length === 12 || digits.length === 13) {
-    return '+' + digits;
+  if (digits.length !== 12 && digits.length !== 13) {
+    return null;
   }
 
-  return null;
+  const national = digits.slice(2);
+  if (!isBrazilianNationalPart(national)) {
+    return null;
+  }
+
+  return '+' + digits;
 }
 
 /**

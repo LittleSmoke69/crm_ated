@@ -4,11 +4,13 @@ import React, { useState, useEffect, useRef, useMemo, useCallback, Suspense, sta
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { Kanban as KanbanIcon, Plus, Users, Target, CheckCircle2, MessageSquare, AlertCircle, Eye, RefreshCw, X, Gift, Loader2, Search, Ticket, Sparkles, Package } from 'lucide-react';
+import CrmSubNav from '@/components/CRM/CrmSubNav';
 import FilterBar from '@/components/CRM/FilterBar';
 import KanbanColumn from '@/components/CRM/KanbanColumn';
 import SortColumnModal from '@/components/CRM/SortColumnModal';
 import { Lead, Column, ThermalStatus } from '@/components/CRM/types';
-import { useSearchParams } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
+import { COMBO_AVULSO_EMAIL_MARKER } from '@/lib/crm/combo-avulso';
 import { useToast } from '@/hooks/useToast';
 import ToastContainer from '@/components/Toast/ToastContainer';
 
@@ -216,8 +218,10 @@ const getDefaultColumns = (leads: Lead[] = []): Column[] => {
 
 const KanbanContent = () => {
   const { checking, userId } = useRequireAuth();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const targetUserId = searchParams.get('userId');
+  const isComboAvulsoCrm = pathname?.startsWith('/crm/avulsos') ?? false;
   const { toasts, showToast, removeToast } = useToast();
 
   const [rawLeads, setRawLeads] = useState<Lead[]>([]); // Leads da API (banca+período) - filtros aplicados localmente
@@ -296,7 +300,7 @@ const KanbanContent = () => {
       isInitialLoadRef.current = false;
     }
     loadLeads(!isInitialLoad);
-  }, [userId, targetUserId, bancaKey, dateKey, bancasReady]);
+  }, [userId, targetUserId, bancaKey, dateKey, bancasReady, isComboAvulsoCrm]);
 
   // Gerente visualizando CRM do consultor: registra sessão, heartbeat e cleanup ao sair
   const isViewingConsultorCrm = !!targetUserId && targetUserId !== userId;
@@ -464,6 +468,9 @@ const KanbanContent = () => {
           url.searchParams.append('to', parts[2]);
         }
       }
+      if (isComboAvulsoCrm) {
+        url.searchParams.set('combo_avulso', '1');
+      }
       return url;
     };
 
@@ -572,7 +579,7 @@ const KanbanContent = () => {
         setFilterLoading(false);
       }
     }
-  }, [userId, targetUserId, filters, exclusiveBancasList, formatApiLeadsToLead, showToast]);
+  }, [userId, targetUserId, filters, exclusiveBancasList, formatApiLeadsToLead, showToast, isComboAvulsoCrm]);
 
   const handleBancasLoaded = useCallback((bancas: { id: string; name: string; url: string }[]) => {
     setExclusiveBancasList(bancas);
@@ -1376,10 +1383,22 @@ const KanbanContent = () => {
               </div>
               <div>
                 <h1 className="text-xl md:text-2xl font-bold text-gray-800 dark:text-white leading-tight">
-                  {consultorInfo ? `CRM: ${consultorInfo.name}` : 'Meu Pipeline'}
+                  {consultorInfo
+                    ? isComboAvulsoCrm
+                      ? `CRM Avulsos: ${consultorInfo.name}`
+                      : `CRM: ${consultorInfo.name}`
+                    : isComboAvulsoCrm
+                      ? 'CRM Avulsos'
+                      : 'Meu Pipeline'}
                 </h1>
                 <p className="text-[11px] md:text-sm text-gray-500 dark:text-gray-400 font-medium line-clamp-1">
-                  {consultorInfo ? `Leads de ${consultorInfo.email}` : 'Gerencie seus leads e maximize conversões'}
+                  {consultorInfo
+                    ? isComboAvulsoCrm
+                      ? `Leads de ${consultorInfo.email} · somente e-mail ${COMBO_AVULSO_EMAIL_MARKER}`
+                      : `Leads de ${consultorInfo.email}`
+                    : isComboAvulsoCrm
+                      ? `Somente clientes com e-mail ${COMBO_AVULSO_EMAIL_MARKER}`
+                      : 'Gerencie seus leads e maximize conversões'}
                 </p>
               </div>
             </div>
@@ -1424,6 +1443,8 @@ const KanbanContent = () => {
               </button>
             </div>
           </div>
+
+          <CrmSubNav />
 
           {/* Quick Metrics Header - Sempre mostra os cards; overlay quando leads estão carregando */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6 animate-in fade-in slide-in-from-top-2 duration-500 relative">
