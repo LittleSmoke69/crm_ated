@@ -5,21 +5,21 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 /**
  * GET /api/crm/messages - Lista mensagens
- * - Admin: vê todas as mensagens de todos os usuários
- * - Usuário normal: vê apenas suas próprias mensagens
+ * - super_admin e admin: vê todas as mensagens de todos os usuários
+ * - Demais: apenas as próprias mensagens
  */
 export async function GET(req: NextRequest) {
   try {
     const { userId } = await requireAuth(req);
 
-    // Verifica se o usuário é admin
     const { data: profile } = await supabaseServiceRole
       .from('profiles')
       .select('status')
       .eq('id', userId)
       .single();
 
-    const isAdmin = profile?.status === 'admin';
+    const canSeeAll =
+      profile?.status === 'super_admin' || profile?.status === 'admin';
 
     // Busca mensagens
     let query = supabaseServiceRole
@@ -36,8 +36,7 @@ export async function GET(req: NextRequest) {
     
     // Inclui campos de mídia se existirem
 
-    // Se não for admin, filtra apenas mensagens do usuário
-    if (!isAdmin) {
+    if (!canSeeAll) {
       query = query.eq('user_id', userId);
     }
 

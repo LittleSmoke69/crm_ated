@@ -220,3 +220,22 @@ export async function requireAuthWithProfile(req: NextRequest): Promise<AuthUser
   };
 }
 
+/**
+ * Apenas super_admin (flows, webhooks, auditoria de hierarquia, etc.).
+ * Implementado aqui para evitar duplicação de export em permissions.ts (auth já importa getUserProfile de permissions).
+ */
+export async function requireSuperAdmin(req: NextRequest): Promise<{ userId: string; profile: UserProfile }> {
+  const { userId } = await requireAuth(req);
+  let profile = await getUserProfile(userId);
+  if (!profile) {
+    await new Promise((r) => setTimeout(r, 400));
+    profile = await getUserProfile(userId);
+  }
+  if (!profile) {
+    throw new Error('Perfil não encontrado');
+  }
+  if (profile.status !== 'super_admin') {
+    throw new Error('Acesso negado. Apenas SuperAdmin pode acessar este recurso.');
+  }
+  return { userId, profile };
+}

@@ -5,7 +5,7 @@
  */
 
 import { NextRequest } from 'next/server';
-import { requireSuperAdmin } from '@/lib/middleware/permissions';
+import { requireSuperAdmin } from '@/lib/middleware/auth';
 import { successResponse, errorResponse } from '@/lib/utils/response';
 import { isCentralTenant } from '@/lib/services/central-push-service';
 

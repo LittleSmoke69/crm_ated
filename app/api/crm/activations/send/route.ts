@@ -12,9 +12,10 @@ import { resolveEvolutionInstanceForActivation } from '@/lib/crm/resolve-evoluti
 import { maybeMarkEvolutionInstanceDisconnected, messageIndicatesEvolutionSessionDropped } from '@/lib/evolution/mark-instance-disconnected';
 import { instanceNameForMassSendGroupIndex } from '@/lib/crm/mass-send-instance-names';
 import { normalizeMassSendGroupId } from '@/lib/crm/mass-send-group-idempotency';
+import { getActivationEvolutionFetchTimeoutMs } from '@/lib/crm/activation-evolution-fetch-timeout';
 
 export const runtime = 'nodejs';
-export const maxDuration = 300; // 5 minutos
+export const maxDuration = 300; // 5 minutos (Netlify/Vercel: alinhar ao plano; ver ACTIVATION_EVOLUTION_FETCH_TIMEOUT_MS)
 
 /**
  * Normaliza a base_url removendo barras finais e duplas
@@ -372,6 +373,8 @@ export async function POST(req: NextRequest) {
       errors: [] as any[],
     };
 
+    const evolutionFetchTimeoutMs = getActivationEvolutionFetchTimeoutMs();
+
     // Menção @all: garantir boolean explícito (Evolution API pode aceitar mentionsEveryone ou mentions_everyone)
     const isMentionAll = message.mention_all === true || String(message.mention_all).toLowerCase() === 'true';
 
@@ -409,11 +412,10 @@ export async function POST(req: NextRequest) {
         const { baseUrl: instBaseUrl, apiKey, instanceName: instNameForUrl, instanceId } = creds;
         const normalizedBaseUrl = normalizeBaseUrl(instBaseUrl);
 
-        const FETCH_TIMEOUT_MS = 30000; // 30 segundos
         const controller = new AbortController();
         const timeoutId = setTimeout(() => {
           controller.abort();
-        }, FETCH_TIMEOUT_MS);
+        }, evolutionFetchTimeoutMs);
 
         let url: string;
         let requestBody: any;
@@ -641,7 +643,7 @@ export async function POST(req: NextRequest) {
         } catch (fetchError: any) {
           clearTimeout(timeoutId);
           if (fetchError.name === 'AbortError' || controller.signal.aborted) {
-            throw new Error(`Timeout: requisição excedeu ${FETCH_TIMEOUT_MS}ms`);
+            throw new Error(`Timeout: requisição excedeu ${evolutionFetchTimeoutMs}ms`);
           }
           throw fetchError;
         }

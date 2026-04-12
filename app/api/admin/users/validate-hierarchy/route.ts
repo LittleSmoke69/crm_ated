@@ -121,12 +121,13 @@ export async function GET(req: NextRequest) {
 
       if (user.status === 'consultor' && user.enroller) {
         const enroller = allUsers.find((u) => u.id === user.enroller);
-        if (enroller && enroller.status !== 'gerente') {
+        const validConsultorEnroller = ['gerente', 'admin', 'super_admin'].includes(enroller?.status ?? '');
+        if (enroller && !validConsultorEnroller) {
           brokenHierarchies.push({
             userId: user.id,
             email: user.email,
             status: user.status,
-            expectedEnroller: 'gerente',
+            expectedEnroller: 'gerente, admin ou super_admin',
             actualEnroller: enroller.status,
           });
         }

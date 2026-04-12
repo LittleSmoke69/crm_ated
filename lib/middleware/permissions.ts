@@ -235,24 +235,6 @@ export async function requireAntiSpamAccess(req: NextRequest): Promise<{ userId:
   return { userId, profile };
 }
 
-/**
- * Requer que o usuário seja SuperAdmin (acesso a Flows e Webhooks)
- */
-export async function requireSuperAdmin(req: NextRequest): Promise<{ userId: string; profile: UserProfile }> {
-  const { userId } = await requireAuth(req);
-  const profile = await getUserProfile(userId);
-
-  if (!profile) {
-    throw new Error('Perfil não encontrado');
-  }
-
-  if (profile.status !== 'super_admin') {
-    throw new Error('Acesso negado. Apenas SuperAdmin pode acessar este recurso.');
-  }
-
-  return { userId, profile };
-}
-
 /** Tenant padrão quando profile.zaploto_id é null (ex: usuários antigos) */
 const DEFAULT_ZAPLOTO_ID = '00000000-0000-0000-0000-000000000001';
 
@@ -476,7 +458,8 @@ export async function getSubordinates(userId: string): Promise<UserProfile[]> {
 
 /**
  * Valida se a hierarquia está correta
- * Consultor e Gerente podem ter enroller NULL (sem superior) ou ter Gerente/Dono como enroller
+ * Consultor: enroller obrigatório — Gerente, Admin ou Super Admin
+ * Gerente: enroller opcional — Dono, outro Gerente, Admin ou Super Admin
  * Dono de banca pode ter enroller NULL ou outro Dono de banca (se houver estrutura superior)
  * Admin deve ter enroller NULL
  * Auditoria e Suporte podem ter Admin como enroller ou NULL
@@ -514,10 +497,10 @@ export async function validateHierarchy(userId: string, status: UserStatus | str
     return { valid: true };
   }
 
-  // Gerente, Dono de banca e Gestor podem ter enroller NULL (sem superior). Consultor sempre deve ter um Gerente.
+  // Gerente, Dono de banca e Gestor podem ter enroller NULL (sem superior). Consultor sempre deve ter um superior válido.
   if (enrollerId === null) {
     if (statusStr === 'consultor') {
-      return { valid: false, error: 'Consultor deve ser atribuído a um Gerente' };
+      return { valid: false, error: 'Consultor deve ser atribuído a um Gerente ou Admin' };
     }
     if (statusStr === 'dono_banca' || statusStr === 'gerente' || statusStr === 'gestor') {
       return { valid: true };
@@ -533,8 +516,9 @@ export async function validateHierarchy(userId: string, status: UserStatus | str
 
   // Valida hierarquia
   if (statusStr === 'consultor') {
-    if (enrollerProfile.status !== 'gerente') {
-      return { valid: false, error: 'Consultor deve ter um Gerente como enroller' };
+    const validConsultorEnroller = ['gerente', 'admin', 'super_admin'].includes(enrollerProfile.status ?? '');
+    if (!validConsultorEnroller) {
+      return { valid: false, error: 'Consultor deve ter um Gerente, Admin ou Super Admin como enroller' };
     }
   } else if (statusStr === 'gerente') {
     // Gerente pode ter Dono de banca, outro Gerente, Admin ou Super Admin como enroller (super_admin/admin/suporte podem atribuir sem dono de banca)
@@ -591,4 +575,3 @@ export async function hasHierarchyCycle(userId: string, enroller: string | null)
 
   return false;
 }
-

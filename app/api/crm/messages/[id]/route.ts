@@ -51,10 +51,11 @@ export async function PATCH(
       .eq('id', userId)
       .single();
 
-    const isAdmin = profile?.status === 'admin';
+    const canModerateAll =
+      profile?.status === 'super_admin' || profile?.status === 'admin';
     const isOwner = existingMessage.user_id === userId;
 
-    if (!isAdmin && !isOwner) {
+    if (!canModerateAll && !isOwner) {
       return errorResponse('Acesso negado. Você não tem permissão para editar esta mensagem.', 403);
     }
 
@@ -145,10 +146,11 @@ export async function DELETE(
       .eq('id', userId)
       .single();
 
-    const isAdmin = profile?.status === 'admin';
+    const canModerateAll =
+      profile?.status === 'super_admin' || profile?.status === 'admin';
     const isOwner = existingMessage.user_id === userId;
 
-    if (!isAdmin && !isOwner) {
+    if (!canModerateAll && !isOwner) {
       return errorResponse('Acesso negado. Você não tem permissão para deletar esta mensagem.', 403);
     }
 

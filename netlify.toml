@@ -5,6 +5,8 @@
 [[plugins]]
   package = "@netlify/plugin-nextjs"
 
+# Timeout fetch Next → Evolution (sendMedia/vídeo): ACTIVATION_EVOLUTION_FETCH_TIMEOUT_MS (padrão 180000).
+# Rotas app/api/crm/activations/send e mass-send/process usam maxDuration = 300 onde suportado.
 # Scheduled Functions: process-campaign-queue, process-message-queue, check-instances-status
 # Maturador: maturation-tick roda a cada 1 minuto; maturation-scheduler desativado
 # process-campaign-queue e process-message-queue: rodam a cada 1 minuto para processar jobs das filas

@@ -49,25 +49,26 @@ CREATE TABLE IF NOT EXISTS public.user_bancas (
 CREATE INDEX IF NOT EXISTS idx_user_bancas_user_id ON public.user_bancas (user_id);
 CREATE INDEX IF NOT EXISTS idx_user_bancas_banca_ids_gin ON public.user_bancas USING GIN (banca_ids);
 
-COMMENT ON TABLE public.user_bancas IS 'Bancas em que consultor/gerente/gestor atua';
+COMMENT ON TABLE public.user_bancas IS 'Bancas em que consultor/gerente/gestor/admin atua';
 COMMENT ON COLUMN public.user_bancas.banca_ids IS 'Array de UUIDs (como string) das bancas';
 
 ALTER TABLE public.user_bancas ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Users can read own user_bancas" ON public.user_bancas;
 DROP POLICY IF EXISTS "Consultor Gerente Gestor SuperAdmin can manage own user_bancas" ON public.user_bancas;
+DROP POLICY IF EXISTS "Consultor Gerente Gestor SuperAdmin Admin can manage own user_bancas" ON public.user_bancas;
 
 CREATE POLICY "Users can read own user_bancas"
   ON public.user_bancas FOR SELECT
   USING (auth.uid() = user_id);
 
-CREATE POLICY "Consultor Gerente Gestor SuperAdmin can manage own user_bancas"
+CREATE POLICY "Consultor Gerente Gestor SuperAdmin Admin can manage own user_bancas"
   ON public.user_bancas FOR ALL
   USING (
     auth.uid() = user_id
     AND EXISTS (
       SELECT 1 FROM public.profiles p
       WHERE p.id = auth.uid()
-        AND p.status IN ('consultor', 'gerente', 'super_admin', 'gestor')
+        AND p.status IN ('consultor', 'gerente', 'super_admin', 'gestor', 'admin')
     )
   );

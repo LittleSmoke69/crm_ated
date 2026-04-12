@@ -3,11 +3,12 @@ import { requireAdminOrSuporte } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { getEffectiveZaplotoId } from '@/lib/tenant-context';
+import { recordHierarchyNetworkAudit } from '@/lib/admin/hierarchy-network-audit';
 
 const LOG = '[PUT /api/admin/users/[userId]/bancas]';
 
-/** Status para os quais o GET retorna banca_ids (demais retornam []). PUT aceita qualquer usuário para fluxo da hierarquia. */
-const STATUS_WITH_BANCAS = ['consultor', 'gerente', 'gestor', 'suporte'];
+/** Status para os quais o GET retorna banca_ids (demais retornam []). Inclui admin para vínculo na hierarquia. PUT aceita qualquer usuário. */
+const STATUS_WITH_BANCAS = ['consultor', 'gerente', 'gestor', 'suporte', 'admin'];
 
 /**
  * PUT /api/admin/users/[userId]/bancas - Define as bancas em que o consultor/gerente atua (admin)
@@ -34,6 +35,19 @@ export async function PUT(
       console.warn(`${LOG} Usuário não encontrado: ${userId}`);
       return errorResponse('Usuário não encontrado', 404);
     }
+
+    const { data: prevBancasRow } = await supabaseServiceRole
+      .from('user_bancas')
+      .select('banca_ids')
+      .eq('user_id', userId)
+      .maybeSingle();
+    const prevIds = Array.isArray(prevBancasRow?.banca_ids) ? [...(prevBancasRow!.banca_ids as string[])] : [];
+
+    const { data: targetProfile } = await supabaseServiceRole
+      .from('profiles')
+      .select('email, status')
+      .eq('id', userId)
+      .maybeSingle();
 
     const body = await req.json().catch(() => ({}));
     const rawBancaIds = body?.banca_ids;
@@ -80,6 +94,26 @@ export async function PUT(
     if (upsertError) {
       console.error(`${LOG} Erro ao salvar user_bancas:`, upsertError);
       return errorResponse(upsertError.message || 'Erro ao atualizar bancas', 500);
+    }
+
+    const prevNorm = [...prevIds].map((x) => String(x).toLowerCase()).sort().join(',');
+    const nextNorm = [...idsToSave].map((x) => String(x).toLowerCase()).sort().join(',');
+    if (prevNorm !== nextNorm) {
+      await recordHierarchyNetworkAudit({
+        zaploto_id: profile.zaploto_id ?? null,
+        actor_id: profile.id,
+        actor_email: profile.email,
+        actor_status: profile.status,
+        action: 'user_bancas.set',
+        target_user_id: userId,
+        summary: `Bancas CRM (${targetProfile?.email || userId}): vínculo atualizado`,
+        meta: {
+          target_email: targetProfile?.email,
+          target_status: targetProfile?.status,
+          banca_ids_before: prevIds,
+          banca_ids_after: idsToSave,
+        },
+      });
     }
 
     return successResponse(

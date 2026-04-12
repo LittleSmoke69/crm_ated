@@ -15,6 +15,8 @@ import { triggerMassSendProcessFromOrigin } from '@/lib/crm/trigger-mass-send-pr
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
+/** Alinha com disparo síncrono / tempo Evolution (ACTIVATION_EVOLUTION_FETCH_TIMEOUT_MS até 270s). */
+export const maxDuration = 300;
 
 const HEARTBEAT_MS = 5_000;
 const CHAIN_FOLLOWUP_MS = 4_500;

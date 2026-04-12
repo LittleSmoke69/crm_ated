@@ -3,6 +3,7 @@ import { requireAdminOrSuporte } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { validateHierarchy, hasHierarchyCycle, UserStatus } from '@/lib/middleware/permissions';
+import { recordHierarchyNetworkAudit } from '@/lib/admin/hierarchy-network-audit';
 import bcrypt from 'bcryptjs';
 
 /**
@@ -13,7 +14,7 @@ export async function PATCH(
   { params }: { params: Promise<{ userId: string }> }
 ) {
   try {
-    await requireAdminOrSuporte(req);
+    const { profile: actorProfile } = await requireAdminOrSuporte(req);
     const { userId } = await params;
     const body = await req.json();
     const { email, fullName, password, status, enroller, isActive, bancaName, bancaUrl } = body;
@@ -132,6 +133,31 @@ export async function PATCH(
         });
     }
 
+    const auditBits: string[] = [];
+    if (updateData.status) auditBits.push(`cargo ${currentUser.status} → ${updateData.status}`);
+    if (enroller !== undefined) auditBits.push('superior (enroller) alterado');
+    if (updateData.email) auditBits.push('email alterado');
+    if (updateData.full_name !== undefined) auditBits.push('nome alterado');
+    if (updateData.password_hash) auditBits.push('senha alterada');
+    if (updateData.banca_name !== undefined || updateData.banca_url !== undefined) auditBits.push('nome/url da banca');
+    if (typeof isActive === 'boolean') auditBits.push(isActive ? 'conta ativada' : 'conta desativada');
+    if (auditBits.length > 0) {
+      await recordHierarchyNetworkAudit({
+        zaploto_id: actorProfile.zaploto_id ?? null,
+        actor_id: actorProfile.id,
+        actor_email: actorProfile.email,
+        actor_status: actorProfile.status,
+        action: 'user.update',
+        target_user_id: userId,
+        summary: `${currentUser.email}: ${auditBits.join('; ')}`,
+        meta: {
+          target_email: currentUser.email,
+          target_was_status: currentUser.status,
+          fields: auditBits,
+        },
+      });
+    }
+
     return successResponse(updatedUser, 'Usuário atualizado com sucesso');
   } catch (err: any) {
     return serverErrorResponse(err);
@@ -146,8 +172,14 @@ export async function DELETE(
   { params }: { params: Promise<{ userId: string }> }
 ) {
   try {
-    await requireAdminOrSuporte(req);
+    const { profile: actorProfile } = await requireAdminOrSuporte(req);
     const { userId } = await params;
+
+    const { data: victim } = await supabaseServiceRole
+      .from('profiles')
+      .select('id, email, full_name, status')
+      .eq('id', userId)
+      .maybeSingle();
 
     // Verifica se usuário tem subordinados
     const { data: subordinates } = await supabaseServiceRole
@@ -181,6 +213,19 @@ export async function DELETE(
 
     if (deleteError) {
       return errorResponse(`Erro ao remover usuário: ${deleteError.message}`, 400);
+    }
+
+    if (victim) {
+      await recordHierarchyNetworkAudit({
+        zaploto_id: actorProfile.zaploto_id ?? null,
+        actor_id: actorProfile.id,
+        actor_email: actorProfile.email,
+        actor_status: actorProfile.status,
+        action: 'user.delete',
+        target_user_id: userId,
+        summary: `Removeu usuário ${victim.email} (${victim.status})`,
+        meta: { target_email: victim.email, target_status: victim.status },
+      });
     }
 
     return successResponse({ id: userId }, 'Usuário removido com sucesso');

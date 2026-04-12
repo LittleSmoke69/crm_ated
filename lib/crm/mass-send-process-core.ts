@@ -48,14 +48,15 @@ import {
   instanceNameForMassSendGroupIndex,
   normalizeActivationMassSendInstanceNames,
 } from '@/lib/crm/mass-send-instance-names';
+import { getActivationEvolutionFetchTimeoutMs } from '@/lib/crm/activation-evolution-fetch-timeout';
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
-const EVOLUTION_FETCH_TIMEOUT_MS = 30_000;
+const EVOLUTION_FETCH_TIMEOUT_MS = getActivationEvolutionFetchTimeoutMs();
 const PTV_FETCH_TIMEOUT_MS = 45_000;
 /**
  * TTL do lock na query de “job disponível”. Precisa cobrir 1 grupo lento + retries
- * (ex.: 30s timeout × tentativas + 3s + 5s) sem outro worker assumir o mesmo job.
+ * (timeout Evolution configurável via ACTIVATION_EVOLUTION_FETCH_TIMEOUT_MS) sem outro worker assumir o mesmo job.
  */
 /** Cobrir PTV + rede lenta + claim IN_FLIGHT sem outro worker roubar o job no meio. */
 const LOCK_TTL_MS = 900_000;

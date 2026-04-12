@@ -10,6 +10,7 @@
  */
 import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
+import { getUserProfile } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { triggerMassSendProcessChained } from '@/lib/crm/trigger-mass-send-chained';
@@ -24,12 +25,18 @@ function isNoRowsError(error: { code?: string; message?: string } | null): boole
   return msg.includes('0 rows') || msg.includes('multiple (or no) rows');
 }
 
+function canModerateAllActivations(profile: { status?: string | null } | null): boolean {
+  return profile?.status === 'super_admin' || profile?.status === 'admin';
+}
+
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { userId } = await requireAuth(req);
+    const profile = await getUserProfile(userId);
+    const isElevated = canModerateAllActivations(profile);
     const { id: rawId } = await params;
     const jobId = typeof rawId === 'string' ? rawId.trim() : '';
 
@@ -53,9 +60,11 @@ export async function GET(
       return errorResponse('Campanha não encontrada', 404);
     }
 
-    if (job.user_id !== userId) {
+    if (job.user_id !== userId && !isElevated) {
       return errorResponse('Sem permissão para ver esta campanha', 403);
     }
+
+    const groupsOwnerId = String(job.user_id || userId);
 
     const { data: groupRows, error: groupsErr } = await supabaseServiceRole
       .from('activation_mass_send_job_groups')
@@ -79,7 +88,7 @@ export async function GET(
         .from('whatsapp_groups')
         .select('group_id, group_subject')
         .in('instance_name', instanceNamesForLookup)
-        .eq('user_id', userId)
+        .eq('user_id', groupsOwnerId)
         .in('group_id', allGroupIds);
       if (Array.isArray(groupNames)) {
         for (const g of groupNames) {
@@ -116,6 +125,8 @@ export async function PATCH(
 ) {
   try {
     const { userId } = await requireAuth(req);
+    const profile = await getUserProfile(userId);
+    const isElevated = canModerateAllActivations(profile);
     const { id: rawId } = await params;
     const jobId = typeof rawId === 'string' ? rawId.trim() : '';
 
@@ -145,7 +156,7 @@ export async function PATCH(
       return errorResponse('Campanha não encontrada', 404);
     }
 
-    if (job.user_id !== userId) {
+    if (job.user_id !== userId && !isElevated) {
       return errorResponse('Sem permissão', 403);
     }
 
@@ -202,6 +213,8 @@ export async function DELETE(
 ) {
   try {
     const { userId } = await requireAuth(_req);
+    const profile = await getUserProfile(userId);
+    const isElevated = canModerateAllActivations(profile);
     const { id: jobId } = await params;
 
     if (!jobId) {
@@ -218,7 +231,7 @@ export async function DELETE(
       return errorResponse('Campanha não encontrada', 404);
     }
 
-    if (job.user_id !== userId) {
+    if (job.user_id !== userId && !isElevated) {
       return errorResponse('Sem permissão para excluir esta campanha', 403);
     }
 

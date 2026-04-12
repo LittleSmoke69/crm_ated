@@ -3,6 +3,7 @@ import { requireAdminOrSuporte } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { validateHierarchy, hasHierarchyCycle, UserStatus } from '@/lib/middleware/permissions';
+import { recordHierarchyNetworkAudit } from '@/lib/admin/hierarchy-network-audit';
 import bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
 
@@ -103,6 +104,21 @@ export async function POST(req: NextRequest) {
         }
       }
     }
+
+    await recordHierarchyNetworkAudit({
+      zaploto_id: profile.zaploto_id ?? null,
+      actor_id: profile.id,
+      actor_email: profile.email,
+      actor_status: profile.status,
+      action: 'user.create',
+      target_user_id: newUser.id,
+      summary: `Criou ${status}: ${newUser.email}`,
+      meta: {
+        new_status: status,
+        banca_ids: Array.isArray(bancaIds) ? bancaIds : [],
+        enroller: enroller || null,
+      },
+    });
 
     return successResponse(newUser, 'Usuário criado com sucesso');
   } catch (err: any) {

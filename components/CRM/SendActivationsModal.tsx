@@ -560,8 +560,8 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
   return (
     <>
       <ToastContainer toasts={toasts} onClose={removeToast} />
-      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-3 sm:p-4 overflow-y-auto">
-        <div className="bg-gray-100 dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-2xl w-full max-w-md sm:max-w-lg shadow-2xl flex flex-col min-h-0 max-h-[calc(100vh-2rem)] my-auto overflow-y-auto overflow-x-hidden">
+      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-3 sm:p-4 overflow-y-auto overscroll-contain">
+        <div className="bg-gray-100 dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-2xl w-full max-w-lg sm:max-w-2xl shadow-2xl flex flex-col h-[min(calc(100dvh-1.5rem),920px)] max-h-[min(calc(100dvh-1.5rem),920px)] my-auto overflow-hidden">
         {/* Header */}
         <div className="p-4 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between flex-shrink-0">
           <div className="flex-1 pr-2">
@@ -626,10 +626,6 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
               </div>
             </>
           )}
-          <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-2">
-            Marque ao menos uma instância para carregar os grupos. Várias instâncias: o disparo alterna por grupo
-            (1º grupo → 1ª inst., 2º → 2ª, e assim por diante).
-          </p>
         </div>
 
         {/* Filtros e Seleção */}
@@ -692,10 +688,10 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
           </div>
         </div>
 
-        {/* Lista de Grupos - scroll interno; altura limitada para o footer ficar sempre visível */}
-        <div className="flex-1 min-h-[100px] overflow-y-auto overflow-x-hidden px-2 py-2 custom-scrollbar" style={{ maxHeight: '220px' }}>
+        {/* Lista de Grupos — única área com scroll; header/filtros/rodapé permanecem fixos no card */}
+        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-2 py-2 custom-scrollbar">
           {loading ? (
-            <div className="flex flex-col items-center justify-center min-h-[200px] py-12 gap-3">
+            <div className="flex flex-col items-center justify-center py-12 gap-3 min-h-[10rem]">
               <Loader2 className="w-8 h-8 text-[#8CD955] animate-spin" />
               <span className="text-gray-500 dark:text-gray-400 text-sm inline-flex items-center">
                 Isso pode demorar um pouco
@@ -707,7 +703,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
               </span>
             </div>
           ) : filteredGroups.length === 0 ? (
-            <div className="flex flex-col items-center justify-center min-h-[200px] py-12 text-center">
+            <div className="flex flex-col items-center justify-center py-12 text-center min-h-[10rem]">
               <span className="text-gray-500 dark:text-gray-400 text-sm">Nenhum grupo encontrado</span>
             </div>
           ) : (
@@ -778,7 +774,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
           </div>
         )}
 
-        {/* Footer Actions - sempre visível */}
+        {/* Rodapé fixo ao fundo do card — não entra no scroll da lista */}
         <div className="p-4 border-t border-gray-200 dark:border-[#404040] bg-white dark:bg-[#333] flex gap-3 flex-shrink-0">
           <button
             type="button"

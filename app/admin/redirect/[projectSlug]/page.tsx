@@ -414,28 +414,36 @@ export default function AdminRedirectPage() {
   if (checking || loading) {
     return (
       <Layout>
-        <div className="flex items-center justify-center p-12">
-          <Loader2 className="w-8 h-8 animate-spin text-gray-500" />
+        <div className="flex items-center justify-center py-12 w-full">
+          <Loader2 className="w-8 h-8 animate-spin text-gray-500 dark:text-[#aaa]" />
         </div>
       </Layout>
     );
   }
 
-  const inputClass = 'w-full border border-gray-300 rounded-xl px-4 py-2.5 text-gray-800 placeholder:text-gray-500 focus:ring-2 focus:ring-[#8CD955]/50 focus:border-[#8CD955] outline-none';
+  const inputClass =
+    'w-full border border-gray-300 dark:border-[#555] rounded-xl px-4 py-2.5 bg-white dark:bg-[#333] text-gray-800 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#8CD955]/50 focus:border-[#8CD955] outline-none';
 
   return (
     <Layout>
-      <div className="p-6 max-w-6xl mx-auto">
-        <div className="flex items-center gap-2 mb-4">
-          <button type="button" onClick={() => router.push('/admin/vsl')} className="text-gray-600 hover:text-gray-800 font-medium">
-            ← VSL
+      <div className="w-full max-w-none min-w-0 space-y-4">
+        <div className="flex flex-wrap items-center gap-2 mb-2">
+          <button
+            type="button"
+            onClick={() => router.push('/admin/vsl')}
+            className="text-gray-600 dark:text-[#aaa] hover:text-gray-800 dark:hover:text-white font-medium"
+          >
+            ← Vsl e Redirect
           </button>
-          <span className="text-gray-400">/</span>
-          <h1 className="text-xl font-bold text-gray-800">Redirect Manager — /{projectSlug}</h1>
+          <span className="text-gray-400 dark:text-[#666]">/</span>
+          <h1 className="text-xl font-bold text-gray-800 dark:text-white">Redirect Manager — /{projectSlug}</h1>
         </div>
 
         {loadError && (
-          <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
+          <div
+            className="mb-4 rounded-xl border border-red-200 dark:border-red-800/50 bg-red-50 dark:bg-red-950/40 px-4 py-3 text-sm text-red-800 dark:text-red-200"
+            role="alert"
+          >
             {loadError}
           </div>
         )}
@@ -444,21 +452,21 @@ export default function AdminRedirectPage() {
           {/* Coluna esquerda: cards de métricas + adicionar grupo */}
           <div className="lg:col-span-1 space-y-4">
             <div className="grid grid-cols-2 gap-3">
-              <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-4">
-                <p className="text-xs text-gray-500 mb-0.5">Total de Grupos</p>
-                <p className="text-xl font-bold text-gray-800">{totalGroups}</p>
+              <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-sm p-4">
+                <p className="text-xs text-gray-500 dark:text-[#aaa] mb-0.5">Total de Grupos</p>
+                <p className="text-xl font-bold text-gray-800 dark:text-white">{totalGroups}</p>
               </div>
-              <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-4">
-                <p className="text-xs text-gray-500 mb-0.5">Grupos Ativos</p>
-                <p className="text-xl font-bold text-gray-800">{activeGroups}</p>
+              <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-sm p-4">
+                <p className="text-xs text-gray-500 dark:text-[#aaa] mb-0.5">Grupos Ativos</p>
+                <p className="text-xl font-bold text-gray-800 dark:text-white">{activeGroups}</p>
               </div>
-              <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-4">
-                <p className="text-xs text-gray-500 mb-0.5">Total de Cliques</p>
-                <p className="text-xl font-bold text-gray-800">{totalClicks}</p>
+              <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-sm p-4">
+                <p className="text-xs text-gray-500 dark:text-[#aaa] mb-0.5">Total de Cliques</p>
+                <p className="text-xl font-bold text-gray-800 dark:text-white">{totalClicks}</p>
               </div>
-              <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 col-span-2">
-                <p className="text-xs text-gray-500 mb-1">Link de Redirect</p>
-                <p className="text-sm font-mono text-gray-800 truncate mb-1.5">/r/{redirectSlug}</p>
+              <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-sm p-4 col-span-2">
+                <p className="text-xs text-gray-500 dark:text-[#aaa] mb-1">Link de Redirect</p>
+                <p className="text-sm font-mono text-gray-800 dark:text-white truncate mb-1.5">/r/{redirectSlug}</p>
                 <button
                   type="button"
                   onClick={copyLink}
@@ -469,9 +477,12 @@ export default function AdminRedirectPage() {
                 </button>
               </div>
             </div>
-            <section className="bg-white border border-gray-200 rounded-xl shadow-sm p-4">
-              <h2 className="font-semibold text-gray-800 text-sm mb-3">Pixel (Facebook)</h2>
-              <p className="text-xs text-gray-500 mb-2">Usado na VSL deste projeto (redirect <span className="font-mono text-gray-700">/r/{redirectSlug ?? ''}</span>). fbq(&apos;init&apos;, &apos;[pixel salvo]&apos;).</p>
+            <section className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-sm p-4">
+              <h2 className="font-semibold text-gray-800 dark:text-white text-sm mb-3">Pixel (Facebook)</h2>
+              <p className="text-xs text-gray-500 dark:text-[#aaa] mb-2">
+                Usado na VSL deste projeto (redirect{' '}
+                <span className="font-mono text-gray-700 dark:text-[#ccc]">/r/{redirectSlug ?? ''}</span>). fbq(&apos;init&apos;, &apos;[pixel salvo]&apos;).
+              </p>
               <form onSubmit={savePixel} className="space-y-2">
                 <input
                   type="text"
@@ -490,9 +501,12 @@ export default function AdminRedirectPage() {
                 </button>
               </form>
             </section>
-            <section className="bg-white border border-gray-200 rounded-xl shadow-sm p-4">
-              <h2 className="font-semibold text-gray-800 text-sm mb-1">Timer do Redirect</h2>
-              <p className="text-xs text-gray-500 mb-3">Tempo antes de redirecionar na página <span className="font-mono text-gray-700">/r/{redirectSlug ?? ''}</span>. Use <strong>0</strong> para redirect instantâneo.</p>
+            <section className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-sm p-4">
+              <h2 className="font-semibold text-gray-800 dark:text-white text-sm mb-1">Timer do Redirect</h2>
+              <p className="text-xs text-gray-500 dark:text-[#aaa] mb-3">
+                Tempo antes de redirecionar na página{' '}
+                <span className="font-mono text-gray-700 dark:text-[#ccc]">/r/{redirectSlug ?? ''}</span>. Use <strong className="text-gray-800 dark:text-white">0</strong> para redirect instantâneo.
+              </p>
               <form onSubmit={saveTimer} className="space-y-3">
                 <div className="flex items-center gap-3">
                   <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -500,9 +514,9 @@ export default function AdminRedirectPage() {
                       type="checkbox"
                       checked={redirectTimerSeconds === 0}
                       onChange={(e) => setRedirectTimerSeconds(e.target.checked ? 0 : 3)}
-                      className="w-4 h-4 rounded border-gray-300 text-[#8CD955] focus:ring-[#8CD955]"
+                      className="w-4 h-4 rounded border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] text-[#8CD955] focus:ring-[#8CD955]"
                     />
-                    <span className="text-sm font-medium text-gray-700">Instantâneo (0 seg)</span>
+                    <span className="text-sm font-medium text-gray-700 dark:text-[#ccc]">Instantâneo (0 seg)</span>
                   </label>
                 </div>
                 {redirectTimerSeconds > 0 && (
@@ -513,23 +527,23 @@ export default function AdminRedirectPage() {
                       max={300}
                       value={redirectTimerSeconds}
                       onChange={(e) => setRedirectTimerSeconds(Math.max(1, Math.min(300, Number(e.target.value) || 1)))}
-                      className="w-24 border border-gray-300 rounded-xl px-3 py-2 text-gray-800 text-center font-semibold focus:ring-2 focus:ring-[#8CD955]/50 focus:border-[#8CD955] outline-none"
+                      className="w-24 border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] rounded-xl px-3 py-2 text-gray-800 dark:text-white text-center font-semibold focus:ring-2 focus:ring-[#8CD955]/50 focus:border-[#8CD955] outline-none"
                     />
-                    <span className="text-sm text-gray-600">segundo{redirectTimerSeconds !== 1 ? 's' : ''}</span>
+                    <span className="text-sm text-gray-600 dark:text-[#aaa]">segundo{redirectTimerSeconds !== 1 ? 's' : ''}</span>
                   </div>
                 )}
                 <button
                   type="submit"
                   disabled={savingTimer}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-gray-700 text-white font-medium rounded-xl hover:bg-gray-800 transition disabled:opacity-50"
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-gray-700 dark:bg-[#3d3d3d] text-white font-medium rounded-xl hover:bg-gray-800 dark:hover:bg-[#4a4a4a] transition disabled:opacity-50"
                 >
                   {savingTimer ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                   Salvar timer
                 </button>
               </form>
             </section>
-            <section className="bg-white border border-gray-200 rounded-xl shadow-sm p-4">
-              <h2 className="font-semibold text-gray-800 text-sm mb-3">Adicionar Novo Grupo</h2>
+            <section className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-sm p-4">
+              <h2 className="font-semibold text-gray-800 dark:text-white text-sm mb-3">Adicionar Novo Grupo</h2>
               <button
                 type="button"
                 onClick={() => {
@@ -546,15 +560,15 @@ export default function AdminRedirectPage() {
           </div>
 
           {/* Coluna direita: tabela de grupos (2/3 da largura) */}
-          <section className="lg:col-span-2 bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex flex-col min-h-[280px]">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
-              <h2 className="font-semibold text-gray-800">Grupos Cadastrados</h2>
+          <section className="lg:col-span-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-sm overflow-hidden flex flex-col min-h-[280px]">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 dark:border-[#404040] shrink-0">
+              <h2 className="font-semibold text-gray-800 dark:text-white">Grupos Cadastrados</h2>
               <button
                 type="button"
                 onClick={openWeightsModal}
                 disabled={groups.length === 0 || activeGroups === 0}
                 title={activeGroups === 0 ? 'Ative ao menos um grupo para editar %' : undefined}
-                className="flex items-center gap-2 px-3 py-2 bg-gray-700 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex items-center gap-2 px-3 py-2 bg-gray-700 dark:bg-[#3d3d3d] text-white text-sm font-medium rounded-lg hover:bg-gray-800 dark:hover:bg-[#4a4a4a] transition disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Percent className="w-4 h-4" />
                 Editar %
@@ -563,7 +577,7 @@ export default function AdminRedirectPage() {
             <div className="flex-1 overflow-auto">
               <table className="w-full">
                 <thead>
-                  <tr className="bg-gray-50 text-left text-xs font-medium text-gray-700">
+                  <tr className="bg-gray-50 dark:bg-[#333] text-left text-xs font-medium text-gray-700 dark:text-[#ccc]">
                     <th className="p-3">Nome</th>
                     <th className="p-3 hidden md:table-cell">Consultor</th>
                     <th className="p-3 hidden sm:table-cell">Link</th>
@@ -575,14 +589,14 @@ export default function AdminRedirectPage() {
                 </thead>
                 <tbody>
                   {groups.map((g) => (
-                    <tr key={g.id} className="border-t border-gray-100 hover:bg-gray-50/50">
-                      <td className="p-3 font-medium text-gray-800 truncate max-w-[120px] sm:max-w-none">{g.name}</td>
-                      <td className="p-3 text-xs text-gray-700 truncate max-w-[160px] hidden md:table-cell" title={g.consultant?.email ?? ''}>
+                    <tr key={g.id} className="border-t border-gray-100 dark:border-[#404040] hover:bg-gray-50/50 dark:hover:bg-[#333]/50">
+                      <td className="p-3 font-medium text-gray-800 dark:text-white truncate max-w-[120px] sm:max-w-none">{g.name}</td>
+                      <td className="p-3 text-xs text-gray-700 dark:text-[#ccc] truncate max-w-[160px] hidden md:table-cell" title={g.consultant?.email ?? ''}>
                         {g.consultant
                           ? (g.consultant.full_name?.trim() || g.consultant.email?.trim() || '—')
                           : '—'}
                       </td>
-                      <td className="p-3 text-xs text-gray-700 truncate max-w-[140px] hidden sm:table-cell">{g.invite_url}</td>
+                      <td className="p-3 text-xs text-gray-700 dark:text-[#ccc] truncate max-w-[140px] hidden sm:table-cell">{g.invite_url}</td>
                       <td className="p-3">
                         <label className="flex items-center gap-2 cursor-pointer">
                           <input
@@ -590,23 +604,29 @@ export default function AdminRedirectPage() {
                             checked={g.is_active}
                             onChange={() => toggleActive(g)}
                             disabled={togglingId === g.id}
-                            className="w-4 h-4 rounded border-gray-300 text-[#8CD955] focus:ring-[#8CD955]"
+                            className="w-4 h-4 rounded border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] text-[#8CD955] focus:ring-[#8CD955]"
                           />
-                          <span className={g.is_active ? 'text-green-600 font-medium text-sm' : 'text-gray-500 text-sm'}>
+                          <span
+                            className={
+                              g.is_active
+                                ? 'text-green-600 dark:text-green-400 font-medium text-sm'
+                                : 'text-gray-500 dark:text-[#888] text-sm'
+                            }
+                          >
                             {togglingId === g.id ? '...' : g.is_active ? 'Ativo' : 'Inativo'}
                           </span>
                         </label>
                       </td>
-                      <td className="p-3 text-gray-800 text-sm">
+                      <td className="p-3 text-gray-800 dark:text-white text-sm">
                         {g.is_active ? `${g.weight_percent}%` : '—'}
                       </td>
-                      <td className="p-3 text-gray-800 font-medium text-sm">{g.clicks}</td>
+                      <td className="p-3 text-gray-800 dark:text-white font-medium text-sm">{g.clicks}</td>
                       <td className="p-3">
                         <div className="flex items-center gap-2">
                           <button
                             type="button"
                             onClick={() => openEditModal(g)}
-                            className="text-gray-700 hover:text-gray-900 flex items-center gap-1 text-sm font-medium"
+                            className="text-gray-700 dark:text-[#ccc] hover:text-gray-900 dark:hover:text-white flex items-center gap-1 text-sm font-medium"
                           >
                             <Pencil className="w-3.5 h-3.5" />
                             Editar
@@ -614,7 +634,7 @@ export default function AdminRedirectPage() {
                           <button
                             type="button"
                             onClick={() => deleteGroup(g.id)}
-                            className="text-red-600 hover:underline flex items-center gap-1 text-sm font-medium"
+                            className="text-red-600 dark:text-red-400 hover:underline flex items-center gap-1 text-sm font-medium"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                             Remover
@@ -626,53 +646,53 @@ export default function AdminRedirectPage() {
                 </tbody>
               </table>
               {groups.length === 0 && (
-                <p className="py-6 px-4 text-gray-600 text-sm text-center">Nenhum grupo. Adicione um ao lado.</p>
+                <p className="py-6 px-4 text-gray-600 dark:text-[#aaa] text-sm text-center">Nenhum grupo. Adicione um ao lado.</p>
               )}
             </div>
           </section>
 
           {/* Dashboard Resumo UTM */}
-          <section className="lg:col-span-3 bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-            <div className="px-4 py-3 border-b border-gray-100">
-              <h2 className="font-semibold text-gray-800">Resumo UTM (Dashboard)</h2>
-              <p className="text-xs text-gray-500 mt-0.5">Agrupamento dos acessos à página /r/{redirectSlug ?? ''} com parâmetros UTM na URL.</p>
+          <section className="lg:col-span-3 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-sm overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-100 dark:border-[#404040]">
+              <h2 className="font-semibold text-gray-800 dark:text-white">Resumo UTM (Dashboard)</h2>
+              <p className="text-xs text-gray-500 dark:text-[#aaa] mt-0.5">Agrupamento dos acessos à página /r/{redirectSlug ?? ''} com parâmetros UTM na URL.</p>
             </div>
             <div className="p-4 space-y-4">
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
-                  <p className="text-xs text-gray-500">Total de acessos com UTM</p>
-                  <p className="text-xl font-bold text-gray-800">{utmSummary.total.toLocaleString('pt-BR')}</p>
+                <div className="bg-gray-50 dark:bg-[#333] rounded-lg p-3 border border-gray-100 dark:border-[#404040]">
+                  <p className="text-xs text-gray-500 dark:text-[#aaa]">Total de acessos com UTM</p>
+                  <p className="text-xl font-bold text-gray-800 dark:text-white">{utmSummary.total.toLocaleString('pt-BR')}</p>
                 </div>
-                <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
-                  <p className="text-xs text-gray-500">Fontes (utm_source)</p>
-                  <p className="text-xl font-bold text-gray-800">{Object.keys(utmSummary.by_source).length}</p>
+                <div className="bg-gray-50 dark:bg-[#333] rounded-lg p-3 border border-gray-100 dark:border-[#404040]">
+                  <p className="text-xs text-gray-500 dark:text-[#aaa]">Fontes (utm_source)</p>
+                  <p className="text-xl font-bold text-gray-800 dark:text-white">{Object.keys(utmSummary.by_source).length}</p>
                 </div>
-                <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
-                  <p className="text-xs text-gray-500">Meios (utm_medium)</p>
-                  <p className="text-xl font-bold text-gray-800">{Object.keys(utmSummary.by_medium).length}</p>
+                <div className="bg-gray-50 dark:bg-[#333] rounded-lg p-3 border border-gray-100 dark:border-[#404040]">
+                  <p className="text-xs text-gray-500 dark:text-[#aaa]">Meios (utm_medium)</p>
+                  <p className="text-xl font-bold text-gray-800 dark:text-white">{Object.keys(utmSummary.by_medium).length}</p>
                 </div>
-                <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
-                  <p className="text-xs text-gray-500">Campanhas (utm_campaign)</p>
-                  <p className="text-xl font-bold text-gray-800">{Object.keys(utmSummary.by_campaign).length}</p>
+                <div className="bg-gray-50 dark:bg-[#333] rounded-lg p-3 border border-gray-100 dark:border-[#404040]">
+                  <p className="text-xs text-gray-500 dark:text-[#aaa]">Campanhas (utm_campaign)</p>
+                  <p className="text-xl font-bold text-gray-800 dark:text-white">{Object.keys(utmSummary.by_campaign).length}</p>
                 </div>
               </div>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                <div className="border border-gray-200 rounded-lg overflow-hidden">
-                  <div className="bg-gray-50 px-3 py-2 border-b border-gray-200">
-                    <p className="text-sm font-medium text-gray-700">Por utm_source</p>
+                <div className="border border-gray-200 dark:border-[#404040] rounded-lg overflow-hidden bg-white dark:bg-[#252525]">
+                  <div className="bg-gray-50 dark:bg-[#333] px-3 py-2 border-b border-gray-200 dark:border-[#404040]">
+                    <p className="text-sm font-medium text-gray-700 dark:text-[#ccc]">Por utm_source</p>
                   </div>
                   <div className="overflow-auto max-h-48">
                     {Object.entries(utmSummary.by_source).length === 0 ? (
-                      <p className="p-3 text-sm text-gray-500">Nenhum dado</p>
+                      <p className="p-3 text-sm text-gray-500 dark:text-[#888]">Nenhum dado</p>
                     ) : (
                       <table className="w-full text-sm">
                         <tbody>
                           {Object.entries(utmSummary.by_source)
                             .sort((a, b) => b[1] - a[1])
                             .map(([name, count]) => (
-                              <tr key={name} className="border-t border-gray-100">
-                                <td className="p-2 font-mono text-gray-800 truncate max-w-[180px]" title={name}>{name}</td>
-                                <td className="p-2 text-right font-semibold text-gray-700">{count.toLocaleString('pt-BR')}</td>
+                              <tr key={name} className="border-t border-gray-100 dark:border-[#404040]">
+                                <td className="p-2 font-mono text-gray-800 dark:text-white truncate max-w-[180px]" title={name}>{name}</td>
+                                <td className="p-2 text-right font-semibold text-gray-700 dark:text-[#ccc]">{count.toLocaleString('pt-BR')}</td>
                               </tr>
                             ))}
                         </tbody>
@@ -680,22 +700,22 @@ export default function AdminRedirectPage() {
                     )}
                   </div>
                 </div>
-                <div className="border border-gray-200 rounded-lg overflow-hidden">
-                  <div className="bg-gray-50 px-3 py-2 border-b border-gray-200">
-                    <p className="text-sm font-medium text-gray-700">Por utm_medium</p>
+                <div className="border border-gray-200 dark:border-[#404040] rounded-lg overflow-hidden bg-white dark:bg-[#252525]">
+                  <div className="bg-gray-50 dark:bg-[#333] px-3 py-2 border-b border-gray-200 dark:border-[#404040]">
+                    <p className="text-sm font-medium text-gray-700 dark:text-[#ccc]">Por utm_medium</p>
                   </div>
                   <div className="overflow-auto max-h-48">
                     {Object.entries(utmSummary.by_medium).length === 0 ? (
-                      <p className="p-3 text-sm text-gray-500">Nenhum dado</p>
+                      <p className="p-3 text-sm text-gray-500 dark:text-[#888]">Nenhum dado</p>
                     ) : (
                       <table className="w-full text-sm">
                         <tbody>
                           {Object.entries(utmSummary.by_medium)
                             .sort((a, b) => b[1] - a[1])
                             .map(([name, count]) => (
-                              <tr key={name} className="border-t border-gray-100">
-                                <td className="p-2 font-mono text-gray-800 truncate max-w-[180px]" title={name}>{name}</td>
-                                <td className="p-2 text-right font-semibold text-gray-700">{count.toLocaleString('pt-BR')}</td>
+                              <tr key={name} className="border-t border-gray-100 dark:border-[#404040]">
+                                <td className="p-2 font-mono text-gray-800 dark:text-white truncate max-w-[180px]" title={name}>{name}</td>
+                                <td className="p-2 text-right font-semibold text-gray-700 dark:text-[#ccc]">{count.toLocaleString('pt-BR')}</td>
                               </tr>
                             ))}
                         </tbody>
@@ -704,17 +724,17 @@ export default function AdminRedirectPage() {
                   </div>
                 </div>
               </div>
-              <div className="border border-gray-200 rounded-lg overflow-hidden">
-                <div className="bg-gray-50 px-3 py-2 border-b border-gray-200">
-                  <p className="text-sm font-medium text-gray-700">Top campanhas (utm_campaign)</p>
+              <div className="border border-gray-200 dark:border-[#404040] rounded-lg overflow-hidden bg-white dark:bg-[#252525]">
+                <div className="bg-gray-50 dark:bg-[#333] px-3 py-2 border-b border-gray-200 dark:border-[#404040]">
+                  <p className="text-sm font-medium text-gray-700 dark:text-[#ccc]">Top campanhas (utm_campaign)</p>
                 </div>
                 <div className="overflow-auto max-h-52">
                   {Object.entries(utmSummary.by_campaign).length === 0 ? (
-                    <p className="p-3 text-sm text-gray-500">Nenhum dado</p>
+                    <p className="p-3 text-sm text-gray-500 dark:text-[#888]">Nenhum dado</p>
                   ) : (
                     <table className="w-full text-sm">
                       <thead>
-                        <tr className="text-left text-gray-600 border-b border-gray-200">
+                        <tr className="text-left text-gray-600 dark:text-[#aaa] border-b border-gray-200 dark:border-[#404040]">
                           <th className="p-2">Campaign ID</th>
                           <th className="p-2 text-right">Acessos</th>
                         </tr>
@@ -724,9 +744,9 @@ export default function AdminRedirectPage() {
                           .sort((a, b) => b[1] - a[1])
                           .slice(0, 15)
                           .map(([name, count]) => (
-                            <tr key={name} className="border-t border-gray-100">
-                              <td className="p-2 font-mono text-gray-800 truncate max-w-[220px]" title={name}>{name}</td>
-                              <td className="p-2 text-right font-semibold text-gray-700">{count.toLocaleString('pt-BR')}</td>
+                            <tr key={name} className="border-t border-gray-100 dark:border-[#404040]">
+                              <td className="p-2 font-mono text-gray-800 dark:text-white truncate max-w-[220px]" title={name}>{name}</td>
+                              <td className="p-2 text-right font-semibold text-gray-700 dark:text-[#ccc]">{count.toLocaleString('pt-BR')}</td>
                             </tr>
                           ))}
                       </tbody>
@@ -734,13 +754,13 @@ export default function AdminRedirectPage() {
                   )}
                 </div>
               </div>
-              <div className="border border-gray-200 rounded-lg overflow-hidden">
-                <div className="bg-gray-50 px-3 py-2 border-b border-gray-200">
-                  <p className="text-sm font-medium text-gray-700">Combinação source | medium</p>
+              <div className="border border-gray-200 dark:border-[#404040] rounded-lg overflow-hidden bg-white dark:bg-[#252525]">
+                <div className="bg-gray-50 dark:bg-[#333] px-3 py-2 border-b border-gray-200 dark:border-[#404040]">
+                  <p className="text-sm font-medium text-gray-700 dark:text-[#ccc]">Combinação source | medium</p>
                 </div>
                 <div className="overflow-auto max-h-48">
                   {Object.entries(utmSummary.by_source_medium).length === 0 ? (
-                    <p className="p-3 text-sm text-gray-500">Nenhum dado</p>
+                    <p className="p-3 text-sm text-gray-500 dark:text-[#888]">Nenhum dado</p>
                   ) : (
                     <table className="w-full text-sm">
                       <tbody>
@@ -748,9 +768,9 @@ export default function AdminRedirectPage() {
                           .sort((a, b) => b[1] - a[1])
                           .slice(0, 20)
                           .map(([name, count]) => (
-                            <tr key={name} className="border-t border-gray-100">
-                              <td className="p-2 font-mono text-gray-800 truncate max-w-[280px]" title={name}>{name}</td>
-                              <td className="p-2 text-right font-semibold text-gray-700">{count.toLocaleString('pt-BR')}</td>
+                            <tr key={name} className="border-t border-gray-100 dark:border-[#404040]">
+                              <td className="p-2 font-mono text-gray-800 dark:text-white truncate max-w-[280px]" title={name}>{name}</td>
+                              <td className="p-2 text-right font-semibold text-gray-700 dark:text-[#ccc]">{count.toLocaleString('pt-BR')}</td>
                             </tr>
                           ))}
                       </tbody>
@@ -759,9 +779,9 @@ export default function AdminRedirectPage() {
                 </div>
               </div>
               {Object.keys(utmSummary.by_day).length > 0 && (
-                <div className="border border-gray-200 rounded-lg overflow-hidden">
-                  <div className="bg-gray-50 px-3 py-2 border-b border-gray-200">
-                    <p className="text-sm font-medium text-gray-700">Acessos por dia</p>
+                <div className="border border-gray-200 dark:border-[#404040] rounded-lg overflow-hidden bg-white dark:bg-[#252525]">
+                  <div className="bg-gray-50 dark:bg-[#333] px-3 py-2 border-b border-gray-200 dark:border-[#404040]">
+                    <p className="text-sm font-medium text-gray-700 dark:text-[#ccc]">Acessos por dia</p>
                   </div>
                   <div className="overflow-auto max-h-40">
                     <table className="w-full text-sm">
@@ -770,9 +790,9 @@ export default function AdminRedirectPage() {
                           .sort((a, b) => b[0].localeCompare(a[0]))
                           .slice(0, 14)
                           .map(([day, count]) => (
-                            <tr key={day} className="border-t border-gray-100">
-                              <td className="p-2 text-gray-800">{new Date(day + 'T12:00:00').toLocaleDateString('pt-BR')}</td>
-                              <td className="p-2 text-right font-semibold text-gray-700">{count.toLocaleString('pt-BR')}</td>
+                            <tr key={day} className="border-t border-gray-100 dark:border-[#404040]">
+                              <td className="p-2 text-gray-800 dark:text-white">{new Date(day + 'T12:00:00').toLocaleDateString('pt-BR')}</td>
+                              <td className="p-2 text-right font-semibold text-gray-700 dark:text-[#ccc]">{count.toLocaleString('pt-BR')}</td>
                             </tr>
                           ))}
                       </tbody>
@@ -781,24 +801,24 @@ export default function AdminRedirectPage() {
                 </div>
               )}
               {utmSummary.sample_size > 0 && (
-                <p className="text-xs text-gray-500">Resumo com base em até {utmSummary.sample_size.toLocaleString('pt-BR')} visitas recentes. Total geral: {utmSummary.total.toLocaleString('pt-BR')}.</p>
+                <p className="text-xs text-gray-500 dark:text-[#aaa]">Resumo com base em até {utmSummary.sample_size.toLocaleString('pt-BR')} visitas recentes. Total geral: {utmSummary.total.toLocaleString('pt-BR')}.</p>
               )}
             </div>
           </section>
 
           {/* Acessos com UTM (página /r/[slug] com utm_* na URL) */}
-          <section className="lg:col-span-3 bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
-            <div className="px-4 py-3 border-b border-gray-100 shrink-0">
-              <h2 className="font-semibold text-gray-800">Acessos com UTM (histórico)</h2>
-              <p className="text-xs text-gray-500 mt-0.5">Visitas à página /r/{redirectSlug ?? ''} com utm_source, utm_medium, utm_campaign, utm_content ou utm_term na URL (últimas 100).</p>
+          <section className="lg:col-span-3 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-sm overflow-hidden flex flex-col">
+            <div className="px-4 py-3 border-b border-gray-100 dark:border-[#404040] shrink-0">
+              <h2 className="font-semibold text-gray-800 dark:text-white">Acessos com UTM (histórico)</h2>
+              <p className="text-xs text-gray-500 dark:text-[#aaa] mt-0.5">Visitas à página /r/{redirectSlug ?? ''} com utm_source, utm_medium, utm_campaign, utm_content ou utm_term na URL (últimas 100).</p>
             </div>
             <div className="overflow-auto max-h-[320px]">
               {utmVisits.length === 0 ? (
-                <p className="py-6 px-4 text-gray-600 text-sm text-center">Nenhum acesso com UTM registrado ainda.</p>
+                <p className="py-6 px-4 text-gray-600 dark:text-[#aaa] text-sm text-center">Nenhum acesso com UTM registrado ainda.</p>
               ) : (
                 <table className="w-full">
-                  <thead className="bg-gray-50 sticky top-0">
-                    <tr className="text-left text-xs font-medium text-gray-700">
+                  <thead className="bg-gray-50 dark:bg-[#333] sticky top-0 z-[1]">
+                    <tr className="text-left text-xs font-medium text-gray-700 dark:text-[#ccc]">
                       <th className="p-3">Data</th>
                       <th className="p-3">Status</th>
                       <th className="p-3">utm_source</th>
@@ -810,24 +830,24 @@ export default function AdminRedirectPage() {
                   </thead>
                   <tbody>
                     {utmVisits.map((v) => (
-                      <tr key={v.id} className="border-t border-gray-100 hover:bg-gray-50/50">
-                        <td className="p-3 text-sm text-gray-700 whitespace-nowrap">
+                      <tr key={v.id} className="border-t border-gray-100 dark:border-[#404040] hover:bg-gray-50/50 dark:hover:bg-[#333]/50">
+                        <td className="p-3 text-sm text-gray-700 dark:text-[#ccc] whitespace-nowrap">
                           {new Date(v.created_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}
                         </td>
                         <td className="p-3 text-sm">
                           <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${
-                            v.status === 'complete' ? 'bg-green-100 text-green-800' :
-                            v.status === 'incomplete' ? 'bg-amber-100 text-amber-800' :
-                            'bg-gray-100 text-gray-600'
+                            v.status === 'complete' ? 'bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-300' :
+                            v.status === 'incomplete' ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300' :
+                            'bg-gray-100 dark:bg-[#404040] text-gray-600 dark:text-[#ccc]'
                           }`}>
                             {v.status === 'complete' ? 'Complete' : v.status === 'incomplete' ? 'Incomplete' : 'Pending'}
                           </span>
                         </td>
-                        <td className="p-3 text-sm text-gray-800 font-mono max-w-[100px] truncate" title={v.utm_source ?? ''}>{v.utm_source ?? '—'}</td>
-                        <td className="p-3 text-sm text-gray-800 font-mono max-w-[100px] truncate" title={v.utm_medium ?? ''}>{v.utm_medium ?? '—'}</td>
-                        <td className="p-3 text-sm text-gray-800 font-mono max-w-[120px] truncate" title={v.utm_campaign ?? ''}>{v.utm_campaign ?? '—'}</td>
-                        <td className="p-3 text-sm text-gray-800 font-mono max-w-[100px] truncate hidden xl:table-cell" title={v.utm_content ?? ''}>{v.utm_content ?? '—'}</td>
-                        <td className="p-3 text-sm text-gray-800 font-mono max-w-[100px] truncate hidden xl:table-cell" title={v.utm_term ?? ''}>{v.utm_term ?? '—'}</td>
+                        <td className="p-3 text-sm text-gray-800 dark:text-white font-mono max-w-[100px] truncate" title={v.utm_source ?? ''}>{v.utm_source ?? '—'}</td>
+                        <td className="p-3 text-sm text-gray-800 dark:text-white font-mono max-w-[100px] truncate" title={v.utm_medium ?? ''}>{v.utm_medium ?? '—'}</td>
+                        <td className="p-3 text-sm text-gray-800 dark:text-white font-mono max-w-[120px] truncate" title={v.utm_campaign ?? ''}>{v.utm_campaign ?? '—'}</td>
+                        <td className="p-3 text-sm text-gray-800 dark:text-white font-mono max-w-[100px] truncate hidden xl:table-cell" title={v.utm_content ?? ''}>{v.utm_content ?? '—'}</td>
+                        <td className="p-3 text-sm text-gray-800 dark:text-white font-mono max-w-[100px] truncate hidden xl:table-cell" title={v.utm_term ?? ''}>{v.utm_term ?? '—'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -839,11 +859,11 @@ export default function AdminRedirectPage() {
 
         {modalEdit && editForm && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-xl max-w-md w-full p-6 shadow-xl">
-              <h3 className="font-bold text-gray-800 mb-4">Editar grupo</h3>
+            <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl max-w-md w-full p-6 shadow-xl">
+              <h3 className="font-bold text-gray-800 dark:text-white mb-4">Editar grupo</h3>
               <form onSubmit={saveEdit} className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Nome</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-1.5">Nome</label>
                   <input
                     value={editForm.name}
                     onChange={(e) => setEditForm((f) => f && { ...f, name: e.target.value })}
@@ -852,7 +872,7 @@ export default function AdminRedirectPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Link (https://chat.whatsapp.com/...)</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-1.5">Link (https://chat.whatsapp.com/...)</label>
                   <input
                     value={editForm.invite_url}
                     onChange={(e) => setEditForm((f) => f && { ...f, invite_url: e.target.value })}
@@ -864,7 +884,7 @@ export default function AdminRedirectPage() {
                 {isConsultantByBanca ? (
                   <>
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Banca</label>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-1.5">Banca</label>
                       <select
                         value={consultantBancaIdModal}
                         onChange={(e) => {
@@ -883,10 +903,10 @@ export default function AdminRedirectPage() {
                           </option>
                         ))}
                       </select>
-                      <p className="text-xs text-gray-500 mt-1">Só bancas em que você está vinculado.</p>
+                      <p className="text-xs text-gray-500 dark:text-[#aaa] mt-1">Só bancas em que você está vinculado.</p>
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Consultor vinculado (opcional)</label>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-1.5">Consultor vinculado (opcional)</label>
                       <select
                         value={editForm.consultant_user_id}
                         onChange={(e) => setEditForm((f) => f && { ...f, consultant_user_id: e.target.value })}
@@ -905,7 +925,7 @@ export default function AdminRedirectPage() {
                   </>
                 ) : (
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Consultor vinculado (opcional)</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-1.5">Consultor vinculado (opcional)</label>
                     <select
                       value={editForm.consultant_user_id}
                       onChange={(e) => setEditForm((f) => f && { ...f, consultant_user_id: e.target.value })}
@@ -920,7 +940,7 @@ export default function AdminRedirectPage() {
                       ))}
                     </select>
                     {consultantOptions.length === 0 && (
-                      <p className="text-xs text-amber-700 mt-1">
+                      <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
                         Nenhum consultor na lista. Com banca no projeto, só aparecem consultores vinculados a ela; sem banca, até 500 consultores do sistema.
                       </p>
                     )}
@@ -930,7 +950,7 @@ export default function AdminRedirectPage() {
                   <button type="submit" disabled={saving} className="px-5 py-2.5 bg-[#8CD955] text-white font-medium rounded-xl disabled:opacity-50 transition">
                     {saving ? <Loader2 className="w-4 h-4 animate-spin inline mr-1" /> : null} Salvar
                   </button>
-                  <button type="button" onClick={() => { setModalEdit(false); setEditForm(null); setConsultantBancaIdModal(''); setConsultantsByBanca([]); }} className="px-5 py-2.5 bg-gray-200 text-gray-800 font-medium rounded-xl hover:bg-gray-300 transition">
+                  <button type="button" onClick={() => { setModalEdit(false); setEditForm(null); setConsultantBancaIdModal(''); setConsultantsByBanca([]); }} className="px-5 py-2.5 bg-gray-200 dark:bg-[#404040] text-gray-800 dark:text-white font-medium rounded-xl hover:bg-gray-300 dark:hover:bg-[#505050] transition">
                     Cancelar
                   </button>
                 </div>
@@ -941,11 +961,11 @@ export default function AdminRedirectPage() {
 
         {modalAdd && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-xl max-w-md w-full p-6 shadow-xl">
-              <h3 className="font-bold text-gray-800 mb-4">Novo Grupo</h3>
+            <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl max-w-md w-full p-6 shadow-xl">
+              <h3 className="font-bold text-gray-800 dark:text-white mb-4">Novo Grupo</h3>
               <form onSubmit={addGroup} className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Nome</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-1.5">Nome</label>
                   <input
                     value={addForm.name}
                     onChange={(e) => setAddForm((f) => ({ ...f, name: e.target.value }))}
@@ -954,7 +974,7 @@ export default function AdminRedirectPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Link (https://chat.whatsapp.com/...)</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-1.5">Link (https://chat.whatsapp.com/...)</label>
                   <input
                     value={addForm.invite_url}
                     onChange={(e) => setAddForm((f) => ({ ...f, invite_url: e.target.value }))}
@@ -964,7 +984,7 @@ export default function AdminRedirectPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">% (0–100)</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-1.5">% (0–100)</label>
                   <input
                     type="number"
                     min={0}
@@ -977,7 +997,7 @@ export default function AdminRedirectPage() {
                 {isConsultantByBanca ? (
                   <>
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Banca</label>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-1.5">Banca</label>
                       <select
                         value={consultantBancaIdModal}
                         onChange={(e) => {
@@ -996,10 +1016,10 @@ export default function AdminRedirectPage() {
                           </option>
                         ))}
                       </select>
-                      <p className="text-xs text-gray-500 mt-1">Escolha a banca para listar os consultores vinculados.</p>
+                      <p className="text-xs text-gray-500 dark:text-[#aaa] mt-1">Escolha a banca para listar os consultores vinculados.</p>
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Consultor vinculado (opcional)</label>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-1.5">Consultor vinculado (opcional)</label>
                       <select
                         value={addForm.consultant_user_id}
                         onChange={(e) => setAddForm((f) => ({ ...f, consultant_user_id: e.target.value }))}
@@ -1018,7 +1038,7 @@ export default function AdminRedirectPage() {
                   </>
                 ) : (
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Consultor vinculado (opcional)</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-1.5">Consultor vinculado (opcional)</label>
                     <select
                       value={addForm.consultant_user_id}
                       onChange={(e) => setAddForm((f) => ({ ...f, consultant_user_id: e.target.value }))}
@@ -1033,7 +1053,7 @@ export default function AdminRedirectPage() {
                       ))}
                     </select>
                     {consultantOptions.length === 0 && (
-                      <p className="text-xs text-amber-700 mt-1">
+                      <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
                         Nenhum consultor na lista. Com banca no projeto, só aparecem consultores vinculados a ela; sem banca, até 500 consultores do sistema.
                       </p>
                     )}
@@ -1043,7 +1063,7 @@ export default function AdminRedirectPage() {
                   <button type="submit" disabled={saving} className="px-5 py-2.5 bg-[#8CD955] text-white font-medium rounded-xl disabled:opacity-50 transition">
                     {saving ? <Loader2 className="w-4 h-4 animate-spin inline mr-1" /> : null} Salvar
                   </button>
-                  <button type="button" onClick={() => { setModalAdd(false); setConsultantBancaIdModal(''); setConsultantsByBanca([]); }} className="px-5 py-2.5 bg-gray-200 text-gray-800 font-medium rounded-xl hover:bg-gray-300 transition">
+                  <button type="button" onClick={() => { setModalAdd(false); setConsultantBancaIdModal(''); setConsultantsByBanca([]); }} className="px-5 py-2.5 bg-gray-200 dark:bg-[#404040] text-gray-800 dark:text-white font-medium rounded-xl hover:bg-gray-300 dark:hover:bg-[#505050] transition">
                     Cancelar
                   </button>
                 </div>
@@ -1054,33 +1074,33 @@ export default function AdminRedirectPage() {
 
         {modalWeights && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-xl max-w-md w-full p-6 shadow-xl">
-              <h3 className="font-bold text-gray-800 mb-1">Editar Porcentagens (soma = 100)</h3>
-              <p className="text-xs text-gray-500 mb-4">Apenas grupos ativos entram na distribuição do redirect.</p>
+            <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl max-w-md w-full p-6 shadow-xl">
+              <h3 className="font-bold text-gray-800 dark:text-white mb-1">Editar Porcentagens (soma = 100)</h3>
+              <p className="text-xs text-gray-500 dark:text-[#aaa] mb-4">Apenas grupos ativos entram na distribuição do redirect.</p>
               <div className="space-y-3 mb-4">
                 {groups.filter((g) => g.is_active).map((g) => (
                   <div key={g.id} className="flex items-center justify-between gap-3">
-                    <span className="text-sm font-medium text-gray-800 truncate flex-1">{g.name}</span>
+                    <span className="text-sm font-medium text-gray-800 dark:text-white truncate flex-1">{g.name}</span>
                     <input
                       type="number"
                       min={0}
                       max={100}
                       value={weights[g.id] ?? 0}
                       onChange={(e) => setWeights((w) => ({ ...w, [g.id]: Number(e.target.value) || 0 }))}
-                      className={`w-20 border border-gray-300 rounded-lg px-2 py-1.5 text-right text-gray-800 focus:ring-2 focus:ring-[#8CD955]/50 outline-none`}
+                      className="w-20 border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] rounded-lg px-2 py-1.5 text-right text-gray-800 dark:text-white focus:ring-2 focus:ring-[#8CD955]/50 outline-none"
                     />
-                    <span className="text-gray-700 font-medium">%</span>
+                    <span className="text-gray-700 dark:text-[#ccc] font-medium">%</span>
                   </div>
                 ))}
               </div>
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
-                <p className="text-sm text-gray-600">
+                <p className="text-sm text-gray-600 dark:text-[#aaa]">
                   Soma:{' '}
-                  <span className={`font-semibold ${Math.abs(weightsSum - 100) > 0.01 ? 'text-amber-700' : 'text-gray-800'}`}>
+                  <span className={`font-semibold ${Math.abs(weightsSum - 100) > 0.01 ? 'text-amber-700 dark:text-amber-300' : 'text-gray-800 dark:text-white'}`}>
                     {weightsSum}%
                   </span>
                   {Math.abs(weightsSum - 100) > 0.01 && (
-                    <span className="block text-xs text-amber-800 mt-0.5">
+                    <span className="block text-xs text-amber-800 dark:text-amber-200 mt-0.5">
                       {weightsRemainder > 0
                         ? `Faltam ${weightsRemainder}% para completar 100.`
                         : weightsRemainder < 0
@@ -1093,7 +1113,7 @@ export default function AdminRedirectPage() {
                   type="button"
                   onClick={redistributeWeightsEqually}
                   disabled={activeForWeights.length === 0}
-                  className="inline-flex items-center justify-center gap-2 px-3 py-2 text-sm font-medium rounded-lg border border-gray-300 bg-white text-gray-800 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="inline-flex items-center justify-center gap-2 px-3 py-2 text-sm font-medium rounded-lg border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] text-gray-800 dark:text-white hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Scale className="w-4 h-4" />
                   Redistribuir igual (100%)
@@ -1108,7 +1128,7 @@ export default function AdminRedirectPage() {
                 >
                   {saving ? <Loader2 className="w-4 h-4 animate-spin inline mr-1" /> : null} Salvar
                 </button>
-                <button type="button" onClick={() => setModalWeights(false)} className="px-5 py-2.5 bg-gray-200 text-gray-800 font-medium rounded-xl hover:bg-gray-300 transition">
+                <button type="button" onClick={() => setModalWeights(false)} className="px-5 py-2.5 bg-gray-200 dark:bg-[#404040] text-gray-800 dark:text-white font-medium rounded-xl hover:bg-gray-300 dark:hover:bg-[#505050] transition">
                   Cancelar
                 </button>
               </div>

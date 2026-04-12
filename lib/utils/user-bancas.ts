@@ -14,7 +14,7 @@ export async function getUserBancas(userId: string): Promise<BancaInfo[]> {
   if (!profile) return [];
 
   // Consultor, Gerente, Gestor e Super Admin podem ter bancas escolhidas em user_bancas (banca_ids JSONB)
-  if (['consultor', 'gerente', 'gestor', 'super_admin'].includes(profile.status || '')) {
+  if (['consultor', 'gerente', 'gestor', 'super_admin', 'admin'].includes(profile.status || '')) {
     const { data: row, error } = await supabaseServiceRole
       .from('user_bancas')
       .select('banca_ids')
