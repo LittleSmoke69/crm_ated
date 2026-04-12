@@ -7,6 +7,16 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 const LEAD_TYPES = ['registered', 'with_balance', 'has_won', 'has_withdrawn'] as const;
 
+/** Quem pode ser o "gerente" da solicitação (campo gerente_id / equipe do consultor). */
+const LEAD_REQUEST_MANAGER_STATUSES = ['gerente', 'admin', 'super_admin'] as const;
+
+function isValidLeadRequestManagerStatus(status: string | null | undefined): boolean {
+  return (
+    typeof status === 'string' &&
+    (LEAD_REQUEST_MANAGER_STATUSES as readonly string[]).includes(status)
+  );
+}
+
 /**
  * POST /api/gerente/lead-request
  * Recebe solicitação de leads do gerente: tipo de lead e lista de consultores com quantidade cada.
@@ -61,8 +71,11 @@ export async function POST(req: NextRequest) {
         );
       }
       const gerenteProfile = await getUserProfile(gid);
-      if (gerenteProfile?.status !== 'gerente') {
-        return errorResponse('O gerente indicado não é válido (perfil deve ser gerente).', 400);
+      if (!isValidLeadRequestManagerStatus(gerenteProfile?.status)) {
+        return errorResponse(
+          'O responsável indicado não é válido (perfil deve ser gerente, admin ou super admin).',
+          400
+        );
       }
       gerenteIdForRequest = gid;
     } else {
