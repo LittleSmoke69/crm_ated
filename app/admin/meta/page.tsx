@@ -2136,6 +2136,49 @@ export default function AdminMetaPage() {
               </p>
             )}
           </div>
+          {/* Depósito consultores via Meta */}
+          <div className={`${metaCard} p-4`}>
+            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Depósito consultores (Meta)</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Soma dos depósitos dos consultores atribuídos às campanhas Meta no período.</p>
+            {(metaSummaryCardsLoading || allCampaignsLoading) ? (
+              <div className="mt-3 flex items-center gap-2 text-gray-600 dark:text-gray-400 min-h-[2rem]">
+                <Loader2 className="w-5 h-5 animate-spin text-[#8CD955] shrink-0" />
+                <span className="text-sm">Carregando dados…</span>
+              </div>
+            ) : consultorTotalsForFunnel.leads === 0 && consultorTotalsForFunnel.deposited === 0 ? (
+              <p className="text-xs text-amber-600 dark:text-amber-400 mt-3">Atribua consultores às campanhas para calcular o retorno em depósitos.</p>
+            ) : (
+              <p className="text-2xl font-bold text-gray-900 dark:text-gray-50 mt-2 tabular-nums tracking-tight">
+                {formatBRL(consultorTotalsForFunnel.deposited)}
+              </p>
+            )}
+          </div>
+          {/* Delta: Gasto Meta vs Retorno */}
+          {(() => {
+            const spend = metaSummaryCards.spendAll;
+            const deposited = consultorTotalsForFunnel.deposited;
+            const delta = deposited - spend;
+            const isPositive = delta >= 0;
+            const isLoading = metaSummaryCardsLoading || allCampaignsLoading;
+            return (
+              <div className={`${metaCard} p-4 border-l-4 ${isLoading ? 'border-l-gray-300 dark:border-l-gray-600' : isPositive ? 'border-l-emerald-500' : 'border-l-red-500'}`}>
+                <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">{isPositive ? 'Excedente (Retorno − Gasto)' : 'Faltando retorno (Gasto − Retorno)'}</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Diferença entre depósitos dos consultores e gasto Meta no período.
+                </p>
+                {isLoading ? (
+                  <div className="mt-3 flex items-center gap-2 text-gray-600 dark:text-gray-400 min-h-[2rem]">
+                    <Loader2 className="w-5 h-5 animate-spin text-[#8CD955] shrink-0" />
+                    <span className="text-sm">Carregando dados…</span>
+                  </div>
+                ) : (
+                  <p className={`text-2xl font-bold mt-2 tabular-nums tracking-tight ${isPositive ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+                    {isPositive ? '+' : ''}{formatBRL(delta)}
+                  </p>
+                )}
+              </div>
+            );
+          })()}
         </div>
         </div>
 

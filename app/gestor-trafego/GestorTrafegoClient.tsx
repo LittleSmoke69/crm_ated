@@ -1358,6 +1358,47 @@ export default function GestorTrafegoClient({
                   </p>
                 </div>
               </div>
+              {/* ROI: Gasto Meta Ads vs Retorno em Depósitos dos Consultores */}
+              {(metaFunnel != null || metaCampaignsData.length > 0) && (
+                (() => {
+                  const spend = metaFunnel?.spend ?? 0;
+                  const consultorDeposited = metaCampaignsData.reduce((sum, r) => sum + (Number(r.consultor_total_deposited) || 0), 0);
+                  const hasConsultorData = metaCampaignsData.some((r) => (r.assigned_consultors?.length ?? 0) > 0);
+                  const delta = consultorDeposited - spend;
+                  const isPositive = delta >= 0;
+                  return (
+                    <div className="mt-4 p-4 rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-50/60 dark:bg-gray-800/40">
+                      <div className="flex items-center gap-2 mb-3">
+                        <TrendingUp className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                        <p className="text-xs font-bold text-gray-600 dark:text-gray-400 uppercase tracking-wide">Gasto Meta Ads vs Retorno em Depósitos</p>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="bg-white dark:bg-gray-700/50 p-3 rounded-lg border border-gray-100 dark:border-gray-600">
+                          <p className="text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Gasto Meta (período)</p>
+                          <p className="text-lg font-bold text-gray-800 dark:text-gray-100 min-h-[1.75rem] flex items-center">
+                            {loadingMeta ? <MetaMetricSkeleton /> : formatMetaSpend(spend, metaFunnel?.currency)}
+                          </p>
+                        </div>
+                        <div className="bg-white dark:bg-gray-700/50 p-3 rounded-lg border border-gray-100 dark:border-gray-600">
+                          <p className="text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">
+                            Depósitos via Meta
+                            {!hasConsultorData && !loadingMeta && <span className="ml-1 normal-case font-normal text-amber-500 dark:text-amber-400">(atribua consultores às campanhas)</span>}
+                          </p>
+                          <p className="text-lg font-bold text-gray-800 dark:text-gray-100 min-h-[1.75rem] flex items-center">
+                            {loadingMeta ? <MetaMetricSkeleton /> : formatMetaSpend(consultorDeposited, metaFunnel?.currency)}
+                          </p>
+                        </div>
+                        <div className={`p-3 rounded-lg border ${isPositive ? 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-700' : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-700'}`}>
+                          <p className="text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">{isPositive ? 'Excedente' : 'Faltando retorno'}</p>
+                          <p className={`text-lg font-bold min-h-[1.75rem] flex items-center ${isPositive ? 'text-emerald-700 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+                            {loadingMeta ? <MetaMetricSkeleton /> : `${isPositive ? '+' : ''}${formatMetaSpend(delta, metaFunnel?.currency)}`}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()
+              )}
               {!loadingMeta && !metaFunnel && metaCampaignsData.length > 0 && (
                 <p className="text-xs text-amber-800 dark:text-amber-200 mt-3 rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-3 py-2.5 leading-relaxed">
                   <strong>Sem agregado de funil para este período:</strong> a lista de campanhas veio do banco/sync, mas não há insights agregados em{' '}

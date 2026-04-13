@@ -71,11 +71,23 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
         group_subject: schedule.group_subject || '',
       };
       if (schedule.scheduled_at_utc) {
+        // Converte UTC → data/hora no timezone do agendamento (não no fuso do navegador)
+        const tz = schedule.timezone || 'America/Sao_Paulo';
         const date = new Date(schedule.scheduled_at_utc);
-        const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+        const formatter = new Intl.DateTimeFormat('sv-SE', {
+          timeZone: tz,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+        });
+        const parts = formatter.formatToParts(date);
+        const get = (type: string) => parts.find((p) => p.type === type)?.value || '00';
         setFormData({
-          selectedDate: localDate.toISOString().split('T')[0],
-          selectedTime: localDate.toTimeString().slice(0, 5),
+          selectedDate: `${get('year')}-${get('month')}-${get('day')}`,
+          selectedTime: `${get('hour')}:${get('minute')}`,
           ...base,
         });
       } else if (schedule.recurring_time) {

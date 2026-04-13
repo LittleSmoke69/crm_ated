@@ -1,19 +1,22 @@
 /**
  * Netlify Scheduled Function: process-message-queue
- * 
+ *
  * Roda a cada 1 minuto (configurado no netlify.toml)
- * Processa agendamentos de mensagens que estão devidos (next_run_utc <= now)
- * 
+ * Processa agendamentos de mensagens candidatos (next_run_utc dentro do lookahead).
+ *
+ * Janela de execução (não envia “a qualquer momento depois” do agendamento):
+ * - Pontual (`once`): instante canônico = `scheduled_at_utc` (fallback: `next_run_utc`).
+ *   Só envia se agora ∈ [canônico, canônico + MESSAGE_SCHEDULE_MAX_LATE_MINUTES] (default 3 min).
+ * - Recorrente: instante canônico = `next_run_utc`; mesma janela. Fora da janela: pula o ciclo e reagenda.
+ * - Revalidação após o lock, antes do POST à Evolution.
+ *
+ * Env: MESSAGE_SCHEDULE_MAX_LATE_MINUTES (opcional, default 3)
+ *
  * Fluxo:
- * 1. Busca agendamentos devidos com status 'scheduled'
- * 2. Trava os jobs (lock) para evitar processamento duplicado. Locks expirados voltam para
- *    `scheduled` com next_run adiado (~3 min) para mitigar reenvio se o worker morreu após a Evolution aceitar o POST.
- * 3. Para cada job, chama Evolution API para enviar mensagem (text, audio, image)
- * 4. Atualiza status do job (success/failed)
- * 5. Para recorrentes, calcula próximo next_run_utc
- * 
- * Recorrentes: só executa no dia (recurringDays) e no horário (recurringTime) configurados;
- * se não for o dia/horário, atualiza next_run_utc e não marca como executado.
+ * 1. Busca agendamentos com status 'scheduled' e next_run_utc no lookahead
+ * 2. Filtra pela janela canônica; fora → failed (once) ou reagenda (recurring)
+ * 3. Trava os jobs (lock). Locks expirados voltam para `scheduled` com next_run adiado (~3 min)
+ * 4. Chama Evolution API; atualiza status; recorrentes calculam próximo next_run_utc
  */
 
 import { createClient } from '@supabase/supabase-js';
@@ -65,6 +68,68 @@ const FETCH_TIMEOUT_MS = 30000; // Timeout para Evolution API
 const LOOKAHEAD_MINUTES = 2; // Lookahead para buscar jobs próximos
 /** Ao expirar lock `processing`, adia o próximo disparo para evitar reenvio imediato se a Evolution já aceitou o POST mas o worker caiu antes do UPDATE (duplicata no grupo). */
 const STALE_UNLOCK_DELAY_MS = 3 * 60 * 1000;
+
+/**
+ * Após o instante canônico do agendamento, o envio só é permitido dentro desta janela.
+ * Evita disparar “horas depois” se next_run estiver errado ou a fila atrasar demais.
+ * Override: MESSAGE_SCHEDULE_MAX_LATE_MINUTES (ex.: 5)
+ */
+const MAX_LATE_MS = (() => {
+  const mins = Number(process.env.MESSAGE_SCHEDULE_MAX_LATE_MINUTES);
+  if (Number.isFinite(mins) && mins > 0) return Math.round(mins * 60 * 1000);
+  return 3 * 60 * 1000; // 3 min (cron 1 min + batch de até 20 jobs)
+})();
+
+/** Se |next_run_utc − scheduled_at_utc| passar disso em agendamento pontual, usamos só scheduled_at_utc na validação. */
+const ONCE_SCHEDULE_DRIFT_WARN_MS = 60_000;
+
+function parseUtcMs(iso: string | null | undefined): number | null {
+  if (!iso || typeof iso !== 'string') return null;
+  const n = Date.parse(iso);
+  return Number.isNaN(n) ? null : n;
+}
+
+/**
+ * Pontual: prioriza scheduled_at_utc (o que o usuário gravou). Recorrente: next_run_utc.
+ */
+function getCanonicalScheduleInstantMs(job: {
+  schedule_type?: string;
+  scheduled_at_utc?: string | null;
+  next_run_utc?: string | null;
+}): { targetMs: number; source: 'scheduled_at_utc' | 'next_run_utc' } | null {
+  if (job.schedule_type === 'once') {
+    const sa = parseUtcMs(job.scheduled_at_utc);
+    const nr = parseUtcMs(job.next_run_utc);
+    if (sa != null) {
+      if (nr != null && Math.abs(nr - sa) > ONCE_SCHEDULE_DRIFT_WARN_MS) {
+        console.warn(
+          `[SCHEDULE] Pontual com divergência next_run vs scheduled_at > ${ONCE_SCHEDULE_DRIFT_WARN_MS}ms — janela usa scheduled_at_utc`
+        );
+      }
+      return { targetMs: sa, source: 'scheduled_at_utc' };
+    }
+    if (nr != null) return { targetMs: nr, source: 'next_run_utc' };
+    return null;
+  }
+  const nr = parseUtcMs(job.next_run_utc);
+  if (nr == null) return null;
+  return { targetMs: nr, source: 'next_run_utc' };
+}
+
+type ExecutionWindowResult =
+  | { action: 'eligible' }
+  | { action: 'too_early' }
+  | { action: 'too_late'; targetMs: number }
+  | { action: 'invalid' };
+
+function evaluateExecutionWindow(job: any, nowMs: number): ExecutionWindowResult {
+  const canonical = getCanonicalScheduleInstantMs(job);
+  if (!canonical) return { action: 'invalid' };
+  const { targetMs } = canonical;
+  if (nowMs < targetMs) return { action: 'too_early' };
+  if (nowMs > targetMs + MAX_LATE_MS) return { action: 'too_late', targetMs };
+  return { action: 'eligible' };
+}
 
 /** Indica se o erro é por instância DESCONECTADA na Evolution API — nesses casos não conta para o
  * limite de tentativas e o job continua sendo reagendado até a instância voltar.
@@ -159,10 +224,98 @@ async function processMessageJob(job: any, workerId: string): Promise<{ success:
     cron_expr: cron_expr || '(vazio)',
     timezone: timezone || '(vazio)',
     next_run_utc: next_run_utc || '(vazio)',
+    scheduled_at_utc: job.scheduled_at_utc || '(vazio)',
     status: job.status,
   });
   
   try {
+    // Revalida janela após o lock (evita envio se o relógio / fila mudou entre lock e processamento)
+    const win = evaluateExecutionWindow(job, Date.now());
+    if (win.action !== 'eligible') {
+      const ts = new Date().toISOString();
+      if (win.action === 'too_early') {
+        await supabaseServiceRole
+          .from('message_schedules')
+          .update({
+            status: 'scheduled',
+            locked_at: null,
+            locked_by: null,
+            updated_at: ts,
+            last_error:
+              '[JANELA] Revalidação: instante canônico ainda não atingido — lock liberado sem enviar.',
+          })
+          .eq('id', id)
+          .eq('status', 'processing');
+        return { success: false, error: 'too_early_revalidate' };
+      }
+      if (win.action === 'invalid') {
+        await supabaseServiceRole
+          .from('message_schedules')
+          .update({
+            status: 'failed',
+            last_error: '[JANELA] Revalidação: datas inválidas.',
+            locked_at: null,
+            locked_by: null,
+            updated_at: ts,
+          })
+          .eq('id', id)
+          .eq('status', 'processing');
+        return { success: false, error: 'invalid_schedule' };
+      }
+      if (win.action === 'too_late') {
+        const baseMsg = `[JANELA] Revalidação: fora da tolerância (${MAX_LATE_MS / 60000} min) após ${new Date(win.targetMs).toISOString()}.`;
+        if (schedule_type === 'recurring') {
+          const nextRunUTC = calculateNextRecurringRun(
+            cron_expr || '',
+            timezone || 'America/Sao_Paulo',
+            recurring_days,
+            recurring_time || '',
+            logPrefix,
+            ts
+          );
+          if (nextRunUTC) {
+            await supabaseServiceRole
+              .from('message_schedules')
+              .update({
+                status: 'scheduled',
+                next_run_utc: nextRunUTC,
+                last_error: `${baseMsg} Ciclo ignorado; próximo: ${nextRunUTC}.`,
+                locked_at: null,
+                locked_by: null,
+                updated_at: ts,
+              })
+              .eq('id', id)
+              .eq('status', 'processing');
+          } else {
+            await supabaseServiceRole
+              .from('message_schedules')
+              .update({
+                status: 'failed',
+                last_error: `${baseMsg} Não foi possível reagendar.`,
+                locked_at: null,
+                locked_by: null,
+                updated_at: ts,
+              })
+              .eq('id', id)
+              .eq('status', 'processing');
+          }
+        } else {
+          await supabaseServiceRole
+            .from('message_schedules')
+            .update({
+              status: 'failed',
+              last_error: `${baseMsg} Envio não realizado.`,
+              locked_at: null,
+              locked_by: null,
+              updated_at: ts,
+            })
+            .eq('id', id)
+            .eq('status', 'processing');
+        }
+        return { success: false, error: 'too_late_revalidate' };
+      }
+    }
+
     // Busca dados da mensagem
     const { data: message, error: messageError } = await supabaseServiceRole
       .from('messages')
@@ -609,6 +762,14 @@ async function processMessageJob(job: any, workerId: string): Promise<{ success:
  * Após isso o job é marcado como falha para não ficar preso indefinidamente. */
 const INSTANCE_UNAVAILABLE_MAX_RETRY_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * Para jobs recorrentes com instância desconectada: se o retry estiver mais de N minutos
+ * após o horário configurado (recurring_time), o ciclo é considerado expirado.
+ * O job pula para a próxima ocorrência em vez de disparar horas atrasado.
+ * Ex: mensagem diária às 10:00 — se instância voltar às 10:31, pula para amanhã às 10:00.
+ */
+const MAX_RECURRING_CYCLE_LATE_MIN = 30;
+
 /** Centraliza a lógica de erro para evitar duplicação entre catch do fetch e catch externo. */
 async function handleJobError(
   job: any,
@@ -626,6 +787,48 @@ async function handleJobError(
     const withinRetryWindow = elapsedMs < INSTANCE_UNAVAILABLE_MAX_RETRY_MS;
 
     if (withinRetryWindow) {
+      // Para recorrentes: verifica se o ciclo atual já expirou (retry muito depois do horário configurado)
+      if (job.schedule_type === 'recurring' && job.recurring_time && job.timezone) {
+        const nextRetryMs = Date.now() + 5 * 60 * 1000;
+        const retryDate = new Date(nextRetryMs);
+        const retryHHMM = new Intl.DateTimeFormat('en-US', {
+          timeZone: job.timezone,
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+        }).format(retryDate);
+        const [retryH, retryM] = retryHHMM.split(':').map(Number);
+        const [targetH, targetM] = String(job.recurring_time).split(':').map(Number);
+        let diffMin = (retryH * 60 + retryM) - (targetH * 60 + targetM);
+        // Corrige cruzamento de meia-noite (ex: recurring_time=23:50, retry=00:10 → diff real = 20min)
+        if (diffMin < -12 * 60) diffMin += 24 * 60;
+        if (diffMin > MAX_RECURRING_CYCLE_LATE_MIN) {
+          const nextRunUTC = calculateNextRecurringRun(
+            job.cron_expr || '',
+            job.timezone,
+            job.recurring_days,
+            job.recurring_time,
+            `${logPrefix} [cycle_skip]`,
+            retryDate.toISOString()
+          );
+          if (nextRunUTC) {
+            console.log(`${logPrefix} ⏭️ [RECORRENTE] Ciclo das ${job.recurring_time} expirado (+${diffMin}min > ${MAX_RECURRING_CYCLE_LATE_MIN}min) — pulando para próxima ocorrência: ${nextRunUTC}`);
+            await supabaseServiceRole
+              .from('message_schedules')
+              .update({
+                status: 'scheduled',
+                next_run_utc: nextRunUTC,
+                last_error: `Ciclo das ${job.recurring_time} expirado — instância offline por mais de ${MAX_RECURRING_CYCLE_LATE_MIN}min após o horário. Próxima execução: ${nextRunUTC}.`,
+                updated_at: new Date().toISOString(),
+                locked_at: null,
+                locked_by: null,
+              })
+              .eq('id', id);
+            return { success: false, error: `Ciclo expirado (+${diffMin}min): próxima em ${nextRunUTC}` };
+          }
+        }
+      }
+
       console.log(`${logPrefix} 🔄 [INSTÂNCIA DESCONECTADA] Reagendando em 5 min (${Math.round(elapsedMs / 60000)}min de ${INSTANCE_UNAVAILABLE_MAX_RETRY_MS / 60000}min de janela)`);
       const nextRetry = new Date(Date.now() + 5 * 60 * 1000);
       await supabaseServiceRole
@@ -806,21 +1009,31 @@ export const handler: Handler = async (event, context) => {
     // Log detalhado de cada job encontrado
     dueJobs.forEach((job: any, index: number) => {
       const jobTime = job.next_run_utc ? new Date(job.next_run_utc) : null;
-      const isDue = jobTime && jobTime <= now;
+      const isDueNextRun = !!(jobTime && jobTime <= now);
+      const canonical = getCanonicalScheduleInstantMs(job);
+      const window = evaluateExecutionWindow(job, now.getTime());
       const timeDiff = jobTime ? Math.round((jobTime.getTime() - now.getTime()) / 1000 / 60) : null;
-      
+
       // Normaliza recurring_days para log
       const normalizedDaysForLog = normalizeRecurringDays(job.recurring_days);
-      
+
       console.log(`[WORKER ${WORKER_ID}] 📋 [JOB ${index + 1}/${dueJobs.length}] ID: ${job.id}`, {
         message_id: job.message_id,
         group_id: job.group_id,
         instance_name: job.instance_name,
         schedule_type: job.schedule_type,
+        scheduled_at_utc: job.scheduled_at_utc ?? null,
         next_run_utc: job.next_run_utc,
-        next_run_local: jobTime ? jobTime.toLocaleString('pt-BR', { timeZone: job.timezone || 'America/Sao_Paulo' }) : '(vazio)',
-        is_due: isDue,
-        minutes_until: timeDiff !== null ? `${timeDiff} min` : '(vazio)',
+        canonico_local:
+          canonical != null
+            ? new Date(canonical.targetMs).toLocaleString('pt-BR', {
+                timeZone: job.timezone || 'America/Sao_Paulo',
+              })
+            : '(vazio)',
+        fonte_canonica: canonical?.source ?? null,
+        janela: window.action,
+        next_run_devido: isDueNextRun,
+        minutes_until_next_run: timeDiff !== null ? `${timeDiff} min` : '(vazio)',
         recurring_days_raw: job.recurring_days,
         recurring_days_type: typeof job.recurring_days,
         recurring_days_is_array: Array.isArray(job.recurring_days),
@@ -838,42 +1051,113 @@ export const handler: Handler = async (event, context) => {
 
     console.log(`[WORKER ${WORKER_ID}] 🔒 [LOCK] Tentando travar ${dueJobs.length} job(s)...`);
 
+    const tzLog = (j: any) => j.timezone || 'America/Sao_Paulo';
+
     for (const job of dueJobs) {
-      // Verifica se o job está realmente devido (next_run_utc <= now)
       const jobTime = job.next_run_utc ? new Date(job.next_run_utc) : null;
-      const isDue = jobTime && jobTime <= now;
-      
-      // Log detalhado da verificação
-      if (jobTime) {
-        const timeDiffMs = jobTime.getTime() - now.getTime();
+      const isDueNextRun = !!(jobTime && jobTime <= now);
+      const canonical = getCanonicalScheduleInstantMs(job);
+      const window = evaluateExecutionWindow(job, now.getTime());
+
+      if (jobTime && canonical) {
+        const targetDate = new Date(canonical.targetMs);
+        const timeDiffMs = canonical.targetMs - now.getTime();
         const timeDiffMinutes = Math.round(timeDiffMs / 1000 / 60);
         const timeDiffSeconds = Math.round(timeDiffMs / 1000);
-        
         console.log(`[WORKER ${WORKER_ID}] ⏰ [VERIFICAR HORÁRIO] Job ${job.id}:`, {
+          scheduled_at_utc: job.scheduled_at_utc ?? '(vazio)',
           next_run_utc: job.next_run_utc,
-          next_run_local: jobTime.toLocaleString('pt-BR', { timeZone: job.timezone || 'America/Sao_Paulo' }),
+          instante_canonico_utc: new Date(canonical.targetMs).toISOString(),
+          fonte_canonica: canonical.source,
+          instante_canonico_local: targetDate.toLocaleString('pt-BR', { timeZone: tzLog(job) }),
           agora_utc: nowISO,
-          agora_local: now.toLocaleString('pt-BR', { timeZone: job.timezone || 'America/Sao_Paulo' }),
+          agora_local: now.toLocaleString('pt-BR', { timeZone: tzLog(job) }),
           diferenca_minutos: timeDiffMinutes,
           diferenca_segundos: timeDiffSeconds,
-          esta_devido: isDue,
+          janela_max_atraso_min: MAX_LATE_MS / 60000,
+          resultado_janela: window.action,
+          next_run_devido: isDueNextRun,
           schedule_type: job.schedule_type,
           recurring_days: job.recurring_days || [],
           recurring_time: job.recurring_time || '(vazio)',
           cron_expr: job.cron_expr || '(vazio)',
         });
       }
-      
-      if (!isDue) {
-        const timeDiff = jobTime ? Math.round((jobTime.getTime() - now.getTime()) / 1000 / 60) : null;
-        console.log(`[WORKER ${WORKER_ID}] ⏳ [JOB ${job.id}] Ainda não está devido (faltam ${timeDiff} min), pulando...`);
+
+      if (window.action === 'invalid') {
+        console.error(`[WORKER ${WORKER_ID}] ❌ [JOB ${job.id}] Sem data canônica válida — marcando como falha`);
+        await supabaseServiceRole
+          .from('message_schedules')
+          .update({
+            status: 'failed',
+            last_error:
+              '[JANELA] Agendamento sem scheduled_at_utc/next_run_utc válidos — disparo cancelado.',
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', job.id)
+          .eq('status', 'scheduled');
         continue;
       }
 
-      // next_run_utc é o único critério de disparo — foi calculado com timezone e dias corretos.
-      // Não há double-check de dia/hora: se isDue=true, o job deve ser executado.
+      if (window.action === 'too_early') {
+        console.log(
+          `[WORKER ${WORKER_ID}] ⏳ [JOB ${job.id}] Instante canônico ainda não chegou (possível next_run antecipado) — não travar.`
+        );
+        continue;
+      }
 
-      console.log(`[WORKER ${WORKER_ID}] ✅ [JOB ${job.id}] Está devido! Processando...`);
+      if (window.action === 'too_late') {
+        const lateMin = Math.round((now.getTime() - window.targetMs) / 60000);
+        const baseMsg = `[JANELA] Fora do horário permitido: agendado para ${new Date(window.targetMs).toISOString()} (tolerância ${MAX_LATE_MS / 60000} min após esse instante). Agora está ${lateMin} min após o agendamento.`;
+        console.warn(`[WORKER ${WORKER_ID}] 🚫 [JOB ${job.id}] ${baseMsg}`);
+
+        if (job.schedule_type === 'recurring') {
+          const nextRunUTC = calculateNextRecurringRun(
+            job.cron_expr || '',
+            job.timezone || 'America/Sao_Paulo',
+            job.recurring_days,
+            job.recurring_time || '',
+            `[WORKER ${WORKER_ID}]`,
+            nowISO
+          );
+          if (nextRunUTC) {
+            await supabaseServiceRole
+              .from('message_schedules')
+              .update({
+                status: 'scheduled',
+                next_run_utc: nextRunUTC,
+                last_error: `${baseMsg} Ciclo ignorado; próxima execução: ${nextRunUTC}.`,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', job.id)
+              .eq('status', 'scheduled');
+          } else {
+            await supabaseServiceRole
+              .from('message_schedules')
+              .update({
+                status: 'failed',
+                last_error: `${baseMsg} Não foi possível calcular o próximo horário recorrente.`,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', job.id)
+              .eq('status', 'scheduled');
+          }
+        } else {
+          await supabaseServiceRole
+            .from('message_schedules')
+            .update({
+              status: 'failed',
+              last_error: `${baseMsg} Envio não realizado.`,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', job.id)
+            .eq('status', 'scheduled');
+        }
+        continue;
+      }
+
+      // Dentro da janela [instante_canônico, instante + MAX_LATE_MS]
+      console.log(`[WORKER ${WORKER_ID}] ✅ [JOB ${job.id}] Dentro da janela de execução — processando...`);
       
       // Tenta travar o job
       console.log(`[WORKER ${WORKER_ID}] 🔒 [LOCK] Tentando travar job ${job.id}...`);

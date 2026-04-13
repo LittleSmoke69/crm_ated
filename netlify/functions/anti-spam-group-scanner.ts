@@ -158,10 +158,18 @@ async function getGroupParticipantsV2(instanceId: string, groupJid: string) {
     try { data = JSON.parse(text); } catch { return { success: false, participants: [] }; }
     if (!response.ok) return { success: false, participants: [] };
 
-    const raw: any[] = Array.isArray(data?.participants) ? data.participants : [];
+    const raw: any[] = Array.isArray(data?.participants)
+      ? data.participants
+      : Array.isArray(data)
+        ? data
+        : [];
     const participants = raw
       .map((p: any) => {
-        const rawPhone = p?.phoneNumber ?? (typeof p?.id === 'string' ? p.id : null) ?? p?.jid ?? (typeof p === 'string' ? p : null);
+        const rawPhone =
+          p?.phoneNumber ??
+          (typeof p?.id === 'string' && !String(p.id).includes('@lid') ? p.id : null) ??
+          p?.jid ??
+          (typeof p === 'string' ? p : null);
         if (!rawPhone) return null;
         const phone = String(rawPhone).replace(/@.*$/, '').replace(/\D/g, '').trim();
         if (!phone) return null;
@@ -211,12 +219,20 @@ async function loadActiveConfigs(): Promise<AntiSpamConfig[]> {
 }
 
 async function getConfigGroups(config: AntiSpamConfig) {
-  if (config.scan_mode !== 'selected_groups') {
+  if (config.scan_mode === 'all_groups' || !config.scan_mode) {
     const result = await fetchAllGroups(config.master_instance_id);
-    if (result.success && result.groupNames.length > 0) {
-      return result.groupNames.map((g: any) => ({ groupJid: g.group_jid, groupName: g.group_name || g.group_jid }));
+    if (!result.success) {
+      console.error(`[Scanner] Config ${config.id}: fetchAllGroups falhou — instância sem resposta ou desconectada`);
+      return [];
     }
+    if (result.groupNames.length === 0) {
+      console.warn(`[Scanner] Config ${config.id}: fetchAllGroups retornou 0 grupos`);
+      return [];
+    }
+    return result.groupNames.map((g: any) => ({ groupJid: g.group_jid, groupName: g.group_name || g.group_jid }));
   }
+
+  // scan_mode === 'selected_groups'
   const { data } = await supabase()
     .from('anti_spam_groups')
     .select('group_jid, group_name')
@@ -300,6 +316,9 @@ export const handler: Handler = async () => {
       const blacklist = cacheByConfig.get(config.id) ?? new Set<string>();
       const ownerKey = config.owner_id || config.banca_id;
 
+      grandTotalGroups += groups.length;
+      console.log(`[Scanner] Config ${config.id}: ${groups.length} grupos encontrados, ${blacklist.size} na blacklist`);
+
       for (let i = 0; i < groups.length; i += SCAN_BATCH_SIZE) {
         const batch = groups.slice(i, i + SCAN_BATCH_SIZE);
         const batchResults: any[] = [];
@@ -320,10 +339,9 @@ export const handler: Handler = async () => {
           batchErrors > 0 ? batchResults.flatMap((r) => r.errors).join(' | ') : null
         );
 
-        console.log(`[Scanner] Config ${config.id}: batch ${Math.floor(i / SCAN_BATCH_SIZE) + 1}, ${batch.length} grupos, ${batchRemoved} removidos, ${batchErrors} erros`);
+        console.log(`[Scanner] Config ${config.id}: batch ${Math.floor(i / SCAN_BATCH_SIZE) + 1}/${Math.ceil(groups.length / SCAN_BATCH_SIZE)}, ${batch.length} grupos, ${batchRemoved} removidos, ${batchErrors} erros`);
         grandTotalRemoved += batchRemoved;
         grandTotalErrors += batchErrors;
-        grandTotalGroups += groups.length;
       }
     }
 

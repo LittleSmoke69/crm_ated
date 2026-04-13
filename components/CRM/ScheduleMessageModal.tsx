@@ -186,7 +186,7 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
     }
   }, [isOpen, selectedInstance]);
 
-  // Reset ao fechar
+  // Reset ao fechar / inicializa data e hora ao abrir
   useEffect(() => {
     if (!isOpen) {
       setCurrentStep(1);
@@ -198,6 +198,23 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
       setRecurringTime('');
       setSelectedGroups(new Set());
       setSearchQuery('');
+    } else {
+      // Preenche data e hora com o momento atual no timezone padrão
+      const now = new Date();
+      const tz = timezone || 'America/Sao_Paulo';
+      const formatter = new Intl.DateTimeFormat('sv-SE', {
+        timeZone: tz,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      });
+      const parts = formatter.formatToParts(now);
+      const get = (type: string) => parts.find((p) => p.type === type)?.value || '00';
+      setSelectedDate(`${get('year')}-${get('month')}-${get('day')}`);
+      setSelectedTime(`${get('hour')}:${get('minute')}`);
     }
   }, [isOpen]);
 
