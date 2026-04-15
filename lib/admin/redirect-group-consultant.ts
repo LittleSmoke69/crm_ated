@@ -33,14 +33,25 @@ export async function validateConsultantUserId(
   return { ok: true, id };
 }
 
-/** Consultores com perfil consultor vinculados à banca (user_bancas). */
+/** Consultores com perfil consultor vinculados à banca (user_bancas.banca_ids contém o UUID). */
 export async function fetchConsultantsForBanca(
   bancaId: string
 ): Promise<{ id: string; full_name: string | null; email: string | null }[]> {
-  const { data: ubRows } = await supabaseServiceRole
-    .from('user_bancas')
-    .select('user_id')
-    .filter('banca_ids', 'cs', JSON.stringify([bancaId]));
+  let ubRows: { user_id: string }[] | null = null;
+  const q1 = await supabaseServiceRole.from('user_bancas').select('user_id').contains('banca_ids', [bancaId]);
+  if (!q1.error) {
+    ubRows = (q1.data ?? []) as { user_id: string }[];
+  } else {
+    console.warn('[fetchConsultantsForBanca] contains falhou, usando filtro em memória:', q1.error.message);
+    const all = await supabaseServiceRole.from('user_bancas').select('user_id, banca_ids');
+    if (all.error) {
+      console.error('[fetchConsultantsForBanca] user_bancas', all.error.message);
+      return [];
+    }
+    ubRows = (all.data ?? [])
+      .filter((r: { banca_ids?: unknown }) => Array.isArray(r.banca_ids) && (r.banca_ids as string[]).includes(bancaId))
+      .map((r: { user_id: string }) => ({ user_id: r.user_id }));
+  }
   const uids = [...new Set((ubRows ?? []).map((r: { user_id: string }) => r.user_id))];
   if (uids.length === 0) return [];
   const { data: profs } = await supabaseServiceRole

@@ -37,7 +37,8 @@ export default function AdminVslProjectPage() {
   const [saving, setSaving] = useState(false);
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [deletingPageId, setDeletingPageId] = useState<string | null>(null);
-  const [form, setForm] = useState({ name: '', pixel_id: '', redirect_timer_seconds: 5 });
+  const [deletingProject, setDeletingProject] = useState(false);
+  const [form, setForm] = useState({ name: '', slug: '', pixel_id: '', redirect_timer_seconds: 5 });
   const [capiToken, setCapiToken] = useState('');
 
   useEffect(() => {
@@ -50,6 +51,7 @@ export default function AdminVslProjectPage() {
           setProject(json.data);
           setForm({
             name: json.data.name,
+            slug: json.data.slug || '',
             pixel_id: json.data.pixel_id || '',
             redirect_timer_seconds: json.data.redirect_timer_seconds ?? 5,
           });
@@ -76,12 +78,55 @@ export default function AdminVslProjectPage() {
       const res = await fetch(`/api/admin/vsl/projects/${projectId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-        body: JSON.stringify(form),
+        body: JSON.stringify({
+          name: form.name.trim(),
+          slug: form.slug.trim().toLowerCase().replace(/[^a-z0-9-_]/g, '-'),
+          pixel_id: form.pixel_id.trim() || null,
+          redirect_timer_seconds: form.redirect_timer_seconds,
+        }),
       });
       const json = await res.json();
-      if (json?.data) setProject((p) => (p ? { ...p, ...json.data } : null));
+      if (!json?.success) {
+        alert(typeof json?.error === 'string' ? json.error : 'Erro ao salvar projeto');
+        return;
+      }
+      if (json?.data) {
+        setProject((p) => (p ? { ...p, ...json.data } : null));
+        setForm((f) => ({
+          ...f,
+          name: json.data.name ?? f.name,
+          slug: json.data.slug ?? f.slug,
+          pixel_id: json.data.pixel_id ?? '',
+          redirect_timer_seconds: json.data.redirect_timer_seconds ?? f.redirect_timer_seconds,
+        }));
+      }
     } finally {
       setSaving(false);
+    }
+  };
+
+  const deleteProject = async () => {
+    if (!userId || !projectId) return;
+    if (
+      !confirm(
+        'Excluir este projeto? Remove páginas VSL, redirect, grupos e métricas. Esta ação não pode ser desfeita.'
+      )
+    ) {
+      return;
+    }
+    setDeletingProject(true);
+    try {
+      const res = await fetch(`/api/admin/vsl/projects/${projectId}`, {
+        method: 'DELETE',
+        headers: { 'X-User-Id': userId },
+      });
+      const json = await res.json();
+      if (json?.success) router.push('/admin/vsl');
+      else alert(typeof json?.error === 'string' ? json.error : 'Erro ao excluir');
+    } catch {
+      alert('Erro de rede');
+    } finally {
+      setDeletingProject(false);
     }
   };
 
@@ -184,7 +229,7 @@ export default function AdminVslProjectPage() {
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-2xl font-bold text-gray-800">Configuração do projeto</h1>
             <span className="inline-flex items-center px-2.5 py-0.5 rounded-lg text-xs font-mono bg-gray-100 text-gray-700">
-              /{project.slug}
+              /{form.slug || project.slug}
             </span>
           </div>
         </div>
@@ -200,7 +245,7 @@ export default function AdminVslProjectPage() {
             </div>
             <div>
               <h2 className="font-semibold text-gray-800">Dados do projeto</h2>
-              <p className="text-xs text-gray-500">Nome, Pixel e timer do redirect</p>
+              <p className="text-xs text-gray-500">Nome, slug público (/r/...), pixel e timer do redirect</p>
             </div>
           </div>
           <div className="p-6">
@@ -213,6 +258,21 @@ export default function AdminVslProjectPage() {
                   className={inputClass}
                   placeholder="Ex: VSL Loteria"
                 />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Slug do redirect</label>
+                <input
+                  value={form.slug}
+                  onChange={(e) =>
+                    setForm((f) => ({
+                      ...f,
+                      slug: e.target.value.toLowerCase().replace(/[^a-z0-9-_]/g, '-'),
+                    }))
+                  }
+                  className={inputClass}
+                  placeholder="ex: minha-banca"
+                />
+                <p className="text-xs text-gray-500 mt-1.5">URL pública: /r/{form.slug || '...'}</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">Pixel ID (Meta)</label>
@@ -235,10 +295,19 @@ export default function AdminVslProjectPage() {
                 />
               </div>
             </div>
-            <div className="mt-5 pt-5 border-t border-gray-100 flex justify-end">
+            <div className="mt-5 pt-5 border-t border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <button
                 type="button"
-                onClick={() => { saveProject(); saveTimer(); }}
+                onClick={() => void deleteProject()}
+                disabled={deletingProject}
+                className="flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-red-700 bg-red-50 hover:bg-red-100 rounded-xl border border-red-200 disabled:opacity-50 transition"
+              >
+                {deletingProject ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                Excluir projeto
+              </button>
+              <button
+                type="button"
+                onClick={() => { void saveProject(); void saveTimer(); }}
                 disabled={saving}
                 className="flex items-center gap-2 px-6 py-2.5 bg-[#8CD955] text-white font-medium rounded-xl hover:opacity-90 disabled:opacity-50 transition shadow-sm"
               >

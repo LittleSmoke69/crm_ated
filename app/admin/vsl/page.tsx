@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { Plus, Settings, ExternalLink, Loader2 } from 'lucide-react';
+import { Plus, Settings, ExternalLink, Loader2, Trash2 } from 'lucide-react';
 
 interface VslProject {
   id: string;
@@ -23,6 +23,7 @@ export default function AdminVslPage() {
   const [projects, setProjects] = useState<VslProject[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!userId) return;
@@ -44,6 +45,34 @@ export default function AdminVslPage() {
         setLoading(false);
       });
   }, [userId]);
+
+  const deleteProject = async (p: VslProject) => {
+    if (!userId) return;
+    if (
+      !confirm(
+        `Excluir o projeto "${p.name}"? Isso remove páginas VSL, redirect, grupos e estatísticas vinculados. Não dá para desfazer.`
+      )
+    ) {
+      return;
+    }
+    setDeletingId(p.id);
+    try {
+      const res = await fetch(`/api/admin/vsl/projects/${p.id}`, {
+        method: 'DELETE',
+        headers: { 'X-User-Id': userId },
+      });
+      const json = await res.json();
+      if (json?.success) {
+        setProjects((list) => list.filter((x) => x.id !== p.id));
+      } else {
+        alert(typeof json?.error === 'string' ? json.error : 'Erro ao excluir projeto');
+      }
+    } catch {
+      alert('Erro de rede ao excluir');
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   if (checking || loading) {
     return (
@@ -98,7 +127,7 @@ export default function AdminVslPage() {
                 <p className="font-semibold text-gray-800 dark:text-white truncate">{p.name}</p>
                 <p className="text-sm text-gray-600 dark:text-[#aaa] font-mono">/{p.slug}</p>
               </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
+              <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
                 <button
                   type="button"
                   onClick={() => router.push(`/admin/redirect/${p.slug}`)}
@@ -113,7 +142,16 @@ export default function AdminVslPage() {
                   className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-gray-700 dark:text-[#ccc] bg-gray-100 dark:bg-[#333] hover:bg-gray-200 dark:hover:bg-[#404040] rounded-lg transition"
                 >
                   <Settings className="w-4 h-4" />
-                  Config
+                  Editar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void deleteProject(p)}
+                  disabled={deletingId === p.id}
+                  className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-950/40 hover:bg-red-100 dark:hover:bg-red-950/60 rounded-lg transition disabled:opacity-50"
+                >
+                  {deletingId === p.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                  Excluir
                 </button>
               </div>
             </li>

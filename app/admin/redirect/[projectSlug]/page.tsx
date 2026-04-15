@@ -1,10 +1,22 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { Loader2, Plus, Copy, Pencil, Trash2, Percent, Scale } from 'lucide-react';
+import { Loader2, Plus, Copy, Pencil, Trash2, Percent, Scale, Settings, ExternalLink } from 'lucide-react';
+import RedirectClicksDashboard from '@/components/Redirect/RedirectClicksDashboard';
+import ConsultantSearchPicker from '@/components/Redirect/ConsultantSearchPicker';
+
+const CONSULTANT_FETCH_MS = 28000;
+
+function whatsappInviteHref(raw: string): string | null {
+  const t = raw.trim();
+  if (!t) return null;
+  if (/^https?:\/\//i.test(t)) return t;
+  if (t.startsWith('chat.whatsapp.com') || t.startsWith('wa.me/')) return `https://${t}`;
+  return null;
+}
 
 interface ConsultantOption {
   id: string;
@@ -87,6 +99,12 @@ export default function AdminRedirectPage() {
   const [utmVisits, setUtmVisits] = useState<UtmVisit[]>([]);
   const [utmSummary, setUtmSummary] = useState<UtmSummary>({ total: 0, by_source: {}, by_medium: {}, by_campaign: {}, by_source_medium: {}, by_day: {}, sample_size: 0 });
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [projectName, setProjectName] = useState('');
+  const [modalProjectEdit, setModalProjectEdit] = useState(false);
+  const [projectEditForm, setProjectEditForm] = useState({ name: '', slug: '' });
+  const [savingProjectEdit, setSavingProjectEdit] = useState(false);
+  const [deletingProject, setDeletingProject] = useState(false);
+  const consultantFetchAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (!userId) return;
@@ -121,6 +139,7 @@ export default function AdminRedirectPage() {
         setTotalGroups(json.data.total_groups ?? 0);
         setActiveGroups(json.data.active_groups ?? 0);
         if (json.data.project_id) setProjectId(json.data.project_id);
+        setProjectName(typeof json.data.project_name === 'string' ? json.data.project_name : '');
         setPixelId(json.data.pixel_id ?? '');
         setRedirectTimerSeconds(json.data.redirect_timer_seconds ?? 3);
         setUtmVisits(json.data.utm_visits ?? []);
@@ -137,18 +156,33 @@ export default function AdminRedirectPage() {
 
   const loadConsultantsForBanca = async (bancaId: string) => {
     if (!userId || !bancaId) return;
+    consultantFetchAbortRef.current?.abort();
+    const ac = new AbortController();
+    consultantFetchAbortRef.current = ac;
+    const timeoutId = setTimeout(() => ac.abort(), CONSULTANT_FETCH_MS);
     setLoadingConsultantsByBanca(true);
     try {
       const r = await fetch(`/api/admin/redirect/consultants?banca_id=${encodeURIComponent(bancaId)}`, {
         headers: { 'X-User-Id': userId },
+        signal: ac.signal,
       });
       const j = await r.json();
+      if (consultantFetchAbortRef.current !== ac) return;
       if (j?.success && Array.isArray(j.data)) setConsultantsByBanca(j.data as ConsultantOption[]);
       else setConsultantsByBanca([]);
-    } catch {
-      setConsultantsByBanca([]);
+    } catch (e) {
+      if (consultantFetchAbortRef.current === ac) {
+        setConsultantsByBanca([]);
+        if (e instanceof Error && e.name === 'AbortError') {
+          console.warn('[redirect] consultores: requisição cancelada ou tempo esgotado');
+        }
+      }
     } finally {
-      setLoadingConsultantsByBanca(false);
+      clearTimeout(timeoutId);
+      if (consultantFetchAbortRef.current === ac) {
+        setLoadingConsultantsByBanca(false);
+        consultantFetchAbortRef.current = null;
+      }
     }
   };
 
@@ -173,6 +207,10 @@ export default function AdminRedirectPage() {
         }),
       });
       const json = await res.json();
+      if (!res.ok || json?.success === false) {
+        alert(typeof json?.error === 'string' ? json.error : 'Erro ao adicionar grupo');
+        return;
+      }
       if (json?.data) {
         const row = json.data as Group & { clicks?: number };
         const cid = row.consultant_user_id ?? null;
@@ -185,7 +223,7 @@ export default function AdminRedirectPage() {
         setConsultantBancaIdModal('');
         setConsultantsByBanca([]);
       } else {
-        alert(json.error || 'Erro ao adicionar');
+        alert('Resposta inválida do servidor.');
       }
     } finally {
       setSaving(false);
@@ -217,23 +255,42 @@ export default function AdminRedirectPage() {
     const byBanca = consultantUi.mode === 'by_banca' && consultantUi.bancas.length > 0;
     const cid = g.consultant_user_id?.trim();
     if (byBanca && userId && cid) {
+      consultantFetchAbortRef.current?.abort();
+      const ac = new AbortController();
+      consultantFetchAbortRef.current = ac;
+      const timeoutId = setTimeout(() => ac.abort(), CONSULTANT_FETCH_MS);
       setLoadingConsultantsByBanca(true);
       void (async () => {
         try {
-          for (const b of consultantUi.bancas) {
-            const r = await fetch(`/api/admin/redirect/consultants?banca_id=${encodeURIComponent(b.id)}`, {
-              headers: { 'X-User-Id': userId },
-            });
-            const j = await r.json();
-            const arr: ConsultantOption[] = j?.success && Array.isArray(j.data) ? j.data : [];
+          const results = await Promise.all(
+            consultantUi.bancas.map(async (b) => {
+              try {
+                const r = await fetch(`/api/admin/redirect/consultants?banca_id=${encodeURIComponent(b.id)}`, {
+                  headers: { 'X-User-Id': userId },
+                  signal: ac.signal,
+                });
+                const j = await r.json();
+                const arr: ConsultantOption[] = j?.success && Array.isArray(j.data) ? j.data : [];
+                return { bancaId: b.id, arr };
+              } catch {
+                return { bancaId: b.id, arr: [] as ConsultantOption[] };
+              }
+            })
+          );
+          if (consultantFetchAbortRef.current !== ac) return;
+          for (const { bancaId, arr } of results) {
             if (arr.some((c) => c.id === cid)) {
-              setConsultantBancaIdModal(b.id);
+              setConsultantBancaIdModal(bancaId);
               setConsultantsByBanca(arr);
               return;
             }
           }
         } finally {
-          setLoadingConsultantsByBanca(false);
+          clearTimeout(timeoutId);
+          if (consultantFetchAbortRef.current === ac) {
+            setLoadingConsultantsByBanca(false);
+            consultantFetchAbortRef.current = null;
+          }
         }
       })();
     }
@@ -254,7 +311,11 @@ export default function AdminRedirectPage() {
         }),
       });
       const json = await res.json();
-      if (json?.success && json?.data) {
+      if (!res.ok || json?.success === false) {
+        alert(typeof json?.error === 'string' ? json.error : 'Erro ao salvar grupo');
+        return;
+      }
+      if (json?.data) {
         const d = json.data as { name: string; invite_url: string; consultant_user_id?: string | null };
         const cid = d.consultant_user_id ?? null;
         setGroups((prev) =>
@@ -275,7 +336,7 @@ export default function AdminRedirectPage() {
         setConsultantBancaIdModal('');
         setConsultantsByBanca([]);
       } else {
-        alert(json?.error || 'Erro ao salvar');
+        alert('Resposta inválida do servidor.');
       }
     } finally {
       setSaving(false);
@@ -357,6 +418,78 @@ export default function AdminRedirectPage() {
     }
   };
 
+  const openProjectEditModal = () => {
+    setProjectEditForm({
+      name: projectName,
+      slug: (redirectSlug ?? projectSlug ?? '').trim(),
+    });
+    setModalProjectEdit(true);
+  };
+
+  const saveProjectEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userId || !projectId) return;
+    const name = projectEditForm.name.trim();
+    const slug = projectEditForm.slug.trim().toLowerCase().replace(/[^a-z0-9-_]/g, '-');
+    if (!name || !slug) {
+      alert('Nome e slug são obrigatórios.');
+      return;
+    }
+    setSavingProjectEdit(true);
+    try {
+      const res = await fetch(`/api/admin/vsl/projects/${projectId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({ name, slug }),
+      });
+      const json = await res.json();
+      if (!json?.success) {
+        alert(typeof json?.error === 'string' ? json.error : 'Erro ao salvar projeto');
+        return;
+      }
+      if (json.data) {
+        const d = json.data as { name?: string; slug?: string };
+        if (d.name) setProjectName(d.name);
+        if (d.slug) {
+          setRedirectSlug(d.slug);
+          if (d.slug !== projectSlug) {
+            router.replace(`/admin/redirect/${d.slug}`);
+          }
+        }
+      }
+      setModalProjectEdit(false);
+    } catch {
+      alert('Erro de rede');
+    } finally {
+      setSavingProjectEdit(false);
+    }
+  };
+
+  const deleteProject = async () => {
+    if (!userId || !projectId) return;
+    if (
+      !confirm(
+        'Excluir este projeto? Remove grupos, páginas VSL, redirects e estatísticas. Não dá para desfazer.'
+      )
+    ) {
+      return;
+    }
+    setDeletingProject(true);
+    try {
+      const res = await fetch(`/api/admin/vsl/projects/${projectId}`, {
+        method: 'DELETE',
+        headers: { 'X-User-Id': userId },
+      });
+      const json = await res.json();
+      if (json?.success) router.push('/admin/vsl');
+      else alert(typeof json?.error === 'string' ? json.error : 'Erro ao excluir');
+    } catch {
+      alert('Erro de rede');
+    } finally {
+      setDeletingProject(false);
+    }
+  };
+
   const copyLink = () => {
     const url = typeof window !== 'undefined' ? `${window.location.origin}/r/${redirectSlug}` : '';
     navigator.clipboard?.writeText(url).then(() => {
@@ -427,16 +560,50 @@ export default function AdminRedirectPage() {
   return (
     <Layout>
       <div className="w-full max-w-none min-w-0 space-y-4">
-        <div className="flex flex-wrap items-center gap-2 mb-2">
-          <button
-            type="button"
-            onClick={() => router.push('/admin/vsl')}
-            className="text-gray-600 dark:text-[#aaa] hover:text-gray-800 dark:hover:text-white font-medium"
-          >
-            ← Vsl e Redirect
-          </button>
-          <span className="text-gray-400 dark:text-[#666]">/</span>
-          <h1 className="text-xl font-bold text-gray-800 dark:text-white">Redirect Manager — /{projectSlug}</h1>
+        <div className="flex flex-wrap items-center gap-2 mb-2 justify-between">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
+            <button
+              type="button"
+              onClick={() => router.push('/admin/vsl')}
+              className="text-gray-600 dark:text-[#aaa] hover:text-gray-800 dark:hover:text-white font-medium shrink-0"
+            >
+              ← Vsl e Redirect
+            </button>
+            <span className="text-gray-400 dark:text-[#666]">/</span>
+            <h1 className="text-xl font-bold text-gray-800 dark:text-white truncate">
+              Redirect — {projectName || projectSlug}
+              <span className="text-gray-500 dark:text-[#888] font-mono font-normal text-base"> /{redirectSlug ?? projectSlug}</span>
+            </h1>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => projectId && router.push(`/admin/vsl/${projectId}`)}
+              disabled={!projectId}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-700 dark:text-[#ccc] bg-gray-100 dark:bg-[#333] hover:bg-gray-200 dark:hover:bg-[#404040] rounded-lg transition disabled:opacity-50"
+            >
+              <Settings className="w-4 h-4" />
+              VSL
+            </button>
+            <button
+              type="button"
+              onClick={openProjectEditModal}
+              disabled={!projectId}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-700 dark:text-[#ccc] bg-gray-100 dark:bg-[#333] hover:bg-gray-200 dark:hover:bg-[#404040] rounded-lg transition disabled:opacity-50"
+            >
+              <Pencil className="w-4 h-4" />
+              Editar projeto
+            </button>
+            <button
+              type="button"
+              onClick={() => void deleteProject()}
+              disabled={!projectId || deletingProject}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-950/40 hover:bg-red-100 dark:hover:bg-red-950/60 rounded-lg transition disabled:opacity-50"
+            >
+              {deletingProject ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+              Excluir
+            </button>
+          </div>
         </div>
 
         {loadError && (
@@ -449,7 +616,45 @@ export default function AdminRedirectPage() {
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Coluna esquerda: cards de métricas + adicionar grupo */}
+          {/* Faixa superior: ação principal + resumo rápido */}
+          <div className="lg:col-span-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 rounded-2xl border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] px-4 py-4 shadow-sm">
+            <div className="min-w-0 space-y-1">
+              <p className="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-[#888]">Grupos do redirect</p>
+              <p className="text-sm text-gray-600 dark:text-[#aaa]">
+                <span className="font-mono text-gray-800 dark:text-white">/r/{redirectSlug ?? '—'}</span>
+                <span className="mx-2 text-gray-300 dark:text-[#555]">·</span>
+                <span>{totalGroups} grupo{totalGroups !== 1 ? 's' : ''}</span>
+                <span className="mx-2 text-gray-300 dark:text-[#555]">·</span>
+                <span>{activeGroups} ativo{activeGroups !== 1 ? 's' : ''}</span>
+                <span className="mx-2 text-gray-300 dark:text-[#555]">·</span>
+                <span>{totalClicks.toLocaleString('pt-BR')} clique{totalClicks !== 1 ? 's' : ''}</span>
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={copyLink}
+                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-xl border border-gray-200 dark:border-[#555] bg-gray-50 dark:bg-[#333] text-gray-800 dark:text-white hover:bg-gray-100 dark:hover:bg-[#404040] transition"
+              >
+                <Copy className="w-4 h-4 text-[#8CD955]" />
+                {copyDone ? 'Copiado!' : 'Copiar link'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setConsultantBancaIdModal('');
+                  setConsultantsByBanca([]);
+                  setModalAdd(true);
+                }}
+                className="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-[#8CD955] text-white text-sm font-semibold rounded-xl hover:opacity-90 transition shadow-sm"
+              >
+                <Plus className="w-4 h-4" />
+                Adicionar grupo
+              </button>
+            </div>
+          </div>
+
+          {/* Coluna esquerda: métricas e configurações */}
           <div className="lg:col-span-1 space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-sm p-4">
@@ -460,21 +665,9 @@ export default function AdminRedirectPage() {
                 <p className="text-xs text-gray-500 dark:text-[#aaa] mb-0.5">Grupos Ativos</p>
                 <p className="text-xl font-bold text-gray-800 dark:text-white">{activeGroups}</p>
               </div>
-              <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-sm p-4">
-                <p className="text-xs text-gray-500 dark:text-[#aaa] mb-0.5">Total de Cliques</p>
-                <p className="text-xl font-bold text-gray-800 dark:text-white">{totalClicks}</p>
-              </div>
               <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-sm p-4 col-span-2">
-                <p className="text-xs text-gray-500 dark:text-[#aaa] mb-1">Link de Redirect</p>
-                <p className="text-sm font-mono text-gray-800 dark:text-white truncate mb-1.5">/r/{redirectSlug}</p>
-                <button
-                  type="button"
-                  onClick={copyLink}
-                  className="flex items-center gap-1.5 text-sm text-[#8CD955] hover:underline font-medium"
-                >
-                  <Copy className="w-4 h-4" />
-                  {copyDone ? 'Copiado!' : 'Copiar'}
-                </button>
+                <p className="text-xs text-gray-500 dark:text-[#aaa] mb-0.5">Total de Cliques</p>
+                <p className="text-xl font-bold text-gray-800 dark:text-white">{totalClicks.toLocaleString('pt-BR')}</p>
               </div>
             </div>
             <section className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-sm p-4">
@@ -542,45 +735,34 @@ export default function AdminRedirectPage() {
                 </button>
               </form>
             </section>
-            <section className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-sm p-4">
-              <h2 className="font-semibold text-gray-800 dark:text-white text-sm mb-3">Adicionar Novo Grupo</h2>
-              <button
-                type="button"
-                onClick={() => {
-                  setConsultantBancaIdModal('');
-                  setConsultantsByBanca([]);
-                  setModalAdd(true);
-                }}
-                className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-[#8CD955] text-white font-medium rounded-xl hover:opacity-90 transition"
-              >
-                <Plus className="w-4 h-4" />
-                Adicionar
-              </button>
-            </section>
           </div>
 
           {/* Coluna direita: tabela de grupos (2/3 da largura) */}
           <section className="lg:col-span-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-sm overflow-hidden flex flex-col min-h-[280px]">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 dark:border-[#404040] shrink-0">
-              <h2 className="font-semibold text-gray-800 dark:text-white">Grupos Cadastrados</h2>
-              <button
-                type="button"
-                onClick={openWeightsModal}
-                disabled={groups.length === 0 || activeGroups === 0}
-                title={activeGroups === 0 ? 'Ative ao menos um grupo para editar %' : undefined}
-                className="flex items-center gap-2 px-3 py-2 bg-gray-700 dark:bg-[#3d3d3d] text-white text-sm font-medium rounded-lg hover:bg-gray-800 dark:hover:bg-[#4a4a4a] transition disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Percent className="w-4 h-4" />
-                Editar %
-              </button>
+            <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-gray-100 dark:border-[#404040] shrink-0">
+              <div>
+                <h2 className="font-semibold text-gray-800 dark:text-white">Grupos cadastrados</h2>
+                <p className="text-xs text-gray-500 dark:text-[#888] mt-0.5">Nome, convite WhatsApp, pesos e cliques</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={openWeightsModal}
+                  disabled={groups.length === 0 || activeGroups === 0}
+                  title={activeGroups === 0 ? 'Ative ao menos um grupo para editar %' : undefined}
+                  className="flex items-center gap-2 px-3 py-2 bg-gray-700 dark:bg-[#3d3d3d] text-white text-sm font-medium rounded-lg hover:bg-gray-800 dark:hover:bg-[#4a4a4a] transition disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Percent className="w-4 h-4" />
+                  Editar %
+                </button>
+              </div>
             </div>
             <div className="flex-1 overflow-auto">
               <table className="w-full">
                 <thead>
                   <tr className="bg-gray-50 dark:bg-[#333] text-left text-xs font-medium text-gray-700 dark:text-[#ccc]">
-                    <th className="p-3">Nome</th>
+                    <th className="p-3 min-w-[160px]">Grupo e convite</th>
                     <th className="p-3 hidden md:table-cell">Consultor</th>
-                    <th className="p-3 hidden sm:table-cell">Link</th>
                     <th className="p-3">Status</th>
                     <th className="p-3 w-14">%</th>
                     <th className="p-3 w-16">Cliques</th>
@@ -590,13 +772,35 @@ export default function AdminRedirectPage() {
                 <tbody>
                   {groups.map((g) => (
                     <tr key={g.id} className="border-t border-gray-100 dark:border-[#404040] hover:bg-gray-50/50 dark:hover:bg-[#333]/50">
-                      <td className="p-3 font-medium text-gray-800 dark:text-white truncate max-w-[120px] sm:max-w-none">{g.name}</td>
-                      <td className="p-3 text-xs text-gray-700 dark:text-[#ccc] truncate max-w-[160px] hidden md:table-cell" title={g.consultant?.email ?? ''}>
+                      <td className="p-3 align-top">
+                        <div className="flex flex-col gap-1.5 max-w-[min(100vw-8rem,280px)] sm:max-w-[320px]">
+                          <span className="font-semibold text-gray-800 dark:text-white leading-snug">{g.name}</span>
+                          {(() => {
+                            const href = whatsappInviteHref(g.invite_url);
+                            return href ? (
+                              <a
+                                href={href}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1.5 text-sm font-medium text-[#8CD955] hover:underline w-fit"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5 shrink-0" aria-hidden />
+                                Abrir link do grupo
+                              </a>
+                            ) : (
+                              <span className="text-xs text-amber-700 dark:text-amber-300">URL não reconhecida — copie manualmente</span>
+                            );
+                          })()}
+                          <span className="text-[10px] sm:text-xs font-mono text-gray-500 dark:text-[#888] break-all leading-relaxed" title={g.invite_url}>
+                            {g.invite_url}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="p-3 text-xs text-gray-700 dark:text-[#ccc] truncate max-w-[160px] hidden md:table-cell align-top" title={g.consultant?.email ?? ''}>
                         {g.consultant
                           ? (g.consultant.full_name?.trim() || g.consultant.email?.trim() || '—')
                           : '—'}
                       </td>
-                      <td className="p-3 text-xs text-gray-700 dark:text-[#ccc] truncate max-w-[140px] hidden sm:table-cell">{g.invite_url}</td>
                       <td className="p-3">
                         <label className="flex items-center gap-2 cursor-pointer">
                           <input
@@ -650,6 +854,8 @@ export default function AdminRedirectPage() {
               )}
             </div>
           </section>
+
+          <RedirectClicksDashboard projectId={projectId} userId={userId} redirectSlug={redirectSlug} />
 
           {/* Dashboard Resumo UTM */}
           <section className="lg:col-span-3 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-sm overflow-hidden">
@@ -857,9 +1063,63 @@ export default function AdminRedirectPage() {
           </section>
         </div>
 
-        {modalEdit && editForm && (
+        {modalProjectEdit && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl max-w-md w-full p-6 shadow-xl">
+              <h3 className="font-bold text-gray-800 dark:text-white mb-1">Editar projeto</h3>
+              <p className="text-xs text-gray-500 dark:text-[#aaa] mb-4">
+                Nome e slug público do redirect (/r/...). Ao mudar o slug, links antigos deixam de funcionar.
+              </p>
+              <form onSubmit={saveProjectEdit} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-1.5">Nome</label>
+                  <input
+                    value={projectEditForm.name}
+                    onChange={(e) => setProjectEditForm((f) => ({ ...f, name: e.target.value }))}
+                    className={inputClass}
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-1.5">Slug</label>
+                  <input
+                    value={projectEditForm.slug}
+                    onChange={(e) =>
+                      setProjectEditForm((f) => ({
+                        ...f,
+                        slug: e.target.value.toLowerCase().replace(/[^a-z0-9-_]/g, '-'),
+                      }))
+                    }
+                    className={inputClass}
+                    required
+                  />
+                  <p className="text-xs text-gray-500 dark:text-[#aaa] mt-1">/r/{projectEditForm.slug || '...'}</p>
+                </div>
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="submit"
+                    disabled={savingProjectEdit}
+                    className="px-5 py-2.5 bg-[#8CD955] text-white font-medium rounded-xl disabled:opacity-50 transition"
+                  >
+                    {savingProjectEdit ? <Loader2 className="w-4 h-4 animate-spin inline mr-1" /> : null}
+                    Salvar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setModalProjectEdit(false)}
+                    className="px-5 py-2.5 bg-gray-200 dark:bg-[#404040] text-gray-800 dark:text-white font-medium rounded-xl hover:bg-gray-300 dark:hover:bg-[#505050] transition"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {modalEdit && editForm && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl max-w-lg w-full p-6 shadow-xl max-h-[90vh] overflow-y-auto">
               <h3 className="font-bold text-gray-800 dark:text-white mb-4">Editar grupo</h3>
               <form onSubmit={saveEdit} className="space-y-4">
                 <div>
@@ -903,47 +1163,41 @@ export default function AdminRedirectPage() {
                           </option>
                         ))}
                       </select>
-                      <p className="text-xs text-gray-500 dark:text-[#aaa] mt-1">Só bancas em que você está vinculado.</p>
+                      <p className="text-xs text-gray-500 dark:text-[#aaa] mt-1">
+                        Opcional para filtrar a lista de consultores. Você pode salvar o grupo sem consultor mesmo sem escolher banca.
+                      </p>
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-1.5">Consultor vinculado (opcional)</label>
-                      <select
+                      <ConsultantSearchPicker
                         value={editForm.consultant_user_id}
-                        onChange={(e) => setEditForm((f) => f && { ...f, consultant_user_id: e.target.value })}
-                        disabled={!consultantBancaIdModal || loadingConsultantsByBanca}
-                        className={inputClass}
-                      >
-                        <option value="">{loadingConsultantsByBanca ? 'Carregando…' : 'Nenhum'}</option>
-                        {consultantPickList.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {(c.full_name?.trim() || c.email || c.id).slice(0, 80)}
-                            {c.email ? ` — ${c.email}` : ''}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={(id) => setEditForm((f) => f && { ...f, consultant_user_id: id })}
+                        options={consultantPickList}
+                        loading={loadingConsultantsByBanca}
+                        emptyListHint={
+                          consultantBancaIdModal
+                            ? undefined
+                            : 'Selecione uma banca acima para carregar os consultores vinculados a ela. O grupo pode ficar sem consultor.'
+                        }
+                        inputClass={inputClass}
+                      />
                     </div>
                   </>
                 ) : (
                   <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-1.5">Consultor vinculado (opcional)</label>
-                    <select
+                    <ConsultantSearchPicker
                       value={editForm.consultant_user_id}
-                      onChange={(e) => setEditForm((f) => f && { ...f, consultant_user_id: e.target.value })}
-                      className={inputClass}
-                    >
-                      <option value="">Nenhum</option>
-                      {consultantOptions.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {(c.full_name?.trim() || c.email || c.id).slice(0, 80)}
-                          {c.email ? ` — ${c.email}` : ''}
-                        </option>
-                      ))}
-                    </select>
-                    {consultantOptions.length === 0 && (
-                      <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
-                        Nenhum consultor na lista. Com banca no projeto, só aparecem consultores vinculados a ela; sem banca, até 500 consultores do sistema.
-                      </p>
-                    )}
+                      onChange={(id) => setEditForm((f) => f && { ...f, consultant_user_id: id })}
+                      options={consultantOptions}
+                      loading={false}
+                      emptyListHint={
+                        consultantOptions.length === 0
+                          ? 'Nenhum consultor na lista. Com banca no projeto, só aparecem consultores vinculados a ela; sem banca, até 500 consultores do sistema.'
+                          : undefined
+                      }
+                      inputClass={inputClass}
+                    />
                   </div>
                 )}
                 <div className="flex gap-3 pt-2">
@@ -961,7 +1215,7 @@ export default function AdminRedirectPage() {
 
         {modalAdd && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl max-w-md w-full p-6 shadow-xl">
+            <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl max-w-lg w-full p-6 shadow-xl max-h-[90vh] overflow-y-auto">
               <h3 className="font-bold text-gray-800 dark:text-white mb-4">Novo Grupo</h3>
               <form onSubmit={addGroup} className="space-y-4">
                 <div>
@@ -1016,47 +1270,41 @@ export default function AdminRedirectPage() {
                           </option>
                         ))}
                       </select>
-                      <p className="text-xs text-gray-500 dark:text-[#aaa] mt-1">Escolha a banca para listar os consultores vinculados.</p>
+                      <p className="text-xs text-gray-500 dark:text-[#aaa] mt-1">
+                        Opcional: use para filtrar consultores. Dá para criar o grupo sem banca e sem consultor.
+                      </p>
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-1.5">Consultor vinculado (opcional)</label>
-                      <select
+                      <ConsultantSearchPicker
                         value={addForm.consultant_user_id}
-                        onChange={(e) => setAddForm((f) => ({ ...f, consultant_user_id: e.target.value }))}
-                        disabled={!consultantBancaIdModal || loadingConsultantsByBanca}
-                        className={inputClass}
-                      >
-                        <option value="">{loadingConsultantsByBanca ? 'Carregando…' : 'Nenhum'}</option>
-                        {consultantPickList.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {(c.full_name?.trim() || c.email || c.id).slice(0, 80)}
-                            {c.email ? ` — ${c.email}` : ''}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={(id) => setAddForm((f) => ({ ...f, consultant_user_id: id }))}
+                        options={consultantPickList}
+                        loading={loadingConsultantsByBanca}
+                        emptyListHint={
+                          consultantBancaIdModal
+                            ? undefined
+                            : 'Selecione uma banca acima para carregar os consultores vinculados a ela. O grupo pode ficar sem consultor.'
+                        }
+                        inputClass={inputClass}
+                      />
                     </div>
                   </>
                 ) : (
                   <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-1.5">Consultor vinculado (opcional)</label>
-                    <select
+                    <ConsultantSearchPicker
                       value={addForm.consultant_user_id}
-                      onChange={(e) => setAddForm((f) => ({ ...f, consultant_user_id: e.target.value }))}
-                      className={inputClass}
-                    >
-                      <option value="">Nenhum</option>
-                      {consultantOptions.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {(c.full_name?.trim() || c.email || c.id).slice(0, 80)}
-                          {c.email ? ` — ${c.email}` : ''}
-                        </option>
-                      ))}
-                    </select>
-                    {consultantOptions.length === 0 && (
-                      <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
-                        Nenhum consultor na lista. Com banca no projeto, só aparecem consultores vinculados a ela; sem banca, até 500 consultores do sistema.
-                      </p>
-                    )}
+                      onChange={(id) => setAddForm((f) => ({ ...f, consultant_user_id: id }))}
+                      options={consultantOptions}
+                      loading={false}
+                      emptyListHint={
+                        consultantOptions.length === 0
+                          ? 'Nenhum consultor na lista. Com banca no projeto, só aparecem consultores vinculados a ela; sem banca, até 500 consultores do sistema.'
+                          : undefined
+                      }
+                      inputClass={inputClass}
+                    />
                   </div>
                 )}
                 <div className="flex gap-3 pt-2">

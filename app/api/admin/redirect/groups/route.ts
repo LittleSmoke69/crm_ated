@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
 
     const { data: project } = await supabaseServiceRole
       .from('vsl_projects')
-      .select('slug, pixel_id, redirect_timer_seconds, banca_id')
+      .select('name, slug, pixel_id, redirect_timer_seconds, banca_id')
       .eq('id', projectId)
       .single();
     if (!project) return errorResponse('Projeto não encontrado', 404);
@@ -238,6 +238,7 @@ export async function GET(req: NextRequest) {
       groups: list,
       redirect_slug_id: redirectRow?.id ?? null,
       redirect_slug: project.slug,
+      project_name: project.name ?? '',
       project_id: projectId,
       pixel_id: project.pixel_id ?? null,
       redirect_timer_seconds: project.redirect_timer_seconds ?? 3,
