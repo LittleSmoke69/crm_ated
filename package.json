@@ -15,6 +15,9 @@
     "setup:scheduled-function": "tsx scripts/setup-scheduled-function.ts",
     "anti-spam:worker": "tsx scripts/anti-spam-worker.ts",
     "backfill:transfer-balances": "tsx scripts/backfill-transfer-balances.ts",
+    "cron:install": "tsx scripts/linux/install-linux-cron.ts",
+    "cron:list": "tsx scripts/linux/list-scheduled-jobs.ts",
+    "cron:run": "tsx scripts/linux/run-netlify-scheduled-function.ts",
     "test:resolve-expired": "tsx scripts/test-resolve-expired.ts",
     "test:wa-audio-official": "tsx scripts/test-whatsapp-official-audio.ts",
     "run:netlify-resolve-expired": "tsx scripts/run-netlify-resolve-expired.ts"
