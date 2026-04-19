@@ -76,8 +76,16 @@ export class NormalizationService {
           break;
         }
         lastError = error;
-        const msg = typeof error?.message === 'string' ? error.message : '';
-        const isRetryable = msg.includes('522') || msg.includes('Connection timed out') || msg.includes('<!DOCTYPE');
+        const msg = typeof error?.message === 'string' ? error.message.toLowerCase() : '';
+        const isRetryable =
+          msg.includes('522') ||
+          msg.includes('connection timed out') ||
+          msg.includes('<!doctype') ||
+          msg.includes('fetch failed') ||
+          msg.includes('econnrefused') ||
+          msg.includes('econnreset') ||
+          msg.includes('etimedout') ||
+          msg.includes('enotfound');
         if (!isRetryable || attempt === maxAttempts) {
           console.error('❌ [NORMALIZATION] Erro ao buscar regras:', sanitizeErrorForLog(error));
           return payload;

@@ -178,20 +178,49 @@ async function processEventBackground(payload: any): Promise<void> {
     // Continua sem normalização — usaremos payload original como fallback
   }
 
-  // ── Insere no banco ────────────────────────────────────────────────────────
-  const { data: event, error: insertError } = await supabaseServiceRole
-    .from('evolution_webhook_events')
-    .insert({
-      env: 'prod',
-      event_type: eventType,
-      instance_name: instanceName,
-      remote_jid: remoteJid,
-      message_id: messageId,
-      payload: payload,
-      payload_normalized: normalizedPayload || null,
-    })
-    .select('id, env, instance_name, payload, payload_normalized')
-    .single();
+  // ── Insere no banco (com retry para erros de rede transitórios) ───────────
+  const INSERT_MAX_RETRIES = 3;
+  let event: { id: string; env: string; instance_name: string | null; payload: any; payload_normalized: any } | null = null;
+  let insertError: { message?: string; code?: string } | null = null;
+
+  for (let attempt = 1; attempt <= INSERT_MAX_RETRIES; attempt++) {
+    const result = await supabaseServiceRole
+      .from('evolution_webhook_events')
+      .insert({
+        env: 'prod',
+        event_type: eventType,
+        instance_name: instanceName,
+        remote_jid: remoteJid,
+        message_id: messageId,
+        payload: payload,
+        payload_normalized: normalizedPayload || null,
+      })
+      .select('id, env, instance_name, payload, payload_normalized')
+      .single();
+
+    event = result.data;
+    insertError = result.error;
+
+    if (!insertError) break;
+
+    // Duplicata: não retenta — comportamento idempotente esperado.
+    if (insertError.code === '23505') break;
+
+    const emsg = String(insertError.message || '').toLowerCase();
+    const isNetworkError =
+      emsg.includes('fetch failed') ||
+      emsg.includes('econnrefused') ||
+      emsg.includes('econnreset') ||
+      emsg.includes('etimedout') ||
+      emsg.includes('enotfound') ||
+      emsg.includes('connection timed out') ||
+      emsg.includes('522');
+
+    if (!isNetworkError || attempt === INSERT_MAX_RETRIES) break;
+
+    console.warn(`⚠️ [WEBHOOK PROD] Retry insert (tentativa ${attempt}/${INSERT_MAX_RETRIES}): ${insertError.message}`);
+    await new Promise((r) => setTimeout(r, 500 * attempt));
+  }
 
   if (insertError || !event) {
     // Violação de unique constraint: evento já foi inserido numa entrega anterior — comportamento esperado e idempotente.
