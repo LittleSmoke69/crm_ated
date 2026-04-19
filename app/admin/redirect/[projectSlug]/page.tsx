@@ -1,14 +1,16 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { Loader2, Plus, Copy, Pencil, Trash2, Percent, Scale, Settings, ExternalLink } from 'lucide-react';
+import { Loader2, Plus, Copy, Pencil, Trash2, Percent, Scale, Settings, ExternalLink, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import RedirectClicksDashboard from '@/components/Redirect/RedirectClicksDashboard';
 import ConsultantSearchPicker from '@/components/Redirect/ConsultantSearchPicker';
 
 const CONSULTANT_FETCH_MS = 28000;
+/** Itens por página na tabela Grupos cadastrados */
+const GROUPS_PAGE_SIZE = 5;
 
 function whatsappInviteHref(raw: string): string | null {
   const t = raw.trim();
@@ -104,7 +106,18 @@ export default function AdminRedirectPage() {
   const [projectEditForm, setProjectEditForm] = useState({ name: '', slug: '' });
   const [savingProjectEdit, setSavingProjectEdit] = useState(false);
   const [deletingProject, setDeletingProject] = useState(false);
+  const [groupsPage, setGroupsPage] = useState(1);
   const consultantFetchAbortRef = useRef<AbortController | null>(null);
+
+  const groupsTotalPages = Math.max(1, Math.ceil(groups.length / GROUPS_PAGE_SIZE));
+  const paginatedGroups = useMemo(() => {
+    const start = (groupsPage - 1) * GROUPS_PAGE_SIZE;
+    return groups.slice(start, start + GROUPS_PAGE_SIZE);
+  }, [groups, groupsPage]);
+
+  useEffect(() => {
+    setGroupsPage((p) => Math.min(p, groupsTotalPages));
+  }, [groupsTotalPages]);
 
   useEffect(() => {
     if (!userId) return;
@@ -353,9 +366,42 @@ export default function AdminRedirectPage() {
         body: JSON.stringify({ is_active: !g.is_active }),
       });
       const json = await res.json();
+      const wb = json?.meta?.weights_by_group as Record<string, number> | undefined;
+      const activeFromMeta = json?.meta?.active_groups;
       if (json?.success && json?.data) {
-        setGroups((prev) => prev.map((x) => (x.id === g.id ? { ...x, is_active: json.data.is_active } : x)));
-        if (json.data.is_active === false) {
+        setGroups((prev) =>
+          prev.map((x) => {
+            const wp = wb?.[x.id];
+            if (x.id === g.id) {
+              return {
+                ...x,
+                ...json.data,
+                weight_percent: wp ?? Number(json.data.weight_percent) ?? x.weight_percent,
+                is_active: json.data.is_active,
+              };
+            }
+            return wp !== undefined ? { ...x, weight_percent: wp } : x;
+          })
+        );
+        if (typeof activeFromMeta === 'number') {
+          setActiveGroups(activeFromMeta);
+        } else if (wb) {
+          setActiveGroups(Object.values(wb).filter((p) => p > 0).length);
+        } else {
+          setActiveGroups((c) => {
+            const delta = json.data.is_active ? 1 : -1;
+            return Math.max(0, c + delta);
+          });
+        }
+        if (wb) {
+          setWeights((w) => {
+            const n = { ...w };
+            for (const [gid, pct] of Object.entries(wb)) {
+              n[gid] = pct;
+            }
+            return n;
+          });
+        } else if (json.data.is_active === false) {
           setWeights((w) => ({ ...w, [g.id]: 0 }));
         }
       } else {
@@ -742,7 +788,12 @@ export default function AdminRedirectPage() {
             <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-gray-100 dark:border-[#404040] shrink-0">
               <div>
                 <h2 className="font-semibold text-gray-800 dark:text-white">Grupos cadastrados</h2>
-                <p className="text-xs text-gray-500 dark:text-[#888] mt-0.5">Nome, convite WhatsApp, pesos e cliques</p>
+                <p className="text-xs text-gray-500 dark:text-[#888] mt-0.5">
+                  Nome, convite WhatsApp, pesos e cliques
+                  {groups.length > GROUPS_PAGE_SIZE ? (
+                    <span className="text-gray-400 dark:text-[#666]"> · {GROUPS_PAGE_SIZE} por página</span>
+                  ) : null}
+                </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <button
@@ -770,7 +821,7 @@ export default function AdminRedirectPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {groups.map((g) => (
+                  {paginatedGroups.map((g) => (
                     <tr key={g.id} className="border-t border-gray-100 dark:border-[#404040] hover:bg-gray-50/50 dark:hover:bg-[#333]/50">
                       <td className="p-3 align-top">
                         <div className="flex flex-col gap-1.5 max-w-[min(100vw-8rem,280px)] sm:max-w-[320px]">
@@ -851,6 +902,44 @@ export default function AdminRedirectPage() {
               </table>
               {groups.length === 0 && (
                 <p className="py-6 px-4 text-gray-600 dark:text-[#aaa] text-sm text-center">Nenhum grupo. Adicione um ao lado.</p>
+              )}
+              {groups.length > GROUPS_PAGE_SIZE && (
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3 border-t border-gray-100 dark:border-[#404040] bg-gray-50/80 dark:bg-[#333]/50 shrink-0">
+                  <p className="text-xs text-gray-600 dark:text-[#aaa] tabular-nums">
+                    Mostrando{' '}
+                    <span className="font-medium text-gray-800 dark:text-white">
+                      {(groupsPage - 1) * GROUPS_PAGE_SIZE + 1}
+                      –
+                      {Math.min(groupsPage * GROUPS_PAGE_SIZE, groups.length)}
+                    </span>{' '}
+                    de {groups.length}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setGroupsPage((p) => Math.max(1, p - 1))}
+                      disabled={groupsPage <= 1}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-lg border border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] text-gray-800 dark:text-white hover:bg-gray-100 dark:hover:bg-[#404040] disabled:opacity-40 disabled:cursor-not-allowed transition"
+                      aria-label="Página anterior"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                      Anterior
+                    </button>
+                    <span className="text-xs text-gray-600 dark:text-[#aaa] px-2 tabular-nums">
+                      Página {groupsPage} / {groupsTotalPages}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setGroupsPage((p) => Math.min(groupsTotalPages, p + 1))}
+                      disabled={groupsPage >= groupsTotalPages}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-lg border border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] text-gray-800 dark:text-white hover:bg-gray-100 dark:hover:bg-[#404040] disabled:opacity-40 disabled:cursor-not-allowed transition"
+                      aria-label="Próxima página"
+                    >
+                      Próxima
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
               )}
             </div>
           </section>
@@ -1321,64 +1410,112 @@ export default function AdminRedirectPage() {
         )}
 
         {modalWeights && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl max-w-md w-full p-6 shadow-xl">
-              <h3 className="font-bold text-gray-800 dark:text-white mb-1">Editar Porcentagens (soma = 100)</h3>
-              <p className="text-xs text-gray-500 dark:text-[#aaa] mb-4">Apenas grupos ativos entram na distribuição do redirect.</p>
-              <div className="space-y-3 mb-4">
-                {groups.filter((g) => g.is_active).map((g) => (
-                  <div key={g.id} className="flex items-center justify-between gap-3">
-                    <span className="text-sm font-medium text-gray-800 dark:text-white truncate flex-1">{g.name}</span>
-                    <input
-                      type="number"
-                      min={0}
-                      max={100}
-                      value={weights[g.id] ?? 0}
-                      onChange={(e) => setWeights((w) => ({ ...w, [g.id]: Number(e.target.value) || 0 }))}
-                      className="w-20 border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] rounded-lg px-2 py-1.5 text-right text-gray-800 dark:text-white focus:ring-2 focus:ring-[#8CD955]/50 outline-none"
-                    />
-                    <span className="text-gray-700 dark:text-[#ccc] font-medium">%</span>
-                  </div>
-                ))}
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/50 backdrop-blur-[2px]"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setModalWeights(false);
+            }}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="modal-weights-title"
+              className="flex flex-col w-full max-w-xl max-h-[min(90dvh,56rem)] bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-2xl shadow-2xl overflow-hidden"
+            >
+              <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-gray-200 dark:border-[#404040] shrink-0 bg-gray-50/90 dark:bg-[#333]/90">
+                <div className="min-w-0 pr-2">
+                  <h3 id="modal-weights-title" className="font-bold text-gray-800 dark:text-white text-lg leading-tight">
+                    Editar porcentagens
+                  </h3>
+                  <p className="text-xs text-gray-500 dark:text-[#aaa] mt-1.5 leading-snug">
+                    Soma = 100%. Apenas grupos ativos ({activeForWeights.length}) entram no redirect.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setModalWeights(false)}
+                  className="shrink-0 p-2 rounded-xl text-gray-500 hover:text-gray-900 dark:text-[#aaa] dark:hover:text-white hover:bg-gray-200/80 dark:hover:bg-[#404040] transition"
+                  aria-label="Fechar"
+                >
+                  <X className="w-5 h-5" />
+                </button>
               </div>
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
-                <p className="text-sm text-gray-600 dark:text-[#aaa]">
-                  Soma:{' '}
-                  <span className={`font-semibold ${Math.abs(weightsSum - 100) > 0.01 ? 'text-amber-700 dark:text-amber-300' : 'text-gray-800 dark:text-white'}`}>
-                    {weightsSum}%
-                  </span>
-                  {Math.abs(weightsSum - 100) > 0.01 && (
-                    <span className="block text-xs text-amber-800 dark:text-amber-200 mt-0.5">
-                      {weightsRemainder > 0
-                        ? `Faltam ${weightsRemainder}% para completar 100.`
-                        : weightsRemainder < 0
-                          ? `Excedem ${Math.abs(weightsRemainder)}% além de 100.`
-                          : null}
+
+              <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-5 py-3 pr-4">
+                <ul className="space-y-0 divide-y divide-gray-100 dark:divide-[#404040]/90">
+                  {groups
+                    .filter((g) => g.is_active)
+                    .map((g) => (
+                      <li key={g.id} className="flex items-center gap-3 py-3 first:pt-1">
+                        <span className="text-sm font-medium text-gray-800 dark:text-white truncate flex-1 min-w-0" title={g.name}>
+                          {g.name}
+                        </span>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            inputMode="numeric"
+                            value={weights[g.id] ?? 0}
+                            onChange={(e) => setWeights((w) => ({ ...w, [g.id]: Number(e.target.value) || 0 }))}
+                            className="w-[4.5rem] border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] rounded-lg px-2 py-2 text-right text-sm tabular-nums text-gray-800 dark:text-white focus:ring-2 focus:ring-[#8CD955]/50 outline-none"
+                          />
+                          <span className="text-gray-700 dark:text-[#ccc] font-medium text-sm w-4">%</span>
+                        </div>
+                      </li>
+                    ))}
+                </ul>
+              </div>
+
+              <div className="shrink-0 border-t border-gray-200 dark:border-[#404040] px-5 py-4 space-y-4 bg-gray-50/95 dark:bg-[#2f2f2f]">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div className="text-sm text-gray-600 dark:text-[#aaa]">
+                    <span className="text-gray-500 dark:text-[#888]">Soma:</span>{' '}
+                    <span
+                      className={`font-semibold tabular-nums ${
+                        Math.abs(weightsSum - 100) > 0.01 ? 'text-amber-700 dark:text-amber-300' : 'text-gray-800 dark:text-white'
+                      }`}
+                    >
+                      {weightsSum}%
                     </span>
-                  )}
-                </p>
-                <button
-                  type="button"
-                  onClick={redistributeWeightsEqually}
-                  disabled={activeForWeights.length === 0}
-                  className="inline-flex items-center justify-center gap-2 px-3 py-2 text-sm font-medium rounded-lg border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] text-gray-800 dark:text-white hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <Scale className="w-4 h-4" />
-                  Redistribuir igual (100%)
-                </button>
-              </div>
-              <div className="flex gap-3">
-                <button
-                  type="button"
-                  onClick={saveWeights}
-                  disabled={saving || Math.abs(weightsSum - 100) > 0.01}
-                  className="px-5 py-2.5 bg-[#8CD955] text-white font-medium rounded-xl disabled:opacity-50 transition"
-                >
-                  {saving ? <Loader2 className="w-4 h-4 animate-spin inline mr-1" /> : null} Salvar
-                </button>
-                <button type="button" onClick={() => setModalWeights(false)} className="px-5 py-2.5 bg-gray-200 dark:bg-[#404040] text-gray-800 dark:text-white font-medium rounded-xl hover:bg-gray-300 dark:hover:bg-[#505050] transition">
-                  Cancelar
-                </button>
+                    {Math.abs(weightsSum - 100) > 0.01 && (
+                      <span className="block text-xs text-amber-800 dark:text-amber-200 mt-1">
+                        {weightsRemainder > 0
+                          ? `Faltam ${weightsRemainder}% para completar 100.`
+                          : weightsRemainder < 0
+                            ? `Excedem ${Math.abs(weightsRemainder)}% além de 100.`
+                            : null}
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={redistributeWeightsEqually}
+                    disabled={activeForWeights.length === 0}
+                    className="inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-xl border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] text-gray-800 dark:text-white hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50 disabled:cursor-not-allowed w-full sm:w-auto"
+                  >
+                    <Scale className="w-4 h-4 shrink-0" />
+                    Redistribuir igual (100%)
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    onClick={saveWeights}
+                    disabled={saving || Math.abs(weightsSum - 100) > 0.01}
+                    className="flex-1 min-w-[8rem] flex items-center justify-center px-5 py-2.5 bg-[#8CD955] text-white font-medium rounded-xl disabled:opacity-50 transition"
+                  >
+                    {saving ? <Loader2 className="w-4 h-4 animate-spin inline mr-1" /> : null}
+                    Salvar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setModalWeights(false)}
+                    className="flex-1 min-w-[8rem] px-5 py-2.5 bg-gray-200 dark:bg-[#404040] text-gray-800 dark:text-white font-medium rounded-xl hover:bg-gray-300 dark:hover:bg-[#505050] transition"
+                  >
+                    Cancelar
+                  </button>
+                </div>
               </div>
             </div>
           </div>

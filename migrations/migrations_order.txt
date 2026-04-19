@@ -189,4 +189,5 @@ claim_maturation_steps_active_plan_only.sql
 create_gerente_lead_stock_pools.sql
 add_transfer_kind_to_admin_lead_transfer_logs.sql
 add_sidebar_lead_transfer_item.sql
+add_sidebar_gerente_lead_stock.sql
 add_transfer_stats_rpc_gerente_performed_by.sql

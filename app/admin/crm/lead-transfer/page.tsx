@@ -381,6 +381,53 @@ interface GerenteLeadRequest {
   leads_still_needed_from_expired?: number;
 }
 
+function normalizePhoneDigitsForSearch(s: string): string {
+  return String(s).replace(/\D/g, '');
+}
+
+/** Campo destacado para filtrar a lista já carregada por nome, e-mail, telefone ou ID. */
+function LeadTransferClientSearchField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="rounded-xl border border-[#8CD955]/35 bg-gradient-to-r from-[#8CD955]/10 to-transparent dark:from-[#8CD955]/14 p-4 mb-4 ring-1 ring-[#8CD955]/15">
+      <label className="flex items-center gap-2 text-sm font-bold text-gray-800 dark:text-white mb-2">
+        <UserSearch className="w-4 h-4 text-[#8CD955] shrink-0" />
+        Buscar cliente
+      </label>
+      <div className="relative max-w-3xl">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500 dark:text-gray-400 pointer-events-none" />
+        <input
+          type="search"
+          autoComplete="off"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="Nome, e-mail, telefone ou ID do lead..."
+          className="w-full pl-11 pr-11 py-3 rounded-xl border border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] text-gray-900 dark:text-white text-base placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+          aria-label="Buscar cliente na lista"
+        />
+        {value.trim() !== '' && (
+          <button
+            type="button"
+            onClick={() => onChange('')}
+            className="absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-lg text-gray-500 hover:bg-gray-100 dark:hover:bg-[#404040]"
+            aria-label="Limpar busca"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
+      </div>
+      <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+        Filtra os leads já carregados nesta tela (sem nova chamada ao servidor). Para telefone, você pode digitar só os números.
+      </p>
+    </div>
+  );
+}
+
 export default function AdminLeadTransferPage() {
   const router = useRouter();
   const { checking, userId, userStatus } = useRequireAuth();
@@ -2042,10 +2089,27 @@ export default function AdminLeadTransferPage() {
   const filteredLeadsBase = React.useMemo(() => {
     let list = sortedLeads;
     if (leadSearchLower) {
+      const queryDigits = normalizePhoneDigitsForSearch(leadSearchQuery);
       list = list.filter((lead) => {
-        const name = String((lead.name ?? lead.full_name ?? lead.email ?? '')).toLowerCase();
-        const email = String(lead.email ?? '').toLowerCase();
-        return name.includes(leadSearchLower) || email.includes(leadSearchLower);
+        const rec = lead as Record<string, unknown>;
+        const name = String(rec.name ?? rec.full_name ?? rec.email ?? '').toLowerCase();
+        const email = String(rec.email ?? '').toLowerCase();
+        const phoneRaw = String(
+          rec.phone ??
+            rec.mobile ??
+            rec.telefone ??
+            rec.whatsapp ??
+            rec.phone_number ??
+            rec.cellphone ??
+            ''
+        ).toLowerCase();
+        const phoneDigits = normalizePhoneDigitsForSearch(phoneRaw);
+        const idStr = String(lead.id ?? '').toLowerCase();
+        if (name.includes(leadSearchLower) || email.includes(leadSearchLower)) return true;
+        if (phoneRaw.includes(leadSearchLower)) return true;
+        if (queryDigits.length >= 3 && phoneDigits.includes(queryDigits)) return true;
+        if (leadSearchLower.length >= 2 && idStr.includes(leadSearchLower)) return true;
+        return false;
       });
     }
     if (leadFilterStatus) {
@@ -7662,6 +7726,12 @@ export default function AdminLeadTransferPage() {
               {currentStep === 3 && (
                 <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl border border-gray-200 dark:border-[#404040] p-5 shadow-sm ring-1 ring-gray-100 dark:ring-transparent space-y-4">
                   <label className="text-sm font-bold text-gray-800 dark:text-white block">Filtros e buscar leads</label>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 -mt-2">
+                    Depois que os leads carregarem, use a busca abaixo para achar nome, e-mail, telefone ou ID sem rolar até a tabela.
+                  </p>
+                  {hasSearchedLeads && !loadingLeads && sortedLeads.length > 0 && (
+                    <LeadTransferClientSearchField value={leadSearchQuery} onChange={setLeadSearchQuery} />
+                  )}
                   <div className="flex flex-wrap gap-4 items-end">
                     <div>
                       <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Inatividade (dias)</label>
@@ -7778,14 +7848,30 @@ export default function AdminLeadTransferPage() {
                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Aguarde enquanto carregamos os resultados.</p>
                     </div>
                   )}
-                  {hasSearchedLeads && !loadingLeads && filteredLeads.length === 0 && (
+                  {hasSearchedLeads && !loadingLeads && sortedLeads.length === 0 && (
                     <div className="py-8 px-4 rounded-xl border border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#1f1f1f] text-center">
                       <Users className="w-10 h-10 text-gray-400 dark:text-gray-500 mx-auto mb-2" />
                       <p className="text-gray-700 dark:text-gray-200 font-medium">Nenhum lead de acordo com os filtros solicitados</p>
                       <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Tente alterar o período de inatividade, os filtros ou o consultor origem.</p>
                     </div>
                   )}
-                  {hasSearchedLeads && !loadingLeads && filteredLeads.length > 0 && (
+                  {hasSearchedLeads && !loadingLeads && sortedLeads.length > 0 && (
+                    <>
+                      {filteredLeads.length === 0 ? (
+                        <div className="py-8 px-4 rounded-xl border border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#1f1f1f] text-center mb-4">
+                          <Users className="w-10 h-10 text-gray-400 dark:text-gray-500 mx-auto mb-2" />
+                          <p className="text-gray-700 dark:text-gray-200 font-medium">
+                            {leadSearchQuery.trim()
+                              ? 'Nenhum lead corresponde à busca ou aos filtros atuais'
+                              : 'Nenhum lead corresponde aos filtros da tabela abaixo'}
+                          </p>
+                          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                            {leadSearchQuery.trim()
+                              ? 'Limpe o campo Buscar cliente ou refine nome, telefone ou ID.'
+                              : 'Ajuste status, temperatura ou totais nos filtros acima.'}
+                          </p>
+                        </div>
+                      ) : (
                     <>
                       <p className="text-sm text-gray-600 dark:text-gray-300">
                         <strong>{filteredLeads.length}</strong> lead(s) {minSumBalance.trim() ? `(soma mín. R$ ${minSumBalance.trim()})` : ''}. Soma dos saldos: <strong>R$ {totalFilteredBalanceSum.toFixed(2).replace('.', ',')}</strong>. Até <strong>{Math.min(parseInt(quantity, 10) || 0, MAX_LEADS_SELECT, filteredLeads.length)}</strong> serão auto-selecionados no próximo passo.
@@ -7860,6 +7946,8 @@ export default function AdminLeadTransferPage() {
                         {filteredLeads.length > 100 && <p className="text-xs text-gray-500 dark:text-gray-400 p-2 border-t border-gray-100 dark:border-[#404040]">Exibindo 100 de {filteredLeads.length} leads.</p>}
                       </div>
                     </>
+                      )}
+                    </>
                   )}
                   <div className="flex gap-2 pt-2 border-t border-gray-100 dark:border-[#404040]">
                     <button type="button" onClick={() => setCurrentStep(2)} className="px-4 py-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors">Anterior</button>
@@ -7870,14 +7958,39 @@ export default function AdminLeadTransferPage() {
 
               {/* Step 4: Tabela de leads + seleção */}
               {currentStep >= 4 && hasSearchedLeads && !loadingLeads && filteredLeads.length === 0 && (
-                <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl border border-gray-200 dark:border-[#404040] p-6 shadow-sm text-center ring-1 ring-gray-100 dark:ring-transparent">
-                  <p className="text-gray-600">Nenhum lead encontrado com esses filtros.</p>
-                  <p className="text-sm text-gray-500 mt-1">Tente outro consultor, filtros, valor mínimo ou tag.</p>
-                  <button type="button" onClick={() => setCurrentStep(3)} className="mt-3 text-[#8CD955] font-medium hover:underline">Voltar aos filtros</button>
+                <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl border border-gray-200 dark:border-[#404040] p-6 shadow-sm ring-1 ring-gray-100 dark:ring-transparent">
+                  {sortedLeads.length > 0 ? (
+                    <>
+                      <LeadTransferClientSearchField value={leadSearchQuery} onChange={setLeadSearchQuery} />
+                      <div className="text-center py-4">
+                        <p className="text-gray-600 dark:text-gray-300">
+                          {leadSearchQuery.trim()
+                            ? 'Nenhum lead corresponde à busca ou aos filtros atuais.'
+                            : 'Nenhum lead corresponde aos filtros da seleção.'}
+                        </p>
+                        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                          {leadSearchQuery.trim()
+                            ? 'Limpe o campo Buscar cliente ou refine nome, telefone ou ID.'
+                            : 'Ajuste os filtros na barra acima ou volte aos filtros da etapa anterior.'}
+                        </p>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-center">
+                      <p className="text-gray-600">Nenhum lead encontrado com esses filtros.</p>
+                      <p className="text-sm text-gray-500 mt-1">Tente outro consultor, filtros, valor mínimo ou tag.</p>
+                    </div>
+                  )}
+                  <div className="text-center mt-4 pt-4 border-t border-gray-100 dark:border-[#404040]">
+                    <button type="button" onClick={() => setCurrentStep(3)} className="text-[#8CD955] font-medium hover:underline">
+                      Voltar aos filtros
+                    </button>
+                  </div>
                 </div>
               )}
               {currentStep >= 4 && filteredLeads.length > 0 && (
                 <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl border border-gray-200 dark:border-[#404040] p-5 shadow-sm ring-1 ring-gray-100 dark:ring-transparent">
+                  <LeadTransferClientSearchField value={leadSearchQuery} onChange={setLeadSearchQuery} />
                   {daysInactivePreset === 'all' && (
                     <p className="text-xs text-gray-600 dark:text-gray-400 mb-3">
                       <strong className="font-medium text-gray-800 dark:text-gray-200">Todos os leads</strong>: lista completa; confira a coluna <strong className="font-medium text-gray-800 dark:text-gray-200">Transferido</strong> antes de confirmar o repasse.
@@ -7997,10 +8110,6 @@ export default function AdminLeadTransferPage() {
                   )}
                   <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
                     <div className="flex flex-wrap items-center gap-3">
-                      <div className="relative">
-                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
-                        <input type="text" value={leadSearchQuery} onChange={(e) => setLeadSearchQuery(e.target.value)} placeholder="Buscar por nome ou e-mail..." className="pl-8 pr-3 py-1.5 w-56 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-white placeholder:text-gray-600 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]/40" />
-                      </div>
                       <select value={leadFilterStatus} onChange={(e) => setLeadFilterStatus(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[140px]">
                         <option value="">Status: Todos</option>
                         {uniqueStatuses.map((s) => (

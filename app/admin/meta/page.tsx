@@ -28,8 +28,8 @@ import {
   Users,
   UserPlus,
   Trash2,
+  Radio,
 } from 'lucide-react';
-import Funnel3DChart from '@/components/Charts/Funnel3DChart';
 
 function formatBRL(value: number): string {
   return new Intl.NumberFormat('pt-BR', {
@@ -38,6 +38,42 @@ function formatBRL(value: number): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(Number.isFinite(value) ? value : 0);
+}
+
+/** Cruza linha live com `campaigns-all` priorizando integração + conta quando existirem no cache. */
+function findAllCampaignRowForLiveMerge(
+  rows: any[] | undefined,
+  bancaId: string,
+  campaignId: string,
+  integrationId: unknown,
+  adAccountId: unknown
+): any | undefined {
+  if (!rows?.length) return undefined;
+  const integ = integrationId != null && String(integrationId).trim() !== '' ? String(integrationId) : null;
+  const ad = adAccountId != null && String(adAccountId).trim() !== '' ? String(adAccountId) : null;
+  if (integ || ad) {
+    const match = rows.find((r: any) => {
+      if (String(r.banca_id) !== bancaId || String(r.campaign_id) !== campaignId) return false;
+      if (integ && String(r.integration_id ?? '') !== integ) return false;
+      if (ad && String(r.ad_account_id ?? '') !== ad) return false;
+      return true;
+    });
+    if (match) return match;
+  }
+  return rows.find((r: any) => String(r.banca_id) === bancaId && String(r.campaign_id) === campaignId);
+}
+
+function shortUuid(id: string | null | undefined): string {
+  const s = String(id ?? '').trim();
+  if (!s) return '—';
+  return s.length > 10 ? `${s.slice(0, 8)}…` : s;
+}
+
+function formatActShort(act: string | null | undefined): string {
+  const s = String(act ?? '').trim();
+  if (!s) return '—';
+  const clean = s.startsWith('act_') ? s.slice(4) : s;
+  return clean.length > 12 ? `…${clean.slice(-10)}` : clean;
 }
 
 /** Cards e painéis — coerente com Layout (`dark:bg-[#1a1a1a]` no main). */
@@ -151,26 +187,6 @@ type OverviewKindSummaryBucket = {
   insights_rows: number;
 };
 
-interface RedirectSummaryTotals {
-  total_clicks: number;
-  total_groups: number;
-  active_groups: number;
-  redirect_slugs: number;
-  active_redirect_slugs: number;
-  vsl_projects: number;
-}
-
-interface RedirectSummaryProjectRow {
-  project_id: string;
-  name: string;
-  project_slug: string;
-  redirect_slug: string | null;
-  redirect_active: boolean | null;
-  clicks: number;
-  groups_total: number;
-  groups_active: number;
-}
-
 /** `cost_per_action_type` da Meta Insights API, persistido como `raw_cost_per_action_type` (JSONB). */
 function formatCostPerActionTypeCell(raw: unknown): { short: string; title: string } {
   if (!Array.isArray(raw) || raw.length === 0) {
@@ -241,7 +257,6 @@ export default function AdminMetaPage() {
     insights_rows: number;
     cost_per_action_type?: Record<string, number>;
   } | null>(null);
-  const [campaignsSynchronized, setCampaignsSynchronized] = useState(0);
   const [overviewTopContributors, setOverviewTopContributors] = useState<Array<{
     banca_id: string;
     banca_name: string;
@@ -267,13 +282,6 @@ export default function AdminMetaPage() {
   const [metaInsightsPeriod, setMetaInsightsPeriod] = useState<'daily' | 'yesterday' | '7days' | '15days' | '30days' | 'custom' | 'all'>('daily');
   const [metaInsightsCustomFrom, setMetaInsightsCustomFrom] = useState('');
   const [metaInsightsCustomTo, setMetaInsightsCustomTo] = useState('');
-
-  const [redirectSummary, setRedirectSummary] = useState<{
-    totals: RedirectSummaryTotals;
-    projects: RedirectSummaryProjectRow[];
-  } | null>(null);
-  const [loadingRedirectSummary, setLoadingRedirectSummary] = useState(false);
-  const [redirectSummaryError, setRedirectSummaryError] = useState<string | null>(null);
 
   /** Agregação live (mesma pilha de fallbacks do sync), todas as integrações, período = filtro da UI. */
   const [liveAggregate, setLiveAggregate] = useState<{
@@ -301,6 +309,8 @@ export default function AdminMetaPage() {
     total: number;
   } | null>(null);
   const [liveAggregateError, setLiveAggregateError] = useState<string | null>(null);
+  /** Último pacote completo ao vivo da Meta (stream NDJSON). */
+  const [liveMetricsUpdatedAt, setLiveMetricsUpdatedAt] = useState<Date | null>(null);
 
   // Modal: criar nova integração
   const [newIntegrationOpen, setNewIntegrationOpen] = useState(false);
@@ -308,7 +318,7 @@ export default function AdminMetaPage() {
   const [newIntegrationError, setNewIntegrationError] = useState<string | null>(null);
   const [newIntegrationForm, setNewIntegrationForm] = useState({
     banca_ids: [] as string[],
-    base_url: 'https://graph.facebook.com/v19.0',
+    base_url: 'https://graph.facebook.com/v25.0',
     access_token: '',
     ad_account_id: '',
     pixel_id: '',
@@ -342,7 +352,7 @@ export default function AdminMetaPage() {
   const SYNCED_DATA_PAGE_SIZE = 5;
 
   const [form, setForm] = useState({
-    base_url: 'https://graph.facebook.com/v19.0',
+    base_url: 'https://graph.facebook.com/v25.0',
     access_token: '',
     ad_account_id: '',
     pixel_id: '',
@@ -765,13 +775,6 @@ export default function AdminMetaPage() {
           setOverviewApiTotals(null);
         }
 
-        // Captura campanhas sincronizadas
-        if (data.data?.campaigns_synchronized) {
-          setCampaignsSynchronized(Number(data.data.campaigns_synchronized) || 0);
-        } else {
-          setCampaignsSynchronized(0);
-        }
-
         // Captura top contributors
         if (Array.isArray(data.data?.top_contributors)) {
           setOverviewTopContributors(data.data.top_contributors);
@@ -810,7 +813,6 @@ export default function AdminMetaPage() {
       } else {
         setOverviewRows([]);
         setOverviewApiTotals(null);
-        setCampaignsSynchronized(0);
         setOverviewTopContributors(null);
         setOverviewKindSummary({
           normal: { campaigns: 0, reach: 0, impressions: 0, clicks: 0, leads: 0, spend: 0, insights_rows: 0 },
@@ -821,7 +823,6 @@ export default function AdminMetaPage() {
     } catch (err: any) {
       setOverviewRows([]);
       setOverviewApiTotals(null);
-      setCampaignsSynchronized(0);
       setOverviewTopContributors(null);
       setOverviewKindSummary({
         normal: { campaigns: 0, reach: 0, impressions: 0, clicks: 0, leads: 0, spend: 0, insights_rows: 0 },
@@ -838,34 +839,6 @@ export default function AdminMetaPage() {
     overviewFilterBancaId,
     allCampaignsShowInactive,
   ]);
-
-  const loadRedirectSummary = useCallback(async () => {
-    if (!userId) return;
-    setLoadingRedirectSummary(true);
-    setRedirectSummaryError(null);
-    try {
-      const qs = new URLSearchParams();
-      if (adminMetaInsightsDateRange.dateFrom) qs.set('date_from', adminMetaInsightsDateRange.dateFrom);
-      if (adminMetaInsightsDateRange.dateTo) qs.set('date_to', adminMetaInsightsDateRange.dateTo);
-      const url = qs.toString() ? `/api/admin/meta/redirect-summary?${qs.toString()}` : '/api/admin/meta/redirect-summary';
-      const res = await fetch(url, {
-        headers: { 'X-User-Id': userId },
-        cache: 'no-store',
-      });
-      const data = await res.json();
-      if (data.success && data.data?.totals && Array.isArray(data.data.projects)) {
-        setRedirectSummary({ totals: data.data.totals, projects: data.data.projects });
-      } else {
-        setRedirectSummary(null);
-        setRedirectSummaryError(data.error || 'Erro ao carregar resumo de redirects.');
-      }
-    } catch (err: any) {
-      setRedirectSummary(null);
-      setRedirectSummaryError(err?.message || 'Erro ao carregar resumo de redirects.');
-    } finally {
-      setLoadingRedirectSummary(false);
-    }
-  }, [userId, adminMetaInsightsDateRange.dateFrom, adminMetaInsightsDateRange.dateTo]);
 
   /** Limite para o fluxo NDJSON inteiro (várias integrações em série). */
   const LIVE_AGGREGATE_STREAM_MS = 600_000;
@@ -937,6 +910,7 @@ export default function AdminMetaPage() {
           });
           setLiveAggregateStreamProgress(null);
           setLoadingLiveAggregate(false);
+          setLiveMetricsUpdatedAt(new Date());
         } else if (evt.type === 'error') {
           const msg = typeof evt.error === 'string' ? evt.error : 'Erro no stream Meta.';
           setLiveAggregateError((prev) => (prev ? `${prev} · ${msg}` : msg));
@@ -1001,9 +975,19 @@ export default function AdminMetaPage() {
   useEffect(() => {
     if (!userId) return;
     void loadOverview();
-    void loadRedirectSummary();
     void loadLiveAggregate();
-  }, [userId, loadOverview, loadRedirectSummary, loadLiveAggregate]);
+  }, [userId, loadOverview, loadLiveAggregate]);
+
+  /** Atualização periódica das métricas ao vivo na Meta (todas as integrações / escopo do filtro). */
+  useEffect(() => {
+    if (!userId) return;
+    const ms = 90_000;
+    const id = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      void loadLiveAggregate();
+    }, ms);
+    return () => window.clearInterval(id);
+  }, [userId, loadLiveAggregate]);
 
   // Remove da seleção IDs que deixaram de existir na visão geral (ex.: após refresh da lista)
   useEffect(() => {
@@ -1273,7 +1257,6 @@ export default function AdminMetaPage() {
           loadSyncedData(),
           loadOverview(),
           loadAllCampaigns(),
-          loadRedirectSummary(),
           loadLiveAggregate(),
         ]);
       } else {
@@ -1344,7 +1327,12 @@ export default function AdminMetaPage() {
   ]);
 
   const handleSaveCampaignKind = useCallback(
-    async (bancaId: string, campaignId: string, campaign_kind: MetaCampaignKind) => {
+    async (
+      bancaId: string,
+      campaignId: string,
+      campaign_kind: MetaCampaignKind,
+      campaignName?: string | null
+    ) => {
       if (!userId) return;
       const key = `${bancaId}:${campaignId}`;
       setCampaignKindSavingKey(key);
@@ -1353,7 +1341,14 @@ export default function AdminMetaPage() {
         const res = await fetch('/api/admin/meta/campaign-kind', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-          body: JSON.stringify({ banca_id: bancaId, campaign_id: campaignId, campaign_kind }),
+          body: JSON.stringify({
+            banca_id: bancaId,
+            campaign_id: campaignId,
+            campaign_kind,
+            ...(campaignName != null && String(campaignName).trim() !== ''
+              ? { name: String(campaignName).trim() }
+              : {}),
+          }),
         });
         const data = await res.json();
         if (!data.success) {
@@ -1633,6 +1628,13 @@ export default function AdminMetaPage() {
   const scopedMetaBancaFilter = Boolean(overviewFilterBancaId?.trim());
   const usingLiveMetaCards = Boolean(liveAggregate && !liveAggregateError);
 
+  /** Cache local (campaigns-all) já filtrado pela banca do dropdown, para não esvaziar a tabela enquanto o live carrega. */
+  const cachedMetricRowsForCrmScope = useMemo(() => {
+    if (!scopedMetaBancaFilter) return metricSyncedCampaignRows;
+    const bid = String(overviewFilterBancaId).trim();
+    return metricSyncedCampaignRows.filter((row: any) => String(row.banca_id) === bid);
+  }, [metricSyncedCampaignRows, scopedMetaBancaFilter, overviewFilterBancaId]);
+
   /** Totais vindos do cache (campaigns-all): gasto e leads por tipo — sem API Graph, “resultados” usam leads sincronizados. */
   const cacheKindSummary = useMemo(() => {
     return (metricSyncedCampaignRows as any[]).reduce(
@@ -1712,25 +1714,30 @@ export default function AdminMetaPage() {
     (scopedMetaBancaFilter && !usingLiveMetaCards && !liveAggregateError) ||
     (!scopedMetaBancaFilter && !usingLiveMetaCards && allCampaignsLoading);
 
-  /** Linhas da tabela: prioriza métricas live (Graph) cruzadas com cadastro local para tipo/consultores. */
+  /** Linhas da tabela: métricas live (todas as integrações no stream) cruzadas com CRM; fallback = cache por banca. */
   const displayMetricCampaignRows = useMemo(() => {
     if (!usingLiveMetaCards || !liveAggregate) {
-      if (scopedMetaBancaFilter) return [];
-      return metricSyncedCampaignRows;
+      return cachedMetricRowsForCrmScope;
     }
     const liveList = (liveAggregate.campaigns ?? []) as Array<Record<string, unknown>>;
-    return liveList.map((row) => {
+    const merged = liveList.map((row) => {
       const bancaId = String(row.banca_id ?? '');
       const campaignId = String(row.campaign_id ?? '');
-      const dbRow = (allCampaignsRows ?? []).find(
-        (r: any) => String(r.banca_id) === bancaId && String(r.campaign_id) === campaignId
+      const integrationId = row.integration_id ?? null;
+      const adAccountId = row.ad_account_id ?? null;
+      const dbRow = findAllCampaignRowForLiveMerge(
+        allCampaignsRows,
+        bancaId,
+        campaignId,
+        integrationId,
+        adAccountId
       );
       return {
         ...(dbRow || {}),
         id: dbRow?.id ?? campaignId,
         banca_id: bancaId,
-        integration_id: row.integration_id ?? (dbRow as { integration_id?: string } | undefined)?.integration_id ?? null,
-        ad_account_id: row.ad_account_id ?? (dbRow as { ad_account_id?: string } | undefined)?.ad_account_id ?? null,
+        integration_id: integrationId ?? (dbRow as { integration_id?: string } | undefined)?.integration_id ?? null,
+        ad_account_id: adAccountId ?? (dbRow as { ad_account_id?: string } | undefined)?.ad_account_id ?? null,
         banca_name: row.banca_name ?? dbRow?.banca_name,
         banca_url: row.banca_url ?? dbRow?.banca_url ?? null,
         campaign_id: campaignId,
@@ -1758,53 +1765,22 @@ export default function AdminMetaPage() {
         consultor_total_deposited: dbRow?.consultor_total_deposited ?? 0,
       };
     });
-  }, [usingLiveMetaCards, liveAggregate, metricSyncedCampaignRows, allCampaignsRows, scopedMetaBancaFilter]);
-
-  const consultorTotalsForFunnel = useMemo(
-    () =>
-      (displayMetricCampaignRows ?? []).reduce(
-        (acc, row: any) => {
-          acc.leads += Number(row.consultor_total_leads) || 0;
-          acc.deposited += Number(row.consultor_total_deposited) || 0;
-          return acc;
-        },
-        { leads: 0, deposited: 0 }
-      ),
-    [displayMetricCampaignRows]
-  );
-
-  const funnelMetaValues = useMemo(() => {
-    if (usingLiveMetaCards && liveAggregate) {
-      const t = liveAggregate.totals;
-      return {
-        impressions: t.impressions,
-        reach: t.reach,
-        clicks: t.clicks,
-        leads: t.leads,
-      };
+    const dedup = new Map<string, (typeof merged)[0]>();
+    for (const row of merged) {
+      const k = [
+        String(row.banca_id ?? ''),
+        String(row.campaign_id ?? ''),
+        row.integration_id != null ? String(row.integration_id) : '',
+        row.ad_account_id != null ? String(row.ad_account_id) : '',
+      ].join(':');
+      dedup.set(k, row);
     }
-    if (scopedMetaBancaFilter) {
-      return { impressions: 0, reach: 0, clicks: 0, leads: 0 };
-    }
-    return {
-      impressions: overviewRowsUniqueBanca.reduce((sum, row) => sum + (Number(row.metrics.impressions) || 0), 0),
-      reach: overviewRowsUniqueBanca.reduce((sum, row) => sum + (Number(row.metrics.reach) || 0), 0),
-      clicks: overviewRowsUniqueBanca.reduce((sum, row) => sum + (Number(row.metrics.clicks) || 0), 0),
-      leads: overviewTotals.totalLeads,
-    };
-  }, [usingLiveMetaCards, liveAggregate, scopedMetaBancaFilter, overviewRowsUniqueBanca, overviewTotals.totalLeads]);
+    return Array.from(dedup.values());
+  }, [usingLiveMetaCards, liveAggregate, allCampaignsRows, cachedMetricRowsForCrmScope]);
 
-  const displayCampaignsSynchronizedCount = useMemo(() => {
-    if (!scopedMetaBancaFilter) return campaignsSynchronized;
-    if (usingLiveMetaCards && liveAggregate?.totals) {
-      return Number(liveAggregate.totals.campaigns_with_metrics) || 0;
-    }
-    return 0;
-  }, [scopedMetaBancaFilter, usingLiveMetaCards, liveAggregate, campaignsSynchronized]);
-
-  const campaignsSyncCardLoading = scopedMetaBancaFilter
-    ? loadingLiveAggregate && !liveAggregate
-    : loadingOverview;
+  const crmCampaignsBlockLoading =
+    (loadingLiveAggregate && !liveAggregate && cachedMetricRowsForCrmScope.length === 0) ||
+    (allCampaignsLoading && cachedMetricRowsForCrmScope.length === 0 && !usingLiveMetaCards);
 
   const syncedAdsetRows = syncedData?.adsets ?? [];
   const syncedInsightRows = syncedData?.insights ?? [];
@@ -2030,7 +2006,7 @@ export default function AdminMetaPage() {
                 setNewIntegrationForm((f) => ({
                   ...f,
                   banca_ids: [],
-                  base_url: 'https://graph.facebook.com/v19.0',
+                  base_url: 'https://graph.facebook.com/v25.0',
                   access_token: '',
                   ad_account_id: '',
                   pixel_id: '',
@@ -2120,107 +2096,48 @@ export default function AdminMetaPage() {
             )}
           </div>
         </div>
+        </div>
 
-        <div className="grid gap-4 md:grid-cols-1 xl:grid-cols-3">
-          <div className={`${metaCard} p-4`}>
-            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Campanhas sincronizadas</p>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Campanhas com dados de insights no período selecionado.</p>
-            {campaignsSyncCardLoading ? (
-              <div className="mt-3 flex items-center gap-2 text-gray-600 dark:text-gray-400 min-h-[2rem]">
-                <Loader2 className="w-5 h-5 animate-spin text-[#8CD955] shrink-0" />
-                <span className="text-sm">Carregando dados…</span>
-              </div>
-            ) : (
-              <p className="text-2xl font-bold text-gray-900 dark:text-gray-50 mt-2 tabular-nums tracking-tight">
-                {displayCampaignsSynchronizedCount.toLocaleString('pt-BR')}
+        <div
+          id="dados-sincronizados-section"
+          className={`${metaCard} p-4 md:p-6 ring-1 ring-[#8CD955]/25 dark:ring-[#6AAE39]/35 shadow-md dark:shadow-black/30`}
+        >
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between mb-5">
+            <div className="min-w-0">
+              <h3 className="text-lg font-bold text-gray-900 dark:text-gray-50 tracking-tight">
+                Métricas e cadastro no CRM
+              </h3>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                Campanhas de <span className="font-semibold text-gray-800 dark:text-gray-200">todas as integrações Meta</span>{' '}
+                {scopedMetaBancaFilter ? (
+                  <span className="text-gray-500 dark:text-gray-500">(banca filtrada no painel)</span>
+                ) : null}
+                . Métricas de alcance, cliques e gasto vêm da <span className="font-semibold text-emerald-700 dark:text-emerald-400">Meta em tempo real</span> quando o carregamento ao vivo conclui; o cache local complementa tipo, consultores e vínculos.
               </p>
-            )}
-          </div>
-          {/* Depósito consultores via Meta */}
-          <div className={`${metaCard} p-4`}>
-            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Depósito consultores (Meta)</p>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Soma dos depósitos dos consultores atribuídos às campanhas Meta no período.</p>
-            {(metaSummaryCardsLoading || allCampaignsLoading) ? (
-              <div className="mt-3 flex items-center gap-2 text-gray-600 dark:text-gray-400 min-h-[2rem]">
-                <Loader2 className="w-5 h-5 animate-spin text-[#8CD955] shrink-0" />
-                <span className="text-sm">Carregando dados…</span>
-              </div>
-            ) : consultorTotalsForFunnel.leads === 0 && consultorTotalsForFunnel.deposited === 0 ? (
-              <p className="text-xs text-amber-600 dark:text-amber-400 mt-3">Atribua consultores às campanhas para calcular o retorno em depósitos.</p>
-            ) : (
-              <p className="text-2xl font-bold text-gray-900 dark:text-gray-50 mt-2 tabular-nums tracking-tight">
-                {formatBRL(consultorTotalsForFunnel.deposited)}
-              </p>
-            )}
-          </div>
-          {/* Delta: Gasto Meta vs Retorno */}
-          {(() => {
-            const spend = metaSummaryCards.spendAll;
-            const deposited = consultorTotalsForFunnel.deposited;
-            const delta = deposited - spend;
-            const isPositive = delta >= 0;
-            const isLoading = metaSummaryCardsLoading || allCampaignsLoading;
-            return (
-              <div className={`${metaCard} p-4 border-l-4 ${isLoading ? 'border-l-gray-300 dark:border-l-gray-600' : isPositive ? 'border-l-emerald-500' : 'border-l-red-500'}`}>
-                <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">{isPositive ? 'Excedente (Retorno − Gasto)' : 'Faltando retorno (Gasto − Retorno)'}</p>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  Diferença entre depósitos dos consultores e gasto Meta no período.
-                </p>
-                {isLoading ? (
-                  <div className="mt-3 flex items-center gap-2 text-gray-600 dark:text-gray-400 min-h-[2rem]">
-                    <Loader2 className="w-5 h-5 animate-spin text-[#8CD955] shrink-0" />
-                    <span className="text-sm">Carregando dados…</span>
-                  </div>
+              <div className="flex flex-wrap items-center gap-2 mt-2">
+                <span className="text-xs text-gray-500 dark:text-gray-400">Período: {adminMetaInsightsDateRange.label}</span>
+                {usingLiveMetaCards ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 dark:bg-emerald-950/80 px-2.5 py-0.5 text-[11px] font-semibold uppercase text-emerald-800 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800">
+                    <Radio className="w-3 h-3 shrink-0 animate-pulse" />
+                    Ao vivo · Meta API
+                  </span>
                 ) : (
-                  <p className={`text-2xl font-bold mt-2 tabular-nums tracking-tight ${isPositive ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
-                    {isPositive ? '+' : ''}{formatBRL(delta)}
-                  </p>
+                  <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 dark:bg-[#333] px-2.5 py-0.5 text-[11px] font-semibold uppercase text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-[#404040]">
+                    Cache CRM / aguardando Meta
+                  </span>
                 )}
+                {liveMetricsUpdatedAt ? (
+                  <span className="text-[11px] text-gray-500 dark:text-gray-500">
+                    Atualizado {liveMetricsUpdatedAt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  </span>
+                ) : null}
+                {loadingLiveAggregate ? (
+                  <span className="text-[11px] text-amber-700 dark:text-amber-400 flex items-center gap-1">
+                    <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+                    Sincronizando integrações com a Meta…
+                  </span>
+                ) : null}
               </div>
-            );
-          })()}
-        </div>
-        </div>
-
-        <div className={`${metaCard} p-4 md:p-5`}>
-          <div className="flex items-center gap-2 mb-2">
-            <BarChart3 className="w-5 h-5 text-[#8CD955]" />
-            <h2 className="text-base font-semibold text-gray-900 dark:text-gray-50">Funil de campanhas + consultores</h2>
-          </div>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
-            Período selecionado acima e cadastros/depósitos dos consultores atribuídos às campanhas.
-          </p>
-          <div className="bg-gray-50 dark:bg-[#1a1a1a] p-3 rounded-xl border border-gray-100 dark:border-[#383838] min-h-[320px]">
-            <Funnel3DChart
-              data={{
-                stages: ['Impressões', 'Alcance', 'Cliques', 'Leads Meta', 'Cadastros consultores', 'Depósito consultores (R$)'],
-                values: [
-                  funnelMetaValues.impressions,
-                  funnelMetaValues.reach,
-                  funnelMetaValues.clicks,
-                  funnelMetaValues.leads,
-                  consultorTotalsForFunnel.leads,
-                  consultorTotalsForFunnel.deposited,
-                ],
-              }}
-              showPlaceholder={
-                (scopedMetaBancaFilter && !usingLiveMetaCards) ||
-                (!scopedMetaBancaFilter &&
-                  !overviewRows.length &&
-                  !allCampaignsRows.length &&
-                  !usingLiveMetaCards)
-              }
-            />
-          </div>
-        </div>
-
-        <div id="dados-sincronizados-section" className={`${metaCard} p-4 md:p-5`}>
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="text-base font-semibold text-gray-900 dark:text-gray-50">Métricas e cadastro no CRM</h3>
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                Período: {adminMetaInsightsDateRange.label}.
-              </p>
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -2259,33 +2176,38 @@ export default function AdminMetaPage() {
 
           <div className="space-y-4">
             {/* Tabela de campanhas — sempre visível, não depende de banca específica */}
-            {(scopedMetaBancaFilter
-              ? loadingLiveAggregate && !liveAggregate
-              : (loadingLiveAggregate && !liveAggregate) || allCampaignsLoading) ? (
+            {crmCampaignsBlockLoading ? (
               <div className="py-8 flex justify-center">
                 <Loader2 className="w-6 h-6 animate-spin text-[#8CD955]" />
               </div>
             ) : (
-                  <div className="border border-gray-200 dark:border-[#404040] rounded-xl overflow-hidden">
+                  <div className="border-2 border-gray-200 dark:border-[#404040] rounded-xl overflow-hidden bg-white/50 dark:bg-[#1f1f1f]/50">
                     <button
                       onClick={() => setExpandedTab(expandedTab === 'campaigns' ? null : 'campaigns')}
-                      className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 dark:bg-[#2a2a2a] hover:bg-gray-100 dark:hover:bg-[#333] transition text-gray-800 dark:text-gray-100"
+                      className="w-full flex items-center justify-between px-4 py-3.5 bg-gradient-to-r from-[#F1FAE8] to-gray-50 dark:from-emerald-950/40 dark:to-[#2a2a2a] hover:from-[#E8F5DC] hover:to-gray-100 dark:hover:from-emerald-950/55 dark:hover:to-[#333] transition text-gray-800 dark:text-gray-100 border-b border-gray-200/80 dark:border-[#383838]"
                     >
-                      <span className="flex items-center gap-2 font-medium text-gray-800 dark:text-white">
-                        <Target className="w-4 h-4 text-[#8CD955]" />
-                        Campanhas com dados ({displayMetricCampaignRows.length})
+                      <span className="flex flex-col items-start gap-0.5 sm:flex-row sm:items-center sm:gap-2 text-left">
+                        <span className="flex items-center gap-2 font-bold text-base text-gray-900 dark:text-white">
+                          <Target className="w-5 h-5 text-[#8CD955] shrink-0" />
+                          Campanhas
+                        </span>
+                        <span className="text-xs font-normal text-gray-600 dark:text-gray-400 sm:pl-1">
+                          {displayMetricCampaignRows.length} no período · todas as contas / integrações no stream ao vivo
+                        </span>
                       </span>
-                      {expandedTab === 'campaigns' ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+                      {expandedTab === 'campaigns' ? <ChevronUp className="w-5 h-5 shrink-0" /> : <ChevronDown className="w-5 h-5 shrink-0" />}
                     </button>
                     {expandedTab === 'campaigns' && (
-                      <div className="overflow-x-auto max-h-80 overflow-y-auto">
-                        <table className="w-full text-sm text-left min-w-[2220px] text-gray-800 dark:text-gray-200">
-                          <thead className="bg-gray-100 dark:bg-[#2a2a2a] text-gray-700 dark:text-gray-200 sticky top-0">
+                      <div className="overflow-x-auto max-h-[min(72vh,920px)] overflow-y-auto">
+                        <table className="w-full text-sm text-left min-w-[2480px] text-gray-800 dark:text-gray-200">
+                          <thead className="bg-gray-100 dark:bg-[#2a2a2a] text-gray-700 dark:text-gray-200 sticky top-0 z-10 shadow-sm">
                             <tr>
-                              <th className="px-4 py-2">Início</th>
-                              <th className="px-4 py-2">Banca</th>
-                              <th className="px-4 py-2">Nome</th>
-                              <th className="px-4 py-2">Campaign ID</th>
+                              <th className="px-4 py-2.5">Início</th>
+                              <th className="px-4 py-2.5">Banca</th>
+                              <th className="px-4 py-2.5">Integração</th>
+                              <th className="px-4 py-2.5">Conta ads</th>
+                              <th className="px-4 py-2.5 min-w-[220px]">Campanha</th>
+                              <th className="px-4 py-2.5">Campaign ID</th>
                               <th className="px-4 py-2">Tipo</th>
                               <th className="px-4 py-2 text-right">Reach</th>
                               <th className="px-4 py-2 text-right">Impressões</th>
@@ -2314,6 +2236,8 @@ export default function AdminMetaPage() {
                                 spend: Number(c.spend) || 0,
                                 results: Number(c.results_live) || 0,
                               };
+                              const eff = String(c.effective_status || c.status || '').toUpperCase();
+                              const isActiveCampaign = eff === 'ACTIVE';
                               const ownerKey = `${String(c.banca_id)}:${String(c.campaign_id)}`;
                               const ownerTarget = campaignOwnerDraft[ownerKey] ?? String(c.banca_id);
                               /** Não usar só campaign_id / id do CRM: a mesma campanha pode vir de 2 integrações Meta. */
@@ -2324,14 +2248,44 @@ export default function AdminMetaPage() {
                                 c.integration_id != null ? String(c.integration_id) : '',
                                 c.ad_account_id != null ? String(c.ad_account_id) : '',
                               ].join(':');
+                              const rowClass =
+                                isActiveCampaign && usingLiveMetaCards
+                                  ? 'bg-emerald-50/80 dark:bg-emerald-950/30 border-l-4 border-l-emerald-500'
+                                  : isActiveCampaign
+                                    ? 'bg-emerald-50/50 dark:bg-emerald-950/20 border-l-2 border-l-emerald-400'
+                                    : 'hover:bg-gray-50 dark:hover:bg-[#2a2a2a]/80';
                               return (
-                                <tr key={rowKey} className="hover:bg-gray-50 dark:hover:bg-[#2a2a2a]/80">
+                                <tr key={rowKey} className={rowClass}>
                                   <td className="px-4 py-2 text-gray-700 dark:text-white">{c.start_time ? formatDate(c.start_time) : '-'}</td>
                                   <td className="px-4 py-2 text-xs text-gray-600 dark:text-gray-400">
                                     <p className="font-medium text-gray-900 dark:text-gray-50">{c.banca_name || c.banca_id}</p>
                                     {c.banca_url ? <p className="text-[11px] text-gray-500 dark:text-gray-500 break-all">{c.banca_url}</p> : null}
                                   </td>
-                                  <td className="px-4 py-2 font-medium text-gray-900 dark:text-gray-50">{c.name || c.campaign_id}</td>
+                                  <td className="px-4 py-2 text-xs font-mono text-gray-600 dark:text-gray-400 align-top" title={c.integration_id ? String(c.integration_id) : ''}>
+                                    {shortUuid(c.integration_id)}
+                                  </td>
+                                  <td
+                                    className="px-4 py-2 text-xs font-mono text-gray-600 dark:text-gray-400 align-top"
+                                    title={c.ad_account_id ? String(c.ad_account_id) : ''}
+                                  >
+                                    {formatActShort(c.ad_account_id)}
+                                  </td>
+                                  <td className="px-4 py-3 align-top">
+                                    <div className="flex flex-col gap-1.5 max-w-md">
+                                      {usingLiveMetaCards && isActiveCampaign ? (
+                                        <span className="inline-flex w-fit items-center rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow-sm">
+                                          Ativa · tempo real
+                                        </span>
+                                      ) : isActiveCampaign ? (
+                                        <span className="inline-flex w-fit items-center rounded-full bg-emerald-100 dark:bg-emerald-900/50 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-800 dark:text-emerald-200">
+                                          Ativa
+                                        </span>
+                                      ) : null}
+                                      <span className="text-base font-semibold text-gray-900 dark:text-gray-50 leading-snug">
+                                        {c.name || c.campaign_id}
+                                      </span>
+                                    </div>
+                                  </td>
                                   <td className="px-4 py-2 text-xs font-mono text-gray-700 dark:text-gray-300">{c.campaign_id || '-'}</td>
                                   <td className="px-4 py-2 align-top">
                                     {c.banca_id ? (
@@ -2340,7 +2294,12 @@ export default function AdminMetaPage() {
                                         disabled={campaignKindSavingKey === `${String(c.banca_id)}:${String(c.campaign_id)}`}
                                         onChange={(e) => {
                                           const v = e.target.value as MetaCampaignKind;
-                                          void handleSaveCampaignKind(String(c.banca_id), String(c.campaign_id), v);
+                                          void handleSaveCampaignKind(
+                                            String(c.banca_id),
+                                            String(c.campaign_id),
+                                            v,
+                                            c.name
+                                          );
                                         }}
                                         className="px-2 py-1 rounded-lg border border-gray-200 dark:border-[#404040] text-xs text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] max-w-[140px] disabled:opacity-50"
                                       >
@@ -2415,8 +2374,8 @@ export default function AdminMetaPage() {
                         {(displayMetricCampaignRows?.length ?? 0) === 0 && (
                           <p className="px-4 py-6 text-center text-gray-500 dark:text-gray-400">
                             {usingLiveMetaCards
-                              ? 'Nenhuma campanha com métrica no período para o filtro atual.'
-                              : 'Nenhuma campanha sincronizada.'}
+                              ? 'Nenhuma campanha com métrica no período (todas as integrações / contas) para o filtro atual.'
+                              : 'Nenhuma campanha com métricas no cache local para este período e filtro de banca.'}
                           </p>
                         )}
                         {!usingLiveMetaCards && (allCampaignsRows?.length ?? 0) > 0 && (
@@ -2628,127 +2587,6 @@ export default function AdminMetaPage() {
           </div>
         </div>
 
-        <div className={`${metaCard} p-4 md:p-5`}>
-          <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
-            <div className="flex items-center gap-2">
-              <Link2 className="w-5 h-5 text-[#8CD955]" />
-              <div>
-                <h2 className="text-base font-semibold text-gray-900 dark:text-gray-50">Redirects VSL (todos os projetos)</h2>
-                <p className="text-sm text-gray-600 dark:text-gray-400">
-                  Cliques registrados, slugs públicos e grupos de destino agregados no sistema.
-                </p>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => void loadRedirectSummary()}
-              disabled={loadingRedirectSummary}
-              className="px-3 py-2 bg-gray-100 dark:bg-[#333] hover:bg-gray-200 dark:hover:bg-[#404040] rounded-xl font-medium text-gray-700 dark:text-gray-200 disabled:opacity-50 flex items-center gap-2 text-sm"
-            >
-              {loadingRedirectSummary ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-              Atualizar redirects
-            </button>
-          </div>
-          {redirectSummaryError && (
-            <div className="mb-4 p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-sm text-red-700 dark:text-red-300">
-              {redirectSummaryError}
-            </div>
-          )}
-          {loadingRedirectSummary && !redirectSummary ? (
-            <div className="flex items-center justify-center py-12 text-gray-500 dark:text-gray-400 gap-2">
-              <Loader2 className="w-6 h-6 animate-spin text-[#8CD955]" />
-              Carregando…
-            </div>
-          ) : redirectSummary ? (
-            <>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 mb-6">
-                <div className="rounded-xl border border-gray-100 dark:border-[#383838] bg-gray-50/80 dark:bg-[#1e1e1e] p-3">
-                  <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase">Total de cliques</p>
-                  <p className="text-xl font-bold text-gray-900 dark:text-gray-50 mt-0.5">
-                    {redirectSummary.totals.total_clicks.toLocaleString('pt-BR')}
-                  </p>
-                </div>
-                <div className="rounded-xl border border-gray-100 dark:border-[#383838] bg-gray-50/80 dark:bg-[#1e1e1e] p-3">
-                  <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase">Grupos</p>
-                  <p className="text-xl font-bold text-gray-900 dark:text-gray-50 mt-0.5">
-                    {redirectSummary.totals.total_groups.toLocaleString('pt-BR')}
-                  </p>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                    {redirectSummary.totals.active_groups.toLocaleString('pt-BR')} ativos
-                  </p>
-                </div>
-                <div className="rounded-xl border border-gray-100 dark:border-[#383838] bg-gray-50/80 dark:bg-[#1e1e1e] p-3">
-                  <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase">Slugs redirect</p>
-                  <p className="text-xl font-bold text-gray-900 dark:text-gray-50 mt-0.5">
-                    {redirectSummary.totals.redirect_slugs.toLocaleString('pt-BR')}
-                  </p>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                    {redirectSummary.totals.active_redirect_slugs.toLocaleString('pt-BR')} ativos
-                  </p>
-                </div>
-                <div className="rounded-xl border border-gray-100 dark:border-[#383838] bg-gray-50/80 dark:bg-[#1e1e1e] p-3">
-                  <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase">Projetos VSL</p>
-                  <p className="text-xl font-bold text-gray-900 dark:text-gray-50 mt-0.5">
-                    {redirectSummary.totals.vsl_projects.toLocaleString('pt-BR')}
-                  </p>
-                </div>
-              </div>
-              <div className="overflow-x-auto max-h-[min(420px,50vh)] overflow-y-auto rounded-xl border border-gray-100 dark:border-[#383838]">
-                <table className="w-full min-w-[720px] text-sm">
-                  <thead className="sticky top-0 bg-gray-50 dark:bg-[#2a2a2a] text-gray-700 dark:text-gray-200 z-10">
-                    <tr>
-                      <th className="px-3 py-2 text-left font-semibold">Projeto</th>
-                      <th className="px-3 py-2 text-left font-semibold">Slug redirect</th>
-                      <th className="px-3 py-2 text-right font-semibold">Cliques</th>
-                      <th className="px-3 py-2 text-right font-semibold">Grupos</th>
-                      <th className="px-3 py-2 text-right font-semibold">Grupos ativos</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100 dark:divide-[#383838]">
-                    {redirectSummary.projects
-                      .filter(
-                        (r) =>
-                          r.redirect_slug ||
-                          r.clicks > 0 ||
-                          r.groups_total > 0
-                      )
-                      .map((r) => (
-                        <tr key={r.project_id} className="hover:bg-gray-50/80 dark:hover:bg-[#2a2a2a]/80">
-                          <td className="px-3 py-2 text-gray-800 dark:text-gray-100">
-                            <span className="font-medium">{r.name}</span>
-                            <span className="block text-xs text-gray-500 dark:text-gray-400">{r.project_slug}</span>
-                          </td>
-                          <td className="px-3 py-2 text-gray-700 dark:text-gray-300">
-                            {r.redirect_slug ? (
-                              <>
-                                <code className="text-xs bg-gray-100 dark:bg-[#333] px-1.5 py-0.5 rounded text-gray-800 dark:text-gray-200">{r.redirect_slug}</code>
-                                {r.redirect_active === false && (
-                                  <span className="ml-1 text-xs text-amber-600 dark:text-amber-400">inativo</span>
-                                )}
-                              </>
-                            ) : (
-                              <span className="text-gray-400 dark:text-gray-500">—</span>
-                            )}
-                          </td>
-                          <td className="px-3 py-2 text-right tabular-nums">{r.clicks.toLocaleString('pt-BR')}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{r.groups_total.toLocaleString('pt-BR')}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{r.groups_active.toLocaleString('pt-BR')}</td>
-                        </tr>
-                      ))}
-                  </tbody>
-                </table>
-                {redirectSummary.projects.filter(
-                  (r) => r.redirect_slug || r.clicks > 0 || r.groups_total > 0
-                ).length === 0 && (
-                  <p className="p-6 text-center text-gray-500 text-sm">
-                    Nenhum projeto com redirect ou cliques ainda.
-                  </p>
-                )}
-              </div>
-            </>
-          ) : null}
-        </div>
-
         <div className={metaCardOverflow}>
           <div className="p-4 border-b border-gray-100 dark:border-[#383838] bg-gray-50/50 dark:bg-[#1e1e1e] flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -2766,7 +2604,6 @@ export default function AdminMetaPage() {
                 type="button"
                 onClick={() => {
                   void loadOverview();
-                  void loadRedirectSummary();
                 }}
                 disabled={loadingOverview}
                 className="px-3 py-2 bg-gray-100 dark:bg-[#333] hover:bg-gray-200 dark:hover:bg-[#404040] rounded-xl font-medium text-gray-700 dark:text-gray-200 disabled:opacity-50 flex items-center gap-2"
@@ -3210,7 +3047,7 @@ export default function AdminMetaPage() {
                     type="text"
                     value={form.base_url}
                     onChange={(e) => setForm((f) => ({ ...f, base_url: e.target.value }))}
-                    placeholder="https://graph.facebook.com/v19.0"
+                    placeholder="https://graph.facebook.com/v25.0"
                     className="w-full px-4 py-2 border border-gray-200 dark:border-[#404040] rounded-xl text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] placeholder:text-gray-500 dark:placeholder:text-gray-500"
                   />
                 </div>

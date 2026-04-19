@@ -19,9 +19,14 @@ import {
   type InsightsDateOption,
   type MetaInsight,
 } from '@/lib/meta/metaClient';
+import {
+  getActiveCampaignsSpend,
+  type GetActiveCampaignsSpendOptions,
+  type ActiveCampaignSpendRow,
+} from '@/lib/meta/metaAdsService';
 import { buildCampaignConsultorSummary } from '@/lib/services/meta-campaign-consultors';
 
-const DEFAULT_BASE_URL = 'https://graph.facebook.com/v19.0';
+const DEFAULT_BASE_URL = 'https://graph.facebook.com/v25.0';
 const DEFAULT_DATE_PRESET = 'last_30d';
 
 /** Logs do retorno bruto da Meta (admin / sync); nunca incluir token. */
@@ -704,15 +709,30 @@ export async function setMetaIntegrationBancaLinks(integrationId: string, bancaI
   return listBancasByIntegration(id);
 }
 
-/** Remove a linha em meta_integration_configs (vínculos somem por ON DELETE CASCADE). Só modelo compartilhado. */
+/**
+ * Remove integração Meta: primeiro `meta_integration_configs` (modelo compartilhado;
+ * vínculos em `meta_integration_bancas` caem por CASCADE), senão `meta_integrations` (legado por banca).
+ * A UI lista os dois tipos com `integration_id` = id da respectiva tabela.
+ */
 export async function deleteMetaIntegrationConfig(integrationId: string): Promise<void> {
   const id = String(integrationId).trim();
   if (!id) throw new Error('integration_id é obrigatório.');
 
-  const { data, error } = await supabaseServiceRole.from('meta_integration_configs').delete().eq('id', id).select('id');
+  const { data: cfgDeleted, error: cfgErr } = await supabaseServiceRole
+    .from('meta_integration_configs')
+    .delete()
+    .eq('id', id)
+    .select('id');
+  if (cfgErr) throw new Error(cfgErr.message);
+  if (cfgDeleted?.length) return;
 
-  if (error) throw new Error(error.message);
-  if (!data?.length) throw new Error('Integração Meta não encontrada ou já removida.');
+  const { data: legDeleted, error: legErr } = await supabaseServiceRole
+    .from('meta_integrations')
+    .delete()
+    .eq('id', id)
+    .select('id');
+  if (legErr) throw new Error(legErr.message);
+  if (!legDeleted?.length) throw new Error('Integração Meta não encontrada ou já removida.');
 }
 
 /** Primeiro token válido entre todas as integrações da banca; senão legado. */
@@ -1291,7 +1311,7 @@ export interface AdminMetaLiveAggregateResult {
   integrations: AdminMetaLiveIntegrationTrace[];
 }
 
-async function listAdminMetaLiveJobs(includeInactiveIntegrations = false): Promise<AdminMetaLiveJob[]> {
+export async function listAdminMetaLiveJobs(includeInactiveIntegrations = false): Promise<AdminMetaLiveJob[]> {
   const jobs: AdminMetaLiveJob[] = [];
   const bancasCoveredByShared = new Set<string>();
 
@@ -1336,6 +1356,147 @@ async function listAdminMetaLiveJobs(includeInactiveIntegrations = false): Promi
   }
 
   return jobs;
+}
+
+export type ConsolidateAllActiveCampaignsSpendOptions = GetActiveCampaignsSpendOptions & {
+  /** Quando true, inclui linhas inativas em `meta_integration_configs`. */
+  includeInactiveIntegrations?: boolean;
+};
+
+/** Campanha ativa (insights) + origem multi-tenant. */
+export type ConsolidatedActiveCampaignSpendEntry = ActiveCampaignSpendRow & {
+  integration_id: string;
+  source: 'shared' | 'legacy';
+  ad_account_id: string;
+  banca_ids: string[];
+};
+
+export type ConsolidatedActiveCampaignsSpendIntegrationSlice = {
+  integration_id: string;
+  source: 'shared' | 'legacy';
+  ad_account_id: string | null;
+  banca_ids: string[];
+  total_spend: number;
+  campaigns: ActiveCampaignSpendRow[];
+  error?: string;
+};
+
+export type ConsolidatedActiveCampaignsSpendAllResult = {
+  campaigns: ConsolidatedActiveCampaignSpendEntry[];
+  by_integration: ConsolidatedActiveCampaignsSpendIntegrationSlice[];
+  summary: {
+    integrations_total: number;
+    integrations_ok: number;
+    integrations_failed: number;
+    campaigns_total: number;
+    total_spend: number;
+  };
+};
+
+/**
+ * Percorre todas as integrações Meta com token (modelo compartilhado + legado sem vínculo duplicado),
+ * busca insights de campanhas com entrega ativa por conta e consolida em uma resposta.
+ * Chamadas Graph são **sequenciais** para reduzir risco de rate limit.
+ */
+export async function consolidateActiveCampaignsSpendAllIntegrations(
+  options?: ConsolidateAllActiveCampaignsSpendOptions
+): Promise<ConsolidatedActiveCampaignsSpendAllResult> {
+  const { includeInactiveIntegrations, ...spendOpts } = options ?? {};
+  const jobs = await listAdminMetaLiveJobs(includeInactiveIntegrations === true);
+  const by_integration: ConsolidatedActiveCampaignsSpendIntegrationSlice[] = [];
+  const campaignsFlat: ConsolidatedActiveCampaignSpendEntry[] = [];
+
+  for (const job of jobs) {
+    const banca_ids = job.linkedBancaIds;
+    let integration_id = '';
+    const source: 'shared' | 'legacy' = job.kind === 'shared' ? 'shared' : 'legacy';
+    let baseUrl = DEFAULT_BASE_URL;
+    let adAccountId: string | null = null;
+    let token: string | null = null;
+
+    if (job.kind === 'shared') {
+      integration_id = job.integrationId;
+      token = await getDecryptedTokenByIntegrationId(integration_id);
+      const { data } = await supabaseServiceRole
+        .from('meta_integration_configs')
+        .select('base_url, ad_account_id')
+        .eq('id', integration_id)
+        .maybeSingle();
+      baseUrl = String(data?.base_url ?? DEFAULT_BASE_URL).trim() || DEFAULT_BASE_URL;
+      adAccountId = data?.ad_account_id != null ? String(data.ad_account_id).trim() : null;
+    } else {
+      token = await getLegacyDecryptedToken(job.representativeBancaId);
+      const { data } = await supabaseServiceRole
+        .from('meta_integrations')
+        .select('id, base_url, ad_account_id')
+        .eq('banca_id', job.representativeBancaId)
+        .maybeSingle();
+      integration_id = data?.id != null ? String(data.id) : `legacy:${job.representativeBancaId}`;
+      baseUrl = String(data?.base_url ?? DEFAULT_BASE_URL).trim() || DEFAULT_BASE_URL;
+      adAccountId = data?.ad_account_id != null ? String(data.ad_account_id).trim() : null;
+    }
+
+    if (!token || !adAccountId) {
+      by_integration.push({
+        integration_id,
+        source,
+        ad_account_id: adAccountId,
+        banca_ids,
+        total_spend: 0,
+        campaigns: [],
+        error: !token ? 'Token indisponível.' : 'ad_account_id não configurado.',
+      });
+      continue;
+    }
+
+    try {
+      const { campaigns, totalSpend } = await getActiveCampaignsSpend(baseUrl, token, adAccountId, spendOpts);
+      by_integration.push({
+        integration_id,
+        source,
+        ad_account_id: adAccountId,
+        banca_ids,
+        total_spend: totalSpend,
+        campaigns,
+      });
+      for (const c of campaigns) {
+        campaignsFlat.push({
+          ...c,
+          integration_id,
+          source,
+          ad_account_id: adAccountId,
+          banca_ids: [...banca_ids],
+        });
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      by_integration.push({
+        integration_id,
+        source,
+        ad_account_id: adAccountId,
+        banca_ids,
+        total_spend: 0,
+        campaigns: [],
+        error: msg,
+      });
+    }
+  }
+
+  const integrations_ok = by_integration.filter((s) => !s.error).length;
+  const integrations_failed = by_integration.filter((s) => Boolean(s.error)).length;
+  const total_spend = by_integration.reduce((s, x) => s + x.total_spend, 0);
+
+  return {
+    campaigns: campaignsFlat,
+    by_integration,
+    summary: {
+      integrations_total: jobs.length,
+      integrations_ok,
+      integrations_failed,
+      campaigns_total: campaignsFlat.length,
+      total_spend,
+    },
+  };
 }
 
 /**

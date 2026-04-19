@@ -1,7 +1,8 @@
 /**
  * POST /api/admin/meta/campaign-kind
  * Define campaign_kind (normal | bolao) em meta_campaigns.
- * Body: { banca_id, campaign_id, campaign_kind: 'normal' | 'bolao' }
+ * Body: { banca_id, campaign_id, campaign_kind: 'normal' | 'bolao', name? }
+ * Se ainda não existir linha em meta_campaigns (ex.: só live na Meta), faz insert mínimo.
  */
 
 import { NextRequest } from 'next/server';
@@ -26,8 +27,13 @@ export async function POST(req: NextRequest) {
       return errorResponse('campaign_kind deve ser "normal" ou "bolao".', 400);
     }
 
+    const nameRaw = body?.name;
+    const name =
+      nameRaw != null && String(nameRaw).trim() !== '' ? String(nameRaw).trim().slice(0, 2000) : null;
+
     const now = new Date().toISOString();
-    const { data, error } = await supabaseServiceRole
+
+    const { data: updated, error: upErr } = await supabaseServiceRole
       .from('meta_campaigns')
       .update({ campaign_kind: campaignKind, updated_at: now })
       .eq('banca_id', bancaId)
@@ -35,12 +41,39 @@ export async function POST(req: NextRequest) {
       .select('banca_id,campaign_id,campaign_kind')
       .maybeSingle();
 
-    if (error) return errorResponse(error.message, 500);
-    if (!data) {
-      return errorResponse('Campanha não encontrada para esta banca. Sincronize antes de classificar.', 404);
+    if (upErr) return errorResponse(upErr.message, 500);
+    if (updated) {
+      return successResponse({ row: updated });
     }
 
-    return successResponse({ row: data });
+    const { data: inserted, error: insErr } = await supabaseServiceRole
+      .from('meta_campaigns')
+      .insert({
+        banca_id: bancaId,
+        campaign_id: campaignId,
+        campaign_kind: campaignKind,
+        name,
+        updated_at: now,
+      })
+      .select('banca_id,campaign_id,campaign_kind')
+      .single();
+
+    if (insErr) {
+      if (insErr.code === '23505') {
+        const { data: retry, error: retryErr } = await supabaseServiceRole
+          .from('meta_campaigns')
+          .update({ campaign_kind: campaignKind, updated_at: now })
+          .eq('banca_id', bancaId)
+          .eq('campaign_id', campaignId)
+          .select('banca_id,campaign_id,campaign_kind')
+          .maybeSingle();
+        if (retryErr) return errorResponse(retryErr.message, 500);
+        if (retry) return successResponse({ row: retry });
+      }
+      return errorResponse(insErr.message, 500);
+    }
+
+    return successResponse({ row: inserted });
   } catch (err: any) {
     if (err?.message?.includes('Acesso negado') || err?.message?.includes('não autenticado')) {
       return errorResponse(err.message, 403);

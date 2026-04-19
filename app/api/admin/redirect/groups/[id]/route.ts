@@ -7,6 +7,7 @@ import {
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { requireVslProjectAccess } from '@/lib/middleware/vsl-admin';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
+import { equalWeightsForRedirectGroups } from '@/lib/vsl/redirect-weight';
 
 const WHATSAPP_INVITE_PREFIX = 'https://chat.whatsapp.com/';
 
@@ -69,6 +70,40 @@ export async function PATCH(
     if (error) {
       console.error('[admin/redirect/groups PATCH]', error.message);
       return errorResponse('Erro ao atualizar grupo', 500);
+    }
+
+    /** Ao mudar ativo/inativo: redistribui % igualmente entre todos os grupos ativos do projeto (inativos = 0%). */
+    let weightsByGroup: Record<string, number> | undefined;
+    if (body.is_active !== undefined && data && group.project_id) {
+      const { data: allRows, error: listErr } = await supabaseServiceRole
+        .from('redirect_groups')
+        .select('id, is_active')
+        .eq('project_id', group.project_id)
+        .order('name');
+      if (listErr) {
+        console.error('[admin/redirect/groups PATCH] list for redistribute', listErr.message);
+        return errorResponse('Grupo atualizado, mas falhou ao redistribuir %. Recarregue a página.', 500);
+      }
+      const updates = equalWeightsForRedirectGroups((allRows ?? []) as { id: string; is_active: boolean }[]);
+      const now = new Date().toISOString();
+      for (const u of updates) {
+        const { error: wErr } = await supabaseServiceRole
+          .from('redirect_groups')
+          .update({ weight_percent: u.weight_percent, updated_at: now })
+          .eq('id', u.id);
+        if (wErr) {
+          console.error('[admin/redirect/groups PATCH] weight update', u.id, wErr.message);
+          return errorResponse('Grupo atualizado, mas falhou ao redistribuir %. Recarregue a página.', 500);
+        }
+      }
+      weightsByGroup = Object.fromEntries(updates.map((u) => [u.id, u.weight_percent]));
+      const { data: refreshed } = await supabaseServiceRole.from('redirect_groups').select().eq('id', id).single();
+      if (refreshed) data = refreshed;
+    }
+
+    if (weightsByGroup) {
+      const activeCount = Object.values(weightsByGroup).filter((p) => p > 0).length;
+      return successResponse(data, { meta: { weights_by_group: weightsByGroup, active_groups: activeCount } });
     }
     return successResponse(data);
   } catch (e: unknown) {

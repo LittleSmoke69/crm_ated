@@ -203,7 +203,7 @@ export default function GestorTrafegoClient({
   const [metaActiveOnly, setMetaActiveOnly] = useState(true);
   const [showMetaConfig, setShowMetaConfig] = useState(false);
   const [metaConfigForm, setMetaConfigForm] = useState({
-    base_url: 'https://graph.facebook.com/v23.0',
+    base_url: 'https://graph.facebook.com/v25.0',
     access_token: '',
     ad_account_id: '',
     pixel_id: '',
@@ -1718,7 +1718,7 @@ export default function GestorTrafegoClient({
                       type="text"
                       value={metaConfigForm.base_url}
                       onChange={(e) => setMetaConfigForm((f) => ({ ...f, base_url: e.target.value }))}
-                      placeholder="https://graph.facebook.com/v23.0"
+                      placeholder="https://graph.facebook.com/v25.0"
                       disabled={!isAdminOrSuperAdmin}
                       readOnly={!isAdminOrSuperAdmin}
                       className={`w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] ${!isAdminOrSuperAdmin ? 'bg-gray-100 dark:bg-gray-700 cursor-not-allowed' : 'bg-white dark:bg-gray-800'}`}

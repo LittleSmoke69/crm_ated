@@ -219,7 +219,18 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
               submenu: sub,
             };
           };
-          const items = json.data.items.map((it: unknown) => toMenuItem(it as Parameters<typeof toMenuItem>[0]));
+          let items = json.data.items.map((it: unknown) => toMenuItem(it as Parameters<typeof toMenuItem>[0]));
+          /** Garante Estoque de leads para gerente quando o tenant ainda não tem o item na sidebar inteligente */
+          if (userStatus === 'gerente') {
+            const hasLeadStock = items.some((it) =>
+              typeof it.href === 'string' && it.href.includes('/gerente/crm/lead-stock-transfer')
+            );
+            if (!hasLeadStock) {
+              const gestIdx = items.findIndex((it) => it.href === '/gerente');
+              const insertAt = gestIdx >= 0 ? gestIdx + 1 : Math.min(1, items.length);
+              items = [...items.slice(0, insertAt), itemLeadStockGerente, ...items.slice(insertAt)];
+            }
+          }
           setDynamicSidebar({ items, useLegacy: false });
         } else {
           setDynamicSidebar({ items: [], useLegacy: true });
@@ -302,7 +313,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const itemVslRedirect: MenuItem = { href: '/admin/vsl', icon: ExternalLink, label: 'VSL & Redirect' };
   const itemZaplink: MenuItem = { href: '/admin/zaplink', icon: Link2, label: 'Zaplink' };
   const itemZaplinkGerente: MenuItem = { href: '/gerente/zaplink', icon: Link2, label: 'Zaplink' };
-  const itemLeadStockGerente: MenuItem = { href: '/gerente/crm/lead-stock-transfer', icon: Package, label: 'Estoque → consultores' };
+  const itemLeadStockGerente: MenuItem = { href: '/gerente/crm/lead-stock-transfer', icon: Package, label: 'Estoque de leads' };
   const itemLeadTransfer: MenuItem = { href: '/admin/crm/lead-transfer', icon: ArrowRightLeft, label: 'Transferência de Leads' };
   const itemZaplinkGestorTrafego: MenuItem = { href: '/gestor-trafego/zaplink', icon: Link2, label: 'Zaplink' };
   const itemAcademy: MenuItem = {

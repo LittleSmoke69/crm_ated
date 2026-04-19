@@ -49,7 +49,7 @@ const defaultConfigPayload = {
   integration_id: null as string | null,
   integrations: [] as ReturnType<typeof mapIntegrationPublic>[],
   banca_ids: [] as string[],
-  base_url: 'https://graph.facebook.com/v19.0',
+  base_url: 'https://graph.facebook.com/v25.0',
   token_last4: null as string | null,
   ad_account_id: null as string | null,
   pixel_id: null as string | null,

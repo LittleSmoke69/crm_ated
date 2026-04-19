@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { requireAdminLeadTransferContext } from '@/lib/server/crm/adminLeadTransferContext';
 import { executeLeadRedistributionCore, type TransferKind } from '@/lib/server/crm/leadRedistributionCore';
-import { resolveGerenteStockPoolEmail } from '@/lib/server/crm/gerenteLeadStock';
+import { resolveGerenteStockPoolEmail, findGerenteUserIdIfEmailIsGerenteOnBanca } from '@/lib/server/crm/gerenteLeadStock';
 import { z } from 'zod';
 
 const transferTypeEnum = z.enum(['TF', 'TF1', 'TF2', 'TF3']);
@@ -78,12 +78,23 @@ export async function POST(req: NextRequest) {
     const ctx = await requireAdminLeadTransferContext(req, parsed.data.banca_id);
     console.log(`${LOG_PREFIX} POST context: userId=${ctx.userId}, bancaId=${ctx.bancaId}, crmBaseUrl=${ctx.crmBaseUrl}`);
 
+    let toGerenteStockGerenteId = parsed.data.to_gerente_stock_gerente_id;
+    if (!toGerenteStockGerenteId && parsed.data.target_consultant_email?.trim()) {
+      const autoGerenteId = await findGerenteUserIdIfEmailIsGerenteOnBanca(parsed.data.target_consultant_email.trim(), ctx.bancaId);
+      if (autoGerenteId) {
+        toGerenteStockGerenteId = autoGerenteId;
+        console.log(
+          `${LOG_PREFIX} POST destino é gerente na banca → usando estoque CRM (admin_to_gerente_stock) gerente_id=${autoGerenteId}`
+        );
+      }
+    }
+
     let target_consultant_email = (parsed.data.target_consultant_email ?? '').trim();
     let filters_snapshot = parsed.data.filters_snapshot ?? null;
     let transferKind: TransferKind = 'standard';
 
-    if (parsed.data.to_gerente_stock_gerente_id) {
-      const stockEmail = await resolveGerenteStockPoolEmail(parsed.data.to_gerente_stock_gerente_id, ctx.bancaId);
+    if (toGerenteStockGerenteId) {
+      const stockEmail = await resolveGerenteStockPoolEmail(toGerenteStockGerenteId, ctx.bancaId);
       if (!stockEmail) {
         return errorResponse(
           'Não foi possível determinar o e-mail de estoque do gerente nesta banca. Verifique vínculo do gerente à banca e e-mail no perfil.',
@@ -94,15 +105,12 @@ export async function POST(req: NextRequest) {
       transferKind = 'admin_to_gerente_stock';
       const fs = typeof filters_snapshot === 'object' && filters_snapshot !== null ? { ...filters_snapshot } : {};
       fs.to_gerente_stock = true;
-      fs.gerente_stock_gerente_id = parsed.data.to_gerente_stock_gerente_id;
+      fs.gerente_stock_gerente_id = toGerenteStockGerenteId;
       filters_snapshot = fs;
-      console.log(`${LOG_PREFIX} POST admin → estoque gerente=${parsed.data.to_gerente_stock_gerente_id} pool=${target_consultant_email}`);
+      console.log(`${LOG_PREFIX} POST admin → estoque gerente=${toGerenteStockGerenteId} pool=${target_consultant_email}`);
     }
 
-    if (
-      parsed.data.source_consultant_email.trim().toLowerCase() === target_consultant_email.toLowerCase() &&
-      !parsed.data.to_gerente_stock_gerente_id
-    ) {
+    if (parsed.data.source_consultant_email.trim().toLowerCase() === target_consultant_email.toLowerCase()) {
       return errorResponse('Consultor origem e destino devem ser diferentes.', 400);
     }
 

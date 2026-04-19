@@ -95,7 +95,7 @@ export async function GET(req: NextRequest) {
       return successResponse({
         configured: false,
         integrations: [],
-        base_url: 'https://graph.facebook.com/v19.0',
+        base_url: 'https://graph.facebook.com/v25.0',
         token_last4: null,
         ad_account_id: null,
         pixel_id: null,
@@ -191,7 +191,7 @@ export async function PUT(req: NextRequest) {
       payload.base_url = body.base_url;
       payload.access_token = body.access_token;
     } else {
-      let keepBase = 'https://graph.facebook.com/v19.0';
+      let keepBase = 'https://graph.facebook.com/v25.0';
       if (integrationIdBody) {
         const { data } = await supabaseServiceRole
           .from('meta_integration_configs')

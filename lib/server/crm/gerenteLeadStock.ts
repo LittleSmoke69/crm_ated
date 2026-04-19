@@ -125,3 +125,16 @@ export async function isConsultantDirectReportOfGerente(gerenteUserId: string, c
     .maybeSingle();
   return !!data?.id;
 }
+
+/**
+ * Se o e-mail for de um gerente vinculado à banca, retorna o id — usado para enviar ao estoque CRM
+ * em vez da “carteira consultor” do gerente em transferências admin padrão.
+ */
+export async function findGerenteUserIdIfEmailIsGerenteOnBanca(targetEmail: string, bancaId: string): Promise<string | null> {
+  const em = targetEmail.trim().toLowerCase();
+  if (!em) return null;
+  const { data: prof, error } = await supabaseServiceRole.from('profiles').select('id, status').ilike('email', em).maybeSingle();
+  if (error || !prof?.id || prof.status !== 'gerente') return null;
+  const onBanca = await assertGerenteHasBanca(prof.id, bancaId);
+  return onBanca ? prof.id : null;
+}

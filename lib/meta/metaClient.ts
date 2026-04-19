@@ -118,6 +118,18 @@ function extractLeadsFromActions(actions: Array<{ action_type: string; value: st
   return lead ? parseInt(lead.value || '0', 10) || 0 : 0;
 }
 
+function graphBackoffMs(attempt: number): number {
+  return RETRY_DELAY_MS * 2 ** (attempt - 1);
+}
+
+function isMetaRateLimitPayload(data: unknown): boolean {
+  const code = (data as { error?: { code?: number } } | null)?.error?.code;
+  if (typeof code !== 'number') return false;
+  if ([4, 17, 32, 613].includes(code)) return true;
+  if (code >= 80000 && code <= 80014) return true;
+  return false;
+}
+
 async function fetchWithRetry(
   url: string,
   options: RequestInit = {},
@@ -149,16 +161,38 @@ async function fetchWithRetry(
   throw new Error('Max retries exceeded');
 }
 
+/**
+ * GET Graph com URL completa (ex.: `paging.next` já inclui `access_token`).
+ * Retentar em rate limit (códigos 17, 4, etc.) e mapear token expirado / permissão.
+ */
+export async function metaGraphGetJson<T>(fullUrl: string): Promise<T> {
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const res = await fetchWithRetry(fullUrl);
+    const data = (await res.json()) as T & {
+      error?: { code?: number; message?: string; error_subcode?: number };
+    };
+    if (res.ok) return data as T;
+    if (isMetaRateLimitPayload(data) && attempt < MAX_RETRIES) {
+      await new Promise((r) => setTimeout(r, graphBackoffMs(attempt)));
+      continue;
+    }
+    const code = data?.error?.code;
+    const msg = data?.error?.message || JSON.stringify(data);
+    if (code === 190 || code === 102) {
+      throw new Error(`Meta API: token inválido ou expirado (${code}): ${msg}`);
+    }
+    if (code === 10) {
+      throw new Error(`Meta API: permissão insuficiente (ex.: ads_read) — ${msg}`);
+    }
+    throw new Error(`Meta API error (${res.status}): ${msg}`);
+  }
+  throw new Error('Meta API: tentativas esgotadas');
+}
+
 async function getJson<T>(url: string, token: string): Promise<T> {
   const u = new URL(url);
   u.searchParams.set('access_token', token);
-  const res = await fetchWithRetry(u.toString());
-  const data = await res.json();
-  if (!res.ok) {
-    const errMsg = data?.error?.message || data?.error?.code || JSON.stringify(data);
-    throw new Error(`Meta API error (${res.status}): ${errMsg}`);
-  }
-  return data as T;
+  return metaGraphGetJson<T>(u.toString());
 }
 
 /** Valida token: GET /me */
@@ -174,7 +208,7 @@ export async function getAdAccounts(baseUrl: string, token: string): Promise<Met
   const results: MetaAdAccount[] = data?.data ?? [];
   let next = data?.paging?.next;
   while (next) {
-    const nextData = await fetch(next).then((r) => r.json());
+    const nextData = await metaGraphGetJson<{ data?: MetaAdAccount[]; paging?: MetaPaging }>(next);
     if (nextData?.data) results.push(...nextData.data);
     next = nextData?.paging?.next;
   }
@@ -196,7 +230,7 @@ export async function listCampaigns(
   const results: MetaCampaign[] = data?.data ?? [];
   let next = data?.paging?.next;
   while (next) {
-    const nextData = await fetch(next).then((r) => r.json());
+    const nextData = await metaGraphGetJson<{ data?: MetaCampaign[]; paging?: MetaPaging }>(next);
     if (nextData?.data) results.push(...nextData.data);
     next = nextData?.paging?.next;
   }
@@ -224,7 +258,7 @@ export async function listAdSets(
   const results: MetaAdSet[] = data?.data ?? [];
   let next = data?.paging?.next;
   while (next) {
-    const nextData = await fetch(next).then((r) => r.json());
+    const nextData = await metaGraphGetJson<{ data?: MetaAdSet[]; paging?: MetaPaging }>(next);
     if (nextData?.data) results.push(...nextData.data);
     next = nextData?.paging?.next;
   }
@@ -276,7 +310,7 @@ export async function getInsightsDaily(
   const results: MetaInsight[] = data?.data ?? [];
   let next = data?.paging?.next;
   while (next) {
-    const nextData = await fetch(next).then((r) => r.json());
+    const nextData = await metaGraphGetJson<{ data?: MetaInsight[]; paging?: MetaPaging }>(next);
     if (nextData?.data) results.push(...nextData.data);
     next = nextData?.paging?.next;
   }

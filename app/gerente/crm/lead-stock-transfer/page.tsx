@@ -9,7 +9,12 @@ import ToastContainer from '@/components/Toast/ToastContainer';
 import { ArrowRightLeft, Loader2, CheckSquare, RefreshCw } from 'lucide-react';
 
 type Banca = { id: string; name?: string | null; url?: string | null };
-type LeadRow = Record<string, unknown> & { id?: string | number };
+type LeadRow = Record<string, unknown> & {
+  id?: string | number;
+  stock_meta?: { deadline_days: number; received_at: string; transfer_type: string; lead_id: string; transfer_log_id: string };
+};
+type StockMetaCounts = { all: number; '10': number; '20': number; '30': number; other: number };
+type StockMeta = { counts: StockMetaCounts; expected_in_crm: number; matched_in_crm: number; deadline_filter: string };
 
 function authHeaders(userId: string | null) {
   const h: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -32,6 +37,8 @@ export default function GerenteLeadStockTransferPage() {
   const [transferType, setTransferType] = useState<'TF' | 'TF1' | 'TF2' | 'TF3'>('TF');
   const [deadlineDays, setDeadlineDays] = useState(10);
   const [transferring, setTransferring] = useState(false);
+  const [deadlineFilter, setDeadlineFilter] = useState<'all' | '10' | '20' | '30' | 'other'>('all');
+  const [stockMeta, setStockMeta] = useState<StockMeta | null>(null);
 
   const loadBancas = useCallback(async () => {
     if (!userId) return;
@@ -65,29 +72,43 @@ export default function GerenteLeadStockTransferPage() {
   const loadLeads = useCallback(async () => {
     if (!userId || !bancaId || !stockOk) {
       setLeads([]);
+      setStockMeta(null);
       return;
     }
     setLoadingLeads(true);
     try {
       const res = await fetch(
-        `/api/gerente/crm/lead-stock/indicateds?banca_id=${encodeURIComponent(bancaId)}&transferred_filter=no&per_page=3000&page=1`,
+        `/api/gerente/crm/lead-stock/indicateds?banca_id=${encodeURIComponent(
+          bancaId
+        )}&transferred_filter=no&deadline_days=${encodeURIComponent(deadlineFilter)}`,
         { headers: authHeaders(userId) }
       );
       const json = await res.json();
       if (res.ok && json.success && Array.isArray(json.data?.data)) {
         setLeads(json.data.data as LeadRow[]);
+        const sm = json.data?.stock_meta;
+        if (sm && typeof sm === 'object' && sm.counts) {
+          setStockMeta({
+            counts: sm.counts as StockMetaCounts,
+            expected_in_crm: Number(sm.expected_in_crm) || 0,
+            matched_in_crm: Number(sm.matched_in_crm) || 0,
+            deadline_filter: String(sm.deadline_filter ?? 'all'),
+          });
+        } else setStockMeta(null);
       } else {
         setLeads([]);
+        setStockMeta(null);
         showToast(json?.error ?? 'Erro ao carregar leads do estoque', 'error');
       }
     } catch {
       setLeads([]);
+      setStockMeta(null);
       showToast('Erro ao carregar leads', 'error');
     } finally {
       setLoadingLeads(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- showToast estável o suficiente para UX
-  }, [userId, bancaId, stockOk]);
+  }, [userId, bancaId, stockOk, deadlineFilter]);
 
   const loadConsultores = useCallback(async () => {
     if (!userId || !bancaId) {
@@ -211,7 +232,7 @@ export default function GerenteLeadStockTransferPage() {
               Transferir do estoque
             </h1>
             <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-              Leads enviados pelo admin para o seu estoque CRM. Destino: apenas consultores da sua equipe nesta banca.
+              Somente leads que o admin enviou ao seu estoque CRM nesta banca (na conta pool do estoque). Repasse para consultores da sua equipe — aparecem no CRM do consultor em Transferidos, como nas transferências do admin.
             </p>
           </div>
           <Link href="/gerente" className="text-sm text-[#8CD955] hover:underline">
@@ -228,6 +249,7 @@ export default function GerenteLeadStockTransferPage() {
                 setBancaId(e.target.value);
                 setSelected(new Set());
                 setTargetEmail('');
+                setDeadlineFilter('all');
               }}
               className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm"
             >
@@ -310,20 +332,63 @@ export default function GerenteLeadStockTransferPage() {
 
         {stockOk && (
           <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] overflow-hidden">
-            <div className="p-3 border-b border-gray-100 dark:border-[#404040] flex justify-between items-center">
-              <span className="text-sm font-semibold text-gray-800 dark:text-white">Leads no estoque (não transferidos no CRM)</span>
-              <button type="button" onClick={toggleAll} className="text-xs text-[#8CD955] hover:underline">
-                {selected.size === leads.length && leads.length > 0 ? 'Desmarcar todos' : 'Marcar todos'}
-              </button>
+            <div className="p-3 border-b border-gray-100 dark:border-[#404040] flex flex-col gap-3">
+              <div className="flex flex-wrap justify-between items-center gap-2">
+                <span className="text-sm font-semibold text-gray-800 dark:text-white">
+                  Estoque recebido do admin (por prazo do pacote)
+                </span>
+                <button type="button" onClick={toggleAll} className="text-xs text-[#8CD955] hover:underline shrink-0">
+                  {selected.size === leads.length && leads.length > 0 ? 'Desmarcar todos' : 'Marcar todos'}
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {(
+                  [
+                    { key: 'all' as const, label: 'Todos' },
+                    { key: '10' as const, label: '10 dias' },
+                    { key: '20' as const, label: '20 dias' },
+                    { key: '30' as const, label: '30 dias' },
+                    { key: 'other' as const, label: 'Outros prazos' },
+                  ] as const
+                ).map(({ key, label }) => {
+                  const n = key === 'all' ? stockMeta?.counts?.all ?? null : stockMeta?.counts?.[key] ?? null;
+                  const countLabel = n != null ? ` (${n})` : '';
+                  const active = deadlineFilter === key;
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setDeadlineFilter(key)}
+                      className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                        active
+                          ? 'bg-[#8CD955] border-[#8CD955] text-white'
+                          : 'border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-300 hover:border-[#8CD955]'
+                      }`}
+                    >
+                      {label}
+                      {countLabel}
+                    </button>
+                  );
+                })}
+              </div>
+              {stockMeta && stockMeta.matched_in_crm < stockMeta.expected_in_crm && (
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  Alguns leads constam no sistema mas ainda não foram encontrados na listagem do CRM ({stockMeta.matched_in_crm}/
+                  {stockMeta.expected_in_crm}). Confira no CRM ou aguarde sincronização.
+                </p>
+              )}
             </div>
             {loadingLeads ? (
               <div className="p-8 flex justify-center">
                 <Loader2 className="w-6 h-6 animate-spin text-[#8CD955]" />
               </div>
             ) : leads.length === 0 ? (
-              <p className="p-6 text-sm text-gray-500 text-center">Nenhum lead listado. Verifique se há leads no e-mail de estoque no CRM.</p>
+              <p className="p-6 text-sm text-gray-500 text-center">
+                Nenhum lead neste filtro. Quando o admin enviar leads ao seu estoque, eles aparecem aqui por prazo (10 / 20 / 30 dias ou
+                outros).
+              </p>
             ) : (
-              <div className="overflow-x-auto max-h-[480px] overflow-y-auto">
+              <div className="overflow-x-auto max-h-[520px] overflow-y-auto">
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-gray-50 dark:bg-[#333] z-10">
                     <tr>
@@ -331,14 +396,29 @@ export default function GerenteLeadStockTransferPage() {
                       <th className="p-2 text-left">ID</th>
                       <th className="p-2 text-left">Nome</th>
                       <th className="p-2 text-left">Saldo</th>
+                      <th className="p-2 text-left">Prazo</th>
+                      <th className="p-2 text-left">Recebido</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {leads.slice(0, 500).map((l) => {
+                    {leads.map((l) => {
                       const id = String(l.id ?? '');
                       if (!id) return null;
                       const name = [l.name, l.last_name].filter(Boolean).join(' ') || '—';
                       const bal = l.balance ?? l.saldo;
+                      const sm = l.stock_meta;
+                      const prazo = sm?.deadline_days != null ? `${sm.deadline_days} dias` : '—';
+                      let recebido = '—';
+                      if (sm?.received_at) {
+                        try {
+                          recebido = new Date(sm.received_at).toLocaleString('pt-BR', {
+                            dateStyle: 'short',
+                            timeStyle: 'short',
+                          });
+                        } catch {
+                          recebido = sm.received_at;
+                        }
+                      }
                       return (
                         <tr key={id} className="border-t border-gray-100 dark:border-[#404040]">
                           <td className="p-2">
@@ -347,14 +427,13 @@ export default function GerenteLeadStockTransferPage() {
                           <td className="p-2 font-mono text-xs">{id}</td>
                           <td className="p-2">{name}</td>
                           <td className="p-2">{bal != null ? String(bal) : '—'}</td>
+                          <td className="p-2 whitespace-nowrap">{prazo}</td>
+                          <td className="p-2 whitespace-nowrap text-xs text-gray-600 dark:text-gray-400">{recebido}</td>
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
-                {leads.length > 500 && (
-                  <p className="text-xs text-gray-500 p-2 text-center">Mostrando 500 de {leads.length}. Reduza no CRM ou transfira em lotes.</p>
-                )}
               </div>
             )}
           </div>
