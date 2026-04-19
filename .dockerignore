@@ -1,0 +1,38 @@
+# Dependências — serão instaladas no build
+node_modules
+
+# Build anterior — será gerado no build
+.next
+
+# Git
+.git
+.gitignore
+
+# Logs e temporários
+*.log
+npm-debug.log*
+.npm
+
+# Ambiente local
+.env.local
+.env.*.local
+
+# Editor
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testes
+coverage
+__tests__
+*.test.ts
+*.spec.ts
+
+# Docs
+docs
+*.md

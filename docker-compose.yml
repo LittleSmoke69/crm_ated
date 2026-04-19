@@ -8,6 +8,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    image: zaplotov3-app
     container_name: zaplotov3-1
     restart: unless-stopped
     ports:
@@ -25,9 +26,7 @@ services:
       - cron_logs:/var/log
 
   app2:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: zaplotov3-app
     container_name: zaplotov3-2
     restart: unless-stopped
     ports:
@@ -42,9 +41,7 @@ services:
       - ZAPLOTOV3
 
   app3:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: zaplotov3-app
     container_name: zaplotov3-3
     restart: unless-stopped
     ports:
@@ -59,9 +56,7 @@ services:
       - ZAPLOTOV3
 
   app4:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: zaplotov3-app
     container_name: zaplotov3-4
     restart: unless-stopped
     ports:
