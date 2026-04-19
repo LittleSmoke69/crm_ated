@@ -309,8 +309,9 @@ async function handleParticipantAdd(
   if (normalizedAction !== 'add') return;
 
   const groupJid =
-    payload?.data?.id ?? payload?.data?.key?.remoteJid ?? payload?.data?.groupJid ?? event.remote_jid ?? '';
-  if (!groupJid || !groupJid.includes('@g.us')) return;
+    [payload?.data?.id, payload?.data?.key?.remoteJid, payload?.data?.groupJid, event.remote_jid]
+      .find((v) => v && typeof v === 'string' && String(v).includes('@g.us')) ?? '';
+  if (!groupJid) return;
 
   const participants = payload?.data?.participants ?? payload?.participants ?? [];
   const toCheck = Array.isArray(participants) ? participants : [participants];

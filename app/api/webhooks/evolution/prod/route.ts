@@ -23,21 +23,38 @@ export const runtime = 'nodejs';
 export const maxDuration = 60;
 
 /**
- * Extrai o ID do primeiro participante do payload
+ * Extrai o ID do primeiro participante do payload (mantido para dedup pós-insert)
  */
 function extractFirstParticipantId(payload: any): string | null {
   const participants: any[] = payload?.data?.participants ?? [];
   const firstParticipant = participants[0];
   if (!firstParticipant) return null;
-  
+
   const participantId = String(
     firstParticipant?.id ??
     firstParticipant?.phoneNumber ??
     (typeof firstParticipant === 'string' ? firstParticipant : '') ??
     '',
   ).trim();
-  
+
   return participantId || null;
+}
+
+/**
+ * Extrai IDs de TODOS os participantes do payload, ordenados.
+ * Usado na dedup pré-insert para garantir que eventos com participantes diferentes
+ * não sejam incorretamente descartados.
+ */
+function extractAllParticipantIds(payload: any): string[] {
+  const participants: any[] = payload?.data?.participants ?? [];
+  const ids: string[] = [];
+  for (const p of participants) {
+    const id = String(
+      p?.id ?? p?.phoneNumber ?? (typeof p === 'string' ? p : '') ?? '',
+    ).trim();
+    if (id) ids.push(id);
+  }
+  return ids.sort();
 }
 
 /**
@@ -78,15 +95,19 @@ function extractMetadata(payload: any) {
     payload?.id ||
     null;
 
-  // group-participants: grupo vem em data.id
+  // group-participants: grupo vem em data.id (deve ser @g.us)
   // mensagens: vem em data.key.remoteJid
+  // Prefere valor @g.us para data.id; caso contrário ignora (pode ser @lid ou hash)
+  const dataId = payload?.data?.id;
+  const dataIdAsGroup = dataId && typeof dataId === 'string' && dataId.endsWith('@g.us') ? dataId : null;
   const remoteJid =
-    payload?.data?.id ||
+    dataIdAsGroup ||
     payload?.data?.key?.remoteJid ||
     payload?.data?.message?.key?.remoteJid ||
     payload?.key?.remoteJid ||
     payload?.remoteJid ||
     payload?.data?.groupJid ||
+    (dataId && typeof dataId === 'string' ? dataId : null) ||
     null;
 
   return { eventType, instanceName, messageId, remoteJid };
@@ -105,15 +126,15 @@ async function processEventBackground(payload: any): Promise<void> {
   const actionRaw = String(payload?.data?.action ?? payload?.action ?? '').toLowerCase();
 
   // ── Deduplicação pré-insert de group-participants ──────────────────────────
-  // Camada 1: fast-path — se já existe evento recente com mesmo fingerprint (instance + group + participant), descarta.
+  // Camada 1: fast-path — compara o conjunto completo de participantes (não só o primeiro)
+  // para evitar descartar eventos com participantes distintos dentro da janela de 30s.
   if (isGroupParticipants && actionRaw === 'add' && instanceName && remoteJid) {
-    const firstParticipantId = extractFirstParticipantId(payload);
+    const incomingParticipants = extractAllParticipantIds(payload);
 
-    if (firstParticipantId) {
+    if (incomingParticipants.length > 0) {
+      const incomingKey = incomingParticipants.join(',');
       const since = new Date(Date.now() - PARTICIPANT_DEDUP_WINDOW_MS).toISOString();
-      
-      // Busca evento duplicado considerando instance + group + participant
-      // Usa payload->data->participants[0] para comparar o participante
+
       const { data: existing } = await supabaseServiceRole
         .from('evolution_webhook_events')
         .select('id, payload')
@@ -122,15 +143,14 @@ async function processEventBackground(payload: any): Promise<void> {
         .in('event_type', EVOLUTION_GROUP_PARTICIPANT_EVENT_TYPES)
         .gte('created_at', since)
         .order('created_at', { ascending: false })
-        .limit(10); // Busca últimos 10 para comparar participantes
+        .limit(20);
 
       if (existing && existing.length > 0) {
-        // Compara participantes dos eventos existentes
         for (const evt of existing) {
-          const existingParticipantId = extractFirstParticipantId(evt.payload);
-          if (existingParticipantId && existingParticipantId === firstParticipantId) {
+          const existingKey = extractAllParticipantIds(evt.payload).join(',');
+          if (existingKey && existingKey === incomingKey) {
             console.log(
-              `⚠️ [WEBHOOK PROD] group-participants duplicado (pré-insert) — instância=${instanceName} grupo=${remoteJid} participante=${firstParticipantId} (evento existente: ${evt.id})`,
+              `⚠️ [WEBHOOK PROD] group-participants duplicado (pré-insert) — instância=${instanceName} grupo=${remoteJid} participantes=[${incomingKey}] (evento existente: ${evt.id})`,
             );
             return;
           }
@@ -191,11 +211,10 @@ async function processEventBackground(payload: any): Promise<void> {
   // janela para o MESMO participante — apenas ele prossegue para executar o flow.
   // Não filtra por env: protege também contra double-trigger prod+test.
   if (isGroupParticipants && actionRaw === 'add' && instanceName && remoteJid) {
-    const firstParticipantId = extractFirstParticipantId(payload);
-    
-    if (firstParticipantId) {
+    const incomingKey = extractAllParticipantIds(payload).join(',');
+
+    if (incomingKey) {
       const dedupSince = new Date(Date.now() - PARTICIPANT_DEDUP_WINDOW_MS).toISOString();
-      // Busca eventos recentes do mesmo grupo
       const { data: recentEvents } = await supabaseServiceRole
         .from('evolution_webhook_events')
         .select('id, payload')
@@ -207,14 +226,12 @@ async function processEventBackground(payload: any): Promise<void> {
         .limit(POST_INSERT_DEDUP_LIMIT);
 
       if (recentEvents && recentEvents.length > 0) {
-        // Encontra o primeiro evento com o mesmo participante
         for (const evt of recentEvents) {
-          if (evt.id === event.id) continue; // Pula o evento atual
-          
-          const evtParticipantId = extractFirstParticipantId(evt.payload);
-          if (evtParticipantId && evtParticipantId === firstParticipantId) {
+          if (evt.id === event.id) continue;
+          const evtKey = extractAllParticipantIds(evt.payload).join(',');
+          if (evtKey && evtKey === incomingKey) {
             console.log(
-              `⚠️ [WEBHOOK PROD] Post-insert dedup: evento ${event.id} ignorado (primeiro evento para participante ${firstParticipantId}: ${evt.id})`,
+              `⚠️ [WEBHOOK PROD] Post-insert dedup: evento ${event.id} ignorado (participantes=[${incomingKey}] já processados em ${evt.id})`,
             );
             return;
           }
@@ -267,25 +284,27 @@ async function processEventBackground(payload: any): Promise<void> {
     return;
   }
 
-  // Extrai groupJid para flows de participantes
-  let groupJid =
-    payload?.data?.id ??
-    np?.data?.id ??
-    np?.normalized?.groupId ??
-    np?.normalized?.group_id ??
-    np?.groupId ??
-    np?.group_id ??
-    payload?.data?.key?.remoteJid ??
-    payload?.data?.groupJid ??
-    (remoteJid && String(remoteJid).includes('@g.us') ? remoteJid : null) ??
-    null;
+  // Extrai groupJid para flows de participantes — percorre candidatos e usa o primeiro @g.us válido.
+  // Evita capturar @lid, @s.whatsapp.net ou hashes hexadecimais que podem estar em data.id.
+  const groupJidCandidates = [
+    payload?.data?.id,
+    np?.data?.id,
+    np?.normalized?.groupId,
+    np?.normalized?.group_id,
+    np?.groupId,
+    np?.group_id,
+    payload?.data?.key?.remoteJid,
+    payload?.data?.groupJid,
+    remoteJid,
+  ];
+  const groupJid = groupJidCandidates.find(
+    (v) => v && typeof v === 'string' && v.endsWith('@g.us'),
+  ) ?? null;
 
-  // Valida se groupJid é realmente um grupo (deve terminar com @g.us)
-  if (groupJid && !String(groupJid).endsWith('@g.us')) {
+  if (isGroupParticipants && !groupJid) {
     console.warn(
-      `⚠️ [WEBHOOK PROD] groupJid extraído não é um grupo válido (não termina com @g.us): ${groupJid}. Ignorando processamento de flows de grupo.`,
+      `⚠️ [WEBHOOK PROD] group-participants sem groupJid @g.us válido (instância=${instanceName}). Candidatos: ${groupJidCandidates.filter(Boolean).join(', ')}`,
     );
-    groupJid = null;
   }
 
   // group-participants.update → flow_instances (boas-vindas por grupo/usuário)
