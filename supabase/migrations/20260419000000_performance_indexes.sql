@@ -1,3 +1,4 @@
+-- disable-transaction
 -- Performance indexes for Zaploto
 -- Addresses slow queries identified in maturation processor, evolution balancer, and chat service.
 
