@@ -1,0 +1,79 @@
+networks:
+  ZAPLOTOV3:
+    name: ZAPLOTOV3
+    external: true
+
+services:
+  app1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: zaplotov3-1
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      NODE_OPTIONS: "--max-old-space-size=4096"
+      PORT: 3000
+      CRON_ENABLED: "true"
+      SITE_URL: "https://zaploto.com"
+    networks:
+      - ZAPLOTOV3
+    volumes:
+      - cron_logs:/var/log
+
+  app2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: zaplotov3-2
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      NODE_OPTIONS: "--max-old-space-size=4096"
+      PORT: 3001
+      CRON_ENABLED: "false"
+    networks:
+      - ZAPLOTOV3
+
+  app3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: zaplotov3-3
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      NODE_OPTIONS: "--max-old-space-size=4096"
+      PORT: 3002
+      CRON_ENABLED: "false"
+    networks:
+      - ZAPLOTOV3
+
+  app4:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: zaplotov3-4
+    restart: unless-stopped
+    ports:
+      - "3003:3003"
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      NODE_OPTIONS: "--max-old-space-size=4096"
+      PORT: 3003
+      CRON_ENABLED: "false"
+    networks:
+      - ZAPLOTOV3
+
+volumes:
+  cron_logs:
