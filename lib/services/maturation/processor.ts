@@ -185,11 +185,11 @@ async function terminateMaturationJobsInfrastructureFailure(
   if ((endedRows?.length || 0) === 0) return false;
 
   const masterIds = [...new Set((jobsBefore || []).map((r) => r.master_instance_id).filter(Boolean))] as string[];
-  for (const mid of masterIds) {
+  if (masterIds.length > 0) {
     await supabase
       .from('master_instances')
       .update({ is_locked: false, locked_job_id: null, locked_at: null })
-      .eq('id', mid);
+      .in('id', masterIds);
   }
 
   await supabase
@@ -241,19 +241,25 @@ async function failRunningMaturationJobsWithInactivePlans(supabase: SupabaseClie
   const badJobs = running.filter((j) => !j.plan_id || inactiveOrMissing.has(j.plan_id as string));
   if (badJobs.length === 0) return;
 
+  // Batch-fetch instance labels for all bad jobs in one query (avoids N+1)
+  const badJobIds = badJobs.map((j) => j.id);
+  const { data: labelRows } = await supabase
+    .from('maturation_jobs')
+    .select(`id, master_instances ( evolution_instances ( instance_name ) )`)
+    .in('id', badJobIds);
+  const labelByJobId = new Map<string, string>();
+  for (const lr of labelRows || []) {
+    const mi = (lr as any)?.master_instances;
+    labelByJobId.set(lr.id, mi?.evolution_instances?.instance_name ?? '—');
+  }
+
   const seenKey = new Set<string>();
   for (const row of badJobs) {
     const ck = row.campaign_id != null ? `c:${row.campaign_id}` : `j:${row.id}`;
     if (seenKey.has(ck)) continue;
     seenKey.add(ck);
 
-    const { data: labelRow } = await supabase
-      .from('maturation_jobs')
-      .select(`master_instances ( evolution_instances ( instance_name ) )`)
-      .eq('id', row.id)
-      .maybeSingle();
-    const mi = (labelRow as { master_instances?: { evolution_instances?: { instance_name?: string } } })?.master_instances;
-    const instanceLabel = mi?.evolution_instances?.instance_name ?? '—';
+    const instanceLabel = labelByJobId.get(row.id) ?? '—';
 
     await terminateMaturationJobsInfrastructureFailure(supabase, {
       triggerJobId: row.id,
@@ -688,10 +694,17 @@ async function processStep(supabase: SupabaseClient, step: any): Promise<void> {
 }
 
 async function updateJobProgress(supabase: SupabaseClient, jobId: string): Promise<void> {
-  const { count: sent } = await supabase.from('maturation_steps').select('id', { count: 'exact', head: true }).eq('job_id', jobId).eq('status', 'sent');
-  const { count: failed } = await supabase.from('maturation_steps').select('id', { count: 'exact', head: true }).eq('job_id', jobId).eq('status', 'failed');
-  const { count: skipped } = await supabase.from('maturation_steps').select('id', { count: 'exact', head: true }).eq('job_id', jobId).eq('status', 'skipped');
-  const { count: total } = await supabase.from('maturation_steps').select('id', { count: 'exact', head: true }).eq('job_id', jobId);
+  const [
+    { count: sent },
+    { count: failed },
+    { count: skipped },
+    { count: total },
+  ] = await Promise.all([
+    supabase.from('maturation_steps').select('id', { count: 'exact', head: true }).eq('job_id', jobId).eq('status', 'sent'),
+    supabase.from('maturation_steps').select('id', { count: 'exact', head: true }).eq('job_id', jobId).eq('status', 'failed'),
+    supabase.from('maturation_steps').select('id', { count: 'exact', head: true }).eq('job_id', jobId).eq('status', 'skipped'),
+    supabase.from('maturation_steps').select('id', { count: 'exact', head: true }).eq('job_id', jobId),
+  ]);
   const sentN = sent || 0;
   const failedN = failed || 0;
   const skippedN = skipped || 0;
@@ -1217,28 +1230,37 @@ export async function runJobCatchUp(supabase: SupabaseClient, jobId: string): Pr
     return { sent: 0, failed: 0, results: [] };
   }
 
-  for (const row of steps) {
-    const target_chat_id = (row.target_chat_id && String(row.target_chat_id).trim()) || job.target_chat_id || null;
-    const stepEnriched = {
-      id: row.id,
-      job_id: row.job_id,
-      step_index: row.step_index,
-      type: row.type,
-      payload_json: row.payload_json || {},
-      attempts: row.attempts || 0,
-      instance_name,
-      base_url,
-      api_key,
-      target_chat_id,
-      master_instance_id: job.master_instance_id,
-    };
+  // Process steps sequentially (Evolution API calls must be serial per instance)
+  // but batch-fetch all statuses in one query after processing
+  const enrichedSteps = steps.map((row) => ({
+    id: row.id,
+    job_id: row.job_id,
+    step_index: row.step_index,
+    type: row.type,
+    payload_json: row.payload_json || {},
+    attempts: row.attempts || 0,
+    instance_name,
+    base_url,
+    api_key,
+    target_chat_id: (row.target_chat_id && String(row.target_chat_id).trim()) || job.target_chat_id || null,
+    master_instance_id: job.master_instance_id,
+  }));
+
+  for (const stepEnriched of enrichedSteps) {
     await processStep(supabase, stepEnriched);
-    const { data: updated } = await supabase
-      .from('maturation_steps')
-      .select('status')
-      .eq('id', row.id)
-      .single();
-    const st = updated?.status === 'sent' ? 'sent' : updated?.status === 'failed' ? 'failed' : 'pending';
+  }
+
+  // Batch-fetch all step statuses in one query (avoids N+1 individual selects)
+  const stepIds = steps.map((r) => r.id);
+  const { data: updatedSteps } = await supabase
+    .from('maturation_steps')
+    .select('id, status')
+    .in('id', stepIds);
+  const statusById = new Map((updatedSteps || []).map((s) => [s.id, s.status]));
+
+  for (const row of steps) {
+    const rawStatus = statusById.get(row.id);
+    const st = rawStatus === 'sent' ? 'sent' : rawStatus === 'failed' ? 'failed' : 'pending';
     results.push({ step_index: row.step_index, status: st });
     if (st === 'sent') sent++;
     else if (st === 'failed') failed++;
@@ -1377,9 +1399,7 @@ export async function runMaturationTick(supabase: SupabaseClient): Promise<any> 
       totalProcessed++;
     }
 
-    for (const id of processedJobIds) {
-      await updateJobProgress(supabase, id);
-    }
+    await Promise.all(Array.from(processedJobIds).map((id) => updateJobProgress(supabase, id)));
 
     await new Promise((resolve) => setTimeout(resolve, 300));
   }

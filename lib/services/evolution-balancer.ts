@@ -65,10 +65,12 @@ export class EvolutionBalancer {
     const now = new Date().toISOString();
 
     // Base query: busca TODAS as instâncias ativas e disponíveis (balanceamento global)
+    // apikey incluído aqui para evitar query extra em addLeadToGroup
     let query = supabaseServiceRole
       .from('evolution_instances')
       .select(`
         *,
+        apikey,
         evolution_apis!inner (
           id,
           name,
@@ -276,16 +278,10 @@ export class EvolutionBalancer {
 
     const { base_url } = instance.evolution_api;
     const { instance_name } = instance;
-    
-    // CRÍTICO: Busca a apikey da instância (não a global)
-    const { data: instanceData } = await supabaseServiceRole
-      .from('evolution_instances')
-      .select('apikey')
-      .eq('id', instance.id)
-      .single();
-    
-    const instanceApikey = instanceData?.apikey;
-    
+
+    // CRÍTICO: apikey já carregada no select de pickBestEvolutionInstance (evita query extra)
+    const instanceApikey = (instance as any).apikey as string | undefined;
+
     if (!instanceApikey) {
       console.error(`❌ [BALANCEADOR] Instância ${instance_name} não possui apikey`);
       return {

@@ -268,13 +268,21 @@ export class ChatService {
 
       const transient = error != null && isTransientSupabaseOrNetworkError(error);
       if (transient && attempt < SAVE_MESSAGE_MAX_RETRIES) {
-        const jitterMs = Math.floor(Math.random() * 120);
-        const delayMs = SAVE_MESSAGE_BASE_DELAY_MS * 2 ** (attempt - 1) + jitterMs;
-        console.warn(
-          `[Zaploto Chat] saveMessage: falha transitória (tentativa ${attempt}/${SAVE_MESSAGE_MAX_RETRIES}), nova tentativa em ${delayMs}ms`,
-          error instanceof Error ? error.message : error
-        );
-        await sleep(delayMs);
+        // First retry is immediate to avoid unnecessary latency on transient blips
+        if (attempt > 1) {
+          const jitterMs = Math.floor(Math.random() * 120);
+          const delayMs = SAVE_MESSAGE_BASE_DELAY_MS * 2 ** (attempt - 2) + jitterMs;
+          console.warn(
+            `[Zaploto Chat] saveMessage: falha transitória (tentativa ${attempt}/${SAVE_MESSAGE_MAX_RETRIES}), nova tentativa em ${delayMs}ms`,
+            error instanceof Error ? error.message : error
+          );
+          await sleep(delayMs);
+        } else {
+          console.warn(
+            `[Zaploto Chat] saveMessage: falha transitória (tentativa ${attempt}/${SAVE_MESSAGE_MAX_RETRIES}), nova tentativa imediata`,
+            error instanceof Error ? error.message : error
+          );
+        }
         continue;
       }
 
@@ -312,8 +320,11 @@ export class ChatService {
 
         const transient = isTransientSupabaseOrNetworkError(updErr);
         if (transient && attempt < CONVERSATION_UPDATE_MAX_RETRIES) {
-          const jitterMs = Math.floor(Math.random() * 80);
-          await sleep(SAVE_MESSAGE_BASE_DELAY_MS * attempt + jitterMs);
+          // First retry is immediate; subsequent retries use exponential backoff
+          if (attempt > 1) {
+            const jitterMs = Math.floor(Math.random() * 80);
+            await sleep(SAVE_MESSAGE_BASE_DELAY_MS * (attempt - 1) + jitterMs);
+          }
           continue;
         }
         throw updErr;
