@@ -45,6 +45,9 @@ type StockPackage = {
   pending_leads: number;
   distributed_leads: number;
   canceled_leads: number;
+  /** Preenchido quando admin visualiza vários gerentes ou filtro explícito */
+  stock_gerente_user_id?: string | null;
+  gerente_name?: string | null;
 };
 
 type StockLead = {
@@ -61,6 +64,7 @@ type StockLead = {
   saldo_snapshot: number | null;
   last_interaction_snapshot: string | null;
   total_depositado_snapshot: number | null;
+  total_apostado_snapshot: number | null;
 };
 
 type Consultor = { id: string; email: string; full_name: string | null };
@@ -85,6 +89,8 @@ type HistoryItem = {
   stock_distributed: number;
   stock_canceled: number;
   status_label: 'em_estoque' | 'repassado' | 'cancelado_total' | 'cancelado_parcial' | 'distribuido';
+  stock_gerente_user_id?: string | null;
+  stock_gerente_name?: string | null;
 };
 
 type HistoryTotals = {
@@ -94,12 +100,24 @@ type HistoryTotals = {
   distributed_leads: number;
 };
 
-type LeadSortField = 'lead_id' | 'lead_name' | 'saldo_snapshot' | 'original_source_consultant_email' | 'last_interaction_snapshot';
+type LeadSortField =
+  | 'lead_id'
+  | 'lead_name'
+  | 'saldo_snapshot'
+  | 'total_depositado_snapshot'
+  | 'total_apostado_snapshot'
+  | 'original_source_consultant_email'
+  | 'last_interaction_snapshot';
 type PackageSortField = 'created_at' | 'transfer_type' | 'deadline_days' | 'pending_leads' | 'distributed_leads' | 'performed_by_name';
 type HistorySortField = 'created_at' | 'kind' | 'transfer_type' | 'count' | 'total_balance' | 'target_consultant_name';
 type SortDir = 'asc' | 'desc';
 type ActiveTab = 'packages' | 'history';
 type HistoryFilter = 'all' | 'reserved' | 'distributed' | 'canceled';
+
+type BalanceFilterMode = 'all' | 'with_balance' | 'without_balance' | 'range';
+/** Igual à transferência de leads: depositado e apostado */
+type DepositFilterMode = 'all' | 'with_value' | 'without_value' | 'range';
+type ApostaFilterMode = 'all' | 'with_bet' | 'without_bet' | 'range';
 
 function authHeaders(userId: string | null) {
   const h: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -144,6 +162,32 @@ function daysLeft(receivedAtIso: string, deadlineDays: number): { expired: boole
   }
 }
 
+/** Parse valor digitado em campo de saldo (aceita vírgula ou ponto). */
+function parseMoneyInput(v: string): number | null {
+  const t = v.trim().replace(/\./g, '').replace(',', '.');
+  if (!t) return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+}
+
+function leadBalanceValue(l: StockLead): number {
+  if (l.saldo_snapshot == null) return 0;
+  const n = Number(l.saldo_snapshot);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function leadDepositValue(l: StockLead): number {
+  if (l.total_depositado_snapshot == null) return 0;
+  const n = Number(l.total_depositado_snapshot);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function leadApostaValue(l: StockLead): number {
+  if (l.total_apostado_snapshot == null) return 0;
+  const n = Number(l.total_apostado_snapshot);
+  return Number.isFinite(n) ? n : 0;
+}
+
 function compareValues(a: unknown, b: unknown): number {
   const av = a == null ? '' : a;
   const bv = b == null ? '' : b;
@@ -158,7 +202,7 @@ function SortIcon({ dir }: { dir: SortDir | null }) {
 }
 
 export default function GerenteLeadStockTransferPage() {
-  const { checking, userId } = useRequireAuth();
+  const { checking, userId, userStatus } = useRequireAuth();
   const { showToast, toasts, removeToast } = useToast();
 
   const [bancas, setBancas] = useState<Banca[]>([]);
@@ -180,6 +224,16 @@ export default function GerenteLeadStockTransferPage() {
 
   const [leadSearch, setLeadSearch] = useState('');
   const [leadSort, setLeadSort] = useState<{ field: LeadSortField; dir: SortDir }>({ field: 'saldo_snapshot', dir: 'desc' });
+  const [balanceFilter, setBalanceFilter] = useState<BalanceFilterMode>('all');
+  const [saldoMinStr, setSaldoMinStr] = useState('');
+  const [saldoMaxStr, setSaldoMaxStr] = useState('');
+  const [depositFilter, setDepositFilter] = useState<DepositFilterMode>('all');
+  const [depositMinStr, setDepositMinStr] = useState('');
+  const [depositMaxStr, setDepositMaxStr] = useState('');
+  const [apostaFilter, setApostaFilter] = useState<ApostaFilterMode>('all');
+  const [apostaMinStr, setApostaMinStr] = useState('');
+  const [apostaMaxStr, setApostaMaxStr] = useState('');
+  const [bulkFirstNInput, setBulkFirstNInput] = useState('');
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('packages');
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -188,6 +242,10 @@ export default function GerenteLeadStockTransferPage() {
   const [historySearch, setHistorySearch] = useState('');
   const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('all');
   const [historySort, setHistorySort] = useState<{ field: HistorySortField; dir: SortDir }>({ field: 'created_at', dir: 'desc' });
+
+  const isAdminStockViewer = userStatus === 'admin' || userStatus === 'super_admin';
+  const [adminGerenteFilter, setAdminGerenteFilter] = useState('');
+  const [adminGerentes, setAdminGerentes] = useState<{ id: string; email: string; full_name: string | null }[]>([]);
 
   const loadBancas = useCallback(async () => {
     if (!userId) return;
@@ -206,8 +264,11 @@ export default function GerenteLeadStockTransferPage() {
     }
     setLoadingPackages(true);
     try {
+      const extra = isAdminStockViewer && adminGerenteFilter.trim()
+        ? `&gerente_user_id=${encodeURIComponent(adminGerenteFilter.trim())}`
+        : '';
       const res = await fetch(
-        `/api/gerente/crm/lead-stock/packages?banca_id=${encodeURIComponent(bancaId)}`,
+        `/api/gerente/crm/lead-stock/packages?banca_id=${encodeURIComponent(bancaId)}${extra}`,
         { headers: authHeaders(userId) }
       );
       const json = await res.json();
@@ -223,17 +284,33 @@ export default function GerenteLeadStockTransferPage() {
     } finally {
       setLoadingPackages(false);
     }
-  }, [userId, bancaId, showToast]);
+  }, [userId, bancaId, showToast, isAdminStockViewer, adminGerenteFilter]);
 
   const loadPackageLeads = useCallback(async () => {
     if (!userId || !bancaId || !selectedLogId) {
       setLeads([]);
       return;
     }
+    let gerenteForPackage = '';
+    if (isAdminStockViewer) {
+      const pkg = packages.find((p) => p.transfer_log_id === selectedLogId);
+      gerenteForPackage = (pkg?.stock_gerente_user_id ?? '').trim();
+      if (!gerenteForPackage && adminGerenteFilter.trim()) {
+        gerenteForPackage = adminGerenteFilter.trim();
+      }
+      if (!gerenteForPackage) {
+        setLeads([]);
+        return;
+      }
+    }
     setLoadingLeads(true);
     try {
+      const gidQs =
+        isAdminStockViewer && gerenteForPackage
+          ? `&gerente_user_id=${encodeURIComponent(gerenteForPackage)}`
+          : '';
       const res = await fetch(
-        `/api/gerente/crm/lead-stock/package-leads?banca_id=${encodeURIComponent(bancaId)}&transfer_log_id=${encodeURIComponent(selectedLogId)}&status=em_estoque`,
+        `/api/gerente/crm/lead-stock/package-leads?banca_id=${encodeURIComponent(bancaId)}&transfer_log_id=${encodeURIComponent(selectedLogId)}&status=em_estoque${gidQs}`,
         { headers: authHeaders(userId) }
       );
       const json = await res.json();
@@ -249,7 +326,7 @@ export default function GerenteLeadStockTransferPage() {
     } finally {
       setLoadingLeads(false);
     }
-  }, [userId, bancaId, selectedLogId, showToast]);
+  }, [userId, bancaId, selectedLogId, showToast, isAdminStockViewer, packages, adminGerenteFilter]);
 
   const loadHistory = useCallback(async () => {
     if (!userId || !bancaId) {
@@ -259,8 +336,12 @@ export default function GerenteLeadStockTransferPage() {
     }
     setLoadingHistory(true);
     try {
+      const extra =
+        isAdminStockViewer && adminGerenteFilter.trim()
+          ? `&gerente_user_id=${encodeURIComponent(adminGerenteFilter.trim())}`
+          : '';
       const res = await fetch(
-        `/api/gerente/crm/lead-stock/history?banca_id=${encodeURIComponent(bancaId)}`,
+        `/api/gerente/crm/lead-stock/history?banca_id=${encodeURIComponent(bancaId)}${extra}`,
         { headers: authHeaders(userId) }
       );
       const json = await res.json();
@@ -280,10 +361,39 @@ export default function GerenteLeadStockTransferPage() {
     } finally {
       setLoadingHistory(false);
     }
-  }, [userId, bancaId, showToast]);
+  }, [userId, bancaId, showToast, isAdminStockViewer, adminGerenteFilter]);
+
+  useEffect(() => {
+    if (!userId || !bancaId || !isAdminStockViewer) {
+      setAdminGerentes([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const res = await fetch(`/api/admin/crm/gerentes-for-banca?banca_id=${encodeURIComponent(bancaId)}`, {
+        headers: authHeaders(userId),
+      });
+      const json = await res.json();
+      if (cancelled) return;
+      if (res.ok && json.success && Array.isArray(json.data)) {
+        setAdminGerentes(
+          json.data.map((row: { id?: string; email?: string; full_name?: string | null }) => ({
+            id: String(row.id ?? ''),
+            email: String(row.email ?? ''),
+            full_name: row.full_name ?? null,
+          }))
+        );
+      } else {
+        setAdminGerentes([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, bancaId, isAdminStockViewer]);
 
   const loadConsultores = useCallback(async () => {
-    if (!userId || !bancaId) {
+    if (!userId || !bancaId || isAdminStockViewer) {
       setConsultores([]);
       return;
     }
@@ -303,7 +413,7 @@ export default function GerenteLeadStockTransferPage() {
     } else {
       setConsultores([]);
     }
-  }, [userId, bancaId]);
+  }, [userId, bancaId, isAdminStockViewer]);
 
   useEffect(() => {
     if (!checking && userId) void loadBancas();
@@ -317,6 +427,17 @@ export default function GerenteLeadStockTransferPage() {
     setTargetEmail('');
     setPkgSearch('');
     setLeadSearch('');
+    setBalanceFilter('all');
+    setSaldoMinStr('');
+    setSaldoMaxStr('');
+    setDepositFilter('all');
+    setDepositMinStr('');
+    setDepositMaxStr('');
+    setApostaFilter('all');
+    setApostaMinStr('');
+    setApostaMaxStr('');
+    setBulkFirstNInput('');
+    setAdminGerenteFilter('');
   }, [bancaId, loadPackages]);
 
   useEffect(() => {
@@ -327,6 +448,16 @@ export default function GerenteLeadStockTransferPage() {
     void loadPackageLeads();
     setSelected(new Set());
     setLeadSearch('');
+    setBalanceFilter('all');
+    setSaldoMinStr('');
+    setSaldoMaxStr('');
+    setDepositFilter('all');
+    setDepositMinStr('');
+    setDepositMaxStr('');
+    setApostaFilter('all');
+    setApostaMinStr('');
+    setApostaMaxStr('');
+    setBulkFirstNInput('');
   }, [selectedLogId, loadPackageLeads]);
 
   useEffect(() => {
@@ -361,6 +492,7 @@ export default function GerenteLeadStockTransferPage() {
       if (!term) return true;
       return (
         (p.performed_by_name ?? '').toLowerCase().includes(term) ||
+        (p.gerente_name ?? '').toLowerCase().includes(term) ||
         p.transfer_type.toLowerCase().includes(term) ||
         String(p.deadline_days).includes(term)
       );
@@ -370,10 +502,10 @@ export default function GerenteLeadStockTransferPage() {
     return [...filtered].sort((a, b) => sign * compareValues(a[field], b[field]));
   }, [packages, pkgSearch, pkgSort]);
 
-  /** Leads filtrados, ordenados + utilidades de seleção */
+  /** Leads filtrados (busca + saldo), ordenados — base para tabela e seleção em massa */
   const leadsView = useMemo(() => {
     const term = leadSearch.trim().toLowerCase();
-    const filtered = leads.filter((l) => {
+    let filtered = leads.filter((l) => {
       if (!term) return true;
       return (
         String(l.lead_id).toLowerCase().includes(term) ||
@@ -381,10 +513,82 @@ export default function GerenteLeadStockTransferPage() {
         (l.original_source_consultant_email ?? '').toLowerCase().includes(term)
       );
     });
+
+    filtered = filtered.filter((l) => {
+      const balance = leadBalanceValue(l);
+      if (balanceFilter === 'with_balance') return balance > 0;
+      if (balanceFilter === 'without_balance') return balance <= 0;
+      if (balanceFilter === 'range') {
+        const mn = parseMoneyInput(saldoMinStr);
+        const mx = parseMoneyInput(saldoMaxStr);
+        if (mn != null && balance < mn) return false;
+        if (mx != null && balance > mx) return false;
+        return true;
+      }
+      return true;
+    });
+
+    filtered = filtered.filter((l) => {
+      if (depositFilter === 'all') return true;
+      const v = leadDepositValue(l);
+      if (depositFilter === 'with_value') return v > 0;
+      if (depositFilter === 'without_value') return v <= 0;
+      if (depositFilter === 'range') {
+        const mn = parseMoneyInput(depositMinStr);
+        const mx = parseMoneyInput(depositMaxStr);
+        if (mn != null && v < mn) return false;
+        if (mx != null && v > mx) return false;
+        return true;
+      }
+      return true;
+    });
+
+    filtered = filtered.filter((l) => {
+      if (apostaFilter === 'all') return true;
+      const ap = leadApostaValue(l);
+      if (apostaFilter === 'with_bet') return ap > 0;
+      if (apostaFilter === 'without_bet') return ap <= 0;
+      if (apostaFilter === 'range') {
+        const mn = parseMoneyInput(apostaMinStr);
+        const mx = parseMoneyInput(apostaMaxStr);
+        if (mn != null && ap < mn) return false;
+        if (mx != null && ap > mx) return false;
+        return true;
+      }
+      return true;
+    });
+
     const { field, dir } = leadSort;
     const sign = dir === 'asc' ? 1 : -1;
     return [...filtered].sort((a, b) => sign * compareValues(a[field], b[field]));
-  }, [leads, leadSearch, leadSort]);
+  }, [
+    leads,
+    leadSearch,
+    leadSort,
+    balanceFilter,
+    saldoMinStr,
+    saldoMaxStr,
+    depositFilter,
+    depositMinStr,
+    depositMaxStr,
+    apostaFilter,
+    apostaMinStr,
+    apostaMaxStr,
+  ]);
+
+  /** Totais da lista filtrada (útil com muitos leads) */
+  const filteredListStats = useMemo(() => {
+    let selectedInFiltered = 0;
+    for (const l of leadsView) {
+      if (selected.has(l.lead_id)) selectedInFiltered++;
+    }
+    const sumSaldo = leadsView.reduce((acc, l) => acc + leadBalanceValue(l), 0);
+    return {
+      visible: leadsView.length,
+      selectedInFiltered,
+      sumSaldo,
+    };
+  }, [leadsView, selected]);
 
   const selectedSummary = useMemo(() => {
     const rows = leads.filter((l) => selected.has(l.lead_id));
@@ -407,6 +611,8 @@ export default function GerenteLeadStockTransferPage() {
         (h.source_consultant_name ?? '').toLowerCase().includes(term) ||
         (h.source_consultant_email ?? '').toLowerCase().includes(term) ||
         (h.performed_by_name ?? '').toLowerCase().includes(term) ||
+        (h.stock_gerente_name ?? '').toLowerCase().includes(term) ||
+        (h.stock_gerente_user_id ?? '').toLowerCase().includes(term) ||
         h.transfer_type.toLowerCase().includes(term)
       );
     });
@@ -457,6 +663,35 @@ export default function GerenteLeadStockTransferPage() {
     });
   };
 
+  const clearSelection = () => setSelected(new Set());
+
+  /** Seleciona exatamente os N primeiros da lista filtrada e ordenada (ideal para lotes grandes). */
+  const selectFirstNInView = (n: number) => {
+    const cap = Math.max(0, Math.min(Math.floor(Number(n)) || 0, leadsView.length));
+    setSelected(new Set(leadsView.slice(0, cap).map((l) => l.lead_id)));
+  };
+
+  const applyBulkFirstN = () => {
+    const raw = bulkFirstNInput.trim();
+    const n = parseInt(raw, 10);
+    if (!Number.isFinite(n) || n < 1) {
+      showToast('Digite quantos leads marcar (ex.: 100).', 'error');
+      return;
+    }
+    selectFirstNInView(n);
+  };
+
+  const invertSelectionInView = () => {
+    setSelected((prev) => {
+      const n = new Set(prev);
+      for (const l of leadsView) {
+        if (n.has(l.lead_id)) n.delete(l.lead_id);
+        else n.add(l.lead_id);
+      }
+      return n;
+    });
+  };
+
   const doTransfer = async () => {
     if (!userId || !bancaId || !targetEmail.trim() || selected.size === 0) {
       showToast('Selecione leads e o consultor destino.', 'error');
@@ -501,6 +736,9 @@ export default function GerenteLeadStockTransferPage() {
 
   const consultorSelecionado = consultores.find((c) => c.email === targetEmail) ?? null;
 
+  /** Visão agregada (todos os gerentes): mostra coluna Gerente nas tabelas */
+  const showGerenteColumnMerged = isAdminStockViewer && !adminGerenteFilter.trim();
+
   return (
     <Layout>
       <ToastContainer toasts={toasts} onClose={removeToast} />
@@ -515,12 +753,17 @@ export default function GerenteLeadStockTransferPage() {
               Estoque de leads
             </h1>
             <p className="text-sm text-gray-600 dark:text-gray-400 mt-1 max-w-3xl">
-              Pacotes reservados pelo admin no seu estoque. Os leads só se movem no CRM quando você distribuir a um consultor da sua equipe.
+              {isAdminStockViewer
+                ? 'Visão da banca: pacotes reservados ao estoque dos gerentes. O repasse para consultores continua sendo feito pelo gerente no CRM; aqui é possível auditar e abrir os leads.'
+                : 'Pacotes reservados pelo admin no seu estoque. Os leads só se movem no CRM quando você distribuir a um consultor da sua equipe.'}
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <Link href="/gerente" className="text-sm text-[#8CD955] hover:underline whitespace-nowrap">
-              ← Gestão de consultores
+            <Link
+              href={isAdminStockViewer ? '/admin' : '/gerente'}
+              className="text-sm text-[#8CD955] hover:underline whitespace-nowrap"
+            >
+              ← {isAdminStockViewer ? 'Painel admin' : 'Gestão de consultores'}
             </Link>
             <button
               type="button"
@@ -571,6 +814,31 @@ export default function GerenteLeadStockTransferPage() {
             <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-2">
               Cada banca tem seu estoque separado. Troque aqui para ver outro estoque.
             </p>
+
+            {isAdminStockViewer && (
+              <>
+                <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1.5 mt-4">
+                  Gerente
+                </label>
+                <select
+                  value={adminGerenteFilter}
+                  onChange={(e) => setAdminGerenteFilter(e.target.value)}
+                  className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-[#8CD955]/40 focus:border-[#8CD955] outline-none"
+                >
+                  <option value="">Todos os gerentes</option>
+                  {adminGerentes.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.full_name || g.email || g.id}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-2">
+                  {adminGerenteFilter
+                    ? 'Exibindo apenas pacotes e histórico deste gerente.'
+                    : 'Exibindo estoque agregado de todos os gerentes desta banca.'}
+                </p>
+              </>
+            )}
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
@@ -606,6 +874,7 @@ export default function GerenteLeadStockTransferPage() {
             onFilterChange={setHistoryFilter}
             sort={historySort}
             onToggleSort={toggleHistorySort}
+            showGerenteColumn={showGerenteColumnMerged}
           />
         ) : !selectedLogId ? (
           <PackagesList
@@ -616,6 +885,8 @@ export default function GerenteLeadStockTransferPage() {
             sort={pkgSort}
             onToggleSort={togglePkgSort}
             onOpen={(id) => setSelectedLogId(id)}
+            showGerenteColumn={showGerenteColumnMerged}
+            viewerMode={isAdminStockViewer ? 'admin' : 'gerente'}
           />
         ) : (
           <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-4">
@@ -653,26 +924,230 @@ export default function GerenteLeadStockTransferPage() {
               </div>
 
               <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] overflow-hidden">
-                <div className="px-4 py-3 border-b border-gray-100 dark:border-[#404040] flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-sm font-semibold text-gray-800 dark:text-white whitespace-nowrap">
-                      Leads no pacote
-                    </span>
-                    <span className="text-xs text-gray-500 dark:text-gray-400">
-                      {leadsView.length} de {leads.length}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 flex-1 sm:flex-none sm:min-w-[280px] max-w-sm">
-                    <div className="relative flex-1">
-                      <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                      <input
-                        value={leadSearch}
-                        onChange={(e) => setLeadSearch(e.target.value)}
-                        placeholder="Buscar por ID, nome ou origem"
-                        className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-[#444] dark:bg-[#333] dark:text-white focus:ring-2 focus:ring-[#8CD955]/40 focus:border-[#8CD955] outline-none"
-                      />
+                <div className="px-4 py-3 border-b border-gray-100 dark:border-[#404040] space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex flex-col gap-1 min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-semibold text-gray-800 dark:text-white whitespace-nowrap">
+                          Leads no pacote
+                        </span>
+                        <span className="text-xs text-gray-500 dark:text-gray-400 tabular-nums">
+                          lista: {filteredListStats.visible} / {leads.length}
+                          {' · '}
+                          <span className="inline-flex items-center gap-1">
+                            <DollarSign className="w-3 h-3" />
+                            saldo na lista {formatMoney(filteredListStats.sumSaldo)}
+                          </span>
+                          {!isAdminStockViewer ? (
+                            <>
+                              {' · '}
+                              selecionados nesta lista: {filteredListStats.selectedInFiltered}
+                              {selected.size > filteredListStats.selectedInFiltered ? (
+                                <span className="text-amber-600 dark:text-amber-400">
+                                  {' '}(total marcado {selected.size}, inclui fora do filtro)
+                                </span>
+                              ) : null}
+                            </>
+                          ) : (
+                            <>
+                              {' · '}
+                              <span className="text-gray-400">somente leitura (repasse pelo gerente)</span>
+                            </>
+                          )}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-1 sm:flex-none sm:min-w-[260px] max-w-md w-full">
+                      <div className="relative flex-1">
+                        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                        <input
+                          value={leadSearch}
+                          onChange={(e) => setLeadSearch(e.target.value)}
+                          placeholder="Buscar por ID, nome ou origem"
+                          className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-[#444] dark:bg-[#333] dark:text-white focus:ring-2 focus:ring-[#8CD955]/40 focus:border-[#8CD955] outline-none"
+                        />
+                      </div>
                     </div>
                   </div>
+
+                  <div className="flex flex-wrap items-end gap-3">
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[11px] font-semibold text-gray-600 dark:text-gray-400">Saldo (filtro)</label>
+                      <select
+                        value={balanceFilter}
+                        onChange={(e) => setBalanceFilter(e.target.value as BalanceFilterMode)}
+                        className="min-w-[160px] border border-gray-200 dark:border-[#444] dark:bg-[#333] dark:text-white rounded-lg px-2 py-2 text-xs"
+                      >
+                        <option value="all">Todos</option>
+                        <option value="with_balance">Com saldo</option>
+                        <option value="without_balance">Sem saldo</option>
+                        <option value="range">Faixa (min–máx)</option>
+                      </select>
+                    </div>
+                    {balanceFilter === 'range' && (
+                      <>
+                        <div className="flex flex-col gap-1">
+                          <label className="text-[11px] font-semibold text-gray-600 dark:text-gray-400">Mín. R$</label>
+                          <input
+                            value={saldoMinStr}
+                            onChange={(e) => setSaldoMinStr(e.target.value)}
+                            placeholder="0"
+                            inputMode="decimal"
+                            className="w-[100px] border border-gray-200 dark:border-[#444] dark:bg-[#333] dark:text-white rounded-lg px-2 py-2 text-xs"
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <label className="text-[11px] font-semibold text-gray-600 dark:text-gray-400">Máx. R$</label>
+                          <input
+                            value={saldoMaxStr}
+                            onChange={(e) => setSaldoMaxStr(e.target.value)}
+                            placeholder="∞"
+                            inputMode="decimal"
+                            className="w-[100px] border border-gray-200 dark:border-[#444] dark:bg-[#333] dark:text-white rounded-lg px-2 py-2 text-xs"
+                          />
+                        </div>
+                      </>
+                    )}
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[11px] font-semibold text-gray-600 dark:text-gray-400">Total depositado</label>
+                      <select
+                        value={depositFilter}
+                        onChange={(e) => setDepositFilter(e.target.value as DepositFilterMode)}
+                        className="min-w-[160px] border border-gray-200 dark:border-[#444] dark:bg-[#333] dark:text-white rounded-lg px-2 py-2 text-xs"
+                      >
+                        <option value="all">Todos</option>
+                        <option value="with_value">Com valor</option>
+                        <option value="without_value">Sem valor</option>
+                        <option value="range">Faixa (min–máx)</option>
+                      </select>
+                    </div>
+                    {depositFilter === 'range' && (
+                      <>
+                        <div className="flex flex-col gap-1">
+                          <label className="text-[11px] font-semibold text-gray-600 dark:text-gray-400">Dep. mín. R$</label>
+                          <input
+                            value={depositMinStr}
+                            onChange={(e) => setDepositMinStr(e.target.value)}
+                            placeholder="0"
+                            inputMode="decimal"
+                            className="w-[100px] border border-gray-200 dark:border-[#444] dark:bg-[#333] dark:text-white rounded-lg px-2 py-2 text-xs"
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <label className="text-[11px] font-semibold text-gray-600 dark:text-gray-400">Dep. máx. R$</label>
+                          <input
+                            value={depositMaxStr}
+                            onChange={(e) => setDepositMaxStr(e.target.value)}
+                            placeholder="∞"
+                            inputMode="decimal"
+                            className="w-[100px] border border-gray-200 dark:border-[#444] dark:bg-[#333] dark:text-white rounded-lg px-2 py-2 text-xs"
+                          />
+                        </div>
+                      </>
+                    )}
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[11px] font-semibold text-gray-600 dark:text-gray-400">Total apostado</label>
+                      <select
+                        value={apostaFilter}
+                        onChange={(e) => setApostaFilter(e.target.value as ApostaFilterMode)}
+                        className="min-w-[160px] border border-gray-200 dark:border-[#444] dark:bg-[#333] dark:text-white rounded-lg px-2 py-2 text-xs"
+                      >
+                        <option value="all">Todos</option>
+                        <option value="with_bet">Com valor</option>
+                        <option value="without_bet">Sem valor</option>
+                        <option value="range">Faixa (min–máx)</option>
+                      </select>
+                    </div>
+                    {apostaFilter === 'range' && (
+                      <>
+                        <div className="flex flex-col gap-1">
+                          <label className="text-[11px] font-semibold text-gray-600 dark:text-gray-400">Ap. mín. R$</label>
+                          <input
+                            value={apostaMinStr}
+                            onChange={(e) => setApostaMinStr(e.target.value)}
+                            placeholder="0"
+                            inputMode="decimal"
+                            className="w-[100px] border border-gray-200 dark:border-[#444] dark:bg-[#333] dark:text-white rounded-lg px-2 py-2 text-xs"
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <label className="text-[11px] font-semibold text-gray-600 dark:text-gray-400">Ap. máx. R$</label>
+                          <input
+                            value={apostaMaxStr}
+                            onChange={(e) => setApostaMaxStr(e.target.value)}
+                            placeholder="∞"
+                            inputMode="decimal"
+                            className="w-[100px] border border-gray-200 dark:border-[#444] dark:bg-[#333] dark:text-white rounded-lg px-2 py-2 text-xs"
+                          />
+                        </div>
+                      </>
+                    )}
+                    {!isAdminStockViewer && (
+                      <div className="flex flex-wrap gap-2 items-center ml-auto">
+                        <span className="text-[11px] font-semibold text-gray-600 dark:text-gray-400 whitespace-nowrap">Seleção rápida</span>
+                        {[50, 100, 250, 500].map((n) => (
+                          <button
+                            key={n}
+                            type="button"
+                            disabled={loadingLeads || leadsView.length === 0}
+                            onClick={() => selectFirstNInView(n)}
+                            className="px-2 py-1.5 rounded-lg text-[11px] font-semibold border border-gray-200 dark:border-[#444] bg-gray-50 dark:bg-[#333] hover:bg-[#8CD955]/15 hover:border-[#8CD955]/40 disabled:opacity-40 text-gray-700 dark:text-gray-200"
+                          >
+                            Primeiros {n}
+                          </button>
+                        ))}
+                        <button
+                          type="button"
+                          disabled={loadingLeads || leadsView.length === 0}
+                          onClick={() => selectFirstNInView(leadsView.length)}
+                          className="px-2 py-1.5 rounded-lg text-[11px] font-semibold bg-[#8CD955]/15 border border-[#8CD955]/40 text-[#6B8E3F] hover:bg-[#8CD955]/25 disabled:opacity-40"
+                        >
+                          Todos filtrados ({leadsView.length})
+                        </button>
+                        <button
+                          type="button"
+                          disabled={loadingLeads || leadsView.length === 0}
+                          onClick={invertSelectionInView}
+                          className="px-2 py-1.5 rounded-lg text-[11px] font-semibold border border-gray-200 dark:border-[#444] hover:bg-gray-50 dark:hover:bg-[#333] disabled:opacity-40"
+                        >
+                          Inverter na lista
+                        </button>
+                        <button
+                          type="button"
+                          disabled={selected.size === 0}
+                          onClick={clearSelection}
+                          className="px-2 py-1.5 rounded-lg text-[11px] font-semibold text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/50 hover:bg-red-50 dark:hover:bg-red-950/30 disabled:opacity-40"
+                        >
+                          Limpar tudo
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {!isAdminStockViewer && (
+                    <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-gray-100 dark:border-[#404040]">
+                      <span className="text-[11px] text-gray-500 dark:text-gray-400">Marcar quantidade exata:</span>
+                      <input
+                        type="number"
+                        min={1}
+                        value={bulkFirstNInput}
+                        onChange={(e) => setBulkFirstNInput(e.target.value)}
+                        placeholder="Ex.: 300"
+                        className="w-24 border border-gray-200 dark:border-[#444] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-xs"
+                      />
+                      <button
+                        type="button"
+                        disabled={loadingLeads || leadsView.length === 0}
+                        onClick={applyBulkFirstN}
+                        className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#8CD955] text-white hover:bg-[#7BC84A] disabled:opacity-40"
+                      >
+                        Aplicar ordem atual
+                      </button>
+                      <span className="text-[11px] text-gray-400">
+                        Usa a ordenação da tabela (ex.: saldo decrescente) para marcar os primeiros N da lista já filtrada.
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 {loadingLeads ? (
@@ -683,7 +1158,9 @@ export default function GerenteLeadStockTransferPage() {
                   <div className="p-10 text-center">
                     <Inbox className="w-10 h-10 text-gray-300 dark:text-gray-600 mx-auto mb-2" />
                     <p className="text-sm text-gray-500 dark:text-gray-400">
-                      {leads.length === 0 ? 'Nenhum lead em estoque neste pacote.' : 'Nenhum lead corresponde à busca.'}
+                      {leads.length === 0
+                        ? 'Nenhum lead em estoque neste pacote.'
+                        : 'Nenhum lead corresponde à busca ou aos filtros (saldo, depósito, aposta). Ajuste os filtros acima.'}
                     </p>
                   </div>
                 ) : (
@@ -691,17 +1168,27 @@ export default function GerenteLeadStockTransferPage() {
                     <table className="w-full text-sm">
                       <thead className="sticky top-0 bg-gray-50 dark:bg-[#333] z-10 shadow-sm">
                         <tr>
-                          <th className="px-3 py-2.5 w-10">
-                            <input
-                              type="checkbox"
-                              checked={leadsView.length > 0 && leadsView.every((l) => selected.has(l.lead_id))}
-                              onChange={toggleAllVisible}
-                              className="rounded border-gray-300"
-                            />
-                          </th>
+                          {!isAdminStockViewer && (
+                            <th className="px-3 py-2.5 w-10">
+                              <input
+                                type="checkbox"
+                                checked={leadsView.length > 0 && leadsView.every((l) => selected.has(l.lead_id))}
+                                onChange={toggleAllVisible}
+                                className="rounded border-gray-300"
+                              />
+                            </th>
+                          )}
                           <ThSort label="ID" field="lead_id" current={leadSort} onToggle={toggleLeadSort} />
                           <ThSort label="Nome" field="lead_name" current={leadSort} onToggle={toggleLeadSort} />
                           <ThSort label="Saldo" field="saldo_snapshot" current={leadSort} onToggle={toggleLeadSort} align="right" />
+                          <ThSort
+                            label="Depositado"
+                            field="total_depositado_snapshot"
+                            current={leadSort}
+                            onToggle={toggleLeadSort}
+                            align="right"
+                          />
+                          <ThSort label="Apostado" field="total_apostado_snapshot" current={leadSort} onToggle={toggleLeadSort} align="right" />
                           <ThSort label="Origem real no CRM" field="original_source_consultant_email" current={leadSort} onToggle={toggleLeadSort} />
                           <ThSort label="Última interação" field="last_interaction_snapshot" current={leadSort} onToggle={toggleLeadSort} />
                         </tr>
@@ -712,23 +1199,33 @@ export default function GerenteLeadStockTransferPage() {
                           return (
                             <tr
                               key={l.lead_id}
-                              onClick={() => toggle(l.lead_id)}
-                              className={`border-t border-gray-100 dark:border-[#404040] cursor-pointer transition-colors ${
-                                checked ? 'bg-[#8CD955]/10 dark:bg-[#8CD955]/15' : 'hover:bg-gray-50 dark:hover:bg-[#333]'
+                              onClick={isAdminStockViewer ? undefined : () => toggle(l.lead_id)}
+                              className={`border-t border-gray-100 dark:border-[#404040] transition-colors ${
+                                isAdminStockViewer
+                                  ? 'hover:bg-gray-50 dark:hover:bg-[#333]'
+                                  : `cursor-pointer ${checked ? 'bg-[#8CD955]/10 dark:bg-[#8CD955]/15' : 'hover:bg-gray-50 dark:hover:bg-[#333]'}`
                               }`}
                             >
-                              <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={() => toggle(l.lead_id)}
-                                  className="rounded border-gray-300"
-                                />
-                              </td>
+                              {!isAdminStockViewer && (
+                                <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() => toggle(l.lead_id)}
+                                    className="rounded border-gray-300"
+                                  />
+                                </td>
+                              )}
                               <td className="px-3 py-2 font-mono text-xs text-gray-600 dark:text-gray-300">{l.lead_id}</td>
                               <td className="px-3 py-2 text-gray-800 dark:text-gray-100">{l.lead_name ?? '—'}</td>
                               <td className="px-3 py-2 text-right tabular-nums font-medium text-gray-800 dark:text-gray-100">
                                 {formatMoney(l.saldo_snapshot)}
+                              </td>
+                              <td className="px-3 py-2 text-right tabular-nums text-gray-700 dark:text-gray-200">
+                                {formatMoney(l.total_depositado_snapshot)}
+                              </td>
+                              <td className="px-3 py-2 text-right tabular-nums text-gray-700 dark:text-gray-200">
+                                {formatMoney(l.total_apostado_snapshot)}
                               </td>
                               <td className="px-3 py-2 text-xs text-gray-600 dark:text-gray-400 truncate max-w-[220px]" title={l.original_source_consultant_email ?? undefined}>
                                 {l.original_source_consultant_email ?? '—'}
@@ -752,66 +1249,82 @@ export default function GerenteLeadStockTransferPage() {
                 <div className="px-4 py-3 bg-[#8CD955]/10 dark:bg-[#8CD955]/15 border-b border-[#8CD955]/30">
                   <h2 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2">
                     <Users className="w-4 h-4 text-[#6B8E3F]" />
-                    Distribuir para consultor
+                    {isAdminStockViewer ? 'Repasse no CRM (gerente)' : 'Distribuir para consultor'}
                   </h2>
                   <p className="text-[11px] text-gray-600 dark:text-gray-300 mt-0.5">
-                    O repasse chama o CRM com a origem real de cada lead.
+                    {isAdminStockViewer
+                      ? 'Administradores visualizam e auditam o estoque. O repasse real (CRM) é feito pelo gerente responsável pelo pacote.'
+                      : 'O repasse chama o CRM com a origem real de cada lead.'}
                   </p>
                 </div>
 
-                <div className="p-4 space-y-4">
-                  <div>
-                    <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1.5">
-                      Consultor destino
-                    </label>
-                    <select
-                      value={targetEmail}
-                      onChange={(e) => setTargetEmail(e.target.value)}
-                      className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-[#8CD955]/40 focus:border-[#8CD955] outline-none"
+                {isAdminStockViewer ? (
+                  <div className="p-4 space-y-3">
+                    <div className="rounded-lg border border-blue-200 dark:border-blue-900/40 bg-blue-50/80 dark:bg-blue-950/25 p-3 text-xs text-blue-900 dark:text-blue-100">
+                      Use esta tela para conferir leads e histórico. Para distribuir leads a consultores, o gerente deve abrir o mesmo pacote na conta dele.
+                    </div>
+                    {currentPackage?.gerente_name ? (
+                      <p className="text-[11px] text-gray-600 dark:text-gray-400">
+                        Pacote no estoque de:{' '}
+                        <span className="font-semibold text-gray-800 dark:text-gray-200">{currentPackage.gerente_name}</span>
+                      </p>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="p-4 space-y-4">
+                    <div>
+                      <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1.5">
+                        Consultor destino
+                      </label>
+                      <select
+                        value={targetEmail}
+                        onChange={(e) => setTargetEmail(e.target.value)}
+                        className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-[#8CD955]/40 focus:border-[#8CD955] outline-none"
+                      >
+                        <option value="">Selecione um consultor</option>
+                        {consultores.map((c) => (
+                          <option key={c.id} value={c.email}>
+                            {c.full_name || c.email}
+                          </option>
+                        ))}
+                      </select>
+                      {consultorSelecionado && (
+                        <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5 truncate" title={consultorSelecionado.email}>
+                          {consultorSelecionado.email}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="rounded-lg border border-gray-200 dark:border-[#404040] p-3 bg-gray-50 dark:bg-[#333]/40">
+                      <p className="text-xs font-semibold text-gray-700 dark:text-gray-200 mb-2">Resumo da seleção</p>
+                      <div className="grid grid-cols-3 gap-2 text-center">
+                        <MiniStat label="Leads" value={selectedSummary.count} icon={<Inbox className="w-3 h-3" />} />
+                        <MiniStat label="Origens" value={selectedSummary.origens} icon={<Users className="w-3 h-3" />} />
+                        <MiniStat
+                          label="Saldo total"
+                          valueText={formatMoney(selectedSummary.totalSaldo)}
+                          icon={<DollarSign className="w-3 h-3" />}
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => void doTransfer()}
+                      disabled={transferring || selected.size === 0 || !targetEmail}
+                      className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-lg bg-[#8CD955] text-white font-semibold hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     >
-                      <option value="">Selecione um consultor</option>
-                      {consultores.map((c) => (
-                        <option key={c.id} value={c.email}>
-                          {c.full_name || c.email}
-                        </option>
-                      ))}
-                    </select>
-                    {consultorSelecionado && (
-                      <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5 truncate" title={consultorSelecionado.email}>
-                        {consultorSelecionado.email}
+                      {transferring ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckSquare className="w-4 h-4" />}
+                      Transferir {selected.size > 0 ? `(${selected.size})` : ''}
+                    </button>
+
+                    {selected.size === 0 && (
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 text-center">
+                        Selecione leads na tabela ao lado para habilitar o envio.
                       </p>
                     )}
                   </div>
-
-                  <div className="rounded-lg border border-gray-200 dark:border-[#404040] p-3 bg-gray-50 dark:bg-[#333]/40">
-                    <p className="text-xs font-semibold text-gray-700 dark:text-gray-200 mb-2">Resumo da seleção</p>
-                    <div className="grid grid-cols-3 gap-2 text-center">
-                      <MiniStat label="Leads" value={selectedSummary.count} icon={<Inbox className="w-3 h-3" />} />
-                      <MiniStat label="Origens" value={selectedSummary.origens} icon={<Users className="w-3 h-3" />} />
-                      <MiniStat
-                        label="Saldo total"
-                        valueText={formatMoney(selectedSummary.totalSaldo)}
-                        icon={<DollarSign className="w-3 h-3" />}
-                      />
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => void doTransfer()}
-                    disabled={transferring || selected.size === 0 || !targetEmail}
-                    className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-lg bg-[#8CD955] text-white font-semibold hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    {transferring ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckSquare className="w-4 h-4" />}
-                    Transferir {selected.size > 0 ? `(${selected.size})` : ''}
-                  </button>
-
-                  {selected.size === 0 && (
-                    <p className="text-[11px] text-gray-500 dark:text-gray-400 text-center">
-                      Selecione leads na tabela ao lado para habilitar o envio.
-                    </p>
-                  )}
-                </div>
+                )}
               </div>
 
               {currentPackage && (
@@ -835,7 +1348,7 @@ export default function GerenteLeadStockTransferPage() {
       </div>
 
       {/* Barra de ação sticky quando houver seleção (mobile) */}
-      {selectedLogId && selected.size > 0 && (
+      {selectedLogId && selected.size > 0 && !isAdminStockViewer && (
         <div className="xl:hidden fixed bottom-0 left-0 right-0 z-40 bg-white dark:bg-[#2a2a2a] border-t border-gray-200 dark:border-[#404040] p-3 shadow-lg">
           <div className="max-w-5xl mx-auto flex items-center gap-3">
             <div className="flex-1 min-w-0">
@@ -1013,6 +1526,8 @@ function PackagesList({
   sort,
   onToggleSort,
   onOpen,
+  showGerenteColumn,
+  viewerMode,
 }: {
   packagesView: StockPackage[];
   loading: boolean;
@@ -1021,6 +1536,8 @@ function PackagesList({
   sort: { field: PackageSortField; dir: SortDir };
   onToggleSort: (field: PackageSortField) => void;
   onOpen: (id: string) => void;
+  showGerenteColumn?: boolean;
+  viewerMode?: 'gerente' | 'admin';
 }) {
   return (
     <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] overflow-hidden">
@@ -1036,7 +1553,9 @@ function PackagesList({
           <input
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
-            placeholder="Buscar por TF, prazo, responsável..."
+            placeholder={
+              showGerenteColumn ? 'Buscar por TF, prazo, gerente, responsável...' : 'Buscar por TF, prazo, responsável...'
+            }
             className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-[#444] dark:bg-[#333] dark:text-white focus:ring-2 focus:ring-[#8CD955]/40 focus:border-[#8CD955] outline-none"
           />
         </div>
@@ -1050,7 +1569,9 @@ function PackagesList({
         <div className="p-10 text-center">
           <Package className="w-10 h-10 text-gray-300 dark:text-gray-600 mx-auto mb-2" />
           <p className="text-sm text-gray-500 dark:text-gray-400">
-            Nenhum pacote encontrado. Quando o admin reservar leads ao seu estoque nesta banca, eles aparecem aqui.
+            {viewerMode === 'admin'
+              ? 'Nenhum pacote nesta visão. Ajuste o filtro de gerente ou a banca.'
+              : 'Nenhum pacote encontrado. Quando o admin reservar leads ao seu estoque nesta banca, eles aparecem aqui.'}
           </p>
         </div>
       ) : (
@@ -1063,6 +1584,9 @@ function PackagesList({
                 <ThSortPkg label="Prazo" field="deadline_days" current={sort} onToggle={onToggleSort} />
                 <ThSortPkg label="Em estoque" field="pending_leads" current={sort} onToggle={onToggleSort} align="right" />
                 <ThSortPkg label="Distribuídos" field="distributed_leads" current={sort} onToggle={onToggleSort} align="right" />
+                {showGerenteColumn && (
+                  <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400">Gerente</th>
+                )}
                 <ThSortPkg label="Reservado por" field="performed_by_name" current={sort} onToggle={onToggleSort} />
                 <th className="px-3 py-2.5 text-right text-xs font-semibold text-gray-600 dark:text-gray-400">Ações</th>
               </tr>
@@ -1108,6 +1632,14 @@ function PackagesList({
                     <td className="px-3 py-2.5 text-right text-gray-600 dark:text-gray-400 tabular-nums">
                       {p.distributed_leads}
                     </td>
+                    {showGerenteColumn && (
+                      <td
+                        className="px-3 py-2.5 text-gray-700 dark:text-gray-200 truncate max-w-[160px]"
+                        title={p.gerente_name ?? p.stock_gerente_user_id ?? undefined}
+                      >
+                        {p.gerente_name ?? '—'}
+                      </td>
+                    )}
                     <td className="px-3 py-2.5 text-gray-600 dark:text-gray-300 truncate max-w-[180px]" title={p.performed_by_name ?? undefined}>
                       {p.performed_by_name ?? '—'}
                     </td>
@@ -1119,7 +1651,7 @@ function PackagesList({
                         className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#8CD955] text-white hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                       >
                         <Users className="w-3 h-3" />
-                        Abrir e distribuir
+                        {viewerMode === 'admin' ? 'Ver leads' : 'Abrir e distribuir'}
                       </button>
                     </td>
                   </tr>
@@ -1259,6 +1791,7 @@ function HistoryView({
   onFilterChange,
   sort,
   onToggleSort,
+  showGerenteColumn,
 }: {
   items: HistoryItem[];
   totalCount: number;
@@ -1269,6 +1802,7 @@ function HistoryView({
   onFilterChange: (v: HistoryFilter) => void;
   sort: { field: HistorySortField; dir: SortDir };
   onToggleSort: (field: HistorySortField) => void;
+  showGerenteColumn?: boolean;
 }) {
   const filters: { id: HistoryFilter; label: string }[] = [
     { id: 'all', label: 'Todos' },
@@ -1336,6 +1870,11 @@ function HistoryView({
                 <ThSortHistory label="Data" field="created_at" current={sort} onToggle={onToggleSort} />
                 <ThSortHistory label="Tipo de movimento" field="kind" current={sort} onToggle={onToggleSort} />
                 <ThSortHistory label="TF" field="transfer_type" current={sort} onToggle={onToggleSort} />
+                {showGerenteColumn && (
+                  <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 whitespace-nowrap">
+                    Gerente
+                  </th>
+                )}
                 <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 whitespace-nowrap">
                   Origem / Destino
                 </th>
@@ -1375,10 +1914,18 @@ function HistoryView({
                       {h.deadline_days} dia(s)
                     </div>
                   </td>
+                  {showGerenteColumn && (
+                    <td
+                      className="px-3 py-2.5 text-gray-700 dark:text-gray-200 truncate max-w-[140px]"
+                      title={h.stock_gerente_name ?? h.stock_gerente_user_id ?? undefined}
+                    >
+                      {h.stock_gerente_name ?? '—'}
+                    </td>
+                  )}
                   <td className="px-3 py-2.5">
                     {h.kind === 'reserved' ? (
                       <span className="text-xs text-gray-600 dark:text-gray-300">
-                        Reservado ao seu estoque
+                        {showGerenteColumn ? 'Reserva ao estoque do gerente' : 'Reservado ao seu estoque'}
                       </span>
                     ) : (
                       <div className="flex flex-col gap-0.5 text-xs">

@@ -20,6 +20,12 @@ export type StockPackage = {
   canceled_leads: number;
 };
 
+/** Pacote + dono do estoque (admin vendo vários gerentes na mesma banca). */
+export type StockPackageWithGerente = StockPackage & {
+  stock_gerente_user_id: string;
+  gerente_name: string | null;
+};
+
 export type StockLeadRow = {
   lead_id: string;
   transfer_log_id: string;
@@ -153,6 +159,118 @@ export async function listStockPackagesForGerente(
         pending_leads: bucket.pending,
         distributed_leads: bucket.distributed,
         canceled_leads: bucket.canceled,
+      };
+    })
+    .sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
+}
+
+/**
+ * Lista pacotes de estoque na banca para todos os gerentes que tenham reservas (admin/super_admin).
+ */
+export async function listStockPackagesAllGerentesForBanca(bancaId: string): Promise<StockPackageWithGerente[]> {
+  const { data: entries, error: entriesErr } = await supabaseServiceRole
+    .from('admin_lead_transfer_entries')
+    .select('transfer_log_id, stock_status, stock_gerente_user_id')
+    .eq('banca_id', bancaId)
+    .not('stock_gerente_user_id', 'is', null);
+
+  if (entriesErr || !Array.isArray(entries) || entries.length === 0) {
+    if (entriesErr) console.warn('[gerenteStockReservation] listPackagesAllGerentes entries:', entriesErr.message);
+    return [];
+  }
+
+  type Bucket = { pending: number; distributed: number; canceled: number; total: number; gerenteId: string };
+  const byLog = new Map<string, Bucket>();
+  for (const e of entries) {
+    const lid = String(e.transfer_log_id ?? '');
+    const gid = String((e as { stock_gerente_user_id?: string }).stock_gerente_user_id ?? '').trim();
+    if (!lid || !gid) continue;
+    let bucket = byLog.get(lid);
+    if (!bucket) {
+      bucket = { pending: 0, distributed: 0, canceled: 0, total: 0, gerenteId: gid };
+    }
+    if (bucket.gerenteId !== gid) {
+      console.warn('[gerenteStockReservation] transfer_log_id com gerentes distintos; usando primeiro:', lid);
+    }
+    bucket.total++;
+    switch ((e as { stock_status?: string }).stock_status) {
+      case 'em_estoque':
+        bucket.pending++;
+        break;
+      case 'repassado':
+        bucket.distributed++;
+        break;
+      case 'cancelado':
+        bucket.canceled++;
+        break;
+      default:
+        break;
+    }
+    byLog.set(lid, bucket);
+  }
+
+  const logIds = Array.from(byLog.keys());
+  if (logIds.length === 0) return [];
+
+  const { data: logs, error: logsErr } = await supabaseServiceRole
+    .from('admin_lead_transfer_logs')
+    .select('id, created_at, transfer_type, deadline_days, performed_by_user_id')
+    .in('id', logIds)
+    .eq('banca_id', bancaId)
+    .eq('transfer_kind', 'admin_to_gerente_stock');
+
+  if (logsErr || !Array.isArray(logs)) {
+    console.warn('[gerenteStockReservation] listPackagesAllGerentes logs:', logsErr?.message);
+    return [];
+  }
+
+  const performerIds = Array.from(
+    new Set((logs as RawLog[]).map((l) => (l.performed_by_user_id ?? '').trim()).filter(Boolean))
+  );
+  const performerNameById = new Map<string, string>();
+  if (performerIds.length > 0) {
+    const { data: profiles } = await supabaseServiceRole
+      .from('profiles')
+      .select('id, full_name, email')
+      .in('id', performerIds);
+    for (const p of (profiles ?? []) as { id: string; full_name: string | null; email: string | null }[]) {
+      const name = (p.full_name && p.full_name.trim()) || (p.email && p.email.trim()) || '';
+      performerNameById.set(p.id, name);
+    }
+  }
+
+  const gerenteIds = Array.from(new Set([...byLog.values()].map((b) => b.gerenteId).filter(Boolean)));
+  const gerenteNameById = new Map<string, string>();
+  if (gerenteIds.length > 0) {
+    const { data: gprofs } = await supabaseServiceRole
+      .from('profiles')
+      .select('id, full_name, email')
+      .in('id', gerenteIds);
+    for (const p of (gprofs ?? []) as { id: string; full_name: string | null; email: string | null }[]) {
+      const name = (p.full_name && p.full_name.trim()) || (p.email && p.email.trim()) || '';
+      gerenteNameById.set(p.id, name || p.email || '');
+    }
+  }
+
+  return (logs as RawLog[])
+    .map<StockPackageWithGerente>((log) => {
+      const bucket = byLog.get(log.id);
+      const gId = bucket?.gerenteId ?? '';
+      const baseBucket = bucket ?? { pending: 0, distributed: 0, canceled: 0, total: 0, gerenteId: gId };
+      return {
+        transfer_log_id: log.id,
+        banca_id: bancaId,
+        created_at: log.created_at ?? new Date(0).toISOString(),
+        transfer_type: (log.transfer_type ?? 'TF') as StockPackageWithGerente['transfer_type'],
+        deadline_days: Number(log.deadline_days ?? 10) || 10,
+        performed_by_user_id: log.performed_by_user_id ?? null,
+        performed_by_name: log.performed_by_user_id ? performerNameById.get(log.performed_by_user_id) ?? null : null,
+        total_leads: baseBucket.total,
+        pending_leads: baseBucket.pending,
+        distributed_leads: baseBucket.distributed,
+        canceled_leads: baseBucket.canceled,
+        stock_gerente_user_id: gId,
+        gerente_name: gId ? gerenteNameById.get(gId) ?? null : null,
       };
     })
     .sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));

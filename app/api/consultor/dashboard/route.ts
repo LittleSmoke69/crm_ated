@@ -7,8 +7,11 @@ import {
   aggregateBetsDepositsPayload,
   computeConsultantAdsSummary,
   fetchBetsDepositsByConsultant,
-  getConsultorProfilesByBancaUrl,
+  getDashboardScopeForUser,
 } from '@/lib/services/dashboard/consultor-bets-deposits';
+import {
+  gerenteCanViewConsultorPerformance,
+} from '@/lib/services/dashboard/gerente-desempenho-scope';
 
 const DASHBOARD_BETS_DEPOSITS_INTERVAL_MS = 500;
 
@@ -54,7 +57,11 @@ async function getUserWithdrawals(bancaUrl: string, oddsUserId: number, apiKey: 
  */
 export async function GET(req: NextRequest) {
   try {
-    const { userId, profile } = await requireStatusOrSidebarPermission(req, ['consultor', 'super_admin', 'admin'], 'meu_desempenho');
+    const { userId, profile } = await requireStatusOrSidebarPermission(
+      req,
+      ['consultor', 'super_admin', 'admin', 'gerente', 'gestor', 'dono_banca'],
+      'meu_desempenho'
+    );
 
     const { searchParams } = req.nextUrl;
     const dateFrom = searchParams.get('date_from');
@@ -65,10 +72,19 @@ export async function GET(req: NextRequest) {
     const skipLegacy = ['1', 'true', 'yes'].includes(String(searchParams.get('skip_legacy') || '').toLowerCase());
 
     const isAdminOrSuperAdmin = profile?.status === 'super_admin' || profile?.status === 'admin';
+    const isGerente = profile?.status === 'gerente';
 
-    // super_admin/admin podem ver desempenho de outro consultor: consultor_id + banca_url obrigatórios
     let effectiveUserId = userId;
-    if (isAdminOrSuperAdmin && consultorIdFilter) {
+    if (isGerente && consultorIdFilter) {
+      const ok = await gerenteCanViewConsultorPerformance(userId, consultorIdFilter);
+      if (!ok) {
+        return errorResponse(
+          'Acesso negado: você só pode ver o desempenho seu e dos seus consultores.',
+          403
+        );
+      }
+      effectiveUserId = consultorIdFilter;
+    } else if (isAdminOrSuperAdmin && consultorIdFilter) {
       const targetProfile = await getUserProfile(consultorIdFilter);
       if (['consultor', 'gerente', 'admin', 'gestor'].includes(String(targetProfile?.status || ''))) {
         effectiveUserId = consultorIdFilter;
@@ -77,19 +93,49 @@ export async function GET(req: NextRequest) {
 
     let bancaUrl = bancaUrlFilter;
     if (!bancaUrl) {
-      const hierarchyPath = await getHierarchyPath(effectiveUserId);
-      const donoBanca = hierarchyPath.find(p => p.status === 'dono_banca');
-      if (donoBanca) {
-        const { data: donoProfile } = await supabaseServiceRole
-          .from('profiles')
-          .select('banca_url')
-          .eq('id', donoBanca.id)
-          .single();
-        bancaUrl = donoProfile?.banca_url;
+      // Usa a primeira banca visível pelo escopo hierárquico do próprio usuário logado
+      const scopeForDefault = await getDashboardScopeForUser({ userId });
+      if (!scopeForDefault.allowed) {
+        return errorResponse('Acesso negado.', 403);
+      }
+      if (scopeForDefault.defaultBancaUrl) {
+        bancaUrl = scopeForDefault.defaultBancaUrl;
+      } else {
+        const hierarchyPath = await getHierarchyPath(effectiveUserId);
+        const donoBanca = hierarchyPath.find((p) => p.status === 'dono_banca');
+        if (donoBanca) {
+          const { data: donoProfile } = await supabaseServiceRole
+            .from('profiles')
+            .select('banca_url')
+            .eq('id', donoBanca.id)
+            .single();
+          bancaUrl = donoProfile?.banca_url;
+        }
       }
     }
     if (isAdminOrSuperAdmin && consultorIdFilter && !bancaUrl) {
       return errorResponse('Para visualizar desempenho de um consultor, informe banca_url e consultor_id.', 400);
+    }
+
+    if (
+      consultorIdFilter &&
+      (profile?.status === 'dono_banca' || profile?.status === 'gestor') &&
+      bancaUrl
+    ) {
+      const scopedCheck = await getDashboardScopeForUser({ userId, bancaUrl });
+      if (!scopedCheck.allowed) {
+        return errorResponse(
+          scopedCheck.reason === 'banca_out_of_scope'
+            ? 'Esta banca está fora do seu escopo.'
+            : 'Acesso negado.',
+          403
+        );
+      }
+      const inScope = scopedCheck.consultantProfiles.some((p) => p.id === consultorIdFilter);
+      if (!inScope) {
+        return errorResponse('Perfil fora do seu escopo para esta banca.', 403);
+      }
+      effectiveUserId = consultorIdFilter;
     }
 
     const consultorProfile = await getUserProfile(effectiveUserId);
@@ -100,24 +146,47 @@ export async function GET(req: NextRequest) {
       const n = Number(normalized);
       return Number.isFinite(n) ? n : 0;
     };
+    const isAggregatedDashboard = !consultorIdFilter;
     const shouldLoadLegacyConsultorLeads = Boolean(
-      !skipLegacy && consultorProfile?.email && (!isAdminOrSuperAdmin || consultorIdFilter)
+      !skipLegacy && consultorProfile?.email && !isAggregatedDashboard
     );
 
-    let consultantProfilesScope: Array<{ id: string; email: string; full_name: string | null; status?: string | null }> = [];
-    if (isAdminOrSuperAdmin && !consultorIdFilter) {
-      if (bancaUrl) {
-        consultantProfilesScope = await getConsultorProfilesByBancaUrl(bancaUrl);
+    let consultantProfilesScope: Array<{
+      id: string;
+      email: string;
+      full_name: string | null;
+      status?: string | null;
+    }> = [];
+
+    if (consultorIdFilter) {
+      if (consultorProfile?.email) {
+        consultantProfilesScope = [
+          {
+            id: effectiveUserId,
+            email: consultorProfile.email,
+            full_name: consultorProfile.full_name ?? null,
+            status: consultorProfile.status ?? null,
+          },
+        ];
       }
-    } else if (consultorProfile?.email) {
-      consultantProfilesScope = [
-        {
-          id: effectiveUserId,
-          email: consultorProfile.email,
-          full_name: consultorProfile.full_name ?? null,
-          status: consultorProfile.status ?? null,
-        },
-      ];
+    } else if (bancaUrl) {
+      // Escopo hierárquico unificado (consultor/gerente/gestor/dono_banca/admin/super_admin)
+      const scoped = await getDashboardScopeForUser({ userId, bancaUrl });
+      if (!scoped.allowed) {
+        return errorResponse(
+          scoped.reason === 'banca_out_of_scope'
+            ? 'Esta banca está fora do seu escopo.'
+            : 'Acesso negado.',
+          403
+        );
+      }
+      consultantProfilesScope = scoped.consultantProfiles;
+      console.log('[Consultor Dashboard API] Hierarchical scope resolved', {
+        user_status: scoped.userStatus,
+        scope_label: scoped.scopeLabel,
+        profiles_count: scoped.consultantProfiles.length,
+        banca_url: bancaUrl,
+      });
     }
     
     let externalKpis = null;

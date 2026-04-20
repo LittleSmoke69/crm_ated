@@ -146,7 +146,7 @@ export default function ConsultorPage() {
   const [showBancaFilter, setShowBancaFilter] = useState(false);
   const [bancaSearchTerm, setBancaSearchTerm] = useState('');
 
-  // Perfil e filtro de consultor para super_admin/admin (ver desempenho de outro consultor)
+  // Filtro de pessoa: admin (por banca) ou gerente (própria equipe)
   const [userStatus, setUserStatus] = useState<string | null>(null);
   const [consultoresDaBanca, setConsultoresDaBanca] = useState<
     Array<{ id: string; email: string; full_name: string | null; status?: string | null }>
@@ -305,43 +305,71 @@ export default function ConsultorPage() {
     return { dateFrom, dateTo };
   };
 
-  const isAdminOrSuperAdmin = userStatus === 'super_admin' || userStatus === 'admin';
+  /** Filtro por pessoa em Meu Desempenho. Quem pode filtrar: todos os papéis com hierarquia. */
+  const canFilterConsultorDesempenho = [
+    'super_admin',
+    'admin',
+    'gerente',
+    'gestor',
+    'dono_banca',
+  ].includes(userStatus || '');
 
   useEffect(() => {
     if (!userId) return;
-    loadBancas();
-    setInitialLoading(false);
-  }, [userId]);
+    (async () => {
+      try {
+        const res = await fetch('/api/consultor/meu-desempenho/scope', {
+          headers: { 'X-User-Id': userId },
+        }).then((r) => r.json());
+        if (res?.success && res.data) {
+          const list = Array.isArray(res.data.bancas) ? res.data.bancas : [];
+          setBancas(list);
+          if (res.data.userStatus) setUserStatus(res.data.userStatus);
+
+          // Auto-seleciona a primeira banca quando só há uma visível (consultor/gerente/etc.)
+          if (!selectedBanca && list.length === 1 && list[0]?.url) {
+            setSelectedBanca(list[0].url);
+          }
+        }
+      } catch (error) {
+        console.error('[MeuDesempenho] Falha ao carregar escopo:', error);
+      } finally {
+        setInitialLoading(false);
+      }
+    })();
+  }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!userId) return;
-    fetch('/api/user/profile', { headers: { 'X-User-Id': userId } })
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.success && res.data?.status) setUserStatus(res.data.status);
-      })
-      .catch(() => {});
-  }, [userId]);
-
-  useEffect(() => {
-    if (!userId || !isAdminOrSuperAdmin || !selectedBanca) {
+    if (!userId) {
       setConsultoresDaBanca([]);
       setSelectedConsultorId('all');
       return;
     }
+    if (!selectedBanca) {
+      setConsultoresDaBanca([]);
+      setSelectedConsultorId('all');
+      return;
+    }
+    // Escopo hierárquico: /meu-desempenho/scope já aplica as regras por papel
     setConsultoresLoading(true);
-    fetch(`/api/consultor/consultores-by-banca?banca_url=${encodeURIComponent(selectedBanca)}`, {
-      headers: { 'X-User-Id': userId }
+    fetch(`/api/consultor/meu-desempenho/scope?banca_url=${encodeURIComponent(selectedBanca)}`, {
+      headers: { 'X-User-Id': userId },
     })
       .then((r) => r.json())
       .then((res) => {
-        if (res.success && Array.isArray(res.data)) {
-          setConsultoresDaBanca(res.data);
+        if (res?.success && res.data) {
+          const profiles = Array.isArray(res.data.consultantProfiles)
+            ? res.data.consultantProfiles
+            : [];
+          setConsultoresDaBanca(profiles);
+          if (res.data.userStatus && res.data.userStatus !== userStatus) {
+            setUserStatus(res.data.userStatus);
+          }
           if (!selectedConsultorId) setSelectedConsultorId('all');
         }
       })
       .finally(() => setConsultoresLoading(false));
-  }, [userId, isAdminOrSuperAdmin, selectedBanca]);
+  }, [userId, selectedBanca]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -356,24 +384,6 @@ export default function ConsultorPage() {
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
   }, [showDatePicker, showBancaFilter, showWinnersDatePicker, showConsultorDesempenhoFilter]);
-
-  const loadBancas = async () => {
-    try {
-      const response = await fetch('/api/crm/bancas', {
-        headers: {
-          'X-User-Id': userId as string,
-        },
-      });
-      if (response.ok) {
-        const result = await response.json();
-        if (result.success) {
-          setBancas(result.data || []);
-        }
-      }
-    } catch (error) {
-      console.error('Erro ao carregar bancas:', error);
-    }
-  };
 
   const parseMoneyValue = (value: unknown): number => {
     if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
@@ -519,7 +529,7 @@ export default function ConsultorPage() {
       if (selectedBanca) baseParams.append('banca_url', selectedBanca);
 
       const isProgressiveAll =
-        isAdminOrSuperAdmin &&
+        canFilterConsultorDesempenho &&
         selectedConsultorId === 'all' &&
         consultoresDaBanca.length > 0;
 
@@ -611,7 +621,7 @@ export default function ConsultorPage() {
         return;
       }
 
-      if (isAdminOrSuperAdmin && selectedConsultorId && selectedConsultorId !== 'all') {
+      if (canFilterConsultorDesempenho && selectedConsultorId && selectedConsultorId !== 'all') {
         baseParams.append('consultor_id', selectedConsultorId);
       }
       const url = `/api/consultor/dashboard${baseParams.toString() ? `?${baseParams.toString()}` : ''}`;
@@ -659,7 +669,7 @@ export default function ConsultorPage() {
       params.append('banca_url', selectedBanca);
       if (dateFrom) params.append('date_from', dateFrom);
       if (dateTo) params.append('date_to', dateTo);
-      if (isAdminOrSuperAdmin && selectedConsultorId && selectedConsultorId !== 'all') {
+      if (canFilterConsultorDesempenho && selectedConsultorId && selectedConsultorId !== 'all') {
         params.append('consultor_id', selectedConsultorId);
       }
       const response = await fetch(`/api/consultor/winners?${params.toString()}`, {
@@ -689,11 +699,10 @@ export default function ConsultorPage() {
       setData(null);
       return;
     }
-    if (isAdminOrSuperAdmin && !selectedConsultorId) return;
-    if (isAdminOrSuperAdmin && selectedConsultorId === 'all' && consultoresDaBanca.length === 0) return;
+    if (canFilterConsultorDesempenho && selectedConsultorId === 'all' && consultoresDaBanca.length === 0) return;
     loadDashboard();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dateFilter, appliedStartDate, appliedEndDate, selectedBanca, selectedConsultorId, isAdminOrSuperAdmin, consultoresDaBanca.length]);
+  }, [dateFilter, appliedStartDate, appliedEndDate, selectedBanca, selectedConsultorId, canFilterConsultorDesempenho, consultoresDaBanca.length]);
 
   // Carrega lista de ganhadores quando banca, período ou consultor (admin) mudar
   useEffect(() => {
@@ -703,7 +712,7 @@ export default function ConsultorPage() {
     }
     loadWinners();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedBanca, winnersPeriod, winnersAppliedStart, winnersAppliedEnd, isAdminOrSuperAdmin ? selectedConsultorId : null]);
+  }, [selectedBanca, winnersPeriod, winnersAppliedStart, winnersAppliedEnd, canFilterConsultorDesempenho ? selectedConsultorId : null]);
 
   useEffect(() => {
     return () => {
@@ -954,8 +963,8 @@ export default function ConsultorPage() {
               )}
             </div>
 
-            {/* Filtro de Consultor (super_admin/admin: ver desempenho de outro consultor) */}
-            {isAdminOrSuperAdmin && (
+            {/* Filtro de Consultor (admin: por banca; gerente: equipe própria) */}
+            {canFilterConsultorDesempenho && (
               <div className="relative consultor-desempenho-filter-container">
                 {/** super_admin/admin: lista também gerente e admin da banca */}
                 <button

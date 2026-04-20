@@ -24,6 +24,19 @@ export async function assertGerenteHasBanca(gerenteUserId: string, bancaId: stri
   return ids.includes(bancaId);
 }
 
+/** IDs de perfis com status gerente que têm a banca em user_bancas (para escopo admin no estoque). */
+export async function listGerenteUserIdsOnBanca(bancaId: string): Promise<string[]> {
+  const { data: ubRows } = await supabaseServiceRole.from('user_bancas').select('user_id, banca_ids');
+  const candidates = new Set<string>();
+  for (const row of ubRows ?? []) {
+    const arr = Array.isArray(row.banca_ids) ? (row.banca_ids as string[]) : [];
+    if (arr.includes(bancaId)) candidates.add(row.user_id as string);
+  }
+  if (candidates.size === 0) return [];
+  const { data: profs } = await supabaseServiceRole.from('profiles').select('id').in('id', [...candidates]).eq('status', 'gerente');
+  return (profs ?? []).map((p: { id: string }) => p.id);
+}
+
 export async function getStockPoolForGerenteBanca(
   gerenteUserId: string,
   bancaId: string

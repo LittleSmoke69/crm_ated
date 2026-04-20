@@ -337,6 +337,28 @@ export async function requireStatus(
 }
 
 /**
+ * Estoque de leads (visualização): gerente (próprio estoque) ou admin/super_admin (auditoria por banca).
+ */
+export async function requireLeadStockViewer(req: NextRequest): Promise<{ userId: string; profile: UserProfile }> {
+  const { userId } = await requireAuth(req);
+  const profile = await getUserProfile(userId);
+  if (!profile) {
+    console.error('[requireLeadStockViewer] Perfil não encontrado para userId:', userId);
+    throw new Error('Perfil não encontrado');
+  }
+  const s = profile.status?.trim().toLowerCase();
+  if (s === 'gerente' || s === 'admin' || s === 'super_admin') {
+    return { userId, profile };
+  }
+  throw new Error('Acesso negado. Apenas gerente, admin ou super_admin podem acessar o estoque de leads.');
+}
+
+export function isLeadStockAdminViewer(profile: UserProfile): boolean {
+  const s = profile.status?.trim().toLowerCase();
+  return s === 'admin' || s === 'super_admin';
+}
+
+/**
  * Verifica se um usuário pode acessar dados de outro usuário baseado na hierarquia
  * Admin pode acessar tudo
  * Dono de banca pode acessar seus Gerentes e Consultores abaixo dele
@@ -435,22 +457,34 @@ export async function getSubordinates(userId: string): Promise<UserProfile[]> {
     return [];
   }
 
-  // Busca subordinados diretos
-  const { data: directSubordinates } = await supabaseServiceRole
-    .from('profiles')
-    .select('id, email, full_name, status, enroller, created_at')
-    .eq('enroller', userId);
+  /**
+   * Descendentes por enroller: BFS em níveis (1 query por nível da árvore).
+   * Antes: recursão = 1 round-trip por nó (muito lento em redes grandes).
+   */
+  const ENROLLER_IN_CHUNK = 100;
+  const MAX_DEPTH = 64;
+  const seen = new Set<string>();
+  let frontier: string[] = [userId];
+  const allSubordinates: UserProfile[] = [];
 
-  if (!directSubordinates || directSubordinates.length === 0) {
-    return [];
-  }
-
-  const allSubordinates: UserProfile[] = [...directSubordinates as UserProfile[]];
-
-  // Busca subordinados recursivamente
-  for (const subordinate of directSubordinates) {
-    const nestedSubordinates = await getSubordinates(subordinate.id);
-    allSubordinates.push(...nestedSubordinates);
+  for (let depth = 0; depth < MAX_DEPTH && frontier.length > 0; depth++) {
+    const batch: UserProfile[] = [];
+    for (let i = 0; i < frontier.length; i += ENROLLER_IN_CHUNK) {
+      const chunk = frontier.slice(i, i + ENROLLER_IN_CHUNK);
+      const { data: children } = await supabaseServiceRole
+        .from('profiles')
+        .select('id, email, full_name, status, enroller, created_at')
+        .in('enroller', chunk);
+      batch.push(...((children as UserProfile[]) || []));
+    }
+    frontier = [];
+    for (const child of batch) {
+      const id = child.id;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      allSubordinates.push(child);
+      frontier.push(id);
+    }
   }
 
   return allSubordinates;

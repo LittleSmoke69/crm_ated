@@ -128,49 +128,65 @@ export default function ConsultorDetalhadoPage() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(1);
 
-  const isAdminOrSuperAdmin = userStatus === 'super_admin' || userStatus === 'admin';
+  const canFilterConsultorDesempenho = [
+    'super_admin',
+    'admin',
+    'gerente',
+    'gestor',
+    'dono_banca',
+  ].includes(userStatus || '');
 
-  // Carrega perfil
+  // Carrega escopo (perfil + bancas visíveis) em uma chamada
   useEffect(() => {
     if (!userId) return;
-    fetch('/api/user/profile', { headers: { 'X-User-Id': userId } })
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.success && res.data?.status) setUserStatus(res.data.status);
-      })
-      .catch(() => {});
-  }, [userId]);
+    (async () => {
+      try {
+        const res = await fetch('/api/consultor/meu-desempenho/scope', {
+          headers: { 'X-User-Id': userId },
+        }).then((r) => r.json());
+        if (res?.success && res.data) {
+          const list = Array.isArray(res.data.bancas) ? res.data.bancas : [];
+          setBancas(list);
+          if (res.data.userStatus) setUserStatus(res.data.userStatus);
+          if (!selectedBanca && list.length === 1 && list[0]?.url) {
+            setSelectedBanca(list[0].url);
+          }
+        }
+      } catch (error) {
+        console.error('[MeuDesempenho/Detalhado] Falha ao carregar escopo:', error);
+      }
+    })();
+  }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Carrega bancas
   useEffect(() => {
-    if (!userId) return;
-    fetch('/api/crm/bancas', { headers: { 'X-User-Id': userId } })
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.success) setBancas(res.data || []);
-      })
-      .catch(() => {});
-  }, [userId]);
-
-  // Carrega consultores quando admin/super_admin tem banca selecionada
-  useEffect(() => {
-    if (!userId || !isAdminOrSuperAdmin || !selectedBanca) {
+    if (!userId) {
+      setConsultoresDaBanca([]);
+      setSelectedConsultorId('all');
+      return;
+    }
+    if (!selectedBanca) {
       setConsultoresDaBanca([]);
       setSelectedConsultorId('all');
       return;
     }
     setConsultoresLoading(true);
-    fetch(`/api/consultor/consultores-by-banca?banca_url=${encodeURIComponent(selectedBanca)}`, {
+    fetch(`/api/consultor/meu-desempenho/scope?banca_url=${encodeURIComponent(selectedBanca)}`, {
       headers: { 'X-User-Id': userId },
     })
       .then((r) => r.json())
       .then((res) => {
-        if (res.success && Array.isArray(res.data)) {
-          setConsultoresDaBanca(res.data);
+        if (res?.success && res.data) {
+          const profiles = Array.isArray(res.data.consultantProfiles)
+            ? res.data.consultantProfiles
+            : [];
+          setConsultoresDaBanca(profiles);
+          if (res.data.userStatus && res.data.userStatus !== userStatus) {
+            setUserStatus(res.data.userStatus);
+          }
         }
       })
       .finally(() => setConsultoresLoading(false));
-  }, [userId, isAdminOrSuperAdmin, selectedBanca]);
+  }, [userId, selectedBanca]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Calcula período aplicado
   useEffect(() => {
@@ -237,7 +253,7 @@ export default function ConsultorDetalhadoPage() {
     if (appliedStartDate) params.set('date_from', appliedStartDate);
     if (appliedEndDate) params.set('date_to', appliedEndDate);
     if (selectedBanca) params.set('banca_url', selectedBanca);
-    if (isAdminOrSuperAdmin && selectedConsultorId !== 'all') {
+    if (canFilterConsultorDesempenho && selectedConsultorId !== 'all') {
       params.set('consultor_id', selectedConsultorId);
     }
     params.set('skip_legacy', '1');
@@ -267,7 +283,7 @@ export default function ConsultorDetalhadoPage() {
       });
 
     return () => controller.abort();
-  }, [userId, selectedBanca, selectedConsultorId, appliedStartDate, appliedEndDate, isAdminOrSuperAdmin]);
+  }, [userId, selectedBanca, selectedConsultorId, appliedStartDate, appliedEndDate, canFilterConsultorDesempenho]);
 
   // Linhas planas
   const rows = useMemo(
@@ -358,7 +374,9 @@ export default function ConsultorDetalhadoPage() {
     selectedConsultorId !== 'all' && selectedConsultor
       ? `Perfil selecionado: ${selectedConsultor.full_name || selectedConsultor.email}`
       : data?.betsDepositsData?.consultant_scope?.consultants
-      ? `Todos os perfis da banca (${data.betsDepositsData.consultant_scope.consultants.length})`
+      ? userStatus === 'gerente'
+        ? `Equipe (${data.betsDepositsData.consultant_scope.consultants.length})`
+        : `Todos os perfis da banca (${data.betsDepositsData.consultant_scope.consultants.length})`
       : 'Seu desempenho';
 
   if (checking) return null;
@@ -384,7 +402,7 @@ export default function ConsultorDetalhadoPage() {
             bancas={bancas}
             selectedBanca={selectedBanca}
             onChangeBanca={setSelectedBanca}
-            showConsultorFilter={isAdminOrSuperAdmin}
+            showConsultorFilter={canFilterConsultorDesempenho}
             consultores={consultoresDaBanca}
             consultoresLoading={consultoresLoading}
             selectedConsultorId={selectedConsultorId}

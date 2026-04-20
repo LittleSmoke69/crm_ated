@@ -1,4 +1,6 @@
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { getSubordinateIds, getUserProfile, type UserProfile } from '@/lib/middleware/permissions';
+import { getHierarchyPath } from '@/lib/utils/hierarchy';
 
 const CRM_BETS_DEPOSITS_ENDPOINT =
   'https://web.rodadafortuna.digital/api/crm/get-bets-and-deposits-by-consultant';
@@ -312,6 +314,341 @@ export function aggregateBetsDepositsPayload(items: Array<{ profile: ConsultantP
         data: depositsData,
       },
     },
+  };
+}
+
+/**
+ * Escopos de perfis que participam da agregação em "Meu Desempenho" por papel.
+ * - consultor: só ele
+ * - gerente: ele + consultores subordinados
+ * - gestor: igual ao dono na mesma banca — gerentes + consultores da hierarquia do dono (via user_bancas)
+ * - dono_banca: apenas gerentes + consultores subordinados (sem ele mesmo)
+ * - admin/super_admin: todos os perfis (consultor/gerente/gestor/admin) da banca via user_bancas
+ */
+const SCOPE_ALLOWED_SUBORDINATE_STATUS: Record<string, string[]> = {
+  consultor: [],
+  gerente: ['consultor'],
+  /** Legado / genérico; gestor usa bloco dedicado (escopo tipo dono). */
+  gestor: ['consultor', 'gerente'],
+  dono_banca: ['gerente', 'consultor'],
+};
+
+const SCOPE_INCLUDES_SELF: Record<string, boolean> = {
+  consultor: true,
+  gerente: true,
+  gestor: true,
+  dono_banca: false,
+};
+
+export type DashboardScopeResult = {
+  allowed: boolean;
+  reason?: string;
+  userStatus: string | null;
+  bancas: Array<{ id: string; name: string; url: string }>;
+  defaultBancaUrl: string | null;
+  consultantProfiles: ConsultantProfileBasic[];
+  scopeLabel: string;
+};
+
+type BancaRowBasic = { id: string; name: string; url: string };
+
+function normalizeBancaUrlForMatch(raw: string | null | undefined): string {
+  return String(raw || '')
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/api\/crm\/?/i, '')
+    .replace(/\/+$/, '')
+    .toLowerCase();
+}
+
+async function fetchBancaIdsFromUserBancas(userIds: string[]): Promise<Set<string>> {
+  if (userIds.length === 0) return new Set();
+  const { data } = await supabaseServiceRole
+    .from('user_bancas')
+    .select('banca_ids')
+    .in('user_id', userIds);
+  const set = new Set<string>();
+  for (const row of data || []) {
+    const arr = Array.isArray((row as any).banca_ids) ? ((row as any).banca_ids as string[]) : [];
+    for (const id of arr) set.add(String(id));
+  }
+  return set;
+}
+
+async function fetchUserIdsInBanca(bancaId: string): Promise<string[]> {
+  const { data } = await supabaseServiceRole
+    .from('user_bancas')
+    .select('user_id')
+    .filter('banca_ids', 'cs', JSON.stringify([bancaId]));
+  return (data || []).map((r: { user_id: string }) => r.user_id);
+}
+
+export type MeuDesempenhoVisibilityBundle = {
+  profile: UserProfile | null;
+  visibleBancas: BancaRowBasic[];
+  /** Descendentes na hierarquia (enroller); reutilizar no escopo por banca para não chamar 2× */
+  descendantIdsFromMe: string[];
+};
+
+/**
+ * Uma passagem: perfil + bancas visíveis + IDs na árvore abaixo do usuário.
+ * Evita duplicar getSubordinateIds entre lista de bancas e escopo por banca (dono/gerente).
+ */
+export async function getVisibleBancasAndDescendantIds(userId: string): Promise<MeuDesempenhoVisibilityBundle> {
+  const profile = await getUserProfile(userId);
+  if (!profile) {
+    return { profile: null, visibleBancas: [], descendantIdsFromMe: [] };
+  }
+
+  const { data: allBancas } = await supabaseServiceRole
+    .from('crm_bancas')
+    .select('id, name, url')
+    .order('name', { ascending: true });
+  const bancas = (allBancas || []) as BancaRowBasic[];
+
+  if (profile.status === 'admin' || profile.status === 'super_admin') {
+    return { profile, visibleBancas: bancas, descendantIdsFromMe: [] };
+  }
+
+  const descendantIdsFromMe = await getSubordinateIds(userId);
+  const targetUserIds = Array.from(new Set([userId, ...descendantIdsFromMe]));
+  const allowedBancaIds = await fetchBancaIdsFromUserBancas(targetUserIds);
+
+  return {
+    profile,
+    visibleBancas: bancas.filter((b) => allowedBancaIds.has(String(b.id))),
+    descendantIdsFromMe,
+  };
+}
+
+/**
+ * Retorna a lista de bancas visíveis para o usuário no contexto de "Meu Desempenho".
+ * - admin/super_admin: todas as bancas de crm_bancas.
+ * - demais papéis: bancas em que o próprio usuário OU algum subordinado hierárquico atua
+ *   (`user_bancas`). Isso cobre dono_banca (várias bancas), gerente, gestor e consultor.
+ */
+export async function getVisibleBancasForUser(userId: string): Promise<BancaRowBasic[]> {
+  const { visibleBancas } = await getVisibleBancasAndDescendantIds(userId);
+  return visibleBancas;
+}
+
+/**
+ * Resolve o escopo completo de "Meu Desempenho" para um usuário numa banca específica.
+ * Aplica as regras hierárquicas e retorna os perfis que devem ser agregados + metadados.
+ */
+export async function getDashboardScopeForUser(params: {
+  userId: string;
+  bancaUrl?: string | null;
+  /** Quando já veio de GET /scope: evita 2× montar hierarquia + perfil */
+  visibilityBundle?: MeuDesempenhoVisibilityBundle | null;
+}): Promise<DashboardScopeResult> {
+  const bundle =
+    params.visibilityBundle ?? (await getVisibleBancasAndDescendantIds(params.userId));
+  const profile = bundle.profile;
+  if (!profile) {
+    return {
+      allowed: false,
+      reason: 'user_not_found',
+      userStatus: null,
+      bancas: [],
+      defaultBancaUrl: null,
+      consultantProfiles: [],
+      scopeLabel: '',
+    };
+  }
+
+  const visibleBancas = bundle.visibleBancas;
+  const descendantIdsFromMe = bundle.descendantIdsFromMe;
+  const defaultBancaUrl = visibleBancas[0]?.url ?? null;
+
+  const normalizedRequested = normalizeBancaUrlForMatch(params.bancaUrl);
+  const selectedBanca =
+    (normalizedRequested
+      ? visibleBancas.find((b) => normalizeBancaUrlForMatch(b.url) === normalizedRequested)
+      : null) || null;
+
+  // Requisitou banca específica que o usuário não pode ver → bloqueia
+  if (normalizedRequested && !selectedBanca) {
+    return {
+      allowed: false,
+      reason: 'banca_out_of_scope',
+      userStatus: profile.status ?? null,
+      bancas: visibleBancas,
+      defaultBancaUrl,
+      consultantProfiles: [],
+      scopeLabel: '',
+    };
+  }
+
+  // Nenhuma banca exigida e usuário não tem nenhuma visível → retorna escopo vazio mas válido
+  if (!selectedBanca) {
+    return {
+      allowed: true,
+      userStatus: profile.status ?? null,
+      bancas: visibleBancas,
+      defaultBancaUrl,
+      consultantProfiles: [],
+      scopeLabel: 'Nenhuma banca selecionada',
+    };
+  }
+
+  // admin/super_admin: agrega todos os perfis da banca via user_bancas
+  if (profile.status === 'admin' || profile.status === 'super_admin') {
+    const profiles = await getConsultorProfilesByBancaUrl(selectedBanca.url);
+    return {
+      allowed: true,
+      userStatus: profile.status,
+      bancas: visibleBancas,
+      defaultBancaUrl,
+      consultantProfiles: profiles,
+      scopeLabel:
+        profiles.length > 0
+          ? `Todos os perfis da banca (${profiles.length})`
+          : 'Banca sem perfis cadastrados',
+    };
+  }
+
+  // Gestor de tráfego: mesmo conjunto que o dono na banca — subordinados do **dono** (gerentes + consultores).
+  if (profile.status === 'gestor') {
+    const [path, userIdsInBancaList] = await Promise.all([
+      getHierarchyPath(params.userId),
+      fetchUserIdsInBanca(selectedBanca.id),
+    ]);
+    const dono = path.find((p) => p.status === 'dono_banca');
+    if (!dono) {
+      return {
+        allowed: true,
+        userStatus: profile.status,
+        bancas: visibleBancas,
+        defaultBancaUrl,
+        consultantProfiles: [],
+        scopeLabel: 'Nenhum dono de banca na hierarquia',
+      };
+    }
+
+    const allowedSubStatus = SCOPE_ALLOWED_SUBORDINATE_STATUS['dono_banca'];
+    const includeSelf = SCOPE_INCLUDES_SELF['dono_banca'];
+    const subordinateIds = await getSubordinateIds(dono.id);
+    const userIdsInBanca = new Set(userIdsInBancaList);
+
+    const candidateIds: string[] = [];
+    if (includeSelf && userIdsInBanca.has(dono.id)) {
+      candidateIds.push(dono.id);
+    }
+    if (subordinateIds.length > 0) {
+      candidateIds.push(...subordinateIds.filter((id) => userIdsInBanca.has(id)));
+    }
+
+    const uniqueIds = Array.from(new Set(candidateIds));
+    if (uniqueIds.length === 0) {
+      return {
+        allowed: true,
+        userStatus: profile.status,
+        bancas: visibleBancas,
+        defaultBancaUrl,
+        consultantProfiles: [],
+        scopeLabel: 'Nenhum gerente ou consultor desta banca no escopo do dono',
+      };
+    }
+
+    const roleDono = 'dono_banca';
+    const { data: gestorProfiles } = await supabaseServiceRole
+      .from('profiles')
+      .select('id, email, full_name, status')
+      .in('id', uniqueIds)
+      .in(
+        'status',
+        allowedSubStatus.length > 0
+          ? Array.from(new Set([...(includeSelf ? [roleDono] : []), ...allowedSubStatus]))
+          : [roleDono]
+      );
+
+    const consultantProfiles: ConsultantProfileBasic[] = (gestorProfiles || [])
+      .filter((p: any) => Boolean(p.id) && Boolean(p.email))
+      .map((p: any) => ({
+        id: String(p.id),
+        email: String(p.email),
+        full_name: p.full_name ?? null,
+        status: p.status ?? null,
+      }));
+
+    return {
+      allowed: true,
+      userStatus: profile.status,
+      bancas: visibleBancas,
+      defaultBancaUrl,
+      consultantProfiles,
+      scopeLabel:
+        consultantProfiles.length > 0
+          ? `Gerentes e consultores da rede (${consultantProfiles.length})`
+          : 'Sem perfis elegíveis nesta banca',
+    };
+  }
+
+  // Papéis hierárquicos: consultor, gerente, dono_banca
+  const role = String(profile.status || 'consultor');
+  const allowedSubStatus = SCOPE_ALLOWED_SUBORDINATE_STATUS[role] ?? [];
+  const includeSelf = SCOPE_INCLUDES_SELF[role] ?? true;
+
+  const subordinateIds =
+    allowedSubStatus.length > 0 ? descendantIdsFromMe : [];
+  const userIdsInBanca = new Set(await fetchUserIdsInBanca(selectedBanca.id));
+
+  // Perfis candidatos = próprio (se o papel inclui) + subordinados filtrados por status
+  const candidateIds: string[] = [];
+  if (includeSelf && userIdsInBanca.has(params.userId)) {
+    candidateIds.push(params.userId);
+  }
+  if (subordinateIds.length > 0) {
+    candidateIds.push(...subordinateIds.filter((id) => userIdsInBanca.has(id)));
+  }
+
+  const uniqueIds = Array.from(new Set(candidateIds));
+  if (uniqueIds.length === 0) {
+    return {
+      allowed: true,
+      userStatus: profile.status,
+      bancas: visibleBancas,
+      defaultBancaUrl,
+      consultantProfiles: [],
+      scopeLabel: 'Nenhum perfil elegível no seu escopo para esta banca',
+    };
+  }
+
+  const { data: profiles } = await supabaseServiceRole
+    .from('profiles')
+    .select('id, email, full_name, status')
+    .in('id', uniqueIds)
+    .in(
+      'status',
+      allowedSubStatus.length > 0
+        ? Array.from(new Set([...(includeSelf ? [role] : []), ...allowedSubStatus]))
+        : [role]
+    );
+
+  const consultantProfiles: ConsultantProfileBasic[] = (profiles || [])
+    .filter((p: any) => Boolean(p.id) && Boolean(p.email))
+    .map((p: any) => ({
+      id: String(p.id),
+      email: String(p.email),
+      full_name: p.full_name ?? null,
+      status: p.status ?? null,
+    }));
+
+  const labelByRole: Record<string, string> = {
+    consultor: 'Seu desempenho',
+    gerente: `Você + seus consultores (${consultantProfiles.length})`,
+    gestor: `Você + seu time (${consultantProfiles.length})`,
+    dono_banca: `Seus gerentes e consultores (${consultantProfiles.length})`,
+  };
+
+  return {
+    allowed: true,
+    userStatus: profile.status,
+    bancas: visibleBancas,
+    defaultBancaUrl,
+    consultantProfiles,
+    scopeLabel: labelByRole[role] || `Perfis no escopo (${consultantProfiles.length})`,
   };
 }
 

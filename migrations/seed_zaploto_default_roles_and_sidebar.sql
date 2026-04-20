@@ -121,7 +121,7 @@ BEGIN
   SELECT v_zaploto_id, v_role_dono, si.id, true
   FROM zaploto_sidebar_items si WHERE si.zaploto_id = v_zaploto_id
   AND si.code IN ('gestao_banca', 'dashboard', 'instances', 'maturador', 'ai_agents', 'crm', 'crm_kanban', 'crm_transferido', 'crm_avulsos',
-    'campanhas', 'campanha_add_group', 'campanha_mensagem', 'campanha_grupos', 'contacts', 'import_contacts', 'meu_anti_spam', 'profile')
+    'campanhas', 'campanha_add_group', 'campanha_mensagem', 'campanha_grupos', 'contacts', 'import_contacts', 'meu_desempenho', 'meu_anti_spam', 'profile')
   ON CONFLICT (role_id, sidebar_item_id) DO UPDATE SET visible = true;
 
   -- Gestor
@@ -129,7 +129,7 @@ BEGIN
   SELECT v_zaploto_id, v_role_gestor, si.id, true
   FROM zaploto_sidebar_items si WHERE si.zaploto_id = v_zaploto_id
   AND si.code IN ('gestao_trafego', 'vsl_redirect', 'dashboard', 'instances', 'maturador', 'ai_agents', 'crm', 'crm_kanban', 'crm_transferido', 'crm_avulsos',
-    'campanhas', 'campanha_add_group', 'campanha_mensagem', 'campanha_grupos', 'contacts', 'import_contacts', 'meu_anti_spam', 'profile')
+    'campanhas', 'campanha_add_group', 'campanha_mensagem', 'campanha_grupos', 'contacts', 'import_contacts', 'meu_desempenho', 'meu_anti_spam', 'profile')
   ON CONFLICT (role_id, sidebar_item_id) DO UPDATE SET visible = true;
 
   -- Gerente
@@ -137,7 +137,7 @@ BEGIN
   SELECT v_zaploto_id, v_role_gerente, si.id, true
   FROM zaploto_sidebar_items si WHERE si.zaploto_id = v_zaploto_id
   AND si.code IN ('gestao_consultores', 'dashboard', 'instances', 'ai_agents', 'crm', 'crm_kanban', 'crm_transferido', 'crm_avulsos',
-    'campanhas', 'campanha_add_group', 'campanha_mensagem', 'campanha_grupos', 'contacts', 'import_contacts', 'list_cleaning', 'meu_anti_spam', 'profile')
+    'campanhas', 'campanha_add_group', 'campanha_mensagem', 'campanha_grupos', 'contacts', 'import_contacts', 'list_cleaning', 'meu_desempenho', 'meu_anti_spam', 'profile')
   ON CONFLICT (role_id, sidebar_item_id) DO UPDATE SET visible = true;
 
   -- Consultor

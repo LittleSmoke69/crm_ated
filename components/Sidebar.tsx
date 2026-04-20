@@ -84,6 +84,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
     pathname === '/admin' ||
     pathname?.startsWith('/admin/') ||
     pathname?.startsWith('/gerente/zaplink') ||
+    pathname?.startsWith('/gerente/crm/lead-stock') ||
     pathname?.startsWith('/gestor-trafego/zaplink') ||
     onSignOut !== undefined;
 
@@ -221,7 +222,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
           };
           let items = json.data.items.map((it: unknown) => toMenuItem(it as Parameters<typeof toMenuItem>[0]));
           /** Garante Estoque de leads para gerente/super_admin quando o tenant ainda não tem o item na sidebar inteligente */
-          if (userStatus === 'gerente' || userStatus === 'super_admin') {
+          if (userStatus === 'gerente' || userStatus === 'super_admin' || userStatus === 'admin') {
             const hasLeadStock = items.some((it) =>
               typeof it.href === 'string' && it.href.includes('/gerente/crm/lead-stock-transfer')
             );
@@ -390,6 +391,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemGestaoBanca,
         itemGestaoTrafego,
         itemGestaoConsultores,
+        itemLeadStockGerente,
         itemLeadTransfer,
         itemMeuDesempenho,
         itemDesempenhoDetalhado,
@@ -438,6 +440,8 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
     if (userStatus === 'dono_banca') {
       return [
         itemGestaoBanca,
+        itemMeuDesempenho,
+        itemDesempenhoDetalhado,
         itemDashboard,
         itemInstances,
         itemMaturador,
@@ -456,6 +460,8 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
     if (userStatus === 'gestor') {
       return [
         itemGestaoTrafego,
+        itemMeuDesempenho,
+        itemDesempenhoDetalhado,
         itemZaplinkGestorTrafego,
         itemVslRedirect,
         itemDashboard,
@@ -476,6 +482,8 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
     if (userStatus === 'gerente') {
       return [
         itemGestaoConsultores,
+        itemMeuDesempenho,
+        itemDesempenhoDetalhado,
         itemLeadTransfer,
         itemLeadStockGerente,
         itemGestaoTrafego,
