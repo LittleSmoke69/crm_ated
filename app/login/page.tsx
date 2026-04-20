@@ -113,53 +113,53 @@ const LoginPage = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-100 dark:bg-[#1a1a1a] px-4 py-12 relative">
+    <div className="min-h-[100dvh] min-h-screen flex items-center justify-center bg-gray-100 dark:bg-[#1a1a1a] px-4 sm:px-6 py-8 sm:py-12 pb-[max(2rem,env(safe-area-inset-bottom))] pt-[max(2rem,env(safe-area-inset-top))] relative overflow-x-hidden">
       <button
         type="button"
         onClick={toggleTheme}
-        className="absolute top-4 right-4 p-2 rounded-lg bg-gray-200 dark:bg-[#333] text-gray-600 dark:text-[#aaa] hover:bg-gray-300 dark:hover:bg-[#404040] transition-colors"
+        className="absolute top-[max(1rem,env(safe-area-inset-top))] right-[max(1rem,env(safe-area-inset-right))] p-2.5 min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg bg-gray-200 dark:bg-[#333] text-gray-600 dark:text-[#aaa] hover:bg-gray-300 dark:hover:bg-[#404040] transition-colors"
         aria-label={theme === 'light' ? 'Ativar modo escuro' : 'Ativar modo claro'}
       >
         {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
       </button>
-      <div className="w-full max-w-lg">
+      <div className="w-full max-w-lg mx-auto">
         {/* Logo e Título */}
-        <div className="text-center mb-8">
+        <div className="text-center mb-6 sm:mb-8">
           <div className="flex items-center justify-center mb-3 w-full">
             <Logo size="xl" />
           </div>
-          <h1 className="text-2xl font-bold text-gray-800 dark:text-white mb-2">
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-800 dark:text-white mb-2 px-1">
             Bem-vindo de volta
           </h1>
-          <p className="text-gray-600 dark:text-[#aaa] text-sm">
+          <p className="text-gray-600 dark:text-[#aaa] text-sm sm:text-base max-w-[22rem] sm:max-w-none mx-auto px-1 leading-relaxed">
             Entre com suas credenciais para acessar sua conta
           </p>
         </div>
 
         {/* Card de Login */}
-        <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-lg p-10 border border-gray-200 dark:border-[#404040]">
+        <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-lg p-5 sm:p-8 lg:p-10 border border-gray-200 dark:border-[#404040]">
           {errorMsg && (
-            <div className="mb-6 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 text-sm px-4 py-3 flex items-center gap-2">
-              <AlertCircle className="w-5 h-5 flex-shrink-0" />
-              <span>{errorMsg}</span>
+            <div className="mb-5 sm:mb-6 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 text-sm px-3 sm:px-4 py-3 flex items-start gap-2">
+              <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+              <span className="min-w-0 break-words">{errorMsg}</span>
             </div>
           )}
 
-          <form onSubmit={handleLogin} className="space-y-5">
+          <form onSubmit={handleLogin} className="space-y-4 sm:space-y-5">
             {/* Email */}
             <div>
               <label htmlFor="email" className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-2">
                 E-mail
               </label>
               <div className="relative">
-                <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400 dark:text-[#888]" />
+                <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400 dark:text-[#888] pointer-events-none" />
                 <input
                   id="email"
                   type="email"
                   value={email}
                   onChange={e => setEmail(e.target.value)}
                   placeholder="seu@email.com"
-                  className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-gray-800 dark:text-white placeholder:text-gray-600 dark:placeholder:text-[#aaa] transition"
+                  className="w-full min-h-[48px] pl-10 pr-4 py-2.5 sm:py-3 border-2 border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-base text-gray-800 dark:text-white placeholder:text-gray-600 dark:placeholder:text-[#aaa] transition"
                   disabled={loading}
                   autoComplete="username"
                   inputMode="email"
@@ -174,14 +174,14 @@ const LoginPage = () => {
                 Senha
               </label>
               <div className="relative">
-                <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400 dark:text-[#888]" />
+                <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400 dark:text-[#888] pointer-events-none" />
                 <input
                   id="password"
                   type="password"
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-gray-800 dark:text-white placeholder:text-gray-600 dark:placeholder:text-[#aaa] transition"
+                  className="w-full min-h-[48px] pl-10 pr-4 py-2.5 sm:py-3 border-2 border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-base text-gray-800 dark:text-white placeholder:text-gray-600 dark:placeholder:text-[#aaa] transition"
                   disabled={loading}
                   autoComplete="current-password"
                   required
@@ -193,7 +193,7 @@ const LoginPage = () => {
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-3 rounded-lg text-white font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-md hover:shadow-lg bg-[#8CD955] dark:bg-[#00ff00] hover:bg-[#7BC84A] dark:hover:bg-[#00e600]"
+              className="w-full min-h-[48px] py-3 rounded-lg text-white text-base font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-md hover:shadow-lg bg-[#8CD955] dark:bg-[#00ff00] hover:bg-[#7BC84A] dark:hover:bg-[#00e600]"
             >
               {loading ? (
                 <>
@@ -209,19 +209,20 @@ const LoginPage = () => {
             </button>
           </form>
 
-          {/* Esqueceu a senha (esquerda) e Criar conta (direita) na mesma linha */}
-          <div className="mt-6 flex flex-nowrap items-center justify-between gap-4 text-sm">
+          {/* Esqueceu a senha e Criar conta — empilhados no mobile */}
+          <div className="mt-6 flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-x-4 sm:gap-y-2 text-sm text-center sm:text-left">
             <a
               href="/forgot-password"
-              className="text-[#8CD955] dark:text-[#00ff00] hover:text-[#7BC84A] dark:hover:text-[#00e600] font-medium transition whitespace-nowrap"
+              className="text-[#8CD955] dark:text-[#00ff00] hover:text-[#7BC84A] dark:hover:text-[#00e600] font-medium transition py-2.5 sm:py-0 -mx-1 px-1 rounded-lg inline-flex items-center justify-center sm:justify-start active:bg-black/5 dark:active:bg-white/10"
             >
-              Esqueceu a senha? Clique aqui
+              <span className="sm:hidden">Esqueceu a senha?</span>
+              <span className="hidden sm:inline">Esqueceu a senha? Clique aqui</span>
             </a>
-            <p className="text-gray-600 dark:text-[#aaa] whitespace-nowrap">
-              Não tem conta?{' '}
+            <p className="text-gray-600 dark:text-[#aaa] py-2.5 sm:py-0 flex flex-wrap items-center justify-center sm:justify-end gap-x-1 gap-y-1">
+              <span>Não tem conta?</span>
               <a
                 href="/register"
-                className="text-[#8CD955] dark:text-[#00ff00] hover:text-[#7BC84A] dark:hover:text-[#00e600] font-medium transition"
+                className="text-[#8CD955] dark:text-[#00ff00] hover:text-[#7BC84A] dark:hover:text-[#00e600] font-medium transition rounded-lg px-1 -mx-1 py-1 active:bg-black/5 dark:active:bg-white/10"
               >
                 Criar conta
               </a>
@@ -230,8 +231,8 @@ const LoginPage = () => {
         </div>
 
         {/* Footer */}
-        <p className="text-center text-xs text-gray-500 dark:text-[#888] mt-6">
-          © 2025 ZAPLOTO. Todos os direitos reservados.
+        <p className="text-center text-xs text-gray-500 dark:text-[#888] mt-6 px-2">
+          © 2026 ZAPLOTO. Todos os direitos reservados.
         </p>
       </div>
     </div>
