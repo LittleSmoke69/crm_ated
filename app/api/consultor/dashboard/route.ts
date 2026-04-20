@@ -3,6 +3,18 @@ import { requireStatusOrSidebarPermission, getUserProfile } from '@/lib/middlewa
 import { successResponse, errorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { getHierarchyPath } from '@/lib/utils/hierarchy';
+import {
+  aggregateBetsDepositsPayload,
+  computeConsultantAdsSummary,
+  fetchBetsDepositsByConsultant,
+  getConsultorProfilesByBancaUrl,
+} from '@/lib/services/dashboard/consultor-bets-deposits';
+
+const DASHBOARD_BETS_DEPOSITS_INTERVAL_MS = 500;
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
 
 /**
  * Busca o total de saques de um usuário usando a API de saques
@@ -50,6 +62,7 @@ export async function GET(req: NextRequest) {
     const bancaUrlFilter = searchParams.get('banca_url');
     const searchBy = searchParams.get('search_by') || 'created_at';
     const consultorIdFilter = searchParams.get('consultor_id')?.trim() || null;
+    const skipLegacy = ['1', 'true', 'yes'].includes(String(searchParams.get('skip_legacy') || '').toLowerCase());
 
     const isAdminOrSuperAdmin = profile?.status === 'super_admin' || profile?.status === 'admin';
 
@@ -57,7 +70,7 @@ export async function GET(req: NextRequest) {
     let effectiveUserId = userId;
     if (isAdminOrSuperAdmin && consultorIdFilter) {
       const targetProfile = await getUserProfile(consultorIdFilter);
-      if (targetProfile?.status === 'consultor') {
+      if (['consultor', 'gerente', 'admin', 'gestor'].includes(String(targetProfile?.status || ''))) {
         effectiveUserId = consultorIdFilter;
       }
     }
@@ -80,10 +93,44 @@ export async function GET(req: NextRequest) {
     }
 
     const consultorProfile = await getUserProfile(effectiveUserId);
+
+    const parsePtBrValue = (value: unknown): number => {
+      if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+      const normalized = String(value ?? '').trim().replace(/\./g, '').replace(',', '.');
+      const n = Number(normalized);
+      return Number.isFinite(n) ? n : 0;
+    };
+    const shouldLoadLegacyConsultorLeads = Boolean(
+      !skipLegacy && consultorProfile?.email && (!isAdminOrSuperAdmin || consultorIdFilter)
+    );
+
+    let consultantProfilesScope: Array<{ id: string; email: string; full_name: string | null; status?: string | null }> = [];
+    if (isAdminOrSuperAdmin && !consultorIdFilter) {
+      if (bancaUrl) {
+        consultantProfilesScope = await getConsultorProfilesByBancaUrl(bancaUrl);
+      }
+    } else if (consultorProfile?.email) {
+      consultantProfilesScope = [
+        {
+          id: effectiveUserId,
+          email: consultorProfile.email,
+          full_name: consultorProfile.full_name ?? null,
+          status: consultorProfile.status ?? null,
+        },
+      ];
+    }
     
     let externalKpis = null;
     let externalKpisError: string | null = null;
     let chartData: any = null;
+    let betsDepositsData: any = null;
+    let adsSummary = {
+      total_spend: 0,
+      meta_spend: 0,
+      redirect_spend: 0,
+      redirect_clicks: 0,
+      source: 'none' as 'none' | 'meta_ads' | 'redirect',
+    };
     
     const engagementStats = {
       no_play: 0,
@@ -92,7 +139,91 @@ export async function GET(req: NextRequest) {
       deposit_3x_plus: 0
     };
 
-    if (bancaUrl) {
+    if (bancaUrl && consultantProfilesScope.length > 0) {
+      console.log('[Consultor Dashboard API] Loading bets/deposits endpoint', {
+        consultant_count: consultantProfilesScope.length,
+        date_from: dateFrom,
+        date_to: dateTo,
+        mode: 'sequential_with_interval',
+        interval_ms: DASHBOARD_BETS_DEPOSITS_INTERVAL_MS,
+      });
+      const countsByStatus = consultantProfilesScope.reduce(
+        (acc, p) => {
+          const key = String(p.status || 'consultor');
+          acc[key] = (acc[key] || 0) + 1;
+          return acc;
+        },
+        {} as Record<string, number>
+      );
+      const remainingByStatus = { ...countsByStatus };
+      console.log('[Consultor Dashboard API] Bets/deposits scope by status', countsByStatus);
+      const validResults: Array<{
+        profile: { id: string; email: string; full_name: string | null };
+        payload: any;
+      }> = [];
+
+      for (let i = 0; i < consultantProfilesScope.length; i++) {
+        const profileScope = consultantProfilesScope[i];
+        const statusKey = String(profileScope.status || 'consultor');
+        const remainingTotalBefore = consultantProfilesScope.length - i;
+        console.log('[Consultor Dashboard API] Bets/deposits consultant request', {
+          index: i + 1,
+          total: consultantProfilesScope.length,
+          remaining_total_before: remainingTotalBefore,
+          remaining_by_status_before: remainingByStatus,
+          status: statusKey,
+          consultant_email: profileScope.email,
+        });
+
+        const payload = await fetchBetsDepositsByConsultant({
+          bancaUrl,
+          consultantEmail: profileScope.email,
+          dateFrom,
+          dateTo,
+          page: 1,
+          perPage: 200,
+        });
+
+        if (payload?.success && payload?.data) {
+          validResults.push({ profile: profileScope, payload });
+        }
+
+        remainingByStatus[statusKey] = Math.max(0, Number(remainingByStatus[statusKey] || 0) - 1);
+        console.log('[Consultor Dashboard API] Bets/deposits consultant processed', {
+          consultant_email: profileScope.email,
+          status: statusKey,
+          success: Boolean(payload?.success && payload?.data),
+          remaining_total_after: consultantProfilesScope.length - (i + 1),
+          remaining_by_status_after: remainingByStatus,
+        });
+
+        if (i < consultantProfilesScope.length - 1) {
+          await sleep(DASHBOARD_BETS_DEPOSITS_INTERVAL_MS);
+        }
+      }
+
+      if (validResults.length > 0) {
+        betsDepositsData = aggregateBetsDepositsPayload(validResults);
+        console.log('[Consultor Dashboard API] Bets/deposits aggregated', {
+          valid_consultants: validResults.length,
+          total_consultants: consultantProfilesScope.length,
+          has_totals: Boolean(betsDepositsData?.totals),
+        });
+      } else {
+        console.log('[Consultor Dashboard API] Bets/deposits returned empty for all consultants');
+      }
+    }
+
+    if (bancaUrl && consultantProfilesScope.length > 0) {
+      adsSummary = await computeConsultantAdsSummary({
+        bancaUrl,
+        consultorIds: consultantProfilesScope.map((p) => p.id),
+        dateFrom,
+        dateTo,
+      });
+    }
+
+    if (bancaUrl && shouldLoadLegacyConsultorLeads) {
       // Busca leads individuais para calcular TODOS os gráficos e KPIs
       if (consultorProfile?.email) {
         try {
@@ -626,10 +757,30 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    if (!externalKpis && betsDepositsData?.totals) {
+      const totalDeposited = parsePtBrValue(betsDepositsData.totals.total_depositos);
+      const totalBets = parsePtBrValue(betsDepositsData.totals.total_apostas);
+      const totalCommission = parsePtBrValue(betsDepositsData.totals.total_comissao);
+      externalKpis = {
+        total_leads: Number(betsDepositsData?.history?.bets_by_user?.pagination?.total || 0),
+        total_deposited: totalDeposited,
+        total_bets: totalBets,
+        total_prizes: 0,
+        total_withdrawals: 0,
+        active_leads: 0,
+        net_profit: totalDeposited - totalCommission,
+        conversion_rate: 0,
+        clientes_premiados: 0,
+        ltv_medio: 0,
+      };
+    }
+
     return successResponse({
       externalKpis,
       externalKpisError,
       chartData,
+      betsDepositsData,
+      adsSummary,
     });
   } catch (err: any) {
     console.error('[Consultor Dashboard API] Erro:', err.message);

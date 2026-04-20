@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { 
@@ -9,7 +9,6 @@ import {
   Users, 
   Target, 
   CheckCircle2, 
-  DollarSign, 
   Award, 
   BarChart3, 
   Calendar, 
@@ -22,7 +21,9 @@ import {
   ArrowUpRight,
   Wallet,
   Phone,
-  Copy
+  Copy,
+  History,
+  MousePointerClick
 } from 'lucide-react';
 import Link from 'next/link';
 import StatusDistributionChart from '@/components/Charts/StatusDistributionChart';
@@ -30,6 +31,7 @@ import ActivityByWeekdayChart from '@/components/Charts/ActivityByWeekdayChart';
 import ConversionFunnelChart from '@/components/Charts/ConversionFunnelChart';
 import TopPerformersChart from '@/components/Charts/TopPerformersChart';
 import StarsDistributionChart from '@/components/Charts/StarsDistributionChart';
+import ExportCsvMenu from '@/components/consultor/ExportCsvMenu';
 
 interface ExternalKpis {
   total_leads: number;
@@ -37,9 +39,11 @@ interface ExternalKpis {
   total_bets: number;
   total_prizes: number;
   total_withdrawals?: number;
+  active_clients_count?: number;
   active_leads: number;
   conversion_rate: number;
   net_profit: number;
+  clientes_afiliados?: number;
   clientes_premiados?: number;
   ltv_medio?: number;
 }
@@ -65,6 +69,69 @@ interface DashboardData {
   externalKpis?: ExternalKpis | null;
   externalKpisError?: string | null;
   chartData?: ChartData | null;
+  betsDepositsData?: {
+    consultant_scope?: {
+      type: 'single' | 'multi';
+      count: number;
+      consultants: Array<{ id: string; email: string; full_name: string | null }>;
+    };
+    totals?: {
+      total_apostas: string | number;
+      total_depositos: string | number;
+      total_comissao: string | number;
+    };
+    commission_by_type?: Array<{
+      id: number;
+      type: string;
+      wallet: string;
+      user_id_sender: number;
+      value: string;
+      created_at: string;
+      consultant_email?: string;
+      consultant_name?: string | null;
+    }>;
+    history?: {
+      bets_by_user?: {
+        pagination?: { current_page: number; per_page: number; total: number; last_page: number };
+        data?: Array<{
+          user_id_sender: number;
+          user_name: string;
+          user_email: string;
+          total_apostado: number;
+          total_apostado_loteria: number;
+          total_apostado_bichao: number;
+          bets_count_loteria: number;
+          bets_count_bichao: number;
+        }>;
+      };
+      deposits_by_user?: {
+        pagination?: { current_page: number; per_page: number; total: number; last_page: number };
+        data?: Array<{
+          user_id_sender: number;
+          user_name: string;
+          user_email: string;
+          total_depositado: number;
+          deposits_count: number;
+        }>;
+      };
+    };
+  } | null;
+  adsSummary?: {
+    total_spend: number;
+    meta_spend: number;
+    redirect_spend: number;
+    redirect_clicks: number;
+    source: 'none' | 'meta_ads' | 'redirect';
+  } | null;
+}
+
+interface DashboardProgressState {
+  mode: 'single' | 'progressive';
+  processed: number;
+  total: number;
+  currentName: string | null;
+  totalByStatus: Record<string, number>;
+  processedByStatus: Record<string, number>;
 }
 
 export default function ConsultorPage() {
@@ -81,9 +148,11 @@ export default function ConsultorPage() {
 
   // Perfil e filtro de consultor para super_admin/admin (ver desempenho de outro consultor)
   const [userStatus, setUserStatus] = useState<string | null>(null);
-  const [consultoresDaBanca, setConsultoresDaBanca] = useState<Array<{ id: string; email: string; full_name: string | null }>>([]);
+  const [consultoresDaBanca, setConsultoresDaBanca] = useState<
+    Array<{ id: string; email: string; full_name: string | null; status?: string | null }>
+  >([]);
   const [consultoresLoading, setConsultoresLoading] = useState(false);
-  const [selectedConsultorId, setSelectedConsultorId] = useState<string>('');
+  const [selectedConsultorId, setSelectedConsultorId] = useState<string>('all');
   const [showConsultorDesempenhoFilter, setShowConsultorDesempenhoFilter] = useState(false);
   const [consultorDesempenhoSearchTerm, setConsultorDesempenhoSearchTerm] = useState('');
 
@@ -107,6 +176,9 @@ export default function ConsultorPage() {
   const [winnersLoading, setWinnersLoading] = useState(false);
   const [winnersError, setWinnersError] = useState<string | null>(null);
   const [winnersListCopied, setWinnersListCopied] = useState(false);
+  const dashboardAbortRef = useRef<AbortController | null>(null);
+  const dashboardRequestKeyRef = useRef<string | null>(null);
+  const [dashboardProgress, setDashboardProgress] = useState<DashboardProgressState | null>(null);
 
   // Função auxiliar para formatar data no formato YYYY-MM-DD usando fuso horário local
   const formatDateLocal = (date: Date): string => {
@@ -254,7 +326,7 @@ export default function ConsultorPage() {
   useEffect(() => {
     if (!userId || !isAdminOrSuperAdmin || !selectedBanca) {
       setConsultoresDaBanca([]);
-      setSelectedConsultorId('');
+      setSelectedConsultorId('all');
       return;
     }
     setConsultoresLoading(true);
@@ -265,8 +337,7 @@ export default function ConsultorPage() {
       .then((res) => {
         if (res.success && Array.isArray(res.data)) {
           setConsultoresDaBanca(res.data);
-          if (res.data.length > 0 && !selectedConsultorId) setSelectedConsultorId(res.data[0].id);
-          else if (res.data.length === 0) setSelectedConsultorId('');
+          if (!selectedConsultorId) setSelectedConsultorId('all');
         }
       })
       .finally(() => setConsultoresLoading(false));
@@ -304,30 +375,252 @@ export default function ConsultorPage() {
     }
   };
 
+  const parseMoneyValue = (value: unknown): number => {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+    const normalized = String(value ?? '').trim().replace(/\./g, '').replace(',', '.');
+    const n = Number(normalized);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const mergeAdsSummary = (current: DashboardData['adsSummary'], next: DashboardData['adsSummary']) => {
+    const base = current || { total_spend: 0, meta_spend: 0, redirect_spend: 0, redirect_clicks: 0, source: 'none' as const };
+    const incoming = next || { total_spend: 0, meta_spend: 0, redirect_spend: 0, redirect_clicks: 0, source: 'none' as const };
+    const metaSpend = (base.meta_spend || 0) + (incoming.meta_spend || 0);
+    const redirectSpend = (base.redirect_spend || 0) + (incoming.redirect_spend || 0);
+    const redirectClicks = (base.redirect_clicks || 0) + (incoming.redirect_clicks || 0);
+    const totalSpend = metaSpend + redirectSpend;
+    return {
+      total_spend: totalSpend,
+      meta_spend: metaSpend,
+      redirect_spend: redirectSpend,
+      redirect_clicks: redirectClicks,
+      source: metaSpend > 0 ? 'meta_ads' as const : redirectClicks > 0 ? 'redirect' as const : 'none' as const,
+    };
+  };
+
+  const mergeBetsDepositsData = (current: DashboardData['betsDepositsData'], next: DashboardData['betsDepositsData']) => {
+    if (!next) return current;
+    if (!current) return next;
+
+    const consultantsMap = new Map<string, { id: string; email: string; full_name: string | null }>();
+    [...(current.consultant_scope?.consultants || []), ...(next.consultant_scope?.consultants || [])].forEach((item) => {
+      if (item?.id) consultantsMap.set(item.id, item);
+    });
+    const consultants = [...consultantsMap.values()];
+
+    const totalApostas = parseMoneyValue(current.totals?.total_apostas) + parseMoneyValue(next.totals?.total_apostas);
+    const totalDepositos = parseMoneyValue(current.totals?.total_depositos) + parseMoneyValue(next.totals?.total_depositos);
+    const totalComissao = parseMoneyValue(current.totals?.total_comissao) + parseMoneyValue(next.totals?.total_comissao);
+
+    const commissionByType = [...(current.commission_by_type || []), ...(next.commission_by_type || [])].sort((a, b) =>
+      String(b.created_at || '').localeCompare(String(a.created_at || ''))
+    );
+
+    const betsMap = new Map<number, any>();
+    [...(current.history?.bets_by_user?.data || []), ...(next.history?.bets_by_user?.data || [])].forEach((row) => {
+      const key = Number(row.user_id_sender || 0);
+      const prev = betsMap.get(key) || {
+        user_id_sender: key,
+        user_name: row.user_name || '',
+        user_email: row.user_email || '',
+        total_apostado: 0,
+        total_apostado_loteria: 0,
+        total_apostado_bichao: 0,
+        bets_count_loteria: 0,
+        bets_count_bichao: 0,
+      };
+      prev.total_apostado += Number(row.total_apostado || 0);
+      prev.total_apostado_loteria += Number(row.total_apostado_loteria || 0);
+      prev.total_apostado_bichao += Number(row.total_apostado_bichao || 0);
+      prev.bets_count_loteria += Number(row.bets_count_loteria || 0);
+      prev.bets_count_bichao += Number(row.bets_count_bichao || 0);
+      if (!prev.user_name && row.user_name) prev.user_name = row.user_name;
+      if (!prev.user_email && row.user_email) prev.user_email = row.user_email;
+      betsMap.set(key, prev);
+    });
+    const betsData = [...betsMap.values()].sort((a, b) => Number(b.total_apostado || 0) - Number(a.total_apostado || 0));
+
+    const depositsMap = new Map<number, any>();
+    [...(current.history?.deposits_by_user?.data || []), ...(next.history?.deposits_by_user?.data || [])].forEach((row) => {
+      const key = Number(row.user_id_sender || 0);
+      const prev = depositsMap.get(key) || {
+        user_id_sender: key,
+        user_name: row.user_name || '',
+        user_email: row.user_email || '',
+        total_depositado: 0,
+        deposits_count: 0,
+      };
+      prev.total_depositado += Number(row.total_depositado || 0);
+      prev.deposits_count += Number(row.deposits_count || 0);
+      if (!prev.user_name && row.user_name) prev.user_name = row.user_name;
+      if (!prev.user_email && row.user_email) prev.user_email = row.user_email;
+      depositsMap.set(key, prev);
+    });
+    const depositsData = [...depositsMap.values()].sort((a, b) => Number(b.total_depositado || 0) - Number(a.total_depositado || 0));
+
+    return {
+      consultant_scope: {
+        type: consultants.length > 1 ? 'multi' as const : 'single' as const,
+        count: consultants.length,
+        consultants,
+      },
+      totals: {
+        total_apostas: totalApostas,
+        total_depositos: totalDepositos,
+        total_comissao: totalComissao,
+      },
+      commission_by_type: commissionByType,
+      history: {
+        bets_by_user: {
+          pagination: { current_page: 1, per_page: betsData.length, total: betsData.length, last_page: 1 },
+          data: betsData,
+        },
+        deposits_by_user: {
+          pagination: { current_page: 1, per_page: depositsData.length, total: depositsData.length, last_page: 1 },
+          data: depositsData,
+        },
+      },
+    };
+  };
+
+  const buildExternalKpisFromBetsDeposits = (betsDepositsData: DashboardData['betsDepositsData']) => {
+    if (!betsDepositsData?.totals) return null;
+    const totalDeposited = parseMoneyValue(betsDepositsData.totals.total_depositos);
+    const totalBets = parseMoneyValue(betsDepositsData.totals.total_apostas);
+    const totalComissao = parseMoneyValue(betsDepositsData.totals.total_comissao);
+    return {
+      total_leads: Number(betsDepositsData?.history?.bets_by_user?.pagination?.total || 0),
+      total_deposited: totalDeposited,
+      total_bets: totalBets,
+      total_prizes: 0,
+      total_withdrawals: 0,
+      active_leads: 0,
+      net_profit: totalDeposited - totalComissao,
+      conversion_rate: 0,
+      clientes_premiados: 0,
+      ltv_medio: 0,
+    };
+  };
+
   const loadDashboard = async () => {
     // Só carrega se houver banca selecionada
     if (!selectedBanca) {
       setData(null);
+      setDashboardProgress(null);
       return;
     }
 
+    let controller: AbortController | null = null;
     try {
-      setDataLoading(true);
-      
       const { dateFrom, dateTo } = getDateRange();
-      
-      let url = '/api/consultor/dashboard';
-      const params = new URLSearchParams();
-      if (dateFrom) params.append('date_from', dateFrom);
-      if (dateTo) params.append('date_to', dateTo);
-      if (selectedBanca) params.append('banca_url', selectedBanca);
-      if (isAdminOrSuperAdmin && selectedConsultorId) params.append('consultor_id', selectedConsultorId);
-      if (params.toString()) url += `?${params.toString()}`;
+      const baseParams = new URLSearchParams();
+      if (dateFrom) baseParams.append('date_from', dateFrom);
+      if (dateTo) baseParams.append('date_to', dateTo);
+      if (selectedBanca) baseParams.append('banca_url', selectedBanca);
+
+      const isProgressiveAll =
+        isAdminOrSuperAdmin &&
+        selectedConsultorId === 'all' &&
+        consultoresDaBanca.length > 0;
+
+      const requestKey = `${baseParams.toString()}|${userId || ''}|${selectedConsultorId}|${isProgressiveAll ? 'progressive' : 'single'}`;
+      if (dataLoading && dashboardRequestKeyRef.current === requestKey) {
+        return;
+      }
+
+      dashboardAbortRef.current?.abort();
+      controller = new AbortController();
+      dashboardAbortRef.current = controller;
+      dashboardRequestKeyRef.current = requestKey;
+      setDataLoading(true);
+      setDashboardProgress(null);
+
+      if (isProgressiveAll) {
+        const scope = consultoresDaBanca.filter((c) => Boolean(c.id) && Boolean(c.email));
+        const totalByStatus = scope.reduce((acc, item) => {
+          const key = String(item.status || 'consultor').toLowerCase();
+          acc[key] = (acc[key] || 0) + 1;
+          return acc;
+        }, {} as Record<string, number>);
+        const processedByStatus: Record<string, number> = {};
+        let aggregatedData: DashboardData = {
+          externalKpis: null,
+          externalKpisError: null,
+          chartData: null,
+          betsDepositsData: null,
+          adsSummary: { total_spend: 0, meta_spend: 0, redirect_spend: 0, redirect_clicks: 0, source: 'none' },
+        };
+
+        setData(aggregatedData);
+        setDashboardProgress({
+          mode: 'progressive',
+          processed: 0,
+          total: scope.length,
+          currentName: null,
+          totalByStatus,
+          processedByStatus,
+        });
+
+        for (let i = 0; i < scope.length; i++) {
+          if (controller.signal.aborted) return;
+          const item = scope[i];
+          const statusKey = String(item.status || 'consultor').toLowerCase();
+          setDashboardProgress({
+            mode: 'progressive',
+            processed: i,
+            total: scope.length,
+            currentName: item.full_name || item.email,
+            totalByStatus,
+            processedByStatus: { ...processedByStatus },
+          });
+
+          const params = new URLSearchParams(baseParams.toString());
+          params.append('consultor_id', item.id);
+          params.append('skip_legacy', '1');
+
+          const response = await fetch(`/api/consultor/dashboard?${params.toString()}`, {
+            headers: { 'X-User-Id': userId as string },
+            signal: controller.signal,
+          });
+
+          if (response.ok) {
+            const result = await response.json();
+            if (result.success && result.data) {
+              aggregatedData = {
+                ...aggregatedData,
+                betsDepositsData: mergeBetsDepositsData(aggregatedData.betsDepositsData, result.data.betsDepositsData),
+                adsSummary: mergeAdsSummary(aggregatedData.adsSummary, result.data.adsSummary),
+                chartData: aggregatedData.chartData || result.data.chartData || null,
+                externalKpisError: aggregatedData.externalKpisError || result.data.externalKpisError || null,
+              };
+              aggregatedData.externalKpis = buildExternalKpisFromBetsDeposits(aggregatedData.betsDepositsData);
+              setData({ ...aggregatedData });
+            }
+          }
+
+          processedByStatus[statusKey] = (processedByStatus[statusKey] || 0) + 1;
+          setDashboardProgress({
+            mode: 'progressive',
+            processed: i + 1,
+            total: scope.length,
+            currentName: item.full_name || item.email,
+            totalByStatus,
+            processedByStatus: { ...processedByStatus },
+          });
+        }
+        return;
+      }
+
+      if (isAdminOrSuperAdmin && selectedConsultorId && selectedConsultorId !== 'all') {
+        baseParams.append('consultor_id', selectedConsultorId);
+      }
+      const url = `/api/consultor/dashboard${baseParams.toString() ? `?${baseParams.toString()}` : ''}`;
 
       const response = await fetch(url, {
         headers: {
           'X-User-Id': userId as string,
         },
+        signal: controller.signal,
       });
 
       if (response.ok) {
@@ -337,9 +630,18 @@ export default function ConsultorPage() {
         }
       }
     } catch (error) {
+      if ((error as any)?.name === 'AbortError') {
+        return;
+      }
       console.error('Erro ao carregar dashboard:', error);
     } finally {
-      setDataLoading(false);
+      if (dashboardAbortRef.current === controller) {
+        dashboardAbortRef.current = null;
+        setDataLoading(false);
+        setDashboardProgress((prev) =>
+          prev ? { ...prev, currentName: null, processed: Math.min(prev.processed, prev.total) } : null
+        );
+      }
     }
   };
 
@@ -357,7 +659,9 @@ export default function ConsultorPage() {
       params.append('banca_url', selectedBanca);
       if (dateFrom) params.append('date_from', dateFrom);
       if (dateTo) params.append('date_to', dateTo);
-      if (isAdminOrSuperAdmin && selectedConsultorId) params.append('consultor_id', selectedConsultorId);
+      if (isAdminOrSuperAdmin && selectedConsultorId && selectedConsultorId !== 'all') {
+        params.append('consultor_id', selectedConsultorId);
+      }
       const response = await fetch(`/api/consultor/winners?${params.toString()}`, {
         headers: { 'X-User-Id': userId as string },
       });
@@ -385,7 +689,8 @@ export default function ConsultorPage() {
       setData(null);
       return;
     }
-    if (isAdminOrSuperAdmin && consultoresDaBanca.length > 0 && !selectedConsultorId) return;
+    if (isAdminOrSuperAdmin && !selectedConsultorId) return;
+    if (isAdminOrSuperAdmin && selectedConsultorId === 'all' && consultoresDaBanca.length === 0) return;
     loadDashboard();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dateFilter, appliedStartDate, appliedEndDate, selectedBanca, selectedConsultorId, isAdminOrSuperAdmin, consultoresDaBanca.length]);
@@ -399,6 +704,12 @@ export default function ConsultorPage() {
     loadWinners();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBanca, winnersPeriod, winnersAppliedStart, winnersAppliedEnd, isAdminOrSuperAdmin ? selectedConsultorId : null]);
+
+  useEffect(() => {
+    return () => {
+      dashboardAbortRef.current?.abort();
+    };
+  }, []);
 
   const handleSignOut = () => {
     if (typeof window !== 'undefined') {
@@ -532,7 +843,40 @@ export default function ConsultorPage() {
     );
   }
 
-  const { externalKpis, externalKpisError, chartData } = data || {};
+  const { externalKpis, externalKpisError, chartData, betsDepositsData, adsSummary } = data || {};
+  const parsePtBrValue = (value?: string | number | null) => {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+    const normalized = String(value ?? '').trim().replace(/\./g, '').replace(',', '.');
+    const n = Number(normalized);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const totalApostasBody = parsePtBrValue(betsDepositsData?.totals?.total_apostas);
+  const totalDepositosBody = parsePtBrValue(betsDepositsData?.totals?.total_depositos);
+  const totalComissaoBody = parsePtBrValue(betsDepositsData?.totals?.total_comissao);
+  const statusOrder = ['consultor', 'gerente', 'admin', 'gestor'];
+  const statusLabel: Record<string, string> = {
+    consultor: 'consultor(es)',
+    gerente: 'gerente(s)',
+    admin: 'admin(s)',
+    gestor: 'gestor(es)',
+  };
+  const progressTotalByStatus = dashboardProgress?.totalByStatus || {};
+  const progressProcessedByStatus = dashboardProgress?.processedByStatus || {};
+  const progressRemainingByStatus = statusOrder.reduce((acc, key) => {
+    const total = Number(progressTotalByStatus[key] || 0);
+    const processed = Number(progressProcessedByStatus[key] || 0);
+    const remaining = Math.max(0, total - processed);
+    if (remaining > 0) acc[key] = remaining;
+    return acc;
+  }, {} as Record<string, number>);
+  const loadingScopeStatusText = statusOrder
+    .filter((k) => (progressTotalByStatus[k] || 0) > 0)
+    .map((k) => `${progressTotalByStatus[k]} ${statusLabel[k] || k}`)
+    .join(' | ');
+  const loadingRemainingStatusText = statusOrder
+    .filter((k) => (progressRemainingByStatus[k] || 0) > 0)
+    .map((k) => `${progressRemainingByStatus[k]} ${statusLabel[k] || k}`)
+    .join(' | ');
 
   return (
     <Layout onSignOut={handleSignOut}>
@@ -613,6 +957,7 @@ export default function ConsultorPage() {
             {/* Filtro de Consultor (super_admin/admin: ver desempenho de outro consultor) */}
             {isAdminOrSuperAdmin && (
               <div className="relative consultor-desempenho-filter-container">
+                {/** super_admin/admin: lista também gerente e admin da banca */}
                 <button
                   onClick={() => {
                     setShowConsultorDesempenhoFilter(!showConsultorDesempenhoFilter);
@@ -622,7 +967,13 @@ export default function ConsultorPage() {
                   className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333] transition-all shadow-sm disabled:opacity-80"
                 >
                   <Users className="w-4 h-4 text-[#8CD955]" />
-                  {consultoresLoading ? 'Carregando...' : (consultoresDaBanca.find((c) => c.id === selectedConsultorId)?.full_name || consultoresDaBanca.find((c) => c.id === selectedConsultorId)?.email || 'Consultor')}
+                  {consultoresLoading
+                    ? 'Carregando...'
+                    : selectedConsultorId === 'all'
+                      ? 'Todos os consultores'
+                      : (consultoresDaBanca.find((c) => c.id === selectedConsultorId)?.full_name ||
+                        consultoresDaBanca.find((c) => c.id === selectedConsultorId)?.email ||
+                        'Consultor')}
                   <ChevronDown className="w-4 h-4" />
                 </button>
                 {showConsultorDesempenhoFilter && (
@@ -641,6 +992,20 @@ export default function ConsultorPage() {
                       </div>
                     </div>
                     <div className="overflow-y-auto max-h-[280px] p-2">
+                      <button
+                        onClick={() => {
+                          setSelectedConsultorId('all');
+                          setShowConsultorDesempenhoFilter(false);
+                          setConsultorDesempenhoSearchTerm('');
+                        }}
+                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                          selectedConsultorId === 'all'
+                            ? 'bg-[#8CD95515] text-[#8CD955] font-medium'
+                            : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
+                        }`}
+                      >
+                        Todos os consultores
+                      </button>
                       {consultoresDaBanca
                         .filter(c => (c.full_name || c.email || '').toLowerCase().includes(consultorDesempenhoSearchTerm.toLowerCase()))
                         .map((c) => (
@@ -655,7 +1020,12 @@ export default function ConsultorPage() {
                               selectedConsultorId === c.id ? 'bg-[#8CD95515] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
                             }`}
                           >
-                            {c.full_name || c.email}
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="truncate">{c.full_name || c.email}</span>
+                              <span className="text-[10px] uppercase text-gray-500 dark:text-gray-400">
+                                {c.status || 'consultor'}
+                              </span>
+                            </div>
                           </button>
                         ))}
                       {consultoresDaBanca.filter(c => (c.full_name || c.email || '').toLowerCase().includes(consultorDesempenhoSearchTerm.toLowerCase())).length === 0 && (
@@ -757,6 +1127,48 @@ export default function ConsultorPage() {
               )}
             </div>
 
+            <ExportCsvMenu
+              disabled={dataLoading}
+              bancaName={
+                selectedBanca
+                  ? bancas.find((b) => b.url === selectedBanca)?.name || null
+                  : null
+              }
+              bancaUrl={selectedBanca}
+              dateFrom={appliedStartDate || null}
+              dateTo={appliedEndDate || null}
+              scope={(() => {
+                if (selectedConsultorId && selectedConsultorId !== 'all') {
+                  const sel = consultoresDaBanca.find((c) => c.id === selectedConsultorId);
+                  return sel
+                    ? `Perfil selecionado: ${sel.full_name || sel.email} (${sel.status || 'consultor'})`
+                    : 'Perfil selecionado';
+                }
+                const consultants = data?.betsDepositsData?.consultant_scope?.consultants || [];
+                return consultants.length > 0
+                  ? `Todos os perfis da banca (${consultants.length})`
+                  : 'Seu desempenho';
+              })()}
+              scopeExtra={(() => {
+                const consultants = data?.betsDepositsData?.consultant_scope?.consultants;
+                if (!Array.isArray(consultants) || consultants.length === 0) return undefined;
+                const names = consultants
+                  .map((c) => c.full_name || c.email)
+                  .filter(Boolean)
+                  .slice(0, 20)
+                  .join(', ');
+                const extraLabel =
+                  consultants.length > 20 ? `${names} (+${consultants.length - 20} outros)` : names;
+                return [{ label: 'Perfis incluídos', value: extraLabel }];
+              })()}
+              totals={data?.betsDepositsData?.totals || null}
+              externalKpis={data?.externalKpis || null}
+              adsSummary={data?.adsSummary || null}
+              commissionByType={data?.betsDepositsData?.commission_by_type || null}
+              betsByUser={data?.betsDepositsData?.history?.bets_by_user?.data || null}
+              depositsByUser={data?.betsDepositsData?.history?.deposits_by_user?.data || null}
+            />
+
             <Link
               href="/crm/kanban"
               className="flex items-center gap-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-md shadow-[#8CD955]/20"
@@ -767,15 +1179,29 @@ export default function ConsultorPage() {
           </div>
         </div>
 
+        <div className="flex flex-col gap-6">
         {/* Resumo de Performance */}
-        <div className="relative">
-          {dataLoading && (
-            <div className="absolute inset-0 bg-white/80 dark:bg-[#1a1a1a]/80 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
-            </div>
-          )}
-          
+        <div className="relative order-2">
           {(() => {
+            if (dataLoading) {
+              return (
+                <div className="bg-gradient-to-br from-[#A8E677] to-[#8CD955] p-6 rounded-2xl shadow-lg border border-[#8CD955]/40 text-white min-h-[280px]">
+                  <div className="flex items-center justify-between gap-3 mb-6">
+                    <div className="flex items-center gap-2">
+                      <TrendingUp className="w-6 h-6 text-white" />
+                      <h2 className="text-xl font-bold">Resumo de Resultado de Novos Cadastro</h2>
+                    </div>
+                    <span className="text-xs font-bold bg-white/20 rounded-full px-3 py-1">Carregando dados...</span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 gap-4">
+                    {Array.from({ length: 8 }).map((_, idx) => (
+                      <div key={`summary-skeleton-${idx}`} className="bg-white/15 p-4 rounded-xl border border-white/20 animate-pulse h-20" />
+                    ))}
+                  </div>
+                </div>
+              );
+            }
+
             if (externalKpisError) {
               return (
                 <div className="bg-amber-50 border border-amber-200 rounded-2xl p-6 text-center">
@@ -790,7 +1216,7 @@ export default function ConsultorPage() {
                 <div className="bg-gradient-to-br from-[#A8E677] to-[#8CD955] p-6 rounded-2xl shadow-lg border border-[#8CD955]/40 text-white">
                   <div className="flex items-center gap-2 mb-6">
                     <TrendingUp className="w-6 h-6 text-white" />
-                    <h2 className="text-xl font-bold">Resumo de Resultados</h2>
+                    <h2 className="text-xl font-bold">Resumo de Resultado de Novos Cadastro</h2>
                   </div>
                   
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 gap-4">
@@ -839,16 +1265,7 @@ export default function ConsultorPage() {
                       <p className="text-2xl font-bold">R$ {externalKpis.total_deposited.toLocaleString('pt-BR')}</p>
                     </div>
                     
-                    {/* 7. Total Apostado */}
-                    <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                      <div className="flex items-center gap-2 mb-1">
-                        <Target className="w-4 h-4 text-white/80" />
-                        <p className="text-[10px] font-bold text-white/80 uppercase">Total Apostado</p>
-                      </div>
-                      <p className="text-2xl font-bold">R$ {externalKpis.total_bets.toLocaleString('pt-BR')}</p>
-                    </div>
-                    
-                    {/* 8. Total Premiado */}
+                    {/* 7. Total Premiado */}
                     <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
                       <div className="flex items-center gap-2 mb-1">
                         <Award className="w-4 h-4 text-white/80" />
@@ -857,7 +1274,7 @@ export default function ConsultorPage() {
                       <p className="text-2xl font-bold">R$ {externalKpis.total_prizes.toLocaleString('pt-BR')}</p>
                     </div>
                     
-                    {/* 9. Clientes Premiados */}
+                    {/* 8. Clientes Premiados */}
                     <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
                       <div className="flex items-center gap-2 mb-1">
                         <Award className="w-4 h-4 text-white/80" />
@@ -865,6 +1282,7 @@ export default function ConsultorPage() {
                       </div>
                       <p className="text-2xl font-bold">{externalKpis.clientes_premiados || 0}</p>
                     </div>
+
                   </div>
                 </div>
               );
@@ -894,14 +1312,26 @@ export default function ConsultorPage() {
         </div>
 
         {/* Gráficos */}
-        <div className="relative">
-          {dataLoading && (
-            <div className="absolute inset-0 bg-white/80 dark:bg-[#1a1a1a]/80 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
-            </div>
-          )}
-          
+        <div className="relative order-3">
           {(() => {
+            if (dataLoading) {
+              return (
+                <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-[#404040] min-h-[280px]">
+                  <div className="flex items-center justify-between gap-3 mb-6">
+                    <h2 className="text-lg font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                      <BarChart3 className="w-5 h-5 text-[#8CD955]" />
+                      Análises e Gráficos
+                    </h2>
+                    <span className="text-xs font-bold text-gray-500 dark:text-gray-400">Carregando gráficos...</span>
+                  </div>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <div className="h-40 rounded-xl bg-gray-100 dark:bg-[#1e1e1e] animate-pulse" />
+                    <div className="h-40 rounded-xl bg-gray-100 dark:bg-[#1e1e1e] animate-pulse" />
+                  </div>
+                </div>
+              );
+            }
+
             if (chartData) {
               return (
                 <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-[#404040]">
@@ -1023,6 +1453,218 @@ export default function ConsultorPage() {
             
             return null;
           })()}
+        </div>
+
+        {/* Apostas, Depósitos, Comissão e Histórico (novo endpoint) */}
+        <div className="order-1 bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-[#404040]">
+          <div className="flex items-center justify-between gap-4 mb-6">
+            <h2 className="text-lg font-bold text-gray-800 dark:text-white flex items-center gap-2">
+              <History className="w-5 h-5 text-gray-500 dark:text-gray-400" />
+              Apostas, Depósitos e Comissão
+            </h2>
+            {betsDepositsData?.consultant_scope && (
+              <span className="text-xs text-gray-500 dark:text-gray-400">
+                Escopo: {betsDepositsData.consultant_scope.type === 'multi' ? 'Todos os consultores' : 'Consultor selecionado'} ({betsDepositsData.consultant_scope.count})
+              </span>
+            )}
+          </div>
+          {dashboardProgress?.mode === 'progressive' && dashboardProgress.total > 0 && dataLoading && (
+            <div className="mb-4 rounded-xl border border-gray-200 dark:border-[#404040] bg-gray-50/60 dark:bg-[#1e1e1e] px-3 py-2">
+              <div className="flex items-center justify-between gap-2 text-xs text-gray-600 dark:text-gray-300">
+                <span>
+                  Carregando {dashboardProgress.processed}/{dashboardProgress.total}
+                  {dashboardProgress.currentName ? ` - ${dashboardProgress.currentName}` : ''}
+                </span>
+                <span>{Math.round((dashboardProgress.processed / Math.max(1, dashboardProgress.total)) * 100)}%</span>
+              </div>
+              <div className="mt-2 h-2 rounded-full bg-gray-200 dark:bg-[#333] overflow-hidden">
+                <div
+                  className="h-full bg-[#8CD955] transition-all duration-300"
+                  style={{ width: `${(dashboardProgress.processed / Math.max(1, dashboardProgress.total)) * 100}%` }}
+                />
+              </div>
+            </div>
+          )}
+          {Array.isArray(betsDepositsData?.consultant_scope?.consultants) && betsDepositsData.consultant_scope.consultants.length > 0 && (
+            <div className="mb-5 flex flex-wrap gap-2">
+              {betsDepositsData.consultant_scope.consultants.slice(0, 12).map((consultant) => (
+                <span
+                  key={consultant.id}
+                  className="inline-flex items-center rounded-full px-3 py-1 text-xs font-bold bg-gray-100 dark:bg-[#333] text-gray-600 dark:text-gray-300"
+                >
+                  {consultant.full_name || consultant.email}
+                </span>
+              ))}
+              {betsDepositsData.consultant_scope.consultants.length > 12 && (
+                <span className="inline-flex items-center rounded-full px-3 py-1 text-xs font-bold bg-gray-100 dark:bg-[#333] text-gray-600 dark:text-gray-300">
+                  +{betsDepositsData.consultant_scope.consultants.length - 12} consultores
+                </span>
+              )}
+            </div>
+          )}
+
+          {!betsDepositsData ? (
+            dataLoading ? (
+              <div className="space-y-4">
+                <div className="rounded-xl border border-gray-200 dark:border-[#404040] bg-gray-50/60 dark:bg-[#1e1e1e] px-4 py-3">
+                  <p className="text-sm font-bold text-gray-700 dark:text-gray-200">
+                    Carregando dados do endpoint de apostas/depósitos...
+                  </p>
+                  {dashboardProgress?.mode === 'progressive' && dashboardProgress.total > 0 && (
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      Escopo atual: {dashboardProgress.total} perfil(is). {loadingScopeStatusText || 'Distribuição indisponível'}.
+                    </p>
+                  )}
+                  {dashboardProgress?.mode === 'progressive' && dashboardProgress.total > 0 && (
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      Progresso: {dashboardProgress.processed}/{dashboardProgress.total}
+                      {dashboardProgress.currentName ? ` | Atual: ${dashboardProgress.currentName}` : ''}
+                      {loadingRemainingStatusText ? ` | Faltando: ${loadingRemainingStatusText}` : ''}
+                    </p>
+                  )}
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  {Array.from({ length: 4 }).map((_, idx) => (
+                    <div
+                      key={`bets-loading-${idx}`}
+                      className="rounded-xl border border-gray-200 dark:border-[#404040] p-4 bg-gray-50/60 dark:bg-[#1e1e1e] animate-pulse h-20"
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="text-sm text-gray-500 dark:text-gray-400">
+                Dados do endpoint de apostas/depósitos ainda não disponíveis para este filtro.
+              </div>
+            )
+          ) : (
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="rounded-xl border border-gray-200 dark:border-[#404040] p-4 bg-gray-50/60 dark:bg-[#1e1e1e]">
+                  <p className="text-xs uppercase font-bold text-gray-500 dark:text-gray-400">Total Apostas</p>
+                  <p className="text-xl font-bold text-gray-900 dark:text-white mt-1">
+                    R$ {totalApostasBody.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-gray-200 dark:border-[#404040] p-4 bg-gray-50/60 dark:bg-[#1e1e1e]">
+                  <p className="text-xs uppercase font-bold text-gray-500 dark:text-gray-400">Total Depósitos</p>
+                  <p className="text-xl font-bold text-gray-900 dark:text-white mt-1">
+                    R$ {totalDepositosBody.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-gray-200 dark:border-[#404040] p-4 bg-gray-50/60 dark:bg-[#1e1e1e]">
+                  <p className="text-xs uppercase font-bold text-gray-500 dark:text-gray-400">Total Comissão</p>
+                  <p className="text-xl font-bold text-gray-900 dark:text-white mt-1">
+                    R$ {totalComissaoBody.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-gray-200 dark:border-[#404040] p-4 bg-gray-50/60 dark:bg-[#1e1e1e]">
+                  <p className="text-xs uppercase font-bold text-gray-500 dark:text-gray-400">Ads (Meta/Redirect)</p>
+                  <p className="text-xl font-bold text-gray-900 dark:text-white mt-1">
+                    R$ {(adsSummary?.total_spend || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </p>
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1">
+                    Meta: R$ {(adsSummary?.meta_spend || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} | Redirect clicks: {adsSummary?.redirect_clicks || 0}
+                  </p>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-gray-200 dark:border-[#404040] overflow-hidden">
+                <div className="px-4 py-3 bg-gray-50 dark:bg-[#1f1f1f] border-b border-gray-200 dark:border-[#404040]">
+                  <p className="text-sm font-bold text-gray-700 dark:text-gray-200">Histórico de comissão por tipo</p>
+                </div>
+                <div className="max-h-80 overflow-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50/80 dark:bg-[#1b1b1b] sticky top-0">
+                      <tr className="text-left text-gray-600 dark:text-gray-300">
+                        <th className="px-4 py-2">Data</th>
+                        <th className="px-4 py-2">Tipo</th>
+                        <th className="px-4 py-2">Carteira</th>
+                        <th className="px-4 py-2">Valor</th>
+                        <th className="px-4 py-2">Consultor</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(betsDepositsData?.commission_by_type || []).slice(0, 200).map((row) => (
+                        <tr key={`${row.id}-${row.created_at}`} className="border-t border-gray-100 dark:border-[#333]">
+                          <td className="px-4 py-2 text-gray-700 dark:text-gray-300">{row.created_at || '-'}</td>
+                          <td className="px-4 py-2 text-gray-700 dark:text-gray-300">{row.type || '-'}</td>
+                          <td className="px-4 py-2 text-gray-700 dark:text-gray-300">{row.wallet || '-'}</td>
+                          <td className="px-4 py-2 font-bold text-[#8CD955]">R$ {parsePtBrValue(row.value).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                          <td className="px-4 py-2 text-gray-700 dark:text-gray-300">{row.consultant_name || row.consultant_email || '-'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                <div className="rounded-xl border border-gray-200 dark:border-[#404040] overflow-hidden">
+                  <div className="px-4 py-3 bg-gray-50 dark:bg-[#1f1f1f] border-b border-gray-200 dark:border-[#404040]">
+                    <p className="text-sm font-bold text-gray-700 dark:text-gray-200">Histórico de apostas por usuário</p>
+                  </div>
+                  <div className="max-h-80 overflow-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50/80 dark:bg-[#1b1b1b] sticky top-0">
+                        <tr className="text-left text-gray-600 dark:text-gray-300">
+                          <th className="px-4 py-2">Usuário</th>
+                          <th className="px-4 py-2">Email</th>
+                          <th className="px-4 py-2">Apostado</th>
+                          <th className="px-4 py-2">Qtd</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(betsDepositsData?.history?.bets_by_user?.data || []).map((row) => (
+                          <tr key={`bet-${row.user_id_sender}`} className="border-t border-gray-100 dark:border-[#333]">
+                            <td className="px-4 py-2 text-gray-700 dark:text-gray-300">{row.user_name || '-'}</td>
+                            <td className="px-4 py-2 text-gray-700 dark:text-gray-300">{row.user_email || '-'}</td>
+                            <td className="px-4 py-2 font-bold text-[#8CD955]">
+                              R$ {Number(row.total_apostado || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </td>
+                            <td className="px-4 py-2 text-gray-700 dark:text-gray-300">
+                              {(Number(row.bets_count_loteria || 0) + Number(row.bets_count_bichao || 0)).toLocaleString('pt-BR')}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-gray-200 dark:border-[#404040] overflow-hidden">
+                  <div className="px-4 py-3 bg-gray-50 dark:bg-[#1f1f1f] border-b border-gray-200 dark:border-[#404040]">
+                    <p className="text-sm font-bold text-gray-700 dark:text-gray-200">Histórico de depósitos por usuário</p>
+                  </div>
+                  <div className="max-h-80 overflow-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50/80 dark:bg-[#1b1b1b] sticky top-0">
+                        <tr className="text-left text-gray-600 dark:text-gray-300">
+                          <th className="px-4 py-2">Usuário</th>
+                          <th className="px-4 py-2">Email</th>
+                          <th className="px-4 py-2">Depositado</th>
+                          <th className="px-4 py-2">Qtd</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(betsDepositsData?.history?.deposits_by_user?.data || []).map((row) => (
+                          <tr key={`dep-${row.user_id_sender}`} className="border-t border-gray-100 dark:border-[#333]">
+                            <td className="px-4 py-2 text-gray-700 dark:text-gray-300">{row.user_name || '-'}</td>
+                            <td className="px-4 py-2 text-gray-700 dark:text-gray-300">{row.user_email || '-'}</td>
+                            <td className="px-4 py-2 font-bold text-[#8CD955]">
+                              R$ {Number(row.total_depositado || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </td>
+                            <td className="px-4 py-2 text-gray-700 dark:text-gray-300">{Number(row.deposits_count || 0).toLocaleString('pt-BR')}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
         </div>
 
         {/* Lista de ganhadores: banca do topo + período ao lado (filtro por last_winner_at) */}

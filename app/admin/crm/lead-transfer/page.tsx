@@ -2474,13 +2474,16 @@ export default function AdminLeadTransferPage() {
             destinoModo === 'estoque_gerente'
               ? `estoque: ${gerentesForStockOptions.find((g) => g.id === estoqueGerenteId)?.full_name || gerentesForStockOptions.find((g) => g.id === estoqueGerenteId)?.email || estoqueGerenteId}`
               : targetEmail;
+          const isStockReservation = destinoModo === 'estoque_gerente' || Boolean(json?.data?.stock_reservation);
           showToast(
-            clearedSolic
-              ? `${count} lead(s) enviados ao estoque (${destinoLabel}). Solicitação não auto-aprovada neste fluxo.`
-              : `${count} lead(s) transferido(s) de ${sourceEmail} para ${destinoLabel}. Aba Histórico atualizada.`,
+            isStockReservation
+              ? `${count} lead(s) reservado(s) no estoque do gerente (${destinoLabel}). Os leads permanecem com o consultor de origem no CRM até o gerente distribuir.`
+              : clearedSolic
+                ? `${count} lead(s) enviados ao estoque (${destinoLabel}). Solicitação não auto-aprovada neste fluxo.`
+                : `${count} lead(s) transferido(s) de ${sourceEmail} para ${destinoLabel}. Aba Histórico atualizada.`,
             'success'
           );
-          if (Number(json?.data?.crm_count) === 0 && count > 0) {
+          if (!isStockReservation && Number(json?.data?.crm_count) === 0 && count > 0) {
             showToast('O CRM informou 0 leads redistribuídos. Os leads aparecerão na tela "Leads Transferidos" do Zaploto (complemento pelos nossos registros).', 'info');
           }
         }
@@ -2634,10 +2637,38 @@ export default function AdminLeadTransferPage() {
     }
   };
 
-  /** Apagar a transferência e devolver os leads ao consultor de origem (mesma lógica que Devolver). */
+  /** Apagar transferência. Se for estoque (admin→estoque), apenas tira do estoque (sem CRM). */
   const confirmApagar = async () => {
     const log = logSelectedForApagar;
     if (!log || !userId) return;
+    const transferKind = ((log as { transfer_kind?: string }).transfer_kind ?? 'standard').trim();
+    const isStockReservation = transferKind === 'admin_to_gerente_stock';
+    if (isStockReservation) {
+      setApagarLoading(true);
+      try {
+        const res = await fetch('/api/admin/crm/cancel-stock-reservation', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+          body: JSON.stringify({ transfer_log_id: log.id }),
+        });
+        const json = await res.json();
+        if (res.ok && json.success) {
+          setShowApagarModal(false);
+          setLogSelectedForApagar(null);
+          showToast(json?.message ?? 'Reserva removida do estoque.', 'success');
+          await loadTransferLogs(historyBancaFilter || undefined);
+          await loadTransferStats();
+        } else {
+          showToast(json?.error ?? 'Erro ao tirar leads do estoque.', 'error');
+        }
+      } catch {
+        showToast('Erro ao tirar leads do estoque.', 'error');
+      } finally {
+        setApagarLoading(false);
+      }
+      return;
+    }
+
     const bancaIdLog = (log as { banca_id?: string }).banca_id;
     const sourceEmail = (log as { source_consultant_email?: string }).source_consultant_email?.trim();
     const targetEmail = (log as { target_consultant_email?: string }).target_consultant_email?.trim();
@@ -4386,6 +4417,10 @@ export default function AdminLeadTransferPage() {
         case 'transfer_type':
           valA = logA.transfer_type ?? 'TF';
           valB = logB.transfer_type ?? 'TF';
+          break;
+        case 'transfer_kind':
+          valA = (logA as { transfer_kind?: string }).transfer_kind ?? 'standard';
+          valB = (logB as { transfer_kind?: string }).transfer_kind ?? 'standard';
           break;
         case 'source':
           valA = (logA as { source_consultant_name?: string }).source_consultant_name ?? logA.source_consultant_email ?? '';
@@ -6706,6 +6741,7 @@ export default function AdminLeadTransferPage() {
                       <ThSort field="banca" label="Banca" className="w-[120px]" />
                       <ThSort field="created_at" label="Data/Hora" className="w-[140px]" />
                       <ThSort field="transfer_type" label="Tipo" className="w-[52px]" />
+                      <ThSort field="transfer_kind" label="Fluxo" className="w-[140px]" title="Se a transferência foi direta (consultor→consultor) ou via estoque do gerente" />
                       <ThSort field="source" label="Origem" className="min-w-[120px]" />
                       <ThSort field="target" label="Destino" className="min-w-[120px]" />
                       <ThSort field="performed_by" label="Quem fez" className="w-[90px]" />
@@ -6721,13 +6757,13 @@ export default function AdminLeadTransferPage() {
                   </thead>
                   <tbody>
                     {loadingLogs ? (
-                      <tr><td colSpan={14} className="p-10 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-[#8CD955]" /></td></tr>
+                      <tr><td colSpan={15} className="p-10 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-[#8CD955]" /></td></tr>
                     ) : !managementLoaded && !loadingLogs ? (
-                      <tr><td colSpan={14} className="p-8 text-center text-gray-500 dark:text-white">Selecione a banca (ou &quot;Todas as Bancas&quot;) e clique em Aplicar filtros para carregar o histórico.</td></tr>
+                      <tr><td colSpan={15} className="p-8 text-center text-gray-500 dark:text-white">Selecione a banca (ou &quot;Todas as Bancas&quot;) e clique em Aplicar filtros para carregar o histórico.</td></tr>
                     ) : transferLogs.length === 0 ? (
-                      <tr><td colSpan={14} className="p-8 text-center text-gray-500 dark:text-white">Nenhuma transferência nos filtros. Ajuste data/tipo ou faça uma nova transferência.</td></tr>
+                      <tr><td colSpan={15} className="p-8 text-center text-gray-500 dark:text-white">Nenhuma transferência nos filtros. Ajuste data/tipo ou faça uma nova transferência.</td></tr>
                     ) : transferLogsFiltered.length === 0 ? (
-                      <tr><td colSpan={14} className="p-8 text-center text-gray-500 dark:text-white">Nenhuma transferência corresponde aos filtros. Ajuste &quot;Status&quot; ou &quot;Prazo&quot;.</td></tr>
+                      <tr><td colSpan={15} className="p-8 text-center text-gray-500 dark:text-white">Nenhuma transferência corresponde aos filtros. Ajuste &quot;Status&quot; ou &quot;Prazo&quot;.</td></tr>
                     ) : (
                       <>
                       {transferLogsPaginated.map((log) => {
@@ -6760,6 +6796,42 @@ export default function AdminLeadTransferPage() {
                               {formatDatePtBR(log.created_at)}
                             </td>
                             <td className="py-3 px-4 font-medium text-gray-800 dark:text-white">{log.transfer_type || 'TF'}</td>
+                            <td className="py-3 px-4">
+                              {(() => {
+                                const kind = ((log as { transfer_kind?: string }).transfer_kind ?? 'standard').trim();
+                                if (kind === 'admin_to_gerente_stock') {
+                                  return (
+                                    <span
+                                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-blue-500/15 text-blue-700 dark:text-blue-300 border border-blue-500/30"
+                                      title="Admin reservou leads no estoque do gerente (Zaploto). Movimentação real no CRM ocorre apenas no repasse ao consultor."
+                                    >
+                                      <Package className="w-3 h-3 flex-shrink-0" />
+                                      Admin → Estoque
+                                    </span>
+                                  );
+                                }
+                                if (kind === 'gerente_stock_to_consultant') {
+                                  return (
+                                    <span
+                                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-violet-500/15 text-violet-700 dark:text-violet-300 border border-violet-500/30"
+                                      title="Gerente distribuiu leads do estoque para um consultor da sua equipe na banca"
+                                    >
+                                      <ArrowRightLeft className="w-3 h-3 flex-shrink-0" />
+                                      Estoque → Consultor
+                                    </span>
+                                  );
+                                }
+                                return (
+                                  <span
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-gray-500/15 text-gray-700 dark:text-gray-300 border border-gray-500/30"
+                                    title="Transferência direta entre consultores (não passou pelo estoque do gerente)"
+                                  >
+                                    <ArrowRightLeft className="w-3 h-3 flex-shrink-0" />
+                                    Direta
+                                  </span>
+                                );
+                              })()}
+                            </td>
                             <td className="py-3 px-4 text-gray-600 dark:text-white truncate max-w-[140px]" title={origemEmail ?? undefined}>{origemNome}</td>
                             <td className="py-3 px-4 text-gray-600 dark:text-white truncate max-w-[140px]" title={destinoEmail ?? undefined}>{destinoNome}</td>
                             <td className="py-3 px-4 text-gray-700 dark:text-white truncate max-w-[80px]" title={quemFez}>{(quemFez as string) !== '-' ? quemFez : '-'}</td>
@@ -6768,8 +6840,52 @@ export default function AdminLeadTransferPage() {
                             <td className="py-3 px-4 text-gray-600 dark:text-white tabular-nums">{fmtSaldo}</td>
                             <td className="py-3 px-4 text-gray-600 dark:text-white truncate max-w-[160px] font-mono text-xs" title={ids.join(', ')}>{ids.length ? ids.slice(0, 6).join(', ') + (ids.length > 6 ? ` +${ids.length - 6}` : '') : '-'}</td>
                             <td className="py-3 px-4 text-gray-600 dark:text-white">{reTransferidos > 0 ? <span className="text-amber-500 dark:text-amber-400 font-medium">{reTransferidos}</span> : '-'}</td>
-                            <td className="py-3 px-4" title={(log as { devolvido_at?: string }).devolvido_at ? 'Leads desta transferência foram devolvidos ao consultor de origem.' : isReverse ? 'Transferência reverse (re-envio após devolução).' : (log as { resolution_status_log?: string }).resolution_status_log === 'resolvida' ? 'Transferência expirada e já resolvida (vinculados/disponíveis para repasse).' : 'Prazo de conversão a partir da transferência. Após expirar, resolver para vincular ou disponibilizar para repasse.'}>
-                              {isReverse ? (
+                            <td className="py-3 px-4" title={(() => {
+                              const stockStatus = (log as { stock_status_log?: string }).stock_status_log;
+                              if (stockStatus === 'cancelado_total') return 'Pacote de estoque cancelado pelo admin: nenhum lead permanece ativo neste estoque.';
+                              if (stockStatus === 'cancelado_parcial') return 'Pacote de estoque parcialmente cancelado: parte dos leads foi cancelada.';
+                              if ((log as { devolvido_at?: string }).devolvido_at) return 'Leads desta transferência foram devolvidos ao consultor de origem.';
+                              if (isReverse) return 'Transferência reverse (re-envio após devolução).';
+                              if ((log as { resolution_status_log?: string }).resolution_status_log === 'resolvida') return 'Transferência expirada e já resolvida (vinculados/disponíveis para repasse).';
+                              return 'Prazo de conversão a partir da transferência. Após expirar, resolver para vincular ou disponibilizar para repasse.';
+                            })()}>
+                              {(() => {
+                                const stockStatus = (log as { stock_status_log?: string }).stock_status_log;
+                                const stockCancelados = Number((log as { stock_cancelado_count?: number }).stock_cancelado_count ?? 0);
+                                if (stockStatus === 'cancelado_total') {
+                                  return (
+                                    <span className="inline-flex items-center gap-1 text-sm text-red-600 dark:text-red-400 font-medium">
+                                      <X className="w-3.5 h-3.5 flex-shrink-0" />
+                                      Cancelado
+                                    </span>
+                                  );
+                                }
+                                if (stockStatus === 'cancelado_parcial') {
+                                  return (
+                                    <span className="inline-flex items-center gap-1 text-sm text-red-600 dark:text-red-400 font-medium">
+                                      <X className="w-3.5 h-3.5 flex-shrink-0" />
+                                      Cancelado parcial{stockCancelados > 0 ? ` (${stockCancelados})` : ''}
+                                    </span>
+                                  );
+                                }
+                                if (stockStatus === 'repassado') {
+                                  return (
+                                    <span className="inline-flex items-center gap-1 text-sm text-emerald-600 dark:text-emerald-400 font-medium">
+                                      <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />
+                                      Repassado
+                                    </span>
+                                  );
+                                }
+                                if (stockStatus === 'em_estoque') {
+                                  return (
+                                    <span className="inline-flex items-center gap-1 text-sm text-blue-600 dark:text-blue-400 font-medium">
+                                      <Clock className="w-3.5 h-3.5 flex-shrink-0" />
+                                      Em estoque
+                                    </span>
+                                  );
+                                }
+                                return null;
+                              })() ?? (isReverse ? (
                                 <span className="inline-flex items-center gap-1 text-sm text-violet-600 dark:text-violet-400 font-medium">
                                   <RotateCcw className="w-3.5 h-3.5 flex-shrink-0" />
                                   Reverse
@@ -6791,7 +6907,7 @@ export default function AdminLeadTransferPage() {
                                     {deadline.expired ? 'Expirada' : `${deadline.daysLeft} dia(s) restante(s)`}
                                   </span>
                                 </span>
-                              )}
+                              ))}
                             </td>
                             <td className="py-3 px-4">
                               {(() => {
@@ -6849,7 +6965,52 @@ export default function AdminLeadTransferPage() {
                                   <Pencil className="w-3.5 h-3.5" />
                                   Editar
                                 </button>
+                                {((log as { transfer_kind?: string }).transfer_kind === 'admin_to_gerente_stock') && (
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      if (!userId) return;
+                                      if (!window.confirm('Cancelar todas as reservas ainda em estoque deste pacote? Leads já repassados não são afetados.')) return;
+                                      try {
+                                        const res = await fetch('/api/admin/crm/cancel-stock-reservation', {
+                                          method: 'POST',
+                                          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+                                          body: JSON.stringify({ transfer_log_id: log.id }),
+                                        });
+                                        const json = await res.json();
+                                        if (res.ok && json.success) {
+                                          showToast(json.message ?? 'Reserva cancelada.', 'success');
+                                          await loadTransferLogs(historyBancaFilter || undefined);
+                                        } else {
+                                          showToast(json?.error ?? 'Erro ao cancelar reserva.', 'error');
+                                        }
+                                      } catch {
+                                        showToast('Erro ao cancelar reserva.', 'error');
+                                      }
+                                    }}
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-red-500/10 text-red-700 dark:text-red-400 hover:bg-red-500/20 border border-red-500/40 transition-colors"
+                                    title="Cancela as reservas ainda em estoque (não afeta leads já repassados) — não move nada no CRM"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                    Cancelar reserva
+                                  </button>
+                                )}
                                 {(() => {
+                                  const transferKind = ((log as { transfer_kind?: string }).transfer_kind ?? 'standard').trim();
+                                  const isStockReservation = transferKind === 'admin_to_gerente_stock';
+                                  if (isStockReservation) {
+                                    return (
+                                      <button
+                                        type="button"
+                                        onClick={() => { setLogSelectedForApagar(log); setShowApagarModal(true); }}
+                                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-red-500/15 text-red-700 dark:text-red-400 hover:bg-red-500/25 border border-red-500/40 transition-colors"
+                                        title="Tirar os leads deste pacote do estoque (sem devolver no CRM)"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                        Tirar do estoque
+                                      </button>
+                                    );
+                                  }
                                   const leadsComDestino = isReverse || !(log as { devolvido_at?: string }).devolvido_at;
                                   const leadsComOrigem = (filtersSnapshot != null && typeof filtersSnapshot === 'object' && (filtersSnapshot as { devolucao?: boolean }).devolucao === true) || ((log as { devolvido_at?: string }).devolvido_at && !isReverse);
                                   if (leadsComDestino && !leadsComOrigem) {
@@ -7588,11 +7749,10 @@ export default function AdminLeadTransferPage() {
                 <div className="mb-3 rounded-xl border border-violet-200 dark:border-violet-800/50 bg-violet-50/40 dark:bg-violet-950/20 px-4 py-3 text-sm text-violet-900 dark:text-violet-100">
                   <p className="font-semibold flex items-center gap-2">
                     <Package className="w-4 h-4" />
-                    Modo estoque do gerente
+                    Modo estoque do gerente (reserva lógica)
                   </p>
                   <p className="text-xs text-violet-800/90 dark:text-violet-200/90 mt-1">
-                    Os leads vão para o e-mail de estoque CRM do gerente escolhido (o mesmo e-mail do cadastro do gerente na banca). O gerente repassa depois aos consultores em{' '}
-                    <span className="font-medium">Estoque → consultores</span>.
+                    Os leads são <span className="font-medium">reservados</span> no estoque do gerente — <span className="font-medium">permanecem com o consultor de origem no CRM</span>. Quando o gerente distribuir a um consultor da equipe, aí sim acontece a movimentação real no CRM. O tipo (TF) e o prazo definidos aqui serão usados no repasse.
                   </p>
                 </div>
               )}
@@ -8028,12 +8188,12 @@ export default function AdminLeadTransferPage() {
                       )}
                       {activeTab === 'transfer_stock' && (
                         <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 mb-3">
-                          Escolha o gerente que receberá os leads no estoque CRM desta banca (usa o e-mail do perfil do gerente vinculado à banca).
+                          Escolha o gerente que receberá a reserva no estoque desta banca. Os leads só são movidos no CRM quando o gerente repassar a um consultor da equipe.
                         </p>
                       )}
                       {activeTab === 'transfer_stock' && (
                         <div className="mb-4">
-                          <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Gerente (recebe no estoque CRM)</label>
+                          <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Gerente (dono da reserva)</label>
                           <select
                             value={estoqueGerenteId}
                             onChange={(e) => setEstoqueGerenteId(e.target.value)}
@@ -8869,8 +9029,15 @@ export default function AdminLeadTransferPage() {
           <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6 border border-gray-200 dark:border-[#404040]">
             <div className="flex items-center gap-2 text-amber-600 mb-4">
               <AlertCircle className="w-6 h-6 flex-shrink-0" />
-              <span className="font-semibold">Revisar e confirmar transferência</span>
+              <span className="font-semibold">
+                {destinoModo === 'estoque_gerente' ? 'Revisar e confirmar reserva no estoque' : 'Revisar e confirmar transferência'}
+              </span>
             </div>
+            {destinoModo === 'estoque_gerente' && (
+              <div className="mb-4 rounded-lg border border-violet-200 dark:border-violet-800/50 bg-violet-50/40 dark:bg-violet-950/20 px-3 py-2 text-xs text-violet-900 dark:text-violet-100">
+                Os leads serão <strong>reservados no estoque do gerente (Zaploto)</strong> e continuam com o consultor de origem no CRM. A movimentação real no CRM só acontece quando o gerente distribuir a um consultor da equipe. TF e prazo definidos aqui serão herdados nesse repasse.
+              </div>
+            )}
             <div className="space-y-3 text-sm text-gray-700 dark:text-gray-300 mb-4">
               <p><strong>Banca:</strong> {bancaName || bancaId}</p>
               <p>
@@ -8894,7 +9061,11 @@ export default function AdminLeadTransferPage() {
             {selectedCount > 50 && (
               <label className="flex items-center gap-2 mb-4 p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700">
                 <input type="checkbox" checked={confirmAcknowledged} onChange={(e) => setConfirmAcknowledged(e.target.checked)} className="rounded border-gray-400" />
-                <span className="text-sm text-amber-800">Entendi que isso altera o responsável por estes leads.</span>
+                <span className="text-sm text-amber-800">
+                  {destinoModo === 'estoque_gerente'
+                    ? 'Entendi que estes leads ficam reservados no estoque do gerente até o repasse.'
+                    : 'Entendi que isso altera o responsável por estes leads.'}
+                </span>
               </label>
             )}
             <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">Esta ação será registrada em auditoria.</p>
@@ -8902,7 +9073,7 @@ export default function AdminLeadTransferPage() {
               <button type="button" onClick={() => { setShowConfirmModal(false); setConfirmAcknowledged(false); }} disabled={transferring} className="px-4 py-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040]">Cancelar</button>
               <button type="button" onClick={confirmTransfer} disabled={transferring || !canExecuteTransfer || (selectedCount > 50 && !confirmAcknowledged)} className="px-4 py-2 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A] disabled:opacity-50 flex items-center gap-2">
                 {transferring ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                Confirmar transferência
+                {destinoModo === 'estoque_gerente' ? 'Confirmar reserva no estoque' : 'Confirmar transferência'}
               </button>
             </div>
           </div>
@@ -9220,14 +9391,18 @@ export default function AdminLeadTransferPage() {
         </div>
       )}
 
-      {/* Modal Apagar: apagar a transferência e devolver os leads ao consultor de origem */}
+      {/* Modal Apagar: transferência normal devolve; estoque apenas remove/cancela reserva */}
       {showApagarModal && logSelectedForApagar && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="modal-apagar-title">
           <div className="bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl max-w-md w-full border border-gray-200 dark:border-[#404040] overflow-hidden">
             <div className="p-4 border-b border-gray-100 dark:border-[#404040] flex items-center justify-between bg-red-500/10 dark:bg-red-500/20">
               <div className="flex items-center gap-2">
                 <Trash2 className="w-5 h-5 text-red-600 dark:text-red-400 flex-shrink-0" />
-                <h2 id="modal-apagar-title" className="text-lg font-bold text-gray-900 dark:text-white">Apagar transferência</h2>
+                <h2 id="modal-apagar-title" className="text-lg font-bold text-gray-900 dark:text-white">
+                  {(((logSelectedForApagar as { transfer_kind?: string }).transfer_kind ?? 'standard').trim() === 'admin_to_gerente_stock')
+                    ? 'Tirar do estoque'
+                    : 'Apagar transferência'}
+                </h2>
               </div>
               {!apagarLoading && (
                 <button type="button" onClick={() => { setShowApagarModal(false); setLogSelectedForApagar(null); }} className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-200 dark:hover:bg-[#404040] transition-colors" aria-label="Fechar">
@@ -9239,16 +9414,33 @@ export default function AdminLeadTransferPage() {
               {apagarLoading ? (
                 <div className="flex flex-col items-center justify-center py-8 gap-4">
                   <Loader2 className="w-10 h-10 animate-spin text-red-500" />
-                  <p className="text-sm font-medium text-gray-700 dark:text-gray-200">Apagando transferência e devolvendo leads…</p>
+                  <p className="text-sm font-medium text-gray-700 dark:text-gray-200">
+                    {(((logSelectedForApagar as { transfer_kind?: string }).transfer_kind ?? 'standard').trim() === 'admin_to_gerente_stock')
+                      ? 'Removendo leads do estoque…'
+                      : 'Apagando transferência e devolvendo leads…'}
+                  </p>
                 </div>
               ) : (
                 <>
-                  <p className="text-sm text-gray-700 dark:text-gray-200 mb-3">
-                    Os <strong>{Array.isArray((logSelectedForApagar as { leads_ids?: unknown[] }).leads_ids) ? (logSelectedForApagar as { leads_ids: unknown[] }).leads_ids.length : 0} lead(s)</strong> serão devolvidos ao consultor de <strong>origem</strong>. A transferência será registrada como encerrada no histórico.
-                  </p>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
-                    Esta ação é irreversível. Os leads voltarão a aparecer para o consultor de origem na banca.
-                  </p>
+                  {(((logSelectedForApagar as { transfer_kind?: string }).transfer_kind ?? 'standard').trim() === 'admin_to_gerente_stock') ? (
+                    <>
+                      <p className="text-sm text-gray-700 dark:text-gray-200 mb-3">
+                        Os <strong>{Array.isArray((logSelectedForApagar as { leads_ids?: unknown[] }).leads_ids) ? (logSelectedForApagar as { leads_ids: unknown[] }).leads_ids.length : 0} lead(s)</strong> serão removidos do estoque do gerente. <strong>Não haverá devolução no CRM</strong>, pois essa reserva foi apenas lógica.
+                      </p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+                        Esta ação marca a reserva como cancelada no histórico.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-sm text-gray-700 dark:text-gray-200 mb-3">
+                        Os <strong>{Array.isArray((logSelectedForApagar as { leads_ids?: unknown[] }).leads_ids) ? (logSelectedForApagar as { leads_ids: unknown[] }).leads_ids.length : 0} lead(s)</strong> serão devolvidos ao consultor de <strong>origem</strong>. A transferência será registrada como encerrada no histórico.
+                      </p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+                        Esta ação é irreversível. Os leads voltarão a aparecer para o consultor de origem na banca.
+                      </p>
+                    </>
+                  )}
                   <div className="flex gap-3">
                     <button
                       type="button"
@@ -9263,7 +9455,9 @@ export default function AdminLeadTransferPage() {
                       className="flex-1 px-4 py-2.5 rounded-xl bg-red-500 text-white hover:bg-red-600 font-medium transition-colors inline-flex items-center justify-center gap-2"
                     >
                       <Trash2 className="w-4 h-4" />
-                      Apagar e devolver
+                      {(((logSelectedForApagar as { transfer_kind?: string }).transfer_kind ?? 'standard').trim() === 'admin_to_gerente_stock')
+                        ? 'Tirar do estoque'
+                        : 'Apagar e devolver'}
                     </button>
                   </div>
                 </>

@@ -220,8 +220,8 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
             };
           };
           let items = json.data.items.map((it: unknown) => toMenuItem(it as Parameters<typeof toMenuItem>[0]));
-          /** Garante Estoque de leads para gerente quando o tenant ainda não tem o item na sidebar inteligente */
-          if (userStatus === 'gerente') {
+          /** Garante Estoque de leads para gerente/super_admin quando o tenant ainda não tem o item na sidebar inteligente */
+          if (userStatus === 'gerente' || userStatus === 'super_admin') {
             const hasLeadStock = items.some((it) =>
               typeof it.href === 'string' && it.href.includes('/gerente/crm/lead-stock-transfer')
             );
@@ -309,6 +309,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const itemGestaoTrafego: MenuItem = { href: '/gestor-trafego', icon: BarChart3, label: 'Gestão de Tráfego' };
   const itemGestaoConsultores: MenuItem = { href: '/gerente', icon: Briefcase, label: 'Gestão de Consultores' };
   const itemMeuDesempenho: MenuItem = { href: '/consultor', icon: BarChart3, label: 'Meu Desempenho' };
+  const itemDesempenhoDetalhado: MenuItem = { href: '/consultor/detalhado', icon: ClipboardList, label: 'Desempenho Detalhado' };
   const itemMetaAds: MenuItem = { href: '/admin/meta', icon: BarChart3, label: 'Meta Ads' };
   const itemVslRedirect: MenuItem = { href: '/admin/vsl', icon: ExternalLink, label: 'VSL & Redirect' };
   const itemZaplink: MenuItem = { href: '/admin/zaplink', icon: Link2, label: 'Zaplink' };
@@ -360,6 +361,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemVslRedirect,
         itemZaplink,
         itemGestaoConsultores,
+        itemLeadStockGerente,
         itemAcademy,
       ];
     }
@@ -390,6 +392,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemGestaoConsultores,
         itemLeadTransfer,
         itemMeuDesempenho,
+        itemDesempenhoDetalhado,
       ];
     }
 
@@ -497,6 +500,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
     if (userStatus === 'consultor') {
       return [
         itemMeuDesempenho,
+        itemDesempenhoDetalhado,
         itemInstances,
         itemChatAtendimento,
         itemCRM,

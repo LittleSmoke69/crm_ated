@@ -34,6 +34,7 @@ type TransferLogRow = {
   filters_snapshot?: unknown;
   crm_response?: unknown;
   created_at?: string | null;
+  transfer_kind?: 'standard' | 'admin_to_gerente_stock' | 'gerente_stock_to_consultant' | string | null;
 };
 /**
  * GET /api/admin/crm/transfer-logs
@@ -103,14 +104,19 @@ export async function GET(req: NextRequest) {
     }
 
     const logIds = list.map((r) => r.id);
-    type EntryRow = { transfer_log_id: string; saldo_snapshot?: number | null; resolution_status?: string | null };
+    type EntryRow = {
+      transfer_log_id: string;
+      saldo_snapshot?: number | null;
+      resolution_status?: string | null;
+      stock_status?: 'em_estoque' | 'repassado' | 'cancelado' | string | null;
+    };
     const allEntries: EntryRow[] = [];
     for (const chunk of chunkArray(logIds, IN_BATCH_SIZE)) {
       let entOffset = 0;
       while (true) {
         const { data } = await supabaseServiceRole
           .from('admin_lead_transfer_entries')
-          .select('transfer_log_id, saldo_snapshot, resolution_status')
+          .select('transfer_log_id, saldo_snapshot, resolution_status, stock_status')
           .in('transfer_log_id', chunk)
           .range(entOffset, entOffset + ENTRIES_PAGE_SIZE - 1);
         const rows = Array.isArray(data) ? (data as EntryRow[]) : [];
@@ -122,6 +128,7 @@ export async function GET(req: NextRequest) {
 
     const totalBalanceByLogId = new Map<string, number>();
     const resolutionByLogId = new Map<string, { hasPending: boolean; total: number; vinculado: number; disponivel: number }>();
+    const stockByLogId = new Map<string, { total: number; em_estoque: number; repassado: number; cancelado: number }>();
     allEntries.forEach((e: EntryRow) => {
       const current = totalBalanceByLogId.get(e.transfer_log_id) ?? 0;
       const saldo = e.saldo_snapshot != null ? Number(e.saldo_snapshot) : 0;
@@ -132,6 +139,13 @@ export async function GET(req: NextRequest) {
       else if (e.resolution_status === 'vinculado') res.vinculado += 1;
       else if (e.resolution_status === 'disponivel_retransferencia') res.disponivel += 1;
       resolutionByLogId.set(e.transfer_log_id, res);
+
+      const stock = stockByLogId.get(e.transfer_log_id) ?? { total: 0, em_estoque: 0, repassado: 0, cancelado: 0 };
+      stock.total += 1;
+      if (e.stock_status === 'em_estoque') stock.em_estoque += 1;
+      else if (e.stock_status === 'repassado') stock.repassado += 1;
+      else if (e.stock_status === 'cancelado') stock.cancelado += 1;
+      stockByLogId.set(e.transfer_log_id, stock);
     });
 
     const storedTotalByLogId = new Map<string, number>();
@@ -199,9 +213,22 @@ export async function GET(req: NextRequest) {
       const deadlineDays = log.deadline_days != null ? log.deadline_days : DEFAULT_DEADLINE;
       const expired = isTransferExpired(log.created_at, deadlineDays);
       const resInfo = resolutionByLogId.get(log.id);
+      const stockInfo = stockByLogId.get(log.id) ?? { total: 0, em_estoque: 0, repassado: 0, cancelado: 0 };
       let resolution_status_log: 'no_prazo' | 'expirada' | 'resolvida' = 'no_prazo';
       if (expired) {
         resolution_status_log = resInfo?.hasPending ? 'expirada' : 'resolvida';
+      }
+      let stock_status_log: 'none' | 'em_estoque' | 'repassado' | 'cancelado_parcial' | 'cancelado_total' = 'none';
+      if ((log.transfer_kind ?? 'standard') === 'admin_to_gerente_stock') {
+        if (stockInfo.cancelado > 0 && stockInfo.em_estoque === 0 && stockInfo.repassado === 0) {
+          stock_status_log = 'cancelado_total';
+        } else if (stockInfo.cancelado > 0) {
+          stock_status_log = 'cancelado_parcial';
+        } else if (stockInfo.em_estoque > 0) {
+          stock_status_log = 'em_estoque';
+        } else if (stockInfo.repassado > 0) {
+          stock_status_log = 'repassado';
+        }
       }
       const resInfoFull = resolutionByLogId.get(log.id);
       return {
@@ -212,6 +239,11 @@ export async function GET(req: NextRequest) {
         target_consultant_name: targetEmail ? (emailToName.get(targetEmail) || log.target_consultant_email) : (log.target_consultant_email ?? '-'),
         performed_by_name: performedBy ? (performedByName.get(performedBy) || '-') : '-',
         resolution_status_log,
+        stock_status_log,
+        stock_total_count: stockInfo.total,
+        stock_pending_count: stockInfo.em_estoque,
+        stock_repassado_count: stockInfo.repassado,
+        stock_cancelado_count: stockInfo.cancelado,
         vinculado_count: resInfoFull?.vinculado ?? 0,
         disponivel_count: resInfoFull?.disponivel ?? 0,
       };

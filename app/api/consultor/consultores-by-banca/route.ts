@@ -11,7 +11,8 @@ function normalizeBancaUrl(url: string | null | undefined): string {
 
 /**
  * GET /api/consultor/consultores-by-banca?banca_url=...
- * Lista consultores da banca para filtro em "Meu Desempenho" (super_admin e admin).
+ * Lista usuários vinculados à banca para filtro em "Meu Desempenho" (super_admin e admin).
+ * Perfis incluídos: consultor, gerente, admin e gestor.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -53,14 +54,20 @@ export async function GET(req: NextRequest) {
 
     const { data: profiles } = await supabaseServiceRole
       .from('profiles')
-      .select('id, email, full_name')
+      .select('id, email, full_name, status')
       .in('id', userIdsInBanca)
-      .eq('status', 'consultor');
+      .in('status', ['consultor', 'gerente', 'admin', 'gestor']);
 
-    const list = (profiles || []).map((p: { id: string; email: string; full_name: string | null }) => ({
+    const list = (profiles || []).map((p: {
+      id: string;
+      email: string;
+      full_name: string | null;
+      status: string | null;
+    }) => ({
       id: p.id,
       email: p.email,
       full_name: p.full_name,
+      status: p.status,
     }));
 
     return successResponse(list);

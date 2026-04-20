@@ -3,23 +3,114 @@ import { requireStatus, getUserProfile } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse } from '@/lib/utils/response';
 import { getHierarchyPath } from '@/lib/utils/hierarchy';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import {
+  getConsultorProfilesByBancaUrl,
+  type ConsultantProfileBasic,
+} from '@/lib/services/dashboard/consultor-bets-deposits';
 
 const SAO_PAULO_TZ = 'America/Sao_Paulo';
-
-/**
- * Converte data ISO para string YYYY-MM-DD no fuso de São Paulo
- */
-function toDateStringSP(isoDate: string): string {
-  const d = new Date(isoDate);
-  return d.toLocaleDateString('en-CA', { timeZone: SAO_PAULO_TZ }); // en-CA => YYYY-MM-DD
-}
-
 const LOG_PREFIX = '[Consultor Winners]';
 
 /**
+ * Intervalo entre chamadas consecutivas ao CRM externo para evitar 429.
+ * Mantém o mesmo padrão adotado no dashboard (bets/deposits).
+ */
+const WINNERS_CRM_INTERVAL_MS = 500;
+
+function toDateStringSP(isoDate: string): string {
+  const d = new Date(isoDate);
+  return d.toLocaleDateString('en-CA', { timeZone: SAO_PAULO_TZ });
+}
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+type WinnerLead = {
+  id: any;
+  name: string;
+  phone: string;
+  last_winner_at: string | null;
+  last_winner_value: number;
+  total_ganho: number;
+  consultant_email?: string;
+  consultant_name?: string | null;
+  consultant_status?: string | null;
+};
+
+/**
+ * Busca todos os leads (com paginação) de um consultor específico no CRM externo.
+ * Retorna array vazio em caso de 404 (consultor inexistente na banca) ou erro não fatal.
+ */
+async function fetchLeadsForConsultant(params: {
+  bancaUrlClean: string;
+  apiKey: string | undefined;
+  consultantEmail: string;
+  logLabel: string;
+}): Promise<{ leads: any[]; error: string | null }> {
+  const { bancaUrlClean, apiKey, consultantEmail, logLabel } = params;
+  const perPage = 2000;
+  const maxPages = 500;
+  let currentPage = 1;
+  let hasMore = true;
+  const leads: any[] = [];
+
+  while (hasMore && currentPage <= maxPages) {
+    const url = new URL(`${bancaUrlClean}/api/crm/get-indicateds-by-consultant`);
+    url.searchParams.append('consultant', consultantEmail);
+    url.searchParams.append('per_page', perPage.toString());
+    url.searchParams.append('page', currentPage.toString());
+    url.searchParams.append('transferred_filter', 'no');
+
+    const pageStart = Date.now();
+    const res = await fetch(url.toString(), {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(apiKey && { 'X-API-KEY': apiKey }),
+      },
+      signal: AbortSignal.timeout(60000),
+    });
+    const pageMs = Date.now() - pageStart;
+
+    if (!res.ok) {
+      console.log(`${LOG_PREFIX} ${logLabel} Página ${currentPage}: HTTP ${res.status} (${pageMs}ms)`);
+      if (res.status === 404 && currentPage === 1) {
+        return { leads: [], error: null };
+      }
+      if (leads.length > 0) break;
+      return { leads: [], error: `HTTP ${res.status}` };
+    }
+
+    const json = await res.json();
+    if (!json.success || !Array.isArray(json.data)) {
+      console.log(`${LOG_PREFIX} ${logLabel} Página ${currentPage}: resposta inválida`);
+      if (leads.length > 0) break;
+      return { leads: [], error: null };
+    }
+
+    const pageLeads = json.data || [];
+    leads.push(...pageLeads);
+    console.log(
+      `${LOG_PREFIX} ${logLabel} Página ${currentPage}: ${pageLeads.length} leads (acumulado: ${leads.length}) [${pageMs}ms]`
+    );
+
+    if (pageLeads.length < perPage || pageLeads.length === 0) hasMore = false;
+    else currentPage++;
+  }
+
+  return { leads, error: null };
+}
+
+/**
  * GET /api/consultor/winners
- * Lista de ganhadores do consultor filtrada por período (last_winner_at).
- * Busca todos os indicados na API externa e filtra por data do último prêmio.
+ * Lista de ganhadores filtrada por período (last_winner_at).
+ *
+ * Escopo de consulta:
+ * - consultor/gestor comum: apenas os próprios ganhadores.
+ * - admin/super_admin com `consultor_id`: ganhadores do perfil alvo.
+ * - admin/super_admin sem `consultor_id` (Todos os consultores): itera sobre
+ *   os perfis consultor/gerente/admin/gestor vinculados à banca filtrada.
  */
 export async function GET(req: NextRequest) {
   const startTime = Date.now();
@@ -36,13 +127,13 @@ export async function GET(req: NextRequest) {
     const bancaUrlFilter = searchParams.get('banca_url');
     const consultorIdFilter = searchParams.get('consultor_id')?.trim() || null;
 
-    // super_admin e admin podem ver ganhadores de outro consultor informando consultor_id
+    // super_admin/admin podem visualizar ganhadores de outro perfil via consultor_id
     let effectiveUserId = userId;
     if (isAdminOrSuperAdmin && consultorIdFilter) {
       const targetProfile = await getUserProfile(consultorIdFilter);
-      if (targetProfile?.status === 'consultor') {
+      if (['consultor', 'gerente', 'admin', 'gestor'].includes(String(targetProfile?.status || ''))) {
         effectiveUserId = consultorIdFilter;
-        console.log(`${LOG_PREFIX} 1b. Visualizando como consultor: ${effectiveUserId}`);
+        console.log(`${LOG_PREFIX} 1b. Visualizando como usuário do filtro: ${effectiveUserId}`);
       }
     }
 
@@ -57,7 +148,7 @@ export async function GET(req: NextRequest) {
     if (!bancaUrl) {
       console.log(`${LOG_PREFIX} 3. Banca não veio no filtro; resolvendo pela hierarquia...`);
       const hierarchyPath = await getHierarchyPath(effectiveUserId);
-      const donoBanca = hierarchyPath.find(p => p.status === 'dono_banca');
+      const donoBanca = hierarchyPath.find((p) => p.status === 'dono_banca');
       if (donoBanca) {
         const { data: donoProfile } = await supabaseServiceRole
           .from('profiles')
@@ -73,16 +164,8 @@ export async function GET(req: NextRequest) {
       console.log(`${LOG_PREFIX} 3. Banca obtida do filtro da requisição`);
     }
 
-    const consultorProfile = await getUserProfile(effectiveUserId);
-    if (!consultorProfile?.email) {
-      console.log(`${LOG_PREFIX} 4. Consultor sem email no perfil → retornando lista vazia`);
-      console.log(`${LOG_PREFIX} ========== FIM (0 ganhadores) ==========\n`);
-      return successResponse({ winners: [], error: null });
-    }
-    console.log(`${LOG_PREFIX} 4. Consultor: email=${consultorProfile.email}`);
-
     if (!bancaUrl) {
-      console.log(`${LOG_PREFIX} 5. Nenhuma banca configurada → retornando lista vazia com mensagem`);
+      console.log(`${LOG_PREFIX} 4. Nenhuma banca configurada → lista vazia`);
       console.log(`${LOG_PREFIX} ========== FIM (sem banca) ==========\n`);
       return successResponse({ winners: [], error: 'Nenhuma banca configurada' });
     }
@@ -93,66 +176,121 @@ export async function GET(req: NextRequest) {
     }
     cleanBancaUrl = cleanBancaUrl.replace(/\/+$/, '');
     const apiKey = process.env.CRM_API_KEY;
-    console.log(`${LOG_PREFIX} 5. URL base da API externa: ${cleanBancaUrl}`);
-    console.log(`${LOG_PREFIX} 6. CRM_API_KEY: ${apiKey ? 'definida' : 'não definida'}`);
+    console.log(`${LOG_PREFIX} 4. URL base da API externa: ${cleanBancaUrl}`);
+    console.log(`${LOG_PREFIX} 5. CRM_API_KEY: ${apiKey ? 'definida' : 'não definida'}`);
 
-    const perPage = 2000;
-    let currentPage = 1;
-    let hasMore = true;
-    const maxPages = 500;
-    let allLeads: any[] = [];
-
-    console.log(`${LOG_PREFIX} 7. Iniciando paginação (per_page=${perPage}, maxPages=${maxPages})...`);
-
-    while (hasMore && currentPage <= maxPages) {
-      const url = new URL(`${cleanBancaUrl}/api/crm/get-indicateds-by-consultant`);
-      url.searchParams.append('consultant', consultorProfile.email);
-      url.searchParams.append('per_page', perPage.toString());
-      url.searchParams.append('page', currentPage.toString());
-      url.searchParams.append('transferred_filter', 'no');
-
-      const pageStart = Date.now();
-      const res = await fetch(url.toString(), {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(apiKey && { 'X-API-KEY': apiKey }),
-        },
-        signal: AbortSignal.timeout(60000),
-      });
-      const pageMs = Date.now() - pageStart;
-
-      if (!res.ok) {
-        console.log(`${LOG_PREFIX}    Página ${currentPage}: HTTP ${res.status} (${pageMs}ms)`);
-        if (res.status === 404 && currentPage === 1) break;
-        if (allLeads.length > 0) break;
-        console.log(`${LOG_PREFIX} 8. Erro fatal da API externa → 400`);
-        console.log(`${LOG_PREFIX} ========== FIM (erro) ==========\n`);
-        return errorResponse(`Erro ao buscar dados da banca: ${res.status}`, 400);
-      }
-
-      const json = await res.json();
-      if (!json.success || !Array.isArray(json.data)) {
-        console.log(`${LOG_PREFIX}    Página ${currentPage}: resposta sem json.success ou json.data não é array`);
-        if (allLeads.length > 0) break;
-        console.log(`${LOG_PREFIX} ========== FIM (0 ganhadores, resposta inválida) ==========\n`);
+    // Escopo de perfis a consultar (alinhado com /api/consultor/dashboard)
+    let consultantProfilesScope: ConsultantProfileBasic[] = [];
+    if (isAdminOrSuperAdmin && !consultorIdFilter) {
+      consultantProfilesScope = await getConsultorProfilesByBancaUrl(bancaUrl);
+      console.log(
+        `${LOG_PREFIX} 6. Escopo: TODOS os perfis da banca (${consultantProfilesScope.length} perfis)`
+      );
+    } else {
+      const consultorProfile = await getUserProfile(effectiveUserId);
+      if (!consultorProfile?.email) {
+        console.log(`${LOG_PREFIX} 6. Consultor sem email → lista vazia`);
+        console.log(`${LOG_PREFIX} ========== FIM (sem email) ==========\n`);
         return successResponse({ winners: [], error: null });
       }
-
-      const pageLeads = json.data || [];
-      allLeads = allLeads.concat(pageLeads);
-      console.log(`${LOG_PREFIX}    Página ${currentPage}: ${pageLeads.length} leads (total acumulado: ${allLeads.length}) [${pageMs}ms]`);
-
-      if (pageLeads.length < perPage || pageLeads.length === 0) hasMore = false;
-      else currentPage++;
+      consultantProfilesScope = [
+        {
+          id: effectiveUserId,
+          email: consultorProfile.email,
+          full_name: consultorProfile.full_name ?? null,
+          status: consultorProfile.status ?? null,
+        },
+      ];
+      console.log(`${LOG_PREFIX} 6. Escopo: perfil único → ${consultorProfile.email}`);
     }
 
-    console.log(`${LOG_PREFIX} 8. Paginação concluída: ${allLeads.length} leads no total`);
+    if (consultantProfilesScope.length === 0) {
+      console.log(`${LOG_PREFIX} 7. Nenhum perfil elegível na banca → lista vazia`);
+      console.log(`${LOG_PREFIX} ========== FIM (escopo vazio) ==========\n`);
+      return successResponse({ winners: [], error: null });
+    }
 
-    const withLastWinnerAt = allLeads.filter((l: any) => l.last_winner_at);
-    console.log(`${LOG_PREFIX} 9. Leads com last_winner_at preenchido: ${withLastWinnerAt.length} de ${allLeads.length}`);
+    // Resumo do escopo por status (útil para logs em telas com muitos perfis)
+    const countsByStatus = consultantProfilesScope.reduce((acc, p) => {
+      const key = String(p.status || 'consultor');
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+    const remainingByStatus = { ...countsByStatus };
+    console.log(`${LOG_PREFIX} 7. Escopo por status:`, countsByStatus);
 
-    let winners = allLeads.filter((lead: any) => {
+    // Dedupe global por id do lead (em caso de transferência o mesmo lead pode retornar em mais de um perfil)
+    const dedupedLeads = new Map<string, WinnerLead>();
+    let totalRawLeads = 0;
+    let errorsCount = 0;
+
+    for (let i = 0; i < consultantProfilesScope.length; i++) {
+      const current = consultantProfilesScope[i];
+      const statusKey = String(current.status || 'consultor');
+      const logLabel = `[${i + 1}/${consultantProfilesScope.length} ${statusKey} ${current.email}]`;
+
+      console.log(`${LOG_PREFIX} 8.${i + 1} Consultando`, {
+        index: i + 1,
+        total: consultantProfilesScope.length,
+        status: statusKey,
+        email: current.email,
+        remaining_before: remainingByStatus,
+      });
+
+      const { leads, error } = await fetchLeadsForConsultant({
+        bancaUrlClean: cleanBancaUrl,
+        apiKey,
+        consultantEmail: current.email,
+        logLabel,
+      });
+
+      if (error) {
+        errorsCount++;
+        console.log(`${LOG_PREFIX} ${logLabel} erro: ${error}`);
+      }
+
+      totalRawLeads += leads.length;
+      for (const lead of leads) {
+        const key = String(lead?.id ?? '');
+        if (!key) continue;
+        if (!dedupedLeads.has(key)) {
+          dedupedLeads.set(key, {
+            id: lead.id,
+            name: [lead.name, lead.last_name].filter(Boolean).join(' ').trim() || 'Sem nome',
+            phone: lead.phone || lead.whatsapp || '',
+            last_winner_at: lead.last_winner_at || null,
+            last_winner_value: parseFloat(lead.last_winner_value) || parseFloat(lead.total_ganho) || 0,
+            total_ganho: parseFloat(lead.total_ganho) || 0,
+            consultant_email: current.email,
+            consultant_name: current.full_name,
+            consultant_status: statusKey,
+          });
+        }
+      }
+
+      remainingByStatus[statusKey] = Math.max(0, Number(remainingByStatus[statusKey] || 0) - 1);
+      console.log(`${LOG_PREFIX} ${logLabel} processado`, {
+        leads_retornados: leads.length,
+        deduped_total: dedupedLeads.size,
+        remaining_after: remainingByStatus,
+      });
+
+      if (i < consultantProfilesScope.length - 1) {
+        await sleep(WINNERS_CRM_INTERVAL_MS);
+      }
+    }
+
+    const allLeads = Array.from(dedupedLeads.values());
+    console.log(
+      `${LOG_PREFIX} 9. Consolidado: raw=${totalRawLeads}, deduped=${allLeads.length}, erros=${errorsCount}`
+    );
+
+    const withLastWinnerAt = allLeads.filter((l) => l.last_winner_at);
+    console.log(
+      `${LOG_PREFIX} 10. Leads com last_winner_at preenchido: ${withLastWinnerAt.length} de ${allLeads.length}`
+    );
+
+    let winners = allLeads.filter((lead) => {
       const at = lead.last_winner_at;
       if (!at) return false;
       const winnerDateStr = toDateStringSP(at);
@@ -161,35 +299,26 @@ export async function GET(req: NextRequest) {
       return true;
     });
 
-    console.log(`${LOG_PREFIX} 10. Filtro por período (last_winner_at):`, {
-      periodo: dateFrom && dateTo ? `${dateFrom} a ${dateTo}` : dateFrom ? `a partir de ${dateFrom}` : dateTo ? `até ${dateTo}` : 'todo o período',
+    console.log(`${LOG_PREFIX} 11. Filtro por período (last_winner_at):`, {
+      periodo:
+        dateFrom && dateTo
+          ? `${dateFrom} a ${dateTo}`
+          : dateFrom
+          ? `a partir de ${dateFrom}`
+          : dateTo
+          ? `até ${dateTo}`
+          : 'todo o período',
       ganhadores_no_periodo: winners.length,
     });
-    if (winners.length > 0 && winners.length <= 5) {
-      winners.forEach((w: any, i: number) => {
-        console.log(`${LOG_PREFIX}    Exemplo ${i + 1}: id=${w.id} last_winner_at=${w.last_winner_at}`);
-      });
-    } else if (winners.length > 5) {
-      console.log(`${LOG_PREFIX}    Exemplos (3 primeiros):`);
-      winners.slice(0, 3).forEach((w: any, i: number) => {
-        console.log(`${LOG_PREFIX}      ${i + 1}. id=${w.id} last_winner_at=${w.last_winner_at}`);
-      });
-    }
 
-    const lastWinnerValue = (l: any) => parseFloat(l.last_winner_value) || parseFloat(l.total_ganho) || 0;
-    winners = winners
-      .map((l: any) => ({
-        id: l.id,
-        name: [l.name, l.last_name].filter(Boolean).join(' ').trim() || 'Sem nome',
-        phone: l.phone || l.whatsapp || '',
-        last_winner_at: l.last_winner_at || null,
-        last_winner_value: lastWinnerValue(l),
-        total_ganho: parseFloat(l.total_ganho) || 0,
-      }))
-      .sort((a: any, b: any) => new Date(b.last_winner_at).getTime() - new Date(a.last_winner_at).getTime());
+    winners = winners.sort(
+      (a, b) => new Date(b.last_winner_at ?? 0).getTime() - new Date(a.last_winner_at ?? 0).getTime()
+    );
 
     const totalMs = Date.now() - startTime;
-    console.log(`${LOG_PREFIX} 11. Resposta: ${winners.length} ganhadores retornados (tempo total: ${totalMs}ms)`);
+    console.log(
+      `${LOG_PREFIX} 12. Resposta: ${winners.length} ganhadores (tempo total: ${totalMs}ms, erros: ${errorsCount})`
+    );
     console.log(`${LOG_PREFIX} ========== FIM (sucesso) ==========\n`);
 
     return successResponse({ winners, error: null });

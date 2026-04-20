@@ -2,7 +2,9 @@ import { NextRequest } from 'next/server';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { requireAdminLeadTransferContext } from '@/lib/server/crm/adminLeadTransferContext';
 import { executeLeadRedistributionCore, type TransferKind } from '@/lib/server/crm/leadRedistributionCore';
-import { resolveGerenteStockPoolEmail, findGerenteUserIdIfEmailIsGerenteOnBanca } from '@/lib/server/crm/gerenteLeadStock';
+import { findGerenteUserIdIfEmailIsGerenteOnBanca } from '@/lib/server/crm/gerenteLeadStock';
+import { reserveAdminToGerenteStock } from '@/lib/server/crm/adminToStockReservation';
+import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { z } from 'zod';
 
 const transferTypeEnum = z.enum(['TF', 'TF1', 'TF2', 'TF3']);
@@ -84,31 +86,58 @@ export async function POST(req: NextRequest) {
       if (autoGerenteId) {
         toGerenteStockGerenteId = autoGerenteId;
         console.log(
-          `${LOG_PREFIX} POST destino é gerente na banca → usando estoque CRM (admin_to_gerente_stock) gerente_id=${autoGerenteId}`
+          `${LOG_PREFIX} POST destino é gerente na banca → reserva lógica no estoque (admin_to_gerente_stock) gerente_id=${autoGerenteId}`
         );
       }
     }
 
-    let target_consultant_email = (parsed.data.target_consultant_email ?? '').trim();
-    let filters_snapshot = parsed.data.filters_snapshot ?? null;
-    let transferKind: TransferKind = 'standard';
-
+    /** Fluxo reserva lógica: admin envia ao estoque do gerente SEM chamar o CRM.
+     *  Os leads continuam com o consultor de origem no CRM. O gerente distribui depois
+     *  aos consultores da equipe — e esse repasse sim chama o CRM (origem real → consultor). */
     if (toGerenteStockGerenteId) {
-      const stockEmail = await resolveGerenteStockPoolEmail(toGerenteStockGerenteId, ctx.bancaId);
-      if (!stockEmail) {
-        return errorResponse(
-          'Não foi possível determinar o e-mail de estoque do gerente nesta banca. Verifique vínculo do gerente à banca e e-mail no perfil.',
-          400
-        );
+      const { data: gerenteProfile } = await supabaseServiceRole
+        .from('profiles')
+        .select('id, email, status')
+        .eq('id', toGerenteStockGerenteId)
+        .maybeSingle();
+      if (!gerenteProfile?.id || gerenteProfile.status !== 'gerente') {
+        return errorResponse('Gerente de destino inválido para reserva no estoque.', 400);
       }
-      target_consultant_email = stockEmail;
-      transferKind = 'admin_to_gerente_stock';
-      const fs = typeof filters_snapshot === 'object' && filters_snapshot !== null ? { ...filters_snapshot } : {};
-      fs.to_gerente_stock = true;
-      fs.gerente_stock_gerente_id = toGerenteStockGerenteId;
-      filters_snapshot = fs;
-      console.log(`${LOG_PREFIX} POST admin → estoque gerente=${toGerenteStockGerenteId} pool=${target_consultant_email}`);
+      const gerenteEmail = String(gerenteProfile.email ?? '').trim().toLowerCase();
+
+      const reservation = await reserveAdminToGerenteStock({
+        userId: ctx.userId,
+        bancaId: ctx.bancaId,
+        gerenteUserId: toGerenteStockGerenteId,
+        gerenteDisplayEmail: gerenteEmail,
+        sourceConsultantEmail: parsed.data.source_consultant_email,
+        leadsIds: parsed.data.leads_ids,
+        transferType: parsed.data.transfer_type,
+        transferDeadlineDays: parsed.data.transfer_deadline_days,
+        filtersSnapshot: parsed.data.filters_snapshot ?? null,
+        leadSnapshots: parsed.data.lead_snapshots,
+      });
+
+      if (!reservation.ok) {
+        return errorResponse(reservation.error, reservation.status);
+      }
+
+      return successResponse(
+        {
+          count: reservation.count,
+          crm_count: 0,
+          transfer_log_id: reservation.transfer_log_id,
+          message: reservation.message,
+          transfer_kind: 'admin_to_gerente_stock' as TransferKind,
+          stock_reservation: true,
+        },
+        reservation.message
+      );
     }
+
+    const target_consultant_email = (parsed.data.target_consultant_email ?? '').trim();
+    const filters_snapshot = parsed.data.filters_snapshot ?? null;
+    const transferKind: TransferKind = 'standard';
 
     if (parsed.data.source_consultant_email.trim().toLowerCase() === target_consultant_email.toLowerCase()) {
       return errorResponse('Consultor origem e destino devem ser diferentes.', 400);
