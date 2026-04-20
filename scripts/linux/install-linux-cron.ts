@@ -35,7 +35,7 @@ function buildCronBlock(appDir: string, npmBin: string, logFile: string): string
   const lines: string[] = [];
   lines.push(BLOCK_START);
   lines.push('# Gerado por scripts/linux/install-linux-cron.ts');
-  lines.push('# Mantemos UTC para equivaler ao comportamento do Netlify');
+  lines.push('# CRON_TZ=UTC: horários previsíveis em qualquer fuso da VPS');
   lines.push('CRON_TZ=UTC');
   lines.push('PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin');
   lines.push('');

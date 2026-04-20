@@ -67,6 +67,18 @@ Anti-Spam em tempo real consumindo eventos de webhook gravados em `evolution_web
 3. Idempotência: cada ação é registrada em `anti_spam_actions` com chave em `meta.action_key`; reprocessamento não duplica ações.
 4. **Verificar grupos (manual):** Endpoint e botão "Verificar grupos" consultam participantes de cada grupo monitorado, identificam números da blacklist já presentes nos grupos e removem (um por request).
 
+## Varredura agendada de grupos (VPS Linux)
+
+O scanner que percorre grupos e remove participantes da blacklist (função `anti-spam-group-scanner`) **não depende de Netlify**. Em produção na VPS (ex.: Contabo), use o mesmo agendamento que o restante do Zaploto:
+
+- **Lista de jobs:** `scripts/linux/scheduled-jobs.ts` (inclui `anti-spam-group-scanner` a cada minuto em UTC).
+- **Executar um job manualmente:** na raiz do app, com `.env` carregado:  
+  `npm run cron:run -- anti-spam-group-scanner`  
+  (implementação em `netlify/functions/anti-spam-group-scanner.ts`, invocada pelo runner `scripts/linux/run-netlify-scheduled-function.ts`.)
+- **Instalar crontab:** `npx tsx scripts/linux/install-linux-cron.ts` (gera bloco com `flock` e `CRON_TZ=UTC`; log padrão `/var/log/zaploto-cron.log` ou `CRON_LOG_FILE`).
+
+Garanta `NEXT_PUBLIC_SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` no ambiente do cron (mesmo do Next/PM2).
+
 ## Evolution API
 
 - Cliente: `lib/anti-spam/evolution-client.ts`

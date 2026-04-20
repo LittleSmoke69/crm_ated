@@ -2,7 +2,7 @@
  * Scanner de grupos do WhatsApp.
  * Busca todos os grupos das configs ativas, escaneia em lotes de 5,
  * remove números da blacklist e internacionais, registra logs no banco.
- * Agendamento típico: a cada 20 minutos no deploy (ex.: Netlify) ou via POST /api/admin/anti-spam/scan-groups / /api/cron/anti-spam-group-scanner.
+ * Agendamento típico: cron na VPS (`npm run cron:run -- anti-spam-group-scanner`, ver `scripts/linux/scheduled-jobs.ts`) ou POST /api/admin/anti-spam/scan-groups / /api/cron/anti-spam-group-scanner.
  */
 
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
