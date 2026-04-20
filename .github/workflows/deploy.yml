@@ -9,6 +9,7 @@ jobs:
   deploy:
     name: Build e Deploy na VPS
     runs-on: ubuntu-latest
+    environment: SSH_HOST
 
     steps:
       - name: Deploy via SSH
@@ -21,15 +22,8 @@ jobs:
           timeout: 300s
           script: |
             set -e
-            echo "==> Atualizando código..."
             cd /tmp/ZaplotoV3
             git pull origin main
-
-            echo "==> Rebuilding containers..."
             docker compose up --build -d
-
-            echo "==> Removendo imagens antigas..."
             docker image prune -f
-
-            echo "==> Status dos containers:"
             docker compose ps
