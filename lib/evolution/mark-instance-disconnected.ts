@@ -62,3 +62,32 @@ export async function maybeMarkEvolutionInstanceDisconnected(
   if (!errorMessage || !messageIndicatesEvolutionSessionDropped(errorMessage)) return;
   await markEvolutionInstanceDisconnected(supabase, instanceId, context);
 }
+
+/**
+ * Resposta JSON da Evolution (ex.: POST /chat/whatsappNumbers) quando a sessão caiu:
+ * Boom + Connection Closed / 428 Precondition Required, etc.
+ */
+export function evolutionChatApiBodyIndicatesSessionDropped(body: unknown): boolean {
+  if (body && typeof body === 'object' && '_non_json' in (body as object)) {
+    const preview = String((body as { preview?: string }).preview ?? '');
+    return messageIndicatesEvolutionSessionDropped(preview);
+  }
+  try {
+    const s = JSON.stringify(body);
+    if (messageIndicatesEvolutionSessionDropped(s)) return true;
+  } catch {
+    return false;
+  }
+  const o = body as Record<string, unknown>;
+  if (o?.isBoom === true) {
+    const out = o.output as Record<string, unknown> | undefined;
+    const payload = out?.payload as Record<string, unknown> | undefined;
+    const code = Number(payload?.statusCode ?? out?.statusCode);
+    const msg = String(payload?.message ?? '').toLowerCase();
+    const err = String(payload?.error ?? '').toLowerCase();
+    if (code === 428) return true;
+    if (msg.includes('connection closed')) return true;
+    if (err.includes('precondition')) return true;
+  }
+  return false;
+}

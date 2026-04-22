@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
       return errorResponse('banca_id é obrigatório.');
     }
 
-    const resolved = await getAdminBancaId(userId, profile, bancaId);
+    const resolved = await getAdminBancaId(userId, profile, bancaId, { skipLeadTransferLock: true });
     if (!resolved) {
       return errorResponse('Banca não encontrada ou sem permissão.');
     }

@@ -71,7 +71,7 @@ export async function GET(req: NextRequest) {
     let stockScopeUserId: string;
 
     if (admin) {
-      const resolved = await getAdminBancaId(userId, profile, bancaId);
+      const resolved = await getAdminBancaId(userId, profile, bancaId, { skipLeadTransferLock: true });
       if (!resolved) return errorResponse('Banca não encontrada ou sem permissão.', 404);
       if (gerenteParam) {
         const ok = await assertGerenteHasBanca(gerenteParam, bancaId);

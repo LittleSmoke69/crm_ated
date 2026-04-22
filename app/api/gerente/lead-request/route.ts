@@ -7,6 +7,9 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 const LEAD_TYPES = ['registered', 'with_balance', 'has_won', 'has_withdrawn'] as const;
 
+/** Alinhado ao modal do gerente (`SOLICITATION_MAX_LEADS` em app/gerente/page.tsx). */
+const MAX_QUANTITY_PER_CONSULTOR = 1000;
+
 /** Quem pode ser o "gerente" da solicitação (campo gerente_id / equipe do consultor). */
 const LEAD_REQUEST_MANAGER_STATUSES = ['gerente', 'admin', 'super_admin'] as const;
 
@@ -91,6 +94,9 @@ export async function POST(req: NextRequest) {
       const quantity = item?.quantity;
       if (!consultorId || typeof quantity !== 'number' || quantity < 1) {
         return errorResponse('Cada item deve ter consultor_id e quantity (número >= 1)', 400);
+      }
+      if (quantity > MAX_QUANTITY_PER_CONSULTOR) {
+        return errorResponse(`Quantidade por consultor não pode ultrapassar ${MAX_QUANTITY_PER_CONSULTOR}.`, 400);
       }
       if (!allowedIds.has(consultorId)) {
         return errorResponse(`Consultor não pertence à equipe do gerente indicado: ${consultorId}`, 403);

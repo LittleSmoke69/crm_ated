@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
     let effectiveGerenteId: string;
 
     if (isLeadStockAdminViewer(profile)) {
-      const resolved = await getAdminBancaId(userId, profile, bancaId);
+      const resolved = await getAdminBancaId(userId, profile, bancaId, { skipLeadTransferLock: true });
       if (!resolved) return errorResponse('Banca não encontrada ou sem permissão.', 404);
       if (!gerenteParam) {
         return errorResponse('Para admin/super_admin, informe gerente_user_id (dono do estoque do pacote).', 400);

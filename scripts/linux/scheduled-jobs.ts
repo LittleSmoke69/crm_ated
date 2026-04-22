@@ -13,7 +13,6 @@ export const SCHEDULED_JOBS: ScheduledJob[] = [
   { name: 'process-activation-mass-send', cron: '*/1 * * * *' },
   { name: 'process-broadcast-queue', cron: '*/1 * * * *' },
   { name: 'check-instances-status', cron: '*/5 * * * *' },
-  { name: 'list-cleaning-resume', cron: '*/1 * * * *' },
   { name: 'process-group-fetch-jobs', cron: '*/1 * * * *' },
   { name: 'audit-group-names-sync', cron: '*/1 * * * *' },
   { name: 'academy-vturb-snapshots', cron: '0 2 * * *' },

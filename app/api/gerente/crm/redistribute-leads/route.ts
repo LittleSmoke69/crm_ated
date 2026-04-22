@@ -6,7 +6,7 @@ import {
   getBancaCrmBaseForTransfer,
   isConsultantDirectReportOfGerente,
 } from '@/lib/server/crm/gerenteLeadStock';
-import { isConsultantInBanca } from '@/lib/server/crm/adminLeadTransferContext';
+import { assertLeadTransferNotLockedForBanca, isConsultantInBanca } from '@/lib/server/crm/adminLeadTransferContext';
 import { createCrmRedistributionClient } from '@/lib/server/crm/crmRedistributionClient';
 import {
   getPendingStockEntriesByLeadIds,
@@ -59,6 +59,8 @@ export async function POST(req: NextRequest) {
 
     const { banca_id, target_consultant_email, leads_ids } = parsed.data;
     const target = target_consultant_email.trim();
+
+    await assertLeadTransferNotLockedForBanca(banca_id);
 
     const hasBanca = await assertGerenteHasBanca(userId, banca_id);
     if (!hasBanca) return errorResponse('Banca não disponível para o seu usuário.', 403);
@@ -288,7 +290,11 @@ export async function POST(req: NextRequest) {
     );
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    if (message.includes('Acesso negado') || message.includes('não tem permissão')) {
+    if (
+      message.includes('Acesso negado') ||
+      message.includes('não tem permissão') ||
+      message.includes('bloqueada para transferência')
+    ) {
       return errorResponse(message, 403);
     }
     if (message.includes('CRM_API_KEY')) return errorResponse('Configuração do servidor incompleta.', 503);

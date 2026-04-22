@@ -3,12 +3,29 @@ import { requireAdmin } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { requireAdminLeadTransferContext, isConsultantInBanca } from '@/lib/server/crm/adminLeadTransferContext';
+import { assertGerenteHasBanca } from '@/lib/server/crm/gerenteLeadStock';
 import { createCrmRedistributionClient, type IndicatedDetail } from '@/lib/server/crm/crmRedistributionClient';
 
 const LOG_PREFIX = '[admin/crm/lead-requests][approve-and-transfer]';
 const LEAD_TYPES = ['registered', 'with_balance', 'has_won', 'has_withdrawn'] as const;
 const DETAIL_PAGE_SIZE = 2000;
 const MAX_DETAIL_PAGES = 15;
+
+/** Distribui um inteiro `total` proporcionalmente a `weights` (maiores restos primeiro). */
+function splitIntegerProportional(weights: number[], total: number): number[] {
+  const n = weights.length;
+  if (n === 0 || total <= 0) return weights.map(() => 0);
+  const sumW = weights.reduce((a, b) => a + b, 0);
+  if (sumW <= 0) return weights.map(() => 0);
+  const exact = weights.map((w) => (total * w) / sumW);
+  const floors = exact.map((x) => Math.floor(x));
+  let rem = total - floors.reduce((a, b) => a + b, 0);
+  const fractional = exact.map((x, i) => ({ i, frac: x - Math.floor(x) })).sort((a, b) => b.frac - a.frac);
+  for (let k = 0; k < rem; k++) {
+    floors[fractional[k].i] += 1;
+  }
+  return floors;
+}
 
 /** Embaralha array (Fisher-Yates) */
 function shuffle<T>(arr: T[]): T[] {
@@ -42,7 +59,7 @@ function leadMatchesTypes(lead: Record<string, unknown>, types: string[]): boole
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const { userId } = await requireAdmin(req);
+    const { userId, profile } = await requireAdmin(req);
     const { id: requestId } = await params;
     if (!requestId) return errorResponse('ID da solicitação é obrigatório.', 400);
 
@@ -53,7 +70,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       source_consultant_id: sourceConsultantId,
       source_consultant_email: sourceConsultantEmailParam,
       banca_id: bancaIdParam,
+      transfer_mode: transferModeRaw,
+      to_gerente_stock_gerente_id: toGerenteStockGerenteIdBody,
+      direct_lead_count: directLeadCountBody,
+      stock_lead_count: stockLeadCountBody,
     } = body;
+
+    const toGerenteStockGerenteId =
+      typeof toGerenteStockGerenteIdBody === 'string' ? toGerenteStockGerenteIdBody.trim() : '';
 
     const leadTypes = Array.isArray(leadTypeParam)
       ? leadTypeParam.filter((t: unknown) => typeof t === 'string' && LEAD_TYPES.includes(t as typeof LEAD_TYPES[number]))
@@ -89,6 +113,50 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const ctx = await requireAdminLeadTransferContext(req, bancaId);
     if (!ctx) return errorResponse('Banca não encontrada ou sem permissão.', 400);
 
+    const hasExplicitSplit =
+      typeof directLeadCountBody === 'number' &&
+      Number.isFinite(directLeadCountBody) &&
+      typeof stockLeadCountBody === 'number' &&
+      Number.isFinite(stockLeadCountBody);
+
+    let directCount: number;
+    let stockCount: number;
+    if (hasExplicitSplit) {
+      directCount = Math.max(0, Math.floor(directLeadCountBody as number));
+      stockCount = Math.max(0, Math.floor(stockLeadCountBody as number));
+      if (directCount + stockCount !== totalNeeded) {
+        return errorResponse(
+          `Direto (${directCount}) + estoque (${stockCount}) deve somar ${totalNeeded} (total da solicitação).`,
+          400
+        );
+      }
+    } else {
+      const legacyMode = transferModeRaw === 'gerente_stock' ? 'gerente_stock' : 'direct';
+      if (legacyMode === 'gerente_stock') {
+        directCount = 0;
+        stockCount = totalNeeded;
+      } else {
+        directCount = totalNeeded;
+        stockCount = 0;
+      }
+    }
+
+    const transferModeEffective: 'direct' | 'gerente_stock' | 'mixed' =
+      directCount > 0 && stockCount > 0 ? 'mixed' : stockCount > 0 ? 'gerente_stock' : 'direct';
+
+    if (stockCount > 0) {
+      if (profile.status !== 'admin' && profile.status !== 'super_admin') {
+        return errorResponse('Apenas administrador ou super administrador podem enviar leads ao estoque do gerente.', 403);
+      }
+      if (!toGerenteStockGerenteId) {
+        return errorResponse('Informe o gerente do estoque (to_gerente_stock_gerente_id).', 400);
+      }
+      const gerenteOk = await assertGerenteHasBanca(toGerenteStockGerenteId, ctx.bancaId);
+      if (!gerenteOk) {
+        return errorResponse('Gerente não está vinculado a esta banca.', 400);
+      }
+    }
+
     const { data: sourceProfile } = await supabaseServiceRole
       .from('profiles')
       .select('id, email')
@@ -97,26 +165,28 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const sourceEmail = (sourceConsultantEmailParam ?? sourceProfile?.email)?.trim();
     if (!sourceEmail) return errorResponse('E-mail do consultor doador não encontrado.', 400);
 
-    const targetIds = validConsultores.map((c: { consultor_id: string }) => c.consultor_id);
-    const { data: targetProfiles } = await supabaseServiceRole
-      .from('profiles')
-      .select('id, email')
-      .in('id', targetIds);
     const emailById = new Map<string, string>();
-    (targetProfiles ?? []).forEach((p: { id: string; email: string | null }) => {
-      if (p.email) emailById.set(p.id, p.email.trim());
-    });
-    for (const c of validConsultores) {
-      if (!emailById.has(c.consultor_id)) {
-        return errorResponse(`E-mail do consultor recebedor não encontrado: ${c.consultor_id}`, 400);
+    if (directCount > 0) {
+      const targetIds = validConsultores.map((c: { consultor_id: string }) => c.consultor_id);
+      const { data: targetProfiles } = await supabaseServiceRole
+        .from('profiles')
+        .select('id, email')
+        .in('id', targetIds);
+      (targetProfiles ?? []).forEach((p: { id: string; email: string | null }) => {
+        if (p.email) emailById.set(p.id, p.email.trim());
+      });
+      for (const c of validConsultores) {
+        if (!emailById.has(c.consultor_id)) {
+          return errorResponse(`E-mail do consultor recebedor não encontrado: ${c.consultor_id}`, 400);
+        }
       }
-    }
 
-    // Doador pode ser qualquer usuário do sistema; a disponibilidade de leads é validada no CRM abaixo.
-    for (const c of validConsultores) {
-      const email = emailById.get(c.consultor_id);
-      if (email && !(await isConsultantInBanca(ctx.bancaId, email))) {
-        return errorResponse(`O consultor recebedor ${email} não pertence à banca.`, 400);
+      // Doador pode ser qualquer usuário do sistema; a disponibilidade de leads é validada no CRM abaixo.
+      for (const c of validConsultores) {
+        const email = emailById.get(c.consultor_id);
+        if (email && !(await isConsultantInBanca(ctx.bancaId, email))) {
+          return errorResponse(`O consultor recebedor ${email} não pertence à banca.`, 400);
+        }
       }
     }
 
@@ -199,18 +269,30 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       });
     }
 
-    let offset = 0;
     const origin = req.url ? new URL(req.url).origin : (process.env.NEXTAUTH_URL ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000'));
     const approvedAtIso = new Date().toISOString();
-    const transferResults: { consultor_id: string; consultor_email: string; quantity_requested: number; quantity_transferred: number; transfer_log_id: string | null; lead_ids: string[] }[] = [];
+    const transferResults: { consultor_id: string; consultor_email: string; quantity_requested: number; quantity_transferred: number; transfer_log_id: string | null; lead_ids: string[]; channel?: 'crm_direct' | 'gerente_stock' }[] =
+      [];
 
-    for (const rec of validConsultores) {
-      const qty = rec.quantity as number;
-      const batchIds = selectedIds.slice(offset, offset + qty);
-      offset += qty;
-      if (batchIds.length === 0) continue;
-      const targetEmail = emailById.get(rec.consultor_id)!;
-      const leadSnapshots = batchIds.map((leadId) => {
+    let gerenteStockDisplayName = '';
+    if (stockCount > 0 && toGerenteStockGerenteId) {
+      const { data: gp } = await supabaseServiceRole
+        .from('profiles')
+        .select('full_name, email')
+        .eq('id', toGerenteStockGerenteId)
+        .maybeSingle();
+      gerenteStockDisplayName = (
+        (gp?.full_name ?? '').trim() ||
+        (gp?.email ?? '').trim() ||
+        toGerenteStockGerenteId
+      ).trim();
+    }
+
+    const directLeadIds = directCount > 0 ? selectedIds.slice(0, directCount) : [];
+    const stockLeadIds = stockCount > 0 ? selectedIds.slice(directCount, directCount + stockCount) : [];
+
+    const mapSnapshots = (batchIds: string[]) =>
+      batchIds.map((leadId) => {
         const snap = snapshotByLeadId.get(String(leadId));
         return {
           lead_id: leadId,
@@ -223,31 +305,92 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           total_saque: snap?.total_saque ?? null,
         };
       });
-      const res = await fetch(`${origin}/api/admin/crm/redistribute-leads`, {
+
+    if (directCount > 0 && directLeadIds.length > 0) {
+      const weights = validConsultores.map((c: { quantity: number }) => c.quantity);
+      const amounts = splitIntegerProportional(weights, directCount);
+      let offsetDirect = 0;
+      for (let i = 0; i < validConsultores.length; i++) {
+        const rec = validConsultores[i];
+        const amt = amounts[i] ?? 0;
+        const batchIds = directLeadIds.slice(offsetDirect, offsetDirect + amt);
+        offsetDirect += amt;
+        if (batchIds.length === 0) continue;
+        const targetEmail = emailById.get(rec.consultor_id)!;
+        const leadSnapshots = mapSnapshots(batchIds);
+        const res = await fetch(`${origin}/api/admin/crm/redistribute-leads`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+          body: JSON.stringify({
+            banca_id: ctx.bancaId,
+            source_consultant_email: sourceEmail,
+            target_consultant_email: targetEmail,
+            leads_ids: batchIds,
+            transfer_type: 'TF',
+            filters_snapshot: {
+              lead_types: leadTypes,
+              from_solicitation: requestId,
+              split_direct_portion: directCount,
+              split_stock_portion: stockCount,
+            },
+            lead_snapshots: leadSnapshots,
+          }),
+        });
+        const json = await res.json();
+        if (!res.ok || !json.success) {
+          return errorResponse(json?.error ?? 'Erro ao transferir um dos lotes de leads. Tente novamente ou realize a transferência manual.', 400);
+        }
+        const countTransferred = json?.data?.count ?? batchIds.length;
+        transferResults.push({
+          consultor_id: rec.consultor_id,
+          consultor_email: targetEmail,
+          quantity_requested: amt,
+          quantity_transferred: countTransferred,
+          transfer_log_id: json?.data?.transfer_log_id ?? null,
+          lead_ids: batchIds,
+          channel: 'crm_direct',
+        });
+      }
+    }
+
+    if (stockCount > 0 && stockLeadIds.length > 0 && toGerenteStockGerenteId) {
+      const leadSnapshots = mapSnapshots(stockLeadIds);
+      const resStock = await fetch(`${origin}/api/admin/crm/redistribute-leads`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
         body: JSON.stringify({
           banca_id: ctx.bancaId,
           source_consultant_email: sourceEmail,
-          target_consultant_email: targetEmail,
-          leads_ids: batchIds,
+          to_gerente_stock_gerente_id: toGerenteStockGerenteId,
+          leads_ids: stockLeadIds,
           transfer_type: 'TF',
-          filters_snapshot: { lead_types: leadTypes, from_solicitation: requestId },
+          transfer_deadline_days: 10,
+          filters_snapshot: {
+            lead_types: leadTypes,
+            from_solicitation: requestId,
+            approve_transfer_mode: 'gerente_stock',
+            split_direct_portion: directCount,
+            split_stock_portion: stockCount,
+          },
           lead_snapshots: leadSnapshots,
         }),
       });
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        return errorResponse(json?.error ?? 'Erro ao transferir um dos lotes de leads. Tente novamente ou realize a transferência manual.', 400);
+      const jsonStock = await resStock.json();
+      if (!resStock.ok || !jsonStock.success) {
+        return errorResponse(
+          jsonStock?.error ?? 'Erro ao reservar leads no estoque do gerente. Tente novamente ou use a transferência manual.',
+          400
+        );
       }
-      const countTransferred = json?.data?.count ?? batchIds.length;
+      const countTransferred = jsonStock?.data?.count ?? stockLeadIds.length;
       transferResults.push({
-        consultor_id: rec.consultor_id,
-        consultor_email: targetEmail,
-        quantity_requested: qty,
+        consultor_id: toGerenteStockGerenteId,
+        consultor_email: gerenteStockDisplayName ? `estoque:${gerenteStockDisplayName}` : `stock:${toGerenteStockGerenteId}`,
+        quantity_requested: stockCount,
         quantity_transferred: countTransferred,
-        transfer_log_id: json?.data?.transfer_log_id ?? null,
-        lead_ids: batchIds,
+        transfer_log_id: jsonStock?.data?.transfer_log_id ?? null,
+        lead_ids: stockLeadIds,
+        channel: 'gerente_stock',
       });
     }
 
@@ -266,6 +409,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       filters_applied: {
         lead_types: leadTypes,
         from_solicitation: requestId,
+        transfer_mode_effective: transferModeEffective,
+        direct_lead_count: directCount,
+        stock_lead_count: stockCount,
+        ...(stockCount > 0 && toGerenteStockGerenteId
+          ? {
+              to_gerente_stock_gerente_id: toGerenteStockGerenteId,
+              gerente_stock_display_name: gerenteStockDisplayName || undefined,
+            }
+          : {}),
       },
       consultores_requested: validConsultores,
     };
@@ -290,9 +442,23 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return errorResponse('Transferências realizadas, mas falha ao atualizar status da solicitação.', 500);
     }
 
+    const msgParts: string[] = [];
+    if (directCount > 0) msgParts.push(`${directCount} direto (CRM)`);
+    if (stockCount > 0) msgParts.push(`${stockCount} reservado(s) no estoque${gerenteStockDisplayName ? ` (${gerenteStockDisplayName})` : ''}`);
+    const summaryMsg =
+      msgParts.length > 0
+        ? `Solicitação atendida: ${msgParts.join('; ')}.`
+        : `${totalNeeded} lead(s) processado(s) com sucesso.`;
+
     return successResponse(
-      { total_transferred: totalNeeded, receivers: validConsultores.length },
-      `${totalNeeded} lead(s) transferido(s) para ${validConsultores.length} consultor(es) com sucesso.`
+      {
+        total_transferred: totalNeeded,
+        direct_lead_count: directCount,
+        stock_lead_count: stockCount,
+        transfer_mode_effective: transferModeEffective,
+        receivers: validConsultores.length,
+      },
+      summaryMsg
     );
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

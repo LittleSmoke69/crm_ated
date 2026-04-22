@@ -117,12 +117,14 @@ async function countLeadsVinculados(
     if (transferLogIdsFilter.length === 0) return 0;
   }
 
+  /** Mesma regra da RPC get_resolved_transfer_stats: não contar vinculados do log admin→estoque (intermediário). */
   let q = supabaseServiceRole
     .from('admin_lead_transfer_entries')
-    .select('id', { count: 'exact', head: true })
+    .select('id, admin_lead_transfer_logs!inner(transfer_kind)', { count: 'exact', head: true })
     .eq('resolution_status', 'vinculado')
     .in('banca_id', bancaIds)
-    .not('resolved_at', 'is', null);
+    .not('resolved_at', 'is', null)
+    .not('admin_lead_transfer_logs.transfer_kind', 'eq', 'admin_to_gerente_stock');
   if (fromParam) q = q.gte('resolved_at', dateToStartOfDaySãoPauloISO(fromParam));
   if (toParam) q = q.lte('resolved_at', dateToEndOfDaySãoPauloISO(toParam));
   if (transferLogIdsFilter?.length) q = q.in('transfer_log_id', transferLogIdsFilter);

@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
     if (!bancaId) return errorResponse('banca_id é obrigatório.', 400);
 
     if (isLeadStockAdminViewer(profile)) {
-      const resolved = await getAdminBancaId(userId, profile, bancaId);
+      const resolved = await getAdminBancaId(userId, profile, bancaId, { skipLeadTransferLock: true });
       if (!resolved) return errorResponse('Banca não encontrada ou sem permissão.', 404);
 
       if (gerenteParam) {

@@ -60,3 +60,8 @@ export function deduplicatePhones(phones: string[]): string[] {
     return true;
   });
 }
+
+/** Mantém apenas números já normalizados com DDI Brasil (55…). */
+export function filterBrazilCountryCode(phones: string[]): string[] {
+  return phones.filter((p) => p.startsWith('55'));
+}

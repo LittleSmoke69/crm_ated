@@ -174,7 +174,11 @@ export async function POST(req: NextRequest) {
     );
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    if (message.includes('não tem permissão') || message.includes('obrigatório')) {
+    if (
+      message.includes('não tem permissão') ||
+      message.includes('obrigatório') ||
+      message.includes('bloqueada para transferência')
+    ) {
       return errorResponse(message, 403);
     }
     if (message.includes('CRM_API_KEY')) {

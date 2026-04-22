@@ -101,14 +101,21 @@ export async function getAdminAllowedBancaIds(
   return rows.map((r: { id: string }) => r.id);
 }
 
+export type GetAdminBancaIdOptions = {
+  /** Quando true, ignora lead_transfer_locked (somente leitura: métricas, auditoria de estoque). */
+  skipLeadTransferLock?: boolean;
+};
+
 /**
  * Obtém banca_id permitida para o usuário.
  * Admin e super_admin: qualquer banca_id existente em crm_bancas (controle total na transferência de leads).
+ * Por padrão respeita crm_bancas.lead_transfer_locked (ninguém transfere até desbloqueio pelo super_admin).
  */
 export async function getAdminBancaId(
   userId: string,
   profile: UserProfile,
-  bancaIdFromRequest: string | null
+  bancaIdFromRequest: string | null,
+  options?: GetAdminBancaIdOptions
 ): Promise<{ bancaId: string; crmBaseUrl: string; bancaName?: string } | null> {
   if (!bancaIdFromRequest?.trim()) {
     return null;
@@ -122,7 +129,7 @@ export async function getAdminBancaId(
 
   const { data: banca, error } = await supabaseServiceRole
     .from('crm_bancas')
-    .select('id, url, name')
+    .select('id, url, name, lead_transfer_locked')
     .eq('id', bancaId)
     .single();
 
@@ -130,12 +137,33 @@ export async function getAdminBancaId(
     console.log(`${LOG_PREFIX} getAdminBancaId: banca not found or no url, bancaId=${bancaId}, error=${error?.message ?? 'n/a'}`);
     return null;
   }
+
+  const locked = !!(banca as { lead_transfer_locked?: boolean }).lead_transfer_locked;
+  if (locked && !options?.skipLeadTransferLock) {
+    console.log(`${LOG_PREFIX} getAdminBancaId: banca locked for lead transfer, bancaId=${bancaId}`);
+    return null;
+  }
+
   const crmBaseUrl = (banca.url as string).trim().replace(/\/+$/, '');
   return {
     bancaId: banca.id,
     crmBaseUrl,
     bancaName: banca.name ?? undefined,
   };
+}
+
+/** Impede repasse pelo gerente quando a banca está suspensa para transferências. */
+export async function assertLeadTransferNotLockedForBanca(bancaId: string): Promise<void> {
+  const id = bancaId.trim();
+  if (!id) return;
+  const { data } = await supabaseServiceRole
+    .from('crm_bancas')
+    .select('lead_transfer_locked')
+    .eq('id', id)
+    .maybeSingle();
+  if (data?.lead_transfer_locked) {
+    throw new Error('Esta banca está bloqueada para transferência de leads.');
+  }
 }
 
 /**
@@ -168,7 +196,7 @@ export async function getLeadTransferBancaAccess(
   const bancaId = bancaIdFromRequest.trim();
 
   if (profile.status === 'admin' || profile.status === 'super_admin') {
-    return getAdminBancaId(userId, profile, bancaId);
+    return getAdminBancaId(userId, profile, bancaId, { skipLeadTransferLock: true });
   }
 
   if (profile.status === 'auditoria') {
@@ -234,6 +262,19 @@ export async function requireAdminLeadTransferContext(
   console.log(`${LOG_PREFIX} requireAdminLeadTransferContext: userId=${userId}, profile.status=${profile.status}, bancaIdFromRequest=${bancaIdFromRequest ?? 'null'}`);
   const resolved = await getAdminBancaId(userId, profile, bancaIdFromRequest);
   if (!resolved) {
+    if (bancaIdFromRequest?.trim()) {
+      const { data: row } = await supabaseServiceRole
+        .from('crm_bancas')
+        .select('lead_transfer_locked')
+        .eq('id', bancaIdFromRequest.trim())
+        .maybeSingle();
+      if (row?.lead_transfer_locked) {
+        console.log(`${LOG_PREFIX} requireAdminLeadTransferContext: banca locked`);
+        throw new Error(
+          'Esta banca está bloqueada para transferência de leads. Solicite ao super admin o desbloqueio.'
+        );
+      }
+    }
     console.log(`${LOG_PREFIX} requireAdminLeadTransferContext: resolved=null, throwing`);
     throw new Error(
       bancaIdFromRequest

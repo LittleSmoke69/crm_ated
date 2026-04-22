@@ -195,3 +195,4 @@ add_sidebar_gerente_meu_desempenho.sql
 add_sidebar_dono_gestor_meu_desempenho.sql
 add_transfer_stats_rpc_gerente_performed_by.sql
 add_stock_reservation_fields.sql
+fix_resolved_transfer_stats_lucro_sem_estoque_intermediario.sql

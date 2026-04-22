@@ -43,6 +43,9 @@ import TagsSummaryChart from '@/components/Charts/TagsSummaryChart';
 import { useToast } from '@/hooks/useToast';
 import ToastContainer from '@/components/Toast/ToastContainer';
 
+/** Máximo de leads por solicitação no modal “Solicitação de leads”. */
+const SOLICITATION_MAX_LEADS = 1000;
+
 interface ConsultorMetric {
   id: string;
   email: string;
@@ -263,6 +266,8 @@ export default function GerentePage() {
     observations?: string | null;
     /** Observação do admin ao rejeitar (opcional) */
     rejection_observation?: string | null;
+    /** Resumo direto × estoque após aprovação (API) */
+    envio_como_label?: string;
   };
   const [leadRequestsHistory, setLeadRequestsHistory] = useState<LeadRequestItem[]>([]);
   const [leadRequestsHistoryLoading, setLeadRequestsHistoryLoading] = useState(false);
@@ -1184,7 +1189,7 @@ export default function GerentePage() {
       setSolicitationError('Selecione a banca para qual os leads serão transferidos.');
       return;
     }
-    const qty = Math.min(200, Math.max(1, Number(solicitationQuantity) || 1));
+    const qty = Math.min(SOLICITATION_MAX_LEADS, Math.max(1, Number(solicitationQuantity) || 1));
     setSolicitationError('');
     setSolicitationSuccess('');
     setSolicitationSubmitting(true);
@@ -2757,6 +2762,7 @@ export default function GerentePage() {
                         <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase">Banca</th>
                         <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase">Tipo de lead</th>
                         <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase">Consultores / Qtd</th>
+                        <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase max-w-[220px]">Envio (admin)</th>
                         <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-center">Prazo (dias)</th>
                         <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-center">Situação</th>
                         <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase">Observação (solicitação)</th>
@@ -2773,6 +2779,13 @@ export default function GerentePage() {
                           <td className="px-4 py-3 text-xs text-gray-700 dark:text-gray-300">{req.lead_type_label ?? req.lead_type}</td>
                           <td className="px-4 py-3 text-xs text-gray-700 dark:text-gray-300">
                             {(req.consultores ?? []).map((c) => `${c.consultor_name ?? c.consultor_id}: ${c.quantity}`).join('; ') || '—'}
+                          </td>
+                          <td className="px-4 py-3 text-xs text-gray-700 dark:text-gray-300 max-w-[220px]">
+                            {(req.status === 'approved' || req.status === 'partial') && req.envio_como_label?.trim() ? (
+                              <span className="whitespace-pre-wrap text-left block leading-snug">{req.envio_como_label.trim()}</span>
+                            ) : (
+                              '—'
+                            )}
                           </td>
                           <td className="px-4 py-3 text-xs text-center text-gray-700 dark:text-gray-300">{req.deadline_days ?? '—'}</td>
                           <td className="px-4 py-3 text-center">
@@ -2844,6 +2857,12 @@ export default function GerentePage() {
                       <p className="text-xs text-gray-600 dark:text-gray-400">
                         {(req.consultores ?? []).map((c) => `${c.consultor_name ?? c.consultor_id}: ${c.quantity}`).join('; ') || '—'}
                       </p>
+                      {(req.status === 'approved' || req.status === 'partial') && req.envio_como_label?.trim() && (
+                        <div className="rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50/80 dark:bg-emerald-950/30 px-3 py-2">
+                          <p className="text-[10px] font-semibold text-emerald-800 dark:text-emerald-200 uppercase tracking-wide mb-0.5">Envio pelo admin</p>
+                          <p className="text-xs text-emerald-900 dark:text-emerald-100 whitespace-pre-wrap">{req.envio_como_label.trim()}</p>
+                        </div>
+                      )}
                       {req.deadline_days != null && <p className="text-xs text-gray-500 dark:text-gray-400">Prazo: {req.deadline_days} dias</p>}
                       {(req.status === 'approved' || req.status === 'partial') && req.approved_at && (
                         <p className="text-[10px] text-gray-400 dark:text-gray-500">Aprovada em {new Date(req.approved_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</p>
@@ -3077,12 +3096,16 @@ export default function GerentePage() {
                       <input
                         type="number"
                         min={1}
-                        max={200}
+                        max={SOLICITATION_MAX_LEADS}
                         value={solicitationQuantity}
-                        onChange={(e) => setSolicitationQuantity(Math.min(200, Math.max(1, parseInt(e.target.value, 10) || 1)))}
+                        onChange={(e) =>
+                          setSolicitationQuantity(
+                            Math.min(SOLICITATION_MAX_LEADS, Math.max(1, parseInt(e.target.value, 10) || 1))
+                          )
+                        }
                         className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium"
                       />
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 ml-1">Máx: 200</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 ml-1">Máx: {SOLICITATION_MAX_LEADS}</p>
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-2 ml-1">Período do pacote (dias)</label>

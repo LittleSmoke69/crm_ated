@@ -142,6 +142,25 @@ export async function requireAdmin(req: NextRequest): Promise<{ userId: string; 
 }
 
 /**
+ * Apenas super_admin (bloqueios globais, operações críticas restritas).
+ */
+export async function requireSuperAdmin(req: NextRequest): Promise<{ userId: string; profile: UserProfile }> {
+  const { userId } = await requireAuth(req);
+  let profile = await getUserProfile(userId);
+  if (!profile) {
+    await new Promise((r) => setTimeout(r, 400));
+    profile = await getUserProfile(userId);
+  }
+  if (!profile) {
+    throw new Error('Perfil não encontrado');
+  }
+  if (profile.status !== 'super_admin') {
+    throw new Error('Acesso negado. Apenas super admin.');
+  }
+  return { userId, profile };
+}
+
+/**
  * APIs da página Transferência de leads (histórico/métricas): super_admin, admin, auditoria e gerente (escopo por bancas).
  */
 export async function requireLeadTransferApiAccess(

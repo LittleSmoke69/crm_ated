@@ -3,7 +3,7 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { requireStatus } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { parsePhoneList, deduplicatePhones } from '@/lib/utils/list-cleaning-parser';
+import { parsePhoneList, deduplicatePhones, filterBrazilCountryCode } from '@/lib/utils/list-cleaning-parser';
 
 const MAX_NUMBERS = 1000;
 
@@ -18,6 +18,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => ({}));
     const rawText = body.rawText as string | undefined;
     const phonesInput = body.phones as string[] | undefined;
+    const onlyBrazilCountryCode55 = body.onlyBrazilCountryCode55 === true;
 
     let phones: string[];
     if (Array.isArray(phonesInput) && phonesInput.length > 0) {
@@ -31,8 +32,19 @@ export async function POST(req: NextRequest) {
       return errorResponse('Envie rawText (textarea) ou phones (array). Máximo 1000 números.', 400);
     }
 
+    const countBeforeBrazilFilter = phones.length;
+    if (onlyBrazilCountryCode55) {
+      phones = filterBrazilCountryCode(phones);
+    }
+    const discardedWithout55 = onlyBrazilCountryCode55 ? countBeforeBrazilFilter - phones.length : 0;
+
     if (phones.length === 0) {
-      return errorResponse('Nenhum número válido encontrado.', 400);
+      return errorResponse(
+        onlyBrazilCountryCode55
+          ? 'Nenhum número com DDI 55 encontrado. Desmarque o filtro ou inclua o código do país.'
+          : 'Nenhum número válido encontrado.',
+        400
+      );
     }
 
     const uniquePhones = deduplicatePhones(phones);
@@ -89,6 +101,7 @@ export async function POST(req: NextRequest) {
       total_unique: job.total_unique,
       duplicates_removed: job.duplicates_removed,
       pending_count: job.pending_count,
+      discarded_without_55: discardedWithout55,
     });
   } catch (err: unknown) {
     return serverErrorResponse(err instanceof Error ? err : new Error('Erro interno'));

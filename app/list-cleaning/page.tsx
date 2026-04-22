@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import Layout from '@/components/Layout';
@@ -12,7 +12,6 @@ import {
   Clock,
   Download,
   Play,
-  Coffee,
   AlertTriangle,
   Loader2,
   Trash2,
@@ -26,11 +25,9 @@ import {
   ChevronRight,
   StopCircle,
 } from 'lucide-react';
-import { parsePhoneList } from '@/lib/utils/list-cleaning-parser';
+import { parsePhoneList, filterBrazilCountryCode } from '@/lib/utils/list-cleaning-parser';
 
 const MAX_NUMBERS = 1000;
-const COFFEE_PAUSE_SECONDS = 15 * 60;
-
 interface JobDetail {
   id: string;
   status: string;
@@ -43,14 +40,15 @@ interface JobDetail {
   pending_count: number;
   next_run_at: string | null;
   error_message: string | null;
+  /** Instância Evolution usada na verificação (travada após a 1ª rodada). */
+  verification_evolution_instance_id?: string | null;
+  session_name_used?: string | null;
 }
 
-interface VerificationRun {
+interface VerificationInstanceOption {
   id: string;
-  total_numbers: number;
-  processed_numbers: number;
+  instance_name: string;
   status: string;
-  current_slot: number;
 }
 
 interface JobListItem {
@@ -96,15 +94,12 @@ export default function ListCleaningPage() {
   const [rawText, setRawText] = useState('');
   const [jobId, setJobId] = useState<string | null>(null);
   const [job, setJob] = useState<JobDetail | null>(null);
-  const [run, setRun] = useState<VerificationRun | null>(null);
   const [rawList, setRawList] = useState<RawRow[]>([]);
   const [cleanList, setCleanList] = useState<CleanRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [stoppingId, setStoppingId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
-  const [coffeeSecondsLeft, setCoffeeSecondsLeft] = useState<number | null>(null);
-  const [pollInterval, setPollInterval] = useState<ReturnType<typeof setInterval> | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [accessChecked, setAccessChecked] = useState(false);
@@ -127,6 +122,11 @@ export default function ListCleaningPage() {
     canDedup: true,
     canWhatsapp: true,
   });
+  /** Se ativo, apenas números que começam com 55 (após normalizar dígitos) seguem para deduplicação. */
+  const [onlyBrazilCountryCode55, setOnlyBrazilCountryCode55] = useState(false);
+  const [verificationInstances, setVerificationInstances] = useState<VerificationInstanceOption[]>([]);
+  const [verificationInstancesLoading, setVerificationInstancesLoading] = useState(false);
+  const [selectedVerificationInstanceId, setSelectedVerificationInstanceId] = useState<string>('');
 
   const fetchJobsList = useCallback(async (page: number = 1) => {
     if (!userId) return;
@@ -221,9 +221,40 @@ export default function ListCleaningPage() {
     return () => { cancelled = true; };
   }, [accessChecked, userId]);
 
-  const phonesCount = rawText.trim()
-    ? Math.min(MAX_NUMBERS, parsePhoneList(rawText.trim()).length)
-    : 0;
+  useEffect(() => {
+    if (!accessChecked || !userId || !capabilities.canWhatsapp) return;
+    let cancelled = false;
+    (async () => {
+      setVerificationInstancesLoading(true);
+      try {
+        const res = await fetch('/api/instances', { headers: { 'X-User-Id': userId } });
+        const json = await res.json().catch(() => ({}));
+        if (cancelled || !json.success || !Array.isArray(json.data)) return;
+        const list = (json.data as VerificationInstanceOption[])
+          .filter((i) => i.status === 'connected')
+          .map((i) => ({
+            id: String(i.id),
+            instance_name: String(i.instance_name ?? ''),
+            status: i.status,
+          }));
+        setVerificationInstances(list);
+      } catch {
+        // mantém lista vazia
+      } finally {
+        if (!cancelled) setVerificationInstancesLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [accessChecked, userId, capabilities.canWhatsapp]);
+
+  const phonesCount = useMemo(() => {
+    if (!rawText.trim()) return 0;
+    let list = parsePhoneList(rawText.trim());
+    if (onlyBrazilCountryCode55) list = filterBrazilCountryCode(list);
+    return Math.min(MAX_NUMBERS, list.length);
+  }, [rawText, onlyBrazilCountryCode55]);
 
   const fetchJobDetail = useCallback(async (id: string) => {
     if (!userId) return;
@@ -234,17 +265,15 @@ export default function ListCleaningPage() {
       if (!res.ok) return;
       const json = await res.json();
       if (json.success && json.data) {
-        setJob(json.data.job);
-        setRun(json.data.run ?? null);
+        const j = json.data.job;
+        setJob(j);
+        if (j?.verification_evolution_instance_id) {
+          setSelectedVerificationInstanceId(String(j.verification_evolution_instance_id));
+        } else {
+          setSelectedVerificationInstanceId('');
+        }
         setRawList(json.data.rawList || []);
         setCleanList(json.data.cleanList || []);
-        if (json.data.job?.next_run_at) {
-          const next = new Date(json.data.job.next_run_at).getTime();
-          const left = Math.max(0, Math.ceil((next - Date.now()) / 1000));
-          setCoffeeSecondsLeft(left);
-        } else {
-          setCoffeeSecondsLeft(null);
-        }
       }
     } catch {
       setToast({ message: 'Erro ao carregar job', type: 'error' });
@@ -256,43 +285,20 @@ export default function ListCleaningPage() {
     fetchJobDetail(jobId);
   }, [jobId, userId, fetchJobDetail]);
 
-  useEffect(() => {
-    if (job?.status !== 'coffee_pause' || !job?.next_run_at) {
-      setCoffeeSecondsLeft(null);
-      return;
-    }
-    const next = new Date(job.next_run_at).getTime();
-    const tick = () => {
-      const left = Math.max(0, Math.ceil((next - Date.now()) / 1000));
-      setCoffeeSecondsLeft(left);
-      if (left <= 0) {
-        fetchJobDetail(jobId!);
-      }
-    };
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, [job?.status, job?.next_run_at, jobId, fetchJobDetail]);
-
-  useEffect(() => {
-    const shouldPoll = jobId && (job?.status === 'verifying' || verifying || (run?.status === 'running'));
-    if (!shouldPoll) return;
-    const id = setInterval(() => fetchJobDetail(jobId!), 1500);
-    setPollInterval(id);
-    return () => {
-      clearInterval(id);
-      setPollInterval(null);
-    };
-  }, [job?.status, jobId, verifying, run?.status, fetchJobDetail]);
-
   const handleDeduplicate = async () => {
     if (!rawText.trim()) {
       setToast({ message: 'Cole números ou envie um arquivo', type: 'error' });
       return;
     }
-    const phones = parsePhoneList(rawText.trim());
+    let phones = parsePhoneList(rawText.trim());
+    if (onlyBrazilCountryCode55) phones = filterBrazilCountryCode(phones);
     if (phones.length === 0) {
-      setToast({ message: 'Nenhum número válido encontrado', type: 'error' });
+      setToast({
+        message: onlyBrazilCountryCode55
+          ? 'Nenhum número com DDI 55 encontrado. Inclua o código do país ou desmarque o filtro.'
+          : 'Nenhum número válido encontrado',
+        type: 'error',
+      });
       return;
     }
     if (phones.length > MAX_NUMBERS) {
@@ -305,7 +311,10 @@ export default function ListCleaningPage() {
       const res = await fetch('/api/list-cleaning', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-User-Id': userId || '' },
-        body: JSON.stringify({ rawText: rawText.trim() }),
+        body: JSON.stringify({
+          rawText: rawText.trim(),
+          onlyBrazilCountryCode55,
+        }),
       });
       const json = await res.json();
       if (!json.success) {
@@ -313,7 +322,12 @@ export default function ListCleaningPage() {
         return;
       }
       setJobId(json.data.jobId);
-      setToast({ message: `Deduplicação concluída. ${json.data.duplicates_removed} duplicado(s) removido(s).`, type: 'success' });
+      const discarded = typeof json.data.discarded_without_55 === 'number' ? json.data.discarded_without_55 : 0;
+      let dedupMsg = `Deduplicação concluída. ${json.data.duplicates_removed} duplicado(s) removido(s).`;
+      if (discarded > 0) {
+        dedupMsg += ` ${discarded} número(s) sem DDI 55 ${discarded === 1 ? 'foi descartado' : 'foram descartados'}.`;
+      }
+      setToast({ message: dedupMsg, type: 'success' });
       await fetchJobDetail(json.data.jobId);
       fetchJobsList();
     } catch {
@@ -329,12 +343,20 @@ export default function ListCleaningPage() {
       setToast({ message: 'Verificação desativada. Reconecte a sessão e tente novamente.', type: 'error' });
       return;
     }
+    const instanceToSend =
+      job?.verification_evolution_instance_id || selectedVerificationInstanceId || '';
+    if (!instanceToSend) {
+      setToast({ message: 'Selecione uma instância WhatsApp para verificar os números.', type: 'error' });
+      return;
+    }
     setVerifying(true);
     setToast(null);
+    setJob((prev) => (prev ? { ...prev, status: 'verifying' } : prev));
     try {
       const res = await fetch(`/api/list-cleaning/${jobId}/verify`, {
         method: 'POST',
-        headers: { 'X-User-Id': userId || '' },
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId || '' },
+        body: JSON.stringify({ evolutionInstanceId: instanceToSend }),
       });
       const json = await res.json();
       if (json.success) {
@@ -345,30 +367,14 @@ export default function ListCleaningPage() {
           not_validated: d?.not_validated ?? 0,
           invalid_phones: Array.isArray(d?.invalid_phones) ? d.invalid_phones : [],
         });
-        if (d?.total_numbers != null && d?.processed_numbers != null && !d?.run_completed) {
-          setRun({
-            id: '',
-            total_numbers: d.total_numbers,
-            processed_numbers: d.processed_numbers,
-            status: 'running',
-            current_slot: 0,
-          });
-        }
-        if (job) {
-          setJob({
-            ...job,
-            status: 'verifying',
-            verified_count: d?.processed_numbers ?? job.verified_count,
-            validated_count: d?.validated ?? job.validated_count,
-            not_validated_count: d?.not_validated ?? job.not_validated_count,
-            pending_count: d?.pending ?? job.pending_count,
-          });
-        }
-        const msg = d?.message || 'Verificação em andamento';
-        if (msg !== 'Verificação concluída') setToast({ message: msg, type: 'success' });
+        const msg = d?.message || 'Verificação finalizada';
+        const instanceDropped = Boolean(d?.evolution_session_dropped);
+        setToast({
+          message: msg,
+          type: instanceDropped ? 'error' : 'success',
+        });
         await fetchJobDetail(jobId);
         fetchJobsList(jobsListPage);
-        if (d?.next_run_at) setCoffeeSecondsLeft(COFFEE_PAUSE_SECONDS);
       } else {
         setToast({ message: json.error || 'Erro ao iniciar verificação', type: 'error' });
         if (json.error?.includes('desativada')) await fetchJobDetail(jobId);
@@ -376,7 +382,7 @@ export default function ListCleaningPage() {
     } catch {
       setToast({
         message:
-          'Falha de conexão ou tempo esgotado. A verificação pode continuar em segundo plano — atualize a página para ver o progresso.',
+          'Falha de conexão ou tempo esgotado no servidor. Atualize a página para ver o estado da lista.',
         type: 'error',
       });
       await fetchJobDetail(jobId);
@@ -424,17 +430,16 @@ export default function ListCleaningPage() {
     setFileName(null);
     setJobId(null);
     setJob(null);
-    setRun(null);
     setRawList([]);
     setCleanList([]);
     setLastVerifySummary(null);
+    setSelectedVerificationInstanceId('');
     setToast({ message: 'Lista limpa. Você pode importar uma nova lista.', type: 'success' });
   };
 
   const openJob = (id: string) => {
     setJobId(id);
     setLastVerifySummary(null);
-    setRun(null);
     fetchJobDetail(id);
   };
 
@@ -496,31 +501,26 @@ export default function ListCleaningPage() {
     reader.readAsText(file, 'UTF-8');
   };
 
-  const formatTimer = (s: number) => {
-    const m = Math.floor(s / 60);
-    const sec = s % 60;
-    return `${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
-  };
+  const verificationInstanceReady =
+    Boolean(job?.verification_evolution_instance_id) ||
+    Boolean(selectedVerificationInstanceId);
 
   const canStartVerification =
     Boolean(
       jobId &&
         job &&
+        verificationInstanceReady &&
         job.status !== 'verifying' &&
         job.status !== 'done' &&
-        job.status !== 'paused_disconnected' &&
-        !(job.status === 'coffee_pause' && (coffeeSecondsLeft ?? 0) > 0)
+        job.status !== 'paused_disconnected'
     );
 
   const isVerifying = verifying || job?.status === 'verifying';
-  const verifyingPhrase = 'Verificando Números, Isso pode demorar um Pouco';
+  const verifyingPhrase = 'Verificando números…';
 
   const verifyButtonLabel = (() => {
     if (job?.status === 'verifying') return verifyingPhrase;
     if (job?.status === 'done') return 'Verificação concluída';
-    if (job?.status === 'coffee_pause' && (coffeeSecondsLeft ?? 0) > 0) {
-      return `Aguardar ${formatTimer(coffeeSecondsLeft || 0)}`;
-    }
     if (job?.status === 'paused_disconnected') return 'Sessão desconectada';
     return 'Iniciar verificação';
   })();
@@ -642,32 +642,19 @@ export default function ListCleaningPage() {
           </div>
         )}
 
-        {(job?.status === 'verifying' || run?.status === 'running') && (
+        {(verifying || job?.status === 'verifying') && (
           <div className="bg-blue-900/20 border border-blue-500/50 text-blue-200 p-4 rounded-xl space-y-3">
             <div className="flex items-center gap-4">
               <Loader2 className="w-8 h-8 flex-shrink-0 animate-spin text-blue-600" />
               <div className="flex-1 min-w-0">
                 <p className="font-semibold">Verificando números</p>
                 <p className="text-sm">
-                  {run && run.total_numbers > 0
-                    ? `${run.processed_numbers} de ${run.total_numbers} já verificados — o processo continua em segundo plano.`
-                    : 'O sistema está consultando a API para validar cada número. Aguarde a conclusão.'}
+                  Processamento direto na API Evolution: intervalo de <strong className="text-blue-300">1 segundo</strong> entre
+                  cada número. Você pode usar <strong className="text-blue-300">Parar verificação</strong> para interromper —
+                  não é necessário atualizar a página.
                 </p>
               </div>
             </div>
-            {run && run.total_numbers > 0 && (
-              <div className="flex items-center gap-3">
-                <div className="flex-1 h-2.5 bg-blue-900/50 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-blue-500 rounded-full transition-all duration-500 ease-out"
-                    style={{ width: `${Math.min(100, (run.processed_numbers / run.total_numbers) * 100)}%` }}
-                  />
-                </div>
-                <span className="text-sm font-medium tabular-nums shrink-0">
-                  {Math.round((run.processed_numbers / run.total_numbers) * 100)}%
-                </span>
-              </div>
-            )}
           </div>
         )}
 
@@ -797,6 +784,17 @@ export default function ListCleaningPage() {
                   className="w-full h-20 border border-[#404040] rounded-lg p-2.5 text-sm font-mono text-gray-200 bg-[#1a1a1a] placeholder-gray-500"
                   maxLength={MAX_NUMBERS * 20}
                 />
+                <label className="mt-2 flex items-start gap-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={onlyBrazilCountryCode55}
+                    onChange={(e) => setOnlyBrazilCountryCode55(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-[#404040] bg-[#1a1a1a] text-[#8CD955] focus:ring-[#8CD955]"
+                  />
+                  <span className="text-sm text-gray-400 leading-snug">
+                    Remover números sem DDI <span className="font-mono text-gray-300">55</span> (só dígitos; mantém apenas linhas que começam com 55)
+                  </span>
+                </label>
                 <p className="mt-1 text-xs text-gray-500">{phonesCount}/1000</p>
               </div>
               {phonesCount > 0 && (
@@ -821,7 +819,7 @@ export default function ListCleaningPage() {
                 </div>
                 <button
                   onClick={handleDeduplicate}
-                  disabled={loading || !rawText.trim()}
+                  disabled={loading || !rawText.trim() || phonesCount === 0}
                   className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#8CD955] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#7BC84A] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
@@ -834,7 +832,9 @@ export default function ListCleaningPage() {
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-wide text-blue-400">Etapa 2</p>
                       <p className="text-lg font-semibold text-gray-200">Verificar no WhatsApp</p>
-                      <p className="text-sm text-gray-500">O sistema processa até 500 números por rodada e pausa automaticamente.</p>
+                      <p className="text-sm text-gray-500">
+                        Um único fluxo na API: 1 segundo entre cada número. Use Parar para interromper.
+                      </p>
                     </div>
                     {job && (
                       <div className="text-right">
@@ -854,12 +854,45 @@ export default function ListCleaningPage() {
                           {job.status === 'verifying' && <Loader2 className="w-3 h-3 animate-spin" />}
                           {statusLabel[job.status] ?? job.status}
                         </span>
-                        {job.status === 'coffee_pause' && (coffeeSecondsLeft ?? 0) > 0 && (
-                          <p className="mt-1 text-xs font-semibold text-amber-400">
-                            Próxima rodada em {formatTimer(coffeeSecondsLeft || 0)}
-                          </p>
-                        )}
                       </div>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <label className="block text-xs font-medium text-gray-400">Instância para verificação</label>
+                    {job?.verification_evolution_instance_id ? (
+                      <div className="rounded-lg border border-[#404040] bg-[#1a1a1a] px-3 py-2 text-sm text-gray-200">
+                        <span className="font-medium">
+                          {job.session_name_used ||
+                            verificationInstances.find((i) => i.id === job.verification_evolution_instance_id)
+                              ?.instance_name ||
+                            'Instância vinculada'}
+                        </span>
+                        <p className="mt-1 text-[11px] text-gray-500">
+                          Esta limpeza está vinculada a esta instância até o fim da verificação.
+                        </p>
+                      </div>
+                    ) : verificationInstancesLoading ? (
+                      <div className="flex items-center gap-2 text-sm text-gray-500">
+                        <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                        Carregando instâncias…
+                      </div>
+                    ) : verificationInstances.length === 0 ? (
+                      <p className="text-sm text-amber-400/90">
+                        Nenhuma instância conectada. Acesse Instâncias WhatsApp e conecte pelo menos uma.
+                      </p>
+                    ) : (
+                      <select
+                        value={selectedVerificationInstanceId}
+                        onChange={(e) => setSelectedVerificationInstanceId(e.target.value)}
+                        className="w-full rounded-lg border border-[#404040] bg-[#1a1a1a] px-3 py-2 text-sm text-gray-200 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      >
+                        <option value="">Selecione a instância…</option>
+                        {verificationInstances.map((i) => (
+                          <option key={i.id} value={i.id}>
+                            {i.instance_name}
+                          </option>
+                        ))}
+                      </select>
                     )}
                   </div>
                   <div className="flex flex-col gap-2">
@@ -881,7 +914,7 @@ export default function ListCleaningPage() {
                         verifyButtonLabel
                       )}
                     </button>
-                    {(job?.status === 'verifying' || job?.status === 'coffee_pause') && (
+                    {(verifying || job?.status === 'verifying' || job?.status === 'coffee_pause') && (
                       <button
                         type="button"
                         onClick={() => handleStopVerify(jobId!)}
@@ -1260,14 +1293,6 @@ export default function ListCleaningPage() {
           </div>
         </section>
 
-        {job?.status === 'coffee_pause' && coffeeSecondsLeft !== null && coffeeSecondsLeft > 0 && (
-          <div className="border-2 border-amber-500/50 bg-amber-900/20 rounded-xl p-6 text-center">
-            <Coffee className="w-12 h-12 text-amber-400 mx-auto mb-2" />
-            <p className="text-lg font-semibold text-amber-300">Pausa para o café ☕</p>
-            <p className="text-3xl font-mono font-bold text-amber-400 mt-2">{formatTimer(coffeeSecondsLeft)}</p>
-            <p className="text-sm text-amber-500 mt-1">O sistema continuará automaticamente após o timer.</p>
-          </div>
-        )}
       </div>
       </div>
     </Layout>

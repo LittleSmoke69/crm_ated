@@ -4,18 +4,18 @@ import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import {
   ensureRunForJob,
-  processOneSlot,
-  SLOT_SIZE,
+  runListCleaningVerificationUntilStoppedOrDone,
 } from '@/lib/services/list-cleaning-slot-service';
+import { resolveEvolutionInstanceForListCleaningVerification } from '@/lib/server/list-cleaning-evolution-instance';
 
 export const runtime = 'nodejs';
-/** Resposta rápida: só cria run + processa 1 slot (máx ~10 números, ~20s). */
-export const maxDuration = 30;
+/** Uma requisição processa a fila inteira: um número por vez na Evolution (POST direto por número), ~1 s entre cada; Wasender igual. */
+export const maxDuration = 3600;
 
 /**
  * POST /api/list-cleaning/[jobId]/verify
- * Inicia ou continua verificação em slots. Processa no máximo 1 slot nesta requisição e retorna rápido.
- * O scheduler (Netlify) processa os próximos slots a cada 1 min.
+ * Inicia a verificação: processa todos os pendentes em sequência (1s entre cada).
+ * Parar: POST /stop (o laço encerra ao detectar que o job deixou de estar `verifying`).
  */
 export async function POST(
   req: NextRequest,
@@ -43,10 +43,54 @@ export async function POST(
       return successResponse({ message: 'Job já concluído', job });
     }
 
-    const apiKey = process.env.WASENDER_API_KEY || '';
-    if (!apiKey) {
-      return errorResponse('Wasender não configurado. Defina WASENDER_API_KEY no ambiente.', 400);
+    const body = await req.json().catch(() => ({}));
+    const requestedInstanceId =
+      typeof body.evolutionInstanceId === 'string' ? body.evolutionInstanceId.trim() : '';
+
+    const existingInstanceId = job.verification_evolution_instance_id as string | null | undefined;
+    let sessionLabel = (job.session_name_used as string | null) ?? '';
+
+    if (!existingInstanceId) {
+      if (!requestedInstanceId) {
+        return errorResponse(
+          'Selecione uma instância WhatsApp para verificar os números.',
+          400
+        );
+      }
+      const resolved = await resolveEvolutionInstanceForListCleaningVerification(
+        requestedInstanceId,
+        userId,
+        profile?.status ?? undefined
+      );
+      if (!resolved.ok) return errorResponse(resolved.message, 400);
+
+      await supabaseServiceRole
+        .from('list_cleaning_jobs')
+        .update({
+          verification_evolution_instance_id: requestedInstanceId,
+          session_name_used: resolved.instance_name,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', jobId);
+
+      sessionLabel = resolved.instance_name;
+    } else {
+      if (requestedInstanceId && requestedInstanceId !== existingInstanceId) {
+        return errorResponse('Este job já está vinculado a outra instância.', 400);
+      }
+      if (!sessionLabel) {
+        const { data: einst } = await supabaseServiceRole
+          .from('evolution_instances')
+          .select('instance_name')
+          .eq('id', existingInstanceId)
+          .single();
+        sessionLabel = einst?.instance_name ?? 'evolution';
+      }
     }
+
+    /** Mesmo UUID persistido no job; o laço não depende só do SELECT seguinte (réplica/atraso). */
+    const evolutionInstanceIdForRun =
+      (existingInstanceId as string | undefined) || requestedInstanceId || undefined;
 
     const { data: pendingItems, error: pendingError } = await supabaseServiceRole
       .from('list_cleaning_items')
@@ -64,17 +108,19 @@ export async function POST(
       return successResponse({ message: 'Nenhum pendente ou já concluído', job: { ...job, status: 'done' } });
     }
 
-    const { runId, totalNumbers, processedNumbers, alreadyRunning } = await ensureRunForJob(jobId);
+    const { totalNumbers } = await ensureRunForJob(jobId);
     if (totalNumbers === 0) {
       return successResponse({ message: 'Nenhum pendente ou já concluído', job: { ...job, status: 'done' } });
     }
 
     await supabaseServiceRole
       .from('list_cleaning_jobs')
-      .update({ status: 'verifying', session_name_used: 'wasender', updated_at: new Date().toISOString() })
+      .update({ status: 'verifying', session_name_used: sessionLabel, updated_at: new Date().toISOString() })
       .eq('id', jobId);
 
-    const slotResult = await processOneSlot(jobId);
+    const loopResult = await runListCleaningVerificationUntilStoppedOrDone(jobId, {
+      verificationEvolutionInstanceId: evolutionInstanceIdForRun,
+    });
 
     const { data: jobAfter } = await supabaseServiceRole
       .from('list_cleaning_jobs')
@@ -86,18 +132,29 @@ export async function POST(
     const totalValidated = (jobAfter?.validated_count ?? 0) as number;
     const totalNotValidated = (jobAfter?.not_validated_count ?? 0) as number;
 
-    return successResponse({
-      message: slotResult.runCompleted
+    let message = loopResult.stopped
+      ? 'Verificação interrompida (parar).'
+      : loopResult.runCompleted
         ? 'Verificação concluída'
-        : `Processado 1 slot (até ${SLOT_SIZE} números). O restante continua em segundo plano — atualize a página para ver o progresso.`,
-      processed: slotResult.processed,
+        : 'Verificação finalizada';
+
+    if (loopResult.evolutionSessionDropped) {
+      message =
+        'A instância WhatsApp desconectou durante a verificação. Ela foi marcada como desconectada em Instâncias WhatsApp — reconecte e tente novamente.';
+    }
+
+    return successResponse({
+      message,
+      evolution_session_dropped: Boolean(loopResult.evolutionSessionDropped),
+      stopped: loopResult.stopped,
+      processed: loopResult.processedSession,
       validated: totalValidated,
       not_validated: totalNotValidated,
       pending: stillPending,
       total_numbers: totalNumbers,
       processed_numbers: (jobAfter?.verified_count ?? 0) as number,
-      run_completed: slotResult.runCompleted,
-      next_run_at: slotResult.hasMore ? undefined : null,
+      run_completed: loopResult.runCompleted,
+      next_run_at: null,
     });
   } catch (err: unknown) {
     return serverErrorResponse(err instanceof Error ? err : new Error('Erro interno'));

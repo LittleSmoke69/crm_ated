@@ -20,7 +20,9 @@ export async function GET(req: NextRequest) {
 
     const { data: rows, error } = await supabaseServiceRole
       .from('gerente_lead_requests')
-      .select('id, gerente_id, gerente_name, lead_type, consultores, status, banca_id, approved_at, created_at, deadline_days, observations, rejection_observation')
+      .select(
+        'id, gerente_id, gerente_name, lead_type, consultores, status, banca_id, approved_at, created_at, deadline_days, observations, rejection_observation, approval_snapshot'
+      )
       .eq('gerente_id', userId)
       .order('created_at', { ascending: false });
 
@@ -57,15 +59,43 @@ export async function GET(req: NextRequest) {
         namesById.set(p.id, name);
       });
     }
-    type RowItem = { status: string; lead_type: string; banca_id?: string | null; consultores?: { consultor_id: string; quantity: number }[] };
+    type RowItem = {
+      status: string;
+      lead_type: string;
+      banca_id?: string | null;
+      consultores?: { consultor_id: string; quantity: number }[];
+      approval_snapshot?: { filters_applied?: Record<string, unknown> } | null;
+    };
     const withLabels = list.map((r: RowItem) => {
       const types = (r.lead_type ?? '').split(',').map((t: string) => t.trim()).filter(Boolean);
       const lead_type_label = types.length > 0 ? types.map((t) => LEAD_TYPE_LABELS[t] ?? t).join(', ') : (LEAD_TYPE_LABELS[r.lead_type] ?? r.lead_type);
       const banca_name = r.banca_id ? (bancaNamesById.get(r.banca_id) ?? r.banca_id) : null;
+      const fa = r.approval_snapshot?.filters_applied as
+        | {
+            direct_lead_count?: number;
+            stock_lead_count?: number;
+            gerente_stock_display_name?: string;
+          }
+        | undefined;
+      let envio_como_label: string | undefined;
+      if (
+        typeof fa?.direct_lead_count === 'number' &&
+        typeof fa?.stock_lead_count === 'number' &&
+        (fa.direct_lead_count > 0 || fa.stock_lead_count > 0)
+      ) {
+        const bits: string[] = [];
+        if (fa.direct_lead_count > 0) bits.push(`${fa.direct_lead_count} direto (CRM)`);
+        if (fa.stock_lead_count > 0) {
+          const nome = fa.gerente_stock_display_name?.trim();
+          bits.push(`${fa.stock_lead_count} estoque gerente${nome ? ` (${nome})` : ''}`);
+        }
+        envio_como_label = bits.join(' · ');
+      }
       return {
         ...r,
         lead_type_label,
         banca_name: banca_name ?? undefined,
+        envio_como_label,
         consultores: (r.consultores ?? []).map((c: { consultor_id: string; quantity: number }) => ({
           ...c,
           consultor_name: namesById.get(c.consultor_id) ?? c.consultor_id,

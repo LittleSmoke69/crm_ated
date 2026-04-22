@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
     const bancaId = searchParams.get('banca_id')?.trim() || null;
 
     // Para o dropdown/filtro usamos apenas id, name, url (resposta mais rápida)
-    const selectFields = withUsers ? '*' : 'id, name, url';
+    const selectFields = withUsers ? '*' : 'id, name, url, lead_transfer_locked';
     type BancaRow = { id: string; name: string; url: string; [k: string]: unknown };
 
     let bancas: BancaRow[];
