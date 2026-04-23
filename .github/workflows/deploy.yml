@@ -7,7 +7,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: SSH_HOST  # ambiente onde os secrets VPS_* estão cadastrados
+    environment: SSH_HOST
 
     steps:
       - name: Deploy via SSH
@@ -16,11 +16,21 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          port: 22
+          port: ${{ secrets.VPS_PORT }}
           script: |
             set -e
+
+            DEPLOY_DIR="/opt/zaploto/ZaplotoV3"
+
+            # Se o diretório não existir, faz clone (segurança contra reboot)
+            if [ ! -d "$DEPLOY_DIR/.git" ]; then
+              echo "📥 Diretório não encontrado, clonando repositório..."
+              mkdir -p /opt/zaploto
+              git clone https://github.com/Zaploto/ZaplotoV3.git "$DEPLOY_DIR"
+            fi
+
             echo "📦 Acessando diretório do projeto..."
-            cd /tmp/ZaplotoV3
+            cd "$DEPLOY_DIR"
 
             echo "🔄 Fazendo git pull..."
             git pull origin main
