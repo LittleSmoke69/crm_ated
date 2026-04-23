@@ -14,12 +14,16 @@ services:
     ports:
       - "3000:3000"
     env_file: .env
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     environment:
       NODE_ENV: production
       NODE_OPTIONS: "--max-old-space-size=4096"
       PORT: 3000
       CRON_ENABLED: "true"
       SITE_URL: "https://zaploto.com"
+      INTERNAL_API_BASE_URL: "http://localhost:3000"
     networks:
       - ZAPLOTOV3
     volumes:
@@ -38,11 +42,15 @@ services:
     ports:
       - "3001:3001"
     env_file: .env
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     environment:
       NODE_ENV: production
       NODE_OPTIONS: "--max-old-space-size=4096"
       PORT: 3001
       CRON_ENABLED: "false"
+      INTERNAL_API_BASE_URL: "http://localhost:3001"
     networks:
       - ZAPLOTOV3
     healthcheck:
@@ -59,11 +67,15 @@ services:
     ports:
       - "3002:3002"
     env_file: .env
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     environment:
       NODE_ENV: production
       NODE_OPTIONS: "--max-old-space-size=4096"
       PORT: 3002
       CRON_ENABLED: "false"
+      INTERNAL_API_BASE_URL: "http://localhost:3002"
     networks:
       - ZAPLOTOV3
     healthcheck:
@@ -80,11 +92,15 @@ services:
     ports:
       - "3003:3003"
     env_file: .env
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     environment:
       NODE_ENV: production
       NODE_OPTIONS: "--max-old-space-size=4096"
       PORT: 3003
       CRON_ENABLED: "false"
+      INTERNAL_API_BASE_URL: "http://localhost:3003"
     networks:
       - ZAPLOTOV3
     healthcheck:

@@ -186,9 +186,8 @@ export async function POST(req: NextRequest) {
     if (useNetlifyFunction) {
       functionUrl = `${netlifyBase.replace(/\/$/, '')}/maturation-start`;
     } else {
-      const origin = req.nextUrl?.origin || req.headers.get('x-forwarded-host') || 'http://localhost:3000';
-      const base = origin.startsWith('http') ? origin : `https://${origin}`;
-      functionUrl = `${base}/api/maturation/start`;
+      const internalBase = process.env.INTERNAL_API_BASE_URL || 'http://localhost:3000';
+      functionUrl = `${internalBase}/api/maturation/start`;
     }
 
     const response = await fetch(functionUrl, {
