@@ -20,7 +20,7 @@ jobs:
           script: |
             set -e
 
-            DEPLOY_DIR="/opt/zaploto/ZaplotoV3"
+            DEPLOY_DIR="/home/claudeuser/ZaplotoV3"
 
             # Se o diretório não existir, faz clone (segurança contra reboot)
             if [ ! -d "$DEPLOY_DIR/.git" ]; then
