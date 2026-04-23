@@ -2,14 +2,12 @@ name: Deploy ZaplotoV3 na VPS
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
 
 jobs:
   deploy:
-    name: Build e Deploy na VPS
     runs-on: ubuntu-latest
-    environment: SSH_HOST
+    environment: SSH_HOST  # ambiente onde os secrets VPS_* estão cadastrados
 
     steps:
       - name: Deploy via SSH
@@ -19,11 +17,18 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: 22
-          timeout: 300s
           script: |
             set -e
+            echo "📦 Acessando diretório do projeto..."
             cd /tmp/ZaplotoV3
+
+            echo "🔄 Fazendo git pull..."
             git pull origin main
+
+            echo "🐳 Subindo containers..."
             docker compose up --build -d
+
+            echo "🧹 Limpando imagens antigas..."
             docker image prune -f
-            docker compose ps
+
+            echo "✅ Deploy concluído!"
