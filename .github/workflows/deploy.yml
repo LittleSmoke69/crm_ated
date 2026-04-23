@@ -25,7 +25,6 @@ jobs:
             # Se o diretório não existir, faz clone (segurança contra reboot)
             if [ ! -d "$DEPLOY_DIR/.git" ]; then
               echo "📥 Diretório não encontrado, clonando repositório..."
-              mkdir -p /opt/zaploto
               git clone https://github.com/Zaploto/ZaplotoV3.git "$DEPLOY_DIR"
             fi
 
