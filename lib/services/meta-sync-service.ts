@@ -25,6 +25,7 @@ import {
   type ActiveCampaignSpendRow,
 } from '@/lib/meta/metaAdsService';
 import { buildCampaignConsultorSummary } from '@/lib/services/meta-campaign-consultors';
+import { buildGestorNamesByCrmBancaIdMap, type CrmBancaLite } from '@/lib/services/gestor-names-by-crm-banca';
 
 const DEFAULT_BASE_URL = 'https://graph.facebook.com/v25.0';
 const DEFAULT_DATE_PRESET = 'last_30d';
@@ -710,6 +711,48 @@ export async function setMetaIntegrationBancaLinks(integrationId: string, bancaI
 }
 
 /**
+ * Atualiza os vínculos da integração alvo e move as bancas informadas
+ * removendo vínculos dessas bancas em outras integrações.
+ */
+export async function moveMetaIntegrationToBancas(integrationId: string, bancaIds: string[]): Promise<string[]> {
+  const id = String(integrationId).trim();
+  const desired = Array.from(new Set(bancaIds.map((x) => String(x).trim()).filter(Boolean)));
+  if (!id) throw new Error('integration_id é obrigatório.');
+  if (desired.length === 0) {
+    throw new Error('Informe ao menos uma banca vinculada, ou remova a integração inteira.');
+  }
+
+  const { data: exists, error: exErr } = await supabaseServiceRole
+    .from('meta_integration_configs')
+    .select('id')
+    .eq('id', id)
+    .maybeSingle();
+  if (exErr) throw new Error(exErr.message);
+  if (!exists) throw new Error('Integração Meta não encontrada.');
+
+  // Remove vínculos dessas bancas em outras integrações para "mover" de fato.
+  const { data: conflictingLinks, error: conflictErr } = await supabaseServiceRole
+    .from('meta_integration_bancas')
+    .select('integration_id, banca_id')
+    .in('banca_id', desired)
+    .neq('integration_id', id);
+  if (conflictErr) throw new Error(conflictErr.message);
+
+  for (const link of conflictingLinks ?? []) {
+    const otherIntegrationId = String((link as { integration_id: string }).integration_id);
+    const bancaId = String((link as { banca_id: string }).banca_id);
+    const { error: delErr } = await supabaseServiceRole
+      .from('meta_integration_bancas')
+      .delete()
+      .eq('integration_id', otherIntegrationId)
+      .eq('banca_id', bancaId);
+    if (delErr) throw new Error(delErr.message);
+  }
+
+  return setMetaIntegrationBancaLinks(id, desired);
+}
+
+/**
  * Remove integração Meta: primeiro `meta_integration_configs` (modelo compartilhado;
  * vínculos em `meta_integration_bancas` caem por CASCADE), senão `meta_integrations` (legado por banca).
  * A UI lista os dois tipos com `integration_id` = id da respectiva tabela.
@@ -1258,6 +1301,8 @@ export interface AdminMetaLiveCampaignRow {
   banca_id: string;
   banca_name: string;
   banca_url: string | null;
+  /** Gestores (hierarquia + user_bancas) da banca CRM atribuída à linha — preenchido em `enrichAdminMetaCampaignRowsWithBancaNames`. */
+  gestor_names?: string[];
   campaign_id: string;
   /** Tipo salvo em `meta_campaigns` (sincronizado). */
   campaign_kind: 'normal' | 'bolao';
@@ -1354,6 +1399,20 @@ export async function listAdminMetaLiveJobs(includeInactiveIntegrations = false)
     if (bancasCoveredByShared.has(bid)) continue;
     jobs.push({ kind: 'legacy', representativeBancaId: bid, linkedBancaIds: [bid] });
   }
+
+  const sharedJobs = jobs.filter((j) => j.kind === 'shared');
+  const legacyJobs = jobs.filter((j) => j.kind === 'legacy');
+  const totalSharedBancas = sharedJobs.reduce((sum, j) => sum + j.linkedBancaIds.length, 0);
+  logMetaReturn('listAdminMetaLiveJobs ← deduplicação por integração', {
+    include_inactive_integrations: includeInactiveIntegrations,
+    integrations_total: jobs.length,
+    shared_integrations: sharedJobs.length,
+    bancas_cobertas_shared: totalSharedBancas,
+    legacy_integrations: legacyJobs.length,
+    deduplicacao_eficiencia: sharedJobs.length > 0
+      ? `${sharedJobs.length} chamada(s) cobrem ${totalSharedBancas} banca(s)`
+      : 'sem integrações compartilhadas',
+  });
 
   return jobs;
 }
@@ -1673,13 +1732,22 @@ async function enrichAdminMetaCampaignRowsWithBancaNames(rows: AdminMetaLiveCamp
   const bancaIds = Array.from(new Set(rows.map((r) => r.banca_id)));
   if (bancaIds.length === 0) return;
   const { data: bancas } = await supabaseServiceRole.from('crm_bancas').select('id,name,url').in('id', bancaIds);
-  const bancaById = new Map(
+  const bancaById = new Map<string, CrmBancaLite>(
     (bancas ?? []).map((b: { id: string; name: string | null; url: string | null }) => [b.id, b])
   );
+  let gestorByBanca = new Map<string, string[]>();
+  try {
+    gestorByBanca = await buildGestorNamesByCrmBancaIdMap(bancaIds, bancaById);
+  } catch (err: unknown) {
+    logMetaReturn('enrichAdminMetaCampaignRowsWithBancaNames gestor_names', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
   for (const row of rows) {
     const b = bancaById.get(row.banca_id);
     row.banca_name = b?.name ?? b?.url ?? row.banca_id;
     row.banca_url = b?.url ?? null;
+    row.gestor_names = gestorByBanca.get(row.banca_id) ?? [];
   }
 }
 

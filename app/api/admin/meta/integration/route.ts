@@ -6,7 +6,7 @@
 import { NextRequest } from 'next/server';
 import { requireAdmin } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
-import { deleteMetaIntegrationConfig, setMetaIntegrationBancaLinks } from '@/lib/services/meta-sync-service';
+import { deleteMetaIntegrationConfig, moveMetaIntegrationToBancas, setMetaIntegrationBancaLinks } from '@/lib/services/meta-sync-service';
 
 export async function DELETE(req: NextRequest) {
   try {
@@ -35,6 +35,7 @@ export async function PATCH(req: NextRequest) {
     const body = await req.json().catch(() => ({}));
     const integrationId = String(body?.integration_id ?? '').trim();
     const raw = body?.banca_ids;
+    const moveFromOtherIntegrations = body?.move_bancas_from_other_integrations === true;
     const bancaIds = Array.isArray(raw)
       ? raw.map((x: unknown) => String(x ?? '').trim()).filter(Boolean)
       : [];
@@ -46,7 +47,9 @@ export async function PATCH(req: NextRequest) {
       return errorResponse('banca_ids deve conter ao menos uma banca.', 400);
     }
 
-    const next = await setMetaIntegrationBancaLinks(integrationId, bancaIds);
+    const next = moveFromOtherIntegrations
+      ? await moveMetaIntegrationToBancas(integrationId, bancaIds)
+      : await setMetaIntegrationBancaLinks(integrationId, bancaIds);
     return successResponse({ integration_id: integrationId, banca_ids: next });
   } catch (err: any) {
     if (err?.message?.includes('Acesso negado') || err?.message?.includes('não autenticado')) {

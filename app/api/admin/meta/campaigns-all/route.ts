@@ -16,6 +16,7 @@ import { requireAdmin } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { buildCampaignConsultorSummary } from '@/lib/services/meta-campaign-consultors';
+import { buildGestorNamesByCrmBancaIdMap } from '@/lib/services/gestor-names-by-crm-banca';
 
 /** Alinhado ao GET /api/admin/meta/overview: dia único sem linhas em meta_insights_daily usa o último dia com dados até date_to. */
 async function resolveInsightsForMetrics(args: {
@@ -150,6 +151,17 @@ export async function GET(req: NextRequest) {
       bancaById = new Map((bancas ?? []).map((b) => [b.id, b]));
     }
 
+    /** Gestor por banca CRM da campanha: hierarquia (subárvore do dono) + user_bancas. */
+    let gestorNamesByBanca = new Map<string, string[]>();
+    if (bancaIds.length > 0) {
+      try {
+        gestorNamesByBanca = await buildGestorNamesByCrmBancaIdMap(bancaIds, bancaById);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return errorResponse(`Erro ao resolver gestores por banca: ${msg}`, 500);
+      }
+    }
+
     const metricByKey = new Map<
       string,
       { reach: number; impressions: number; clicks: number; leads: number; spend: number }
@@ -245,6 +257,7 @@ export async function GET(req: NextRequest) {
         banca_id: c.banca_id,
         banca_name: banca?.name ?? banca?.url ?? c.banca_id,
         banca_url: banca?.url ?? null,
+        gestor_names: gestorNamesByBanca.get(String(c.banca_id)) ?? [],
         campaign_id: c.campaign_id,
         name: c.name ?? null,
         objective: c.objective ?? null,

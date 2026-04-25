@@ -63,6 +63,26 @@ function ResumoMetricSkeleton() {
   return <div className="h-9 w-24 rounded-md bg-white/25 animate-pulse" aria-hidden />;
 }
 
+function formatActShortGestor(act: string | null | undefined): string {
+  const s = String(act ?? '').trim();
+  if (!s) return '—';
+  const clean = s.startsWith('act_') ? s.slice(4) : s;
+  return clean.length > 12 ? `…${clean.slice(-10)}` : clean;
+}
+
+function parseAdAccountIdsFieldGestor(raw: string | null | undefined): string[] {
+  return String(raw ?? '')
+    .split(/[,;\n]+/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+function adAccountIdsFieldWithoutIndexGestor(raw: string, index: number): string {
+  const ids = parseAdAccountIdsFieldGestor(raw);
+  ids.splice(index, 1);
+  return ids.join(', ');
+}
+
 type GestorMetaIntegrationRow = {
   integration_id: string;
   base_url: string;
@@ -1268,7 +1288,7 @@ export default function GestorTrafegoClient({
 
           {/* Card Métricas Meta Ads (Campanhas) - acima do Resumo Geral */}
           <div className="relative mb-6">
-            <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
+            <div className="bg-white dark:bg-[#2a2a2a] p-4 sm:p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
                 <div className="flex items-center gap-2">
                   <div className="p-2 bg-blue-50 dark:bg-blue-900/30 rounded-xl">
@@ -1292,7 +1312,7 @@ export default function GestorTrafegoClient({
                     )}
                   </div>
                 </div>
-                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <div className="flex flex-wrap items-center gap-2 shrink-0 w-full sm:w-auto">
                   <select
                     value={metaActiveOnly ? 'active' : 'all'}
                     onChange={(e) => setMetaActiveOnly(e.target.value === 'active')}
@@ -1420,7 +1440,7 @@ export default function GestorTrafegoClient({
               {/* Tabela de campanhas */}
               {!loadingMeta && metaCampaignsData.length > 0 && (
                 <div className="mt-6 overflow-x-auto">
-                  <table className="w-full text-left border-collapse text-sm">
+                  <table className="w-full min-w-[1180px] text-left border-collapse text-xs sm:text-sm">
                     <thead>
                       <tr className="border-b border-gray-200 dark:border-gray-600 bg-gray-50/80 dark:bg-gray-800/60">
                         <th className="px-4 py-3 font-bold text-gray-600 dark:text-gray-400 uppercase">Campanha</th>
@@ -1504,7 +1524,7 @@ export default function GestorTrafegoClient({
           
           <div className="relative">
             {/* Resumo Geral: skeleton nos valores enquanto carrega (evita confundir com zero real) */}
-            <div className="bg-gradient-to-br from-[#A8E677] to-[#8CD955] p-6 rounded-2xl shadow-lg border border-[#8CD955]/40">
+            <div className="bg-gradient-to-br from-[#A8E677] to-[#8CD955] p-4 sm:p-6 rounded-2xl shadow-lg border border-[#8CD955]/40">
               <div className="flex items-center gap-2 mb-6">
                 <BarChart3 className="w-6 h-6 text-white" />
                 <h2 className="text-xl font-bold text-white">Resumo Geral - {bancaName || 'Banca'}</h2>
@@ -1618,7 +1638,7 @@ export default function GestorTrafegoClient({
 
         {/* Configurar integração Meta (vinculada à banca) - gestor pode adicionar aqui; admin vê em Admin → Meta */}
         {effectiveBancaId && (
-          <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
+          <div className="bg-white dark:bg-[#2a2a2a] p-4 sm:p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
             <button
               type="button"
               onClick={() => setShowMetaConfig(!showMetaConfig)}
@@ -1745,9 +1765,35 @@ export default function GestorTrafegoClient({
                       type="text"
                       value={metaConfigForm.ad_account_id}
                       onChange={(e) => setMetaConfigForm((f) => ({ ...f, ad_account_id: e.target.value }))}
-                      placeholder="300392276267865"
+                      placeholder="act_123, act_456 ou vírgula entre IDs"
                       className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white dark:bg-gray-800"
                     />
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Várias contas: separe por vírgula. Use o × em cada chip para remover antes de salvar.</p>
+                    {parseAdAccountIdsFieldGestor(metaConfigForm.ad_account_id).length > 0 ? (
+                      <div className="mt-2 flex flex-wrap gap-2" aria-label="Contas de anúncio configuradas">
+                        {parseAdAccountIdsFieldGestor(metaConfigForm.ad_account_id).map((act, idx) => (
+                          <span
+                            key={`${act}-${idx}`}
+                            className="inline-flex items-center gap-1 rounded-lg border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/80 px-2 py-1 text-xs font-mono text-gray-800 dark:text-gray-100"
+                          >
+                            <span title={act}>{formatActShortGestor(act)}</span>
+                            <button
+                              type="button"
+                              aria-label={`Remover conta ${act}`}
+                              onClick={() =>
+                                setMetaConfigForm((f) => ({
+                                  ...f,
+                                  ad_account_id: adAccountIdsFieldWithoutIndexGestor(f.ad_account_id, idx),
+                                }))
+                              }
+                              className="rounded p-0.5 text-gray-500 hover:bg-red-100 hover:text-red-700 dark:hover:bg-red-900/40 dark:hover:text-red-300"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-800 dark:text-gray-200 mb-1">Pixel ID</label>
@@ -1891,7 +1937,7 @@ export default function GestorTrafegoClient({
         </div>
 
         {/* Funil Facebook (Meta) + Loteria - unificado */}
-        <div className="relative bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
+        <div className="relative bg-white dark:bg-[#2a2a2a] p-4 sm:p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
           {(loadingMeta || loadingExtMetrics) && (
             <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex flex-col items-center justify-center gap-3">
               <Loader2 className="h-10 w-10 text-[#8CD955] animate-spin" />
@@ -1944,7 +1990,7 @@ export default function GestorTrafegoClient({
               <span className="text-sm font-medium text-gray-600 dark:text-gray-300">Carregando ranking…</span>
             </div>
           )}
-          <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
+          <div className="bg-white dark:bg-[#2a2a2a] p-4 sm:p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
             <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-6 flex items-center gap-2">
               <Trophy className="w-5 h-5 text-amber-500 dark:text-amber-400" />
               Top 5 Consultores por Vendas

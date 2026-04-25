@@ -29,6 +29,7 @@ import {
   UserPlus,
   Trash2,
   Radio,
+  X,
 } from 'lucide-react';
 
 function formatBRL(value: number): string {
@@ -74,6 +75,70 @@ function formatActShort(act: string | null | undefined): string {
   if (!s) return '—';
   const clean = s.startsWith('act_') ? s.slice(4) : s;
   return clean.length > 12 ? `…${clean.slice(-10)}` : clean;
+}
+
+/** IDs de conta de anúncio no campo (vírgula, ponto-e-vírgula ou quebra de linha). */
+function parseAdAccountIdsField(raw: string | null | undefined): string[] {
+  return String(raw ?? '')
+    .split(/[,;\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function adAccountIdsFieldWithoutIndex(raw: string, index: number): string {
+  const ids = parseAdAccountIdsField(raw);
+  ids.splice(index, 1);
+  return ids.join(', ');
+}
+
+/**
+ * Modo "Todas as bancas": a mesma `campaign_id` Meta pode existir em `meta_campaigns` para mais de uma banca
+ * (ex.: conta duplicada entre integrações). Uma campanha = uma linha na tabela e nos totais de cache.
+ */
+function pickCanonicalMetaCampaignRowAmongDuplicates(candidates: any[]): any {
+  if (!candidates?.length) return undefined;
+  if (candidates.length === 1) return candidates[0];
+  return [...candidates].sort((a, b) => {
+    const ua = String(a?.updated_at ?? '').trim();
+    const ub = String(b?.updated_at ?? '').trim();
+    if (ua && ub && ua !== ub) return ub.localeCompare(ua);
+    if (ua && !ub) return -1;
+    if (!ua && ub) return 1;
+    const sa = Number(a?.spend) || 0;
+    const sb = Number(b?.spend) || 0;
+    if (sa !== sb) return sb - sa;
+    return String(a?.banca_id ?? '').localeCompare(String(b?.banca_id ?? ''));
+  })[0];
+}
+
+function dedupeMetaCampaignRowsByGlobalCampaignId(rows: any[]): any[] {
+  if (!rows?.length) return [];
+  const byCampaign = new Map<string, any[]>();
+  for (const r of rows) {
+    const cid = String(r?.campaign_id ?? '').trim();
+    if (!cid) continue;
+    const arr = byCampaign.get(cid) ?? [];
+    arr.push(r);
+    byCampaign.set(cid, arr);
+  }
+  const winner = new Map<string, any>();
+  for (const [cid, arr] of byCampaign) {
+    winner.set(cid, pickCanonicalMetaCampaignRowAmongDuplicates(arr));
+  }
+  const seen = new Set<string>();
+  const out: any[] = [];
+  for (const r of rows) {
+    const cid = String(r?.campaign_id ?? '').trim();
+    if (!cid) {
+      out.push(r);
+      continue;
+    }
+    if (seen.has(cid)) continue;
+    seen.add(cid);
+    const w = winner.get(cid);
+    if (w) out.push(w);
+  }
+  return out;
 }
 
 /** Cards e painéis — coerente com Layout (`dark:bg-[#1a1a1a]` no main). */
@@ -209,6 +274,8 @@ export default function AdminMetaPage() {
   const [bancas, setBancas] = useState<Banca[]>([]);
   /** Bancas vinculadas à integração em edição (multiseleção). */
   const [selectedBancaIds, setSelectedBancaIds] = useState<string[]>([]);
+  /** Banca de contexto escolhida no seletor (usada em testar conexão/revelar token/sync da integração). */
+  const [selectedIntegrationContextBancaId, setSelectedIntegrationContextBancaId] = useState<string>('');
   /** Dropdown multiseleção — detalhes da integração */
   const [bancaPickerOpen, setBancaPickerOpen] = useState(false);
   const [bancaPickerSearch, setBancaPickerSearch] = useState('');
@@ -333,10 +400,10 @@ export default function AdminMetaPage() {
   const [allCampaignsSearch, setAllCampaignsSearch] = useState('');
   /** Opcional: quando true, inclui campanhas não ACTIVE nas somas, overview e tabelas (active_only=0 na API). */
   /**
-   * Default true: no admin muitas contas só têm campanhas pausadas na Meta mas ainda precisam ver métricas/sincronização.
-   * Desmarque para restringir a status ou effective_status ACTIVE (alinhado às APIs active_only=1).
+   * Default false: o painel administrativo precisa refletir apenas campanhas ACTIVE (status ou effective_status),
+   * coerente com o card «Gasto total · campanhas ativas». Marque para incluir pausadas em auditorias.
    */
-  const [allCampaignsShowInactive, setAllCampaignsShowInactive] = useState(true);
+  const [allCampaignsShowInactive, setAllCampaignsShowInactive] = useState(false);
   const [allCampaignsKindFilter, setAllCampaignsKindFilter] = useState<'all' | MetaCampaignKind>('all');
   const [allCampaignsPage, setAllCampaignsPage] = useState(1);
   const [campaignOwnerDraft, setCampaignOwnerDraft] = useState<Record<string, string>>({});
@@ -690,6 +757,9 @@ export default function AdminMetaPage() {
       );
     }
     const linked = bancaIdsLinkedToSelectedIntegration;
+    if (selectedIntegrationContextBancaId && linked.includes(selectedIntegrationContextBancaId)) {
+      return selectedIntegrationContextBancaId;
+    }
     if (overviewFilterBancaId && linked.includes(overviewFilterBancaId)) {
       return overviewFilterBancaId;
     }
@@ -700,9 +770,20 @@ export default function AdminMetaPage() {
   }, [
     adminMetaCreateNewIntegration,
     bancaIdsLinkedToSelectedIntegration,
+    selectedIntegrationContextBancaId,
     overviewFilterBancaId,
     selectedBancaIds,
   ]);
+
+  useEffect(() => {
+    if (selectedBancaIds.length === 0) {
+      if (selectedIntegrationContextBancaId) setSelectedIntegrationContextBancaId('');
+      return;
+    }
+    if (!selectedIntegrationContextBancaId || !selectedBancaIds.includes(selectedIntegrationContextBancaId)) {
+      setSelectedIntegrationContextBancaId(selectedBancaIds[0]);
+    }
+  }, [selectedBancaIds, selectedIntegrationContextBancaId]);
 
   const loadSyncedData = useCallback(async () => {
     if (!primaryBancaId || !userId) return;
@@ -978,16 +1059,11 @@ export default function AdminMetaPage() {
     void loadLiveAggregate();
   }, [userId, loadOverview, loadLiveAggregate]);
 
-  /** Atualização periódica das métricas ao vivo na Meta (todas as integrações / escopo do filtro). */
-  useEffect(() => {
-    if (!userId) return;
-    const ms = 90_000;
-    const id = window.setInterval(() => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-      void loadLiveAggregate();
-    }, ms);
-    return () => window.clearInterval(id);
-  }, [userId, loadLiveAggregate]);
+  /**
+   * Sem polling automático: métricas ao vivo só são consultadas no carregamento da página
+   * ou quando o admin trocar período/banca. O usuário pode forçar uma nova chamada
+   * pelo botão «Atualizar agora» do painel.
+   */
 
   // Remove da seleção IDs que deixaram de existir na visão geral (ex.: após refresh da lista)
   useEffect(() => {
@@ -1083,7 +1159,11 @@ export default function AdminMetaPage() {
       const res = await fetch('/api/admin/meta/integration', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-        body: JSON.stringify({ integration_id: integ, banca_ids: ids }),
+        body: JSON.stringify({
+          integration_id: integ,
+          banca_ids: ids,
+          move_bancas_from_other_integrations: true,
+        }),
       });
       const data = await res.json();
       if (data.success) {
@@ -1091,7 +1171,7 @@ export default function AdminMetaPage() {
         await loadOverview();
         setTestResult({
           success: true,
-          infoMessage: 'Vínculos da integração com as bancas foram atualizados.',
+          infoMessage: 'Vínculos da integração com as bancas foram atualizados (com migração entre integrações).',
         });
       } else {
         setTestResult({ success: false, error: data.error || 'Erro ao atualizar vínculos.' });
@@ -1108,23 +1188,119 @@ export default function AdminMetaPage() {
     const integ =
       adminMetaSelectedIntegrationId || (config.integration_id ? String(config.integration_id) : '');
     if (!integ) return;
+    const selectedRow = config.integrations?.find((i) => String(i.integration_id) === String(integ));
+    const linkedBancaIds = Array.from(
+      new Set(
+        (
+          selectedRow?.banca_ids && selectedRow.banca_ids.length > 0
+            ? selectedRow.banca_ids
+            : Array.isArray(config.banca_ids)
+              ? config.banca_ids
+              : selectedBancaIds
+        )
+          .map((id) => String(id).trim())
+          .filter(Boolean)
+      )
+    );
+    if (linkedBancaIds.length === 0) {
+      setTestResult({ success: false, error: 'Nenhuma banca vinculada a esta integração.' });
+      return;
+    }
+
+    const normalize = (v: string) =>
+      String(v ?? '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .trim();
+
+    const preferredBancaToRemove =
+      linkedBancaIds.find((id) => id === primaryBancaId) ||
+      linkedBancaIds.find((id) => id === overviewFilterBancaId) ||
+      linkedBancaIds[0];
+
+    let bancaToRemove = preferredBancaToRemove;
+    if (linkedBancaIds.length > 1) {
+      const menu = linkedBancaIds
+        .map((id, idx) => {
+          const banca = bancas.find((b) => String(b.id) === id);
+          const label = banca?.name || banca?.url || id;
+          return `${idx + 1}) ${label}`;
+        })
+        .join('\n');
+      const raw = window.prompt(
+        `Qual banca deseja remover desta integração?\n\n${menu}\n\nDigite o número ou o ID da banca:`
+      );
+      if (raw == null) return;
+      const input = raw.trim();
+      if (!input) return;
+      const idx = Number.parseInt(input, 10);
+      if (!Number.isNaN(idx) && idx >= 1 && idx <= linkedBancaIds.length) {
+        bancaToRemove = linkedBancaIds[idx - 1];
+      } else if (linkedBancaIds.includes(input)) {
+        bancaToRemove = input;
+      } else {
+        const normalizedInput = normalize(input);
+        const matchedByLabel = linkedBancaIds.find((id) => {
+          const banca = bancas.find((b) => String(b.id) === id);
+          const name = normalize(banca?.name || '');
+          const url = normalize(banca?.url || '');
+          return (
+            (name && (name === normalizedInput || name.includes(normalizedInput))) ||
+            (url && (url === normalizedInput || url.includes(normalizedInput)))
+          );
+        });
+        if (matchedByLabel) {
+          bancaToRemove = matchedByLabel;
+        } else {
+          setTestResult({
+            success: false,
+            error: 'Banca inválida. Informe número, ID, nome ou URL da banca vinculada.',
+          });
+          return;
+        }
+      }
+    }
+
+    const bancaLabel = (() => {
+      const banca = bancas.find((b) => String(b.id) === String(bancaToRemove));
+      return banca?.name || banca?.url || bancaToRemove;
+    })();
+    const removingEntireIntegration = linkedBancaIds.length === 1;
     const ok = window.confirm(
-      'Remover esta integração Meta? O registro em meta_integration_configs e os vínculos serão apagados. Dados de campanhas já sincronizados no CRM não são removidos.'
+      removingEntireIntegration
+        ? `Esta integração está vinculada apenas à banca "${bancaLabel}".\n\nConfirma remover a integração inteira?`
+        : `Confirma remover a banca "${bancaLabel}" desta integração?\n\nAs outras bancas vinculadas serão mantidas.`
     );
     if (!ok) return;
+
     setMetaIntegrationUiBusy(true);
     setTestResult(null);
     setSyncResult(null);
     try {
-      const res = await fetch('/api/admin/meta/integration', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-        body: JSON.stringify({ integration_id: integ }),
-      });
-      const data = await res.json();
-      if (!data.success) {
-        setTestResult({ success: false, error: data.error || 'Erro ao remover integração.' });
-        return;
+      if (removingEntireIntegration) {
+        const res = await fetch('/api/admin/meta/integration', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+          body: JSON.stringify({ integration_id: integ }),
+        });
+        const data = await res.json();
+        if (!data.success) {
+          setTestResult({ success: false, error: data.error || 'Erro ao remover integração.' });
+          return;
+        }
+      } else {
+        const remainingBancas = linkedBancaIds.filter((id) => id !== bancaToRemove);
+        const res = await fetch('/api/admin/meta/integration', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+          body: JSON.stringify({ integration_id: integ, banca_ids: remainingBancas }),
+        });
+        const data = await res.json();
+        if (!data.success) {
+          setTestResult({ success: false, error: data.error || 'Erro ao remover vínculo da banca.' });
+          return;
+        }
       }
       const anchor = selectedBancaIds[0] || primaryBancaId || overviewFilterBancaId || '';
       await loadOverview();
@@ -1138,7 +1314,12 @@ export default function AdminMetaPage() {
       }
       void loadLiveAggregate();
       void loadAllCampaigns();
-      setTestResult({ success: true, infoMessage: 'Integração removida.' });
+      setTestResult({
+        success: true,
+        infoMessage: removingEntireIntegration
+          ? 'Integração removida.'
+          : `Banca "${bancaLabel}" removida da integração. As demais bancas vinculadas foram mantidas.`,
+      });
     } catch (err: any) {
       setTestResult({ success: false, error: err?.message || 'Erro ao remover integração.' });
     } finally {
@@ -1611,8 +1792,12 @@ export default function AdminMetaPage() {
     },
     { reach: 0, impressions: 0, clicks: 0, leads: 0, spend: 0 }
   );
+  /** Com banca específica no filtro, métricas de campanha vêm só do Graph (live); sem cache do DB na tabela/cards. */
+  const scopedMetaBancaFilter = Boolean(overviewFilterBancaId?.trim());
+  const usingLiveMetaCards = Boolean(liveAggregate && !liveAggregateError);
+
   /** Campanhas com métricas (lista já respeita ACTIVE por padrão via API; opcional incluir pausadas). */
-  const metricSyncedCampaignRows = useMemo(
+  const metricSyncedCampaignRowsBase = useMemo(
     () =>
       (allCampaignsRows ?? []).filter((row: any) => {
         const reach = Number(row?.reach) || 0;
@@ -1624,9 +1809,12 @@ export default function AdminMetaPage() {
       }),
     [allCampaignsRows]
   );
-  /** Com banca específica no filtro, métricas de campanha vêm só do Graph (live); sem cache do DB na tabela/cards. */
-  const scopedMetaBancaFilter = Boolean(overviewFilterBancaId?.trim());
-  const usingLiveMetaCards = Boolean(liveAggregate && !liveAggregateError);
+
+  /** Em "Todas as bancas", não repetir a mesma campanha Meta em linhas com `banca_id` diferentes. */
+  const metricSyncedCampaignRows = useMemo(() => {
+    if (scopedMetaBancaFilter) return metricSyncedCampaignRowsBase;
+    return dedupeMetaCampaignRowsByGlobalCampaignId(metricSyncedCampaignRowsBase);
+  }, [scopedMetaBancaFilter, metricSyncedCampaignRowsBase]);
 
   /** Cache local (campaigns-all) já filtrado pela banca do dropdown, para não esvaziar a tabela enquanto o live carrega. */
   const cachedMetricRowsForCrmScope = useMemo(() => {
@@ -1714,6 +1902,22 @@ export default function AdminMetaPage() {
     (scopedMetaBancaFilter && !usingLiveMetaCards && !liveAggregateError) ||
     (!scopedMetaBancaFilter && !usingLiveMetaCards && allCampaignsLoading);
 
+  /** Primeiro `gestor_names` não vazio por banca vindo do cache `campaigns-all` (para enriquecer o merge ao vivo). */
+  const bancaGestorNamesFromCampaignsCache = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const row of allCampaignsRows ?? []) {
+      const bid = String((row as any)?.banca_id ?? '').trim();
+      if (!bid || m.has(bid)) continue;
+      const g = (row as any)?.gestor_names;
+      if (!Array.isArray(g)) continue;
+      const names = Array.from(
+        new Set(g.map((x: unknown) => String(x ?? '').trim()).filter((s: string) => s.length > 0))
+      );
+      if (names.length > 0) m.set(bid, names);
+    }
+    return m;
+  }, [allCampaignsRows]);
+
   /** Linhas da tabela: métricas live (todas as integrações no stream) cruzadas com CRM; fallback = cache por banca. */
   const displayMetricCampaignRows = useMemo(() => {
     if (!usingLiveMetaCards || !liveAggregate) {
@@ -1732,6 +1936,23 @@ export default function AdminMetaPage() {
         integrationId,
         adAccountId
       );
+      const liveG = (row as { gestor_names?: unknown }).gestor_names;
+      const fromLive = Array.isArray(liveG)
+        ? liveG.map((x) => String(x ?? '').trim()).filter((s) => s.length > 0)
+        : [];
+      const fromDb = Array.isArray((dbRow as { gestor_names?: unknown } | undefined)?.gestor_names)
+        ? ((dbRow as { gestor_names: unknown[] }).gestor_names ?? [])
+            .map((x) => String(x ?? '').trim())
+            .filter((s) => s.length > 0)
+        : [];
+      const fromBancaCache = bancaGestorNamesFromCampaignsCache.get(bancaId) ?? [];
+      const gestorMerged: string[] = [];
+      const seenG = new Set<string>();
+      for (const n of [...fromLive, ...fromDb, ...fromBancaCache]) {
+        if (!n || seenG.has(n)) continue;
+        seenG.add(n);
+        gestorMerged.push(n);
+      }
       return {
         ...(dbRow || {}),
         id: dbRow?.id ?? campaignId,
@@ -1754,6 +1975,7 @@ export default function AdminMetaPage() {
           (row.campaign_kind as MetaCampaignKind) ||
           (dbRow?.campaign_kind as MetaCampaignKind) ||
           'normal',
+        gestor_names: gestorMerged,
         reach: Number(row.reach) || 0,
         impressions: Number(row.impressions) || 0,
         clicks: Number(row.clicks) || 0,
@@ -1775,8 +1997,126 @@ export default function AdminMetaPage() {
       ].join(':');
       dedup.set(k, row);
     }
-    return Array.from(dedup.values());
-  }, [usingLiveMetaCards, liveAggregate, allCampaignsRows, cachedMetricRowsForCrmScope]);
+    let out = Array.from(dedup.values());
+    if (!scopedMetaBancaFilter) {
+      out = dedupeMetaCampaignRowsByGlobalCampaignId(out);
+    }
+    return out;
+  }, [
+    usingLiveMetaCards,
+    liveAggregate,
+    allCampaignsRows,
+    cachedMetricRowsForCrmScope,
+    scopedMetaBancaFilter,
+    bancaGestorNamesFromCampaignsCache,
+  ]);
+
+  /** Ordenação estável para leitura humana: agrupa por banca e ordena por data dentro da banca. */
+  const orderedDisplayMetricCampaignRows = useMemo(() => {
+    const rows = Array.isArray(displayMetricCampaignRows) ? [...displayMetricCampaignRows] : [];
+    rows.sort((a: any, b: any) => {
+      const bancaA = String(a?.banca_name || a?.banca_id || '').trim().toLowerCase();
+      const bancaB = String(b?.banca_name || b?.banca_id || '').trim().toLowerCase();
+      if (bancaA !== bancaB) return bancaA.localeCompare(bancaB, 'pt-BR');
+
+      const ta = a?.start_time ? new Date(String(a.start_time)).getTime() : 0;
+      const tb = b?.start_time ? new Date(String(b.start_time)).getTime() : 0;
+      if (ta !== tb) return tb - ta;
+
+      const nameA = String(a?.name || a?.campaign_id || '').trim().toLowerCase();
+      const nameB = String(b?.name || b?.campaign_id || '').trim().toLowerCase();
+      return nameA.localeCompare(nameB, 'pt-BR');
+    });
+    return rows;
+  }, [displayMetricCampaignRows]);
+
+  /** Restringe vínculos de campanha às bancas da mesma integração Meta para evitar 400 no campaign-owner. */
+  const ownerTargetBancaIdsByIntegration = useMemo(() => {
+    const byIntegration = new Map<string, Set<string>>();
+
+    for (const row of overviewRows) {
+      const integrationId = String(row.integration_id ?? '').trim();
+      const bancaId = String(row.banca_id ?? '').trim();
+      if (!integrationId || !bancaId) continue;
+      const set = byIntegration.get(integrationId) ?? new Set<string>();
+      set.add(bancaId);
+      byIntegration.set(integrationId, set);
+    }
+
+    for (const integration of config?.integrations ?? []) {
+      const integrationId = String(integration.integration_id ?? '').trim();
+      if (!integrationId || !Array.isArray(integration.banca_ids)) continue;
+      const set = byIntegration.get(integrationId) ?? new Set<string>();
+      for (const bancaId of integration.banca_ids) {
+        const id = String(bancaId ?? '').trim();
+        if (id) set.add(id);
+      }
+      byIntegration.set(integrationId, set);
+    }
+
+    const finalMap = new Map<string, string[]>();
+    for (const [integrationId, bancaSet] of byIntegration.entries()) {
+      finalMap.set(integrationId, Array.from(bancaSet));
+    }
+    return finalMap;
+  }, [overviewRows, config?.integrations]);
+
+  const ownerTargetBancaIdsBySourceBanca = useMemo(() => {
+    const byBanca = new Map<string, Set<string>>();
+    for (const row of overviewRows) {
+      const integrationId = String(row.integration_id ?? '').trim();
+      const sourceBancaId = String(row.banca_id ?? '').trim();
+      if (!integrationId || !sourceBancaId) continue;
+      const linked = ownerTargetBancaIdsByIntegration.get(integrationId) ?? [];
+      if (linked.length === 0) continue;
+      const set = byBanca.get(sourceBancaId) ?? new Set<string>();
+      for (const bancaId of linked) set.add(bancaId);
+      byBanca.set(sourceBancaId, set);
+    }
+    const finalMap = new Map<string, string[]>();
+    for (const [sourceBancaId, bancaSet] of byBanca.entries()) {
+      finalMap.set(sourceBancaId, Array.from(bancaSet));
+    }
+    return finalMap;
+  }, [overviewRows, ownerTargetBancaIdsByIntegration]);
+
+  /**
+   * Fallback seguro quando a linha não traz integration_id:
+   * usa apenas bancas que aparecem em TODAS as integrações vinculadas à banca de origem.
+   * Evita permitir destino inválido e receber 400 no campaign-owner.
+   */
+  const ownerSafeTargetBancaIdsBySourceBanca = useMemo(() => {
+    const integrationIdsBySource = new Map<string, string[]>();
+    for (const row of overviewRows) {
+      const sourceBancaId = String(row.banca_id ?? '').trim();
+      const integrationId = String(row.integration_id ?? '').trim();
+      if (!sourceBancaId || !integrationId) continue;
+      const cur = integrationIdsBySource.get(sourceBancaId) ?? [];
+      if (!cur.includes(integrationId)) cur.push(integrationId);
+      integrationIdsBySource.set(sourceBancaId, cur);
+    }
+
+    const safeBySource = new Map<string, string[]>();
+    for (const [sourceBancaId, integrationIds] of integrationIdsBySource.entries()) {
+      const linkedLists = integrationIds
+        .map((iid) => ownerTargetBancaIdsByIntegration.get(iid) ?? [])
+        .filter((list) => list.length > 0);
+
+      if (linkedLists.length === 0) {
+        safeBySource.set(sourceBancaId, [sourceBancaId]);
+        continue;
+      }
+
+      let intersection = new Set(linkedLists[0]);
+      for (let i = 1; i < linkedLists.length; i += 1) {
+        const next = new Set(linkedLists[i]);
+        intersection = new Set([...intersection].filter((id) => next.has(id)));
+      }
+      if (!intersection.has(sourceBancaId)) intersection.add(sourceBancaId);
+      safeBySource.set(sourceBancaId, Array.from(intersection));
+    }
+    return safeBySource;
+  }, [overviewRows, ownerTargetBancaIdsByIntegration]);
 
   const crmCampaignsBlockLoading =
     (loadingLiveAggregate && !liveAggregate && cachedMetricRowsForCrmScope.length === 0) ||
@@ -1858,14 +2198,14 @@ export default function AdminMetaPage() {
 
   return (
     <Layout>
-      <div className="p-6 max-w-7xl mx-auto space-y-6 text-gray-800 dark:text-gray-200">
-        <div className="flex items-center gap-2">
+      <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-6 text-gray-800 dark:text-gray-200">
+        <div className="flex flex-wrap items-center gap-2">
           <BarChart3 className="w-6 h-6 text-[#8CD955]" />
           <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-50">Integração Meta Ads</h1>
         </div>
         <div className="flex flex-wrap items-end justify-between gap-3">
           <p className="text-gray-600 dark:text-gray-400">Gestão geral das integrações Meta Ads por banca.</p>
-          <div className="shrink-0 flex items-end gap-2 flex-wrap">
+          <div className="w-full sm:w-auto shrink-0 flex items-end gap-2 flex-wrap">
             <div>
               <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">Período Meta</label>
               <select
@@ -1874,7 +2214,7 @@ export default function AdminMetaPage() {
                   setMetaInsightsPeriod(e.target.value as typeof metaInsightsPeriod);
                   setOverviewPage(1);
                 }}
-                className="px-3 py-2 border border-gray-200 dark:border-[#404040] rounded-xl text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] min-w-[170px]"
+                className="w-full sm:w-auto px-3 py-2 border border-gray-200 dark:border-[#404040] rounded-xl text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] min-w-[150px]"
               >
                 <option value="daily">Hoje</option>
                 <option value="yesterday">Ontem</option>
@@ -1887,7 +2227,7 @@ export default function AdminMetaPage() {
             </div>
             <div>
               <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">Banca Meta</label>
-              <div className="relative min-w-[220px]" ref={overviewFilterBancaRef}>
+              <div className="relative w-full sm:min-w-[220px]" ref={overviewFilterBancaRef}>
                 <button
                   type="button"
                   onClick={() => setOverviewFilterBancaOpen((v) => !v)}
@@ -1995,8 +2335,8 @@ export default function AdminMetaPage() {
                 className="rounded border-gray-300 dark:border-gray-600 text-[#8CD955] focus:ring-[#8CD955] shrink-0 bg-white dark:bg-[#2a2a2a]"
               />
               <span className="text-[11px] text-gray-700 dark:text-gray-300 leading-snug">
-                <span className="font-semibold text-gray-600 dark:text-gray-400">Padrão do painel:</span> incluir campanhas pausadas
-                <span className="text-gray-500 dark:text-gray-500"> (desmarque para só ACTIVE)</span>
+                <span className="font-semibold text-gray-600 dark:text-gray-400">Padrão do painel:</span> apenas campanhas ativas
+                <span className="text-gray-500 dark:text-gray-500"> (marque para incluir pausadas)</span>
               </span>
             </label>
             <button
@@ -2113,6 +2453,11 @@ export default function AdminMetaPage() {
                   <span className="text-gray-500 dark:text-gray-500">(banca filtrada no painel)</span>
                 ) : null}
                 . Métricas de alcance, cliques e gasto vêm da <span className="font-semibold text-emerald-700 dark:text-emerald-400">Meta em tempo real</span> quando o carregamento ao vivo conclui; o cache local complementa tipo, consultores e vínculos.
+                {!scopedMetaBancaFilter ? (
+                  <span className="block sm:inline sm:before:content-[' '] mt-1 sm:mt-0 text-gray-500 dark:text-gray-500">
+                    Cada ID de campanha Meta aparece no máximo uma vez: se houver duplicidade entre bancas no CRM, mantemos a linha com <span className="font-medium text-gray-600 dark:text-gray-400">atualização mais recente</span> (em empate, maior gasto no período).
+                  </span>
+                ) : null}
               </p>
               <div className="flex flex-wrap items-center gap-2 mt-2">
                 <span className="text-xs text-gray-500 dark:text-gray-400">Período: {adminMetaInsightsDateRange.label}</span>
@@ -2139,16 +2484,16 @@ export default function AdminMetaPage() {
                 ) : null}
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={() => {
-                  const first = (displayMetricCampaignRows || [])[0];
+                  const first = (orderedDisplayMetricCampaignRows || [])[0];
                   if (first) {
                     setConsultorModalCampaignKey(`${String(first.banca_id)}:${String(first.campaign_id)}`);
                   }
                   setConsultorModalOpen(true);
                 }}
-                disabled={displayMetricCampaignRows.length === 0}
+                disabled={orderedDisplayMetricCampaignRows.length === 0}
                 className="text-sm text-blue-700 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 font-medium flex items-center gap-1 disabled:opacity-40"
               >
                 <Users className="w-4 h-4" />
@@ -2192,42 +2537,37 @@ export default function AdminMetaPage() {
                           Campanhas
                         </span>
                         <span className="text-xs font-normal text-gray-600 dark:text-gray-400 sm:pl-1">
-                          {displayMetricCampaignRows.length} no período · todas as contas / integrações no stream ao vivo
+                          {orderedDisplayMetricCampaignRows.length} no período · todas as contas / integrações no stream ao vivo
                         </span>
                       </span>
                       {expandedTab === 'campaigns' ? <ChevronUp className="w-5 h-5 shrink-0" /> : <ChevronDown className="w-5 h-5 shrink-0" />}
                     </button>
                     {expandedTab === 'campaigns' && (
                       <div className="overflow-x-auto max-h-[min(72vh,920px)] overflow-y-auto">
-                        <table className="w-full text-sm text-left min-w-[2480px] text-gray-800 dark:text-gray-200">
+                        <table className="w-full text-xs sm:text-sm text-left min-w-[1580px] xl:min-w-[2480px] text-gray-800 dark:text-gray-200">
                           <thead className="bg-gray-100 dark:bg-[#2a2a2a] text-gray-700 dark:text-gray-200 sticky top-0 z-10 shadow-sm">
                             <tr>
                               <th className="px-4 py-2.5">Início</th>
+                              <th className="px-4 py-2.5">Gestor</th>
                               <th className="px-4 py-2.5">Banca</th>
-                              <th className="px-4 py-2.5">Integração</th>
-                              <th className="px-4 py-2.5">Conta ads</th>
                               <th className="px-4 py-2.5 min-w-[220px]">Campanha</th>
-                              <th className="px-4 py-2.5">Campaign ID</th>
+                              <th className="px-4 py-2 text-right">Gasto</th>
                               <th className="px-4 py-2">Tipo</th>
                               <th className="px-4 py-2 text-right">Reach</th>
                               <th className="px-4 py-2 text-right">Impressões</th>
                               <th className="px-4 py-2 text-right">Cliques</th>
                               <th className="px-4 py-2 text-right">Leads</th>
                               <th className="px-4 py-2 text-right">Resultados</th>
-                              <th className="px-4 py-2 text-right">Gasto</th>
                               <th className="px-4 py-2 text-right">Leads consultores</th>
                               <th className="px-4 py-2 text-right">Depósito consultores</th>
                               <th className="px-4 py-2">Status</th>
                               <th className="px-4 py-2">Objetivo</th>
                               <th className="px-4 py-2 text-right">Orçamento diário</th>
-                              <th className="px-4 py-2 text-right">Orçamento total</th>
-                              <th className="px-4 py-2">Fim</th>
-                              <th className="px-4 py-2">Atualizado</th>
                               <th className="px-4 py-2">Atribuir banca</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-gray-100 dark:divide-[#383838]">
-                            {displayMetricCampaignRows.map((c: any, rowIndex: number) => {
+                            {orderedDisplayMetricCampaignRows.map((c: any, rowIndex: number) => {
                               const m = {
                                 reach: Number(c.reach) || 0,
                                 impressions: Number(c.impressions) || 0,
@@ -2239,7 +2579,21 @@ export default function AdminMetaPage() {
                               const eff = String(c.effective_status || c.status || '').toUpperCase();
                               const isActiveCampaign = eff === 'ACTIVE';
                               const ownerKey = `${String(c.banca_id)}:${String(c.campaign_id)}`;
-                              const ownerTarget = campaignOwnerDraft[ownerKey] ?? String(c.banca_id);
+                              const sourceBancaId = String(c.banca_id ?? '').trim();
+                              const integrationId = String(c.integration_id ?? '').trim();
+                              const allowedOwnerTargetIds =
+                                (integrationId && ownerTargetBancaIdsByIntegration.get(integrationId)) ||
+                                ownerSafeTargetBancaIdsBySourceBanca.get(sourceBancaId) ||
+                                ownerTargetBancaIdsBySourceBanca.get(sourceBancaId) ||
+                                [];
+                              const ownerOptions =
+                                allowedOwnerTargetIds.length > 0
+                                  ? bancas.filter((b) => allowedOwnerTargetIds.includes(String(b.id)))
+                                  : bancas.filter((b) => String(b.id) === sourceBancaId);
+                              const ownerTargetRaw = campaignOwnerDraft[ownerKey] ?? sourceBancaId;
+                              const ownerTarget = ownerOptions.some((b) => String(b.id) === String(ownerTargetRaw))
+                                ? ownerTargetRaw
+                                : sourceBancaId;
                               /** Não usar só campaign_id / id do CRM: a mesma campanha pode vir de 2 integrações Meta. */
                               const rowKey = [
                                 rowIndex,
@@ -2257,18 +2611,11 @@ export default function AdminMetaPage() {
                               return (
                                 <tr key={rowKey} className={rowClass}>
                                   <td className="px-4 py-2 text-gray-700 dark:text-white">{c.start_time ? formatDate(c.start_time) : '-'}</td>
+                                  <td className="px-4 py-2 text-xs text-gray-700 dark:text-gray-300">
+                                    {Array.isArray(c.gestor_names) && c.gestor_names.length > 0 ? c.gestor_names.join(', ') : '—'}
+                                  </td>
                                   <td className="px-4 py-2 text-xs text-gray-600 dark:text-gray-400">
                                     <p className="font-medium text-gray-900 dark:text-gray-50">{c.banca_name || c.banca_id}</p>
-                                    {c.banca_url ? <p className="text-[11px] text-gray-500 dark:text-gray-500 break-all">{c.banca_url}</p> : null}
-                                  </td>
-                                  <td className="px-4 py-2 text-xs font-mono text-gray-600 dark:text-gray-400 align-top" title={c.integration_id ? String(c.integration_id) : ''}>
-                                    {shortUuid(c.integration_id)}
-                                  </td>
-                                  <td
-                                    className="px-4 py-2 text-xs font-mono text-gray-600 dark:text-gray-400 align-top"
-                                    title={c.ad_account_id ? String(c.ad_account_id) : ''}
-                                  >
-                                    {formatActShort(c.ad_account_id)}
                                   </td>
                                   <td className="px-4 py-3 align-top">
                                     <div className="flex flex-col gap-1.5 max-w-md">
@@ -2286,7 +2633,7 @@ export default function AdminMetaPage() {
                                       </span>
                                     </div>
                                   </td>
-                                  <td className="px-4 py-2 text-xs font-mono text-gray-700 dark:text-gray-300">{c.campaign_id || '-'}</td>
+                                  <td className="px-4 py-2 text-right text-gray-700 dark:text-white tabular-nums">R$ {m.spend.toFixed(2)}</td>
                                   <td className="px-4 py-2 align-top">
                                     {c.banca_id ? (
                                       <select
@@ -2315,15 +2662,11 @@ export default function AdminMetaPage() {
                                   <td className="px-4 py-2 text-right text-gray-700 dark:text-white tabular-nums">{m.clicks.toLocaleString('pt-BR')}</td>
                                   <td className="px-4 py-2 text-right text-gray-700 dark:text-white tabular-nums">{m.leads.toLocaleString('pt-BR')}</td>
                                   <td className="px-4 py-2 text-right text-gray-700 dark:text-white tabular-nums">{m.results.toLocaleString('pt-BR')}</td>
-                                  <td className="px-4 py-2 text-right text-gray-700 dark:text-white tabular-nums">R$ {m.spend.toFixed(2)}</td>
                                   <td className="px-4 py-2 text-right text-gray-700 dark:text-white tabular-nums">{(Number(c.consultor_total_leads) || 0).toLocaleString('pt-BR')}</td>
                                   <td className="px-4 py-2 text-right text-gray-700 dark:text-white tabular-nums">R$ {(Number(c.consultor_total_deposited) || 0).toFixed(2)}</td>
                                   <td className="px-4 py-2 text-gray-700 dark:text-white">{c.effective_status || c.status || '-'}</td>
                                   <td className="px-4 py-2 text-gray-700 dark:text-white">{c.objective || '-'}</td>
                                   <td className="px-4 py-2 text-right text-gray-700 dark:text-white">{c.daily_budget != null ? `R$ ${Number(c.daily_budget).toFixed(2)}` : '-'}</td>
-                                  <td className="px-4 py-2 text-right text-gray-700 dark:text-white">{c.lifetime_budget != null ? `R$ ${Number(c.lifetime_budget).toFixed(2)}` : '-'}</td>
-                                  <td className="px-4 py-2 text-gray-700 dark:text-white">{c.stop_time ? formatDate(c.stop_time) : '-'}</td>
-                                  <td className="px-4 py-2 text-xs text-gray-600 dark:text-white">{c.updated_at ? formatDate(c.updated_at) : '-'}</td>
                                   <td className="px-4 py-2">
                                     {c.banca_id ? (
                                       <div className="flex items-center gap-2">
@@ -2337,7 +2680,7 @@ export default function AdminMetaPage() {
                                           }
                                           className="px-2 py-1 rounded-lg border border-gray-200 dark:border-[#404040] text-xs text-gray-700 dark:text-gray-200 bg-white dark:bg-[#2a2a2a] max-w-[220px]"
                                         >
-                                          {bancas.map((b) => (
+                                          {ownerOptions.map((b) => (
                                             <option key={b.id} value={b.id}>
                                               {b.name || b.url || b.id}
                                             </option>
@@ -2840,6 +3183,11 @@ export default function AdminMetaPage() {
                                 ? [...selectedBancaIds, b.id]
                                 : selectedBancaIds.filter((x) => x !== b.id);
                               setSelectedBancaIds(next);
+                              setSelectedIntegrationContextBancaId((prev) => {
+                                if (e.target.checked) return b.id;
+                                if (prev === b.id) return next[0] || '';
+                                return prev;
+                              });
                               setEditingToken(false);
                               setAccessTokenRevealed(false);
                               setRevealTokenError(null);
@@ -3143,6 +3491,31 @@ export default function AdminMetaPage() {
                     className="w-full px-4 py-2 border border-gray-200 dark:border-[#404040] rounded-xl text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] placeholder:text-gray-500 dark:placeholder:text-gray-500"
                   />
                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Para múltiplas contas, separe por vírgula: <span className="font-mono">act_111, act_222</span></p>
+                  {parseAdAccountIdsField(form.ad_account_id).length > 0 ? (
+                    <div className="mt-2 flex flex-wrap gap-2" aria-label="Contas de anúncio configuradas">
+                      {parseAdAccountIdsField(form.ad_account_id).map((act, idx) => (
+                        <span
+                          key={`${act}-${idx}`}
+                          className="inline-flex items-center gap-1 rounded-lg border border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#333] px-2 py-1 text-xs font-mono text-gray-800 dark:text-gray-100"
+                        >
+                          <span title={act}>{formatActShort(act)}</span>
+                          <button
+                            type="button"
+                            aria-label={`Remover conta ${act}`}
+                            onClick={() =>
+                              setForm((f) => ({
+                                ...f,
+                                ad_account_id: adAccountIdsFieldWithoutIndex(f.ad_account_id, idx),
+                              }))
+                            }
+                            className="rounded p-0.5 text-gray-500 hover:bg-red-100 hover:text-red-700 dark:hover:bg-red-900/40 dark:hover:text-red-300"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">Pixel ID</label>
@@ -3544,6 +3917,31 @@ export default function AdminMetaPage() {
                     className="w-full px-4 py-2 border border-gray-200 dark:border-[#404040] rounded-xl text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] placeholder:text-gray-500 dark:placeholder:text-gray-500"
                   />
                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Para múltiplas contas, separe por vírgula: <span className="font-mono">act_111, act_222</span></p>
+                  {parseAdAccountIdsField(newIntegrationForm.ad_account_id).length > 0 ? (
+                    <div className="mt-2 flex flex-wrap gap-2" aria-label="Contas de anúncio configuradas">
+                      {parseAdAccountIdsField(newIntegrationForm.ad_account_id).map((act, idx) => (
+                        <span
+                          key={`${act}-${idx}`}
+                          className="inline-flex items-center gap-1 rounded-lg border border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#333] px-2 py-1 text-xs font-mono text-gray-800 dark:text-gray-100"
+                        >
+                          <span title={act}>{formatActShort(act)}</span>
+                          <button
+                            type="button"
+                            aria-label={`Remover conta ${act}`}
+                            onClick={() =>
+                              setNewIntegrationForm((f) => ({
+                                ...f,
+                                ad_account_id: adAccountIdsFieldWithoutIndex(f.ad_account_id, idx),
+                              }))
+                            }
+                            className="rounded p-0.5 text-gray-500 hover:bg-red-100 hover:text-red-700 dark:hover:bg-red-900/40 dark:hover:text-red-300"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">Pixel ID</label>
