@@ -1696,7 +1696,26 @@ export type AdminMetaLiveJobProcessContext = {
 };
 
 function computeAdminMetaTotalsFromCampaignRows(rows: AdminMetaLiveCampaignRow[]): AdminMetaLiveAggregateResult['totals'] {
-  return rows.reduce(
+  /**
+   * Deduplica por (integration_id, campaign_id) antes de somar para que campanhas replicadas
+   * em múltiplas bancas vinculadas (modo "Todas as bancas") não inflem os totais.
+   * Linhas sem campaign_id são preservadas individualmente.
+   */
+  const seen = new Set<string>();
+  const uniqueRows: AdminMetaLiveCampaignRow[] = [];
+  for (const row of rows) {
+    const cid = String(row.campaign_id ?? '').trim();
+    if (!cid) {
+      uniqueRows.push(row);
+      continue;
+    }
+    const integrationKey = row.integration_id != null ? String(row.integration_id) : 'legacy';
+    const dedupKey = `${integrationKey}:${cid}`;
+    if (seen.has(dedupKey)) continue;
+    seen.add(dedupKey);
+    uniqueRows.push(row);
+  }
+  return uniqueRows.reduce(
     (acc, row) => {
       acc.campaigns_with_metrics += 1;
       acc.reach += row.reach;
@@ -1925,6 +1944,8 @@ async function processAdminMetaLiveJob(
 
   const normalizedAdAccount = normalizedAdAccountIds.join(', ');
 
+  let replicatedCampaignsForMultiBanca = 0;
+
   for (const c of visible) {
     const cid = String(c.id);
     const m = metricsByCampaign.get(cid) ?? {
@@ -1944,43 +1965,81 @@ async function processAdminMetaLiveJob(
       m.spend > 0;
     if (!hasMetrics) continue;
 
-    let resolvedBancaId = resolveCampaignOwnerBancaId(job, cid, ownerByCampaign);
-    if (!resolvedBancaId && overviewBancaId && job.linkedBancaIds.includes(overviewBancaId)) {
-      resolvedBancaId = overviewBancaId;
+    /**
+     * Resolução do destino da campanha:
+     * 1. Owner explícito em meta_campaigns (vínculo prévio).
+     * 2. Filtro de overview/banca específica selecionado pela UI.
+     * 3. Escopo restrito a 1 banca.
+     * 4. Integração com 1 só banca vinculada.
+     * 5. Modo "Todas as bancas" + integração multi-banca: replica linha em cada banca vinculada
+     *    para que a campanha apareça associada a qualquer uma delas no painel.
+     *    Os totais (gasto/leads/etc.) são deduplicados por campaign_id em
+     *    computeAdminMetaTotalsFromCampaignRows para não serem inflados pela replicação.
+     */
+    let targetBancaIds: string[] = [];
+    const owned = ownerByCampaign.get(cid);
+    if (owned) {
+      targetBancaIds = [owned];
+    } else if (overviewBancaId && job.linkedBancaIds.includes(overviewBancaId)) {
+      targetBancaIds = [overviewBancaId];
+    } else if (scopeBancaIds.length === 1 && job.linkedBancaIds.includes(scopeBancaIds[0])) {
+      targetBancaIds = [scopeBancaIds[0]];
+    } else if (job.linkedBancaIds.length === 1) {
+      targetBancaIds = [job.linkedBancaIds[0]];
+    } else if (scopeBancaIds.length > 0) {
+      targetBancaIds = job.linkedBancaIds.filter((id) => scopeBancaIds.includes(id));
+    } else {
+      targetBancaIds = [...job.linkedBancaIds];
+      if (job.linkedBancaIds.length > 1) replicatedCampaignsForMultiBanca += 1;
     }
-    if (!resolvedBancaId && scopeBancaIds.length === 1 && job.linkedBancaIds.includes(scopeBancaIds[0])) {
-      resolvedBancaId = scopeBancaIds[0];
+
+    targetBancaIds = targetBancaIds.filter((resolvedBancaId) => {
+      if (overviewBancaId && resolvedBancaId !== overviewBancaId) return false;
+      if (scopeBancaIds.length > 0 && !scopeBancaIds.includes(resolvedBancaId)) return false;
+      return true;
+    });
+
+    if (targetBancaIds.length === 0) continue;
+
+    for (const resolvedBancaId of targetBancaIds) {
+      const kindKey = `${resolvedBancaId}:${cid}`;
+      const campaign_kind = kindByBancaCampaign.get(kindKey) ?? 'normal';
+
+      campaignRows.push({
+        banca_id: resolvedBancaId,
+        banca_name: resolvedBancaId,
+        banca_url: null,
+        campaign_id: cid,
+        campaign_kind,
+        name: c.name || cid,
+        objective: c.objective ?? null,
+        status: c.status ?? null,
+        effective_status: c.effective_status ?? null,
+        daily_budget: normalizeBudget(c.daily_budget ?? null),
+        lifetime_budget: normalizeBudget(c.lifetime_budget ?? null),
+        start_time: c.start_time ?? null,
+        stop_time: c.stop_time ?? null,
+        reach: m.reach,
+        impressions: m.impressions,
+        clicks: m.clicks,
+        leads: m.leads,
+        results: m.results,
+        spend: m.spend,
+        integration_id: integrationId,
+        ad_account_id: normalizedAdAccount,
+        insights_source: sourceLabel,
+      });
     }
-    if (!resolvedBancaId) continue;
-    if (overviewBancaId && resolvedBancaId !== overviewBancaId) continue;
-    if (scopeBancaIds.length > 0 && !scopeBancaIds.includes(resolvedBancaId)) continue;
+  }
 
-    const kindKey = `${resolvedBancaId}:${cid}`;
-    const campaign_kind = kindByBancaCampaign.get(kindKey) ?? 'normal';
-
-    campaignRows.push({
-      banca_id: resolvedBancaId,
-      banca_name: resolvedBancaId,
-      banca_url: null,
-      campaign_id: cid,
-      campaign_kind,
-      name: c.name || cid,
-      objective: c.objective ?? null,
-      status: c.status ?? null,
-      effective_status: c.effective_status ?? null,
-      daily_budget: normalizeBudget(c.daily_budget ?? null),
-      lifetime_budget: normalizeBudget(c.lifetime_budget ?? null),
-      start_time: c.start_time ?? null,
-      stop_time: c.stop_time ?? null,
-      reach: m.reach,
-      impressions: m.impressions,
-      clicks: m.clicks,
-      leads: m.leads,
-      results: m.results,
-      spend: m.spend,
+  if (replicatedCampaignsForMultiBanca > 0) {
+    logMetaReturn('processAdminMetaLiveJob ← replicação por banca (modo Todas as bancas)', {
       integration_id: integrationId,
-      ad_account_id: normalizedAdAccount,
-      insights_source: sourceLabel,
+      representative_banca_id: rep,
+      linked_bancas: job.linkedBancaIds.length,
+      replicated_campaigns: replicatedCampaignsForMultiBanca,
+      observacao:
+        'Campanhas sem owner pré-definido em meta_campaigns são replicadas em cada banca vinculada para evitar perdas no painel "Todas as bancas". Totais e cards são deduplicados por campaign_id.',
     });
   }
 

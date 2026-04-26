@@ -1997,6 +1997,54 @@ export default function AdminMetaPage() {
       ].join(':');
       dedup.set(k, row);
     }
+
+    /**
+     * Inclui linhas do cache (campaigns-all/DB) que ainda não chegaram no live durante o streaming.
+     * Evita o "pisca-pisca" ao trocar do cache para o live: as campanhas existentes no DB ficam visíveis
+     * até o respectivo batch da Meta chegar, momento em que a linha live sobrescreve a do cache (mesma
+     * chave banca_id+campaign_id). Após o evento `complete` o live ficou canônico para tudo que veio dele
+     * e o cache só preenche o que não estiver no resultado final (ex.: campanhas com métricas históricas
+     * que não retornaram da Meta neste período).
+     */
+    const liveCampaignKeys = new Set<string>();
+    for (const row of merged) {
+      liveCampaignKeys.add(`${String(row.banca_id ?? '')}:${String(row.campaign_id ?? '')}`);
+    }
+    for (const cacheRow of cachedMetricRowsForCrmScope) {
+      const cacheKey = `${String(cacheRow.banca_id ?? '')}:${String(cacheRow.campaign_id ?? '')}`;
+      if (liveCampaignKeys.has(cacheKey)) continue;
+      const integrationKey =
+        cacheRow.integration_id != null ? String(cacheRow.integration_id) : '';
+      const adAccountKey =
+        cacheRow.ad_account_id != null ? String(cacheRow.ad_account_id) : '';
+      const dedupKey = [
+        String(cacheRow.banca_id ?? ''),
+        String(cacheRow.campaign_id ?? ''),
+        integrationKey,
+        adAccountKey,
+      ].join(':');
+      if (dedup.has(dedupKey)) continue;
+      const bancaIdStr = String(cacheRow.banca_id ?? '');
+      const cacheGestorNames = Array.isArray((cacheRow as { gestor_names?: unknown }).gestor_names)
+        ? ((cacheRow as { gestor_names: unknown[] }).gestor_names ?? [])
+            .map((x) => String(x ?? '').trim())
+            .filter((s) => s.length > 0)
+        : [];
+      const fromBancaCache = bancaGestorNamesFromCampaignsCache.get(bancaIdStr) ?? [];
+      const gestorMerged: string[] = [];
+      const seenG = new Set<string>();
+      for (const n of [...cacheGestorNames, ...fromBancaCache]) {
+        if (!n || seenG.has(n)) continue;
+        seenG.add(n);
+        gestorMerged.push(n);
+      }
+      dedup.set(dedupKey, {
+        ...cacheRow,
+        gestor_names: gestorMerged,
+        results_live: 0,
+      });
+    }
+
     let out = Array.from(dedup.values());
     if (!scopedMetaBancaFilter) {
       out = dedupeMetaCampaignRowsByGlobalCampaignId(out);
