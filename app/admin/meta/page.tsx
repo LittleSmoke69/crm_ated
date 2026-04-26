@@ -1840,62 +1840,6 @@ export default function AdminMetaPage() {
     );
   }, [metricSyncedCampaignRows]);
 
-  const metaSummaryCards = useMemo(() => {
-    // Prioridade 1: Live aggregate (Meta Graph em tempo real)
-    if (usingLiveMetaCards && liveAggregate?.totals) {
-      const t = liveAggregate.totals;
-      return {
-        spendAll: Number(t.spend) || 0,
-        spendBolao: Number(t.spend_bolao) || 0,
-        resultsNormal: Number(t.results_normal) || 0,
-        resultsBolao: Number(t.results_bolao) || 0,
-        resultsSub:
-          'Resultados = soma das ações Meta (lead, compra, cadastro completo, etc.) no período, por tipo da campanha no CRM.',
-      };
-    }
-    if (scopedMetaBancaFilter) {
-      return {
-        spendAll: 0,
-        spendBolao: 0,
-        resultsNormal: 0,
-        resultsBolao: 0,
-        resultsSub: liveAggregateError
-          ? String(liveAggregateError)
-          : 'Carregando métricas em tempo real da Meta para a banca selecionada…',
-      };
-    }
-    // Prioridade 2: Overview totals (quando filtrar por banca única ou todas as bancas via overview endpoint)
-    if (overviewApiTotals) {
-      const normal = overviewKindSummary.normal;
-      const bolao = overviewKindSummary.bolao;
-      return {
-        spendAll: overviewApiTotals.total_spend || 0,
-        spendBolao: bolao.spend || 0,
-        resultsNormal: normal.insights_rows > 0 ? normal.leads || 0 : 0,
-        resultsBolao: bolao.insights_rows > 0 ? bolao.leads || 0 : 0,
-        resultsSub:
-          'Dados do período selecionado, sincronizados com a Meta via Graph API.',
-      };
-    }
-    // Fallback: Cache local (campanhas sincronizadas)
-    return {
-      spendAll: cacheKindSummary.spendAll,
-      spendBolao: cacheKindSummary.spendBolao,
-      resultsNormal: cacheKindSummary.resultsNormal,
-      resultsBolao: cacheKindSummary.resultsBolao,
-      resultsSub:
-        'Valores por tipo usam dados salvos no sistema até a próxima atualização bem-sucedida.',
-    };
-  }, [
-    usingLiveMetaCards,
-    liveAggregate,
-    liveAggregateError,
-    scopedMetaBancaFilter,
-    overviewApiTotals,
-    overviewKindSummary,
-    cacheKindSummary,
-  ]);
-
   /** Enquanto busca na Meta ou, sem live, enquanto monta o cache da lista de campanhas. */
   const metaSummaryCardsLoading =
     (loadingLiveAggregate && !liveAggregate) ||
@@ -2057,6 +2001,91 @@ export default function AdminMetaPage() {
     cachedMetricRowsForCrmScope,
     scopedMetaBancaFilter,
     bancaGestorNamesFromCampaignsCache,
+  ]);
+
+  /**
+   * Totais derivados das linhas REALMENTE exibidas em `displayMetricCampaignRows`.
+   * Garante que «Gasto total · campanhas ativas» (e cards de bolão/normal) bata com a soma da tabela,
+   * inclusive enquanto o stream da Meta ainda está em andamento e a tabela contém linhas vindas do cache
+   * que não chegaram em `liveAggregate.totals`.
+   */
+  const displayMetricSummary = useMemo(() => {
+    const rows = Array.isArray(displayMetricCampaignRows) ? displayMetricCampaignRows : [];
+    return rows.reduce(
+      (acc: { spendAll: number; spendBolao: number; resultsNormal: number; resultsBolao: number }, row: any) => {
+        const spend = Number(row?.spend) || 0;
+        const liveResults = Number(row?.results_live) || 0;
+        const cachedLeads = Number(row?.leads) || 0;
+        const results = liveResults > 0 ? liveResults : cachedLeads;
+        const kind = row?.campaign_kind === 'bolao' ? 'bolao' : 'normal';
+        acc.spendAll += spend;
+        if (kind === 'bolao') {
+          acc.spendBolao += spend;
+          acc.resultsBolao += results;
+        } else {
+          acc.resultsNormal += results;
+        }
+        return acc;
+      },
+      { spendAll: 0, spendBolao: 0, resultsNormal: 0, resultsBolao: 0 }
+    );
+  }, [displayMetricCampaignRows]);
+
+  /**
+   * Cards de resumo Meta. Quando há dados ao vivo, totais derivam diretamente da tabela
+   * (`displayMetricSummary`) para garantir consistência visual entre card e tabela.
+   */
+  const metaSummaryCards = useMemo(() => {
+    if (usingLiveMetaCards && liveAggregate?.totals) {
+      return {
+        spendAll: displayMetricSummary.spendAll,
+        spendBolao: displayMetricSummary.spendBolao,
+        resultsNormal: displayMetricSummary.resultsNormal,
+        resultsBolao: displayMetricSummary.resultsBolao,
+        resultsSub:
+          'Resultados = soma das ações Meta (lead, compra, cadastro completo, etc.) no período, por tipo da campanha no CRM.',
+      };
+    }
+    if (scopedMetaBancaFilter) {
+      return {
+        spendAll: 0,
+        spendBolao: 0,
+        resultsNormal: 0,
+        resultsBolao: 0,
+        resultsSub: liveAggregateError
+          ? String(liveAggregateError)
+          : 'Carregando métricas em tempo real da Meta para a banca selecionada…',
+      };
+    }
+    if (overviewApiTotals) {
+      const normal = overviewKindSummary.normal;
+      const bolao = overviewKindSummary.bolao;
+      return {
+        spendAll: overviewApiTotals.total_spend || 0,
+        spendBolao: bolao.spend || 0,
+        resultsNormal: normal.insights_rows > 0 ? normal.leads || 0 : 0,
+        resultsBolao: bolao.insights_rows > 0 ? bolao.leads || 0 : 0,
+        resultsSub:
+          'Dados do período selecionado, sincronizados com a Meta via Graph API.',
+      };
+    }
+    return {
+      spendAll: cacheKindSummary.spendAll,
+      spendBolao: cacheKindSummary.spendBolao,
+      resultsNormal: cacheKindSummary.resultsNormal,
+      resultsBolao: cacheKindSummary.resultsBolao,
+      resultsSub:
+        'Valores por tipo usam dados salvos no sistema até a próxima atualização bem-sucedida.',
+    };
+  }, [
+    usingLiveMetaCards,
+    liveAggregate,
+    liveAggregateError,
+    scopedMetaBancaFilter,
+    overviewApiTotals,
+    overviewKindSummary,
+    cacheKindSummary,
+    displayMetricSummary,
   ]);
 
   /** Ordenação estável para leitura humana: agrupa por banca e ordena por data dentro da banca. */
