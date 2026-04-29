@@ -254,12 +254,13 @@ export default function RedirectClicksDashboard({
 
   const groupBarData = useMemo(() => {
     const list = data?.current?.by_group ?? [];
-    return list.slice(0, 12).map((g) => ({
+    return list.map((g) => ({
       nome: g.name.length > 22 ? `${g.name.slice(0, 20)}…` : g.name,
       fullName: g.name,
       cliques: g.count,
     }));
   }, [data]);
+  const groupChartHeight = Math.max(288, groupBarData.length * 34);
 
   if (!projectId) return null;
 
@@ -466,8 +467,8 @@ export default function RedirectClicksDashboard({
 
             {groupBarData.length > 0 && (
               <div>
-                <h3 className="text-sm font-semibold text-gray-800 dark:text-white mb-2">Por grupo (top 12)</h3>
-                <div className="h-72 w-full min-w-0">
+                <h3 className="text-sm font-semibold text-gray-800 dark:text-white mb-2">Por grupo</h3>
+                <div className="w-full min-w-0" style={{ height: groupChartHeight }}>
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={groupBarData} layout="vertical" margin={{ top: 8, right: 8, left: 8, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" className="stroke-gray-200 dark:stroke-gray-600" />

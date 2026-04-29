@@ -60,11 +60,11 @@ export async function PATCH(
       .single();
 
     if (error && isMissingConsultantColumnError(error) && payload.consultant_user_id !== undefined) {
-      console.warn('[admin/redirect/groups PATCH] coluna consultant_user_id ausente — atualizando sem ela.');
-      const { consultant_user_id: _drop, ...rest } = payload;
-      const retry = await supabaseServiceRole.from('redirect_groups').update(rest).eq('id', id).select().single();
-      data = retry.data;
-      error = retry.error;
+      console.error('[admin/redirect/groups PATCH] Migração add_redirect_group_consultant.sql pendente.');
+      return errorResponse(
+        'Migração pendente: aplique migrations/add_redirect_group_consultant.sql para vincular consultores aos grupos.',
+        500
+      );
     }
 
     if (error) {

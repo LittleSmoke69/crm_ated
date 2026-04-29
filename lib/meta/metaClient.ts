@@ -98,6 +98,40 @@ export interface MetaAccountFinance {
   timezone_name?: string;
 }
 
+/**
+ * Atividade de Ad Account (edge `/activities`).
+ *
+ * O endpoint legado `/transactions` foi descontinuado. A própria Meta indica usar
+ * `/activities` filtrando por `event_type=ad_account_billing_charge` para listar
+ * cobranças efetivas no método de pagamento (ex.: cartão).
+ *
+ * `extra_data` vem como string JSON (ex.: `{"new_value":"123.45","currency":"BRL"}`).
+ */
+export interface MetaAdAccountActivity {
+  event_type?: string;
+  event_time?: string;
+  extra_data?: string;
+  translated_event_type?: string;
+  object_id?: string;
+  object_name?: string;
+  application_name?: string;
+  actor_name?: string;
+  date_time_in_timezone?: string;
+}
+
+/**
+ * Cobrança individual processada (pós-parse de `extra_data` para `event_type=ad_account_billing_charge`).
+ */
+export interface MetaBillingChargeEntry {
+  event_time: string | null;
+  date_time_in_timezone: string | null;
+  amount: number | null;
+  amount_raw: string | null;
+  currency: string | null;
+  transaction_id: string | null;
+  raw_extra_data: Record<string, unknown> | null;
+}
+
 export interface MetaPaging {
   cursors?: { before?: string; after?: string };
   next?: string;
@@ -334,6 +368,147 @@ export async function getAccountFinance(
   const cleanId = adAccountId.startsWith('act_') ? adAccountId : `act_${adAccountId}`;
   const url = `${baseUrl.replace(/\/+$/, '')}/${cleanId}?fields=amount_spent,balance,spend_cap,currency,timezone_name`;
   return getJson<MetaAccountFinance>(url, token);
+}
+
+function parseExtraDataAsRecord(extra: unknown): Record<string, unknown> | null {
+  if (extra == null) return null;
+  if (typeof extra === 'object' && !Array.isArray(extra)) return extra as Record<string, unknown>;
+  if (typeof extra !== 'string' || !extra.trim()) return null;
+  try {
+    const parsed = JSON.parse(extra);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function pickFirstString(obj: Record<string, unknown>, keys: string[]): string | null {
+  for (const k of keys) {
+    const v = obj[k];
+    if (v != null && String(v).trim() !== '') return String(v);
+  }
+  return null;
+}
+
+/** Mapeia um activity de billing charge para uma entrada normalizada (sem normalizar moeda). */
+export function mapBillingChargeActivity(
+  activity: MetaAdAccountActivity
+): MetaBillingChargeEntry | null {
+  if (!activity || activity.event_type !== 'ad_account_billing_charge') return null;
+  const extra = parseExtraDataAsRecord(activity.extra_data);
+  const amountRaw = extra ? pickFirstString(extra, ['new_value', 'amount', 'value', 'charge_amount']) : null;
+  const currency = extra ? pickFirstString(extra, ['currency', 'currency_code']) : null;
+  const transactionId = extra
+    ? pickFirstString(extra, ['transaction_id', 'invoice_id', 'reference_id'])
+    : null;
+  const amountParsed = amountRaw != null ? parseFloat(amountRaw) : NaN;
+  return {
+    event_time: activity.event_time ?? null,
+    date_time_in_timezone: activity.date_time_in_timezone ?? null,
+    amount: Number.isFinite(amountParsed) ? amountParsed : null,
+    amount_raw: amountRaw,
+    currency,
+    transaction_id: transactionId,
+    raw_extra_data: extra,
+  };
+}
+
+/**
+ * Converte YYYY-MM-DD para Unix timestamp (segundos) considerando UTC.
+ * Para `since` usa início do dia (00:00:00) e para `until` usa fim do dia (23:59:59).
+ * Aceita também `unix` numérico já em segundos (passa direto).
+ */
+function toActivitiesUnixTimestamp(value: string | undefined, kind: 'since' | 'until'): string | null {
+  if (value == null) return null;
+  const trimmed = String(value).trim();
+  if (!trimmed) return null;
+  if (/^\d+$/.test(trimmed)) return trimmed;
+  const ymdMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (ymdMatch) {
+    const [, y, m, d] = ymdMatch;
+    const utc = Date.UTC(Number(y), Number(m) - 1, Number(d));
+    if (Number.isNaN(utc)) return null;
+    const ts = kind === 'since' ? Math.floor(utc / 1000) : Math.floor(utc / 1000) + 86399;
+    return String(ts);
+  }
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return String(Math.floor(parsed.getTime() / 1000));
+}
+
+/**
+ * Retorna cobranças efetivas no método de pagamento (cartão) para uma conta de anúncio,
+ * a partir do `/activities` filtrando por `event_type=ad_account_billing_charge` no cliente.
+ *
+ * Notas Meta:
+ * - O endpoint NÃO aceita `category` como filtro confiável; o tipo deve ser filtrado client-side.
+ * - `since`/`until` aceitam Unix timestamp (segundos) — convertemos YYYY-MM-DD aqui.
+ * - Por padrão a Meta retorna 1 semana se não houver `since`/`until`.
+ */
+export async function getAdAccountBillingCharges(
+  baseUrl: string,
+  token: string,
+  adAccountId: string,
+  since?: string,
+  until?: string,
+  options?: { limit?: number; maxPages?: number }
+): Promise<MetaBillingChargeEntry[]> {
+  const cleanId = adAccountId.startsWith('act_') ? adAccountId : `act_${adAccountId}`;
+  const limit = Math.max(1, Math.min(500, options?.limit ?? 200));
+  const maxPages = Math.max(1, Math.min(20, options?.maxPages ?? 5));
+  const fields =
+    'event_type,event_time,extra_data,translated_event_type,object_id,object_name,application_name,actor_name,date_time_in_timezone';
+
+  const sinceUnix = toActivitiesUnixTimestamp(since, 'since');
+  const untilUnix = toActivitiesUnixTimestamp(until, 'until');
+
+  const params = new URLSearchParams();
+  params.set('fields', fields);
+  params.set('limit', String(limit));
+  if (sinceUnix) params.set('since', sinceUnix);
+  if (untilUnix) params.set('until', untilUnix);
+
+  const url = `${baseUrl.replace(/\/+$/, '')}/${cleanId}/activities?${params.toString()}`;
+
+  const charges: MetaBillingChargeEntry[] = [];
+  const eventTypeCounts: Record<string, number> = {};
+  let totalActivities = 0;
+  let pageUrl: string | null = url;
+  let pageCount = 0;
+
+  while (pageUrl && pageCount < maxPages) {
+    const data: { data?: MetaAdAccountActivity[]; paging?: MetaPaging } =
+      pageCount === 0
+        ? await getJson<{ data?: MetaAdAccountActivity[]; paging?: MetaPaging }>(pageUrl, token)
+        : await metaGraphGetJson<{ data?: MetaAdAccountActivity[]; paging?: MetaPaging }>(pageUrl);
+    const items = data?.data ?? [];
+    totalActivities += items.length;
+    for (const item of items) {
+      const t = String(item?.event_type ?? '').trim();
+      if (t) eventTypeCounts[t] = (eventTypeCounts[t] ?? 0) + 1;
+      const entry = mapBillingChargeActivity(item);
+      if (entry) charges.push(entry);
+    }
+    pageUrl = data?.paging?.next ?? null;
+    pageCount += 1;
+  }
+
+  console.log('[Meta Graph] getAdAccountBillingCharges', {
+    ad_account_id: cleanId,
+    since_input: since ?? null,
+    until_input: until ?? null,
+    since_unix: sinceUnix,
+    until_unix: untilUnix,
+    pages: pageCount,
+    activities_total: totalActivities,
+    event_type_counts: eventTypeCounts,
+    billing_charges: charges.length,
+    sample: charges[0] ?? null,
+  });
+
+  return charges;
 }
 
 /** Converte MetaInsight para formato persistível */

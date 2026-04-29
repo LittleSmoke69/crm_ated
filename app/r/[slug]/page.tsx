@@ -114,6 +114,7 @@ export default async function RedirectPage({ params, searchParams }: PageProps) 
   const utm_campaign = sp(query.utm_campaign);
   const utm_content = sp(query.utm_content);
   const utm_term = sp(query.utm_term);
+  const fbclid = sp(query.fbclid);
 
   const redirectRow = await resolveRedirectRow(slug);
   if (!redirectRow) notFound();
@@ -170,8 +171,8 @@ export default async function RedirectPage({ params, searchParams }: PageProps) 
   // Tracking gravado após a resposta 302 (não bloqueia o redirect)
   if (timerSeconds === 0) {
     after(async () => {
-      let clickUtmCampaign: string | null = null;
-      let clickFbclid: string | null = null;
+      let clickUtmCampaign: string | null = utm_campaign;
+      let clickFbclid: string | null = fbclid;
       if (sid) {
         const { data: sess } = await supabaseServiceRole
           .from('vsl_sessions')
@@ -179,8 +180,8 @@ export default async function RedirectPage({ params, searchParams }: PageProps) 
           .eq('id', sid)
           .single();
         if (sess) {
-          clickUtmCampaign = sess.utm_campaign ?? null;
-          clickFbclid = sess.fbclid ?? null;
+          clickUtmCampaign = sess.utm_campaign ?? clickUtmCampaign;
+          clickFbclid = sess.fbclid ?? clickFbclid;
         }
       }
 
@@ -227,8 +228,8 @@ export default async function RedirectPage({ params, searchParams }: PageProps) 
 
   // ── MODO TEMPORIZADO ─────────────────────────────────────────────────────────
   // Tracking síncrono para obter click_id e visit_id que o client usa
-  let clickUtmCampaign: string | null = null;
-  let clickFbclid: string | null = null;
+  let clickUtmCampaign: string | null = utm_campaign;
+  let clickFbclid: string | null = fbclid;
   if (sid) {
     const { data: sess } = await supabaseServiceRole
       .from('vsl_sessions')
@@ -236,8 +237,8 @@ export default async function RedirectPage({ params, searchParams }: PageProps) 
       .eq('id', sid)
       .single();
     if (sess) {
-      clickUtmCampaign = sess.utm_campaign ?? null;
-      clickFbclid = sess.fbclid ?? null;
+      clickUtmCampaign = sess.utm_campaign ?? clickUtmCampaign;
+      clickFbclid = sess.fbclid ?? clickFbclid;
     }
   }
 

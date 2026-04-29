@@ -1,16 +1,14 @@
 'use client';
 
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { Loader2, Plus, Copy, Pencil, Trash2, Percent, Scale, Settings, ExternalLink, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Loader2, Plus, Copy, Pencil, Trash2, Percent, Scale, Settings, ExternalLink, X } from 'lucide-react';
 import RedirectClicksDashboard from '@/components/Redirect/RedirectClicksDashboard';
 import ConsultantSearchPicker from '@/components/Redirect/ConsultantSearchPicker';
 
 const CONSULTANT_FETCH_MS = 28000;
-/** Itens por página na tabela Grupos cadastrados */
-const GROUPS_PAGE_SIZE = 5;
 
 function whatsappInviteHref(raw: string): string | null {
   const t = raw.trim();
@@ -18,6 +16,10 @@ function whatsappInviteHref(raw: string): string | null {
   if (/^https?:\/\//i.test(t)) return t;
   if (t.startsWith('chat.whatsapp.com') || t.startsWith('wa.me/')) return `https://${t}`;
   return null;
+}
+
+function formatBRL(value: number): string {
+  return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(value) || 0);
 }
 
 interface ConsultantOption {
@@ -63,6 +65,33 @@ interface UtmSummary {
   sample_size: number;
 }
 
+interface ProjectProfileRef {
+  id: string;
+  full_name: string | null;
+  email: string | null;
+  status: string | null;
+}
+
+interface ProjectBancaRef {
+  id: string;
+  name: string | null;
+  url: string | null;
+}
+
+interface MetaRedirectSummary {
+  migration_pending: boolean;
+  period: { since: string; until: string };
+  campaigns_count: number;
+  spend: number;
+  billing: {
+    total_card_charges?: number;
+    total_balance_due?: number;
+    card_charges_count?: number;
+    accounts_count?: number;
+  } | null;
+  error?: string;
+}
+
 export default function AdminRedirectPage() {
   const params = useParams();
   const projectSlug = params?.projectSlug as string;
@@ -102,22 +131,15 @@ export default function AdminRedirectPage() {
   const [utmSummary, setUtmSummary] = useState<UtmSummary>({ total: 0, by_source: {}, by_medium: {}, by_campaign: {}, by_source_medium: {}, by_day: {}, sample_size: 0 });
   const [loadError, setLoadError] = useState<string | null>(null);
   const [projectName, setProjectName] = useState('');
+  const [projectOwner, setProjectOwner] = useState<ProjectProfileRef | null>(null);
+  const [projectBanca, setProjectBanca] = useState<ProjectBancaRef | null>(null);
+  const [projectBancaGestores, setProjectBancaGestores] = useState<ProjectProfileRef[]>([]);
+  const [metaRedirectSummary, setMetaRedirectSummary] = useState<MetaRedirectSummary | null>(null);
   const [modalProjectEdit, setModalProjectEdit] = useState(false);
   const [projectEditForm, setProjectEditForm] = useState({ name: '', slug: '' });
   const [savingProjectEdit, setSavingProjectEdit] = useState(false);
   const [deletingProject, setDeletingProject] = useState(false);
-  const [groupsPage, setGroupsPage] = useState(1);
   const consultantFetchAbortRef = useRef<AbortController | null>(null);
-
-  const groupsTotalPages = Math.max(1, Math.ceil(groups.length / GROUPS_PAGE_SIZE));
-  const paginatedGroups = useMemo(() => {
-    const start = (groupsPage - 1) * GROUPS_PAGE_SIZE;
-    return groups.slice(start, start + GROUPS_PAGE_SIZE);
-  }, [groups, groupsPage]);
-
-  useEffect(() => {
-    setGroupsPage((p) => Math.min(p, groupsTotalPages));
-  }, [groupsTotalPages]);
 
   useEffect(() => {
     if (!userId) return;
@@ -153,6 +175,10 @@ export default function AdminRedirectPage() {
         setActiveGroups(json.data.active_groups ?? 0);
         if (json.data.project_id) setProjectId(json.data.project_id);
         setProjectName(typeof json.data.project_name === 'string' ? json.data.project_name : '');
+        setProjectOwner(json.data.project_owner ?? null);
+        setProjectBanca(json.data.project_banca ?? null);
+        setProjectBancaGestores(Array.isArray(json.data.project_banca_gestores) ? json.data.project_banca_gestores : []);
+        setMetaRedirectSummary(json.data.meta_redirect_summary ?? null);
         setPixelId(json.data.pixel_id ?? '');
         setRedirectTimerSeconds(json.data.redirect_timer_seconds ?? 3);
         setUtmVisits(json.data.utm_visits ?? []);
@@ -675,6 +701,72 @@ export default function AdminRedirectPage() {
                 <span className="mx-2 text-gray-300 dark:text-[#555]">·</span>
                 <span>{totalClicks.toLocaleString('pt-BR')} clique{totalClicks !== 1 ? 's' : ''}</span>
               </p>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2 pt-2">
+                <div className={`rounded-xl border px-3 py-2 ${projectBanca ? 'border-[#8CD955]/30 bg-[#8CD955]/10 dark:bg-[#8CD955]/10' : 'border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30'}`}>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500 dark:text-[#aaa]">Banca do gasto Ads</p>
+                  <p className="text-sm font-semibold text-gray-900 dark:text-white truncate" title={projectBanca?.url ?? ''}>
+                    {projectBanca ? (projectBanca.name || projectBanca.url || projectBanca.id) : 'Sem banca vinculada'}
+                  </p>
+                  <p className="text-[11px] text-gray-500 dark:text-[#888] mt-0.5">
+                    {projectBanca ? 'Chave para ads + redirect + consultor' : 'Vincule uma banca para atribuir spend'}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#333]/60 px-3 py-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500 dark:text-[#aaa]">Criado por / responsável</p>
+                  <p className="text-sm font-semibold text-gray-900 dark:text-white truncate" title={projectOwner?.email ?? ''}>
+                    {projectOwner ? (projectOwner.full_name || projectOwner.email || projectOwner.id) : 'Não identificado'}
+                  </p>
+                  <p className="text-[11px] text-gray-500 dark:text-[#888] mt-0.5">
+                    {projectOwner?.status ? `Perfil: ${projectOwner.status}` : 'Origem do redirect'}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#333]/60 px-3 py-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500 dark:text-[#aaa]">Gestores usando a banca</p>
+                  <p className="text-sm font-semibold text-gray-900 dark:text-white truncate" title={projectBancaGestores.map((g) => g.full_name || g.email || g.id).join(', ')}>
+                    {projectBancaGestores.length > 0
+                      ? projectBancaGestores.slice(0, 2).map((g) => g.full_name || g.email || g.id).join(', ')
+                      : 'Nenhum gestor listado'}
+                  </p>
+                  <p className="text-[11px] text-gray-500 dark:text-[#888] mt-0.5">
+                    {projectBancaGestores.length > 2 ? `+${projectBancaGestores.length - 2} vinculados` : 'Via user_bancas'}
+                  </p>
+                </div>
+              </div>
+              {metaRedirectSummary && (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2 pt-2">
+                  <div className="rounded-xl border border-blue-200 dark:border-blue-900 bg-blue-50/70 dark:bg-blue-950/30 px-3 py-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-300">Campanhas Meta vinculadas</p>
+                    <p className="text-sm font-semibold text-gray-900 dark:text-white">
+                      {metaRedirectSummary.campaigns_count.toLocaleString('pt-BR')}
+                    </p>
+                    <p className="text-[11px] text-gray-500 dark:text-[#888] mt-0.5">
+                      Vínculo manual na coluna Redirect do Meta Ads
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-emerald-200 dark:border-emerald-900 bg-emerald-50/70 dark:bg-emerald-950/30 px-3 py-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Spend atribuído</p>
+                    <p className="text-sm font-semibold text-gray-900 dark:text-white">
+                      {formatBRL(metaRedirectSummary.spend)}
+                    </p>
+                    <p className="text-[11px] text-gray-500 dark:text-[#888] mt-0.5">
+                      {metaRedirectSummary.period.since} até {metaRedirectSummary.period.until}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-amber-200 dark:border-amber-900 bg-amber-50/70 dark:bg-amber-950/30 px-3 py-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300">Billing da banca</p>
+                    <p className="text-sm font-semibold text-gray-900 dark:text-white">
+                      {metaRedirectSummary.billing
+                        ? `${formatBRL(Number(metaRedirectSummary.billing.total_card_charges) || 0)} cobrado`
+                        : metaRedirectSummary.migration_pending
+                          ? 'Migration pendente'
+                          : 'Indisponível'}
+                    </p>
+                    <p className="text-[11px] text-gray-500 dark:text-[#888] mt-0.5">
+                      Balance: {formatBRL(Number(metaRedirectSummary.billing?.total_balance_due) || 0)}
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
             <div className="flex flex-wrap items-center gap-2 shrink-0">
               <button
@@ -684,6 +776,13 @@ export default function AdminRedirectPage() {
               >
                 <Copy className="w-4 h-4 text-[#8CD955]" />
                 {copyDone ? 'Copiado!' : 'Copiar link'}
+              </button>
+              <button
+                type="button"
+                onClick={() => document.getElementById('grupos-cadastrados')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-xl border border-[#8CD955]/60 bg-[#8CD955]/10 text-[#5f9f34] dark:text-[#8CD955] hover:bg-[#8CD955]/20 transition"
+              >
+                Ver grupos cadastrados
               </button>
               <button
                 type="button"
@@ -699,6 +798,8 @@ export default function AdminRedirectPage() {
               </button>
             </div>
           </div>
+
+          <RedirectClicksDashboard projectId={projectId} userId={userId} redirectSlug={redirectSlug} />
 
           {/* Coluna esquerda: métricas e configurações */}
           <div className="lg:col-span-1 space-y-4">
@@ -784,15 +885,12 @@ export default function AdminRedirectPage() {
           </div>
 
           {/* Coluna direita: tabela de grupos (2/3 da largura) */}
-          <section className="lg:col-span-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-sm overflow-hidden flex flex-col min-h-[280px]">
+          <section id="grupos-cadastrados" className="lg:col-span-2 scroll-mt-6 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-sm overflow-hidden flex flex-col min-h-[280px]">
             <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-gray-100 dark:border-[#404040] shrink-0">
               <div>
                 <h2 className="font-semibold text-gray-800 dark:text-white">Grupos cadastrados</h2>
                 <p className="text-xs text-gray-500 dark:text-[#888] mt-0.5">
-                  Nome, convite WhatsApp, pesos e cliques
-                  {groups.length > GROUPS_PAGE_SIZE ? (
-                    <span className="text-gray-400 dark:text-[#666]"> · {GROUPS_PAGE_SIZE} por página</span>
-                  ) : null}
+                  Nome, convite WhatsApp, pesos e cliques · lista única com {groups.length} grupo{groups.length !== 1 ? 's' : ''}
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -821,7 +919,7 @@ export default function AdminRedirectPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {paginatedGroups.map((g) => (
+                  {groups.map((g) => (
                     <tr key={g.id} className="border-t border-gray-100 dark:border-[#404040] hover:bg-gray-50/50 dark:hover:bg-[#333]/50">
                       <td className="p-3 align-top">
                         <div className="flex flex-col gap-1.5 max-w-[min(100vw-8rem,280px)] sm:max-w-[320px]">
@@ -903,48 +1001,8 @@ export default function AdminRedirectPage() {
               {groups.length === 0 && (
                 <p className="py-6 px-4 text-gray-600 dark:text-[#aaa] text-sm text-center">Nenhum grupo. Adicione um ao lado.</p>
               )}
-              {groups.length > GROUPS_PAGE_SIZE && (
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3 border-t border-gray-100 dark:border-[#404040] bg-gray-50/80 dark:bg-[#333]/50 shrink-0">
-                  <p className="text-xs text-gray-600 dark:text-[#aaa] tabular-nums">
-                    Mostrando{' '}
-                    <span className="font-medium text-gray-800 dark:text-white">
-                      {(groupsPage - 1) * GROUPS_PAGE_SIZE + 1}
-                      –
-                      {Math.min(groupsPage * GROUPS_PAGE_SIZE, groups.length)}
-                    </span>{' '}
-                    de {groups.length}
-                  </p>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setGroupsPage((p) => Math.max(1, p - 1))}
-                      disabled={groupsPage <= 1}
-                      className="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-lg border border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] text-gray-800 dark:text-white hover:bg-gray-100 dark:hover:bg-[#404040] disabled:opacity-40 disabled:cursor-not-allowed transition"
-                      aria-label="Página anterior"
-                    >
-                      <ChevronLeft className="w-4 h-4" />
-                      Anterior
-                    </button>
-                    <span className="text-xs text-gray-600 dark:text-[#aaa] px-2 tabular-nums">
-                      Página {groupsPage} / {groupsTotalPages}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setGroupsPage((p) => Math.min(groupsTotalPages, p + 1))}
-                      disabled={groupsPage >= groupsTotalPages}
-                      className="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-lg border border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] text-gray-800 dark:text-white hover:bg-gray-100 dark:hover:bg-[#404040] disabled:opacity-40 disabled:cursor-not-allowed transition"
-                      aria-label="Próxima página"
-                    >
-                      Próxima
-                      <ChevronRight className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              )}
             </div>
           </section>
-
-          <RedirectClicksDashboard projectId={projectId} userId={userId} redirectSlug={redirectSlug} />
 
           {/* Dashboard Resumo UTM */}
           <section className="lg:col-span-3 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-sm overflow-hidden">

@@ -117,7 +117,7 @@ export async function GET(req: NextRequest) {
     let q = supabaseServiceRole
       .from('meta_campaigns')
       .select(
-        'banca_id,campaign_id,name,objective,status,effective_status,daily_budget,lifetime_budget,start_time,stop_time,updated_at,campaign_kind',
+        'banca_id,campaign_id,name,objective,status,effective_status,daily_budget,lifetime_budget,start_time,stop_time,updated_at,campaign_kind,redirect_project_id',
         { count: 'exact' }
       )
       .order('updated_at', { ascending: false });
@@ -136,7 +136,16 @@ export async function GET(req: NextRequest) {
     }
 
     const { data: campaigns, error, count } = await q.range(offset, offset + limit - 1);
-    if (error) return errorResponse(`Erro ao buscar campanhas: ${error.message}`, 500);
+    if (error) {
+      const msg = String(error.message ?? '').toLowerCase();
+      if (error.code === '42703' || msg.includes('redirect_project_id')) {
+        return errorResponse(
+          'Migração pendente: aplique migrations/add_redirect_project_to_meta_campaigns.sql para vincular campanhas a redirects.',
+          500
+        );
+      }
+      return errorResponse(`Erro ao buscar campanhas: ${error.message}`, 500);
+    }
 
     const bancaIds = Array.from(new Set((campaigns ?? []).map((c) => c.banca_id))).filter(Boolean) as string[];
 
@@ -149,6 +158,19 @@ export async function GET(req: NextRequest) {
         .in('id', bancaIds);
       if (bancasErr) return errorResponse(`Erro ao buscar bancas: ${bancasErr.message}`, 500);
       bancaById = new Map((bancas ?? []).map((b) => [b.id, b]));
+    }
+
+    const redirectProjectIds = Array.from(
+      new Set((campaigns ?? []).map((c) => (c as { redirect_project_id?: string | null }).redirect_project_id).filter(Boolean))
+    ) as string[];
+    let redirectById = new Map<string, { id: string; name: string | null; slug: string | null; banca_id: string | null }>();
+    if (redirectProjectIds.length > 0) {
+      const { data: redirects, error: redirectsErr } = await supabaseServiceRole
+        .from('vsl_projects')
+        .select('id,name,slug,banca_id')
+        .in('id', redirectProjectIds);
+      if (redirectsErr) return errorResponse(`Erro ao buscar redirects: ${redirectsErr.message}`, 500);
+      redirectById = new Map((redirects ?? []).map((r) => [r.id, r]));
     }
 
     /** Gestor por banca CRM da campanha: hierarquia (subárvore do dono) + user_bancas. */
@@ -269,6 +291,10 @@ export async function GET(req: NextRequest) {
         stop_time: (c as { stop_time?: string | null }).stop_time ?? null,
         updated_at: c.updated_at ?? null,
         campaign_kind: (c as { campaign_kind?: string }).campaign_kind ?? 'normal',
+        redirect_project_id: (c as { redirect_project_id?: string | null }).redirect_project_id ?? null,
+        redirect_project: (c as { redirect_project_id?: string | null }).redirect_project_id
+          ? redirectById.get(String((c as { redirect_project_id?: string | null }).redirect_project_id)) ?? null
+          : null,
         reach: metrics.reach,
         impressions: metrics.impressions,
         clicks: metrics.clicks,

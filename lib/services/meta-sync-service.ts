@@ -13,10 +13,12 @@ import {
   listAdSets,
   getInsightsDaily,
   getAccountFinance,
+  getAdAccountBillingCharges,
   mapInsightToRow,
   normalizeBudget,
   formatMetaDate,
   type InsightsDateOption,
+  type MetaAccountFinance,
   type MetaInsight,
 } from '@/lib/meta/metaClient';
 import {
@@ -26,6 +28,11 @@ import {
 } from '@/lib/meta/metaAdsService';
 import { buildCampaignConsultorSummary } from '@/lib/services/meta-campaign-consultors';
 import { buildGestorNamesByCrmBancaIdMap, type CrmBancaLite } from '@/lib/services/gestor-names-by-crm-banca';
+import {
+  convertMetaSpendToBrl,
+  resolveExchangeRatesForCurrencies,
+  type ExchangeRateSnapshot,
+} from '@/lib/services/exchange-rate-service';
 
 const DEFAULT_BASE_URL = 'https://graph.facebook.com/v25.0';
 const DEFAULT_DATE_PRESET = 'last_30d';
@@ -33,8 +40,535 @@ const DEFAULT_DATE_PRESET = 'last_30d';
 /** Logs do retorno bruto da Meta (admin / sync); nunca incluir token. */
 const META_API_LOG = '[Meta Ads API]';
 
+const ZERO_DECIMAL_META_CURRENCIES = new Set([
+  'BIF',
+  'CLP',
+  'DJF',
+  'GNF',
+  'JPY',
+  'KMF',
+  'KRW',
+  'MGA',
+  'PYG',
+  'RWF',
+  'UGX',
+  'VND',
+  'VUV',
+  'XAF',
+  'XOF',
+  'XPF',
+]);
+
+/**
+ * Cobrança individual da conta (event_type=ad_account_billing_charge),
+ * já normalizada para unidade principal da moeda (ex.: BRL).
+ */
+export type MetaBillingChargeRow = {
+  event_time: string | null;
+  date_time_in_timezone: string | null;
+  amount: number | null;
+  amount_raw: string | null;
+  currency: string | null;
+  transaction_id: string | null;
+};
+
+export type MetaBillingChargesSnapshot = {
+  source: 'ad_account_activities';
+  /** Filtro do painel (since/until em YYYY-MM-DD) — pode ser null quando o cliente quer só o histórico. */
+  period_filter: { since: string | null; until: string | null };
+  /**
+   * Janela efetivamente consultada na Meta (geralmente >= filtro), para garantir contexto
+   * (ex.: histórico de 90 dias) quando o filtro do painel é estreito (ex.: "ontem").
+   */
+  period_window: { since: string | null; until: string | null };
+  /** Número de cobranças dentro de `period_filter` (ou da janela inteira quando não há filtro). */
+  count: number;
+  /** Soma das cobranças dentro de `period_filter` (ou da janela inteira). */
+  total: number;
+  /** Total de cobranças retornadas na janela `period_window` (`>= count`). */
+  count_window: number;
+  /** Soma das cobranças na janela `period_window` (`>= total`). */
+  total_window: number;
+  currency: string | null;
+  /** Cobrança mais recente da janela `period_window` — útil como "última cobrança" quando o filtro não tem nada. */
+  latest_charge: MetaBillingChargeRow | null;
+  fetched_at: string;
+  error?: string;
+  /** Lista detalhada (limitada por paginação) — apenas as entradas dentro de `period_filter` quando há filtro. */
+  entries: MetaBillingChargeRow[];
+};
+
+export type MetaBillingSnapshot = {
+  ad_account_id: string;
+  currency: string | null;
+  timezone_name: string | null;
+  /** Total acumulado da conta retornado por `amount_spent`, normalizado para unidade principal da moeda. */
+  amount_spent: number | null;
+  amount_spent_raw: string | null;
+  /** Valor em aberto/faturável da conta retornado por `balance`, normalizado para unidade principal da moeda. */
+  balance_due: number | null;
+  balance_due_raw: string | null;
+  /** Limite de gasto da conta retornado por `spend_cap`, normalizado para unidade principal da moeda. */
+  spend_cap: number | null;
+  spend_cap_raw: string | null;
+  source: 'ad_account_finance';
+  fetched_at: string;
+  error?: string;
+  /**
+   * Cobranças reais no método de pagamento (cartão), via `/activities` com
+   * `event_type=ad_account_billing_charge`. Normalizadas na unidade principal da moeda.
+   * Pode ser null se a Meta não tiver retornado dados para a conta no período.
+   */
+  card_charges?: MetaBillingChargesSnapshot | null;
+};
+
+export type MetaBillingSummary = {
+  source: 'ad_account_finance';
+  /** Valores monetários normalizados para unidade principal da moeda (ex.: BRL), quando a moeda tem centavos. */
+  unit: 'major_currency_units';
+  accounts_count: number;
+  accounts_with_balance_due: number;
+  accounts_with_amount_spent: number;
+  currencies: string[];
+  currency: string | null;
+  total_balance_due: number;
+  total_amount_spent: number;
+  total_spend_cap: number;
+  /**
+   * Soma das cobranças efetivas no cartão (todas as contas) no período do filtro,
+   * **sempre em BRL** — valores em USD (e outras moedas com cotação) convertidos.
+   */
+  total_card_charges: number;
+  /**
+   * Parcela da soma acima que veio de contas em USD, **ainda em dólar** (antes da conversão).
+   * Só para exibição no painel (ex.: “US$ X · ≈ R$ Y”). Zero quando não há cobrança USD.
+   */
+  total_card_charges_usd: number;
+  /** Quantidade total de cobranças no período do filtro. */
+  card_charges_count: number;
+  /**
+   * Soma na janela ampla (~90d), **em BRL** (USD convertido).
+   */
+  total_card_charges_window: number;
+  /** Parcela em USD na janela ampla (antes de converter). */
+  total_card_charges_window_usd: number;
+  /** Quantidade total de cobranças na janela ampla. */
+  card_charges_count_window: number;
+  /** Quantas contas tinham `card_charges` retornado pela Meta sem erro. */
+  accounts_with_card_charges: number;
+  /** Período aplicado nas chamadas (YYYY-MM-DD), espelhando o filtro do painel. */
+  card_charges_period: { since: string | null; until: string | null } | null;
+  /** Janela ampla consultada na Meta (~90d). */
+  card_charges_window: { since: string | null; until: string | null } | null;
+  /** Cobrança mais recente entre todas as contas (útil quando o filtro do painel não tem cobrança). */
+  latest_card_charge:
+    | {
+        ad_account_id: string;
+        amount: number | null;
+        /** Mesmo `amount` convertido para BRL quando a cobrança não é em real. */
+        amount_brl: number | null;
+        event_time: string | null;
+        currency: string | null;
+        transaction_id: string | null;
+      }
+    | null;
+  accounts: MetaBillingSnapshot[];
+};
+
 function logMetaReturn(context: string, data: Record<string, unknown>): void {
   console.log(META_API_LOG, context, data);
+}
+
+function normalizeMetaAdAccountId(adAccountId: string): string {
+  const t = String(adAccountId ?? '').trim();
+  if (!t) return '';
+  return t.startsWith('act_') ? t : `act_${t}`;
+}
+
+function metaCurrencyMinorUnitDivisor(currency: string | null | undefined): number {
+  const code = String(currency ?? '').trim().toUpperCase();
+  return code && ZERO_DECIMAL_META_CURRENCIES.has(code) ? 1 : 100;
+}
+
+function normalizeMetaFinanceAmount(raw: string | number | null | undefined, currency: string | null | undefined): number | null {
+  if (raw == null || String(raw).trim() === '') return null;
+  const n = typeof raw === 'number' ? raw : parseFloat(String(raw));
+  if (!Number.isFinite(n)) return null;
+  return n / metaCurrencyMinorUnitDivisor(currency);
+}
+
+export function buildMetaBillingSnapshot(
+  adAccountId: string,
+  finance: MetaAccountFinance | null,
+  error?: string,
+  cardCharges?: MetaBillingChargesSnapshot | null
+): MetaBillingSnapshot {
+  const currency = finance?.currency != null ? String(finance.currency) : null;
+  const amountSpentRaw = finance?.amount_spent != null ? String(finance.amount_spent) : null;
+  const balanceRaw = finance?.balance != null ? String(finance.balance) : null;
+  const spendCapRaw = finance?.spend_cap != null ? String(finance.spend_cap) : null;
+  return {
+    ad_account_id: normalizeMetaAdAccountId(adAccountId),
+    currency,
+    timezone_name: finance?.timezone_name != null ? String(finance.timezone_name) : null,
+    amount_spent: normalizeMetaFinanceAmount(amountSpentRaw, currency),
+    amount_spent_raw: amountSpentRaw,
+    balance_due: normalizeMetaFinanceAmount(balanceRaw, currency),
+    balance_due_raw: balanceRaw,
+    spend_cap: normalizeMetaFinanceAmount(spendCapRaw, currency),
+    spend_cap_raw: spendCapRaw,
+    source: 'ad_account_finance',
+    fetched_at: new Date().toISOString(),
+    ...(error ? { error } : {}),
+    card_charges: cardCharges ?? null,
+  };
+}
+
+export type FetchMetaBillingSnapshotOptions = {
+  /** Período aplicado às cobranças no cartão (`activities` → `ad_account_billing_charge`). YYYY-MM-DD. */
+  cardChargesPeriod?: { since: string | null; until: string | null } | null;
+  /** Limite por página da API `/activities`. Default 200, máx 500. */
+  cardChargesPageLimit?: number;
+  /** Máximo de páginas a paginar. Default 5. */
+  cardChargesMaxPages?: number;
+  /**
+   * Moeda guardada no CRM (`meta_integration_configs.currency` / `meta_integrations.currency`) quando
+   * a Meta não devolve `currency` em `adaccount` (finance) a tempo. Evita tratar USD como BRL no
+   * `normalizeMetaFinanceAmount` e zera o total de cobranças.
+   */
+  integrationCurrencyHint?: string | null;
+};
+
+/** Subtrai `days` dias de um Date (UTC), retornando YYYY-MM-DD. */
+function ymdDaysAgoUtc(days: number): string {
+  const t = Date.now() - days * 86400000;
+  return new Date(t).toISOString().slice(0, 10);
+}
+
+/** YYYY-MM-DD de hoje em UTC. */
+function ymdTodayUtc(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+const CARD_CHARGES_MIN_LOOKBACK_DAYS = 90;
+
+/**
+ * Resolve a janela a ser consultada na Meta para `card_charges`.
+ *
+ * Sempre garante pelo menos `CARD_CHARGES_MIN_LOOKBACK_DAYS` de histórico,
+ * mesmo que o filtro do painel seja só "ontem". Isso evita que filtros estreitos
+ * resultem em "0 cobranças" quando há, sim, cobranças recentes (que costumam
+ * acontecer a cada poucos dias quando atinge o threshold do cartão).
+ */
+function resolveCardChargesWindow(
+  filter: { since: string | null; until: string | null }
+): { since: string; until: string } {
+  const today = ymdTodayUtc();
+  const minSince = ymdDaysAgoUtc(CARD_CHARGES_MIN_LOOKBACK_DAYS);
+  const since = filter.since && filter.since < minSince ? filter.since : minSince;
+  const until = filter.until && filter.until > today ? filter.until : today;
+  return { since, until };
+}
+
+/**
+ * Meta `/activities` pode devolver `event_time` como ISO ou como Unix em segundos (string numérica).
+ */
+function parseMetaActivityEventTimeMs(eventTime: string | null): number | null {
+  if (eventTime == null || String(eventTime).trim() === '') return null;
+  const t = String(eventTime).trim();
+  if (/^\d+$/.test(t)) {
+    const n = Number(t);
+    if (!Number.isFinite(n)) return null;
+    return t.length <= 10 ? n * 1000 : n;
+  }
+  const ms = new Date(t).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function isWithinPeriod(
+  eventTime: string | null,
+  filter: { since: string | null; until: string | null }
+): boolean {
+  if (!filter.since && !filter.until) return true;
+  if (!eventTime) return false;
+  const ts = parseMetaActivityEventTimeMs(eventTime);
+  if (ts == null || !Number.isFinite(ts)) return false;
+  if (filter.since) {
+    const sinceTs = Date.UTC(
+      Number(filter.since.slice(0, 4)),
+      Number(filter.since.slice(5, 7)) - 1,
+      Number(filter.since.slice(8, 10))
+    );
+    if (Number.isFinite(sinceTs) && ts < sinceTs) return false;
+  }
+  if (filter.until) {
+    const untilTs =
+      Date.UTC(
+        Number(filter.until.slice(0, 4)),
+        Number(filter.until.slice(5, 7)) - 1,
+        Number(filter.until.slice(8, 10))
+      ) +
+      86399_999;
+    if (Number.isFinite(untilTs) && ts > untilTs) return false;
+  }
+  return true;
+}
+
+async function fetchMetaCardChargesSnapshot(
+  baseUrl: string,
+  token: string,
+  adAccountId: string,
+  filter: { since: string | null; until: string | null },
+  fallbackCurrency: string | null,
+  pageOptions?: { limit?: number; maxPages?: number }
+): Promise<MetaBillingChargesSnapshot> {
+  const window = resolveCardChargesWindow(filter);
+  try {
+    const charges = await getAdAccountBillingCharges(
+      baseUrl,
+      token,
+      adAccountId,
+      window.since,
+      window.until,
+      pageOptions
+    );
+    const currencyFromEntries = charges
+      .map((c) => c.currency)
+      .find((c): c is string => Boolean(c && c.trim())) ?? null;
+    const resolvedCurrency = currencyFromEntries ?? fallbackCurrency;
+
+    const allEntries: MetaBillingChargeRow[] = charges.map((c) => {
+      const normalizedAmount = normalizeMetaFinanceAmount(c.amount_raw, c.currency ?? resolvedCurrency);
+      return {
+        event_time: c.event_time,
+        date_time_in_timezone: c.date_time_in_timezone,
+        amount: normalizedAmount,
+        amount_raw: c.amount_raw,
+        currency: c.currency ?? resolvedCurrency,
+        transaction_id: c.transaction_id,
+      };
+    });
+
+    const hasFilter = Boolean(filter.since || filter.until);
+    const inPeriod = hasFilter
+      ? allEntries.filter((e) => isWithinPeriod(e.event_time, filter))
+      : allEntries;
+
+    const totalInPeriod = inPeriod.reduce((s, e) => s + (e.amount ?? 0), 0);
+    const totalWindow = allEntries.reduce((s, e) => s + (e.amount ?? 0), 0);
+    const latestCharge = allEntries.reduce<MetaBillingChargeRow | null>((latest, entry) => {
+      if (!entry.event_time) return latest;
+      const ts = parseMetaActivityEventTimeMs(entry.event_time);
+      if (ts == null || !Number.isFinite(ts)) return latest;
+      const latestTs = latest?.event_time ? parseMetaActivityEventTimeMs(latest.event_time) ?? -Infinity : -Infinity;
+      return ts > latestTs ? entry : latest;
+    }, null);
+
+    return {
+      source: 'ad_account_activities',
+      period_filter: { since: filter.since ?? null, until: filter.until ?? null },
+      period_window: { since: window.since, until: window.until },
+      count: inPeriod.length,
+      total: totalInPeriod,
+      count_window: allEntries.length,
+      total_window: totalWindow,
+      currency: resolvedCurrency,
+      latest_charge: latestCharge,
+      fetched_at: new Date().toISOString(),
+      entries: inPeriod,
+    };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      source: 'ad_account_activities',
+      period_filter: { since: filter.since ?? null, until: filter.until ?? null },
+      period_window: { since: window.since, until: window.until },
+      count: 0,
+      total: 0,
+      count_window: 0,
+      total_window: 0,
+      currency: fallbackCurrency,
+      latest_charge: null,
+      fetched_at: new Date().toISOString(),
+      error: msg,
+      entries: [],
+    };
+  }
+}
+
+export async function fetchMetaBillingSnapshot(
+  baseUrl: string,
+  token: string,
+  adAccountId: string,
+  options?: FetchMetaBillingSnapshotOptions
+): Promise<MetaBillingSnapshot> {
+  let financeData: MetaAccountFinance | null = null;
+  let financeError: string | undefined;
+  try {
+    financeData = await getAccountFinance(baseUrl, token, adAccountId);
+  } catch (err: unknown) {
+    financeError = err instanceof Error ? err.message : String(err);
+  }
+  const hint = options?.integrationCurrencyHint != null ? String(options.integrationCurrencyHint).trim() : '';
+  const fallbackCurrency =
+    financeData?.currency != null
+      ? String(financeData.currency)
+      : hint !== ''
+        ? hint
+        : null;
+  const period = options?.cardChargesPeriod
+    ? { since: options.cardChargesPeriod.since ?? null, until: options.cardChargesPeriod.until ?? null }
+    : { since: null, until: null };
+  const cardCharges = await fetchMetaCardChargesSnapshot(
+    baseUrl,
+    token,
+    adAccountId,
+    period,
+    fallbackCurrency,
+    {
+      limit: options?.cardChargesPageLimit,
+      maxPages: options?.cardChargesMaxPages,
+    }
+  );
+  return buildMetaBillingSnapshot(adAccountId, financeData, financeError, cardCharges);
+}
+
+export type SummarizeMetaBillingSnapshotsOptions = {
+  /** Taxas para converter cobranças no cartão para BRL (ex.: `{ BRL: 1, USD: 5.4 }`). */
+  exchangeRatesToBrl?: Record<string, number>;
+};
+
+export function summarizeMetaBillingSnapshots(
+  snapshots: MetaBillingSnapshot[],
+  options?: SummarizeMetaBillingSnapshotsOptions
+): MetaBillingSummary {
+  const rates: Record<string, number> = { BRL: 1, ...(options?.exchangeRatesToBrl ?? {}) };
+
+  const byAccount = new Map<string, MetaBillingSnapshot>();
+  for (const snap of snapshots) {
+    const key = normalizeMetaAdAccountId(snap.ad_account_id);
+    if (!key) continue;
+    const prev = byAccount.get(key);
+    if (!prev || (prev.error && !snap.error)) byAccount.set(key, { ...snap, ad_account_id: key });
+  }
+  const accounts = [...byAccount.values()];
+  const currencies = Array.from(
+    new Set(accounts.map((a) => a.currency).filter((c): c is string => Boolean(c)))
+  ).sort();
+  const accountsWithCardCharges = accounts.filter((a) => a.card_charges && !a.card_charges.error);
+
+  let totalCardChargesBrl = 0;
+  let totalCardChargesUsdRaw = 0;
+  let cardChargesCount = 0;
+  let totalCardChargesWindowBrl = 0;
+  let totalCardChargesWindowUsdRaw = 0;
+  let cardChargesCountWindow = 0;
+
+  for (const a of accountsWithCardCharges) {
+    const cc = a.card_charges;
+    if (!cc) continue;
+    const chargeCurrency =
+      String(cc.currency ?? a.currency ?? '')
+        .trim()
+        .toUpperCase() || 'BRL';
+
+    const periodTotal = cc.total ?? 0;
+    const periodBrl =
+      convertMetaSpendToBrl(periodTotal, chargeCurrency, rates) ??
+      (chargeCurrency === 'BRL' || chargeCurrency === '' ? periodTotal : periodTotal);
+    totalCardChargesBrl += periodBrl;
+    if (chargeCurrency === 'USD') {
+      totalCardChargesUsdRaw += periodTotal;
+    }
+
+    cardChargesCount += cc.count ?? 0;
+
+    const windowTotal = cc.total_window ?? 0;
+    const windowBrl =
+      convertMetaSpendToBrl(windowTotal, chargeCurrency, rates) ??
+      (chargeCurrency === 'BRL' || chargeCurrency === '' ? windowTotal : windowTotal);
+    totalCardChargesWindowBrl += windowBrl;
+    if (chargeCurrency === 'USD') {
+      totalCardChargesWindowUsdRaw += windowTotal;
+    }
+
+    cardChargesCountWindow += cc.count_window ?? 0;
+  }
+
+  let cardChargesPeriod: { since: string | null; until: string | null } | null = null;
+  let cardChargesWindow: { since: string | null; until: string | null } | null = null;
+  for (const a of accounts) {
+    const cc = a.card_charges;
+    if (!cc) continue;
+    if (!cardChargesPeriod && cc.period_filter) {
+      cardChargesPeriod = {
+        since: cc.period_filter.since ?? null,
+        until: cc.period_filter.until ?? null,
+      };
+    }
+    if (!cardChargesWindow && cc.period_window) {
+      cardChargesWindow = {
+        since: cc.period_window.since ?? null,
+        until: cc.period_window.until ?? null,
+      };
+    }
+    if (cardChargesPeriod && cardChargesWindow) break;
+  }
+
+  let latestCardCharge: MetaBillingSummary['latest_card_charge'] = null;
+  for (const a of accounts) {
+    const lc = a.card_charges?.latest_charge ?? null;
+    if (!lc?.event_time) continue;
+    const ts = parseMetaActivityEventTimeMs(lc.event_time);
+    if (ts == null || !Number.isFinite(ts)) continue;
+    const currentTs = latestCardCharge?.event_time
+      ? parseMetaActivityEventTimeMs(latestCardCharge.event_time) ?? -Infinity
+      : -Infinity;
+    if (ts > currentTs) {
+      const latestCur =
+        String(lc.currency ?? a.currency ?? '')
+          .trim()
+          .toUpperCase() || 'BRL';
+      const amt = lc.amount;
+      const amtBrl =
+        amt != null && Number.isFinite(amt)
+          ? convertMetaSpendToBrl(amt, latestCur, rates) ??
+            (latestCur === 'BRL' || latestCur === '' ? amt : amt)
+          : null;
+      latestCardCharge = {
+        ad_account_id: a.ad_account_id,
+        amount: lc.amount,
+        amount_brl: amtBrl,
+        event_time: lc.event_time,
+        currency: lc.currency,
+        transaction_id: lc.transaction_id,
+      };
+    }
+  }
+
+  return {
+    source: 'ad_account_finance',
+    unit: 'major_currency_units',
+    accounts_count: accounts.length,
+    accounts_with_balance_due: accounts.filter((a) => a.balance_due != null).length,
+    accounts_with_amount_spent: accounts.filter((a) => a.amount_spent != null).length,
+    currencies,
+    currency: currencies.length === 1 ? currencies[0] : null,
+    total_balance_due: accounts.reduce((s, a) => s + (a.balance_due ?? 0), 0),
+    total_amount_spent: accounts.reduce((s, a) => s + (a.amount_spent ?? 0), 0),
+    total_spend_cap: accounts.reduce((s, a) => s + (a.spend_cap ?? 0), 0),
+    total_card_charges: totalCardChargesBrl,
+    total_card_charges_usd: totalCardChargesUsdRaw,
+    card_charges_count: cardChargesCount,
+    total_card_charges_window: totalCardChargesWindowBrl,
+    total_card_charges_window_usd: totalCardChargesWindowUsdRaw,
+    card_charges_count_window: cardChargesCountWindow,
+    accounts_with_card_charges: accountsWithCardCharges.length,
+    card_charges_period: cardChargesPeriod,
+    card_charges_window: cardChargesWindow,
+    latest_card_charge: latestCardCharge,
+    accounts,
+  };
 }
 
 /**
@@ -341,7 +875,7 @@ async function getLegacyDecryptedToken(bancaId: string, requireActive = true): P
 }
 
 /** Moeda da conta Meta (integração compartilhada ou legado por banca). */
-async function getMetaCurrencyForBanca(bancaId: string): Promise<string> {
+export async function getMetaCurrencyForBanca(bancaId: string): Promise<string> {
   for (const integrationId of await listIntegrationIdsByBanca(bancaId)) {
     const { data } = await supabaseServiceRole
       .from('meta_integration_configs')
@@ -1319,7 +1853,37 @@ export interface AdminMetaLiveCampaignRow {
   clicks: number;
   leads: number;
   results: number;
+  /**
+   * Gasto na moeda nativa da Ad Account (vide `currency`). Para Ad Accounts em USD,
+   * vem em USD. Para BRL, em BRL. **Nunca somar entre moedas distintas sem converter.**
+   */
   spend: number;
+  /**
+   * Código ISO da moeda usada para apresentar/converter esta linha.
+   * Prioridade:
+   *  1. `currency_override` salvo em meta_campaigns (escolha manual no admin).
+   *  2. Moeda nativa da Ad Account devolvida pela Meta.
+   *  3. `null` quando indisponível.
+   */
+  currency: string | null;
+  /**
+   * Moeda nativa da Ad Account na Meta (sempre a mesma para o `spend` bruto do insight).
+   * Permite à UI contrastar com `currency`/`currency_override` quando há override manual.
+   */
+  currency_account: string | null;
+  /**
+   * Override manual salvo em meta_campaigns.currency_override (BRL | USD).
+   * `null` ⇒ usar a moeda nativa da Ad Account.
+   * Exposto para a UI conseguir refletir o estado atual no select.
+   */
+  currency_override: string | null;
+  /**
+   * `spend` convertido para BRL usando a cotação atual (USD-BRL via AwesomeAPI).
+   * - Se `currency` (efetiva) == 'BRL' ou `null`, retorna o próprio `spend`.
+   * - Se a moeda não tem cotação configurada, fica igual ao `spend` e gera log de aviso.
+   * Os totais agregados sempre usam este campo para consolidar em reais.
+   */
+  spend_brl: number;
   integration_id: string | null;
   ad_account_id: string | null;
   insights_source: string | null;
@@ -1330,6 +1894,7 @@ export interface AdminMetaLiveIntegrationTrace {
   representative_banca_id: string;
   ad_account_id: string | null;
   insights_source: string | null;
+  billing_accounts?: MetaBillingSnapshot[];
   error?: string;
 }
 
@@ -1345,13 +1910,17 @@ export interface AdminMetaLiveAggregateResult {
     clicks: number;
     leads: number;
     results: number;
+    /** Soma do `spend_brl` deduplicado por (integration_id, campaign_id). Sempre em BRL. */
     spend: number;
-    /** Gasto só em campanhas marcadas como bolão no CRM. */
+    /** Idem, restrito a campanhas marcadas como bolão no CRM. Em BRL. */
     spend_bolao: number;
     /** Soma de resultados (ações Meta) em campanhas tipo normal / bolão. */
     results_normal: number;
     results_bolao: number;
   };
+  billing: MetaBillingSummary;
+  /** Cotações usadas para converter spend não-BRL nas linhas/totais (ex.: USD→BRL). */
+  exchange_rates: ExchangeRateSnapshot[];
   campaigns: AdminMetaLiveCampaignRow[];
   integrations: AdminMetaLiveIntegrationTrace[];
 }
@@ -1436,6 +2005,7 @@ export type ConsolidatedActiveCampaignsSpendIntegrationSlice = {
   ad_account_id: string | null;
   banca_ids: string[];
   total_spend: number;
+  billing: MetaBillingSnapshot | null;
   campaigns: ActiveCampaignSpendRow[];
   error?: string;
 };
@@ -1449,7 +2019,14 @@ export type ConsolidatedActiveCampaignsSpendAllResult = {
     integrations_failed: number;
     campaigns_total: number;
     total_spend: number;
+    billing_total_balance_due: number;
+    billing_total_amount_spent: number;
+    /** Soma das cobranças no cartão (deduplicada por ad_account_id), no mesmo período do filtro. */
+    billing_total_card_charges: number;
+    /** Quantidade de cobranças. */
+    billing_card_charges_count: number;
   };
+  billing: MetaBillingSummary;
 };
 
 /**
@@ -1464,6 +2041,7 @@ export async function consolidateActiveCampaignsSpendAllIntegrations(
   const jobs = await listAdminMetaLiveJobs(includeInactiveIntegrations === true);
   const by_integration: ConsolidatedActiveCampaignsSpendIntegrationSlice[] = [];
   const campaignsFlat: ConsolidatedActiveCampaignSpendEntry[] = [];
+  const billingSnapshots: MetaBillingSnapshot[] = [];
 
   for (const job of jobs) {
     const banca_ids = job.linkedBancaIds;
@@ -1502,11 +2080,24 @@ export async function consolidateActiveCampaignsSpendAllIntegrations(
         ad_account_id: adAccountId,
         banca_ids,
         total_spend: 0,
+        billing: null,
         campaigns: [],
         error: !token ? 'Token indisponível.' : 'ad_account_id não configurado.',
       });
       continue;
     }
+
+    const cardChargesPeriod = spendOpts?.timeRange?.since && spendOpts?.timeRange?.until
+      ? { since: spendOpts.timeRange.since, until: spendOpts.timeRange.until }
+      : null;
+    const integrationCurrencyHint = await getMetaCurrencyForBanca(banca_ids[0] ?? job.representativeBancaId).catch(
+      () => null as string | null
+    );
+    const billing = await fetchMetaBillingSnapshot(baseUrl, token, adAccountId, {
+      cardChargesPeriod,
+      integrationCurrencyHint,
+    });
+    billingSnapshots.push(billing);
 
     try {
       const { campaigns, totalSpend } = await getActiveCampaignsSpend(baseUrl, token, adAccountId, spendOpts);
@@ -1516,6 +2107,7 @@ export async function consolidateActiveCampaignsSpendAllIntegrations(
         ad_account_id: adAccountId,
         banca_ids,
         total_spend: totalSpend,
+        billing,
         campaigns,
       });
       for (const c of campaigns) {
@@ -1535,6 +2127,7 @@ export async function consolidateActiveCampaignsSpendAllIntegrations(
         ad_account_id: adAccountId,
         banca_ids,
         total_spend: 0,
+        billing,
         campaigns: [],
         error: msg,
       });
@@ -1544,6 +2137,8 @@ export async function consolidateActiveCampaignsSpendAllIntegrations(
   const integrations_ok = by_integration.filter((s) => !s.error).length;
   const integrations_failed = by_integration.filter((s) => Boolean(s.error)).length;
   const total_spend = by_integration.reduce((s, x) => s + x.total_spend, 0);
+  const { rates: exchangeRatesToBrlForBilling } = await resolveExchangeRatesForCurrencies(['USD']);
+  const billing = summarizeMetaBillingSnapshots(billingSnapshots, { exchangeRatesToBrl: exchangeRatesToBrlForBilling });
 
   return {
     campaigns: campaignsFlat,
@@ -1554,7 +2149,12 @@ export async function consolidateActiveCampaignsSpendAllIntegrations(
       integrations_failed,
       campaigns_total: campaignsFlat.length,
       total_spend,
+      billing_total_balance_due: billing.total_balance_due,
+      billing_total_amount_spent: billing.total_amount_spent,
+      billing_total_card_charges: billing.total_card_charges,
+      billing_card_charges_count: billing.card_charges_count,
     },
+    billing,
   };
 }
 
@@ -1693,6 +2293,12 @@ export type AdminMetaLiveJobProcessContext = {
   overviewBancaId: string | null;
   scopeBancaIds: string[];
   activeOnly: boolean;
+  /**
+   * Mapa moeda → fator para BRL (ex.: { BRL: 1, USD: 5.43 }).
+   * Usado para preencher `spend_brl` em cada linha consolidada.
+   * Quando vazio/ausente, a função busca a cotação USD-BRL on-demand uma única vez.
+   */
+  exchangeRatesToBrl?: Record<string, number>;
 };
 
 function computeAdminMetaTotalsFromCampaignRows(rows: AdminMetaLiveCampaignRow[]): AdminMetaLiveAggregateResult['totals'] {
@@ -1723,9 +2329,14 @@ function computeAdminMetaTotalsFromCampaignRows(rows: AdminMetaLiveCampaignRow[]
       acc.clicks += row.clicks;
       acc.leads += row.leads;
       acc.results += row.results;
-      acc.spend += row.spend;
+      /**
+       * Totais consolidados em BRL: usamos `spend_brl` para evitar somar moedas distintas.
+       * Linhas em BRL têm `spend_brl == spend`; em USD são convertidas via cotação atual.
+       */
+      const spendBrl = Number.isFinite(row.spend_brl) ? row.spend_brl : row.spend;
+      acc.spend += spendBrl;
       if (row.campaign_kind === 'bolao') {
-        acc.spend_bolao += row.spend;
+        acc.spend_bolao += spendBrl;
         acc.results_bolao += row.results;
       } else {
         acc.results_normal += row.results;
@@ -1745,6 +2356,10 @@ function computeAdminMetaTotalsFromCampaignRows(rows: AdminMetaLiveCampaignRow[]
       results_bolao: 0,
     }
   );
+}
+
+function emptyMetaBillingSummary(): MetaBillingSummary {
+  return summarizeMetaBillingSnapshots([]);
 }
 
 async function enrichAdminMetaCampaignRowsWithBancaNames(rows: AdminMetaLiveCampaignRow[]): Promise<void> {
@@ -1776,9 +2391,10 @@ async function enrichAdminMetaCampaignRowsWithBancaNames(rows: AdminMetaLiveCamp
 async function processAdminMetaLiveJob(
   job: AdminMetaLiveJob,
   ctx: AdminMetaLiveJobProcessContext
-): Promise<{ traces: AdminMetaLiveIntegrationTrace[]; rows: AdminMetaLiveCampaignRow[] }> {
+): Promise<{ traces: AdminMetaLiveIntegrationTrace[]; rows: AdminMetaLiveCampaignRow[]; billingSnapshots: MetaBillingSnapshot[] }> {
   const traces: AdminMetaLiveIntegrationTrace[] = [];
   const campaignRows: AdminMetaLiveCampaignRow[] = [];
+  const billingSnapshots: MetaBillingSnapshot[] = [];
   const {
     datePreset,
     timeRangeUtc,
@@ -1802,7 +2418,7 @@ async function processAdminMetaLiveJob(
       insights_source: null,
       error: 'Token não configurado.',
     });
-    return { traces, rows: campaignRows };
+    return { traces, rows: campaignRows, billingSnapshots };
   }
 
   const { baseUrl, adAccountId: configuredAdAccountIdRaw } =
@@ -1831,7 +2447,7 @@ async function processAdminMetaLiveJob(
       insights_source: null,
       error: 'Nenhuma conta de anúncio disponível.',
     });
-    return { traces, rows: campaignRows };
+    return { traces, rows: campaignRows, billingSnapshots };
   }
 
   const allCampaigns: Awaited<ReturnType<typeof listCampaigns>> = [];
@@ -1857,7 +2473,36 @@ async function processAdminMetaLiveJob(
       insights_source: null,
       error: `Falha ao listar campanhas: ${attemptErrors.join(' | ')}`,
     });
-    return { traces, rows: campaignRows };
+    return { traces, rows: campaignRows, billingSnapshots };
+  }
+
+  const liveCardChargesPeriod = dateFrom && dateTo
+    ? { since: dateFrom, until: dateTo }
+    : null;
+  let integrationCurrencyHint: string | null = null;
+  try {
+    integrationCurrencyHint = await getMetaCurrencyForBanca(rep);
+  } catch {
+    integrationCurrencyHint = null;
+  }
+  billingSnapshots.push(
+    ...(await Promise.all(
+      workingAccountIds.map((accountId) =>
+        fetchMetaBillingSnapshot(baseUrl, token, accountId, {
+          cardChargesPeriod: liveCardChargesPeriod,
+          integrationCurrencyHint,
+        })
+      )
+    ))
+  );
+
+  /**
+   * Mapa ad_account_id → moeda (BRL/USD/...). A moeda da campanha = moeda da Ad Account.
+   * Construímos a partir do snapshot financeiro recém-buscado (já normaliza prefixo `act_`).
+   */
+  const currencyByAccountId = new Map<string, string | null>();
+  for (const snap of billingSnapshots) {
+    if (snap.ad_account_id) currencyByAccountId.set(snap.ad_account_id, snap.currency ?? null);
   }
 
   const strictInsightRange =
@@ -1898,10 +2543,15 @@ async function processAdminMetaLiveJob(
   const fetchedCampaignIds = Array.from(visibleIds);
   const ownerByCampaign = new Map<string, string>();
   const kindByBancaCampaign = new Map<string, 'normal' | 'bolao'>();
+  /**
+   * Override manual de moeda salvo via UI (POST /api/admin/meta/campaign-currency).
+   * Quando presente, ele tem prioridade sobre a moeda devolvida pela Ad Account.
+   */
+  const currencyOverrideByBancaCampaign = new Map<string, 'BRL' | 'USD'>();
   if (fetchedCampaignIds.length > 0) {
     const { data: existingOwners } = await supabaseServiceRole
       .from('meta_campaigns')
-      .select('campaign_id, banca_id, updated_at, campaign_kind')
+      .select('campaign_id, banca_id, updated_at, campaign_kind, currency_override')
       .in('campaign_id', fetchedCampaignIds)
       .in('banca_id', job.linkedBancaIds)
       .order('updated_at', { ascending: false });
@@ -1913,6 +2563,13 @@ async function processAdminMetaLiveJob(
       if (!kindByBancaCampaign.has(bk)) {
         const rawKind = (row as { campaign_kind?: string | null }).campaign_kind;
         kindByBancaCampaign.set(bk, String(rawKind || 'normal') === 'bolao' ? 'bolao' : 'normal');
+      }
+      const rawOverride = (row as { currency_override?: string | null }).currency_override;
+      if (rawOverride && !currencyOverrideByBancaCampaign.has(bk)) {
+        const upper = String(rawOverride).trim().toUpperCase();
+        if (upper === 'BRL' || upper === 'USD') {
+          currencyOverrideByBancaCampaign.set(bk, upper);
+        }
       }
     }
   }
@@ -2001,9 +2658,38 @@ async function processAdminMetaLiveJob(
 
     if (targetBancaIds.length === 0) continue;
 
+    /**
+     * Resolve a moeda da Ad Account "primária" desta linha (primeira working account dessa job).
+     * Quando uma campanha aparece em múltiplas contas, usamos a primeira do `workingAccountIds` como representação.
+     * Cada Ad Account tem só uma moeda, então isso casa com a realidade do operacional.
+     */
+    const primaryAdAccountId = workingAccountIds[0]
+      ? workingAccountIds[0].startsWith('act_')
+        ? workingAccountIds[0]
+        : `act_${workingAccountIds[0]}`
+      : null;
+    const nativeAccountCurrency =
+      (primaryAdAccountId ? currencyByAccountId.get(primaryAdAccountId) : null) ?? null;
+
     for (const resolvedBancaId of targetBancaIds) {
       const kindKey = `${resolvedBancaId}:${cid}`;
       const campaign_kind = kindByBancaCampaign.get(kindKey) ?? 'normal';
+
+      /**
+       * Resolve a moeda efetivamente exibida e usada na conversão para BRL:
+       *  1. override manual salvo no admin (meta_campaigns.currency_override).
+       *  2. moeda nativa da Ad Account devolvida pela Meta.
+       *  3. null quando ambas indisponíveis.
+       *
+       * Quando o override muda a moeda (ex.: Ad Account em BRL marcada como USD),
+       * `m.spend` continua sendo o valor bruto devolvido pela Meta nessa Ad Account
+       * — o override só altera como interpretamos esse valor para conversão e
+       * apresentação. Por isso `spend_brl` é recalculado aqui.
+       */
+      const overrideCurrency = currencyOverrideByBancaCampaign.get(kindKey) ?? null;
+      const effectiveCurrency = overrideCurrency ?? nativeAccountCurrency;
+      const rowSpendBrl =
+        convertMetaSpendToBrl(m.spend, effectiveCurrency, ctx.exchangeRatesToBrl ?? {}) ?? m.spend;
 
       campaignRows.push({
         banca_id: resolvedBancaId,
@@ -2025,6 +2711,10 @@ async function processAdminMetaLiveJob(
         leads: m.leads,
         results: m.results,
         spend: m.spend,
+        currency: effectiveCurrency,
+        currency_account: nativeAccountCurrency,
+        currency_override: overrideCurrency,
+        spend_brl: rowSpendBrl,
         integration_id: integrationId,
         ad_account_id: normalizedAdAccount,
         insights_source: sourceLabel,
@@ -2048,9 +2738,10 @@ async function processAdminMetaLiveJob(
     representative_banca_id: rep,
     ad_account_id: normalizedAdAccount,
     insights_source: sourceLabel,
+    billing_accounts: billingSnapshots,
   });
 
-  return { traces, rows: campaignRows };
+  return { traces, rows: campaignRows, billingSnapshots };
 }
 
 export type AdminMetaLiveStreamBatchEvent = {
@@ -2060,6 +2751,8 @@ export type AdminMetaLiveStreamBatchEvent = {
   integrations_delta: AdminMetaLiveIntegrationTrace[];
   campaigns_delta: AdminMetaLiveCampaignRow[];
   totals: AdminMetaLiveAggregateResult['totals'];
+  billing: MetaBillingSummary;
+  exchange_rates: ExchangeRateSnapshot[];
 };
 
 export type AdminMetaLiveStreamCompleteEvent = {
@@ -2067,6 +2760,8 @@ export type AdminMetaLiveStreamCompleteEvent = {
   date_from: string | null;
   date_to: string | null;
   totals: AdminMetaLiveAggregateResult['totals'];
+  billing: MetaBillingSummary;
+  exchange_rates: ExchangeRateSnapshot[];
   campaigns: AdminMetaLiveCampaignRow[];
   integrations: AdminMetaLiveIntegrationTrace[];
 };
@@ -2093,6 +2788,13 @@ export async function* iterateAdminMetaLiveAggregateStream(opts: {
   const timeRangeUtc =
     dateFrom && dateTo ? { since: dateFrom, until: dateTo } : getTimeRangeSinceUntil(30);
 
+  /**
+   * Cotações para conversão BRL nos totais. Pré-busca USD-BRL (caso típico — Ad Accounts em USD).
+   * Outras moedas usam taxa neutra (1) e ficam visíveis no log de `resolveExchangeRatesForCurrencies`.
+   */
+  const { rates: exchangeRatesToBrl, snapshots: exchangeRateSnapshots } =
+    await resolveExchangeRatesForCurrencies(['USD']);
+
   const ctx: AdminMetaLiveJobProcessContext = {
     datePreset,
     timeRangeUtc,
@@ -2102,6 +2804,7 @@ export async function* iterateAdminMetaLiveAggregateStream(opts: {
     overviewBancaId,
     scopeBancaIds,
     activeOnly,
+    exchangeRatesToBrl,
   };
 
   let allJobs = await resolveAdminMetaLiveJobsForAggregate(scopeBancaIds, overviewBancaId);
@@ -2113,6 +2816,8 @@ export async function* iterateAdminMetaLiveAggregateStream(opts: {
       date_from: dateFrom,
       date_to: dateTo,
       totals: emptyTotals,
+      billing: emptyMetaBillingSummary(),
+      exchange_rates: exchangeRateSnapshots,
       campaigns: [],
       integrations: [],
     };
@@ -2121,15 +2826,18 @@ export async function* iterateAdminMetaLiveAggregateStream(opts: {
 
   const accumulated: AdminMetaLiveCampaignRow[] = [];
   const integrationTraces: AdminMetaLiveIntegrationTrace[] = [];
+  const billingSnapshots: MetaBillingSnapshot[] = [];
 
   for (let i = 0; i < allJobs.length; i++) {
     const job = allJobs[i];
     try {
-      const { traces, rows } = await processAdminMetaLiveJob(job, ctx);
+      const { traces, rows, billingSnapshots: jobBillingSnapshots } = await processAdminMetaLiveJob(job, ctx);
       integrationTraces.push(...traces);
       accumulated.push(...rows);
+      billingSnapshots.push(...jobBillingSnapshots);
       await enrichAdminMetaCampaignRowsWithBancaNames(rows);
       const totals = computeAdminMetaTotalsFromCampaignRows(accumulated);
+      const billing = summarizeMetaBillingSnapshots(billingSnapshots, { exchangeRatesToBrl });
       yield {
         type: 'batch',
         batchIndex: i,
@@ -2137,6 +2845,8 @@ export async function* iterateAdminMetaLiveAggregateStream(opts: {
         integrations_delta: traces,
         campaigns_delta: rows,
         totals,
+        billing,
+        exchange_rates: exchangeRateSnapshots,
       };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -2148,13 +2858,16 @@ export async function* iterateAdminMetaLiveAggregateStream(opts: {
     }
   }
 
-  accumulated.sort((a, b) => b.spend - a.spend);
+  accumulated.sort((a, b) => b.spend_brl - a.spend_brl);
   const totals = computeAdminMetaTotalsFromCampaignRows(accumulated);
+  const billing = summarizeMetaBillingSnapshots(billingSnapshots, { exchangeRatesToBrl });
   yield {
     type: 'complete',
     date_from: dateFrom,
     date_to: dateTo,
     totals,
+    billing,
+    exchange_rates: exchangeRateSnapshots,
     campaigns: accumulated,
     integrations: integrationTraces,
   };
@@ -2183,6 +2896,9 @@ export async function fetchAdminMetaLiveAggregate(opts: {
       ? { since: dateFrom, until: dateTo }
       : getTimeRangeSinceUntil(30);
 
+  const { rates: exchangeRatesToBrl, snapshots: exchangeRateSnapshots } =
+    await resolveExchangeRatesForCurrencies(['USD']);
+
   let allJobs = await resolveAdminMetaLiveJobsForAggregate(scopeBancaIds, overviewBancaId);
   if (allJobs.length === 0) {
     return {
@@ -2201,6 +2917,8 @@ export async function fetchAdminMetaLiveAggregate(opts: {
         results_normal: 0,
         results_bolao: 0,
       },
+      billing: emptyMetaBillingSummary(),
+      exchange_rates: exchangeRateSnapshots,
       campaigns: [],
       integrations: [],
     };
@@ -2208,6 +2926,7 @@ export async function fetchAdminMetaLiveAggregate(opts: {
 
   const integrationTraces: AdminMetaLiveIntegrationTrace[] = [];
   const campaignRows: AdminMetaLiveCampaignRow[] = [];
+  const billingSnapshots: MetaBillingSnapshot[] = [];
 
   const jobCtx: AdminMetaLiveJobProcessContext = {
     datePreset,
@@ -2218,6 +2937,7 @@ export async function fetchAdminMetaLiveAggregate(opts: {
     overviewBancaId,
     scopeBancaIds,
     activeOnly,
+    exchangeRatesToBrl,
   };
 
   const settled = await Promise.allSettled(
@@ -2228,6 +2948,7 @@ export async function fetchAdminMetaLiveAggregate(opts: {
     if (r.status === 'fulfilled') {
       integrationTraces.push(...r.value.traces);
       campaignRows.push(...r.value.rows);
+      billingSnapshots.push(...r.value.billingSnapshots);
     } else {
       logMetaReturn('fetchAdminMetaLiveAggregate job rejected', {
         error: r.reason instanceof Error ? r.reason.message : String(r.reason),
@@ -2237,15 +2958,18 @@ export async function fetchAdminMetaLiveAggregate(opts: {
 
   await enrichAdminMetaCampaignRowsWithBancaNames(campaignRows);
 
-  campaignRows.sort((a, b) => b.spend - a.spend);
+  campaignRows.sort((a, b) => b.spend_brl - a.spend_brl);
 
   const totals = computeAdminMetaTotalsFromCampaignRows(campaignRows);
+  const billing = summarizeMetaBillingSnapshots(billingSnapshots, { exchangeRatesToBrl });
 
   return {
     success: true,
     date_from: dateFrom,
     date_to: dateTo,
     totals,
+    billing,
+    exchange_rates: exchangeRateSnapshots,
     campaigns: campaignRows,
     integrations: integrationTraces,
   };

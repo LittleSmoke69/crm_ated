@@ -10,7 +10,7 @@ const LOGO_SIGNED_EXPIRES = 3600;
 /**
  * GET /api/redirect/[slug]/resolve
  * Resolve redirect por slug, escolhe grupo por peso, cria click e retorna invite_url + timer + logo.
- * Query: sid (opcional), utm_source, utm_medium, utm_campaign, utm_content, utm_term (salvos em redirect_visits se algum tiver valor).
+ * Query: sid (opcional), utm_source, utm_medium, utm_campaign, utm_content, utm_term, fbclid.
  */
 /** Decodifica o slug da URL (pode vir codificado uma ou duas vezes). */
 function decodeSlug(raw: string): string {
@@ -44,6 +44,7 @@ export async function GET(
     const utm_campaign = req.nextUrl.searchParams.get('utm_campaign')?.trim() || null;
     const utm_content = req.nextUrl.searchParams.get('utm_content')?.trim() || null;
     const utm_term = req.nextUrl.searchParams.get('utm_term')?.trim() || null;
+    const fbclid = req.nextUrl.searchParams.get('fbclid')?.trim() || null;
 
     let redirectRow: { id: string; project_id: string } | null = null;
 
@@ -148,8 +149,8 @@ export async function GET(
       return errorResponse('Nenhum grupo ativo com peso configurado', 400);
     }
 
-    let clickUtmCampaign: string | null = null;
-    let clickFbclid: string | null = null;
+    let clickUtmCampaign: string | null = utm_campaign;
+    let clickFbclid: string | null = fbclid;
     if (sid) {
       const { data: sess } = await supabaseServiceRole
         .from('vsl_sessions')
@@ -157,8 +158,8 @@ export async function GET(
         .eq('id', sid)
         .single();
       if (sess) {
-        clickUtmCampaign = sess.utm_campaign ?? null;
-        clickFbclid = sess.fbclid ?? null;
+        clickUtmCampaign = sess.utm_campaign ?? clickUtmCampaign;
+        clickFbclid = sess.fbclid ?? clickFbclid;
       }
     }
 

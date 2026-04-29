@@ -1,4 +1,9 @@
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import {
+  listRedirectCampaignConsultorAssignments,
+  mergeCampaignConsultorAssignments,
+  type RedirectConsultorGroup,
+} from '@/lib/services/meta-redirect-consultor-attribution';
 interface ConsultantAggregatedMetrics {
   total_leads: number;
   total_deposited: number;
@@ -15,6 +20,8 @@ export interface CampaignAssignedConsultor {
   full_name: string | null;
   total_leads: number;
   total_deposited: number;
+  source: 'manual' | 'redirect' | 'manual_redirect';
+  redirect_groups: RedirectConsultorGroup[];
 }
 
 export interface CampaignConsultorSummary {
@@ -228,7 +235,11 @@ export async function buildCampaignConsultorSummary(
   const result = new Map<string, CampaignConsultorSummary>();
   if (!bancaId || !campaignIds.length) return result;
 
-  const assignments = await listCampaignConsultorAssignments(bancaId, campaignIds);
+  const [manualAssignments, redirectAssignments] = await Promise.all([
+    listCampaignConsultorAssignments(bancaId, campaignIds),
+    listRedirectCampaignConsultorAssignments({ bancaId, campaignIds }),
+  ]);
+  const assignments = mergeCampaignConsultorAssignments(manualAssignments, redirectAssignments);
   if (!assignments.length) {
     campaignIds.forEach((campaignId) => {
       result.set(campaignId, {
@@ -256,11 +267,10 @@ export async function buildCampaignConsultorSummary(
   });
 
   campaignIds.forEach((campaignId) => {
-    const campaignConsultorIds = assignments
-      .filter((a) => a.campaign_id === campaignId)
-      .map((a) => a.consultor_id);
+    const campaignAssignments = assignments.filter((a) => a.campaign_id === campaignId);
 
-    const assignedConsultors: CampaignAssignedConsultor[] = campaignConsultorIds.map((consultorId) => {
+    const assignedConsultors: CampaignAssignedConsultor[] = campaignAssignments.map((assignment) => {
+      const consultorId = assignment.consultor_id;
       const p = profileById.get(consultorId);
       const m = metricsByConsultorId.get(consultorId);
       return {
@@ -269,6 +279,8 @@ export async function buildCampaignConsultorSummary(
         full_name: p?.full_name || null,
         total_leads: Number(m?.total_leads || 0),
         total_deposited: Number(m?.total_deposited || 0),
+        source: assignment?.source ?? 'manual',
+        redirect_groups: assignment?.redirect_groups ?? [],
       };
     });
 

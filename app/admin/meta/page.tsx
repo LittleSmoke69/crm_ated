@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { convertMetaSpendToBrl } from '@/lib/services/exchange-rate-service';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { useRouter } from 'next/navigation';
 import Layout from '@/components/Layout';
@@ -40,6 +41,53 @@ function formatBRL(value: number): string {
     maximumFractionDigits: 2,
   }).format(Number.isFinite(value) ? value : 0);
 }
+
+/**
+ * Formata um valor monetário na moeda original da Ad Account.
+ * - Para BRL/null: usa o pt-BR padrão.
+ * - Para USD/EUR/...: usa pt-BR com a moeda informada (ex.: "US$ 12,34").
+ */
+function formatMoneyByCurrency(value: number, currency: string | null | undefined): string {
+  const code = String(currency ?? '').trim().toUpperCase() || 'BRL';
+  const safe = Number.isFinite(value) ? value : 0;
+  try {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: code,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(safe);
+  } catch {
+    return formatBRL(safe);
+  }
+}
+
+/** Símbolo curto da moeda para uso em badges (BRL → R$ / USD → US$ / EUR → €). */
+function currencySymbol(code: string | null | undefined): string {
+  const c = String(code ?? '').trim().toUpperCase();
+  if (!c || c === 'BRL') return 'R$';
+  if (c === 'USD') return 'US$';
+  if (c === 'EUR') return '€';
+  if (c === 'GBP') return '£';
+  return c;
+}
+
+/** Chave estável por linha (campanha pode existir em mais de uma integração/conta). */
+function metaCampaignStableKey(row: {
+  banca_id?: unknown;
+  campaign_id?: unknown;
+  integration_id?: unknown;
+  ad_account_id?: unknown;
+}): string {
+  return [
+    String(row.banca_id ?? ''),
+    String(row.campaign_id ?? ''),
+    row.integration_id != null ? String(row.integration_id) : '',
+    row.ad_account_id != null ? String(row.ad_account_id) : '',
+  ].join(':');
+}
+
+type LocalMetaCurrencyChoice = 'BRL' | 'USD' | 'AUTO';
 
 /** Cruza linha live com `campaigns-all` priorizando integração + conta quando existirem no cache. */
 function findAllCampaignRowForLiveMerge(
@@ -202,6 +250,38 @@ type LiveAggregateTotalsShape = {
   spend_bolao?: number;
   results_normal?: number;
   results_bolao?: number;
+};
+
+type LiveAggregateBillingShape = {
+  source?: string;
+  unit?: string;
+  accounts_count?: number;
+  accounts_with_balance_due?: number;
+  accounts_with_amount_spent?: number;
+  accounts_with_card_charges?: number;
+  currencies?: string[];
+  currency?: string | null;
+  total_balance_due?: number;
+  total_amount_spent?: number;
+  total_spend_cap?: number;
+  total_card_charges?: number;
+  /** Soma das cobranças em contas USD, em dólar (antes da conversão). */
+  total_card_charges_usd?: number;
+  card_charges_count?: number;
+  total_card_charges_window?: number;
+  total_card_charges_window_usd?: number;
+  card_charges_count_window?: number;
+  card_charges_period?: { since?: string | null; until?: string | null } | null;
+  card_charges_window?: { since?: string | null; until?: string | null } | null;
+  latest_card_charge?: {
+    ad_account_id?: string;
+    amount?: number | null;
+    amount_brl?: number | null;
+    event_time?: string | null;
+    currency?: string | null;
+    transaction_id?: string | null;
+  } | null;
+  accounts?: Array<Record<string, unknown>>;
 };
 
 interface MetaOverviewRow {
@@ -368,6 +448,19 @@ export default function AdminMetaPage() {
     };
     campaigns: Array<Record<string, unknown>>;
     integrations: Array<Record<string, unknown>>;
+    billing?: LiveAggregateBillingShape | null;
+    /**
+     * Cotações usadas no backend para converter spend não-BRL em BRL nos totais.
+     * Cada item segue ExchangeRateSnapshot (pair, rate, source, fetched_at, ttl_seconds).
+     */
+    exchange_rates?: Array<{
+      pair: string;
+      rate: number;
+      source: string;
+      fetched_at?: string;
+      ttl_seconds?: number;
+      error?: string;
+    }>;
   } | null>(null);
   const [loadingLiveAggregate, setLoadingLiveAggregate] = useState(false);
   /** Após o 1º lote NDJSON: totais já aparecem; este estado indica quantas integrações ainda faltam. */
@@ -400,15 +493,33 @@ export default function AdminMetaPage() {
   const [allCampaignsSearch, setAllCampaignsSearch] = useState('');
   /** Opcional: quando true, inclui campanhas não ACTIVE nas somas, overview e tabelas (active_only=0 na API). */
   /**
-   * Default false: o painel administrativo precisa refletir apenas campanhas ACTIVE (status ou effective_status),
-   * coerente com o card «Gasto total · campanhas ativas». Marque para incluir pausadas em auditorias.
+   * Default false: o painel administrativo precisa refletir apenas campanhas ACTIVE (status ou effective_status).
+   * Marque para incluir pausadas em auditorias de spend por campanha.
    */
   const [allCampaignsShowInactive, setAllCampaignsShowInactive] = useState(false);
   const [allCampaignsKindFilter, setAllCampaignsKindFilter] = useState<'all' | MetaCampaignKind>('all');
   const [allCampaignsPage, setAllCampaignsPage] = useState(1);
   const [campaignOwnerDraft, setCampaignOwnerDraft] = useState<Record<string, string>>({});
   const [campaignOwnerSavingKey, setCampaignOwnerSavingKey] = useState<string | null>(null);
+  const [campaignRedirectDraft, setCampaignRedirectDraft] = useState<Record<string, string>>({});
+  const [campaignRedirectSavingKey, setCampaignRedirectSavingKey] = useState<string | null>(null);
+  const [redirectsByBanca, setRedirectsByBanca] = useState<
+    Record<string, Array<{ id: string; name: string | null; slug: string | null; banca_id: string | null }>>
+  >({});
   const [campaignKindSavingKey, setCampaignKindSavingKey] = useState<string | null>(null);
+  /**
+   * Override manual de moeda em andamento (chave: `${banca_id}:${campaign_id}`).
+   * Usado para desabilitar o select enquanto o POST /api/admin/meta/campaign-currency
+   * está em curso, evitando cliques duplos com cotações conflitantes.
+   */
+  const [campaignCurrencySavingKey, setCampaignCurrencySavingKey] = useState<string | null>(null);
+  /**
+   * Ajuste imediato de moeda BRL/USD sem refazer o stream live-aggregate.
+   * `AUTO` = após "limpar override", usa só `currency_account` e ignora `currency_override` stale no payload.
+   */
+  const [localMetaCurrencyByKey, setLocalMetaCurrencyByKey] = useState<
+    Record<string, LocalMetaCurrencyChoice>
+  >({});
   const [campaignConsultorDraft, setCampaignConsultorDraft] = useState<Record<string, string[]>>({});
   const [campaignConsultorSavingKey, setCampaignConsultorSavingKey] = useState<string | null>(null);
   const [consultorsByBanca, setConsultorsByBanca] = useState<Record<string, Array<{ id: string; email: string; full_name: string | null }>>>({});
@@ -971,23 +1082,39 @@ export default function AdminMetaPage() {
           const deltaInt = (evt.integrations_delta as Array<Record<string, unknown>>) ?? [];
           const batchIndex = Number(evt.batchIndex) || 0;
           const totalBatches = Number(evt.totalBatches) || 1;
+          const evtRates = Array.isArray((evt as { exchange_rates?: unknown }).exchange_rates)
+            ? ((evt as { exchange_rates?: unknown }).exchange_rates as Array<Record<string, unknown>>)
+            : null;
           setLiveAggregate((prev) => ({
             date_from: adminMetaInsightsDateRange.dateFrom ?? null,
             date_to: adminMetaInsightsDateRange.dateTo ?? null,
             totals,
+            billing: (evt.billing as LiveAggregateBillingShape | null) ?? prev?.billing ?? null,
             campaigns: [...(prev?.campaigns ?? []), ...deltaCamp],
             integrations: [...(prev?.integrations ?? []), ...deltaInt],
+            exchange_rates:
+              (evtRates as Array<{ pair: string; rate: number; source: string }> | null) ??
+              prev?.exchange_rates,
           }));
           setLiveAggregateStreamProgress({ current: batchIndex + 1, total: totalBatches });
           setLoadingLiveAggregate(false);
         } else if (evt.type === 'complete') {
           sawComplete = true;
+          const completeRates = Array.isArray((evt as { exchange_rates?: unknown }).exchange_rates)
+            ? ((evt as { exchange_rates?: unknown }).exchange_rates as Array<{
+                pair: string;
+                rate: number;
+                source: string;
+              }>)
+            : undefined;
           setLiveAggregate({
             date_from: (evt.date_from as string | null) ?? null,
             date_to: (evt.date_to as string | null) ?? null,
             totals: evt.totals as LiveAggregateTotalsShape,
+            billing: (evt.billing as LiveAggregateBillingShape | null) ?? null,
             campaigns: (evt.campaigns as Array<Record<string, unknown>>) ?? [],
             integrations: (evt.integrations as Array<Record<string, unknown>>) ?? [],
+            exchange_rates: completeRates,
           });
           setLiveAggregateStreamProgress(null);
           setLoadingLiveAggregate(false);
@@ -1479,13 +1606,16 @@ export default function AdminMetaPage() {
       if (data.success && data.data?.rows) {
         setAllCampaignsRows(data.data.rows);
         const nextDraft: Record<string, string[]> = {};
+        const nextRedirectDraft: Record<string, string> = {};
         for (const row of data.data.rows as any[]) {
           const key = `${String(row.banca_id)}:${String(row.campaign_id)}`;
           nextDraft[key] = Array.isArray(row.assigned_consultors)
             ? row.assigned_consultors.map((c: any) => String(c.id)).filter(Boolean)
             : [];
+          nextRedirectDraft[key] = row.redirect_project_id ? String(row.redirect_project_id) : '';
         }
         setCampaignConsultorDraft(nextDraft);
+        setCampaignRedirectDraft(nextRedirectDraft);
       } else {
         setAllCampaignsRows([]);
         setAllCampaignsError(data.error || 'Erro ao carregar campanhas (todas as integrações).');
@@ -1538,6 +1668,8 @@ export default function AdminMetaPage() {
         }
         await loadAllCampaigns();
         await loadOverview();
+        /** Tabela "Métricas" usa `liveAggregate`; sem este reload o tipo/moeda parecem "voltar". */
+        await loadLiveAggregate();
         if (primaryBancaId === bancaId) {
           await loadSyncedData();
           fetch(`/api/admin/meta/campaigns?banca_id=${encodeURIComponent(bancaId)}`, {
@@ -1555,7 +1687,60 @@ export default function AdminMetaPage() {
         setCampaignKindSavingKey(null);
       }
     },
-    [userId, loadAllCampaigns, loadOverview, loadSyncedData, primaryBancaId]
+    [userId, loadAllCampaigns, loadOverview, loadLiveAggregate, loadSyncedData, primaryBancaId]
+  );
+
+  /**
+   * Persiste `currency_override` no CRM. Não dispara novo stream live-aggregate — a linha é atualizada
+   * via `localMetaCurrencyByKey` + recálculo local de `spend_brl` com a cotação já carregada.
+   */
+  const handleSaveCampaignCurrency = useCallback(
+    async (
+      bancaId: string,
+      campaignId: string,
+      currency: 'BRL' | 'USD' | null,
+      campaignName?: string | null,
+      rowStableKey?: string
+    ) => {
+      if (!userId) return;
+      const savingKey = rowStableKey ?? `${bancaId}:${campaignId}`;
+      setCampaignCurrencySavingKey(savingKey);
+      setAllCampaignsError(null);
+      try {
+        const res = await fetch('/api/admin/meta/campaign-currency', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+          body: JSON.stringify({
+            banca_id: bancaId,
+            campaign_id: campaignId,
+            currency,
+            ...(campaignName != null && String(campaignName).trim() !== ''
+              ? { name: String(campaignName).trim() }
+              : {}),
+          }),
+        });
+        const data = await res.json();
+        if (!data.success) {
+          setLocalMetaCurrencyByKey((prev) => {
+            const next = { ...prev };
+            delete next[savingKey];
+            return next;
+          });
+          setAllCampaignsError(data.error || 'Erro ao salvar moeda da campanha.');
+          return;
+        }
+      } catch (err: any) {
+        setLocalMetaCurrencyByKey((prev) => {
+          const next = { ...prev };
+          delete next[savingKey];
+          return next;
+        });
+        setAllCampaignsError(err?.message || 'Erro ao salvar moeda da campanha.');
+      } finally {
+        setCampaignCurrencySavingKey(null);
+      }
+    },
+    [userId]
   );
 
   const handleAssignCampaignOwner = useCallback(async (row: any) => {
@@ -1593,6 +1778,40 @@ export default function AdminMetaPage() {
       setCampaignOwnerSavingKey(null);
     }
   }, [userId, campaignOwnerDraft, loadAllCampaigns, loadOverview, selectedBancaIds, loadSyncedData]);
+
+  const handleSaveCampaignRedirect = useCallback(async (row: any) => {
+    if (!userId) return;
+    const key = `${String(row.banca_id)}:${String(row.campaign_id)}`;
+    const redirectProjectId = (campaignRedirectDraft[key] || '').trim() || null;
+
+    setCampaignRedirectSavingKey(key);
+    setAllCampaignsError(null);
+    try {
+      const res = await fetch('/api/admin/meta/campaign-redirect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({
+          banca_id: String(row.banca_id),
+          campaign_id: String(row.campaign_id),
+          redirect_project_id: redirectProjectId,
+          ...(row.name != null && String(row.name).trim() !== ''
+            ? { name: String(row.name).trim() }
+            : {}),
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        setAllCampaignsError(data.error || 'Erro ao vincular campanha ao redirect.');
+        return;
+      }
+      await loadAllCampaigns();
+      await loadLiveAggregate();
+    } catch (err: any) {
+      setAllCampaignsError(err?.message || 'Erro ao vincular campanha ao redirect.');
+    } finally {
+      setCampaignRedirectSavingKey(null);
+    }
+  }, [userId, campaignRedirectDraft, loadAllCampaigns, loadLiveAggregate]);
 
   const handleSaveCampaignConsultors = useCallback(async (row: any) => {
     if (!userId) return;
@@ -1650,6 +1869,29 @@ export default function AdminMetaPage() {
         })
       );
       setConsultorsByBanca(Object.fromEntries(entries));
+    })();
+  }, [userId, allCampaignsRows]);
+
+  useEffect(() => {
+    if (!userId) return;
+    const bancaIds = Array.from(new Set((allCampaignsRows || []).map((row: any) => String(row.banca_id)).filter(Boolean)));
+    if (!bancaIds.length) return;
+    void (async () => {
+      const entries = await Promise.all(
+        bancaIds.map(async (bancaId) => {
+          try {
+            const res = await fetch(`/api/admin/meta/campaign-redirect?banca_id=${encodeURIComponent(bancaId)}`, {
+              headers: { 'X-User-Id': userId },
+            });
+            const data = await res.json();
+            if (!data.success) return [bancaId, []] as const;
+            return [bancaId, data.data?.redirects || []] as const;
+          } catch {
+            return [bancaId, []] as const;
+          }
+        })
+      );
+      setRedirectsByBanca(Object.fromEntries(entries));
     })();
   }, [userId, allCampaignsRows]);
 
@@ -1862,8 +2104,15 @@ export default function AdminMetaPage() {
     return m;
   }, [allCampaignsRows]);
 
+  /** Cotação USD→BRL do último aggregate (usada só para reconversão local ao mudar moeda na linha). */
+  const liveUsdBrlRate = useMemo(() => {
+    const rates = liveAggregate?.exchange_rates ?? [];
+    const usd = rates.find((r) => r.pair === 'USD-BRL');
+    return usd?.rate && Number.isFinite(Number(usd.rate)) ? Number(usd.rate) : null;
+  }, [liveAggregate]);
+
   /** Linhas da tabela: métricas live (todas as integrações no stream) cruzadas com CRM; fallback = cache por banca. */
-  const displayMetricCampaignRows = useMemo(() => {
+  const displayMetricCampaignRowsRaw = useMemo(() => {
     if (!usingLiveMetaCards || !liveAggregate) {
       return cachedMetricRowsForCrmScope;
     }
@@ -1926,6 +2175,26 @@ export default function AdminMetaPage() {
         leads: Number(row.leads) || 0,
         spend: Number(row.spend) || 0,
         results_live: Number(row.results) || 0,
+        /** Campos da linha live (não somar moedas sem eles). */
+        spend_brl: Number.isFinite(Number((row as { spend_brl?: unknown }).spend_brl))
+          ? Number((row as { spend_brl?: unknown }).spend_brl)
+          : 0,
+        currency: (row as { currency?: string | null }).currency ?? (dbRow as { currency?: string | null } | undefined)?.currency ?? null,
+        currency_account:
+          (row as { currency_account?: string | null }).currency_account ??
+          (row as { currency?: string | null }).currency ??
+          (dbRow as { currency?: string | null } | undefined)?.currency ??
+          null,
+        currency_override:
+          (row as { currency_override?: string | null }).currency_override ??
+          (dbRow as { currency_override?: string | null } | undefined)?.currency_override ??
+          null,
+        redirect_project_id:
+          (dbRow as { redirect_project_id?: string | null } | undefined)?.redirect_project_id ??
+          null,
+        redirect_project:
+          (dbRow as { redirect_project?: unknown } | undefined)?.redirect_project ??
+          null,
         assigned_consultors: dbRow?.assigned_consultors ?? [],
         consultor_total_leads: dbRow?.consultor_total_leads ?? 0,
         consultor_total_deposited: dbRow?.consultor_total_deposited ?? 0,
@@ -2004,23 +2273,81 @@ export default function AdminMetaPage() {
   ]);
 
   /**
-   * Totais derivados das linhas REALMENTE exibidas em `displayMetricCampaignRows`.
-   * Garante que «Gasto total · campanhas ativas» (e cards de bolão/normal) bata com a soma da tabela,
-   * inclusive enquanto o stream da Meta ainda está em andamento e a tabela contém linhas vindas do cache
-   * que não chegaram em `liveAggregate.totals`.
+   * Aplica escolha local de moeda + recalcula `spend_brl` sem novo request ao stream da Meta.
+   */
+  const displayMetricCampaignRows = useMemo(() => {
+    const raw = displayMetricCampaignRowsRaw;
+    const usdRate = liveUsdBrlRate != null && liveUsdBrlRate > 0 ? liveUsdBrlRate : 5;
+    const rates: Record<string, number> = { BRL: 1, USD: usdRate };
+
+    return raw.map((row: Record<string, unknown>) => {
+      const key = metaCampaignStableKey(row);
+      const local = localMetaCurrencyByKey[key];
+      /** Valor persistido no CRM (payload live), antes de sobrescrevermos para UI. */
+      const overrideFromServer = row.currency_override;
+
+      const accountRaw = String(row.currency_account ?? row.currency ?? '').trim().toUpperCase();
+      const nativeForUi =
+        accountRaw === 'USD' || accountRaw === 'BRL' ? accountRaw : accountRaw ? accountRaw : 'BRL';
+
+      let effectiveCurrency: string;
+      let overrideForUi: string | null;
+
+      if (local === 'BRL' || local === 'USD') {
+        effectiveCurrency = local;
+        overrideForUi = local;
+      } else if (local === 'AUTO') {
+        effectiveCurrency = nativeForUi;
+        overrideForUi = null;
+      } else {
+        const ov = String(row.currency_override ?? '').trim().toUpperCase();
+        if (ov === 'BRL' || ov === 'USD') {
+          effectiveCurrency = ov;
+          overrideForUi = ov;
+        } else {
+          effectiveCurrency = nativeForUi;
+          overrideForUi = null;
+        }
+      }
+
+      const spend = Number(row.spend) || 0;
+      const spend_brl =
+        convertMetaSpendToBrl(spend, effectiveCurrency, rates) ??
+        (effectiveCurrency === 'BRL' || !effectiveCurrency ? spend : spend * usdRate);
+
+      return {
+        ...row,
+        currency_override_server: overrideFromServer,
+        currency: effectiveCurrency,
+        currency_override: overrideForUi,
+        currency_account: row.currency_account ?? row.currency ?? nativeForUi,
+        spend_brl,
+      };
+    });
+  }, [displayMetricCampaignRowsRaw, localMetaCurrencyByKey, liveUsdBrlRate]);
+
+  /**
+   * Totais de Insights derivados das linhas REALMENTE exibidas em `displayMetricCampaignRows`.
+   * Usado para resultados e para o spend estimado por tipo de campanha. O card principal de billing
+   * não usa esta soma.
    */
   const displayMetricSummary = useMemo(() => {
     const rows = Array.isArray(displayMetricCampaignRows) ? displayMetricCampaignRows : [];
     return rows.reduce(
       (acc: { spendAll: number; spendBolao: number; resultsNormal: number; resultsBolao: number }, row: any) => {
-        const spend = Number(row?.spend) || 0;
+        /**
+         * Sempre soma em BRL: usamos `spend_brl` quando disponível (linhas live ganham conversão automática
+         * USD→BRL no backend); para linhas vindas só do cache (sem `spend_brl`), assume que `spend` já está em BRL.
+         */
+        const spendBrl =
+          Number.isFinite(Number(row?.spend_brl)) ? Number(row?.spend_brl) : Number(row?.spend) || 0;
         const liveResults = Number(row?.results_live) || 0;
         const cachedLeads = Number(row?.leads) || 0;
         const results = liveResults > 0 ? liveResults : cachedLeads;
         const kind = row?.campaign_kind === 'bolao' ? 'bolao' : 'normal';
-        acc.spendAll += spend;
+        acc.spendAll += spendBrl;
         if (kind === 'bolao') {
-          acc.spendBolao += spend;
+          acc.spendBolao += spendBrl;
           acc.resultsBolao += results;
         } else {
           acc.resultsNormal += results;
@@ -2031,14 +2358,89 @@ export default function AdminMetaPage() {
     );
   }, [displayMetricCampaignRows]);
 
+  const liveBillingDue = useMemo(() => {
+    if (!usingLiveMetaCards || !liveAggregate?.billing) return 0;
+    return Number(liveAggregate.billing.total_balance_due) || 0;
+  }, [usingLiveMetaCards, liveAggregate]);
+
   /**
-   * Cards de resumo Meta. Quando há dados ao vivo, totais derivam diretamente da tabela
-   * (`displayMetricSummary`) para garantir consistência visual entre card e tabela.
+   * Total cobrado no cartão no período do filtro, **em BRL** (contas USD convertidas pela cotação atual).
+   */
+  const liveCardCharges = useMemo(() => {
+    if (!usingLiveMetaCards || !liveAggregate?.billing) return 0;
+    return Number(liveAggregate.billing.total_card_charges) || 0;
+  }, [usingLiveMetaCards, liveAggregate]);
+
+  /**
+   * Parcela em USD das cobranças (soma das contas em dólar, antes de converter).
+   * Exibir ao lado do total em R$ quando > 0.
+   */
+  const liveCardChargesUsdComponent = useMemo(() => {
+    if (!usingLiveMetaCards || !liveAggregate?.billing) return 0;
+    return Number(liveAggregate.billing.total_card_charges_usd) || 0;
+  }, [usingLiveMetaCards, liveAggregate]);
+
+  const liveCardChargesCount = useMemo(() => {
+    if (!usingLiveMetaCards || !liveAggregate?.billing) return 0;
+    return Number(liveAggregate.billing.card_charges_count) || 0;
+  }, [usingLiveMetaCards, liveAggregate]);
+
+  /** Total na janela ~90d (filtrado para BRL no backend). */
+  const liveCardChargesWindow = useMemo(() => {
+    if (!usingLiveMetaCards || !liveAggregate?.billing) return 0;
+    return Number(liveAggregate.billing.total_card_charges_window) || 0;
+  }, [usingLiveMetaCards, liveAggregate]);
+
+  const liveCardChargesWindowUsdComponent = useMemo(() => {
+    if (!usingLiveMetaCards || !liveAggregate?.billing) return 0;
+    return Number(liveAggregate.billing.total_card_charges_window_usd) || 0;
+  }, [usingLiveMetaCards, liveAggregate]);
+
+  const liveCardChargesCountWindow = useMemo(() => {
+    if (!usingLiveMetaCards || !liveAggregate?.billing) return 0;
+    return Number(liveAggregate.billing.card_charges_count_window) || 0;
+  }, [usingLiveMetaCards, liveAggregate]);
+
+  /** Cobrança mais recente entre todas as contas, pra exibir como "última cobrança" quando o filtro não tem dado. */
+  const liveLatestCharge = useMemo(() => {
+    if (!usingLiveMetaCards) return null;
+    const lc = liveAggregate?.billing?.latest_card_charge ?? null;
+    if (!lc?.event_time) return null;
+    const amt = lc.amount != null ? Number(lc.amount) : NaN;
+    const amtBrl = lc.amount_brl != null ? Number(lc.amount_brl) : NaN;
+    if (!Number.isFinite(amt) && !Number.isFinite(amtBrl)) return null;
+    const date = new Date(String(lc.event_time));
+    if (Number.isNaN(date.getTime())) return null;
+    const cur = String(lc.currency ?? '').trim().toUpperCase() || 'BRL';
+    return {
+      amount: Number.isFinite(amt) ? amt : 0,
+      amount_brl: Number.isFinite(amtBrl) ? amtBrl : null,
+      currency: cur,
+      label: date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' }),
+    };
+  }, [usingLiveMetaCards, liveAggregate]);
+
+  const liveBillingAccountsLabel = useMemo(() => {
+    if (!usingLiveMetaCards || !liveAggregate?.billing) return null;
+    const count =
+      Number(liveAggregate.billing.accounts_count) ||
+      (Array.isArray(liveAggregate.billing.accounts) ? liveAggregate.billing.accounts.length : 0);
+    if (count <= 0) return null;
+    return `${count} ${count === 1 ? 'conta' : 'contas'} Meta`;
+  }, [usingLiveMetaCards, liveAggregate]);
+
+  /**
+   * Cards de resumo Meta. O card principal de "Gasto" mostra o valor efetivamente
+   * cobrado no método de pagamento (cartão) no período do filtro, vindo da edge
+   * `/activities` da Ad Account com `event_type=ad_account_billing_charge`.
+   * Esse valor casa com o que o cartão de crédito mostra (já que o `balance` é só
+   * o que está pendente para a próxima cobrança).
    */
   const metaSummaryCards = useMemo(() => {
     if (usingLiveMetaCards && liveAggregate?.totals) {
       return {
-        spendAll: displayMetricSummary.spendAll,
+        cardCharges: liveCardCharges,
+        billingDue: liveBillingDue,
         spendBolao: displayMetricSummary.spendBolao,
         resultsNormal: displayMetricSummary.resultsNormal,
         resultsBolao: displayMetricSummary.resultsBolao,
@@ -2048,7 +2450,8 @@ export default function AdminMetaPage() {
     }
     if (scopedMetaBancaFilter) {
       return {
-        spendAll: 0,
+        cardCharges: 0,
+        billingDue: 0,
         spendBolao: 0,
         resultsNormal: 0,
         resultsBolao: 0,
@@ -2061,7 +2464,8 @@ export default function AdminMetaPage() {
       const normal = overviewKindSummary.normal;
       const bolao = overviewKindSummary.bolao;
       return {
-        spendAll: overviewApiTotals.total_spend || 0,
+        cardCharges: 0,
+        billingDue: 0,
         spendBolao: bolao.spend || 0,
         resultsNormal: normal.insights_rows > 0 ? normal.leads || 0 : 0,
         resultsBolao: bolao.insights_rows > 0 ? bolao.leads || 0 : 0,
@@ -2070,7 +2474,8 @@ export default function AdminMetaPage() {
       };
     }
     return {
-      spendAll: cacheKindSummary.spendAll,
+      cardCharges: 0,
+      billingDue: 0,
       spendBolao: cacheKindSummary.spendBolao,
       resultsNormal: cacheKindSummary.resultsNormal,
       resultsBolao: cacheKindSummary.resultsBolao,
@@ -2086,6 +2491,8 @@ export default function AdminMetaPage() {
     overviewKindSummary,
     cacheKindSummary,
     displayMetricSummary,
+    liveBillingDue,
+    liveCardCharges,
   ]);
 
   /** Ordenação estável para leitura humana: agrupa por banca e ordena por data dentro da banca. */
@@ -2455,22 +2862,88 @@ export default function AdminMetaPage() {
         <div className="space-y-4">
         <div className="grid gap-4 md:grid-cols-1 xl:grid-cols-3">
           <div className={`${metaCard} p-4`}>
-            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Gasto total · campanhas ativas</p>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Soma do gasto no período selecionado.</p>
+            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Gasto total · cobrado no cartão</p>
             {metaSummaryCardsLoading ? (
               <div className="mt-3 flex items-center gap-2 text-gray-600 dark:text-gray-400 min-h-[2rem]">
                 <Loader2 className="w-5 h-5 animate-spin text-[#8CD955] shrink-0" />
                 <span className="text-sm">Carregando dados…</span>
               </div>
             ) : (
-              <p className="text-2xl font-bold text-gray-900 dark:text-gray-50 mt-2 tabular-nums tracking-tight">
-                {formatBRL(metaSummaryCards.spendAll)}
-              </p>
+              <>
+                <p className="text-2xl font-bold text-gray-900 dark:text-gray-50 mt-2 tabular-nums tracking-tight">
+                  {formatBRL(metaSummaryCards.cardCharges)}
+                </p>
+                {liveCardChargesUsdComponent > 0 ? (
+                  <p className="text-sm font-medium text-amber-800 dark:text-amber-200/90 mt-1 tabular-nums">
+                    {formatMoneyByCurrency(liveCardChargesUsdComponent, 'USD')}
+                    <span className="text-[11px] font-normal text-gray-500 dark:text-gray-400 ml-1">
+                      (soma das cobranças em contas USD no período)
+                    </span>
+                  </p>
+                ) : null}
+                <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1">
+                  {liveCardChargesCount > 0
+                    ? `${liveCardChargesCount} ${liveCardChargesCount === 1 ? 'cobrança' : 'cobranças'} no período`
+                    : 'Sem cobranças no período (cobrança é por threshold, não diária).'}
+                </p>
+                {(liveCardChargesCountWindow > liveCardChargesCount || liveLatestCharge) ? (
+                  <p
+                    className="text-[11px] text-gray-500 dark:text-gray-400 mt-1"
+                    title="Histórico completo dos últimos ~90 dias (independente do filtro do painel)."
+                  >
+                    Últimos 90d:{' '}
+                    <span className="font-medium text-gray-700 dark:text-gray-300 tabular-nums">
+                      {formatBRL(liveCardChargesWindow)}
+                    </span>
+                    {liveCardChargesWindowUsdComponent > 0 ? (
+                      <>
+                        {' · '}
+                        <span className="font-medium text-amber-800 dark:text-amber-200/90 tabular-nums">
+                          {formatMoneyByCurrency(liveCardChargesWindowUsdComponent, 'USD')}
+                        </span>
+                      </>
+                    ) : null}
+                    {liveCardChargesCountWindow > 0
+                      ? ` · ${liveCardChargesCountWindow} ${liveCardChargesCountWindow === 1 ? 'cobrança' : 'cobranças'}`
+                      : ''}
+                    {liveLatestCharge ? (
+                      <>
+                        {' · Última: '}
+                        {liveLatestCharge.currency === 'USD' ? (
+                          <>
+                            <span className="font-medium text-gray-700 dark:text-gray-300 tabular-nums">
+                              {formatMoneyByCurrency(liveLatestCharge.amount, 'USD')}
+                            </span>
+                            {liveLatestCharge.amount_brl != null ? (
+                              <>
+                                {' ≈ '}
+                                <span className="font-medium text-gray-700 dark:text-gray-300 tabular-nums">
+                                  {formatBRL(liveLatestCharge.amount_brl)}
+                                </span>
+                              </>
+                            ) : null}
+                          </>
+                        ) : (
+                          <span className="font-medium text-gray-700 dark:text-gray-300 tabular-nums">
+                            {formatBRL(liveLatestCharge.amount_brl ?? liveLatestCharge.amount)}
+                          </span>
+                        )}
+                        {' em '}
+                        {liveLatestCharge.label}
+                      </>
+                    ) : null}
+                  </p>
+                ) : null}
+                <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1">
+                  Balance pendente:{' '}
+                  <span className="font-medium text-gray-700 dark:text-gray-300 tabular-nums">{formatBRL(metaSummaryCards.billingDue)}</span>
+                </p>
+              </>
             )}
           </div>
           <div className={`${metaCard} p-4`}>
-            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Gasto · campanhas tipo bolão</p>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Marcadas como “Bolão” em campanhas sincronizadas no CRM.</p>
+            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Spend Insights · bolão</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Spend estimado da Meta em campanhas marcadas como “Bolão”.</p>
             {metaSummaryCardsLoading ? (
               <div className="mt-3 flex items-center gap-2 text-gray-600 dark:text-gray-400 min-h-[2rem]">
                 <Loader2 className="w-5 h-5 animate-spin text-[#8CD955] shrink-0" />
@@ -2529,10 +3002,10 @@ export default function AdminMetaPage() {
                 {scopedMetaBancaFilter ? (
                   <span className="text-gray-500 dark:text-gray-500">(banca filtrada no painel)</span>
                 ) : null}
-                . Métricas de alcance, cliques e gasto vêm da <span className="font-semibold text-emerald-700 dark:text-emerald-400">Meta em tempo real</span> quando o carregamento ao vivo conclui; o cache local complementa tipo, consultores e vínculos.
+                . Métricas de alcance, cliques e spend estimado vêm da <span className="font-semibold text-emerald-700 dark:text-emerald-400">Meta em tempo real</span> quando o carregamento ao vivo conclui; o cache local complementa tipo, consultores e vínculos.
                 {!scopedMetaBancaFilter ? (
                   <span className="block sm:inline sm:before:content-[' '] mt-1 sm:mt-0 text-gray-500 dark:text-gray-500">
-                    Cada ID de campanha Meta aparece no máximo uma vez: se houver duplicidade entre bancas no CRM, mantemos a linha com <span className="font-medium text-gray-600 dark:text-gray-400">atualização mais recente</span> (em empate, maior gasto no período).
+                    Cada ID de campanha Meta aparece no máximo uma vez: se houver duplicidade entre bancas no CRM, mantemos a linha com <span className="font-medium text-gray-600 dark:text-gray-400">atualização mais recente</span> (em empate, maior spend estimado no período).
                   </span>
                 ) : null}
               </p>
@@ -2543,9 +3016,40 @@ export default function AdminMetaPage() {
                     <Radio className="w-3 h-3 shrink-0 animate-pulse" />
                     Ao vivo · Meta API
                   </span>
-                ) : (
+                ) : null}
+                {!usingLiveMetaCards ? (
                   <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 dark:bg-[#333] px-2.5 py-0.5 text-[11px] font-semibold uppercase text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-[#404040]">
                     Cache CRM / aguardando Meta
+                  </span>
+                ) : null}
+                {usingLiveMetaCards && liveAggregate?.billing ? (
+                  <>
+                    <span
+                      className="inline-flex items-center gap-1 rounded-full bg-rose-100 dark:bg-rose-950/70 px-2.5 py-0.5 text-[11px] font-semibold uppercase text-rose-900 dark:text-rose-300 border border-rose-200/80 dark:border-rose-800"
+                      title="Total consolidado em R$ (USD convertido). Contas em dólar também mostram a soma bruta em US$."
+                    >
+                      <DollarSign className="w-3 h-3 shrink-0" />
+                      Cobrado no cartão: {formatBRL(liveCardCharges)}
+                      {liveCardChargesUsdComponent > 0
+                        ? ` · ${formatMoneyByCurrency(liveCardChargesUsdComponent, 'USD')}`
+                        : ''}
+                      {liveCardChargesCount > 0
+                        ? ` · ${liveCardChargesCount} ${liveCardChargesCount === 1 ? 'cobrança' : 'cobranças'}`
+                        : ''}
+                    </span>
+                    <span
+                      className="inline-flex items-center gap-1 rounded-full bg-amber-100 dark:bg-amber-950/70 px-2.5 py-0.5 text-[11px] font-semibold uppercase text-amber-900 dark:text-amber-300 border border-amber-200/80 dark:border-amber-800"
+                      title="Campo balance da Ad Account: valor pendente que ainda não foi cobrado."
+                    >
+                      <DollarSign className="w-3 h-3 shrink-0" />
+                      Balance pendente: {formatBRL(liveBillingDue)}
+                      {liveBillingAccountsLabel ? ` · ${liveBillingAccountsLabel}` : ''}
+                    </span>
+                  </>
+                ) : (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 dark:bg-amber-950/40 px-2.5 py-0.5 text-[11px] font-semibold uppercase text-amber-700 dark:text-amber-400 border border-amber-200/70 dark:border-amber-900">
+                    <DollarSign className="w-3 h-3 shrink-0" />
+                    Billing Meta aguardando
                   </span>
                 )}
                 {liveMetricsUpdatedAt ? (
@@ -2564,7 +3068,9 @@ export default function AdminMetaPage() {
             <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={() => {
-                  const first = (orderedDisplayMetricCampaignRows || [])[0];
+                  const first = (orderedDisplayMetricCampaignRows || [])[0] as
+                    | { banca_id?: unknown; campaign_id?: unknown }
+                    | undefined;
                   if (first) {
                     setConsultorModalCampaignKey(`${String(first.banca_id)}:${String(first.campaign_id)}`);
                   }
@@ -2628,8 +3134,14 @@ export default function AdminMetaPage() {
                               <th className="px-4 py-2.5">Gestor</th>
                               <th className="px-4 py-2.5">Banca</th>
                               <th className="px-4 py-2.5 min-w-[220px]">Campanha</th>
-                              <th className="px-4 py-2 text-right">Gasto</th>
+                              <th className="px-4 py-2 text-right">Spend Insights</th>
                               <th className="px-4 py-2">Tipo</th>
+                              <th
+                                className="px-4 py-2"
+                                title="Moeda da Ad Account na Meta. Valores em USD são convertidos para BRL na cotação atual para somar nos totais."
+                              >
+                                Moeda
+                              </th>
                               <th className="px-4 py-2 text-right">Reach</th>
                               <th className="px-4 py-2 text-right">Impressões</th>
                               <th className="px-4 py-2 text-right">Cliques</th>
@@ -2640,17 +3152,25 @@ export default function AdminMetaPage() {
                               <th className="px-4 py-2">Status</th>
                               <th className="px-4 py-2">Objetivo</th>
                               <th className="px-4 py-2 text-right">Orçamento diário</th>
+                              <th className="px-4 py-2">Redirect</th>
                               <th className="px-4 py-2">Atribuir banca</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-gray-100 dark:divide-[#383838]">
                             {orderedDisplayMetricCampaignRows.map((c: any, rowIndex: number) => {
+                              const stableKeyForCurrency = metaCampaignStableKey(c);
+                              const rawCurrency = String(c.currency ?? '').trim().toUpperCase();
+                              const rowCurrency = rawCurrency || 'BRL';
+                              const isForeignCurrency = rowCurrency !== 'BRL';
                               const m = {
                                 reach: Number(c.reach) || 0,
                                 impressions: Number(c.impressions) || 0,
                                 clicks: Number(c.clicks) || 0,
                                 leads: Number(c.leads) || 0,
                                 spend: Number(c.spend) || 0,
+                                spend_brl: Number.isFinite(Number(c.spend_brl))
+                                  ? Number(c.spend_brl)
+                                  : Number(c.spend) || 0,
                                 results: Number(c.results_live) || 0,
                               };
                               const eff = String(c.effective_status || c.status || '').toUpperCase();
@@ -2671,6 +3191,17 @@ export default function AdminMetaPage() {
                               const ownerTarget = ownerOptions.some((b) => String(b.id) === String(ownerTargetRaw))
                                 ? ownerTargetRaw
                                 : sourceBancaId;
+                              const redirectOptions = redirectsByBanca[sourceBancaId] || [];
+                              const redirectTargetRaw =
+                                campaignRedirectDraft[ownerKey] ??
+                                (c.redirect_project_id ? String(c.redirect_project_id) : '');
+                              const redirectTarget = redirectOptions.some((r) => String(r.id) === String(redirectTargetRaw))
+                                ? String(redirectTargetRaw)
+                                : '';
+                              const currentRedirectProject = c.redirect_project as
+                                | { id?: string; name?: string | null; slug?: string | null }
+                                | null
+                                | undefined;
                               /** Não usar só campaign_id / id do CRM: a mesma campanha pode vir de 2 integrações Meta. */
                               const rowKey = [
                                 rowIndex,
@@ -2710,7 +3241,37 @@ export default function AdminMetaPage() {
                                       </span>
                                     </div>
                                   </td>
-                                  <td className="px-4 py-2 text-right text-gray-700 dark:text-white tabular-nums">R$ {m.spend.toFixed(2)}</td>
+                                  <td className="px-4 py-2 text-right text-gray-700 dark:text-white tabular-nums">
+                                    <div className="flex flex-col items-end gap-0.5">
+                                      <span
+                                        className="font-medium"
+                                        title={
+                                          isForeignCurrency
+                                            ? `Spend exibido em ${rowCurrency}. O valor bruto vem da Meta na moeda da conta (veja coluna Moeda / override).`
+                                            : 'Valor em BRL.'
+                                        }
+                                      >
+                                        {formatMoneyByCurrency(m.spend, rowCurrency)}
+                                      </span>
+                                      {isForeignCurrency ? (
+                                        <span
+                                          className="text-[11px] text-gray-500 dark:text-gray-400 tabular-nums"
+                                          title={
+                                            liveUsdBrlRate && rowCurrency === 'USD'
+                                              ? `Equivalente em BRL com cotação USD→BRL ${liveUsdBrlRate.toFixed(4).replace('.', ',')} — usado na soma dos totais em R$.`
+                                              : 'Valor convertido para BRL nos totais.'
+                                          }
+                                        >
+                                          ≈ {formatBRL(m.spend_brl)}
+                                          {liveUsdBrlRate && rowCurrency === 'USD' ? (
+                                            <span className="ml-1 text-gray-400 dark:text-gray-500">
+                                              (cot. {liveUsdBrlRate.toFixed(2).replace('.', ',')})
+                                            </span>
+                                          ) : null}
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                  </td>
                                   <td className="px-4 py-2 align-top">
                                     {c.banca_id ? (
                                       <select
@@ -2734,6 +3295,121 @@ export default function AdminMetaPage() {
                                       <span className="text-xs text-gray-500 dark:text-gray-400">—</span>
                                     )}
                                   </td>
+                                  <td className="px-4 py-2 align-top">
+                                    {(() => {
+                                      const localPick = localMetaCurrencyByKey[stableKeyForCurrency];
+                                      const accountNativeRaw = String(c.currency_account ?? '').trim().toUpperCase();
+                                      const nativeSelect: 'BRL' | 'USD' =
+                                        accountNativeRaw === 'USD' ? 'USD' : 'BRL';
+                                      let selectValue: 'BRL' | 'USD';
+                                      if (localPick === 'BRL' || localPick === 'USD') {
+                                        selectValue = localPick;
+                                      } else if (localPick === 'AUTO') {
+                                        selectValue = nativeSelect;
+                                      } else {
+                                        const overrideRaw = String(c.currency_override ?? '').trim().toUpperCase();
+                                        if (overrideRaw === 'BRL' || overrideRaw === 'USD') {
+                                          selectValue = overrideRaw as 'BRL' | 'USD';
+                                        } else {
+                                          selectValue = rowCurrency === 'USD' ? 'USD' : 'BRL';
+                                        }
+                                      }
+                                      const serverOvRaw = String(
+                                        (c as { currency_override_server?: string | null }).currency_override_server ??
+                                          (c as { currency_override?: string | null }).currency_override ??
+                                          ''
+                                      ).trim().toUpperCase();
+                                      const serverHasOverride =
+                                        serverOvRaw === 'BRL' || serverOvRaw === 'USD';
+                                      const showLimpar =
+                                        localPick === 'AUTO'
+                                          ? false
+                                          : localPick === 'BRL' || localPick === 'USD'
+                                            ? true
+                                            : serverHasOverride;
+                                      const saving = campaignCurrencySavingKey === stableKeyForCurrency;
+                                      const selectClass = `px-2 py-1 rounded-lg border text-[10px] font-bold uppercase tracking-wide bg-white dark:bg-[#2a2a2a] disabled:opacity-50 cursor-pointer focus:outline-none focus:ring-2 focus:ring-offset-1 ${
+                                        selectValue === 'USD'
+                                          ? 'border-amber-200/80 dark:border-amber-800 text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/70 focus:ring-amber-400'
+                                          : 'border-emerald-200/80 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/70 focus:ring-emerald-400'
+                                      }`;
+                                      return c.banca_id ? (
+                                        <div className="flex flex-col items-start gap-0.5">
+                                          <select
+                                            value={selectValue}
+                                            disabled={saving}
+                                            onChange={(e) => {
+                                              const next = e.target.value as 'BRL' | 'USD';
+                                              if (next === selectValue) return;
+                                              setLocalMetaCurrencyByKey((prev) => ({
+                                                ...prev,
+                                                [stableKeyForCurrency]: next,
+                                              }));
+                                              void handleSaveCampaignCurrency(
+                                                String(c.banca_id),
+                                                String(c.campaign_id),
+                                                next,
+                                                c.name,
+                                                stableKeyForCurrency
+                                              );
+                                            }}
+                                            title={
+                                              showLimpar || serverHasOverride || localPick === 'BRL' || localPick === 'USD'
+                                                ? `Conversão para R$ nos totais usa esta moeda (cotação atual). Conta Meta nativa: ${nativeSelect}.`
+                                                : `Detectado na conta: ${nativeSelect}. Alterar só recalcula esta linha — não refaz o stream de todas as integrações.`
+                                            }
+                                            className={selectClass}
+                                          >
+                                            <option value="BRL">R$ BRL</option>
+                                            <option value="USD">US$ USD</option>
+                                          </select>
+                                          {showLimpar ? (
+                                            <button
+                                              type="button"
+                                              disabled={saving}
+                                              onClick={() => {
+                                                setLocalMetaCurrencyByKey((prev) => ({
+                                                  ...prev,
+                                                  [stableKeyForCurrency]: 'AUTO',
+                                                }));
+                                                void handleSaveCampaignCurrency(
+                                                  String(c.banca_id),
+                                                  String(c.campaign_id),
+                                                  null,
+                                                  c.name,
+                                                  stableKeyForCurrency
+                                                );
+                                              }}
+                                              className="text-[10px] text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 underline disabled:opacity-50"
+                                              title="Limpar override salvo e voltar à moeda nativa da conta (sem novo carregamento Meta)."
+                                            >
+                                              limpar override
+                                            </button>
+                                          ) : (
+                                            <span className="text-[10px] text-gray-400 dark:text-gray-500" title="Sem override — valor da conta Meta.">
+                                              auto
+                                            </span>
+                                          )}
+                                        </div>
+                                      ) : (
+                                        <span
+                                          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+                                            isForeignCurrency
+                                              ? 'bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300 border border-amber-200/80 dark:border-amber-800'
+                                              : 'bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800'
+                                          }`}
+                                          title={
+                                            isForeignCurrency
+                                              ? `Ad Account em ${rowCurrency}. Spend nativo está em ${rowCurrency}; convertido para BRL via cotação atual nos totais.`
+                                              : 'Ad Account em BRL.'
+                                          }
+                                        >
+                                          <span className="text-sm leading-none">{currencySymbol(rowCurrency)}</span>
+                                          <span>{rowCurrency}</span>
+                                        </span>
+                                      );
+                                    })()}
+                                  </td>
                                   <td className="px-4 py-2 text-right text-gray-700 dark:text-white tabular-nums">{m.reach.toLocaleString('pt-BR')}</td>
                                   <td className="px-4 py-2 text-right text-gray-700 dark:text-white tabular-nums">{m.impressions.toLocaleString('pt-BR')}</td>
                                   <td className="px-4 py-2 text-right text-gray-700 dark:text-white tabular-nums">{m.clicks.toLocaleString('pt-BR')}</td>
@@ -2744,6 +3420,53 @@ export default function AdminMetaPage() {
                                   <td className="px-4 py-2 text-gray-700 dark:text-white">{c.effective_status || c.status || '-'}</td>
                                   <td className="px-4 py-2 text-gray-700 dark:text-white">{c.objective || '-'}</td>
                                   <td className="px-4 py-2 text-right text-gray-700 dark:text-white">{c.daily_budget != null ? `R$ ${Number(c.daily_budget).toFixed(2)}` : '-'}</td>
+                                  <td className="px-4 py-2">
+                                    {c.banca_id ? (
+                                      <div className="flex flex-col gap-1 min-w-[220px]">
+                                        <div className="flex items-center gap-2">
+                                          <select
+                                            value={redirectTarget}
+                                            onChange={(e) =>
+                                              setCampaignRedirectDraft((prev) => ({
+                                                ...prev,
+                                                [ownerKey]: e.target.value,
+                                              }))
+                                            }
+                                            className="px-2 py-1 rounded-lg border border-gray-200 dark:border-[#404040] text-xs text-gray-700 dark:text-gray-200 bg-white dark:bg-[#2a2a2a] max-w-[190px]"
+                                          >
+                                            <option value="">Sem redirect</option>
+                                            {redirectOptions.map((redirect) => (
+                                              <option key={redirect.id} value={redirect.id}>
+                                                {redirect.name || redirect.slug || redirect.id}
+                                              </option>
+                                            ))}
+                                          </select>
+                                          <button
+                                            type="button"
+                                            disabled={
+                                              campaignRedirectSavingKey === ownerKey ||
+                                              String(redirectTarget || '') === String(c.redirect_project_id || '')
+                                            }
+                                            onClick={() => handleSaveCampaignRedirect(c)}
+                                            className="px-3 py-1.5 rounded-lg border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-950/40 text-xs font-medium disabled:opacity-50"
+                                          >
+                                            {campaignRedirectSavingKey === ownerKey ? 'Salvando…' : 'Vincular'}
+                                          </button>
+                                        </div>
+                                        {currentRedirectProject?.id ? (
+                                          <span className="text-[11px] text-gray-500 dark:text-gray-400">
+                                            Atual: {currentRedirectProject.name || currentRedirectProject.slug || currentRedirectProject.id}
+                                          </span>
+                                        ) : redirectOptions.length === 0 ? (
+                                          <span className="text-[11px] text-amber-600 dark:text-amber-400">
+                                            Nenhum redirect ativo nesta banca
+                                          </span>
+                                        ) : null}
+                                      </div>
+                                    ) : (
+                                      <span className="text-xs text-gray-500 dark:text-gray-400">—</span>
+                                    )}
+                                  </td>
                                   <td className="px-4 py-2">
                                     {c.banca_id ? (
                                       <div className="flex items-center gap-2">
@@ -2924,7 +3647,7 @@ export default function AdminMetaPage() {
                               <th className="px-4 py-2"><Eye className="w-4 h-4 inline" /> Alcance</th>
                               <th className="px-4 py-2"><MousePointer className="w-4 h-4 inline" /> Impressões</th>
                               <th className="px-4 py-2">Cliques</th>
-                              <th className="px-4 py-2"><DollarSign className="w-4 h-4 inline" /> Gasto</th>
+                              <th className="px-4 py-2"><DollarSign className="w-4 h-4 inline" /> Spend Insights</th>
                               <th className="px-4 py-2">Leads</th>
                               <th className="px-4 py-2">CPM</th>
                               <th className="px-4 py-2">CPC</th>
@@ -3839,6 +4562,41 @@ export default function AdminMetaPage() {
                       </p>
                     </div>
                   </div>
+
+                  {(() => {
+                    const redirectLinked = (Array.isArray(selectedConsultorModalRow.assigned_consultors)
+                      ? selectedConsultorModalRow.assigned_consultors
+                      : []
+                    )
+                      .map((consultor: any) => ({
+                        consultor,
+                        groups: Array.isArray(consultor.redirect_groups) ? consultor.redirect_groups : [],
+                      }))
+                      .filter((item: any) => item.groups.length > 0);
+                    if (redirectLinked.length === 0) return null;
+                    return (
+                      <div className="p-3 rounded-xl border border-emerald-100 dark:border-emerald-900/60 bg-emerald-50/60 dark:bg-emerald-950/20">
+                        <p className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 uppercase">
+                          Grupos de redirect vinculados à campanha
+                        </p>
+                        <div className="mt-2 space-y-2">
+                          {redirectLinked.map(({ consultor, groups }: any) => (
+                            <div key={consultor.id} className="text-xs text-gray-700 dark:text-gray-200">
+                              <span className="font-semibold">{consultor.full_name || consultor.email || consultor.id}</span>
+                              <span className="text-gray-500 dark:text-gray-400">: </span>
+                              <span>
+                                {groups
+                                  .map((g: any) =>
+                                    `${g.name || 'Grupo sem nome'}${g.project_name ? ` (${g.project_name})` : ''}`
+                                  )
+                                  .join(', ')}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   <div>
                     <label className="block text-xs font-semibold uppercase text-gray-500 dark:text-gray-400 mb-1">Consultores da banca</label>

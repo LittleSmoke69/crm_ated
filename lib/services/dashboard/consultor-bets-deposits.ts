@@ -1,6 +1,7 @@
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { getSubordinateIds, getUserProfile, type UserProfile } from '@/lib/middleware/permissions';
 import { getHierarchyPath } from '@/lib/utils/hierarchy';
+import { inferMetaCampaignIdsFromRedirectConsultors } from '@/lib/services/meta-redirect-consultor-attribution';
 
 const CRM_BETS_DEPOSITS_ENDPOINT =
   'https://web.rodadafortuna.digital/api/crm/get-bets-and-deposits-by-consultant';
@@ -745,7 +746,18 @@ export async function computeConsultantAdsSummary(params: {
     .select('campaign_id')
     .eq('banca_id', banca.id)
     .in('consultor_id', consultorIds);
-  const campaignIds = Array.from(new Set((campaignLinks || []).map((x: any) => String(x.campaign_id)).filter(Boolean)));
+  let redirectCampaignIds: string[] = [];
+  try {
+    redirectCampaignIds = await inferMetaCampaignIdsFromRedirectConsultors(banca.id, consultorIds);
+  } catch (error: any) {
+    console.warn('[MeuDesempenho/AdsSummary] Falha ao inferir campanhas por redirect:', error?.message);
+  }
+  const campaignIds = Array.from(
+    new Set([
+      ...(campaignLinks || []).map((x: any) => String(x.campaign_id)).filter(Boolean),
+      ...redirectCampaignIds,
+    ])
+  );
 
   let metaSpend = 0;
   if (campaignIds.length > 0) {
@@ -760,11 +772,24 @@ export async function computeConsultantAdsSummary(params: {
     metaSpend = (insights || []).reduce((sum: number, row: any) => sum + (Number(row.spend) || 0), 0);
   }
 
-  const { data: redirectGroups } = await supabaseServiceRole
-    .from('redirect_groups')
+  const { data: vslProjects } = await supabaseServiceRole
+    .from('vsl_projects')
     .select('id')
-    .in('consultant_user_id', consultorIds);
-  const groupIds = Array.from(new Set((redirectGroups || []).map((g: any) => String(g.id)).filter(Boolean)));
+    .eq('banca_id', banca.id);
+  const projectIds = Array.from(new Set((vslProjects || []).map((p: any) => String(p.id)).filter(Boolean)));
+
+  let groupIds: string[] = [];
+  if (projectIds.length > 0) {
+    const { data: redirectGroups, error: redirectGroupsError } = await supabaseServiceRole
+      .from('redirect_groups')
+      .select('id')
+      .in('project_id', projectIds)
+      .in('consultant_user_id', consultorIds);
+    if (redirectGroupsError) {
+      console.warn('[MeuDesempenho/AdsSummary] Falha ao listar grupos por consultor:', redirectGroupsError.message);
+    }
+    groupIds = Array.from(new Set((redirectGroups || []).map((g: any) => String(g.id)).filter(Boolean)));
+  }
 
   let redirectClicks = 0;
   if (groupIds.length > 0) {

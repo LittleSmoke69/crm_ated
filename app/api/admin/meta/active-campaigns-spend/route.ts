@@ -13,6 +13,8 @@ import {
   getDecryptedToken,
   getDecryptedTokenByIntegrationId,
   getMetaConfig,
+  fetchMetaBillingSnapshot,
+  getMetaCurrencyForBanca,
   isMetaIntegrationLinkedToBanca,
   listMetaIntegrationsForBanca,
 } from '@/lib/services/meta-sync-service';
@@ -83,9 +85,17 @@ export async function GET(req: NextRequest) {
     if (Number.isFinite(timeIncrement as number)) spendOpts.timeIncrement = timeIncrement;
     if (calendarTimeZone) spendOpts.calendarTimeZone = calendarTimeZone;
 
-    const report = await getActiveCampaignsSpend(baseUrl, token, adAccountId, spendOpts);
+    const cardChargesPeriod = timeRange ? { since: timeRange.since, until: timeRange.until } : null;
+    const integrationCurrencyHint = await getMetaCurrencyForBanca(bancaId);
+    const [report, billing] = await Promise.all([
+      getActiveCampaignsSpend(baseUrl, token, adAccountId, spendOpts),
+      fetchMetaBillingSnapshot(baseUrl, token, adAccountId, {
+        cardChargesPeriod,
+        integrationCurrencyHint,
+      }),
+    ]);
 
-    return successResponse(report);
+    return successResponse({ ...report, billing });
   } catch (err: any) {
     if (err?.message?.includes('Acesso negado') || err?.message?.includes('não autenticado')) {
       return errorResponse(err.message, 403);

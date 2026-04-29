@@ -10,10 +10,21 @@ import {
 import { getBancasDoUsuario } from '@/lib/crm/user-bancas';
 import { requireVslProjectAccess } from '@/lib/middleware/vsl-admin';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import {
+  fetchMetaBillingSnapshot,
+  getDecryptedToken,
+  getMetaConfig,
+  summarizeMetaBillingSnapshots,
+} from '@/lib/services/meta-sync-service';
 import { fetchAllSupabasePages } from '@/lib/supabase/fetch-all-pages';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 
 const WHATSAPP_INVITE_PREFIX = 'https://chat.whatsapp.com/';
+
+function isMissingRedirectProjectColumnError(err: { code?: string; message?: string } | null): boolean {
+  const msg = String(err?.message ?? '').toLowerCase();
+  return err?.code === '42703' || msg.includes('redirect_project_id');
+}
 
 /**
  * GET /api/admin/redirect/groups?project_id=xxx
@@ -45,10 +56,68 @@ export async function GET(req: NextRequest) {
 
     const { data: project } = await supabaseServiceRole
       .from('vsl_projects')
-      .select('name, slug, pixel_id, redirect_timer_seconds, banca_id')
+      .select('name, slug, pixel_id, redirect_timer_seconds, banca_id, owner_user_id')
       .eq('id', projectId)
       .single();
     if (!project) return errorResponse('Projeto não encontrado', 404);
+
+    const [ownerRes, bancaRes] = await Promise.all([
+      project.owner_user_id
+        ? supabaseServiceRole
+            .from('profiles')
+            .select('id, full_name, email, status')
+            .eq('id', project.owner_user_id)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+      project.banca_id
+        ? supabaseServiceRole
+            .from('crm_bancas')
+            .select('id, name, url')
+            .eq('id', project.banca_id)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+    ]);
+
+    let bancaGestores: Array<{ id: string; full_name: string | null; email: string | null; status: string | null }> = [];
+    if (project.banca_id) {
+      let userBancaUserIds: string[] = [];
+      const { data: userBancasRows, error: userBancasErr } = await supabaseServiceRole
+        .from('user_bancas')
+        .select('user_id')
+        .contains('banca_ids', [project.banca_id]);
+      if (!userBancasErr) {
+        userBancaUserIds = Array.from(
+          new Set((userBancasRows ?? []).map((row: { user_id?: string | null }) => row.user_id).filter(Boolean))
+        ) as string[];
+      } else {
+        console.warn('[admin/redirect/groups GET] user_bancas gestores contains', userBancasErr.message);
+        const fallback = await supabaseServiceRole.from('user_bancas').select('user_id, banca_ids');
+        if (!fallback.error) {
+          userBancaUserIds = Array.from(
+            new Set(
+              (fallback.data ?? [])
+                .filter((row: { banca_ids?: unknown }) =>
+                  Array.isArray(row.banca_ids) && (row.banca_ids as string[]).includes(String(project.banca_id))
+                )
+                .map((row: { user_id?: string | null }) => row.user_id)
+                .filter(Boolean)
+            )
+          ) as string[];
+        } else {
+          console.warn('[admin/redirect/groups GET] user_bancas gestores fallback', fallback.error.message);
+        }
+      }
+      if (userBancaUserIds.length > 0) {
+        const { data: gestorRows } = await supabaseServiceRole
+          .from('profiles')
+          .select('id, full_name, email, status')
+          .in('id', userBancaUserIds)
+          .in('status', ['gestor', 'dono_banca', 'gerente', 'admin', 'super_admin'])
+          .order('full_name', { ascending: true, nullsFirst: false })
+          .limit(30);
+        bancaGestores = (gestorRows ?? []) as typeof bancaGestores;
+      }
+    }
 
     const isElevated = canAssignConsultorWithoutBancaCheck(profile);
     const bancasGestor = isElevated ? [] : await getBancasDoUsuario(userId);
@@ -105,19 +174,11 @@ export async function GET(req: NextRequest) {
         .eq('project_id', projectId)
         .order('name');
       if (first.error && isMissingConsultantColumnError(first.error)) {
-        console.warn(
-          '[admin/redirect/groups GET] Migração add_redirect_group_consultant.sql pendente — listando sem consultant_user_id.'
+        console.error('[admin/redirect/groups GET] Migração add_redirect_group_consultant.sql pendente.');
+        return errorResponse(
+          'Migração pendente: aplique migrations/add_redirect_group_consultant.sql para vincular consultores aos grupos.',
+          500
         );
-        const second = await supabaseServiceRole
-          .from('redirect_groups')
-          .select(REDIRECT_GROUPS_COLUMNS_BASE)
-          .eq('project_id', projectId)
-          .order('name');
-        if (second.error) {
-          console.error('[admin/redirect/groups GET] redirect_groups', second.error.message);
-          return errorResponse('Erro ao listar grupos do redirect', 500);
-        }
-        groups = (second.data ?? []) as Array<Record<string, unknown>>;
       } else if (first.error) {
         console.error('[admin/redirect/groups GET] redirect_groups', first.error.message);
         return errorResponse('Erro ao listar grupos do redirect', 500);
@@ -234,12 +295,90 @@ export async function GET(req: NextRequest) {
       sample_size: (utmRows ?? []).length,
     };
 
+    const metaRedirectSummary: {
+      migration_pending: boolean;
+      period: { since: string; until: string };
+      campaigns_count: number;
+      spend: number;
+      billing: ReturnType<typeof summarizeMetaBillingSnapshots> | null;
+      error?: string;
+    } = {
+      migration_pending: false,
+      period: {
+        since: new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10),
+        until: new Date().toISOString().slice(0, 10),
+      },
+      campaigns_count: 0,
+      spend: 0,
+      billing: null,
+    };
+
+    if (project.banca_id) {
+      const linkedCampaigns = await supabaseServiceRole
+        .from('meta_campaigns')
+        .select('campaign_id')
+        .eq('banca_id', project.banca_id)
+        .eq('redirect_project_id', projectId);
+
+      if (linkedCampaigns.error) {
+        if (isMissingRedirectProjectColumnError(linkedCampaigns.error)) {
+          metaRedirectSummary.migration_pending = true;
+          metaRedirectSummary.error =
+            'Migração pendente: aplique migrations/add_redirect_project_to_meta_campaigns.sql.';
+        } else {
+          metaRedirectSummary.error = linkedCampaigns.error.message;
+        }
+      } else {
+        const campaignIds = Array.from(
+          new Set((linkedCampaigns.data ?? []).map((row: { campaign_id?: string | null }) => row.campaign_id).filter(Boolean))
+        ) as string[];
+        metaRedirectSummary.campaigns_count = campaignIds.length;
+        if (campaignIds.length > 0) {
+          const { data: insightsRows, error: insightsErr } = await supabaseServiceRole
+            .from('meta_insights_daily')
+            .select('spend')
+            .eq('banca_id', project.banca_id)
+            .in('campaign_id', campaignIds)
+            .gte('date', metaRedirectSummary.period.since)
+            .lte('date', metaRedirectSummary.period.until);
+          if (!insightsErr) {
+            metaRedirectSummary.spend = (insightsRows ?? []).reduce(
+              (sum: number, row: { spend?: unknown }) => sum + (Number(row.spend) || 0),
+              0
+            );
+          }
+        }
+
+        try {
+          const [token, metaConfig] = await Promise.all([
+            getDecryptedToken(project.banca_id),
+            getMetaConfig(project.banca_id),
+          ]);
+          const adAccountId = metaConfig?.ad_account_id?.trim() || null;
+          if (token && adAccountId) {
+            const billingSnapshot = await fetchMetaBillingSnapshot(
+              metaConfig?.base_url?.trim() || 'https://graph.facebook.com/v25.0',
+              token,
+              adAccountId,
+              { cardChargesPeriod: metaRedirectSummary.period }
+            );
+            metaRedirectSummary.billing = summarizeMetaBillingSnapshots([billingSnapshot]);
+          }
+        } catch (error: any) {
+          metaRedirectSummary.error = metaRedirectSummary.error || error?.message || 'Falha ao carregar billing Meta.';
+        }
+      }
+    }
+
     return successResponse({
       groups: list,
       redirect_slug_id: redirectRow?.id ?? null,
       redirect_slug: project.slug,
       project_name: project.name ?? '',
       project_id: projectId,
+      project_owner: ownerRes.data ?? null,
+      project_banca: bancaRes.data ?? null,
+      project_banca_gestores: bancaGestores,
       pixel_id: project.pixel_id ?? null,
       redirect_timer_seconds: project.redirect_timer_seconds ?? 3,
       total_clicks,
@@ -247,6 +386,7 @@ export async function GET(req: NextRequest) {
       active_groups: list.filter((g: { is_active: boolean }) => g.is_active).length,
       utm_visits: utmVisits ?? [],
       utm_summary,
+      meta_redirect_summary: metaRedirectSummary,
       consultants_for_select: consultantsForSelect,
       consultant_ui: consultantUi,
     });
@@ -344,20 +484,11 @@ export async function POST(req: NextRequest) {
       group = ins.data as Record<string, unknown> | null;
       groupError = ins.error;
       if (groupError && isMissingConsultantColumnError(groupError)) {
-        console.warn('[admin/redirect/groups POST] insert sem consultant_user_id (coluna ausente).');
-        const ins2 = await supabaseServiceRole
-          .from('redirect_groups')
-          .insert({
-            project_id,
-            name: name.trim(),
-            invite_url: invite_url.trim(),
-            weight_percent: weight,
-            is_active: body.is_active !== false,
-          })
-          .select()
-          .single();
-        group = ins2.data as Record<string, unknown> | null;
-        groupError = ins2.error;
+        console.error('[admin/redirect/groups POST] Migração add_redirect_group_consultant.sql pendente.');
+        return errorResponse(
+          'Migração pendente: aplique migrations/add_redirect_group_consultant.sql para vincular consultores aos grupos.',
+          500
+        );
       }
     }
 
