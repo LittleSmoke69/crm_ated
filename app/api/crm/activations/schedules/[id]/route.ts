@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
+import { getUserProfile } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { calculateNextRecurringRun } from '@/lib/utils/recurring-schedule';
@@ -37,7 +38,12 @@ export async function PATCH(
       return errorResponse('Agendamento não encontrado', 404);
     }
 
-    if (schedule.user_id !== userId) {
+    const profile = await getUserProfile(userId);
+    const canManage =
+      schedule.user_id === userId ||
+      profile?.status === 'super_admin' ||
+      profile?.status === 'admin';
+    if (!canManage) {
       return errorResponse('Você não tem permissão para atualizar este agendamento', 403);
     }
 
@@ -161,7 +167,12 @@ export async function DELETE(
       return errorResponse('Agendamento não encontrado', 404);
     }
 
-    if (schedule.user_id !== userId) {
+    const profile = await getUserProfile(userId);
+    const canManage =
+      schedule.user_id === userId ||
+      profile?.status === 'super_admin' ||
+      profile?.status === 'admin';
+    if (!canManage) {
       return errorResponse('Você não tem permissão para excluir este agendamento', 403);
     }
 

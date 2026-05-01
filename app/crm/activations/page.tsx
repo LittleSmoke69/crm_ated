@@ -95,6 +95,80 @@ async function safeResponseJson(response: Response): Promise<any> {
   }
 }
 
+/** Evita abrir dezenas de fetch em paralelo (satura o dev server → ECONNRESET / Error: aborted). */
+const SCHEDULE_GROUP_REQUEST_CONCURRENCY = 4;
+
+async function forEachScheduleIdWithPool(
+  ids: string[],
+  concurrency: number,
+  fn: (id: string) => Promise<void>
+): Promise<void> {
+  const queue = [...ids];
+  const workers = Math.min(concurrency, Math.max(1, queue.length));
+  await Promise.all(
+    Array.from({ length: workers }, async () => {
+      while (queue.length > 0) {
+        const id = queue.shift();
+        if (!id) break;
+        await fn(id);
+      }
+    })
+  );
+}
+
+/**
+ * Um disparo agrupa N linhas em `message_schedules` (um grupo cada). Sem agregação,
+ * vários `.some()` exibem ATIVO + Falhou + Pausado ao mesmo tempo; botões Pausar e Retomar apareciam juntos.
+ */
+function getScheduleGroupAggregate(groupSchedules: { status?: string }[]) {
+  const st = groupSchedules.map((s) => String(s.status ?? '').toLowerCase());
+  if (st.length === 0) {
+    return {
+      badge: 'mixed' as const,
+      hint: '',
+      showPause: false,
+      showResume: false,
+    };
+  }
+  const hasLive = st.some((x) => x === 'scheduled' || x === 'processing');
+  const failedCount = st.filter((x) => x === 'failed').length;
+  const pausedCount = st.filter((x) => x === 'paused').length;
+
+  let badge: 'sent' | 'canceled' | 'paused' | 'active' | 'failed' | 'mixed';
+  let hint = '';
+
+  if (st.every((x) => x === 'sent')) {
+    badge = 'sent';
+  } else if (st.every((x) => x === 'canceled')) {
+    badge = 'canceled';
+  } else if (st.every((x) => x === 'paused')) {
+    badge = 'paused';
+  } else if (hasLive) {
+    badge = 'active';
+    const parts: string[] = [];
+    if (failedCount) parts.push(`${failedCount} grupo(s) com falha`);
+    if (pausedCount) parts.push(`${pausedCount} grupo(s) pausado(s)`);
+    hint = parts.join(' · ');
+  } else if (st.every((x) => x === 'failed')) {
+    badge = 'failed';
+  } else if (pausedCount > 0 && failedCount > 0) {
+    badge = 'mixed';
+    hint = `${pausedCount} pausado(s), ${failedCount} falha(s)`;
+  } else if (pausedCount > 0) {
+    badge = 'paused';
+  } else if (failedCount > 0) {
+    badge = 'failed';
+  } else {
+    badge = 'mixed';
+    hint = 'Estados distintos entre grupos';
+  }
+
+  const showPause = hasLive;
+  const showResume = st.some((x) => x === 'paused') && !hasLive;
+
+  return { badge, hint, showPause, showResume };
+}
+
 /** Upload de arquivo para URL assinada com progresso real (evita gargalos e mostra % real). */
 function uploadFileWithProgress(
   signedUrl: string,
@@ -1277,36 +1351,66 @@ const ActivationsPage = () => {
 
   const handlePauseScheduleGroup = async (scheduleIds: string[]) => {
     if (!userId) return;
-    for (const id of scheduleIds) {
+    const errors: string[] = [];
+    await forEachScheduleIdWithPool(scheduleIds, SCHEDULE_GROUP_REQUEST_CONCURRENCY, async (id) => {
       try {
-        await fetch(`/api/crm/activations/schedules/${id}`, {
+        const response = await fetch(`/api/crm/activations/schedules/${id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
           body: JSON.stringify({ status: 'paused' }),
         });
+        const data = await safeResponseJson(response);
+        if (!response.ok) {
+          errors.push(data.error || `HTTP ${response.status}`);
+        }
       } catch (e) {
         console.error('Erro ao pausar agendamento:', e);
+        errors.push('Erro de rede');
       }
+    });
+    await loadSchedules();
+    if (errors.length === 0) {
+      showToast('Disparo pausado.', 'success');
+    } else if (errors.length === scheduleIds.length) {
+      showToast(errors[0] || 'Não foi possível pausar o disparo.', 'error');
+    } else {
+      showToast(
+        `Pausado parcialmente: ${errors.length} de ${scheduleIds.length} falhou(aram). ${errors[0] || ''}`,
+        'info'
+      );
     }
-    showToast('Disparo pausado.', 'success');
-    loadSchedules();
   };
 
   const handleResumeScheduleGroup = async (scheduleIds: string[]) => {
     if (!userId) return;
-    for (const id of scheduleIds) {
+    const errors: string[] = [];
+    await forEachScheduleIdWithPool(scheduleIds, SCHEDULE_GROUP_REQUEST_CONCURRENCY, async (id) => {
       try {
-        await fetch(`/api/crm/activations/schedules/${id}`, {
+        const response = await fetch(`/api/crm/activations/schedules/${id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
           body: JSON.stringify({ status: 'scheduled' }),
         });
+        const data = await safeResponseJson(response);
+        if (!response.ok) {
+          errors.push(data.error || `HTTP ${response.status}`);
+        }
       } catch (e) {
         console.error('Erro ao retomar agendamento:', e);
+        errors.push('Erro de rede');
       }
+    });
+    await loadSchedules();
+    if (errors.length === 0) {
+      showToast('Disparo retomado.', 'success');
+    } else if (errors.length === scheduleIds.length) {
+      showToast(errors[0] || 'Não foi possível retomar o disparo.', 'error');
+    } else {
+      showToast(
+        `Retomado parcialmente: ${errors.length} de ${scheduleIds.length} falhou(aram). ${errors[0] || ''}`,
+        'info'
+      );
     }
-    showToast('Disparo retomado.', 'success');
-    loadSchedules();
   };
 
   const handleDeleteScheduleGroup = async (scheduleIds: string[]) => {
@@ -1315,18 +1419,33 @@ const ActivationsPage = () => {
       `Excluir este disparo para ${scheduleIds.length} grupo(s)? Todos os agendamentos serão removidos.`
     );
     if (!ok) return;
-    for (const id of scheduleIds) {
+    const errors: string[] = [];
+    await forEachScheduleIdWithPool(scheduleIds, SCHEDULE_GROUP_REQUEST_CONCURRENCY, async (id) => {
       try {
-        await fetch(`/api/crm/activations/schedules/${id}`, {
+        const response = await fetch(`/api/crm/activations/schedules/${id}`, {
           method: 'DELETE',
           headers: { 'X-User-Id': userId },
         });
+        const data = await safeResponseJson(response);
+        if (!response.ok) {
+          errors.push(data.error || `HTTP ${response.status}`);
+        }
       } catch (e) {
         console.error('Erro ao excluir agendamento:', e);
+        errors.push('Erro de rede');
       }
+    });
+    await loadSchedules();
+    if (errors.length === 0) {
+      showToast('Disparo excluído.', 'success');
+    } else if (errors.length === scheduleIds.length) {
+      showToast(errors[0] || 'Não foi possível excluir o disparo.', 'error');
+    } else {
+      showToast(
+        `Exclusão parcial: ${errors.length} de ${scheduleIds.length} falhou(aram). ${errors[0] || ''}`,
+        'info'
+      );
     }
-    showToast('Disparo excluído.', 'success');
-    loadSchedules();
   };
 
   const handleEditMessageFromSchedule = async (messageId: string) => {
@@ -2393,13 +2512,11 @@ const ActivationsPage = () => {
                   const schedule = groupSchedules[0];
                   const message = schedule.messages;
                   const isRecurring = schedule.schedule_type === 'recurring';
-                  const isActive = groupSchedules.some((s) => s.status === 'scheduled' || s.status === 'processing');
-                  const isSent = groupSchedules.every((s) => s.status === 'sent');
-                  const isFailed = groupSchedules.some((s) => s.status === 'failed');
-                  const isPaused = groupSchedules.some((s) => s.status === 'paused');
-                  const isCanceled = groupSchedules.every((s) => s.status === 'canceled');
+                  const agg = getScheduleGroupAggregate(groupSchedules);
                   const groupNames = groupSchedules.map((s) => s.group_subject || s.group_id);
                   const scheduleIds = groupSchedules.map((s) => s.id);
+                  const lastErrorSample =
+                    groupSchedules.find((s) => s.last_error)?.last_error || schedule.last_error;
 
                   return (
                     <div
@@ -2421,32 +2538,50 @@ const ActivationsPage = () => {
                             </span>
                           )}
                         </div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          {isActive && (
-                            <span className="px-2 py-1 bg-[#8CD955] text-white rounded-full text-xs font-medium">
-                              • ATIVO
-                            </span>
-                          )}
-                          {isSent && (
-                            <span className="px-2 py-1 bg-gray-500 text-white rounded-full text-xs font-medium">
-                              Executado
-                            </span>
-                          )}
-                          {isFailed && (
-                            <span className="px-2 py-1 bg-red-500 text-white rounded-full text-xs font-medium" title={schedule.last_error ? `Erro: ${schedule.last_error}` : undefined}>
-                              Falhou
-                            </span>
-                          )}
-                          {isPaused && (
-                            <span className="px-2 py-1 bg-orange-500 text-white rounded-full text-xs font-medium">
-                              Pausado
-                            </span>
-                          )}
-                          {isCanceled && (
-                            <span className="px-2 py-1 bg-gray-500 text-white rounded-full text-xs font-medium">
-                              Cancelado
-                            </span>
-                          )}
+                        <div className="flex flex-col items-end gap-1 max-w-[min(100%,14rem)]">
+                          <div className="flex flex-wrap justify-end items-center gap-2">
+                            {agg.badge === 'active' && (
+                              <span className="px-2 py-1 bg-[#8CD955] text-white rounded-full text-xs font-medium">
+                                • ATIVO
+                              </span>
+                            )}
+                            {agg.badge === 'sent' && (
+                              <span className="px-2 py-1 bg-gray-500 text-white rounded-full text-xs font-medium">
+                                Executado
+                              </span>
+                            )}
+                            {agg.badge === 'failed' && (
+                              <span
+                                className="px-2 py-1 bg-red-500 text-white rounded-full text-xs font-medium"
+                                title={lastErrorSample ? `Erro: ${lastErrorSample}` : undefined}
+                              >
+                                Falhou
+                              </span>
+                            )}
+                            {agg.badge === 'paused' && (
+                              <span className="px-2 py-1 bg-orange-500 text-white rounded-full text-xs font-medium">
+                                Pausado
+                              </span>
+                            )}
+                            {agg.badge === 'canceled' && (
+                              <span className="px-2 py-1 bg-gray-500 text-white rounded-full text-xs font-medium">
+                                Cancelado
+                              </span>
+                            )}
+                            {agg.badge === 'mixed' && (
+                              <span
+                                className="px-2 py-1 bg-slate-500 text-white rounded-full text-xs font-medium"
+                                title={agg.hint || undefined}
+                              >
+                                Misto
+                              </span>
+                            )}
+                          </div>
+                          {agg.hint ? (
+                            <p className="text-[11px] text-gray-500 dark:text-gray-400 text-right leading-snug break-words">
+                              {agg.hint}
+                            </p>
+                          ) : null}
                         </div>
                       </div>
 
@@ -2525,7 +2660,7 @@ const ActivationsPage = () => {
 
                       {/* Ações */}
                       <div className="flex flex-col sm:flex-row flex-wrap gap-2 mt-auto pt-2">
-                        {isActive && (
+                        {agg.showPause && (
                           <button
                             onClick={() => handlePauseScheduleGroup(scheduleIds)}
                             className="w-full sm:flex-1 min-w-0 px-3 py-2 sm:px-4 bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2 text-sm"
@@ -2534,7 +2669,7 @@ const ActivationsPage = () => {
                             Pausar
                           </button>
                         )}
-                        {isPaused && (
+                        {agg.showResume && (
                           <button
                             onClick={() => handleResumeScheduleGroup(scheduleIds)}
                             className="w-full sm:flex-1 min-w-0 px-3 py-2 sm:px-4 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2 text-sm"
