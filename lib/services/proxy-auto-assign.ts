@@ -1,4 +1,5 @@
 import { supabaseServiceRole } from './supabase-service';
+import { assignProxyToEvolutionInstance } from '@/lib/services/evolution-instance-proxy';
 
 /**
  * Serviço para atribuição automática de proxies às instâncias
@@ -129,89 +130,16 @@ export class ProxyAutoAssign {
         return { success: false, error: 'Instância sem Evolution API vinculada' };
       }
 
-      const { data: evolutionApi, error: evolutionApiError } = await supabaseServiceRole
-        .from('evolution_apis')
-        .select('id, base_url, api_key_global')
-        .eq('id', instance.evolution_api_id)
-        .single();
-
-      if (evolutionApiError || !evolutionApi) {
-        console.error('❌ [PROXY-AUTO] Erro ao buscar Evolution API:', evolutionApiError);
-        return { success: false, error: 'Evolution API não encontrada' };
-      }
-
-      // Normaliza a base_url
-      const normalizedBaseUrl = evolutionApi.base_url
-        .replace(/\/+$/, '')
-        .replace(/([^:]\/)\/+/g, '$1');
-
-      const apiKeyGlobal = String(evolutionApi.api_key_global).trim();
-
-      if (!normalizedBaseUrl || !apiKeyGlobal) {
-        return { success: false, error: 'Configuração da Evolution API incompleta' };
-      }
-
-      // Prepara o payload do proxy
-      const proxyPayload: any = {
-        enabled: true,
-        host: selectedProxy.host.trim(),
-        port: String(selectedProxy.port).trim(),
-        protocol: selectedProxy.protocol.trim().toLowerCase(),
-      };
-
-      if (selectedProxy.username && String(selectedProxy.username).trim()) {
-        proxyPayload.username = String(selectedProxy.username).trim();
-      }
-
-      if (selectedProxy.password && String(selectedProxy.password)) {
-        proxyPayload.password = String(selectedProxy.password);
-      }
-
-      // Configura o proxy na Evolution API
-      const url = `${normalizedBaseUrl}/proxy/set/${instanceName}`;
-      const finalUrl = url.replace(/([^:]\/)\/+/g, '$1');
-
       console.log(`📤 [PROXY-AUTO] Atribuindo proxy ${selectedProxy.name} à instância ${instanceName}`);
 
-      const evolutionResponse = await fetch(finalUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'apikey': apiKeyGlobal,
-        },
-        body: JSON.stringify(proxyPayload),
+      const applied = await assignProxyToEvolutionInstance({
+        instanceId,
+        proxyId: selectedProxy.id,
       });
 
-      if (!evolutionResponse.ok) {
-        const errorText = await evolutionResponse.text();
-        let errorData: any = {};
-        try {
-          errorData = JSON.parse(errorText);
-        } catch {
-          errorData = { message: errorText || evolutionResponse.statusText };
-        }
-
-        console.error('❌ [PROXY-AUTO] Erro na Evolution API:', {
-          status: evolutionResponse.status,
-          errorData,
-          instanceName,
-        });
-
-        return {
-          success: false,
-          error: `Erro na Evolution API: ${errorData.message || errorData.error || evolutionResponse.statusText}`,
-        };
-      }
-
-      // Atualiza o proxy_id no banco de dados
-      const { error: updateError } = await supabaseServiceRole
-        .from('evolution_instances')
-        .update({ proxy_id: selectedProxy.id })
-        .eq('id', instanceId);
-
-      if (updateError) {
-        console.error('❌ [PROXY-AUTO] Erro ao atualizar proxy no banco:', updateError);
-        return { success: false, error: `Erro ao atualizar proxy: ${updateError.message}` };
+      if (!applied.ok) {
+        console.error('❌ [PROXY-AUTO] Falha ao aplicar proxy:', applied.error);
+        return { success: false, error: applied.error };
       }
 
       console.log(`✅ [PROXY-AUTO] Proxy ${selectedProxy.name} atribuído com sucesso à instância ${instanceName}`);

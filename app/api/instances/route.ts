@@ -13,7 +13,20 @@ import {
   shouldConfigureMasterChatWebhook,
 } from '@/lib/server/evolution-chat-webhook-config';
 import { getUserProfile } from '@/lib/middleware/permissions';
-import { getEffectiveZaplotoId } from '@/lib/tenant-context';
+import {
+  getEffectiveZaplotoId,
+  getEvolutionInstancesZaplotoScopeId,
+  ZAPLOTO_DEFAULT_TENANT_ID,
+} from '@/lib/tenant-context';
+import { assignProxyToEvolutionInstance } from '@/lib/services/evolution-instance-proxy';
+import { evolutionDbStatusToPublicListUi } from '@/lib/utils/evolution-instance-status';
+
+function shortUuid(id: string | undefined | null): string {
+  if (!id || typeof id !== 'string') return '(none)';
+  const t = id.trim();
+  if (t.length <= 12) return t;
+  return `${t.slice(0, 8)}…${t.slice(-4)}`;
+}
 
 /**
  * GET /api/instances - Lista instâncias do usuário
@@ -45,6 +58,13 @@ export async function GET(req: NextRequest) {
     const isDonoBanca = userStatus === 'dono_banca';
     const isGerente = userStatus === 'gerente';
 
+    /** WL (cookie/referer) pode divergir do perfil; gerente/consultor/dono usam tenant do perfil na lista. */
+    const instancesZaplotoScopeId = getEvolutionInstancesZaplotoScopeId({
+      profile: fullProfile,
+      effectiveZaplotoId,
+      userStatus,
+    });
+
     let instances: any[] = [];
     
     // Define os user_ids que podem ver as instâncias baseado no tipo de usuário
@@ -63,7 +83,48 @@ export async function GET(req: NextRequest) {
     // Se for admin (não super), não filtra por user_id — todas as instâncias do tenant
     // Se for super_admin, não filtra por user_id nem por tenant — visão global
     // Se for consultor, usa apenas o próprio userId (já definido acima)
-    
+
+    /** Mesma regra de GET /api/chat/channels: gerente vê instâncias ligadas em atendimento_chat_assignments. */
+    const instanceIdsForOrFilter = new Set<string>(sharedWithMeIds);
+    let gerenteAtendimentoAssignmentRows = 0;
+    if (isGerente) {
+      const { data: gerenteAssignRows } = await supabaseServiceRole
+        .from('atendimento_chat_assignments')
+        .select('evolution_instance_id')
+        .eq('gerente_user_id', userId);
+      gerenteAtendimentoAssignmentRows = (gerenteAssignRows || []).length;
+      for (const r of gerenteAssignRows || []) {
+        const eid = (r as { evolution_instance_id?: string | null }).evolution_instance_id;
+        if (typeof eid === 'string' && eid.length > 0) instanceIdsForOrFilter.add(eid);
+      }
+    }
+
+    const sharedIdArr = Array.from(instanceIdsForOrFilter);
+
+    console.log('[ListaInstancias] GET /api/instances — filtros', {
+      user: shortUuid(userId),
+      cargo: userStatus,
+      profileZaplotoId: shortUuid(fullProfile.zaploto_id ?? undefined),
+      effectiveZaplotoIdWl: shortUuid(effectiveZaplotoId),
+      instancesZaplotoScopeId: shortUuid(instancesZaplotoScopeId),
+      tenantSlugHeader: req.headers.get('x-zaploto-slug')?.trim() || null,
+      isSuperAdmin,
+      isAdmin,
+      isGerente,
+      isDonoBanca,
+      allowedUserIdsCount: allowedUserIds.length,
+      sharedWlCount: sharedWithMeIds.size,
+      extraIdsForOrCount: sharedIdArr.length,
+      gerenteAtendimentoAssignmentRows,
+      filterMode: isAdmin
+        ? 'admin_all_users_in_tenant'
+        : sharedIdArr.length > 0
+          ? 'or_user_id_in_plus_id_in'
+          : 'user_id_in_only',
+      zaplotoTenantFilter:
+        isSuperAdmin ? 'none' : instancesZaplotoScopeId === ZAPLOTO_DEFAULT_TENANT_ID ? 'default_or_null' : 'eq_only',
+    });
+
     // Query base SEM !inner para garantir LEFT JOIN e retornar TODAS as instâncias
     // IMPORTANTE: Sem !inner, o Supabase faz LEFT JOIN por padrão, retornando TODAS as instâncias,
     // incluindo as que estão associadas a APIs Evolution bloqueadas (is_blocked_for_instances = true)
@@ -88,33 +149,51 @@ export async function GET(req: NextRequest) {
         )
       `);
 
+    // evolution_instances.zaploto_id pode ser NULL (legado); no tenant padrão isso equivale ao ZapLoto central.
     if (!isSuperAdmin) {
-      query = query.eq('zaploto_id', effectiveZaplotoId);
+      if (instancesZaplotoScopeId === ZAPLOTO_DEFAULT_TENANT_ID) {
+        query = query.or(
+          `zaploto_id.eq.${ZAPLOTO_DEFAULT_TENANT_ID},zaploto_id.is.null`
+        );
+      } else {
+        query = query.eq('zaploto_id', instancesZaplotoScopeId);
+      }
     }
 
-    // Aplica filtro de user_id + instâncias compartilhadas com este usuário (mesmo WL)
-    if (isAdmin) {
-      // Admin vê todas as instâncias do tenant — sem filtro de user_id; super_admin vê todos os tenants
-    } else {
-      const sharedIdArr = Array.from(sharedWithMeIds);
-      const orParts: string[] = [`user_id.in.(${allowedUserIds.join(',')})`];
+    // Aplica filtro de user_id + instâncias compartilhadas / vínculo atendimento (mesmo WL)
+    if (!isAdmin) {
+      // PostgREST: `.or()` com uma única cláusula costuma falhar ou retornar vazio de forma inconsistente.
+      // Sem IDs extras: usar `.in('user_id', ...)` (gerente/dono/consultor).
       if (sharedIdArr.length > 0) {
-        orParts.push(`id.in.(${sharedIdArr.join(',')})`);
+        query = query.or(
+          `user_id.in.(${allowedUserIds.join(',')}),id.in.(${sharedIdArr.join(',')})`
+        );
+      } else {
+        query = query.in('user_id', allowedUserIds);
       }
-      query = query.or(orParts.join(','));
     }
 
     const { data, error } = await query.order('created_at', { ascending: false });
 
     if (error) {
-      console.error('[API Instances] Erro ao buscar instâncias:', error);
-      console.error('[API Instances] User Status:', userStatus);
-      console.error('[API Instances] User ID:', userId);
-    } else {
-      // IMPORTANTE: Mostra TODAS as instâncias do usuário (user_id/Owner)
-      // Independente de estarem conectadas, desconectadas ou bloqueadas
-      // is_active=false = registro arquivado (não uso para “caiu”); desconexão usa status
-      const filteredData = (data || []).filter((inst: any) => 
+      console.error('[ListaInstancias] Supabase erro na query evolution_instances', {
+        message: error.message,
+        code: (error as { code?: string }).code,
+        details: (error as { details?: string }).details,
+        hint: (error as { hint?: string }).hint,
+        cargo: userStatus,
+        user: shortUuid(userId),
+      });
+      return errorResponse(`Erro ao buscar instâncias: ${error.message}`, 500);
+    }
+
+    const rawCount = (data || []).length;
+    const inactiveFiltered = (data || []).filter((row: any) => row?.is_active === false).length;
+
+    // IMPORTANTE: Mostra TODAS as instâncias do usuário (user_id/Owner)
+    // Independente de estarem conectadas, desconectadas ou bloqueadas
+    // is_active=false = registro arquivado (não uso para “caiu”); desconexão usa status
+    const filteredData = (data || []).filter((inst: any) => 
         inst.is_active !== false
       );
       
@@ -131,16 +210,8 @@ export async function GET(req: NextRequest) {
           console.warn(`[API Instances] ⚠️ Instância ${inst.instance_name} não tem evolution_api no join, mas tem evolution_api_id: ${inst.evolution_api_id}`);
         }
 
-        // Mapeia status do banco para o frontend
-        // 'ok' no banco = 'connected' no frontend (conectado)
-        // Qualquer outro estado (disconnected, connecting legado, creating, etc.) = 'disconnected' na UI
-        // até o WhatsApp estar realmente conectado — evita mostrar "Conectando" só por ter criado a instância.
-        let frontendStatus: string;
-        if (inst.status === 'ok') {
-          frontendStatus = 'connected';
-        } else {
-          frontendStatus = 'disconnected';
-        }
+        // Mapeia status do banco para o frontend (case-insensitive: OK, ok, connected)
+        const frontendStatus = evolutionDbStatusToPublicListUi(inst.status);
 
         // Processa informações do proxy
         const proxyData = inst.proxy_instances;
@@ -200,7 +271,21 @@ export async function GET(req: NextRequest) {
           owner_display_name: inst.user_id ? displayByUserId.get(inst.user_id) ?? null : null,
         }));
       }
-    }
+
+    const connectedOut = instances.filter((i: { status?: string }) => i.status === 'connected').length;
+    const disconnectedOut = instances.length - connectedOut;
+
+    console.log('[ListaInstancias] GET /api/instances — resultado', {
+      user: shortUuid(userId),
+      cargo: userStatus,
+      instancesZaplotoScopeId: shortUuid(instancesZaplotoScopeId),
+      rawRowsFromDb: rawCount,
+      droppedInactiveIsActiveFalse: inactiveFiltered,
+      returnedToClient: instances.length,
+      uiConnected: connectedOut,
+      uiDisconnected: disconnectedOut,
+      sampleNames: instances.slice(0, 5).map((i: { instance_name?: string }) => i.instance_name),
+    });
 
     return successResponse(instances, 'Instâncias carregadas com sucesso');
   } catch (err: any) {
@@ -229,13 +314,18 @@ export async function POST(req: NextRequest) {
       return errorResponse('Perfil não encontrado', 404);
     }
     const effectiveZaplotoId = await getEffectiveZaplotoId(req, fullProfile);
+    const instancesZaplotoScopeId = getEvolutionInstancesZaplotoScopeId({
+      profile: fullProfile,
+      effectiveZaplotoId,
+      userStatus: fullProfile.status,
+    });
 
     let tenantSlugForWebhook: string | null = null;
-    if (effectiveZaplotoId) {
+    if (instancesZaplotoScopeId) {
       const { data: tenantRow } = await supabaseServiceRole
         .from('zaploto_tenants')
         .select('slug')
-        .eq('id', effectiveZaplotoId)
+        .eq('id', instancesZaplotoScopeId)
         .maybeSingle();
       tenantSlugForWebhook = tenantRow?.slug?.trim().toLowerCase() ?? null;
     }
@@ -250,7 +340,7 @@ export async function POST(req: NextRequest) {
       return errorResponse('Erro ao processar dados da requisição', 400);
     }
 
-    const { instanceName, isMaster, maturationType } = body;
+    const { instanceName, isMaster, maturationType, proxy_id: proxyIdFromBody } = body;
     /** Instância mestre: webhook Zaploto (chat) sempre na criação, salvo EVOLUTION_WEBHOOK_SKIP_MASTER=true no servidor */
     const shouldConfigureChatWebhook = isMaster === true && shouldConfigureMasterChatWebhook();
 
@@ -272,13 +362,19 @@ export async function POST(req: NextRequest) {
     // Passo 3.5: Verifica se o nome da instância já existe na tabela evolution_instances
     // Como cada Evolution API pode criar instâncias com o mesmo nome (são sistemas diferentes),
     // precisamos garantir que o nome seja único no banco Zaploto
-    const { data: existingInstance, error: checkError } = await supabaseServiceRole
+    let uniqueNameQuery = supabaseServiceRole
       .from('evolution_instances')
       .select('id, instance_name, is_active, evolution_api_id')
       .eq('instance_name', instanceName)
-      .eq('zaploto_id', effectiveZaplotoId)
-      .eq('is_active', true) // Verifica apenas instâncias ativas
-      .maybeSingle();
+      .eq('is_active', true); // Verifica apenas instâncias ativas
+    if (instancesZaplotoScopeId === ZAPLOTO_DEFAULT_TENANT_ID) {
+      uniqueNameQuery = uniqueNameQuery.or(
+        `zaploto_id.eq.${ZAPLOTO_DEFAULT_TENANT_ID},zaploto_id.is.null`
+      );
+    } else {
+      uniqueNameQuery = uniqueNameQuery.eq('zaploto_id', instancesZaplotoScopeId);
+    }
+    const { data: existingInstance, error: checkError } = await uniqueNameQuery.maybeSingle();
 
     if (checkError && checkError.code !== 'PGRST116') {
       console.error(`❌ [INSTÂNCIA] Erro ao verificar nome duplicado:`, checkError);
@@ -615,13 +711,19 @@ export async function POST(req: NextRequest) {
     // Passo 7: Verifica se a instância já existe na Evolution API específica
     let existingInstanceInApi;
     try {
-      const { data, error: checkError } = await supabaseServiceRole
+      let existingInApiQuery = supabaseServiceRole
         .from('evolution_instances')
         .select('id')
         .eq('evolution_api_id', apiRecord.id)
-        .eq('instance_name', instanceName)
-        .eq('zaploto_id', effectiveZaplotoId)
-        .single();
+        .eq('instance_name', instanceName);
+      if (instancesZaplotoScopeId === ZAPLOTO_DEFAULT_TENANT_ID) {
+        existingInApiQuery = existingInApiQuery.or(
+          `zaploto_id.eq.${ZAPLOTO_DEFAULT_TENANT_ID},zaploto_id.is.null`
+        );
+      } else {
+        existingInApiQuery = existingInApiQuery.eq('zaploto_id', instancesZaplotoScopeId);
+      }
+      const { data, error: checkError } = await existingInApiQuery.single();
 
       if (checkError && checkError.code !== 'PGRST116') { // PGRST116 = nenhum resultado encontrado (não é erro)
         console.error('❌ [INSTÂNCIA] Erro ao verificar instância existente:', checkError);
@@ -682,7 +784,7 @@ export async function POST(req: NextRequest) {
           error_today: 0,
           rate_limit_count_today: 0,
           user_id: userId, // Vincula a instância ao usuário que criou
-          zaploto_id: effectiveZaplotoId,
+          zaploto_id: instancesZaplotoScopeId,
           apikey: instanceHash, // CRÍTICO: Salva o hash da instância (que é usado como apikey nos requests)
           is_master: isMaster === true, // Marca como instância mestre se solicitado
           maturation_type: maturationTypeValue, // virgem = auto maturação 5 dias; maturado = fluxo normal
@@ -721,6 +823,23 @@ export async function POST(req: NextRequest) {
       return errorResponse(`Erro ao salvar instância: ${dbError?.message || 'Erro desconhecido'}`);
     }
 
+    // Opcional: aplica proxy na Evolution logo após criar a instância (antes do QR / pareamento).
+    let proxyWarning: string | null = null;
+    const proxyIdStr =
+      typeof proxyIdFromBody === 'string' && proxyIdFromBody.trim().length > 0
+        ? proxyIdFromBody.trim()
+        : null;
+    if (proxyIdStr) {
+      const proxyResult = await assignProxyToEvolutionInstance({
+        instanceId: savedInstance.id,
+        proxyId: proxyIdStr,
+      });
+      if (!proxyResult.ok) {
+        proxyWarning = proxyResult.error;
+        console.warn(`⚠️ [INSTÂNCIA] Instância criada mas falha ao aplicar proxy: ${proxyResult.error}`);
+      }
+    }
+
     // Retorna dados no formato compatível com o frontend (inclui QR code)
     // Na UI a instância aparece como desconectada até conectar; o polling usa o estado real da Evolution em GET /status.
     const responseData = {
@@ -732,9 +851,13 @@ export async function POST(req: NextRequest) {
       number: savedInstance.phone_number,
       created_at: savedInstance.created_at,
       updated_at: savedInstance.updated_at,
+      ...(proxyWarning ? { proxy_warning: proxyWarning } : {}),
     };
 
-    return successResponse(responseData, 'Instância criada com sucesso');
+    return successResponse(
+      responseData,
+      proxyWarning ? 'Instância criada; revise o aviso sobre o proxy' : 'Instância criada com sucesso'
+    );
   } catch (err: any) {
     console.error('❌ [INSTÂNCIA] Erro inesperado ao criar instância:', err);
     console.error('❌ [INSTÂNCIA] Stack trace:', err?.stack);

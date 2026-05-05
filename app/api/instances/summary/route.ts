@@ -7,7 +7,11 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { getSubordinates, getUserProfile } from '@/lib/middleware/permissions';
-import { getEffectiveZaplotoId } from '@/lib/tenant-context';
+import {
+  getEffectiveZaplotoId,
+  getEvolutionInstancesZaplotoScopeId,
+  ZAPLOTO_DEFAULT_TENANT_ID,
+} from '@/lib/tenant-context';
 
 export async function GET(req: NextRequest) {
   try {
@@ -16,6 +20,11 @@ export async function GET(req: NextRequest) {
     const fullProfile = await getUserProfile(userId);
     if (!fullProfile) return errorResponse('Perfil não encontrado', 404);
     const effectiveZaplotoId = await getEffectiveZaplotoId(req, fullProfile);
+    const instancesZaplotoScopeId = getEvolutionInstancesZaplotoScopeId({
+      profile: fullProfile,
+      effectiveZaplotoId,
+      userStatus: fullProfile.status,
+    });
 
     const { data: shareRowsForMe } = await supabaseServiceRole
       .from('evolution_instance_shared_users')
@@ -36,20 +45,41 @@ export async function GET(req: NextRequest) {
       allowedUserIds = [userId, ...subordinates.map((s: { id: string }) => s.id)];
     }
 
+    let instanceIdsExtraForFilter = [...sharedWithMeIds];
+    if (isGerente) {
+      const { data: gerenteAssignRows } = await supabaseServiceRole
+        .from('atendimento_chat_assignments')
+        .select('evolution_instance_id')
+        .eq('gerente_user_id', userId);
+      for (const r of gerenteAssignRows || []) {
+        const eid = (r as { evolution_instance_id?: string | null }).evolution_instance_id;
+        if (typeof eid === 'string' && eid.length > 0) instanceIdsExtraForFilter.push(eid);
+      }
+      instanceIdsExtraForFilter = [...new Set(instanceIdsExtraForFilter)];
+    }
+
     let instancesQuery = supabaseServiceRole
       .from('evolution_instances')
       .select('id, instance_name, status, phone_number, user_id')
       .or('is_active.is.null,is_active.eq.true')
       .order('instance_name', { ascending: true });
     if (!isSuperAdmin) {
-      instancesQuery = instancesQuery.eq('zaploto_id', effectiveZaplotoId);
+      if (instancesZaplotoScopeId === ZAPLOTO_DEFAULT_TENANT_ID) {
+        instancesQuery = instancesQuery.or(
+          `zaploto_id.eq.${ZAPLOTO_DEFAULT_TENANT_ID},zaploto_id.is.null`
+        );
+      } else {
+        instancesQuery = instancesQuery.eq('zaploto_id', instancesZaplotoScopeId);
+      }
     }
     if (!isAdmin) {
-      const orParts: string[] = [`user_id.in.(${allowedUserIds.join(',')})`];
-      if (sharedWithMeIds.length > 0) {
-        orParts.push(`id.in.(${sharedWithMeIds.join(',')})`);
+      if (instanceIdsExtraForFilter.length > 0) {
+        instancesQuery = instancesQuery.or(
+          `user_id.in.(${allowedUserIds.join(',')}),id.in.(${instanceIdsExtraForFilter.join(',')})`
+        );
+      } else {
+        instancesQuery = instancesQuery.in('user_id', allowedUserIds);
       }
-      instancesQuery = instancesQuery.or(orParts.join(','));
     }
     const { data: instances, error: instErr } = await instancesQuery;
 

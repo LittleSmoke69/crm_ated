@@ -33,6 +33,7 @@ import {
 import { useSidebar } from '@/contexts/SidebarContext';
 import { supabase } from '@/lib/supabase';
 import { postGroupFetchAndResolve } from '@/lib/utils/group-fetch-client';
+import { instanceListUiStatusIsConnected } from '@/lib/utils/evolution-instance-status';
 
 const QR_WINDOW_SECONDS = 30;
 const STATUS_FETCH_TIMEOUT_MS = 20000; // 20s - evita travamento se o backend/Evolution estiver lento
@@ -605,9 +606,8 @@ const InstancesPage = () => {
         
         // Verifica se estava desconectada e agora conectou
         const wasDisconnected =
-          inst.status === 'disconnected' ||
-          inst.status === 'connecting' ||
-          (inst.status !== 'connected' && inst.status !== 'ok');
+          !instanceListUiStatusIsConnected(inst.status) ||
+          String(inst.status ?? '').toLowerCase() === 'connecting';
         const nowConnected = isEvolutionApiConnected(payload);
         
         // Se conectou, fecha o modal se estiver aberto
@@ -1132,7 +1132,7 @@ const InstancesPage = () => {
     
     // Só fecha o modal se o status for EXATAMENTE 'connected' ou 'ok' no banco
     // Mas só confia se o modal ainda estiver aberto (não foi fechado manualmente)
-    if (targetInstance && (targetInstance.status === 'connected' || targetInstance.status === 'ok')) {
+    if (targetInstance && instanceListUiStatusIsConnected(targetInstance.status)) {
       console.log(`✅ Instância ${currentConnectingInstance} conectou (via fallback)! Fechando modal QR code.`);
       setIsQRModalOpen(false);
       setQrCode('');
@@ -1163,17 +1163,9 @@ const InstancesPage = () => {
     
     // Aplicar filtro por status
     if (instanceFilter === 'connected') {
-      // Filtra instâncias com status 'connected' ou 'ok'
-      filtered = instances.filter(inst => 
-        inst.status === 'connected' || inst.status === 'ok'
-      );
+      filtered = instances.filter((inst) => instanceListUiStatusIsConnected(inst.status));
     } else if (instanceFilter === 'disconnected') {
-      // Filtra instâncias que NÃO estão conectadas
-      // Inclui: 'disconnected', 'connecting', e qualquer outro status que não seja 'connected' ou 'ok'
-      filtered = instances.filter(inst => {
-        const status = inst.status?.toLowerCase();
-        return status !== 'connected' && status !== 'ok';
-      });
+      filtered = instances.filter((inst) => !instanceListUiStatusIsConnected(inst.status));
     }
     // Se instanceFilter === 'todas', não filtra nada
 
@@ -1222,7 +1214,7 @@ const InstancesPage = () => {
 
   // Verifica se há instância mestre conectada
   const hasMasterInstanceConnected = instances.some(
-    inst => (inst as any).is_master === true && (inst.status === 'connected' || inst.status === 'ok')
+    (inst) => (inst as any).is_master === true && instanceListUiStatusIsConnected(inst.status)
   );
 
 
@@ -1373,7 +1365,7 @@ const InstancesPage = () => {
                         : 'bg-[#8CD95515] dark:bg-[#00ff0015] text-[#6AB83D] dark:text-[#00ff00] hover:bg-[#8CD95525] dark:hover:bg-[#00ff0025]'
                     }`}
                   >
-                    Conectadas ({instances.filter(i => i.status === 'connected' || i.status === 'ok').length})
+                    Conectadas ({instances.filter((i) => instanceListUiStatusIsConnected(i.status)).length})
                   </button>
                   <button
                     onClick={() => setInstanceFilter('disconnected')}
@@ -1383,10 +1375,7 @@ const InstancesPage = () => {
                         : 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/30'
                     }`}
                   >
-                    Desconectadas ({instances.filter(i => {
-                      const status = i.status?.toLowerCase();
-                      return status !== 'connected' && status !== 'ok';
-                    }).length})
+                    Desconectadas ({instances.filter((i) => !instanceListUiStatusIsConnected(i.status)).length})
                   </button>
                 </div>
 
@@ -1424,7 +1413,7 @@ const InstancesPage = () => {
                   ) : (
                     <>
                       {paginatedInstances.map(inst => {
-                        const connected = inst.status === 'connected' || inst.status === 'ok';
+                        const connected = instanceListUiStatusIsConnected(inst.status);
                         const blockedFromMaturation = inst.blocked_from_maturation === true;
                         // Verifica se a instância está bloqueada (API Evolution bloqueada para criação de instâncias)
                         const isBlocked = !!inst.is_blocked_for_instances;

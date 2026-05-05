@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { useTenantRouter, withTenantSlug, getWlSlugHeadersForApi } from '@/lib/utils/tenant-href';
+import { evolutionDbStatusIsConnected } from '@/lib/utils/evolution-instance-status';
 import Layout from '@/components/Layout';
 import Pagination from '@/components/Admin/Pagination';
 import { useSidebar } from '@/contexts/SidebarContext';
@@ -610,7 +611,7 @@ export default function AdminDashboard() {
   };
 
   const handleDeleteDisconnectedInstances = async () => {
-    const disconnected = instances.filter((inst: any) => inst.status !== 'ok');
+    const disconnected = instances.filter((inst: any) => !evolutionDbStatusIsConnected(inst.status));
     if (disconnected.length === 0) {
       alert('Não há instâncias desconectadas para remover.');
       return;
@@ -1238,7 +1239,8 @@ export default function AdminDashboard() {
                             Total: {instances.length}
                           </span>
                           <span className="px-2 py-1 rounded-md bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 font-medium">
-                            Desconectadas: {instances.filter((inst: any) => inst.status !== 'ok').length}
+                            Desconectadas:{' '}
+                            {instances.filter((inst: any) => !evolutionDbStatusIsConnected(inst.status)).length}
                           </span>
                         </div>
                       </div>
@@ -1269,7 +1271,11 @@ export default function AdminDashboard() {
                       <div className="flex flex-wrap items-center gap-2">
                         <button
                           onClick={handleDeleteDisconnectedInstances}
-                          disabled={loadingInstances || deletingDisconnectedInstances || instances.every((inst: any) => inst.status === 'ok')}
+                          disabled={
+                            loadingInstances ||
+                            deletingDisconnectedInstances ||
+                            instances.every((inst: any) => evolutionDbStatusIsConnected(inst.status))
+                          }
                           className="inline-flex items-center gap-1.5 px-3 py-2 text-xs sm:text-sm font-medium rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                         >
                           <Trash2 className="w-3.5 h-3.5" />

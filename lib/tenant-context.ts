@@ -11,7 +11,10 @@ import { ZAPLOTO_SLUG_COOKIE } from '@/lib/constants/white-label';
 import { RESERVED_FIRST_SEGMENTS } from '@/lib/middleware/reserved-first-segments';
 import { getPathnameTenantSlug } from '@/lib/utils/white-label-path';
 
-const DEFAULT_ZAPLOTO_ID = '00000000-0000-0000-0000-000000000001';
+/** Tenant ZapLoto central; instâncias legadas podem ter `evolution_instances.zaploto_id` NULL (equivalente). */
+export const ZAPLOTO_DEFAULT_TENANT_ID = '00000000-0000-0000-0000-000000000001';
+
+const DEFAULT_ZAPLOTO_ID = ZAPLOTO_DEFAULT_TENANT_ID;
 
 const ZAPLOTO_ID_HEADER = 'x-zaploto-id';
 const ZAPLOTO_ID_QUERY = 'zaploto_id';
@@ -85,6 +88,29 @@ export async function getEffectiveZaplotoId(
   if (!profile) return DEFAULT_ZAPLOTO_ID;
 
   return zaplotoIdFromProfile;
+}
+
+/**
+ * Escopo de `evolution_instances.zaploto_id` para listagem e criação no app do cliente.
+ *
+ * Cookie/referer/header WL podem alterar `getEffectiveZaplotoId` sem bater com `profiles.zaploto_id`,
+ * fazendo a lista ficar vazia mesmo com instâncias criadas pelo usuário. Para cargos de operação
+ * (gerente, consultor, dono_banca, etc.) usamos sempre o tenant do perfil.
+ *
+ * Painel global (super_admin, admin, auditoria) mantém o tenant efetivo da requisição (switcher / WL).
+ */
+export function getEvolutionInstancesZaplotoScopeId(params: {
+  profile: UserProfile;
+  effectiveZaplotoId: string;
+  userStatus: string | null | undefined;
+}): string {
+  const s = String(params.userStatus ?? '')
+    .trim()
+    .toLowerCase();
+  if (s === 'super_admin' || s === 'admin' || s === 'auditoria') {
+    return params.effectiveZaplotoId;
+  }
+  return params.profile.zaploto_id || ZAPLOTO_DEFAULT_TENANT_ID;
 }
 
 /**

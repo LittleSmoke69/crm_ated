@@ -23,22 +23,27 @@ jobs:
 
             DEPLOY_DIR="/home/claudeuser/ZaplotoV3"
 
-            # Se o diretório não existir, faz clone (segurança contra reboot)
+            # Se o diretório não existir, faz clone
             if [ ! -d "$DEPLOY_DIR/.git" ]; then
-              echo "📥 Diretório não encontrado, clonando repositório..."
+              echo "📥 Clonando repositório..."
               git clone https://github.com/Zaploto/ZaplotoV3.git "$DEPLOY_DIR"
             fi
 
-            echo "📦 Acessando diretório do projeto..."
+            echo "📦 Acessando diretório..."
             cd "$DEPLOY_DIR"
 
             echo "🔄 Fazendo git pull..."
-            git pull origin main
+            git fetch origin main
+            git reset --hard origin/main
 
-            echo "🐳 Subindo containers..."
-            docker compose up --build -d
+            echo "🐳 Build usando cache da imagem anterior..."
+            docker compose build
 
-            echo "🧹 Limpando imagens antigas..."
+            echo "🚀 Subindo containers sem derrubar os outros..."
+            docker compose up -d --no-deps --remove-orphans
+
+            echo "🧹 Limpando apenas imagens sem uso (dangling)..."
             docker image prune -f
 
             echo "✅ Deploy concluído!"
+            docker compose ps

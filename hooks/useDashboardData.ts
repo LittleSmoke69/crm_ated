@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { getWlSlugHeadersForApi } from '@/lib/utils/tenant-href';
+import { instanceListUiStatusIsConnected } from '@/lib/utils/evolution-instance-status';
 
 export interface Contact {
   id: string;
@@ -203,17 +204,47 @@ export const useDashboardData = () => {
       // Busca instâncias via API (agora usa evolution_instances)
       let instancesData: WhatsAppInstance[] = [];
       try {
+        const wl = getWlSlugHeadersForApi();
         const instancesResponse = await fetch('/api/instances', {
-          headers: { 'X-User-Id': userId, ...getWlSlugHeadersForApi() },
+          headers: { 'X-User-Id': userId, ...wl },
+          credentials: 'include',
         });
-        if (instancesResponse.ok) {
-          const instancesResult = await instancesResponse.json();
-          if (instancesResult.success && instancesResult.data) {
-            instancesData = instancesResult.data as WhatsAppInstance[];
-          }
+        const instancesResult = await instancesResponse.json().catch(() => null);
+
+        const list = Array.isArray(instancesResult?.data) ? instancesResult.data : [];
+        const connectedN = list.filter((i: WhatsAppInstance) =>
+          instanceListUiStatusIsConnected(i.status)
+        ).length;
+
+        console.log('[ListaInstancias] cliente ← GET /api/instances', {
+          userShort: `${userId.slice(0, 8)}…`,
+          httpStatus: instancesResponse.status,
+          ok: instancesResponse.ok,
+          success: instancesResult?.success,
+          message: instancesResult?.message,
+          error: instancesResult?.error,
+          count: list.length,
+          connected: connectedN,
+          disconnected: list.length - connectedN,
+          xZaplotoSlug: wl['X-Zaploto-Slug'] ?? '(não enviado)',
+          path:
+            typeof window !== 'undefined' ? window.location.pathname : '',
+        });
+
+        if (instancesResponse.ok && instancesResult?.success && Array.isArray(instancesResult.data)) {
+          instancesData = instancesResult.data as WhatsAppInstance[];
+        } else if (!instancesResponse.ok) {
+          console.warn('[ListaInstancias] HTTP não OK — corpo:', instancesResult);
+          addLog(
+            `Instâncias: servidor retornou HTTP ${instancesResponse.status}${instancesResult?.error ? ` — ${instancesResult.error}` : ''}`,
+            'error'
+          );
+        } else if (instancesResult && instancesResult.success === false) {
+          console.warn('[ListaInstancias] success=false:', instancesResult);
+          addLog(`Instâncias: ${instancesResult.error || instancesResult.message || 'resposta inválida'}`, 'error');
         }
       } catch (instancesError) {
-        console.error('Erro ao buscar instâncias via API:', instancesError);
+        console.error('[ListaInstancias] Exceção ao buscar instâncias:', instancesError);
         addLog('Erro ao buscar instâncias. Usando dados locais se disponíveis.', 'error');
       }
 
@@ -307,7 +338,9 @@ export const useDashboardData = () => {
 
       // Usa instâncias buscadas via API (sempre atualiza, mesmo se vazio)
       setInstances(instancesData || []);
-      const connectedCount = (instancesData || []).filter((i: any) => i.status === 'connected').length;
+      const connectedCount = (instancesData || []).filter((i: any) =>
+        instanceListUiStatusIsConnected(i.status)
+      ).length;
       setKpiConnected(connectedCount);
       
       if (instancesData.length > 0) {
