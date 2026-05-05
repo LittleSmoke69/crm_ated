@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import Link from 'next/link';
+import Link from '@/components/WhitelabelLink';
 import { BarChart3, Loader2, RefreshCw, Calendar, ChevronDown, ChevronUp, Headphones } from 'lucide-react';
 
 interface InstanceRow {

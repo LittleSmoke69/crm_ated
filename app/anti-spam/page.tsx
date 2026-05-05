@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { formatPhoneToList } from '@/lib/utils/phone-utils';
 import { postGroupFetchAndResolve } from '@/lib/utils/group-fetch-client';
+import { getWlSlugHeadersForApi } from '@/lib/utils/tenant-href';
 
 interface AntiSpamConfigRow {
   id: string;
@@ -263,7 +264,9 @@ export default function AntiSpamPage() {
   const loadInstances = useCallback(async () => {
     if (!userId) return;
     try {
-      const res = await fetch('/api/instances', { headers: { 'X-User-Id': userId } });
+      const res = await fetch('/api/instances', {
+        headers: { 'X-User-Id': userId, ...getWlSlugHeadersForApi() },
+      });
       const json = await res.json();
       if (json.success && Array.isArray(json.data)) {
         setInstances(json.data.map((i: any) => ({ id: i.id, instance_name: i.instance_name, status: i.status })));

@@ -2,7 +2,9 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
+import { withTenantSlug } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
+import Link from '@/components/WhitelabelLink';
 import { supabase } from '@/lib/supabase';
 import {
   MessageSquare,
@@ -809,7 +811,7 @@ export default function ChatPage() {
       window.localStorage.removeItem('profile_id');
       document.cookie = 'user_id=; Path=/; Max-Age=0; SameSite=Lax';
     }
-    window.location.href = '/login';
+    window.location.href = withTenantSlug('/login');
   };
 
   // ── Agente IA: carregar flows disponíveis quando abre o painel ──────────────
@@ -2412,9 +2414,9 @@ export default function ChatPage() {
               <p className="text-sm font-medium">{tokenAlertMessage}</p>
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
-              <a href="/admin/whatsapp-official" className="text-sm font-medium underline hover:no-underline">
+              <Link href="/admin/whatsapp-official" className="text-sm font-medium underline hover:no-underline">
                 Renovar token
-              </a>
+              </Link>
               <button
                 type="button"
                 onClick={() => setShowTokenAlert(false)}

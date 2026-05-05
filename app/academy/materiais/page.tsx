@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState, useCallback } from 'react';
-import Link from 'next/link';
+import Link from '@/components/WhitelabelLink';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { Download, Loader2, FileText, Image as ImageIcon, FileSpreadsheet, File as FileIcon, Lock, Eye, X, Search } from 'lucide-react';
 
@@ -42,7 +42,7 @@ const TYPE_ICON_COLORS: Record<string, string> = {
   docx: 'bg-blue-500/15 text-blue-400',
   table: 'bg-green-500/15 text-green-400',
   image: 'bg-purple-500/15 text-purple-400',
-  other: 'bg-[#4ade80]/10 text-[#4ade80]',
+  other: 'bg-[var(--zaploto-green)]/10 text-[var(--zaploto-green)]',
 };
 
 function TypeIcon({ type }: { type: string }) {
@@ -80,7 +80,7 @@ function PreviewCloseBtn({ onClose }: { onClose: () => void }) {
     <button
       type="button"
       onClick={onClose}
-      className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full border border-[#4ade80]/30 bg-[#060f07]/80 text-[#4ade80] backdrop-blur-sm transition hover:bg-[#4ade80]/20 hover:shadow-[0_0_8px_#4ade8066]"
+      className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full border border-[var(--zaploto-green)]/30 bg-[#060f07]/80 text-[var(--zaploto-green)] backdrop-blur-sm transition hover:bg-[var(--zaploto-green)]/20 hover:shadow-[0_0_8px_var(--zaploto-green)]"
     >
       <X className="h-4 w-4" />
     </button>
@@ -101,15 +101,15 @@ function MaterialPreview({
 
   if (type === 'image') {
     return (
-      <div className="relative overflow-hidden rounded-xl border border-[#4ade80]/20 bg-[#030803]">
+      <div className="relative overflow-hidden rounded-xl border border-[var(--zaploto-green)]/20 bg-[#030803]">
         {/* Neon glow top line */}
-        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[#4ade80]/60 to-transparent" />
+        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[var(--zaploto-green)]/60 to-transparent" />
         <PreviewCloseBtn onClose={onClose} />
         <div className="flex items-center justify-center p-2">
           <img
             src={signedUrl}
             alt={title}
-            className="max-h-[70vh] rounded-lg object-contain shadow-[0_0_40px_#4ade8018]"
+            className="max-h-[70vh] rounded-lg object-contain shadow-[0_0_40px_var(--zaploto-green)]"
           />
         </div>
       </div>
@@ -118,8 +118,8 @@ function MaterialPreview({
 
   if (isVideo || (type === 'other' && isVideoPath(file_path))) {
     return (
-      <div className="relative overflow-hidden rounded-xl border border-[#4ade80]/20 bg-black">
-        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[#4ade80]/60 to-transparent" />
+      <div className="relative overflow-hidden rounded-xl border border-[var(--zaploto-green)]/20 bg-black">
+        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[var(--zaploto-green)]/60 to-transparent" />
         <PreviewCloseBtn onClose={onClose} />
         <video src={signedUrl} controls className="max-h-[70vh] w-full rounded-xl" preload="metadata" />
       </div>
@@ -128,8 +128,8 @@ function MaterialPreview({
 
   if (type === 'pdf') {
     return (
-      <div className="relative overflow-hidden rounded-xl border border-[#4ade80]/20 bg-[#030803]" style={{ minHeight: '60vh' }}>
-        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[#4ade80]/60 to-transparent" />
+      <div className="relative overflow-hidden rounded-xl border border-[var(--zaploto-green)]/20 bg-[#030803]" style={{ minHeight: '60vh' }}>
+        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[var(--zaploto-green)]/60 to-transparent" />
         <PreviewCloseBtn onClose={onClose} />
         <iframe src={signedUrl} title={title} className="h-[70vh] w-full rounded-xl border-0" />
       </div>
@@ -137,13 +137,13 @@ function MaterialPreview({
   }
 
   return (
-    <div className="relative overflow-hidden rounded-xl border border-[#4ade80]/20 bg-[#030803] p-8 text-center">
-      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[#4ade80]/60 to-transparent" />
-      <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl border border-[#4ade80]/20 bg-[#4ade80]/10">
+    <div className="relative overflow-hidden rounded-xl border border-[var(--zaploto-green)]/20 bg-[#030803] p-8 text-center">
+      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[var(--zaploto-green)]/60 to-transparent" />
+      <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl border border-[var(--zaploto-green)]/20 bg-[var(--zaploto-green)]/10">
         <TypeIcon type={type} />
       </div>
       <p className="mt-4 text-sm text-white/50">Preview não disponível para este tipo. Use o botão Baixar.</p>
-      <button type="button" onClick={onClose} className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-[#4ade80]/30 px-4 py-2 text-sm font-medium text-[#4ade80] hover:bg-[#4ade80]/10 transition">
+      <button type="button" onClick={onClose} className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-[var(--zaploto-green)]/30 px-4 py-2 text-sm font-medium text-[var(--zaploto-green)] hover:bg-[var(--zaploto-green)]/10 transition">
         <X className="h-3.5 w-3.5" /> Fechar
       </button>
     </div>
@@ -229,7 +229,7 @@ export default function AcademyMateriaisPage() {
               { s: 3, x: '50%', y: '85%', o: 0.4,  d: 3.4  },
             ].map((dot, i) => (
               <div key={i}
-                className="academy-bokeh-dot absolute rounded-full bg-[#4ade80]"
+                className="academy-bokeh-dot absolute rounded-full bg-[var(--zaploto-green)]"
                 style={{
                   width: dot.s, height: dot.s, left: dot.x, top: dot.y,
                   filter: `blur(${dot.s > 4 ? 2 : 1}px)`,
@@ -240,13 +240,13 @@ export default function AcademyMateriaisPage() {
               />
             ))}
             <div className="academy-grid-drift absolute inset-0 opacity-[0.04]"
-              style={{ backgroundImage: 'linear-gradient(#4ade80 1px, transparent 1px), linear-gradient(90deg, #4ade80 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
-            <div className="academy-scanline absolute inset-x-0 h-px bg-gradient-to-r from-transparent via-[#4ade80]/50 to-transparent" style={{ top: 0 }} />
+              style={{ backgroundImage: 'linear-gradient(var(--zaploto-green) 1px, transparent 1px), linear-gradient(90deg, var(--zaploto-green) 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
+            <div className="academy-scanline absolute inset-x-0 h-px bg-gradient-to-r from-transparent via-[var(--zaploto-green)]/50 to-transparent" style={{ top: 0 }} />
           </div>
 
           <div className="relative flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6">
             <div>
-              <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-[#4ade80]/30 bg-[#4ade80]/10 px-3 py-1 text-xs font-medium text-[#4ade80] uppercase tracking-widest">
+              <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-[var(--zaploto-green)]/30 bg-[var(--zaploto-green)]/10 px-3 py-1 text-xs font-medium text-[var(--zaploto-green)] uppercase tracking-widest">
                 Zaploto Academy
               </div>
               <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Material de apoio</h1>
@@ -256,7 +256,7 @@ export default function AcademyMateriaisPage() {
             </div>
             <Link
               href="/academy"
-              className="shrink-0 inline-flex items-center gap-2 self-start rounded-xl border border-[#4ade80]/40 bg-[#4ade80]/10 px-4 py-2.5 text-sm font-semibold text-[#4ade80] hover:bg-[#4ade80]/20 transition"
+              className="shrink-0 inline-flex items-center gap-2 self-start rounded-xl border border-[var(--zaploto-green)]/40 bg-[var(--zaploto-green)]/10 px-4 py-2.5 text-sm font-semibold text-[var(--zaploto-green)] hover:bg-[var(--zaploto-green)]/20 transition"
             >
               ← Início
             </Link>
@@ -267,13 +267,13 @@ export default function AcademyMateriaisPage() {
       {!userId ? (
         <div className="relative overflow-hidden rounded-2xl border border-[#1a3d1a] bg-[#060f07] p-12 text-center">
           <div className="absolute inset-0 opacity-[0.04]"
-            style={{ backgroundImage: 'linear-gradient(#4ade80 1px, transparent 1px), linear-gradient(90deg, #4ade80 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
+            style={{ backgroundImage: 'linear-gradient(var(--zaploto-green) 1px, transparent 1px), linear-gradient(90deg, var(--zaploto-green) 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
           <div className="relative">
-            <Lock className="mx-auto mb-4 h-12 w-12 text-[#4ade80]/40" />
+            <Lock className="mx-auto mb-4 h-12 w-12 text-[var(--zaploto-green)]/40" />
             <p className="mb-4 text-white/50">Faça login para acessar e baixar os materiais.</p>
             <Link
               href="/login"
-              className="inline-flex items-center gap-2 rounded-xl border border-[#4ade80]/40 bg-[#4ade80]/10 px-5 py-2.5 text-sm font-semibold text-[#4ade80] hover:bg-[#4ade80]/20 transition"
+              className="inline-flex items-center gap-2 rounded-xl border border-[var(--zaploto-green)]/40 bg-[var(--zaploto-green)]/10 px-5 py-2.5 text-sm font-semibold text-[var(--zaploto-green)] hover:bg-[var(--zaploto-green)]/20 transition"
             >
               Entrar
             </Link>
@@ -299,7 +299,7 @@ export default function AcademyMateriaisPage() {
                 placeholder="Buscar material pelo nome…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="w-full rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] py-2.5 pl-9 pr-4 text-sm text-[var(--foreground)] placeholder-[var(--muted-foreground)] outline-none transition focus:border-[#4ade80]/60 focus:ring-1 focus:ring-[#4ade80]/30"
+                className="w-full rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] py-2.5 pl-9 pr-4 text-sm text-[var(--foreground)] placeholder-[var(--muted-foreground)] outline-none transition focus:border-[var(--zaploto-green)]/60 focus:ring-1 focus:ring-[var(--zaploto-green)]/30"
               />
               {search && (
                 <button
@@ -322,8 +322,8 @@ export default function AcademyMateriaisPage() {
                     onClick={() => setTypeFilter(opt.value)}
                     className={`whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-medium transition ${
                       typeFilter === opt.value
-                        ? 'bg-[#4ade80] text-[#060f07] shadow-[0_0_8px_#4ade80aa]'
-                        : 'border border-[var(--card-border)] text-[var(--muted-foreground)] hover:border-[#4ade80]/40 hover:text-[#4ade80]'
+                        ? 'bg-[var(--zaploto-green)] text-[#060f07] shadow-[0_0_8px_var(--zaploto-green)]'
+                        : 'border border-[var(--card-border)] text-[var(--muted-foreground)] hover:border-[var(--zaploto-green)]/40 hover:text-[var(--zaploto-green)]'
                     }`}
                   >
                     {opt.label}
@@ -340,7 +340,7 @@ export default function AcademyMateriaisPage() {
               <button
                 type="button"
                 onClick={() => { setSearch(''); setTypeFilter(''); }}
-                className="ml-2 text-[#4ade80] hover:underline"
+                className="ml-2 text-[var(--zaploto-green)] hover:underline"
               >
                 Limpar filtros
               </button>
@@ -360,12 +360,12 @@ export default function AcademyMateriaisPage() {
                     key={m.id}
                     className={`group relative overflow-hidden rounded-xl border bg-[#0a140a]/80 backdrop-blur-sm transition-all duration-300 ${
                       isOpen
-                        ? 'border-[#4ade80]/40 shadow-[0_0_20px_#4ade8018]'
-                        : 'border-[#1e3a1e] hover:border-[#4ade80]/30 hover:shadow-[0_0_12px_#4ade8010]'
+                        ? 'border-[var(--zaploto-green)]/40 shadow-[0_0_20px_var(--zaploto-green)]'
+                        : 'border-[#1e3a1e] hover:border-[var(--zaploto-green)]/30 hover:shadow-[0_0_12px_var(--zaploto-green)]'
                     }`}
                   >
                     {/* Neon top line — aparece quando aberto ou hover */}
-                    <div className={`absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[#4ade80]/60 to-transparent transition-opacity duration-300 ${isOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-60'}`} />
+                    <div className={`absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[var(--zaploto-green)]/60 to-transparent transition-opacity duration-300 ${isOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-60'}`} />
 
                     <div className="flex items-center gap-4 p-4">
                       <TypeIcon type={m.type} />
@@ -382,8 +382,8 @@ export default function AcademyMateriaisPage() {
                           onClick={() => handlePreview(m)}
                           className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-sm font-medium transition ${
                             isOpen
-                              ? 'border-[#4ade80]/40 bg-[#4ade80]/10 text-[#4ade80]'
-                              : 'border-white/10 text-white/50 hover:border-[#4ade80]/40 hover:text-[#4ade80]'
+                              ? 'border-[var(--zaploto-green)]/40 bg-[var(--zaploto-green)]/10 text-[var(--zaploto-green)]'
+                              : 'border-white/10 text-white/50 hover:border-[var(--zaploto-green)]/40 hover:text-[var(--zaploto-green)]'
                           }`}
                         >
                           <Eye className="h-4 w-4" />
@@ -393,7 +393,7 @@ export default function AcademyMateriaisPage() {
                           type="button"
                           onClick={() => handleDownload(m.file_path, m.id)}
                           disabled={downloadingId === m.id}
-                          className="inline-flex items-center gap-2 rounded-xl border border-[#4ade80]/40 bg-[#4ade80]/10 px-4 py-2 text-sm font-semibold text-[#4ade80] transition hover:bg-[#4ade80]/20 hover:shadow-[0_0_10px_#4ade8040] disabled:opacity-50"
+                          className="inline-flex items-center gap-2 rounded-xl border border-[var(--zaploto-green)]/40 bg-[var(--zaploto-green)]/10 px-4 py-2 text-sm font-semibold text-[var(--zaploto-green)] transition hover:bg-[var(--zaploto-green)]/20 hover:shadow-[0_0_10px_var(--zaploto-green)] disabled:opacity-50"
                         >
                           {downloadingId === m.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
                           Baixar
@@ -403,10 +403,10 @@ export default function AcademyMateriaisPage() {
 
                     {/* Área de preview expandida */}
                     {isOpen && (
-                      <div className="border-t border-[#4ade80]/15 bg-[#030803]/80 p-4">
+                      <div className="border-t border-[var(--zaploto-green)]/15 bg-[#030803]/80 p-4">
                         {previewLoading ? (
                           <div className="flex flex-col items-center justify-center gap-3 py-16">
-                            <Loader2 className="h-8 w-8 animate-spin text-[#4ade80]" />
+                            <Loader2 className="h-8 w-8 animate-spin text-[var(--zaploto-green)]" />
                             <p className="text-sm text-white/30">Carregando preview…</p>
                           </div>
                         ) : previewUrl && previewMaterial ? (

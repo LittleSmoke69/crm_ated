@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import Link from 'next/link';
+import Link from '@/components/WhitelabelLink';
 import { BarChart3, Loader2, Calendar } from 'lucide-react';
 import { getStoredUserId } from '@/lib/utils/stored-user-id';
 

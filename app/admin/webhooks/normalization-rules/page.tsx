@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { useRouter } from 'next/navigation';
+import { useTenantRouter } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import { useSidebar } from '@/contexts/SidebarContext';
 import {
@@ -50,7 +50,7 @@ interface NormalizationRule {
 
 export default function NormalizationRulesPage() {
   const { checking, userId } = useRequireAuth();
-  const router = useRouter();
+  const router = useTenantRouter();
   const { isCollapsed, setIsCollapsed, isMobileOpen, setIsMobileOpen } = useSidebar();
 
   const [rules, setRules] = useState<NormalizationRule[]>([]);

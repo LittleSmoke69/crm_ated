@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { useRouter } from 'next/navigation';
+import { useTenantRouter } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { useToast } from '@/hooks/useToast';
@@ -442,7 +442,7 @@ function LeadTransferClientSearchField({
 }
 
 export default function AdminLeadTransferPage() {
-  const router = useRouter();
+  const router = useTenantRouter();
   const { checking, userId, userStatus } = useRequireAuth();
   const { toasts, showToast, removeToast } = useToast();
 

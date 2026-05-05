@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import Link from 'next/link';
+import Link from '@/components/WhitelabelLink';
 import { Plus, Pencil, Trash2, GripVertical, Loader2, Eye, EyeOff, FileVideo, ArrowLeft, BookOpen } from 'lucide-react';
 import { getStoredUserId } from '@/lib/utils/stored-user-id';
 

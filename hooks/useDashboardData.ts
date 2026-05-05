@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
+import { getWlSlugHeadersForApi } from '@/lib/utils/tenant-href';
 
 export interface Contact {
   id: string;
@@ -26,6 +27,8 @@ export interface WhatsAppInstance {
   user_id?: string;
   /** Nome amigável do dono da instância (perfil em `user_id`), preenchido pela API. */
   owner_display_name?: string | null;
+  /** True quando o acesso veio de compartilhamento (não é o dono da instância). */
+  shared_with_me?: boolean;
   proxy_id?: string | null;
   webhook_configured?: boolean;
   is_blocked_for_instances?: boolean; // Indica se a API Evolution está bloqueada para criação de instâncias
@@ -201,7 +204,7 @@ export const useDashboardData = () => {
       let instancesData: WhatsAppInstance[] = [];
       try {
         const instancesResponse = await fetch('/api/instances', {
-          headers: { 'X-User-Id': userId },
+          headers: { 'X-User-Id': userId, ...getWlSlugHeadersForApi() },
         });
         if (instancesResponse.ok) {
           const instancesResult = await instancesResponse.json();

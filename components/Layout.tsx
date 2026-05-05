@@ -284,9 +284,18 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
   const isFullScreen = isChat || isFlowEditor;
 
   return (
-    <div className={`bg-gray-50 dark:bg-[#1a1a1a] flex flex-col lg:flex-row ${isFullScreen ? 'h-screen overflow-hidden' : 'min-h-screen'}`}>
-      {/* Header Mobile */}
-      <header className="lg:hidden h-16 bg-white dark:bg-[#2a2a2a] border-b border-gray-200 dark:border-[#404040] flex items-center justify-between px-4 sticky top-0 z-30 shadow-sm">
+    <div
+      className={`flex flex-col lg:flex-row ${isFullScreen ? 'h-screen overflow-hidden' : 'min-h-screen'}`}
+      style={{ backgroundColor: 'var(--tenant-surface)' }}
+    >
+      {/* Header Mobile — usa tokens do white label quando definidos */}
+      <header
+        className="lg:hidden h-16 border-b flex items-center justify-between px-4 sticky top-0 z-30 shadow-sm"
+        style={{
+          backgroundColor: 'var(--tenant-surface-elevated)',
+          borderColor: 'var(--tenant-border)',
+        }}
+      >
         <div className="flex items-center gap-2">
           <Logo size="md" />
         </div>

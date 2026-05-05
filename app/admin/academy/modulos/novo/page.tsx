@@ -3,13 +3,13 @@
 import { useState } from 'react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { useRouter } from 'next/navigation';
-import Link from 'next/link';
+import { useTenantRouter } from '@/lib/utils/tenant-href';
+import Link from '@/components/WhitelabelLink';
 import { Save, Loader2 } from 'lucide-react';
 import { getStoredUserId } from '@/lib/utils/stored-user-id';
 
 export default function AdminAcademyModuloNovoPage() {
-  const router = useRouter();
+  const router = useTenantRouter();
   const { checking, userId } = useRequireAuth();
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({

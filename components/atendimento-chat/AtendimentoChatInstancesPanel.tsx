@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
-import Link from 'next/link';
+import Link from '@/components/WhitelabelLink';
 import { Loader2, MessageSquare, Plus, RefreshCw } from 'lucide-react';
 
 type EvolutionApiOption = {

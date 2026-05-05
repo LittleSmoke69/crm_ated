@@ -11,6 +11,7 @@ import { selectInstancesForActivationSend } from '@/lib/crm/select-instances-for
 import { useToast } from '@/hooks/useToast';
 import ToastContainer from '@/components/Toast/ToastContainer';
 import { sanitizeMassSendErrorMessage } from '@/lib/utils/activation-send-errors';
+import { getWlSlugHeadersForApi } from '@/lib/utils/tenant-href';
 
 interface Group {
   id: string;
@@ -204,7 +205,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
       // 1. Busca instâncias
       try {
         const response = await fetch('/api/instances', {
-          headers: { 'X-User-Id': userId },
+          headers: { 'X-User-Id': userId, ...getWlSlugHeadersForApi() },
         });
         const data = await response.json();
         if (data.success) {
@@ -503,7 +504,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
           // useEffect carrega grupos quando há instância(ns) selecionada(s)
           if (instances.length === 0) {
             fetch('/api/instances', {
-              headers: { 'X-User-Id': userId },
+              headers: { 'X-User-Id': userId, ...getWlSlugHeadersForApi() },
             })
               .then(res => res.json())
               .then(data => {
@@ -523,7 +524,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
           setForceMassSend(true);
           setShowChoiceModal(false);
           if (instances.length === 0) {
-            fetch('/api/instances', { headers: { 'X-User-Id': userId } })
+            fetch('/api/instances', { headers: { 'X-User-Id': userId, ...getWlSlugHeadersForApi() } })
               .then(res => res.json())
               .then(data => {
                 if (data.success) {

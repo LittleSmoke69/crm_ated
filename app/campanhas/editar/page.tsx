@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { withTenantSlug } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { useDashboardData, Campaign, WhatsAppInstance } from '@/hooks/useDashboardData';
@@ -57,7 +58,7 @@ const EditCampaignsPage = () => {
           const result = await response.json();
           if (result.success && result.data?.status !== 'suporte') {
             // Redireciona se não for suporte
-            window.location.href = '/';
+            window.location.href = withTenantSlug('/');
           }
         }
       } catch (error) {
@@ -74,7 +75,7 @@ const EditCampaignsPage = () => {
       sessionStorage.removeItem('profile_id');
       window.localStorage.removeItem('profile_id');
       document.cookie = 'user_id=; Path=/; Max-Age=0; SameSite=Lax';
-      window.location.href = '/login';
+      window.location.href = withTenantSlug('/login');
     }
   };
 

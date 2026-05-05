@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import Link from 'next/link';
+import Link from '@/components/WhitelabelLink';
 import { BookOpen, FileVideo, FolderOpen, BarChart3, ExternalLink, Loader2, Plus, ChevronRight } from 'lucide-react';
 
 export default function AdminAcademyDashboardPage() {

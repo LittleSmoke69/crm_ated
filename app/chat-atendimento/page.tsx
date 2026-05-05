@@ -1,8 +1,10 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { withTenantSlug } from '@/lib/utils/tenant-href';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import Layout from '@/components/Layout';
+import Link from '@/components/WhitelabelLink';
 import { supabase } from '@/lib/supabase';
 import {
   MessageSquare,
@@ -1151,7 +1153,7 @@ export default function ChatPage() {
       window.localStorage.removeItem('profile_id');
       document.cookie = 'user_id=; Path=/; Max-Age=0; SameSite=Lax';
     }
-    window.location.href = '/login';
+    window.location.href = withTenantSlug('/login');
   };
 
   // ── Perfil (sobrescreve status do auth; garante etiquetas mesmo antes do fetch) ──
@@ -2857,17 +2859,17 @@ export default function ChatPage() {
                     {userStatus === 'gerente' ? (
                       <>
                         Nenhuma instância Evolution ativa na sua conta. Crie em{' '}
-                        <a href="/instances" className="underline" style={{ color: '#8CD955' }}>
+                        <Link href="/instances" className="underline" style={{ color: '#8CD955' }}>
                           Instâncias WhatsApp
-                        </a>
+                        </Link>
                         ; ao conectar, ela aparecerá aqui para você vincular um consultor.
                       </>
                     ) : (
                       <>
                         Você ainda não possui instâncias WhatsApp ativas. Crie uma em{' '}
-                        <a href="/instances" className="underline" style={{ color: '#8CD955' }}>
+                        <Link href="/instances" className="underline" style={{ color: '#8CD955' }}>
                           Instâncias WhatsApp
-                        </a>
+                        </Link>
                         {' '}
                         ou peça ao gerente para atribuir uma instância de atendimento.
                       </>
@@ -3113,9 +3115,9 @@ export default function ChatPage() {
               <p className="text-sm font-medium">{tokenAlertMessage}</p>
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
-              <a href="/admin/whatsapp-official" className="text-sm font-medium underline hover:no-underline">
+              <Link href="/admin/whatsapp-official" className="text-sm font-medium underline hover:no-underline">
                 Renovar token
-              </a>
+              </Link>
               <button
                 type="button"
                 onClick={() => setShowTokenAlert(false)}

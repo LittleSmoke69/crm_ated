@@ -3,8 +3,9 @@
 import { useEffect, useState } from 'react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { useParams, useRouter } from 'next/navigation';
-import Link from 'next/link';
+import { useParams } from 'next/navigation';
+import { useTenantRouter } from '@/lib/utils/tenant-href';
+import Link from '@/components/WhitelabelLink';
 import { Save, Loader2, Plus, Trash2, Upload } from 'lucide-react';
 import { getStoredUserId } from '@/lib/utils/stored-user-id';
 import VturbPlayer from '@/components/academy/VturbPlayer';
@@ -39,7 +40,7 @@ type Asset = { id: string; type: string; title: string };
 
 export default function AdminAcademyAulaEditPage() {
   const params = useParams();
-  const router = useRouter();
+  const router = useTenantRouter();
   const id = params.id as string;
   const { checking, userId } = useRequireAuth();
   const [lesson, setLesson] = useState<Lesson | null>(null);

@@ -15,21 +15,24 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 export async function GET(req: NextRequest) {
   try {
     await requireSuperAdmin(req);
+    const tenantScope = req.headers.get('x-zaploto-id')?.trim() || null;
 
-    // Busca último evento de PROD
-    const { data: lastProdEvent } = await supabaseServiceRole
+    let prodQ = supabaseServiceRole
       .from('evolution_webhook_events')
       .select('received_at')
-      .eq('env', 'prod')
+      .eq('env', 'prod');
+    if (tenantScope) prodQ = prodQ.eq('zaploto_id', tenantScope);
+    const { data: lastProdEvent } = await prodQ
       .order('received_at', { ascending: false })
       .limit(1)
       .single();
 
-    // Busca último evento de TEST
-    const { data: lastTestEvent } = await supabaseServiceRole
+    let testQ = supabaseServiceRole
       .from('evolution_webhook_events')
       .select('received_at')
-      .eq('env', 'test')
+      .eq('env', 'test');
+    if (tenantScope) testQ = testQ.eq('zaploto_id', tenantScope);
+    const { data: lastTestEvent } = await testQ
       .order('received_at', { ascending: false })
       .limit(1)
       .single();

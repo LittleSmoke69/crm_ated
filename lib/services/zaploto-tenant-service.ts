@@ -4,6 +4,7 @@
  */
 
 import { supabaseServiceRole } from './supabase-service';
+import type { TenantThemeColorsStored } from '@/lib/constants/tenant-theme-map';
 
 export interface ZaplotoTenant {
   id: string;
@@ -18,6 +19,7 @@ export interface ZaplotoTenant {
   support_email: string | null;
   is_active: boolean;
   is_central?: boolean;
+  theme_colors?: TenantThemeColorsStored | null;
   created_at: string;
   updated_at: string;
 }

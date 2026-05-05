@@ -174,7 +174,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Verifica se o usuário tem acesso à instância
-    const hasAccess = await checkInstanceAccess(userId, instance_name);
+    const hasAccess = await checkInstanceAccess(req, userId, instance_name);
     if (!hasAccess) {
       return errorResponse('Acesso negado. Você não tem permissão para usar esta instância.', 403);
     }

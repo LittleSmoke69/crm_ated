@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { useRouter } from 'next/navigation';
+import { useTenantRouter, getWlSlugHeadersForApi } from '@/lib/utils/tenant-href';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import Layout from '@/components/Layout';
 import { useSidebar } from '@/contexts/SidebarContext';
@@ -88,7 +88,7 @@ const ALLOWED_LIST_CLEANING_STATUSES = ['super_admin', 'admin', 'dono_banca', 'g
 const PROFILE_CHECK_TIMEOUT_MS = 12000;
 
 export default function ListCleaningPage() {
-  const router = useRouter();
+  const router = useTenantRouter();
   const { checking, userId } = useRequireAuth();
   const { isCollapsed, setIsCollapsed, isMobileOpen, setIsMobileOpen } = useSidebar();
   const [rawText, setRawText] = useState('');
@@ -227,7 +227,9 @@ export default function ListCleaningPage() {
     (async () => {
       setVerificationInstancesLoading(true);
       try {
-        const res = await fetch('/api/instances', { headers: { 'X-User-Id': userId } });
+        const res = await fetch('/api/instances', {
+          headers: { 'X-User-Id': userId, ...getWlSlugHeadersForApi() },
+        });
         const json = await res.json().catch(() => ({}));
         if (cancelled || !json.success || !Array.isArray(json.data)) return;
         const list = (json.data as VerificationInstanceOption[])

@@ -7,16 +7,50 @@
 import { NextRequest } from 'next/server';
 import { UserProfile } from './middleware/permissions';
 import { getTenantByIdOrSlug } from './services/zaploto-tenant-service';
+import { ZAPLOTO_SLUG_COOKIE } from '@/lib/constants/white-label';
+import { RESERVED_FIRST_SEGMENTS } from '@/lib/middleware/reserved-first-segments';
+import { getPathnameTenantSlug } from '@/lib/utils/white-label-path';
 
 const DEFAULT_ZAPLOTO_ID = '00000000-0000-0000-0000-000000000001';
 
 const ZAPLOTO_ID_HEADER = 'x-zaploto-id';
 const ZAPLOTO_ID_QUERY = 'zaploto_id';
-const ZAPLOTO_SLUG_COOKIE = 'zaploto_slug';
+const ZAPLOTO_SLUG_HEADER_LOW = 'x-zaploto-slug';
+
+/**
+ * Slug WL para APIs que não passam pelo rewrite do middleware (/api/*).
+ * Ordem: header explícito → slug na URL do Referer (`/{slug}/...`) → **não** usar cookie se o Referer
+ * for rota central (/instances, /admin, …) para não misturar com cookie antigo de WL.
+ */
+function getSlugFromRequest(req: NextRequest): string {
+  const headerSlug =
+    req.headers.get(ZAPLOTO_SLUG_HEADER_LOW)?.trim().toLowerCase() ||
+    req.headers.get('X-Zaploto-Slug')?.trim().toLowerCase() ||
+    '';
+  if (headerSlug) return headerSlug;
+
+  const referer = req.headers.get('referer');
+  if (referer) {
+    try {
+      const refPath = new URL(referer).pathname;
+      const slugFromRef = getPathnameTenantSlug(refPath);
+      if (slugFromRef) return slugFromRef;
+      const first = refPath.split('/').filter(Boolean)[0]?.toLowerCase();
+      if (first && RESERVED_FIRST_SEGMENTS.has(first)) {
+        return '';
+      }
+    } catch {
+      // ignore URL parse errors
+    }
+  }
+
+  return req.cookies.get(ZAPLOTO_SLUG_COOKIE)?.value?.trim().toLowerCase() || '';
+}
 
 /**
  * Retorna o zaploto_id efetivo para a requisição.
  * - Cookie zaploto_slug (definido pelo middleware em zaploto.com/slug/...): resolve slug → tenant e usa se permitido
+ * - Header X-Zaploto-Slug propagado pelo rewrite do middleware quando aplicável (fallback cookie)
  * - super_admin: header/query X-Zaploto-Id ou zaploto_id para acessar qualquer tenant
  * - outros: zaploto_id do perfil (ou do tenant do slug se pertencer a esse tenant)
  */
@@ -26,9 +60,21 @@ export async function getEffectiveZaplotoId(
 ): Promise<string> {
   const zaplotoIdFromProfile = profile?.zaploto_id || DEFAULT_ZAPLOTO_ID;
 
-  const slugFromCookie = req.cookies.get(ZAPLOTO_SLUG_COOKIE)?.value?.trim();
-  if (slugFromCookie) {
-    const tenant = await getTenantByIdOrSlug(slugFromCookie);
+  /**
+   * super_admin: `X-Zaploto-Id` / query (TenantSwitcher no admin) deve vir **antes** do slug
+   * em Referer/cookie; caso contrário o cookie WL ou `/{slug}/admin` sobrescrevia a seleção do painel.
+   */
+  if (profile?.status === 'super_admin') {
+    const header = req.headers.get(ZAPLOTO_ID_HEADER) || req.headers.get('X-Zaploto-Id');
+    if (header?.trim()) return header.trim();
+    const query = req.nextUrl.searchParams.get(ZAPLOTO_ID_QUERY);
+    if (query?.trim()) return query.trim();
+  }
+
+  const slugEffective = getSlugFromRequest(req);
+
+  if (slugEffective) {
+    const tenant = await getTenantByIdOrSlug(slugEffective);
     if (tenant) {
       if (!profile) return tenant.id;
       if (profile.status === 'super_admin') return tenant.id;
@@ -37,13 +83,6 @@ export async function getEffectiveZaplotoId(
   }
 
   if (!profile) return DEFAULT_ZAPLOTO_ID;
-
-  if (profile.status === 'super_admin') {
-    const header = req.headers.get(ZAPLOTO_ID_HEADER) || req.headers.get('X-Zaploto-Id');
-    if (header?.trim()) return header.trim();
-    const query = req.nextUrl.searchParams.get(ZAPLOTO_ID_QUERY);
-    if (query?.trim()) return query.trim();
-  }
 
   return zaplotoIdFromProfile;
 }

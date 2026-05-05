@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useTenantRouter } from '@/lib/utils/tenant-href';
 import {
   Plus,
   Trash2,
@@ -81,7 +81,7 @@ const emptyForm = () => ({
 });
 
 export default function WhatsAppOfficialAdmin() {
-  const router = useRouter();
+  const router = useTenantRouter();
   const [configs, setConfigs] = useState<WhatsAppOfficialConfig[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

@@ -2,7 +2,8 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { useRouter, useParams } from 'next/navigation';
+import { useParams } from 'next/navigation';
+import { useTenantRouter } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import { useSidebar } from '@/contexts/SidebarContext';
 import { PayloadViewer } from '@/components/Webhooks/PayloadViewer';
@@ -77,7 +78,7 @@ interface WebhookEvent {
 
 export default function FlowExecutionsPage() {
   const { checking, userId } = useRequireAuth();
-  const router = useRouter();
+  const router = useTenantRouter();
   const params = useParams();
   const flowId = params?.flowId as string;
   const { isCollapsed, setIsCollapsed, isMobileOpen, setIsMobileOpen } = useSidebar();

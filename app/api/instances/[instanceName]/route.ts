@@ -17,7 +17,7 @@ export async function GET(
     const { userId } = await requireAuth(req);
     const { instanceName } = await params;
 
-    const hasAccess = await checkInstanceAccess(userId, instanceName);
+    const hasAccess = await checkInstanceAccess(req, userId, instanceName);
     if (!hasAccess) {
       return errorResponse('Acesso negado. Você não tem permissão para acessar esta instância.', 403);
     }
@@ -75,7 +75,7 @@ export async function PATCH(
     const { userId } = await requireAuth(req);
     const { instanceName } = await params;
 
-    const hasAccess = await checkInstanceAccess(userId, instanceName);
+    const hasAccess = await checkInstanceAccess(req, userId, instanceName);
     if (!hasAccess) {
       return errorResponse('Acesso negado. Você não tem permissão para alterar esta instância.', 403);
     }
@@ -175,6 +175,11 @@ export async function DELETE(
       }
       
       return errorResponse('Instância não encontrada no banco de dados', 404);
+    }
+
+    const hasAccess = await checkInstanceAccess(req, userId, instanceName);
+    if (!hasAccess) {
+      return errorResponse('Acesso negado. Você não tem permissão para excluir esta instância.', 403);
     }
 
     const instance = instances[0];

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { withTenantSlug } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { Activity, Heart, Search, Plus, MoreVertical, Paperclip, X, Trash2, Edit2, Star, Info, Upload, ArrowLeft, Video, Phone, MoreVertical as MoreVerticalIcon, Smile, Camera, Mic, Check, CheckCheck, Send, Calendar, Clock, Play, Pause, Eye, Trash, Music, Megaphone, Image, CircleDot, RefreshCw } from 'lucide-react';
@@ -286,7 +287,7 @@ const ActivationsPage = () => {
       sessionStorage.removeItem('profile_id');
       window.localStorage.removeItem('profile_id');
       document.cookie = 'user_id=; Path=/; Max-Age=0; SameSite=Lax';
-      window.location.href = '/login';
+      window.location.href = withTenantSlug('/login');
     }
   };
 

@@ -1,14 +1,14 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useTenantRouter } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import HierarchySection from '@/components/Admin/HierarchySection';
 import { Loader2, AlertCircle } from 'lucide-react';
 
 export default function AdminHierarchyPage() {
-  const router = useRouter();
+  const router = useTenantRouter();
   const { checking, userId } = useRequireAuth();
   const [status, setStatus] = useState<string | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(true);

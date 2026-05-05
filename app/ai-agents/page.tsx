@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { useRouter } from 'next/navigation';
+import { useTenantRouter, getWlSlugHeadersForApi } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import { useSidebar } from '@/contexts/SidebarContext';
 import FlowInstanceModal from '@/components/Automations/FlowInstanceModal';
@@ -81,7 +81,7 @@ interface WhatsAppGroup {
 
 export default function AIAgentsPage() {
   const { checking, userId } = useRequireAuth();
-  const router = useRouter();
+  const router = useTenantRouter();
   const { isCollapsed, setIsCollapsed, isMobileOpen, setIsMobileOpen } = useSidebar();
   
   const [agents, setAgents] = useState<AIAgent[]>([]);
@@ -160,7 +160,7 @@ export default function AIAgentsPage() {
 
       // Carrega instâncias mestres do usuário
       const instancesResponse = await fetch('/api/instances', {
-        headers: { 'X-User-Id': userId },
+        headers: { 'X-User-Id': userId, ...getWlSlugHeadersForApi() },
       });
       if (instancesResponse.ok) {
         const instancesResult = await instancesResponse.json();

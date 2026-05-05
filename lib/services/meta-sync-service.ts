@@ -27,7 +27,11 @@ import {
   type ActiveCampaignSpendRow,
 } from '@/lib/meta/metaAdsService';
 import { buildCampaignConsultorSummary } from '@/lib/services/meta-campaign-consultors';
-import { buildGestorNamesByCrmBancaIdMap, type CrmBancaLite } from '@/lib/services/gestor-names-by-crm-banca';
+import {
+  buildGestorNamesByCrmBancaIdMap,
+  buildGestorUserIdsByCrmBancaIdMap,
+  type CrmBancaLite,
+} from '@/lib/services/gestor-names-by-crm-banca';
 import {
   convertMetaSpendToBrl,
   resolveExchangeRatesForCurrencies,
@@ -1837,6 +1841,8 @@ export interface AdminMetaLiveCampaignRow {
   banca_url: string | null;
   /** Gestores (hierarquia + user_bancas) da banca CRM atribuída à linha — preenchido em `enrichAdminMetaCampaignRowsWithBancaNames`. */
   gestor_names?: string[];
+  /** IDs `profiles.id` dos gestores da banca (mesmo escopo que `gestor_names`). */
+  gestor_user_ids?: string[];
   campaign_id: string;
   /** Tipo salvo em `meta_campaigns` (sincronizado). */
   campaign_kind: 'normal' | 'bolao';
@@ -2370,8 +2376,10 @@ async function enrichAdminMetaCampaignRowsWithBancaNames(rows: AdminMetaLiveCamp
     (bancas ?? []).map((b: { id: string; name: string | null; url: string | null }) => [b.id, b])
   );
   let gestorByBanca = new Map<string, string[]>();
+  let gestorIdsByBanca = new Map<string, string[]>();
   try {
     gestorByBanca = await buildGestorNamesByCrmBancaIdMap(bancaIds, bancaById);
+    gestorIdsByBanca = await buildGestorUserIdsByCrmBancaIdMap(bancaIds, bancaById);
   } catch (err: unknown) {
     logMetaReturn('enrichAdminMetaCampaignRowsWithBancaNames gestor_names', {
       error: err instanceof Error ? err.message : String(err),
@@ -2382,6 +2390,7 @@ async function enrichAdminMetaCampaignRowsWithBancaNames(rows: AdminMetaLiveCamp
     row.banca_name = b?.name ?? b?.url ?? row.banca_id;
     row.banca_url = b?.url ?? null;
     row.gestor_names = gestorByBanca.get(row.banca_id) ?? [];
+    row.gestor_user_ids = gestorIdsByBanca.get(row.banca_id) ?? [];
   }
 }
 

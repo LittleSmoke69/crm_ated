@@ -2,7 +2,10 @@
 
 import React, { createContext, useContext, useState } from 'react';
 
-const ADMIN_TENANT_KEY = 'admin_zaploto_id';
+/** sessionStorage — alinhado ao TenantSwitcher e à página /admin/zaploto */
+export const ADMIN_ZAPLOTO_TENANT_STORAGE_KEY = 'admin_zaploto_id';
+
+const ADMIN_TENANT_KEY = ADMIN_ZAPLOTO_TENANT_STORAGE_KEY;
 
 interface AdminTenantSwitcherContextValue {
   selectedTenantId: string | null;

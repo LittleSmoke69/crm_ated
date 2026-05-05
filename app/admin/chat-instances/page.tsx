@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useTenantRouter } from '@/lib/utils/tenant-href';
 import { 
   Plus, 
   Settings, 
@@ -33,7 +33,7 @@ interface ChatInstance {
 }
 
 export default function ChatInstancesAdmin() {
-  const router = useRouter();
+  const router = useTenantRouter();
   const [instances, setInstances] = useState<ChatInstance[]>([]);
   const [evolutionApis, setEvolutionApis] = useState<EvolutionApi[]>([]);
   const [isCreating, setIsCreating] = useState(false);

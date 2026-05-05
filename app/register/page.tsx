@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { useTheme } from '@/contexts/ThemeContext';
-import { useRouter } from 'next/navigation';
+import { useTenantRouter, useTenantHref } from '@/lib/utils/tenant-href';
 import { supabase } from '@/lib/supabase';
 import bcrypt from 'bcryptjs';
 import { Mail, Lock, User, UserPlus, AlertCircle, CheckCircle2, Sun, Moon } from 'lucide-react';
@@ -20,7 +20,8 @@ const makeUuid = () => {
 };
 
 export default function RegisterPage() {
-  const router = useRouter();
+  const router = useTenantRouter();
+  const toTenantHref = useTenantHref();
   const { theme, toggleTheme } = useTheme();
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
@@ -196,7 +197,7 @@ export default function RegisterPage() {
                   value={fullName}
                   onChange={e => setFullName(e.target.value)}
                   placeholder="Seu nome completo"
-                  className="w-full min-h-[48px] pl-10 pr-4 py-2.5 sm:py-3 border-2 border-gray-100 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-base text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-[#888] transition bg-white dark:bg-[#333] font-medium"
+                  className="w-full min-h-[48px] pl-10 pr-4 py-2.5 sm:py-3 border-2 border-gray-100 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[var(--tenant-primary)] focus:border-[var(--tenant-primary)] text-base text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-[#888] transition bg-white dark:bg-[#333] font-medium"
                   disabled={loading}
                   required
                   autoComplete="name"
@@ -217,7 +218,7 @@ export default function RegisterPage() {
                   value={email}
                   onChange={e => setEmail(e.target.value)}
                   placeholder="seu@email.com"
-                  className="w-full min-h-[48px] pl-10 pr-4 py-2.5 sm:py-3 border-2 border-gray-100 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-base text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-[#888] transition bg-white dark:bg-[#333] font-medium"
+                  className="w-full min-h-[48px] pl-10 pr-4 py-2.5 sm:py-3 border-2 border-gray-100 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[var(--tenant-primary)] focus:border-[var(--tenant-primary)] text-base text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-[#888] transition bg-white dark:bg-[#333] font-medium"
                   disabled={loading}
                   required
                   inputMode="email"
@@ -239,7 +240,7 @@ export default function RegisterPage() {
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full min-h-[48px] pl-10 pr-4 py-2.5 sm:py-3 border-2 border-gray-100 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-base text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-[#888] transition bg-white dark:bg-[#333] font-medium"
+                  className="w-full min-h-[48px] pl-10 pr-4 py-2.5 sm:py-3 border-2 border-gray-100 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[var(--tenant-primary)] focus:border-[var(--tenant-primary)] text-base text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-[#888] transition bg-white dark:bg-[#333] font-medium"
                   disabled={loading}
                   autoComplete="new-password"
                   minLength={6}
@@ -255,7 +256,7 @@ export default function RegisterPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full min-h-[48px] py-3 rounded-lg text-white text-base font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-md hover:shadow-lg bg-[#8CD955] dark:bg-[#00ff00] hover:bg-[#7BC84A] dark:hover:bg-[#00e600]"
+              className="w-full min-h-[48px] py-3 rounded-lg text-white text-base font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-md hover:shadow-lg bg-[var(--tenant-primary)] hover:bg-[var(--tenant-primary-hover)]"
             >
               {loading ? (
                 <>
@@ -276,8 +277,8 @@ export default function RegisterPage() {
             <p className="text-sm text-gray-600 dark:text-[#aaa] flex flex-wrap items-center justify-center gap-x-1 gap-y-1 leading-relaxed">
               <span>Já tem conta?</span>
               <a
-                href="/login"
-                className="text-[#8CD955] dark:text-[#00ff00] hover:text-[#7BC84A] dark:hover:text-[#00e600] font-medium transition inline-block py-2 -my-2 px-1 -mx-1 rounded-lg active:bg-black/5 dark:active:bg-white/10"
+                href={toTenantHref('/login')}
+                className="text-[var(--tenant-primary)] hover:text-[var(--tenant-primary-hover)] font-medium transition inline-block py-2 -my-2 px-1 -mx-1 rounded-lg active:bg-black/5 dark:active:bg-white/10"
               >
                 Fazer login
               </a>

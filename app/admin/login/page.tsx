@@ -1,14 +1,15 @@
 'use client';
 
 import React, { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useTenantRouter } from '@/lib/utils/tenant-href';
+import Link from '@/components/WhitelabelLink';
 import { supabase } from '@/lib/supabase';
 import bcrypt from 'bcryptjs';
 import { Mail, Lock, LogIn, AlertCircle, Shield } from 'lucide-react';
 import Logo from '@/components/Logo';
 
 const AdminLoginPage = () => {
-  const router = useRouter();
+  const router = useTenantRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -183,9 +184,9 @@ const AdminLoginPage = () => {
             </div>
 
             <div className="text-right">
-              <a href="/forgot-password" className="text-sm text-[#8CD955] hover:text-[#7BC84A] font-medium transition">
+              <Link href="/forgot-password" className="text-sm text-[#8CD955] hover:text-[#7BC84A] font-medium transition">
                 Esqueceu a senha? Clique aqui
-              </a>
+              </Link>
             </div>
 
             {/* Botão Submit */}

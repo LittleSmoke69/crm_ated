@@ -144,7 +144,7 @@ export async function POST(req: NextRequest) {
       return errorResponse('instanceName é obrigatório', 400);
     }
 
-    const hasAccess = await checkInstanceAccess(userId, instanceName);
+    const hasAccess = await checkInstanceAccess(req, userId, instanceName);
     if (!hasAccess) {
       return errorResponse('Acesso negado. Você não tem permissão para acessar esta instância.', 403);
     }

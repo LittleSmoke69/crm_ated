@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { useRouter } from 'next/navigation';
+import { useTenantRouter } from '@/lib/utils/tenant-href';
+import { useAdminTenantSwitcher } from '@/contexts/AdminTenantSwitcherContext';
 import Layout from '@/components/Layout';
 import Pagination from '@/components/Admin/Pagination';
 import { useSidebar } from '@/contexts/SidebarContext';
@@ -53,13 +54,23 @@ interface WaiterStatus {
 
 export default function WebhooksEvolutionPage() {
   const { checking, userId } = useRequireAuth();
-  const router = useRouter();
+  const router = useTenantRouter();
   const { isCollapsed, setIsCollapsed, isMobileOpen, setIsMobileOpen } = useSidebar();
-  
+  const adminTenant = useAdminTenantSwitcher();
+  const selectedTenantId = adminTenant?.selectedTenantId ?? null;
+  const tenantApiHeaders = useMemo(
+    () =>
+      selectedTenantId
+        ? ({ 'X-Zaploto-Id': selectedTenantId } as Record<string, string>)
+        : ({} as Record<string, string>),
+    [selectedTenantId]
+  );
+
   // URLs dos webhooks
   const [baseUrl, setBaseUrl] = useState<string>('');
   const [webhookUrlProd, setWebhookUrlProd] = useState<string>('');
   const [webhookUrlTest, setWebhookUrlTest] = useState<string>('');
+  const [tenantSlugForWebhooks, setTenantSlugForWebhooks] = useState<string | null>(null);
 
   // Status
   const [status, setStatus] = useState<WebhookStatus | null>(null);
@@ -114,13 +125,39 @@ export default function WebhooksEvolutionPage() {
   }, [userId, checking, router]);
 
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const origin = window.location.origin;
-      setBaseUrl(origin);
+    if (!userId || !selectedTenantId) {
+      setTenantSlugForWebhooks(null);
+      return;
+    }
+    let cancelled = false;
+    fetch('/api/admin/zaploto/tenants', { headers: { 'X-User-Id': userId } })
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled) return;
+        const list = (j.data || []) as { id: string; slug: string }[];
+        const t = list.find((x) => x.id === selectedTenantId);
+        setTenantSlugForWebhooks(t?.slug?.trim().toLowerCase() ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setTenantSlugForWebhooks(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, selectedTenantId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const origin = window.location.origin;
+    setBaseUrl(origin);
+    if (tenantSlugForWebhooks) {
+      setWebhookUrlProd(`${origin}/${tenantSlugForWebhooks}/api/webhooks/evolution/prod`);
+      setWebhookUrlTest(`${origin}/${tenantSlugForWebhooks}/api/webhooks/evolution/test`);
+    } else {
       setWebhookUrlProd(`${origin}/api/webhooks/evolution/prod`);
       setWebhookUrlTest(`${origin}/api/webhooks/evolution/test`);
     }
-  }, []);
+  }, [tenantSlugForWebhooks]);
 
   // Carrega configuração de eventos
   const loadEventsConfig = useCallback(async () => {
@@ -128,7 +165,7 @@ export default function WebhooksEvolutionPage() {
     try {
       setEventsConfigLoading(true);
       const response = await fetch('/api/admin/webhooks/evolution/events-config', {
-        headers: { 'X-User-Id': userId },
+        headers: { 'X-User-Id': userId, ...tenantApiHeaders },
       });
       if (response.ok) {
         const result = await response.json();
@@ -141,7 +178,7 @@ export default function WebhooksEvolutionPage() {
     } finally {
       setEventsConfigLoading(false);
     }
-  }, [userId]);
+  }, [userId, tenantApiHeaders]);
 
   // Salva configuração de eventos
   const saveEventsConfig = async () => {
@@ -151,7 +188,7 @@ export default function WebhooksEvolutionPage() {
       const enabledEvents = eventsConfig.filter(e => e.enabled).map(e => e.name);
       const response = await fetch('/api/admin/webhooks/evolution/events-config', {
         method: 'POST',
-        headers: { 'X-User-Id': userId, 'Content-Type': 'application/json' },
+        headers: { 'X-User-Id': userId, 'Content-Type': 'application/json', ...tenantApiHeaders },
         body: JSON.stringify({ events: enabledEvents }),
       });
       if (response.ok) {
@@ -181,7 +218,7 @@ export default function WebhooksEvolutionPage() {
     try {
       setStatusLoading(true);
       const response = await fetch('/api/admin/webhooks/evolution/status', {
-        headers: { 'X-User-Id': userId },
+        headers: { 'X-User-Id': userId, ...tenantApiHeaders },
       });
       if (response.ok) {
         const result = await response.json();
@@ -194,7 +231,7 @@ export default function WebhooksEvolutionPage() {
     } finally {
       setStatusLoading(false);
     }
-  }, [userId]);
+  }, [userId, tenantApiHeaders]);
 
   // Carrega eventos
   const loadEvents = useCallback(async () => {
@@ -210,7 +247,7 @@ export default function WebhooksEvolutionPage() {
       if (filterSearch) params.append('q', filterSearch);
 
       const response = await fetch(`/api/admin/webhooks/evolution/events?${params}`, {
-        headers: { 'X-User-Id': userId },
+        headers: { 'X-User-Id': userId, ...tenantApiHeaders },
       });
       if (response.ok) {
         const result = await response.json();
@@ -227,7 +264,7 @@ export default function WebhooksEvolutionPage() {
     } finally {
       setEventsLoading(false);
     }
-  }, [userId, eventsPage, filterEnv, filterEventType, filterSearch]);
+  }, [userId, eventsPage, filterEnv, filterEventType, filterSearch, tenantApiHeaders]);
 
   // Efeitos
   useEffect(() => {
@@ -252,7 +289,7 @@ export default function WebhooksEvolutionPage() {
       const poll = async () => {
         try {
           const response = await fetch(`/api/admin/webhooks/evolution/test-waiters/${waiterId}`, {
-            headers: { 'X-User-Id': userId || '' },
+            headers: { 'X-User-Id': userId || '', ...tenantApiHeaders },
           });
           if (response.ok) {
             const result = await response.json();
@@ -284,7 +321,7 @@ export default function WebhooksEvolutionPage() {
         pollingIntervalRef.current = null;
       }
     };
-  }, [waiterId, waiterPolling, userId]);
+  }, [waiterId, waiterPolling, userId, tenantApiHeaders]);
 
   // Função para copiar
   const copyToClipboard = async (text: string, id: string) => {
@@ -302,7 +339,11 @@ export default function WebhooksEvolutionPage() {
     try {
       const response = await fetch('/api/admin/webhooks/evolution/test-waiters', {
         method: 'POST',
-        headers: { 'X-User-Id': userId || '', 'Content-Type': 'application/json' },
+        headers: {
+          'X-User-Id': userId || '',
+          'Content-Type': 'application/json',
+          ...tenantApiHeaders,
+        },
       });
       if (response.ok) {
         const result = await response.json();

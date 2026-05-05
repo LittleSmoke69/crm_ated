@@ -1,10 +1,11 @@
 'use client';
 
 import React, { useState } from 'react';
-import Link from 'next/link';
+import Link from '@/components/WhitelabelLink';
 import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import { LogIn, LayoutDashboard, Menu, X, ArrowLeft } from 'lucide-react';
+import { useZaplotoTenant } from '@/contexts/ZaplotoTenantContext';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 
 // delay em segundos para cada dot flutuar fora de sincronia
@@ -25,8 +26,11 @@ const NAV_LINKS = [
 
 export default function AcademyLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const { tenant } = useZaplotoTenant();
   const { checking, userId } = useRequireAuth();
   const [menuOpen, setMenuOpen] = useState(false);
+  const logoSrc = tenant.logo_url || '/logo_zaploto.png';
+  const brandLabel = tenant.app_title || 'ZapLoto';
 
   return (
     <div className="relative min-h-screen bg-[#030803] text-[var(--foreground)] flex flex-col">
@@ -35,9 +39,9 @@ export default function AcademyLayout({ children }: { children: React.ReactNode 
       <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
 
         {/* Glow radial da base — simula luz subindo dos cards */}
-        <div className="absolute bottom-0 left-1/4 h-64 w-96 rounded-full bg-[#4ade80]/5 blur-3xl" />
-        <div className="absolute bottom-0 right-1/4 h-56 w-80 rounded-full bg-[#22c55e]/4 blur-3xl" />
-        <div className="absolute bottom-0 left-1/2 h-48 w-72 -translate-x-1/2 rounded-full bg-[#4ade80]/6 blur-3xl" />
+        <div className="absolute bottom-0 left-1/4 h-64 w-96 rounded-full bg-[var(--zaploto-green)]/5 blur-3xl" />
+        <div className="absolute bottom-0 right-1/4 h-56 w-80 rounded-full bg-[var(--zaploto-green)]/4 blur-3xl" />
+        <div className="absolute bottom-0 left-1/2 h-48 w-72 -translate-x-1/2 rounded-full bg-[var(--zaploto-green)]/6 blur-3xl" />
 
         {/* Orbs pulsantes */}
         <div className="academy-orb-pulse absolute -left-16 top-1/4 h-72 w-72 rounded-full bg-[#1a5c1a]/12 blur-3xl" style={{ animationDelay: '0s' }} />
@@ -62,11 +66,11 @@ export default function AcademyLayout({ children }: { children: React.ReactNode 
         ].map((p, i) => (
           <div
             key={i}
-            className="academy-particle-rise absolute rounded-full bg-[#4ade80]"
+            className="academy-particle-rise absolute rounded-full bg-[var(--zaploto-green)]"
             style={{
               width: p.s, height: p.s,
               left: p.x, top: p.y,
-              boxShadow: `0 0 ${p.s * 3}px #4ade80`,
+              boxShadow: `0 0 ${p.s * 3}px var(--zaploto-green)`,
               animationDelay: `${p.d}s`,
               animationDuration: `${5 + (i % 3)}s`,
               ['--dot-o' as string]: p.o,
@@ -92,11 +96,11 @@ export default function AcademyLayout({ children }: { children: React.ReactNode 
         ].map((dot, i) => (
           <div
             key={i}
-            className="academy-bokeh-dot absolute rounded-full bg-[#4ade80]"
+            className="academy-bokeh-dot absolute rounded-full bg-[var(--zaploto-green)]"
             style={{
               width: dot.s, height: dot.s,
               left: dot.x, top: dot.y,
-              boxShadow: `0 0 ${dot.s * 4}px #4ade8088`,
+              boxShadow: `0 0 ${dot.s * 4}px var(--zaploto-green)`,
               filter: `blur(${dot.s > 3 ? 1 : 0}px)`,
               animationDelay: `${dot.d}s`,
               ['--dot-o' as string]: dot.o,
@@ -116,10 +120,10 @@ export default function AcademyLayout({ children }: { children: React.ReactNode 
         ].map((n, i) => (
           <div
             key={i}
-            className="academy-node-pulse absolute h-1 w-1 rounded-full bg-[#4ade80]"
+            className="academy-node-pulse absolute h-1 w-1 rounded-full bg-[var(--zaploto-green)]"
             style={{
               left: n.x, top: n.y,
-              boxShadow: '0 0 6px #4ade80, 0 0 12px #4ade8066',
+              boxShadow: '0 0 6px var(--zaploto-green), 0 0 12px var(--zaploto-green)',
               animationDelay: `${n.d}s`,
             }}
           />
@@ -129,14 +133,14 @@ export default function AcademyLayout({ children }: { children: React.ReactNode 
         <div
           className="academy-grid-drift absolute inset-0 opacity-[0.035]"
           style={{
-            backgroundImage: 'linear-gradient(#4ade80 1px, transparent 1px), linear-gradient(90deg, #4ade80 1px, transparent 1px)',
+            backgroundImage: 'linear-gradient(var(--zaploto-green) 1px, transparent 1px), linear-gradient(90deg, var(--zaploto-green) 1px, transparent 1px)',
             backgroundSize: '40px 40px',
           }}
         />
 
         {/* Scanline varrendo */}
         <div
-          className="academy-scanline absolute inset-x-0 h-px bg-gradient-to-r from-transparent via-[#4ade80]/30 to-transparent"
+          className="academy-scanline absolute inset-x-0 h-px bg-gradient-to-r from-transparent via-[var(--zaploto-green)]/30 to-transparent"
           style={{ top: 0 }}
         />
       </div>
@@ -153,7 +157,7 @@ export default function AcademyLayout({ children }: { children: React.ReactNode 
           {BOKEH.map((dot, i) => (
             <div
               key={i}
-              className="academy-bokeh-dot absolute rounded-full bg-[#4ade80]"
+              className="academy-bokeh-dot absolute rounded-full bg-[var(--zaploto-green)]"
               style={{
                 width: dot.s,
                 height: dot.s,
@@ -170,7 +174,7 @@ export default function AcademyLayout({ children }: { children: React.ReactNode 
           {/* Grid drifting */}
           <div
             className="academy-grid-drift absolute inset-0 opacity-[0.035]"
-            style={{ backgroundImage: 'linear-gradient(#4ade80 1px, transparent 1px), linear-gradient(90deg, #4ade80 1px, transparent 1px)', backgroundSize: '40px 40px' }}
+            style={{ backgroundImage: 'linear-gradient(var(--zaploto-green) 1px, transparent 1px), linear-gradient(90deg, var(--zaploto-green) 1px, transparent 1px)', backgroundSize: '40px 40px' }}
           />
 
         </div>
@@ -178,15 +182,22 @@ export default function AcademyLayout({ children }: { children: React.ReactNode 
         <div className="relative mx-auto flex h-14 max-w-screen-xl items-center justify-between px-4 sm:px-6 lg:px-10">
           {/* Logo */}
           <Link href="/academy" className="flex items-center hover:opacity-90 transition-opacity">
-            <Image src="/logo_zaploto.png" alt="ZapLoto Academy" width={140} height={36}
-              className="h-8 w-auto object-contain sm:h-9" priority />
+            <Image
+              src={logoSrc}
+              alt={`${brandLabel} Academy`}
+              width={140}
+              height={36}
+              className="h-8 w-auto max-w-[140px] object-contain sm:h-9"
+              priority
+              unoptimized={logoSrc.startsWith('http')}
+            />
           </Link>
 
           {/* Nav desktop */}
           <nav className="hidden sm:flex items-center gap-1">
             {NAV_LINKS.map(({ href, label }) => (
               <Link key={href} href={href}
-                className={`rounded-lg px-3 py-2 text-sm font-medium transition ${pathname === href ? 'text-[#4ade80]' : 'text-white/50 hover:text-[#4ade80]'}`}>
+                className={`rounded-lg px-3 py-2 text-sm font-medium transition ${pathname === href ? 'text-[var(--zaploto-green)]' : 'text-white/50 hover:text-[var(--zaploto-green)]'}`}>
                 {label}
               </Link>
             ))}
@@ -203,12 +214,12 @@ export default function AcademyLayout({ children }: { children: React.ReactNode 
             {!checking && (
               userId ? (
                 <Link href="/admin"
-                  className="ml-1 flex items-center gap-1.5 rounded-lg border border-[#4ade80]/40 bg-[#4ade80]/10 px-3 py-2 text-sm font-medium text-[#4ade80] hover:bg-[#4ade80]/20 transition">
+                  className="ml-1 flex items-center gap-1.5 rounded-lg border border-[var(--zaploto-green)]/40 bg-[var(--zaploto-green)]/10 px-3 py-2 text-sm font-medium text-[var(--zaploto-green)] hover:bg-[var(--zaploto-green)]/20 transition">
                   <LayoutDashboard className="h-4 w-4" /> Painel
                 </Link>
               ) : (
                 <Link href="/login"
-                  className="ml-1 flex items-center gap-1.5 rounded-lg border border-[#4ade80]/40 bg-[#4ade80]/10 px-3 py-2 text-sm font-medium text-[#4ade80] hover:bg-[#4ade80]/20 transition">
+                  className="ml-1 flex items-center gap-1.5 rounded-lg border border-[var(--zaploto-green)]/40 bg-[var(--zaploto-green)]/10 px-3 py-2 text-sm font-medium text-[var(--zaploto-green)] hover:bg-[var(--zaploto-green)]/20 transition">
                   <LogIn className="h-4 w-4" /> Entrar
                 </Link>
               )
@@ -218,7 +229,7 @@ export default function AcademyLayout({ children }: { children: React.ReactNode 
           {/* Hamburger mobile */}
           <button
             type="button"
-            className="sm:hidden flex h-9 w-9 items-center justify-center rounded-lg border border-[#4ade80]/30 text-[#4ade80] hover:bg-[#4ade80]/10 transition"
+            className="sm:hidden flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--zaploto-green)]/30 text-[var(--zaploto-green)] hover:bg-[var(--zaploto-green)]/10 transition"
             onClick={() => setMenuOpen((v) => !v)}
             aria-label="Menu"
           >
@@ -230,11 +241,11 @@ export default function AcademyLayout({ children }: { children: React.ReactNode 
         {menuOpen && (
           <div className="relative sm:hidden border-t border-[#1a3d1a] bg-[#060f07] px-4 pb-4 pt-2">
             <div className="absolute inset-0 opacity-[0.03]"
-              style={{ backgroundImage: 'linear-gradient(#4ade80 1px, transparent 1px), linear-gradient(90deg, #4ade80 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
+              style={{ backgroundImage: 'linear-gradient(var(--zaploto-green) 1px, transparent 1px), linear-gradient(90deg, var(--zaploto-green) 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
             <nav className="relative flex flex-col gap-1">
               {NAV_LINKS.map(({ href, label }) => (
                 <Link key={href} href={href} onClick={() => setMenuOpen(false)}
-                  className={`rounded-lg px-3 py-3 text-sm font-medium transition ${pathname === href ? 'text-[#4ade80] bg-[#4ade80]/10' : 'text-white/60 hover:text-[#4ade80] hover:bg-[#4ade80]/5'}`}>
+                  className={`rounded-lg px-3 py-3 text-sm font-medium transition ${pathname === href ? 'text-[var(--zaploto-green)] bg-[var(--zaploto-green)]/10' : 'text-white/60 hover:text-[var(--zaploto-green)] hover:bg-[var(--zaploto-green)]/5'}`}>
                   {label}
                 </Link>
               ))}
@@ -249,12 +260,12 @@ export default function AcademyLayout({ children }: { children: React.ReactNode 
                   <>
                     {userId ? (
                       <Link href="/admin" onClick={() => setMenuOpen(false)}
-                        className="flex items-center gap-2 rounded-lg border border-[#4ade80]/40 bg-[#4ade80]/10 px-3 py-3 text-sm font-medium text-[#4ade80]">
+                        className="flex items-center gap-2 rounded-lg border border-[var(--zaploto-green)]/40 bg-[var(--zaploto-green)]/10 px-3 py-3 text-sm font-medium text-[var(--zaploto-green)]">
                         <LayoutDashboard className="h-4 w-4" /> Painel administrativo
                       </Link>
                     ) : (
                       <Link href="/login" onClick={() => setMenuOpen(false)}
-                        className="flex items-center gap-2 rounded-lg border border-[#4ade80]/40 bg-[#4ade80]/10 px-3 py-3 text-sm font-medium text-[#4ade80]">
+                        className="flex items-center gap-2 rounded-lg border border-[var(--zaploto-green)]/40 bg-[var(--zaploto-green)]/10 px-3 py-3 text-sm font-medium text-[var(--zaploto-green)]">
                         <LogIn className="h-4 w-4" /> Entrar na conta
                       </Link>
                     )}
@@ -270,8 +281,10 @@ export default function AcademyLayout({ children }: { children: React.ReactNode 
 
       <footer className="relative z-10 overflow-hidden border-t border-[#1a3d1a] bg-[#060f07]/80 backdrop-blur-sm py-5 text-center text-sm text-white/30">
         <div className="pointer-events-none absolute inset-0 opacity-[0.03]"
-          style={{ backgroundImage: 'linear-gradient(#4ade80 1px, transparent 1px), linear-gradient(90deg, #4ade80 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
-        <p className="relative">ZapLoto Academy — Conteúdos e trilhas de aprendizado</p>
+          style={{ backgroundImage: 'linear-gradient(var(--zaploto-green) 1px, transparent 1px), linear-gradient(90deg, var(--zaploto-green) 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
+        <p className="relative">
+          {brandLabel} Academy — Conteúdos e trilhas de aprendizado
+        </p>
       </footer>
     </div>
   );

@@ -1,6 +1,6 @@
 'use client';
 
-import Link from 'next/link';
+import Link from '@/components/WhitelabelLink';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { Kanban, ArrowRightLeft, UserPlus } from 'lucide-react';
 

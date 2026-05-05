@@ -3,8 +3,9 @@
 import { Suspense, useEffect, useState } from 'react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { useRouter, useSearchParams } from 'next/navigation';
-import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
+import { useTenantRouter } from '@/lib/utils/tenant-href';
+import Link from '@/components/WhitelabelLink';
 import { Save, Loader2 } from 'lucide-react';
 import { getStoredUserId } from '@/lib/utils/stored-user-id';
 import { ZAPLOTO_ACADEMY_ROLE_OPTIONS } from '@/lib/academy/lesson-role-access';
@@ -12,7 +13,7 @@ import { ZAPLOTO_ACADEMY_ROLE_OPTIONS } from '@/lib/academy/lesson-role-access';
 type Module = { id: string; title: string; slug: string };
 
 function AdminAcademyAulaNovaContent() {
-  const router = useRouter();
+  const router = useTenantRouter();
   const searchParams = useSearchParams();
   const defaultModuleId = searchParams.get('moduleId');
   const { checking, userId } = useRequireAuth();

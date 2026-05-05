@@ -1,9 +1,10 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useMemo, useCallback, Suspense, startTransition } from 'react';
+import { withTenantSlug } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { Kanban as KanbanIcon, Plus, Users, Target, CheckCircle2, MessageSquare, AlertCircle, Eye, RefreshCw, X, Gift, Loader2, Search, Ticket, Sparkles, Package } from 'lucide-react';
+import { Kanban as KanbanIcon, Plus, Users, Target, CheckCircle2, MessageSquare, AlertCircle, Eye, RefreshCw, X, Gift, Loader2, Search, Ticket, Sparkles, Package, Download } from 'lucide-react';
 import CrmSubNav from '@/components/CRM/CrmSubNav';
 import FilterBar from '@/components/CRM/FilterBar';
 import KanbanColumn from '@/components/CRM/KanbanColumn';
@@ -11,6 +12,9 @@ import SortColumnModal from '@/components/CRM/SortColumnModal';
 import { Lead, Column, ThermalStatus } from '@/components/CRM/types';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { COMBO_AVULSO_EMAIL_MARKER } from '@/lib/crm/combo-avulso';
+import { downloadLeadsCsv, canUserExportCrmLeadsCsv, firstNameFromFullName } from '@/lib/crm/export-leads-csv';
+import { buildCrmColumnLabelsMap, filterLeadsAssignedToCrmColumns } from '@/lib/crm/crm-column-export';
+import { isLeadPast90DaysInactivity } from '@/lib/crm/lead-inactivity';
 import { useToast } from '@/hooks/useToast';
 import ToastContainer from '@/components/Toast/ToastContainer';
 
@@ -38,18 +42,6 @@ const STAR_LEVELS = [
   { level: 6, min: 15000, max: 29999 },
   { level: 7, min: 30000, max: 50000 },
 ] as const;
-
-/** Prazo em dias desde o último depósito para "possível transferência" (deve bater com LeadCard). */
-const INACTIVITY_DEADLINE_DAYS = 90;
-
-/** True se o lead tem último depósito e já passou de 90 dias desde essa data. */
-function isLeadPast90DaysInactivity(lead: Lead): boolean {
-  if (!lead.last_deposit_at) return false;
-  const lastDeposit = new Date(lead.last_deposit_at);
-  const deadline = new Date(lastDeposit);
-  deadline.setDate(deadline.getDate() + INACTIVITY_DEADLINE_DAYS);
-  return new Date().getTime() >= deadline.getTime();
-}
 
 /** Retorna o valor (em R$) que falta para a próxima estrela, ou null se já está no nível máximo. */
 function getMissingForNextStar(apostaEstrelas: number): number | null {
@@ -216,13 +208,30 @@ const getDefaultColumns = (leads: Lead[] = []): Column[] => {
   ];
 };
 
+/** Rótulos das colunas no CSV (mesmas chaves que `colLeads` no useMemo do quadro). */
+const KANBAN_CSV_COLUMN_TITLES: Record<string, string> = {
+  novo: 'Clientes cadastrados',
+  contactados: 'Clientes contactados',
+  deposito_sem_aposta: 'Com Saldo Disponível',
+  saque_disponivel: 'Saque disponível',
+  deposito_1x: '1º Depósito',
+  deposito_2x: '2º Depósito',
+  deposito_3x: 'Depositou 3x',
+  deposito_5x: 'Depositou 5x',
+  deposito_10x: 'Depositou 10x+',
+  ativo: 'Cliente ativo',
+  possivel_transferencia: 'Possível transferência',
+};
+
 const KanbanContent = () => {
-  const { checking, userId } = useRequireAuth();
+  const { checking, userId, userStatus } = useRequireAuth();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const targetUserId = searchParams.get('userId');
   const isComboAvulsoCrm = pathname?.startsWith('/crm/avulsos') ?? false;
   const { toasts, showToast, removeToast } = useToast();
+
+  const canExportLeadsCsv = canUserExportCrmLeadsCsv(userStatus);
 
   const [rawLeads, setRawLeads] = useState<Lead[]>([]); // Leads da API (banca+período) - filtros aplicados localmente
   const [loading, setLoading] = useState(false); // true apenas quando a requisição de leads estiver em andamento
@@ -241,6 +250,8 @@ const KanbanContent = () => {
     };
   });
   const [consultorInfo, setConsultorInfo] = useState<{ name: string; email: string } | null>(null);
+  /** Primeiro nome do consultor para nome do arquivo CSV (próprio usuário ou CRM visualizado). */
+  const [csvConsultantFirstName, setCsvConsultantFirstName] = useState('');
 
   // Quem está visualizando o CRM do consultor (para exibir aviso quando gerente acessa)
   const [viewers, setViewers] = useState<{ id: string; name: string }[]>([]);
@@ -290,6 +301,19 @@ const KanbanContent = () => {
   // API chamada APENAS quando banca ou período mudam; demais filtros são aplicados localmente
   const bancaKey = filters.banca ? (typeof filters.banca === 'object' ? filters.banca.value : filters.banca) : null;
   const dateKey = filters.date ? (typeof filters.date === 'object' ? filters.date.value : filters.date) : null;
+
+  const csvFilenameBancaLabel = useMemo(() => {
+    const b = filters.banca;
+    if (!b) return 'Todas as bancas';
+    if (typeof b === 'object') {
+      const v = (b as { value?: string }).value;
+      if (v === 'all') return 'Todas as bancas';
+      const label = (b as { label?: string }).label;
+      if (label && String(label).trim()) return String(label).trim();
+      return v && String(v).trim() ? String(v).trim() : 'Todas as bancas';
+    }
+    return String(b);
+  }, [filters.banca]);
 
   useEffect(() => {
     if (!userId) return;
@@ -359,6 +383,38 @@ const KanbanContent = () => {
     const interval = setInterval(fetchViewers, 30000); // a cada 30s
     return () => clearInterval(interval);
   }, [userId, isConsultorViewingOwn]);
+
+  useEffect(() => {
+    if (consultorInfo?.name) {
+      setCsvConsultantFirstName(firstNameFromFullName(consultorInfo.name));
+      return;
+    }
+    if (!userId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/user/profile', {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+          credentials: 'include',
+        });
+        const text = await res.text();
+        if (cancelled) return;
+        if (!res.ok || !text.trim()) {
+          setCsvConsultantFirstName('');
+          return;
+        }
+        const json = JSON.parse(text) as { success?: boolean; data?: { full_name?: string | null } };
+        const fn = json.success && json.data?.full_name != null ? String(json.data.full_name) : '';
+        setCsvConsultantFirstName(firstNameFromFullName(fn));
+      } catch {
+        if (!cancelled) setCsvConsultantFirstName('');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, consultorInfo?.name]);
 
   // Ao abrir o modal de giros, sincroniza o valor do input com o termo de filtro atual
   useEffect(() => {
@@ -592,7 +648,7 @@ const KanbanContent = () => {
       sessionStorage.removeItem('profile_id');
       window.localStorage.removeItem('profile_id');
       document.cookie = 'user_id=; Path=/; Max-Age=0; SameSite=Lax';
-      window.location.href = '/login';
+      window.location.href = withTenantSlug('/login');
     }
   };
 
@@ -1012,7 +1068,7 @@ const KanbanContent = () => {
   };
 
   // Aplica filtros locais e monta colunas/métricas (sem chamar API)
-  const { columns, metrics: derivedMetrics } = useMemo(() => {
+  const { columns, metrics: derivedMetrics, filteredLeadsForCsv, crmCsvColumnLabels } = useMemo(() => {
     let formattedLeads: Lead[] = [...rawLeads];
 
     // Filtro: apenas leads em possível transferência (90+ dias sem depósito)
@@ -1248,6 +1304,10 @@ const KanbanContent = () => {
       const tB = b.lastInteractionAt ? new Date(b.lastInteractionAt).getTime() : (b.last_interaction ? new Date(b.last_interaction).getTime() : 0);
       return tA - tB;
     });
+
+    const crmCsvColumnLabels = buildCrmColumnLabelsMap(colLeads, KANBAN_CSV_COLUMN_TITLES);
+    const filteredLeadsForCsv = filterLeadsAssignedToCrmColumns(formattedLeads, crmCsvColumnLabels);
+
     const baseColumns: Column[] = [
       { id: 'novo', title: '👥 Clientes cadastrados', color: 'gray', leads: colLeads.novo, totalLeads: colLeads.novo.length },
       { id: 'contactados', title: '📞 Clientes Contactados', color: 'blue', leads: colLeads.contactados, totalLeads: colLeads.contactados.length },
@@ -1280,7 +1340,9 @@ const KanbanContent = () => {
         total_deposited: totalDeposited,
         active_leads: activeLeads,
         conversion_rate: conversionRate
-      }
+      },
+      filteredLeadsForCsv,
+      crmCsvColumnLabels,
     };
   }, [rawLeads, filters, searchTerm, leadsPerColumn, columnSorts]);
 
@@ -1370,6 +1432,23 @@ const KanbanContent = () => {
     return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
   };
 
+  const handleDownloadCsv = () => {
+    const prefix = isComboAvulsoCrm ? 'crm-avulsos' : 'crm-kanban';
+    downloadLeadsCsv(filteredLeadsForCsv, {
+      filenamePrefix: prefix,
+      includeTransferredFields: false,
+      crmColumnLabelsByLeadId: crmCsvColumnLabels,
+      filenameBancaLabel: csvFilenameBancaLabel,
+      filenameConsultantFirstName: csvConsultantFirstName || undefined,
+    });
+    showToast(
+      filteredLeadsForCsv.length === 0
+        ? 'CSV gerado sem linhas (nenhum lead com os filtros atuais).'
+        : `CSV com ${filteredLeadsForCsv.length} lead(s) baixado.`,
+      'success'
+    );
+  };
+
   return (
     <Layout onSignOut={handleSignOut}>
       <div className="h-[calc(100vh-30px)] lg:h-[calc(100vh--255px)] flex flex-col overflow-scroll lg:overflow-hidden max-w-full">
@@ -1422,6 +1501,22 @@ const KanbanContent = () => {
                 >
                   <Eye className="w-3 h-3" />
                   <span className="hidden xs:inline">Visualização</span>
+                </button>
+              )}
+              {canExportLeadsCsv && (
+                <button
+                  type="button"
+                  onClick={handleDownloadCsv}
+                  disabled={loading || filterLoading}
+                  title={
+                    loading || filterLoading
+                      ? 'Aguarde o carregamento dos leads'
+                      : 'Baixar CSV com os leads visíveis (filtros e busca aplicados)'
+                  }
+                  className="whitespace-nowrap flex items-center gap-2 bg-slate-700 hover:bg-slate-800 dark:bg-slate-600 dark:hover:bg-slate-500 text-white px-3 py-2 rounded-xl text-[11px] md:text-sm font-bold transition-all shadow-md flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Baixar CSV</span>
                 </button>
               )}
               <button 

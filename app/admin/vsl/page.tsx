@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useTenantRouter } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { Plus, Settings, ExternalLink, Loader2, Trash2 } from 'lucide-react';
@@ -19,7 +19,7 @@ interface VslProject {
 
 export default function AdminVslPage() {
   const { checking, userId } = useRequireAuth();
-  const router = useRouter();
+  const router = useTenantRouter();
   const [projects, setProjects] = useState<VslProject[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

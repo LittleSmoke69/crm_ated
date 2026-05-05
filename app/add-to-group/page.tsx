@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { withTenantSlug } from '@/lib/utils/tenant-href';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import Layout from '@/components/Layout';
 import { useDashboardData, Contact, WhatsAppInstance, DbGroup, Campaign } from '@/hooks/useDashboardData';
@@ -285,7 +286,7 @@ function AddToGroupPage() {
       window.localStorage.removeItem('profile_id');
       document.cookie = 'user_id=; Path=/; Max-Age=0; SameSite=Lax';
     }
-    window.location.href = '/login';
+    window.location.href = withTenantSlug('/login');
   };
 
   if (checking || userId === null) {

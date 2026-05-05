@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { useRouter } from 'next/navigation';
+import { useTenantRouter } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import { useSidebar } from '@/contexts/SidebarContext';
 import {
@@ -24,6 +24,8 @@ import {
 import { RolePermissionsModal } from '@/components/Admin/RolePermissionsModal';
 import { getStoredUserId } from '@/lib/utils/stored-user-id';
 import { getTenantUrl } from '@/lib/utils/zaploto-tenant-url';
+import { useAdminTenantSwitcher } from '@/contexts/AdminTenantSwitcherContext';
+import { ZAPLOTO_SLUG_COOKIE } from '@/lib/constants/white-label';
 
 interface Tenant {
   id: string;
@@ -59,7 +61,8 @@ interface SidebarItem {
 
 export default function AdminZaplotoPage() {
   const { checking } = useRequireAuth();
-  const router = useRouter();
+  const router = useTenantRouter();
+  const adminTenantSwitcher = useAdminTenantSwitcher();
   const { isCollapsed, setIsCollapsed, isMobileOpen, setIsMobileOpen } = useSidebar();
   const [userId, setUserId] = useState<string | null>(null);
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
@@ -225,6 +228,36 @@ export default function AdminZaplotoPage() {
     const id = getStoredUserId();
     setUserId(id);
   }, []);
+
+  /** Alinha dropdown ao tenant escolhido no painel (header) / cookie WL */
+  useEffect(() => {
+    if (!isSuperAdmin || !tenants.length) return;
+    setSelectedTenantId((prev) => {
+      if (prev && tenants.some((t) => t.id === prev)) return prev;
+      const ctxId = adminTenantSwitcher?.selectedTenantId ?? null;
+      if (ctxId && tenants.some((t) => t.id === ctxId)) return ctxId;
+      return tenants[0]?.id ?? null;
+    });
+  }, [isSuperAdmin, tenants, adminTenantSwitcher?.selectedTenantId]);
+
+  const syncTenantSelection = useCallback(
+    (id: string | null) => {
+      setSelectedTenantId(id);
+      adminTenantSwitcher?.setSelectedTenantId?.(id);
+      if (!id || typeof window === 'undefined') return;
+      const t = tenants.find((x) => x.id === id);
+      if (!t) return;
+      try {
+        const maxAge = 60 * 60 * 24 * 7;
+        const slug = t.slug.trim().toLowerCase();
+        const secure = window.location.protocol === 'https:' ? '; Secure' : '';
+        document.cookie = `${ZAPLOTO_SLUG_COOKIE}=${encodeURIComponent(slug)}; Path=/; Max-Age=${maxAge}; SameSite=Lax${secure}`;
+      } catch {
+        // silencioso
+      }
+    },
+    [adminTenantSwitcher, tenants]
+  );
 
   useEffect(() => {
     if (!userId) return;
@@ -636,7 +669,7 @@ export default function AdminZaplotoPage() {
               <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Tenant:</label>
               <select
                 value={selectedTenantId || ''}
-                onChange={(e) => setSelectedTenantId(e.target.value || null)}
+                onChange={(e) => syncTenantSelection(e.target.value || null)}
                 className="px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] min-w-[200px]"
               >
                 <option value="">Selecione um tenant</option>
@@ -826,7 +859,7 @@ export default function AdminZaplotoPage() {
               <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Tenant:</label>
               <select
                 value={selectedTenantId || ''}
-                onChange={(e) => setSelectedTenantId(e.target.value || null)}
+                onChange={(e) => syncTenantSelection(e.target.value || null)}
                 className="px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] min-w-[200px]"
               >
                 <option value="">Selecione um tenant</option>

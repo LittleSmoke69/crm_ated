@@ -8,6 +8,7 @@ import { postGroupFetchAndResolve } from '@/lib/utils/group-fetch-client';
 import { dateAtTimezoneToUTC } from '@/lib/utils/recurring-schedule';
 import { useToast } from '@/hooks/useToast';
 import ToastContainer from '@/components/Toast/ToastContainer';
+import { getWlSlugHeadersForApi } from '@/lib/utils/tenant-href';
 
 interface Group {
   id: string;
@@ -159,7 +160,7 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
   useEffect(() => {
     if (isOpen && userId) {
       fetch('/api/instances', {
-        headers: { 'X-User-Id': userId },
+        headers: { 'X-User-Id': userId, ...getWlSlugHeadersForApi() },
       })
         .then(res => res.json())
         .then(data => {

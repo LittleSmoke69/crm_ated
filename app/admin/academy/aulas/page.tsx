@@ -4,7 +4,7 @@ import { Suspense, useEffect, useState, useCallback, useRef } from 'react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { useSearchParams } from 'next/navigation';
-import Link from 'next/link';
+import Link from '@/components/WhitelabelLink';
 import { Plus, Pencil, Trash2, Loader2, Eye, EyeOff, GripVertical, ArrowLeft, FileVideo, Clock, Filter, Users, X, ArrowRightLeft } from 'lucide-react';
 import { getStoredUserId } from '@/lib/utils/stored-user-id';
 import { ZAPLOTO_ACADEMY_ROLE_OPTIONS } from '@/lib/academy/lesson-role-access';

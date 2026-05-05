@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import Link from 'next/link';
+import Link from '@/components/WhitelabelLink';
 import { 
   Globe, 
   Layout as LayoutIcon,

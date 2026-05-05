@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { useRouter } from 'next/navigation';
+import { useTenantRouter } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import {
   Play,
@@ -142,7 +142,7 @@ function aggregateMaturationCampaign(campaignJobs: MaturationJob[]) {
 
 export default function MaturadorPage() {
   const { userId, checking, userStatus } = useRequireAuth();
-  const router = useRouter();
+  const router = useTenantRouter();
   const canUseAllMaturationPlans = userStatus === 'super_admin' || userStatus === 'admin';
   const [canAccess, setCanAccess] = useState(false);
   const [jobs, setJobs] = useState<MaturationJob[]>([]);

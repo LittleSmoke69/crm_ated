@@ -4,7 +4,8 @@ import React, { useEffect, useState } from 'react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { ArrowLeft, Users, Phone, Mail, Calendar } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/WhitelabelLink';
+import { withTenantSlug } from '@/lib/utils/tenant-href';
 import { useParams } from 'next/navigation';
 
 interface Lead {
@@ -76,7 +77,7 @@ export default function ConsultorCrmPage() {
       sessionStorage.removeItem('profile_id');
       window.localStorage.removeItem('profile_id');
       document.cookie = 'user_id=; Path=/; Max-Age=0; SameSite=Lax';
-      window.location.href = '/login';
+      window.location.href = withTenantSlug('/login');
     }
   };
 

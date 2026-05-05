@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
+import { useTenantRouter } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { Loader2, Plus, Copy, Pencil, Trash2, Percent, Scale, Settings, ExternalLink, X } from 'lucide-react';
@@ -96,7 +97,7 @@ export default function AdminRedirectPage() {
   const params = useParams();
   const projectSlug = params?.projectSlug as string;
   const { checking, userId } = useRequireAuth();
-  const router = useRouter();
+  const router = useTenantRouter();
   const [groups, setGroups] = useState<Group[]>([]);
   const [redirectSlug, setRedirectSlug] = useState<string | null>(null);
   const [totalClicks, setTotalClicks] = useState(0);

@@ -5,6 +5,7 @@ import { X, Calendar, Clock, Users, MessageSquare, Edit2, ExternalLink, Save, Lo
 import { useToast } from '@/hooks/useToast';
 import { supabase } from '@/lib/supabase';
 import { dateAtTimezoneToUTC } from '@/lib/utils/recurring-schedule';
+import { getWlSlugHeadersForApi } from '@/lib/utils/tenant-href';
 
 interface ScheduleDetailsModalProps {
   isOpen: boolean;
@@ -50,7 +51,7 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
     setLoadingOptions(true);
     try {
       const [instRes, { data: groupsData }] = await Promise.all([
-        fetch('/api/instances', { headers: { 'X-User-Id': userId } }),
+        fetch('/api/instances', { headers: { 'X-User-Id': userId, ...getWlSlugHeadersForApi() } }),
         supabase.from('whatsapp_groups').select('group_id, group_subject').eq('user_id', userId).order('group_subject', { ascending: true }),
       ]);
       const instJson = await instRes.json();

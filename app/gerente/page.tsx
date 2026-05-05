@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { withTenantSlug } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import {
@@ -36,7 +37,7 @@ import {
   ChevronRight,
   ClipboardList
 } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/WhitelabelLink';
 import StatusDistributionChart from '@/components/Charts/StatusDistributionChart';
 import FinancialMetricsBarChart from '@/components/Charts/FinancialMetricsBarChart';
 import TagsSummaryChart from '@/components/Charts/TagsSummaryChart';
@@ -1231,7 +1232,7 @@ export default function GerentePage() {
       sessionStorage.removeItem('profile_id');
       window.localStorage.removeItem('profile_id');
       document.cookie = 'user_id=; Path=/; Max-Age=0; SameSite=Lax';
-      window.location.href = '/login';
+      window.location.href = withTenantSlug('/login');
     }
   };
 

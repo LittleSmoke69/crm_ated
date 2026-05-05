@@ -2,7 +2,8 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { useRouter } from 'next/navigation';
+import { useTenantRouter } from '@/lib/utils/tenant-href';
+import Link from '@/components/WhitelabelLink';
 import Layout from '@/components/Layout';
 import { useSidebar } from '@/contexts/SidebarContext';
 import {
@@ -36,7 +37,7 @@ interface AIAgent {
 
 export default function AdminAIAgentsPage() {
   const { checking, userId } = useRequireAuth();
-  const router = useRouter();
+  const router = useTenantRouter();
   const { isCollapsed, setIsCollapsed, isMobileOpen, setIsMobileOpen } = useSidebar();
   
   const [agents, setAgents] = useState<AIAgent[]>([]);
@@ -358,7 +359,7 @@ export default function AdminAIAgentsPage() {
             </div>
           ) : flows.length === 0 ? (
             <div className="bg-white rounded-lg shadow-md p-8 text-center text-gray-500">
-              Nenhuma automação criada. Crie uma automação em <a href="/admin/flows" className="text-[#8CD955] underline">Flows</a> primeiro.
+              Nenhuma automação criada. Crie uma automação em <Link href="/admin/flows" className="text-[#8CD955] underline">Flows</Link> primeiro.
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

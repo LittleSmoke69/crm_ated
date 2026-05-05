@@ -3,7 +3,10 @@
 import React, { useEffect, useState } from 'react';
 import { Building2, ChevronDown } from 'lucide-react';
 import { useAdminTenantSwitcher } from '@/contexts/AdminTenantSwitcherContext';
+import { ZAPLOTO_SLUG_COOKIE } from '@/lib/constants/white-label';
 import { getStoredUserId } from '@/lib/utils/stored-user-id';
+import { readBrowserCookie } from '@/lib/utils/tenant-href';
+import { ADMIN_ZAPLOTO_TENANT_STORAGE_KEY } from '@/contexts/AdminTenantSwitcherContext';
 
 interface Tenant {
   id: string;
@@ -34,6 +37,21 @@ export function TenantSwitcher() {
       .finally(() => setLoading(false));
   }, []);
 
+  /** Se já existe cookie de slug WL mas session vazia, alinha o contexto ao tenant (evita painel “central” sem opção WL). */
+  useEffect(() => {
+    if (!tenants.length || !setSelectedTenantId) return;
+    try {
+      const stored = sessionStorage.getItem(ADMIN_ZAPLOTO_TENANT_STORAGE_KEY);
+      if (stored && tenants.some((t) => t.id === stored)) return;
+      const slug = readBrowserCookie(ZAPLOTO_SLUG_COOKIE)?.trim().toLowerCase();
+      if (!slug) return;
+      const match = tenants.find((t) => t.slug.trim().toLowerCase() === slug);
+      if (match) setSelectedTenantId(match.id);
+    } catch {
+      // silencioso
+    }
+  }, [tenants, setSelectedTenantId]);
+
   if (loading || tenants.length <= 1) return null;
 
   const current = tenants.find((t) => t.id === selectedTenantId) || tenants[0];
@@ -58,6 +76,17 @@ export function TenantSwitcher() {
                 onClick={() => {
                   setSelectedTenantId?.(t.id);
                   setOpen(false);
+                  try {
+                    const maxAge = 60 * 60 * 24 * 7;
+                    const slug = t.slug.trim().toLowerCase();
+                    const secure =
+                      typeof window !== 'undefined' && window.location.protocol === 'https:'
+                        ? '; Secure'
+                        : '';
+                    document.cookie = `${ZAPLOTO_SLUG_COOKIE}=${encodeURIComponent(slug)}; Path=/; Max-Age=${maxAge}; SameSite=Lax${secure}`;
+                  } catch {
+                    // silencioso
+                  }
                   window.location.reload();
                 }}
                 className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-100 ${

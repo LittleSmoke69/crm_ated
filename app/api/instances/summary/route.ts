@@ -6,20 +6,30 @@ import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { getSubordinates } from '@/lib/middleware/permissions';
+import { getSubordinates, getUserProfile } from '@/lib/middleware/permissions';
+import { getEffectiveZaplotoId } from '@/lib/tenant-context';
 
 export async function GET(req: NextRequest) {
   try {
     const { userId } = await requireAuth(req);
 
-    const { data: profile } = await supabaseServiceRole
-      .from('profiles')
-      .select('status')
-      .eq('id', userId)
-      .single();
-    const isAdmin = profile?.status === 'admin';
-    const isDonoBanca = profile?.status === 'dono_banca';
-    const isGerente = profile?.status === 'gerente';
+    const fullProfile = await getUserProfile(userId);
+    if (!fullProfile) return errorResponse('Perfil não encontrado', 404);
+    const effectiveZaplotoId = await getEffectiveZaplotoId(req, fullProfile);
+
+    const { data: shareRowsForMe } = await supabaseServiceRole
+      .from('evolution_instance_shared_users')
+      .select('evolution_instance_id')
+      .eq('user_id', userId);
+    const sharedWithMeIds = (shareRowsForMe || []).map(
+      (r: { evolution_instance_id: string }) => r.evolution_instance_id
+    );
+
+    const userStatus = fullProfile.status;
+    const isSuperAdmin = userStatus === 'super_admin';
+    const isAdmin = userStatus === 'admin' || isSuperAdmin;
+    const isDonoBanca = userStatus === 'dono_banca';
+    const isGerente = userStatus === 'gerente';
     let allowedUserIds: string[] = [userId];
     if (isDonoBanca || isGerente) {
       const subordinates = await getSubordinates(userId);
@@ -29,9 +39,18 @@ export async function GET(req: NextRequest) {
     let instancesQuery = supabaseServiceRole
       .from('evolution_instances')
       .select('id, instance_name, status, phone_number, user_id')
-      .eq('is_active', true)
+      .or('is_active.is.null,is_active.eq.true')
       .order('instance_name', { ascending: true });
-    if (!isAdmin) instancesQuery = instancesQuery.in('user_id', allowedUserIds);
+    if (!isSuperAdmin) {
+      instancesQuery = instancesQuery.eq('zaploto_id', effectiveZaplotoId);
+    }
+    if (!isAdmin) {
+      const orParts: string[] = [`user_id.in.(${allowedUserIds.join(',')})`];
+      if (sharedWithMeIds.length > 0) {
+        orParts.push(`id.in.(${sharedWithMeIds.join(',')})`);
+      }
+      instancesQuery = instancesQuery.or(orParts.join(','));
+    }
     const { data: instances, error: instErr } = await instancesQuery;
 
     if (instErr) return errorResponse('Erro ao buscar instâncias', 500);
@@ -49,11 +68,14 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const { data: groupsData } = await supabaseServiceRole
+    let groupsQ = supabaseServiceRole
       .from('whatsapp_groups')
       .select('instance_name, group_subject')
-      .in('user_id', allowedUserIds)
       .in('instance_name', instanceNames);
+    if (!isSuperAdmin) {
+      groupsQ = groupsQ.in('user_id', allowedUserIds);
+    }
+    const { data: groupsData } = await groupsQ;
 
     const groupsByInstance = new Map<string, string[]>();
     for (const g of groupsData || []) {

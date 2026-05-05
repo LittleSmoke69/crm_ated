@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import Link from 'next/link';
+import Link from '@/components/WhitelabelLink';
+import { withTenantSlug } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import {
@@ -361,9 +362,9 @@ export default function ConsultorDetalhadoPage() {
   const handleSignOut = async () => {
     try {
       await fetch('/api/auth/logout', { method: 'POST' });
-      window.location.href = '/login';
+      window.location.href = withTenantSlug('/login');
     } catch {
-      window.location.href = '/login';
+      window.location.href = withTenantSlug('/login');
     }
   };
 

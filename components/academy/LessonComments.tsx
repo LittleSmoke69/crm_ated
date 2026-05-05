@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { MessageCircle, Send, Loader2, Lock } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/WhitelabelLink';
 import { getStoredUserId } from '@/lib/utils/stored-user-id';
 
 type Comment = {

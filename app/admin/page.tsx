@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { useRouter } from 'next/navigation';
+import { useTenantRouter, withTenantSlug, getWlSlugHeadersForApi } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import Pagination from '@/components/Admin/Pagination';
 import { useSidebar } from '@/contexts/SidebarContext';
@@ -221,7 +221,7 @@ interface InstanceWithProxy {
 
 export default function AdminDashboard() {
   const { checking } = useRequireAuth();
-  const router = useRouter();
+  const router = useTenantRouter();
   const { isCollapsed, setIsCollapsed, isMobileOpen, setIsMobileOpen } = useSidebar();
   const { getTenantHeader, selectedTenantId } = useAdminTenantSwitcher() || {
     getTenantHeader: () => ({}),
@@ -911,6 +911,18 @@ export default function AdminDashboard() {
             </button>
           )}
 
+          {/* White Label (super_admin com tenant WL selecionado): admin ZapLoto do tenant */}
+          {isSuperAdmin && selectedTenantId && (
+            <button
+              type="button"
+              onClick={() => router.push('/admin/zaploto')}
+              className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base border-2 border-[#8CD955] bg-[#8CD955]/15 text-gray-800 dark:text-white hover:bg-[#8CD955]/25"
+            >
+              <Globe className="w-4 h-4 sm:w-5 sm:h-5" />
+              <span>White Label</span>
+            </button>
+          )}
+
           {/* Meta Ads: super_admin e admin */}
           {(isSuperAdmin || adminStatus === 'admin') && (
             <button
@@ -989,14 +1001,6 @@ export default function AdminDashboard() {
               >
                 <Zap className="w-4 h-4 sm:w-5 sm:h-5" />
                 <span>Maturador</span>
-              </button>
-
-              <button
-                onClick={() => router.push('/admin/zaploto')}
-                className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]"
-              >
-                <Globe className="w-4 h-4 sm:w-5 sm:h-5" />
-                <span>White Label & Cargos</span>
               </button>
             </>
           )}
@@ -2434,7 +2438,7 @@ const UsersSection = ({
         console.log('[Impersonate] Sessão configurada, redirecionando...');
         
         // Redireciona para o dashboard
-        window.location.href = '/';
+        window.location.href = withTenantSlug('/');
       } else {
         console.error('[Impersonate] Erro na resposta:', result);
         alert(`Erro: ${result.error || 'Erro desconhecido'}`);
@@ -3346,7 +3350,7 @@ const CampaignsSection = ({ userId }: { userId: string | null }) => {
     
     try {
       const res = await fetch('/api/instances', {
-        headers: { 'X-User-Id': userId },
+        headers: { 'X-User-Id': userId, ...getWlSlugHeadersForApi() },
       });
       if (res.ok) {
         const data = await res.json();
@@ -3755,7 +3759,7 @@ const SettingsSection = () => {
   const [canEditEvolutionApi, setCanEditEvolutionApi] = useState(true);
   const [evolutionApiPage, setEvolutionApiPage] = useState(1);
   const [attributionPage, setAttributionPage] = useState(1);
-  const router = useRouter();
+  const router = useTenantRouter();
   const [formData, setFormData] = useState({
     name: '',
     base_url: '',

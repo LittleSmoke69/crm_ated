@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
+import { useTenantRouter, withTenantSlug } from '@/lib/utils/tenant-href';
 import { 
   ArrowLeft, 
   Target, 
@@ -65,7 +66,7 @@ interface GerenteDetail {
 export default function DetalheGerente() {
   const { checking, userId } = useRequireAuth();
   const params = useParams();
-  const router = useRouter();
+  const router = useTenantRouter();
   const gerenteId = params?.gerenteId as string;
   
   const [loading, setLoading] = useState(true);
@@ -244,7 +245,7 @@ export default function DetalheGerente() {
       sessionStorage.removeItem('profile_id');
       window.localStorage.removeItem('profile_id');
       document.cookie = 'user_id=; Path=/; Max-Age=0; SameSite=Lax';
-      window.location.href = '/login';
+      window.location.href = withTenantSlug('/login');
     }
   };
 

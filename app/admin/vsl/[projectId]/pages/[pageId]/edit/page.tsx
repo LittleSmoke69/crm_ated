@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
+import { useTenantRouter } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { Loader2, Plus, Trash2, ExternalLink, RefreshCw, FileVideo, Type, MousePointer, Link2, MessageCircle, Smartphone, Video, FileText, LayoutGrid } from 'lucide-react';
@@ -31,7 +32,7 @@ export default function EditVslPagePage() {
   const projectId = params?.projectId as string;
   const pageId = params?.pageId as string;
   const { checking, userId } = useRequireAuth();
-  const router = useRouter();
+  const router = useTenantRouter();
   const previewRef = useRef<HTMLIFrameElement>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

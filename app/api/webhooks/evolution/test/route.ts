@@ -1,5 +1,6 @@
 import { NextRequest, after } from 'next/server';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { resolveZaplotoIdFromWebhookRequest } from '@/lib/server/webhook-zaploto-context';
 import { normalizationService } from '@/lib/services/normalization-service';
 import { flowExecutorService } from '@/lib/services/flow-executor-service';
 import { participantExitAuditService } from '@/lib/services/participant-exit-audit-service';
@@ -67,11 +68,14 @@ function extractMetadata(payload: any) {
   return { eventType, instanceName, messageId, remoteJid };
 }
 
+type WebhookTestOpts = { zaplotoId: string | null };
+
 /**
  * Processamento completo do evento de teste: insert + waiters + flows.
  * Executado via `after()` — após o response 200 já ter sido enviado.
  */
-async function processEventBackground(payload: any): Promise<void> {
+async function processEventBackground(payload: any, opts: WebhookTestOpts): Promise<void> {
+  const { zaplotoId } = opts;
   const { eventType, instanceName, messageId, remoteJid } = extractMetadata(payload);
   const evtNorm = String(eventType).toLowerCase().replace(/_/g, '-');
   const isGroupParticipants =
@@ -89,15 +93,19 @@ async function processEventBackground(payload: any): Promise<void> {
       
       // Busca evento duplicado considerando instance + group + participant
       // Usa payload->data->participants[0] para comparar o participante
-      const { data: existing } = await supabaseServiceRole
+      const preDupBase = supabaseServiceRole
         .from('evolution_webhook_events')
         .select('id, payload')
         .eq('instance_name', instanceName)
         .eq('remote_jid', remoteJid)
         .in('event_type', EVOLUTION_GROUP_PARTICIPANT_EVENT_TYPES)
-        .gte('created_at', since)
+        .gte('created_at', since);
+      const preDup = zaplotoId
+        ? preDupBase.eq('zaploto_id', zaplotoId)
+        : preDupBase.is('zaploto_id', null);
+      const { data: existing } = await preDup
         .order('created_at', { ascending: false })
-        .limit(10); // Busca últimos 10 para comparar participantes
+        .limit(10);
 
       if (existing && existing.length > 0) {
         // Compara participantes dos eventos existentes
@@ -144,6 +152,7 @@ async function processEventBackground(payload: any): Promise<void> {
       message_id: messageId,
       payload: payload,
       payload_normalized: normalizedPayload || null,
+      zaploto_id: zaplotoId,
     })
     .select('id, env, instance_name, payload, payload_normalized')
     .single();
@@ -171,13 +180,17 @@ async function processEventBackground(payload: any): Promise<void> {
     if (firstParticipantId) {
       const dedupSince = new Date(Date.now() - PARTICIPANT_DEDUP_WINDOW_MS).toISOString();
       // Busca eventos recentes do mesmo grupo
-      const { data: recentEvents } = await supabaseServiceRole
+      const postDupBase = supabaseServiceRole
         .from('evolution_webhook_events')
         .select('id, payload')
         .eq('instance_name', instanceName)
         .eq('remote_jid', remoteJid)
         .in('event_type', EVOLUTION_GROUP_PARTICIPANT_EVENT_TYPES)
-        .gte('created_at', dedupSince)
+        .gte('created_at', dedupSince);
+      const postDup = zaplotoId
+        ? postDupBase.eq('zaploto_id', zaplotoId)
+        : postDupBase.is('zaploto_id', null);
+      const { data: recentEvents } = await postDup
         .order('created_at', { ascending: true })
         .limit(POST_INSERT_DEDUP_LIMIT);
 
@@ -323,6 +336,7 @@ async function processEventBackground(payload: any): Promise<void> {
  */
 export async function POST(req: NextRequest) {
   try {
+    const zaplotoId = await resolveZaplotoIdFromWebhookRequest(req);
     let payload: any;
     try {
       const buf = await req.arrayBuffer();
@@ -339,7 +353,7 @@ export async function POST(req: NextRequest) {
     }
 
     after(() =>
-      processEventBackground(payload).catch((err: unknown) => {
+      processEventBackground(payload, { zaplotoId }).catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
         console.error('❌ [WEBHOOK TEST] Erro no processamento em background:', msg);
       }),

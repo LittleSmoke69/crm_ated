@@ -8,7 +8,8 @@ import { proxyAutoAssign } from '@/lib/services/proxy-auto-assign';
 import { notifyInstanceDisconnected } from '@/lib/services/loto-notify-service';
 import {
   EVOLUTION_INSTANCE_WEBHOOK_EVENTS,
-  ZAPLOTO_EVOLUTION_PROD_WEBHOOK_URL,
+  buildEvolutionProdWebhookUrlFromBase,
+  resolvePublicBaseUrlForWebhooks,
   shouldConfigureMasterChatWebhook,
 } from '@/lib/server/evolution-chat-webhook-config';
 import { evolutionApiSelector } from '@/lib/services/evolution-api-selector';
@@ -361,12 +362,32 @@ export async function POST(
       );
 
       const phoneDigits = String(instance.phone_number ?? '').replace(/\D/g, '');
+      let masterRecycleWebhookUrl = '';
+      if (instance.is_master === true && shouldConfigureMasterChatWebhook()) {
+        const publicBase =
+          resolvePublicBaseUrlForWebhooks(req) ||
+          process.env.NEXT_PUBLIC_APP_URL?.trim()?.replace(/\/+$/, '') ||
+          process.env.NEXT_PUBLIC_WEBHOOK_BASE_URL?.trim()?.replace(/\/+$/, '') ||
+          'https://zaploto.com';
+        let slug: string | null = null;
+        const zid = (instance as { zaploto_id?: string | null }).zaploto_id;
+        if (zid) {
+          const { data: trow } = await supabaseServiceRole
+            .from('zaploto_tenants')
+            .select('slug')
+            .eq('id', zid)
+            .maybeSingle();
+          slug = trow?.slug?.trim().toLowerCase() ?? null;
+        }
+        masterRecycleWebhookUrl = buildEvolutionProdWebhookUrlFromBase(publicBase, slug);
+      }
+
       const createOptions =
         instance.is_master === true && shouldConfigureMasterChatWebhook()
           ? {
               webhook: {
                 enabled: true,
-                url: ZAPLOTO_EVOLUTION_PROD_WEBHOOK_URL,
+                url: masterRecycleWebhookUrl,
                 events: [...EVOLUTION_INSTANCE_WEBHOOK_EVENTS],
                 base64: true,
               },

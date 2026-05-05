@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
+import { useTenantRouter } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { Loader2, Save, Upload, ExternalLink, Settings, Key, Image, FileVideo, ArrowRight, Trash2, Pencil } from 'lucide-react';
@@ -30,7 +31,7 @@ export default function AdminVslProjectPage() {
   const params = useParams();
   const projectId = params?.projectId as string;
   const { checking, userId } = useRequireAuth();
-  const router = useRouter();
+  const router = useTenantRouter();
   const [project, setProject] = useState<Project | null>(null);
   const [pages, setPages] = useState<VslPageRow[]>([]);
   const [loading, setLoading] = useState(true);

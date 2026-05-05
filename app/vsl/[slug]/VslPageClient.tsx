@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useTenantRouter } from '@/lib/utils/tenant-href';
 import { VturbPlayer } from '@/components/vsl/VturbPlayer';
 import Image from 'next/image';
 import { buildVslRedirectHref } from '@/lib/vsl/runtime/redirect-url';
@@ -70,7 +70,7 @@ export function VslPageClient({
   marqueeText = 'ATUALIZAÇÕES DIÁRIAS SOBRE FINANÇAS E APOSTAS',
   testimonials = [],
 }: VslPageClientProps) {
-  const router = useRouter();
+  const router = useTenantRouter();
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [ctaVisible, setCtaVisible] = useState(ctaDelaySeconds === 0 && ctaMinWatchPercent === 0);
   const [progressReached, setProgressReached] = useState<Set<number>>(new Set());

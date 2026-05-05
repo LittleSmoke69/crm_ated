@@ -1,7 +1,8 @@
 'use client';
 
 import React, { Suspense, useCallback, useEffect, useMemo } from 'react';
-import { useSearchParams, useRouter } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
+import { useTenantRouter } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { BarChart3, Loader2 } from 'lucide-react';
@@ -11,7 +12,7 @@ import ChatGestaoTagsSection from '@/components/Admin/chat-gestao/ChatGestaoTags
 type TabId = 'relatorio' | 'etiquetas';
 
 function ChatGestaoContent() {
-  const router = useRouter();
+  const router = useTenantRouter();
   const searchParams = useSearchParams();
   const { userId, userStatus, checking } = useRequireAuth();
 

@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { useRouter } from 'next/navigation';
+import { useTenantRouter, withTenantSlug } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import DashboardStats from '@/components/Dashboard/DashboardStats';
 import InstanceList from '@/components/Dashboard/InstanceList';
@@ -12,14 +12,13 @@ import ChartCard from '@/components/Dashboard/ChartCard';
 import CampaignsTable from '@/components/Campaigns/CampaignsTable';
 import { useDashboardData, Campaign } from '@/hooks/useDashboardData';
 import { CheckCircle2, AlertCircle, Info, X, Menu } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/WhitelabelLink';
 import { useSidebar } from '@/contexts/SidebarContext';
 
 const Dashboard = () => {
   const { checking, userId } = useRequireAuth();
-  const router = useRouter();
+  const router = useTenantRouter();
   const { isCollapsed, setIsCollapsed, isMobileOpen, setIsMobileOpen } = useSidebar();
-  const [isCheckingStatus, setIsCheckingStatus] = useState(true);
   const {
     instances,
     dbGroups,
@@ -39,14 +38,11 @@ const Dashboard = () => {
     loadInitialData,
   } = useDashboardData();
 
-  // Verifica o status do usuário e redireciona consultores para o CRM
+  // Consultores: redireciona para o Kanban em segundo plano (sem bloquear o dashboard)
   useEffect(() => {
-    const checkUserStatus = async () => {
-      if (checking || !userId) {
-        setIsCheckingStatus(true);
-        return;
-      }
+    if (checking || !userId) return;
 
+    const checkUserStatus = async () => {
       try {
         const response = await fetch('/api/user/profile', {
           method: 'GET',
@@ -60,15 +56,11 @@ const Dashboard = () => {
         if (response.ok) {
           const result = await response.json();
           if (result.success && result.data?.status === 'consultor') {
-            // Redireciona consultores para o CRM Kanban
             router.replace('/crm/kanban');
-            return;
           }
         }
       } catch (error) {
         console.error('Erro ao verificar status do usuário:', error);
-      } finally {
-        setIsCheckingStatus(false);
       }
     };
 
@@ -82,18 +74,8 @@ const Dashboard = () => {
       window.localStorage.removeItem('profile_id');
       document.cookie = 'user_id=; Path=/; Max-Age=0; SameSite=Lax';
     }
-    window.location.href = '/login';
+    window.location.href = withTenantSlug('/login');
   };
-
-  if (checking || userId === null || isCheckingStatus) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-[#1a1a1a]">
-        <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-lg p-6 border border-gray-200 dark:border-[#404040] text-center">
-          <p className="text-gray-700 dark:text-white font-medium">Preparando seu ambiente...</p>
-        </div>
-      </div>
-    );
-  }
 
   // Calcular taxa de sucesso
   const successRate = kpiAdded + kpiFailedAdds > 0 
@@ -232,7 +214,7 @@ const Dashboard = () => {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full">
           <InstanceList 
             instances={instances} 
-            onViewAll={() => window.location.href = '/instances'}
+            onViewAll={() => { window.location.href = withTenantSlug('/instances'); }}
           />
           <ChartCard 
             title="Mensagens Enviadas e Adição aos Grupos"
@@ -247,7 +229,7 @@ const Dashboard = () => {
           <GroupsCard 
             title="Grupos Salvos no Banco" 
             count={savedGroupsCount}
-            onViewAll={() => window.location.href = '/instances'}
+            onViewAll={() => { window.location.href = withTenantSlug('/instances'); }}
           />
         </div>
 

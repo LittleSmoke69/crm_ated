@@ -1,86 +1,64 @@
+import { NextRequest } from 'next/server';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { getUserProfile, getSubordinates } from '@/lib/middleware/permissions';
+import { getEffectiveZaplotoId } from '@/lib/tenant-context';
 
 /**
- * Verifica se o usuário tem acesso a uma instância
- * @param userId ID do usuário
- * @param instanceName Nome da instância
- * @returns true se o usuário tem acesso (é dono, admin ou perfil com acesso anti-spam), false caso contrário
+ * Verifica se o usuário pode acessar uma instância (mesmo white label + regras de hierarquia).
  */
-export async function checkInstanceAccess(userId: string, instanceName: string): Promise<boolean> {
+export async function checkInstanceAccess(
+  req: NextRequest,
+  userId: string,
+  instanceName: string
+): Promise<boolean> {
   try {
-    console.log(`🔍 [checkInstanceAccess] Verificando acesso - userId: ${userId}, instanceName: ${instanceName}`);
-    
-    const { data: profile, error: profileError } = await supabaseServiceRole
-      .from('profiles')
-      .select('status')
-      .eq('id', userId)
-      .single();
+    const profile = await getUserProfile(userId);
+    if (!profile?.status) return false;
 
-    if (profileError) {
-      console.error(`❌ [checkInstanceAccess] Erro ao buscar perfil do usuário ${userId}:`, profileError);
-    }
+    const effectiveZaplotoId = await getEffectiveZaplotoId(req, profile);
 
-    console.log(`🔍 [checkInstanceAccess] Perfil do usuário:`, {
-      userId,
-      profileStatus: profile?.status,
-      profileError: profileError?.message,
-    });
-
-    // Acesso a todas as instâncias: perfis que usam anti-spam (admin ou Meu Anti-Spam) e precisam buscar grupos
-    const canAccessAllInstances =
-      profile?.status === 'super_admin' ||
-      profile?.status === 'admin' ||
-      profile?.status === 'auditoria' ||
-      profile?.status === 'dono_banca' ||
-      profile?.status === 'gerente' ||
-      profile?.status === 'consultor';
-
-    if (canAccessAllInstances) {
-      console.log(`✅ [checkInstanceAccess] Usuário ${userId} (${profile?.status}) - acesso permitido`);
-      return true;
-    }
-
-    console.log(`🔍 [checkInstanceAccess] Usuário ${userId} não é admin - verificando se é dono da instância ${instanceName}`);
-
-    // Se não for admin, verifica se é dono da instância
-    // maybeSingle evita PGRST116 quando outro usuário tem instância com mesmo nome
     const { data: instance, error: instanceError } = await supabaseServiceRole
       .from('evolution_instances')
-      .select('user_id, id, instance_name, is_active')
+      .select('id, user_id, zaploto_id')
       .eq('instance_name', instanceName)
-      .eq('user_id', userId)
       .eq('is_active', true)
       .maybeSingle();
 
-    if (instanceError) {
-      console.error(`❌ [checkInstanceAccess] Erro ao buscar instância ${instanceName}:`, instanceError);
-    }
+    if (instanceError || !instance) return false;
 
-    console.log(`🔍 [checkInstanceAccess] Dados da instância:`, {
-      instanceName,
-      instanceId: instance?.id,
-      instanceUserId: instance?.user_id,
-      instanceIsActive: instance?.is_active,
-      instanceError: instanceError?.message,
-      instanceFound: !!instance,
-    });
-
-    // Query já filtra por user_id: se retornou linha, o usuário é o dono.
-    if (!instance) {
-      console.warn(`⚠️ [checkInstanceAccess] Instância ${instanceName} não encontrada para o usuário ${userId}`);
+    const instanceId = (instance as { id: string }).id;
+    const instZap = (instance as { zaploto_id?: string | null }).zaploto_id;
+    const DEFAULT_ZAPLOTO = '00000000-0000-0000-0000-000000000001';
+    if (!instZap) {
+      if (effectiveZaplotoId !== DEFAULT_ZAPLOTO) return false;
+    } else if (instZap !== effectiveZaplotoId) {
       return false;
     }
 
-    console.log(`✅ [checkInstanceAccess] Usuário ${userId} é dono da instância ${instanceName} - acesso permitido`);
-    return true;
-  } catch (error: any) {
-    console.error(`❌ [checkInstanceAccess] Erro ao verificar acesso à instância:`, {
-      userId,
-      instanceName,
-      error: error?.message,
-      stack: error?.stack,
-    });
+    const ownerId = String((instance as { user_id?: string | null }).user_id ?? '');
+    const s = profile.status;
+
+    if (s === 'super_admin' || s === 'admin' || s === 'auditoria') {
+      return true;
+    }
+
+    if (s === 'dono_banca' || s === 'gerente') {
+      const subordinates = await getSubordinates(userId);
+      const allowed = new Set([userId, ...subordinates.map((u) => u.id)]);
+      if (allowed.has(ownerId)) return true;
+    }
+
+    const { data: shareRow } = await supabaseServiceRole
+      .from('evolution_instance_shared_users')
+      .select('id')
+      .eq('evolution_instance_id', instanceId)
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (shareRow) return true;
+
+    return ownerId === userId;
+  } catch {
     return false;
   }
 }
-

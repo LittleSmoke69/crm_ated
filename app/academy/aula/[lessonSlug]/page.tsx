@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import Link from 'next/link';
+import Link from '@/components/WhitelabelLink';
 import { useParams } from 'next/navigation';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import {
@@ -200,7 +200,7 @@ export default function AcademyLessonPage() {
         </p>
         <Link
           href="/academy/trilhas"
-          className="mt-6 inline-flex rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] px-5 py-2.5 text-sm font-medium text-[var(--zaploto-green)] hover:border-[#4ade80]/50"
+          className="mt-6 inline-flex rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] px-5 py-2.5 text-sm font-medium text-[var(--zaploto-green)] hover:border-[var(--zaploto-green)]/50"
         >
           Ver trilhas disponíveis
         </Link>
@@ -231,7 +231,7 @@ export default function AcademyLessonPage() {
       {/* ── Back button ── */}
       <Link
         href={`/academy/modulos/${lesson.module?.slug ?? ''}`}
-        className="mb-4 inline-flex items-center gap-2 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-sm font-medium text-[var(--muted-foreground)] shadow-sm transition hover:border-[#4ade80]/50 hover:text-[#4ade80]"
+        className="mb-4 inline-flex items-center gap-2 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-sm font-medium text-[var(--muted-foreground)] shadow-sm transition hover:border-[var(--zaploto-green)]/50 hover:text-[var(--zaploto-green)]"
       >
         <ArrowLeft className="h-4 w-4" />
         <span className="hidden xs:inline">{lesson.module?.title ?? 'Voltar ao módulo'}</span>
@@ -263,15 +263,15 @@ export default function AcademyLessonPage() {
                 className="relative flex w-full items-center gap-3 overflow-hidden bg-[#060f07] px-4 py-3.5 text-left"
               >
                 <div className="pointer-events-none absolute inset-0 opacity-[0.04]"
-                  style={{ backgroundImage: 'linear-gradient(#4ade80 1px, transparent 1px), linear-gradient(90deg, #4ade80 1px, transparent 1px)', backgroundSize: '30px 30px' }} />
+                  style={{ backgroundImage: 'linear-gradient(var(--zaploto-green) 1px, transparent 1px), linear-gradient(90deg, var(--zaploto-green) 1px, transparent 1px)', backgroundSize: '30px 30px' }} />
                 <div className="relative flex-1">
-                  <p className="text-xs font-medium uppercase tracking-widest text-[#4ade80]/70">Zaploto Academy</p>
+                  <p className="text-xs font-medium uppercase tracking-widest text-[var(--zaploto-green)]/70">Zaploto Academy</p>
                   <p className="text-sm font-bold text-white">Aulas do módulo</p>
                   {userId && lessonsInModule.length > 0 && (
                     <p className="mt-0.5 text-xs text-white/40">{completedCount}/{lessonsInModule.length} concluídas</p>
                   )}
                 </div>
-                <ChevronDown className={`relative h-5 w-5 shrink-0 text-[#4ade80] transition-transform ${sidebarOpen ? 'rotate-180' : ''}`} />
+                <ChevronDown className={`relative h-5 w-5 shrink-0 text-[var(--zaploto-green)] transition-transform ${sidebarOpen ? 'rotate-180' : ''}`} />
               </button>
 
               {sidebarOpen && (
@@ -284,20 +284,20 @@ export default function AcademyLessonPage() {
                         <Link
                           href={`/academy/aula/${l.slug}`}
                           onClick={() => setSidebarOpen(false)}
-                          className={`flex items-center gap-3 px-4 py-3 text-sm transition hover:bg-[var(--input-bg)] ${isCurrent ? 'bg-[#4ade80]/5 border-l-2 border-[#4ade80]' : 'border-l-2 border-transparent'}`}
+                          className={`flex items-center gap-3 px-4 py-3 text-sm transition hover:bg-[var(--input-bg)] ${isCurrent ? 'bg-[var(--zaploto-green)]/5 border-l-2 border-[var(--zaploto-green)]' : 'border-l-2 border-transparent'}`}
                         >
-                          <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${isDone ? 'bg-[#4ade80] text-[#060f07]' : isCurrent ? 'bg-[#4ade80] text-[#060f07]' : 'bg-[var(--input-bg)] text-[var(--muted-foreground)]'}`}>
+                          <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${isDone ? 'bg-[var(--zaploto-green)] text-[#060f07]' : isCurrent ? 'bg-[var(--zaploto-green)] text-[#060f07]' : 'bg-[var(--input-bg)] text-[var(--muted-foreground)]'}`}>
                             {isDone ? <Check className="h-3.5 w-3.5" /> : isCurrent ? <PlayCircle className="h-3.5 w-3.5" /> : index + 1}
                           </div>
                           <div className="min-w-0 flex-1">
-                            <p className={`truncate font-medium ${isCurrent ? 'text-[#4ade80]' : 'text-[var(--foreground)]'}`}>{l.title}</p>
+                            <p className={`truncate font-medium ${isCurrent ? 'text-[var(--zaploto-green)]' : 'text-[var(--foreground)]'}`}>{l.title}</p>
                             {l.estimated_minutes != null && (
                               <p className="flex items-center gap-1 text-xs text-[var(--muted-foreground)]">
                                 <Clock className="h-3 w-3" /> {l.estimated_minutes} min
                               </p>
                             )}
                           </div>
-                          {isCurrent && <span className="shrink-0 rounded-full bg-[#4ade80]/20 px-2 py-0.5 text-xs text-[#4ade80]">Atual</span>}
+                          {isCurrent && <span className="shrink-0 rounded-full bg-[var(--zaploto-green)]/20 px-2 py-0.5 text-xs text-[var(--zaploto-green)]">Atual</span>}
                         </Link>
                       </li>
                     );
@@ -312,7 +312,7 @@ export default function AcademyLessonPage() {
             <div className="mb-5 flex gap-2">
               {prevLesson && (
                 <Link href={`/academy/aula/${prevLesson.slug}`}
-                  className="flex flex-1 items-center gap-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-3 text-sm transition hover:border-[#4ade80]/50">
+                  className="flex flex-1 items-center gap-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-3 text-sm transition hover:border-[var(--zaploto-green)]/50">
                   <ArrowLeft className="h-4 w-4 shrink-0 text-[var(--muted-foreground)]" />
                   <span className="min-w-0">
                     <span className="block text-xs text-[var(--muted-foreground)]">Anterior</span>
@@ -322,7 +322,7 @@ export default function AcademyLessonPage() {
               )}
               {nextLesson && (
                 <Link href={`/academy/aula/${nextLesson.slug}`}
-                  className="flex flex-1 items-center justify-end gap-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-3 text-sm transition hover:border-[#4ade80]/50">
+                  className="flex flex-1 items-center justify-end gap-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-3 text-sm transition hover:border-[var(--zaploto-green)]/50">
                   <span className="min-w-0 text-right">
                     <span className="block text-xs text-[var(--muted-foreground)]">Próxima</span>
                     <span className="block truncate font-medium">{nextLesson.title}</span>
@@ -349,7 +349,7 @@ export default function AcademyLessonPage() {
                 onClick={markComplete}
                 disabled={completed || markingComplete}
                 className={`flex w-full items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition sm:w-auto ${
-                  completed ? 'bg-[#4ade80]/10 text-[#4ade80] border border-[#4ade80]/40' : 'bg-[#4ade80] text-[#060f07] hover:opacity-90'
+                  completed ? 'bg-[var(--zaploto-green)]/10 text-[var(--zaploto-green)] border border-[var(--zaploto-green)]/40' : 'bg-[var(--zaploto-green)] text-[#060f07] hover:opacity-90'
                 } disabled:opacity-50`}
               >
                 {completed ? <CheckCircle2 className="h-4 w-4" /> : markingComplete ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
@@ -382,7 +382,7 @@ export default function AcademyLessonPage() {
                     if (!asset) return null;
                     return (
                       <button key={att.id} type="button" onClick={() => getSignedUrl(asset.file_path)}
-                        className="flex w-full items-center gap-2 rounded-xl border border-[var(--card-border)] bg-[var(--input-bg)] px-4 py-3 text-sm font-medium transition hover:border-[#4ade80]/50 hover:text-[#4ade80] sm:w-auto">
+                        className="flex w-full items-center gap-2 rounded-xl border border-[var(--card-border)] bg-[var(--input-bg)] px-4 py-3 text-sm font-medium transition hover:border-[var(--zaploto-green)]/50 hover:text-[var(--zaploto-green)] sm:w-auto">
                         {asset.type === 'pdf' || asset.type === 'doc' || asset.type === 'docx' ? <FileText className="h-4 w-4 shrink-0" />
                           : asset.type === 'table' ? <FileSpreadsheet className="h-4 w-4 shrink-0" />
                           : asset.type === 'image' ? <ImageIcon className="h-4 w-4 shrink-0" />
@@ -419,14 +419,14 @@ export default function AcademyLessonPage() {
                     { s: 4, x: '60%', y: '70%', o: 0.3 },
                     { s: 3, x: '85%', y: '20%', o: 0.4 },
                   ].map((dot, i) => (
-                    <div key={i} className="absolute rounded-full bg-[#4ade80]"
+                    <div key={i} className="absolute rounded-full bg-[var(--zaploto-green)]"
                       style={{ width: dot.s, height: dot.s, left: dot.x, top: dot.y, opacity: dot.o, filter: 'blur(1px)' }} />
                   ))}
                   <div className="absolute inset-0 opacity-[0.04]"
-                    style={{ backgroundImage: 'linear-gradient(#4ade80 1px, transparent 1px), linear-gradient(90deg, #4ade80 1px, transparent 1px)', backgroundSize: '30px 30px' }} />
+                    style={{ backgroundImage: 'linear-gradient(var(--zaploto-green) 1px, transparent 1px), linear-gradient(90deg, var(--zaploto-green) 1px, transparent 1px)', backgroundSize: '30px 30px' }} />
                 </div>
                 <div className="relative">
-                  <p className="text-xs font-medium uppercase tracking-widest text-[#4ade80]/70">Zaploto Academy</p>
+                  <p className="text-xs font-medium uppercase tracking-widest text-[var(--zaploto-green)]/70">Zaploto Academy</p>
                   <h3 className="mt-0.5 text-sm font-bold text-white">Aulas do módulo</h3>
                   {lesson.module?.title && <p className="mt-0.5 truncate text-xs text-white/40">{lesson.module.title}</p>}
                   {userId && lessonsInModule.length > 0 && (
@@ -442,12 +442,12 @@ export default function AcademyLessonPage() {
                   return (
                     <li key={l.id}>
                       <Link href={`/academy/aula/${l.slug}`}
-                        className={`flex items-start gap-3 px-4 py-3 text-sm transition hover:bg-[var(--input-bg)] ${isCurrent ? 'bg-[#4ade80]/5 border-l-2 border-[#4ade80]' : 'border-l-2 border-transparent'}`}>
-                        <div className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-bold ${isDone || isCurrent ? 'bg-[#4ade80] text-[#060f07]' : 'bg-[var(--input-bg)] text-[var(--muted-foreground)]'}`}>
+                        className={`flex items-start gap-3 px-4 py-3 text-sm transition hover:bg-[var(--input-bg)] ${isCurrent ? 'bg-[var(--zaploto-green)]/5 border-l-2 border-[var(--zaploto-green)]' : 'border-l-2 border-transparent'}`}>
+                        <div className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-bold ${isDone || isCurrent ? 'bg-[var(--zaploto-green)] text-[#060f07]' : 'bg-[var(--input-bg)] text-[var(--muted-foreground)]'}`}>
                           {isDone ? <Check className="h-3 w-3" /> : isCurrent ? <PlayCircle className="h-3 w-3" /> : index + 1}
                         </div>
                         <div className="min-w-0 flex-1">
-                          <p className={`font-medium leading-snug ${isCurrent ? 'text-[#4ade80]' : 'text-[var(--foreground)]'}`}>{l.title}</p>
+                          <p className={`font-medium leading-snug ${isCurrent ? 'text-[var(--zaploto-green)]' : 'text-[var(--foreground)]'}`}>{l.title}</p>
                           {l.estimated_minutes != null && (
                             <p className="mt-0.5 flex items-center gap-1 text-xs text-[var(--muted-foreground)]">
                               <Clock className="h-3 w-3" /> {l.estimated_minutes} min
@@ -472,7 +472,7 @@ function LockedPlayer() {
     <div className="flex aspect-video w-full flex-col items-center justify-center rounded-2xl bg-black/90 text-white">
       <Lock className="mb-3 h-10 w-10 opacity-50" />
       <p className="mb-5 text-center text-sm font-medium">Faça login para assistir</p>
-      <Link href="/login" className="rounded-xl border border-[#4ade80]/40 bg-[#4ade80]/10 px-5 py-2.5 text-sm font-semibold text-[#4ade80] hover:bg-[#4ade80]/20 transition">
+      <Link href="/login" className="rounded-xl border border-[var(--zaploto-green)]/40 bg-[var(--zaploto-green)]/10 px-5 py-2.5 text-sm font-semibold text-[var(--zaploto-green)] hover:bg-[var(--zaploto-green)]/20 transition">
         Entrar
       </Link>
     </div>

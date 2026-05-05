@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import Link from 'next/link';
+import Link from '@/components/WhitelabelLink';
 import { BookOpen, Play, Loader2, ChevronRight } from 'lucide-react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 
@@ -58,7 +58,7 @@ export default function AcademyTrilhasPage() {
             {BOKEH.map((dot, i) => (
               <div
                 key={i}
-                className="academy-bokeh-dot absolute rounded-full bg-[#4ade80]"
+                className="academy-bokeh-dot absolute rounded-full bg-[var(--zaploto-green)]"
                 style={{
                   width: dot.s, height: dot.s, left: dot.x, top: dot.y,
                   filter: `blur(${dot.s > 5 ? 2 : 1}px)`,
@@ -69,14 +69,14 @@ export default function AcademyTrilhasPage() {
               />
             ))}
             <div className="academy-grid-drift absolute inset-0 opacity-[0.04]"
-              style={{ backgroundImage: 'linear-gradient(#4ade80 1px, transparent 1px), linear-gradient(90deg, #4ade80 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
-            <div className="academy-scanline absolute inset-x-0 h-px bg-gradient-to-r from-transparent via-[#4ade80]/50 to-transparent" style={{ top: 0 }} />
+              style={{ backgroundImage: 'linear-gradient(var(--zaploto-green) 1px, transparent 1px), linear-gradient(90deg, var(--zaploto-green) 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
+            <div className="academy-scanline absolute inset-x-0 h-px bg-gradient-to-r from-transparent via-[var(--zaploto-green)]/50 to-transparent" style={{ top: 0 }} />
           </div>
 
           {/* Content */}
           <div className="relative flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6">
             <div>
-              <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-[#4ade80]/30 bg-[#4ade80]/10 px-3 py-1 text-xs font-medium text-[#4ade80] uppercase tracking-widest">
+              <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-[var(--zaploto-green)]/30 bg-[var(--zaploto-green)]/10 px-3 py-1 text-xs font-medium text-[var(--zaploto-green)] uppercase tracking-widest">
                 Zaploto Academy
               </div>
               <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Trilhas de aprendizado</h1>
@@ -86,7 +86,7 @@ export default function AcademyTrilhasPage() {
             </div>
             <Link
               href="/academy"
-              className="shrink-0 inline-flex items-center gap-2 self-start rounded-xl border border-[#4ade80]/40 bg-[#4ade80]/10 px-4 py-2.5 text-sm font-semibold text-[#4ade80] backdrop-blur-sm hover:bg-[#4ade80]/20 transition"
+              className="shrink-0 inline-flex items-center gap-2 self-start rounded-xl border border-[var(--zaploto-green)]/40 bg-[var(--zaploto-green)]/10 px-4 py-2.5 text-sm font-semibold text-[var(--zaploto-green)] backdrop-blur-sm hover:bg-[var(--zaploto-green)]/20 transition"
             >
               ← Início
             </Link>
@@ -110,10 +110,10 @@ export default function AcademyTrilhasPage() {
               <Link
                 key={mod.id}
                 href={`/academy/modulos/${mod.slug}`}
-                className="group relative overflow-hidden rounded-2xl border border-[#1e3a1e] bg-[#0a140a]/80 shadow-sm backdrop-blur-sm transition-all duration-300 hover:-translate-y-1 hover:border-[#4ade80]/50 hover:shadow-[0_0_24px_#4ade8028,0_0_48px_#4ade8012]"
+                className="group relative overflow-hidden rounded-2xl border border-[#1e3a1e] bg-[#0a140a]/80 shadow-sm backdrop-blur-sm transition-all duration-300 hover:-translate-y-1 hover:border-[var(--zaploto-green)]/50 hover:shadow-[0_0_24px_var(--zaploto-green),0_0_48px_var(--zaploto-green)]"
               >
                 {/* Neon border top glow line */}
-                <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[#4ade80]/60 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+                <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[var(--zaploto-green)]/60 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
 
                 {/* Thumbnail */}
                 <div className="relative aspect-video w-full overflow-hidden bg-zinc-900">
@@ -126,17 +126,17 @@ export default function AcademyTrilhasPage() {
                   )}
                   {/* Play overlay com neon */}
                   <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
-                    <div className="flex h-14 w-14 items-center justify-center rounded-full bg-[#4ade80] shadow-[0_0_20px_#4ade80,0_0_40px_#4ade8066] transition-transform duration-300 group-hover:scale-110">
+                    <div className="flex h-14 w-14 items-center justify-center rounded-full bg-[var(--zaploto-green)] shadow-[0_0_20px_var(--zaploto-green),0_0_40px_var(--zaploto-green)] transition-transform duration-300 group-hover:scale-110">
                       <Play className="h-6 w-6 text-[#060f07]" fill="currentColor" />
                     </div>
                   </div>
                   {/* Scan line neon no hover */}
-                  <div className="absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-[#4ade80]/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+                  <div className="absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-[var(--zaploto-green)]/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
                 </div>
 
                 {/* Card body */}
                 <div className="p-5">
-                  <h3 className="font-semibold leading-snug text-white/90 transition group-hover:text-[#4ade80]">
+                  <h3 className="font-semibold leading-snug text-white/90 transition group-hover:text-[var(--zaploto-green)]">
                     {mod.title}
                   </h3>
                   {mod.description && (
@@ -145,13 +145,13 @@ export default function AcademyTrilhasPage() {
                   {mod.tags && mod.tags.length > 0 && (
                     <div className="mt-3 flex flex-wrap gap-1.5">
                       {mod.tags.slice(0, 3).map((tag) => (
-                        <span key={tag} className="rounded-full border border-[#4ade80]/20 bg-[#4ade80]/10 px-2.5 py-0.5 text-xs font-medium text-[#4ade80]">
+                        <span key={tag} className="rounded-full border border-[var(--zaploto-green)]/20 bg-[var(--zaploto-green)]/10 px-2.5 py-0.5 text-xs font-medium text-[var(--zaploto-green)]">
                           {tag}
                         </span>
                       ))}
                     </div>
                   )}
-                  <div className="mt-4 flex items-center gap-1 text-sm font-medium text-[#4ade80]">
+                  <div className="mt-4 flex items-center gap-1 text-sm font-medium text-[var(--zaploto-green)]">
                     <Play className="h-3.5 w-3.5" fill="currentColor" /> Ver aulas <ChevronRight className="h-3.5 w-3.5 ml-auto" />
                   </div>
                 </div>

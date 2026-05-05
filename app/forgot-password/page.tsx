@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useState, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useTenantRouter } from '@/lib/utils/tenant-href';
+import Link from '@/components/WhitelabelLink';
 import { Mail, Phone, KeyRound, Lock, AlertCircle, ArrowRight, Loader2 } from 'lucide-react';
 import Logo from '@/components/Logo';
 
@@ -23,7 +24,7 @@ const setSessionArtifacts = (userId: string, userEmail: string) => {
 };
 
 export default function ForgotPasswordPage() {
-  const router = useRouter();
+  const router = useTenantRouter();
   const [step, setStep] = useState<Step>('email');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
@@ -335,7 +336,7 @@ export default function ForgotPasswordPage() {
           )}
 
           <div className="mt-6 text-center">
-            <a href="/login" className="text-sm text-[#8CD955] hover:underline font-medium">Voltar ao login</a>
+            <Link href="/login" className="text-sm text-[#8CD955] hover:underline font-medium">Voltar ao login</Link>
           </div>
         </div>
       </div>

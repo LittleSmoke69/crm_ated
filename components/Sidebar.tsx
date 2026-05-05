@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
-import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import React, { useEffect, useMemo, useState } from 'react';
+import { TenantLink } from '@/components/TenantLink';
+import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard,
   MessageSquare,
@@ -38,9 +38,13 @@ import {
   Headphones,
   UserPlus,
   Package,
+  Globe,
 } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import Logo from '@/components/Logo';
+import { withTenantSlug } from '@/lib/utils/tenant-href';
+import { getInternalAppPathname } from '@/lib/utils/white-label-path';
+import { useAdminTenantSwitcher } from '@/contexts/AdminTenantSwitcherContext';
 
 interface SidebarProps {
   onSignOut?: () => void;
@@ -61,7 +65,8 @@ type UserStatus = 'super_admin' | 'admin' | 'consultor' | 'gerente' | 'dono_banc
 
 const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const pathname = usePathname();
-  const router = useRouter();
+  const routePath = getInternalAppPathname(pathname);
+  const adminTenantCtx = useAdminTenantSwitcher();
   const { isMobileOpen, setIsMobileOpen, isCollapsed, setIsCollapsed } = useSidebar();
   const [userStatus, setUserStatus] = useState<UserStatus>(null);
   const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
@@ -76,16 +81,16 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
 
   // Verifica se está nas páginas que devem mostrar o botão Sair
   const shouldShowLogout =
-    pathname === '/perfil' ||
-    pathname === '/list-cleaning' ||
-    pathname === '/crm/transferido' ||
-    pathname === '/crm/avulsos' ||
-    pathname === '/anti-spam' ||
-    pathname === '/admin' ||
-    pathname?.startsWith('/admin/') ||
-    pathname?.startsWith('/gerente/zaplink') ||
-    pathname?.startsWith('/gerente/crm/lead-stock') ||
-    pathname?.startsWith('/gestor-trafego/zaplink') ||
+    routePath === '/perfil' ||
+    routePath === '/list-cleaning' ||
+    routePath === '/crm/transferido' ||
+    routePath === '/crm/avulsos' ||
+    routePath === '/anti-spam' ||
+    routePath === '/admin' ||
+    routePath?.startsWith('/admin/') ||
+    routePath?.startsWith('/gerente/zaplink') ||
+    routePath?.startsWith('/gerente/crm/lead-stock') ||
+    routePath?.startsWith('/gestor-trafego/zaplink') ||
     onSignOut !== undefined;
 
   // Função de logout padrão
@@ -95,7 +100,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
       sessionStorage.removeItem('profile_id');
       localStorage.removeItem('profile_id');
       document.cookie = 'user_id=; Path=/; Max-Age=0; SameSite=Lax';
-      window.location.href = '/login';
+      window.location.href = withTenantSlug('/login');
     }
   };
 
@@ -109,7 +114,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
     if (!adminId) {
       sessionStorage.removeItem('admin_original_id');
       sessionStorage.removeItem('admin_original_email');
-      window.location.href = '/admin/login';
+      window.location.href = withTenantSlug('/admin/login');
       return;
     }
     // Limpa sessão atual (usuário impersonado)
@@ -132,10 +137,13 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
     document.cookie = `user_id=${encodeURIComponent(adminId)}; Path=/; SameSite=Lax;${secureAttr}`;
     sessionStorage.removeItem('admin_original_id');
     sessionStorage.removeItem('admin_original_email');
-    window.location.href = '/admin';
+    window.location.href = withTenantSlug('/admin');
   };
 
   const [dynamicSidebar, setDynamicSidebar] = useState<{ items: MenuItem[]; useLegacy: boolean } | null>(null);
+  /** Evita exibir o menu fallback e depois o menu completo (efeito “piscando”). */
+  const [profileReady, setProfileReady] = useState(false);
+  const [sidebarReady, setSidebarReady] = useState(false);
 
   const iconMap: Record<string, any> = {
     LayoutDashboard, MessageSquare, Rocket, Users, Plus, Shield, Webhook, Workflow, Bot, Layout,
@@ -145,19 +153,20 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
 
   useEffect(() => {
     const loadUserProfile = async () => {
-      if (typeof window === 'undefined') return;
-      
-      const userId = sessionStorage.getItem('user_id') || 
-                     sessionStorage.getItem('profile_id') || 
-                     window.localStorage.getItem('profile_id');
-      
-      if (!userId) {
-        setUserStatus(null);
-        setDynamicSidebar(null);
-        return;
-      }
-
       try {
+        if (typeof window === 'undefined') return;
+
+        const userId =
+          sessionStorage.getItem('user_id') ||
+          sessionStorage.getItem('profile_id') ||
+          window.localStorage.getItem('profile_id');
+
+        if (!userId) {
+          setUserStatus(null);
+          setDynamicSidebar(null);
+          return;
+        }
+
         const response = await fetch('/api/user/profile', {
           method: 'GET',
           headers: {
@@ -169,19 +178,22 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
 
         if (response.ok) {
           const text = await response.text();
-          if (!text.trim()) return;
-          try {
-            const result = JSON.parse(text);
-            if (result.success && result.data?.status) {
-              setUserStatus(result.data.status as UserStatus);
+          if (text.trim()) {
+            try {
+              const result = JSON.parse(text);
+              if (result.success && result.data?.status) {
+                setUserStatus(result.data.status as UserStatus);
+              }
+            } catch {
+              // resposta inválida
             }
-          } catch {
-            // resposta vazia ou inválida
           }
         }
       } catch (error) {
         console.error('Erro ao carregar perfil:', error);
         setUserStatus(null);
+      } finally {
+        setProfileReady(true);
       }
     };
 
@@ -189,10 +201,29 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   }, []);
 
   useEffect(() => {
-    const loadSidebar = async () => {
-      if (typeof window === 'undefined' || !userStatus) return;
-      const userId = sessionStorage.getItem('user_id') || sessionStorage.getItem('profile_id') || localStorage.getItem('profile_id');
-      if (!userId) return;
+    if (!profileReady) return;
+
+    let cancelled = false;
+
+    const loadSidebarConfig = async () => {
+      if (typeof window === 'undefined') return;
+
+      if (!userStatus) {
+        setSidebarReady(true);
+        return;
+      }
+
+      setSidebarReady(false);
+
+      const userId =
+        sessionStorage.getItem('user_id') ||
+        sessionStorage.getItem('profile_id') ||
+        localStorage.getItem('profile_id');
+      if (!userId) {
+        setSidebarReady(true);
+        return;
+      }
+
       try {
         const res = await fetch('/api/zaploto/sidebar', { headers: { 'X-User-Id': userId }, credentials: 'include' });
         const text = await res.text();
@@ -201,12 +232,18 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
           try {
             json = JSON.parse(text);
           } catch {
-            setDynamicSidebar({ items: [], useLegacy: true });
-            return;
+            if (!cancelled) setDynamicSidebar({ items: [], useLegacy: true });
+            json = {};
           }
         }
+        if (cancelled) return;
         if (json.success && !json.data?.useLegacy && Array.isArray(json.data?.items) && json.data.items.length > 0) {
-          const toMenuItem = (it: { label: string; href?: string | null; icon_name?: string | null; submenu?: { label: string; href?: string | null; icon_name?: string | null }[] }): MenuItem => {
+          const toMenuItem = (it: {
+            label: string;
+            href?: string | null;
+            icon_name?: string | null;
+            submenu?: { label: string; href?: string | null; icon_name?: string | null }[];
+          }): MenuItem => {
             const Icon = (it.icon_name && iconMap[it.icon_name]) || LayoutDashboard;
             const sub = it.submenu?.map((s: { label: string; href?: string | null; icon_name?: string | null }) => ({
               href: s.href || '/',
@@ -220,11 +257,11 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
               submenu: sub,
             };
           };
-          let items = json.data.items.map((it: unknown) => toMenuItem(it as Parameters<typeof toMenuItem>[0]));
+          let items = json.data!.items.map((it: unknown) => toMenuItem(it as Parameters<typeof toMenuItem>[0]));
           /** Garante Estoque de leads para gerente/super_admin quando o tenant ainda não tem o item na sidebar inteligente */
           if (userStatus === 'gerente' || userStatus === 'super_admin' || userStatus === 'admin') {
-            const hasLeadStock = items.some((it) =>
-              typeof it.href === 'string' && it.href.includes('/gerente/crm/lead-stock-transfer')
+            const hasLeadStock = items.some(
+              (it) => typeof it.href === 'string' && it.href.includes('/gerente/crm/lead-stock-transfer')
             );
             if (!hasLeadStock) {
               const gestIdx = items.findIndex((it) => it.href === '/gerente');
@@ -237,11 +274,17 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
           setDynamicSidebar({ items: [], useLegacy: true });
         }
       } catch {
-        setDynamicSidebar({ items: [], useLegacy: true });
+        if (!cancelled) setDynamicSidebar({ items: [], useLegacy: true });
+      } finally {
+        if (!cancelled) setSidebarReady(true);
       }
     };
-    loadSidebar();
-  }, [userStatus]);
+
+    loadSidebarConfig();
+    return () => {
+      cancelled = true;
+    };
+  }, [profileReady, userStatus]);
 
   const toggleSubmenu = (label: string) => {
     setOpenSubmenu(openSubmenu === label ? null : label);
@@ -253,6 +296,11 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const itemMaturador: MenuItem = { href: '/maturador', icon: FlaskConical, label: 'Maturador' };
   const itemProfile: MenuItem = { href: '/perfil', icon: User, label: 'Meu Perfil' };
   const itemPainelAdmin: MenuItem = { href: '/admin', icon: Shield, label: 'Painel Admin' };
+  const itemWhiteLabelAdmin: MenuItem = {
+    href: '/admin/zaploto',
+    icon: Globe,
+    label: 'White Label',
+  };
   const itemWebhooks: MenuItem = {
     label: 'Integrações',
     icon: Webhook,
@@ -337,11 +385,13 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const getMenuItems = (): MenuItem[] => {
     // 👑 SuperAdmin - vê tudo
     if (userStatus === 'super_admin') {
+      const wlActive = !!adminTenantCtx?.selectedTenantId;
       return [
         itemDashboard,
         itemInstances,
         itemMaturador,
         itemPainelAdmin,
+        ...(wlActive ? [itemWhiteLabelAdmin] : []),
         itemHierarquia,
         itemWebhooks,
         itemFlows,
@@ -530,49 +580,56 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
     ];
   };
 
-  const menuItems = (dynamicSidebar && !dynamicSidebar.useLegacy && dynamicSidebar.items.length > 0)
-    ? dynamicSidebar.items
-    : getMenuItems();
+  const menuItems = useMemo(
+    () =>
+      dynamicSidebar && !dynamicSidebar.useLegacy && dynamicSidebar.items.length > 0
+        ? dynamicSidebar.items
+        : getMenuItems(),
+    [dynamicSidebar, userStatus]
+  );
+
+  const menuReady = profileReady && sidebarReady;
 
   // Abrir o submenu se algum item dele estiver ativo
   useEffect(() => {
+    if (!menuReady) return;
     const activeSubmenu = menuItems.find(item => 
       item.submenu?.some(sub => isActive(sub.href))
     );
     if (activeSubmenu) {
       setOpenSubmenu(activeSubmenu.label);
     }
-  }, [pathname, userStatus]);
+  }, [pathname, routePath, userStatus, menuReady, menuItems]);
 
   // Limpa o loading quando a rota mudar para a página desejada
   useEffect(() => {
-    if (loadingRoute && pathname === loadingRoute) {
+    if (loadingRoute && routePath === loadingRoute) {
       // Pequeno delay para garantir que a página começou a carregar
       const timer = setTimeout(() => {
         setLoadingRoute(null);
       }, 500);
       return () => clearTimeout(timer);
     }
-  }, [pathname, loadingRoute]);
+  }, [routePath, loadingRoute]);
 
   const isActive = (href: string) => {
     if (href === '/') {
-      return pathname === '/';
+      return routePath === '/';
     }
     // Para /admin, só destaca se for exatamente /admin (não /admin/...)
     if (href === '/admin') {
-      return pathname === '/admin';
+      return routePath === '/admin';
     }
     // Para /gerente, só destaca na página principal (não em /gerente/zaplink, etc.)
     if (href === '/gerente') {
-      return pathname === '/gerente';
+      return routePath === '/gerente';
     }
     // Para /gestor-trafego, só destaca na página principal (não em /gestor-trafego/zaplink, etc.)
     if (href === '/gestor-trafego') {
-      return pathname === '/gestor-trafego';
+      return routePath === '/gestor-trafego';
     }
     // Para outros paths, verifica se começa com o href
-    return pathname?.startsWith(href);
+    return routePath.startsWith(href);
   };
 
   return (
@@ -638,7 +695,40 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
             className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain p-2 space-y-1"
             aria-label="Menu principal"
           >
-            {menuItems.map((item) => {
+            {!menuReady ? (
+              <div
+                className="flex flex-col gap-1 py-1"
+                aria-busy="true"
+                aria-live="polite"
+              >
+                {Array.from({ length: 8 }).map((_, i) => (
+                  <div
+                    key={i}
+                    className={`flex items-center gap-3 px-3 py-2.5 rounded-lg min-h-[44px] ${
+                      isMobileOpen || !isCollapsed ? 'justify-start' : 'justify-center'
+                    }`}
+                  >
+                    <div
+                      className="shrink-0 rounded-xl bg-gray-300/70 dark:bg-[#3a3a3d] animate-pulse motion-reduce:animate-none motion-reduce:opacity-50"
+                      style={{
+                        width: '2.5rem',
+                        height: '2.5rem',
+                        animationDelay: `${i * 85}ms`,
+                      }}
+                      aria-hidden
+                    />
+                    {(isMobileOpen || !isCollapsed) && (
+                      <div
+                        className="h-3.5 flex-1 rounded-md bg-gray-300/60 dark:bg-[#353538] animate-pulse motion-reduce:animate-none motion-reduce:opacity-40 max-w-[min(168px,72%)]"
+                        style={{ animationDelay: `${i * 85 + 45}ms` }}
+                        aria-hidden
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              menuItems.map((item) => {
               const Icon = item.icon;
               const hasSubmenu = !!item.submenu;
               const isExpanded = openSubmenu === item.label;
@@ -686,7 +776,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
                           const subHref = sub.href ?? '/';
                           const subActive = isActive(subHref);
                           return (
-                            <Link
+                            <TenantLink
                               key={subHref || sub.label}
                               href={subHref}
                               onClick={() => {
@@ -705,7 +795,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
                             >
                               {SubIcon && <SubIcon className="w-4 h-4 flex-shrink-0" />}
                               <span className="text-sm whitespace-nowrap">{sub.label}</span>
-                            </Link>
+                            </TenantLink>
                           );
                         })}
                       </div>
@@ -721,7 +811,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
               const isLoadingGestorTrafego = loadingRoute === '/gestor-trafego';
 
               return (
-                <Link
+                <TenantLink
                   key={item.href || item.label}
                   href={item.href || '#'}
                   prefetch={item.href === '/admin' ? false : undefined}
@@ -733,7 +823,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
                     if ((isDonoBancaLink || isGestorTrafegoLink) && item.href) {
                       setLoadingRoute(item.href);
                       setTimeout(() => {
-                        if (pathname === item.href) {
+                        if (routePath === item.href) {
                           setLoadingRoute(null);
                         }
                       }, 5000);
@@ -756,9 +846,10 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
                   {(isMobileOpen || !isCollapsed) && (
                     <span className="font-medium whitespace-nowrap">{item.label}</span>
                   )}
-                </Link>
+                </TenantLink>
               );
-            })}
+            })
+            )}
           </nav>
 
           {/* Voltar ao admin (quando está acessando conta de outro usuário) */}

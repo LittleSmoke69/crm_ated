@@ -8,9 +8,12 @@ import { evolutionApiSelector } from '@/lib/services/evolution-api-selector';
 import { getSubordinates } from '@/lib/middleware/permissions';
 import {
   EVOLUTION_INSTANCE_WEBHOOK_EVENTS,
-  ZAPLOTO_EVOLUTION_PROD_WEBHOOK_URL,
+  buildEvolutionProdWebhookUrlFromBase,
+  resolvePublicBaseUrlForWebhooks,
   shouldConfigureMasterChatWebhook,
 } from '@/lib/server/evolution-chat-webhook-config';
+import { getUserProfile } from '@/lib/middleware/permissions';
+import { getEffectiveZaplotoId } from '@/lib/tenant-context';
 
 /**
  * GET /api/instances - Lista instâncias do usuário
@@ -21,15 +24,24 @@ export async function GET(req: NextRequest) {
   try {
     const { userId } = await requireAuth(req);
 
-    // Verifica o status do usuário
-    const { data: profile } = await supabaseServiceRole
-      .from('profiles')
-      .select('status')
-      .eq('id', userId)
-      .single();
+    const fullProfile = await getUserProfile(userId);
+    if (!fullProfile) {
+      return errorResponse('Perfil não encontrado', 404);
+    }
 
-    const userStatus = profile?.status;
-    const isAdmin = userStatus === 'admin' || userStatus === 'super_admin';
+    const effectiveZaplotoId = await getEffectiveZaplotoId(req, fullProfile);
+
+    const { data: shareRowsForMe } = await supabaseServiceRole
+      .from('evolution_instance_shared_users')
+      .select('evolution_instance_id')
+      .eq('user_id', userId);
+    const sharedWithMeIds = new Set(
+      (shareRowsForMe || []).map((r: { evolution_instance_id: string }) => r.evolution_instance_id)
+    );
+
+    const userStatus = fullProfile.status;
+    const isSuperAdmin = userStatus === 'super_admin';
+    const isAdmin = userStatus === 'admin' || isSuperAdmin;
     const isDonoBanca = userStatus === 'dono_banca';
     const isGerente = userStatus === 'gerente';
 
@@ -48,7 +60,8 @@ export async function GET(req: NextRequest) {
       const subordinateIds = subordinates.map(s => s.id);
       allowedUserIds = [userId, ...subordinateIds];
     }
-    // Se for admin, não filtra por user_id (mostra todas)
+    // Se for admin (não super), não filtra por user_id — todas as instâncias do tenant
+    // Se for super_admin, não filtra por user_id nem por tenant — visão global
     // Se for consultor, usa apenas o próprio userId (já definido acima)
     
     // Query base SEM !inner para garantir LEFT JOIN e retornar TODAS as instâncias
@@ -75,17 +88,20 @@ export async function GET(req: NextRequest) {
         )
       `);
 
-    // Aplica filtro de user_id baseado no tipo de usuário
-    // IMPORTANTE: Mostra TODAS as instâncias do Owner (user_id), independente de:
-    // - Status (conectada ok / desconectada)
-    // - API bloqueada ou não (is_blocked_for_instances)
-    // - Apenas filtra por user_id/Owner para mostrar apenas as instâncias do usuário
+    if (!isSuperAdmin) {
+      query = query.eq('zaploto_id', effectiveZaplotoId);
+    }
+
+    // Aplica filtro de user_id + instâncias compartilhadas com este usuário (mesmo WL)
     if (isAdmin) {
-      // Admin vê todas as instâncias - sem filtro de user_id
+      // Admin vê todas as instâncias do tenant — sem filtro de user_id; super_admin vê todos os tenants
     } else {
-      // Outros usuários veem APENAS suas instâncias + subordinados (se aplicável)
-      // Inclui TODAS as instâncias deles: conectadas, desconectadas, bloqueadas, etc.
-      query = query.in('user_id', allowedUserIds);
+      const sharedIdArr = Array.from(sharedWithMeIds);
+      const orParts: string[] = [`user_id.in.(${allowedUserIds.join(',')})`];
+      if (sharedIdArr.length > 0) {
+        orParts.push(`id.in.(${sharedIdArr.join(',')})`);
+      }
+      query = query.or(orParts.join(','));
     }
 
     const { data, error } = await query.order('created_at', { ascending: false });
@@ -99,7 +115,7 @@ export async function GET(req: NextRequest) {
       // Independente de estarem conectadas, desconectadas ou bloqueadas
       // is_active=false = registro arquivado (não uso para “caiu”); desconexão usa status
       const filteredData = (data || []).filter((inst: any) => 
-        inst.is_active === true
+        inst.is_active !== false
       );
       
       // Converte para formato compatível com o frontend
@@ -138,6 +154,9 @@ export async function GET(req: NextRequest) {
         const instanceData = {
           id: inst.id,
           instance_name: inst.instance_name,
+          shared_with_me:
+            Boolean(inst.id && sharedWithMeIds.has(inst.id)) &&
+            String(inst.user_id ?? '') !== userId,
           status: frontendStatus,
           number: inst.phone_number,
           created_at: inst.created_at,
@@ -205,24 +224,20 @@ export async function POST(req: NextRequest) {
       return errorResponse(authError?.message || 'Erro de autenticação', 401);
     }
 
-    // Passo 2: Verifica se o usuário é admin
-    let isAdmin = false;
-    try {
-      const { data: profile, error: profileError } = await supabaseServiceRole
-        .from('profiles')
-        .select('status')
-        .eq('id', userId)
-        .single();
+    const fullProfile = await getUserProfile(userId);
+    if (!fullProfile) {
+      return errorResponse('Perfil não encontrado', 404);
+    }
+    const effectiveZaplotoId = await getEffectiveZaplotoId(req, fullProfile);
 
-      if (profileError) {
-        console.error('❌ [INSTÂNCIA] Erro ao buscar perfil do usuário:', profileError);
-        return errorResponse(`Erro ao verificar perfil do usuário: ${profileError.message}`, 500);
-      }
-
-      isAdmin = profile?.status === 'admin';
-    } catch (profileErr: any) {
-      console.error('❌ [INSTÂNCIA] Erro ao verificar perfil:', profileErr);
-      return errorResponse('Erro ao verificar perfil do usuário', 500);
+    let tenantSlugForWebhook: string | null = null;
+    if (effectiveZaplotoId) {
+      const { data: tenantRow } = await supabaseServiceRole
+        .from('zaploto_tenants')
+        .select('slug')
+        .eq('id', effectiveZaplotoId)
+        .maybeSingle();
+      tenantSlugForWebhook = tenantRow?.slug?.trim().toLowerCase() ?? null;
     }
 
     // Passo 3: Parse do body
@@ -261,6 +276,7 @@ export async function POST(req: NextRequest) {
       .from('evolution_instances')
       .select('id, instance_name, is_active, evolution_api_id')
       .eq('instance_name', instanceName)
+      .eq('zaploto_id', effectiveZaplotoId)
       .eq('is_active', true) // Verifica apenas instâncias ativas
       .maybeSingle();
 
@@ -326,12 +342,20 @@ export async function POST(req: NextRequest) {
     const normalizedBaseUrl = normalizeBaseUrl(selectedApi.base_url);
 
     /**
-     * Instância mestre: webhook aponta para produção Zaploto (`/api/webhooks/evolution/prod`),
+     * Instância mestre: webhook aponta para `/api/webhooks/evolution/prod` ou `/{slug}/api/...` em WL,
      * salvo skip por env (shouldConfigureChatWebhook).
      */
     let masterChatWebhookUrl: string | null = null;
     if (shouldConfigureChatWebhook) {
-      masterChatWebhookUrl = ZAPLOTO_EVOLUTION_PROD_WEBHOOK_URL;
+      const publicBase =
+        resolvePublicBaseUrlForWebhooks(req) ||
+        process.env.NEXT_PUBLIC_APP_URL?.trim()?.replace(/\/+$/, '') ||
+        process.env.NEXT_PUBLIC_WEBHOOK_BASE_URL?.trim()?.replace(/\/+$/, '') ||
+        'https://zaploto.com';
+      masterChatWebhookUrl = buildEvolutionProdWebhookUrlFromBase(
+        publicBase,
+        tenantSlugForWebhook
+      );
     }
 
     // Cria instância na Evolution API selecionada pelo balanceador
@@ -596,6 +620,7 @@ export async function POST(req: NextRequest) {
         .select('id')
         .eq('evolution_api_id', apiRecord.id)
         .eq('instance_name', instanceName)
+        .eq('zaploto_id', effectiveZaplotoId)
         .single();
 
       if (checkError && checkError.code !== 'PGRST116') { // PGRST116 = nenhum resultado encontrado (não é erro)
@@ -657,6 +682,7 @@ export async function POST(req: NextRequest) {
           error_today: 0,
           rate_limit_count_today: 0,
           user_id: userId, // Vincula a instância ao usuário que criou
+          zaploto_id: effectiveZaplotoId,
           apikey: instanceHash, // CRÍTICO: Salva o hash da instância (que é usado como apikey nos requests)
           is_master: isMaster === true, // Marca como instância mestre se solicitado
           maturation_type: maturationTypeValue, // virgem = auto maturação 5 dias; maturado = fluxo normal

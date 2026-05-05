@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useTenantRouter } from '@/lib/utils/tenant-href';
 import { VslContentRenderer } from '@/components/vsl/VslContentRenderer';
 import type { VslContentRoot } from '@/lib/vsl/runtime/types';
 import { buildVslRedirectHref } from '@/lib/vsl/runtime/redirect-url';
@@ -51,7 +51,7 @@ export function VslPageClientBlocks({
   videoScriptSrc,
   content,
 }: VslPageClientBlocksProps) {
-  const router = useRouter();
+  const router = useTenantRouter();
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [ctaVisible, setCtaVisible] = useState(ctaDelaySeconds === 0 && ctaMinWatchPercent === 0);
   const delayDone = useRef(false);

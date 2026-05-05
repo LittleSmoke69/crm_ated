@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { withTenantSlug } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import AtendimentoChatInstancesPanel from '@/components/atendimento-chat/AtendimentoChatInstancesPanel';
@@ -15,7 +16,7 @@ export default function GerenteAtendimentoChatPage() {
       window.localStorage.removeItem('profile_id');
       document.cookie = 'user_id=; Path=/; Max-Age=0; SameSite=Lax';
     }
-    window.location.href = '/login';
+    window.location.href = withTenantSlug('/login');
   };
 
   if (checking || !userId) {

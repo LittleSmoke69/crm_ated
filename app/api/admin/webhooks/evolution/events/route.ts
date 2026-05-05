@@ -22,6 +22,7 @@ export async function GET(req: NextRequest) {
   try {
     await requireSuperAdmin(req);
     const { searchParams } = req.nextUrl;
+    const tenantScope = req.headers.get('x-zaploto-id')?.trim() || null;
 
     const env = searchParams.get('env');
     const eventType = searchParams.get('event_type');
@@ -40,6 +41,9 @@ export async function GET(req: NextRequest) {
       if (env && (env === 'prod' || env === 'test')) {
         queryById = queryById.eq('env', env);
       }
+      if (tenantScope) {
+        queryById = queryById.eq('zaploto_id', tenantScope);
+      }
 
       const { data: event, error: eventError } = await queryById.single();
 
@@ -50,9 +54,11 @@ export async function GET(req: NextRequest) {
       return successResponse([event]);
     }
 
+    // `exact` força COUNT(*) completo — em evolution_webhook_events grande estoura statement_timeout (57014).
+    // `estimated` usa contagem exata para poucos resultados e plano estimado para volumes altos.
     let query = supabaseServiceRole
       .from('evolution_webhook_events')
-      .select('*', { count: 'exact' });
+      .select('*', { count: 'estimated' });
 
     // Filtros
     if (env && (env === 'prod' || env === 'test')) {
@@ -70,6 +76,10 @@ export async function GET(req: NextRequest) {
 
     if (q) {
       query = query.or(`instance_name.ilike.%${q}%,remote_jid.ilike.%${q}%,message_id.ilike.%${q}%`);
+    }
+
+    if (tenantScope) {
+      query = query.eq('zaploto_id', tenantScope);
     }
 
     // Ordenação (mais recentes primeiro)

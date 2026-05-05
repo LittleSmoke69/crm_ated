@@ -20,7 +20,7 @@ export async function POST(req: NextRequest) {
       return errorResponse('instanceName e groups (array) são obrigatórios', 400);
     }
 
-    const hasAccess = await checkInstanceAccess(userId, instanceName);
+    const hasAccess = await checkInstanceAccess(req, userId, instanceName);
     if (!hasAccess) {
       return errorResponse('Acesso negado a esta instância.', 403);
     }

@@ -3,8 +3,9 @@
 import { useEffect, useState } from 'react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { useParams, useRouter } from 'next/navigation';
-import Link from 'next/link';
+import { useParams } from 'next/navigation';
+import { useTenantRouter } from '@/lib/utils/tenant-href';
+import Link from '@/components/WhitelabelLink';
 import { Save, Loader2, FileVideo, Upload, ArrowLeft, Eye, EyeOff, CheckCircle2, ImageIcon } from 'lucide-react';
 import { getStoredUserId } from '@/lib/utils/stored-user-id';
 
@@ -21,7 +22,7 @@ type Module = {
 
 export default function AdminAcademyModuloEditPage() {
   const params = useParams();
-  const router = useRouter();
+  const router = useTenantRouter();
   const id = params.id as string;
   const { checking, userId } = useRequireAuth();
   const [module, setModule] = useState<Module | null>(null);

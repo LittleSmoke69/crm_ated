@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { requireSuperAdmin } from '@/lib/middleware/auth';
 import { successResponse, errorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { normalizeThemeColorsInput } from '@/lib/constants/tenant-theme-map';
 
 /**
  * POST /api/admin/zaploto/tenants/create - Cria novo tenant (white label)
@@ -30,6 +31,7 @@ export async function POST(req: NextRequest) {
         app_title: body.app_title?.trim() || name,
         support_email: body.support_email?.trim() || null,
         is_active: body.is_active !== false,
+        theme_colors: normalizeThemeColorsInput(body.theme_colors),
       })
       .select()
       .single();

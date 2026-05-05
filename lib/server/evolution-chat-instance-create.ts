@@ -3,6 +3,7 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import {
   EVOLUTION_INSTANCE_WEBHOOK_EVENTS,
   ZAPLOTO_EVOLUTION_PROD_WEBHOOK_URL,
+  buildEvolutionProdWebhookUrlFromBase,
 } from '@/lib/server/evolution-chat-webhook-config';
 
 export type CreateEvolutionChatInstanceInput = {
@@ -86,7 +87,27 @@ export async function createEvolutionChatInstance(
     };
   }
 
-  const webhookUrl = ZAPLOTO_EVOLUTION_PROD_WEBHOOK_URL;
+  const publicBase =
+    process.env.NEXT_PUBLIC_APP_URL?.trim()?.replace(/\/+$/, '') ||
+    process.env.NEXT_PUBLIC_WEBHOOK_BASE_URL?.trim()?.replace(/\/+$/, '') ||
+    (() => {
+      try {
+        return new URL(ZAPLOTO_EVOLUTION_PROD_WEBHOOK_URL).origin;
+      } catch {
+        return 'https://zaploto.com';
+      }
+    })();
+
+  let tenantSlug: string | null = null;
+  if (zaplotoId) {
+    const { data: trow } = await supabaseServiceRole
+      .from('zaploto_tenants')
+      .select('slug')
+      .eq('id', zaplotoId)
+      .maybeSingle();
+    tenantSlug = trow?.slug?.trim().toLowerCase() ?? null;
+  }
+  const webhookUrl = buildEvolutionProdWebhookUrlFromBase(publicBase, tenantSlug);
   const instanceToken = randomUUID();
 
   const createBody = {

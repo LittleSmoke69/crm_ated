@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from 'react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import Link from 'next/link';
+import Link from '@/components/WhitelabelLink';
 import { Upload, Loader2, FileText, Image as ImageIcon, FileSpreadsheet, File, ArrowLeft, ExternalLink, CheckCircle2, AlertCircle } from 'lucide-react';
 import { getStoredUserId } from '@/lib/utils/stored-user-id';
 

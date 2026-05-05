@@ -1,7 +1,10 @@
 import { NextRequest } from 'next/server';
 import bcrypt from 'bcryptjs';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { getTenantByIdOrSlug } from '@/lib/services/zaploto-tenant-service';
 import { successResponse, errorResponse } from '@/lib/utils/response';
+
+const DEFAULT_ZAPLOTO_ID = '00000000-0000-0000-0000-000000000001';
 
 /**
  * POST /api/auth/login
@@ -13,6 +16,10 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
     const password = typeof body.password === 'string' ? body.password : '';
+    const tenantSlug =
+      typeof body.tenantSlug === 'string'
+        ? body.tenantSlug.trim().toLowerCase()
+        : '';
 
     if (!email || !password) {
       return errorResponse('Email e senha são obrigatórios.', 400);
@@ -20,7 +27,7 @@ export async function POST(req: NextRequest) {
 
     const { data: user, error } = await supabaseServiceRole
       .from('profiles')
-      .select('id, email, password_hash, status')
+      .select('id, email, password_hash, status, zaploto_id')
       .eq('email', email)
       .single();
 
@@ -34,6 +41,19 @@ export async function POST(req: NextRequest) {
       return errorResponse('Credenciais inválidas.', 401);
     }
 
+    if (tenantSlug) {
+      const tenant = await getTenantByIdOrSlug(tenantSlug);
+      if (!tenant) {
+        return errorResponse('Credenciais inválidas para este painel.', 403);
+      }
+      const profileZaplotoId =
+        (user.zaploto_id as string | null | undefined)?.trim() || DEFAULT_ZAPLOTO_ID;
+      const role = user.status as string | null | undefined;
+      if (role !== 'super_admin' && profileZaplotoId !== tenant.id) {
+        return errorResponse('Credenciais inválidas para este painel.', 403);
+      }
+    }
+
     // Atualiza último login (ignora erro para não falhar o login)
     await supabaseServiceRole
       .from('profiles')
@@ -45,6 +65,8 @@ export async function POST(req: NextRequest) {
       userId: user.id,
       email: user.email,
       status: user.status ?? null,
+      zaploto_id:
+        (user.zaploto_id as string | null | undefined)?.trim() || DEFAULT_ZAPLOTO_ID,
     });
   } catch (err) {
     console.error('[Auth Login] Erro:', err);

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { withTenantSlug } from '@/lib/utils/tenant-href';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import Layout from '@/components/Layout';
 import { useDashboardData, Contact } from '@/hooks/useDashboardData';
@@ -277,7 +278,7 @@ const ContactsPage = () => {
       window.localStorage.removeItem('profile_id');
       document.cookie = 'user_id=; Path=/; Max-Age=0; SameSite=Lax';
     }
-    window.location.href = '/login';
+    window.location.href = withTenantSlug('/login');
   };
 
   const handleDeleteContact = async (contactId: string) => {

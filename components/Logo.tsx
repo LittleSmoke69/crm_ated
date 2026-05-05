@@ -2,6 +2,8 @@
 
 import Image from 'next/image';
 import React from 'react';
+import { usePathname } from 'next/navigation';
+import { getPathnameTenantSlug } from '@/lib/utils/white-label-path';
 import { useZaplotoTenant } from '@/contexts/ZaplotoTenantContext';
 
 interface LogoProps {
@@ -13,7 +15,9 @@ const Logo: React.FC<LogoProps> = ({
   size = 'md', 
   className = '' 
 }) => {
-  const { tenant } = useZaplotoTenant();
+  const pathname = usePathname();
+  const wlSlugInUrl = pathname ? getPathnameTenantSlug(pathname) : null;
+  const { tenant, loading } = useZaplotoTenant();
   const sizeClasses = {
     sm: 'h-10 w-auto',
     md: 'h-16 w-auto',
@@ -35,8 +39,44 @@ const Logo: React.FC<LogoProps> = ({
     xl: 64,
   };
 
-  const logoSrc = tenant.logo_url || '/logo_zaploto.png';
   const altText = tenant.app_title || 'ZapLoto';
+
+  /** Na URL `/{slug}/…` nunca mostrar a logo central até termos branding WL (evita flash ZapLoto → WL). */
+  const isWlPublicUrl = !!wlSlugInUrl;
+  const showCentralFallback = !isWlPublicUrl && !tenant.logo_url;
+
+  if (isWlPublicUrl && !tenant.logo_url && loading) {
+    return (
+      <div className={`flex items-center justify-center ${className}`}>
+        <div
+          className={`${sizeClasses[size]} rounded-lg bg-gray-200 dark:bg-[#333] animate-pulse min-w-[100px]`}
+          aria-hidden
+        />
+      </div>
+    );
+  }
+
+  if (isWlPublicUrl && !tenant.logo_url && !loading) {
+    return (
+      <div className={`flex items-center justify-center ${className}`}>
+        <span className="text-lg font-semibold text-gray-700 dark:text-gray-200 px-2 text-center max-w-[14rem] leading-tight">
+          {tenant.app_title || tenant.name || wlSlugInUrl}
+        </span>
+      </div>
+    );
+  }
+
+  const logoSrc = tenant.logo_url || (showCentralFallback ? '/logo_zaploto.png' : '');
+  if (!logoSrc) {
+    return (
+      <div className={`flex items-center justify-center ${className}`}>
+        <div
+          className={`${sizeClasses[size]} rounded-lg bg-gray-200 dark:bg-[#333] animate-pulse min-w-[100px]`}
+          aria-hidden
+        />
+      </div>
+    );
+  }
 
   return (
     <div className={`flex items-center justify-center ${className}`}>

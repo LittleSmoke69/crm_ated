@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { withTenantSlug, getWlSlugHeadersForApi } from '@/lib/utils/tenant-href';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import Layout from '@/components/Layout';
 import QRCodeModal from '@/components/QRCodeModal';
@@ -27,6 +28,7 @@ import {
   Loader2,
   UserPlus,
   Ban,
+  Share2,
 } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import { supabase } from '@/lib/supabase';
@@ -171,6 +173,19 @@ const InstancesPage = () => {
   const [summaryData, setSummaryData] = useState<Array<{ instance_name: string; phone: string | null; status: string; groups_count: number }>>([]);
   const [summaryLoading, setSummaryLoading] = useState(false);
 
+  /** Modal: compartilhar instância no mesmo white label (mesmo cargo). */
+  const [shareModalInst, setShareModalInst] = useState<WhatsAppInstance | null>(null);
+  const [shareEligible, setShareEligible] = useState<{ id: string; email?: string; full_name?: string | null }[]>([]);
+  const [shareRows, setShareRows] = useState<
+    Array<{
+      id: string;
+      user_id: string;
+      profile: { email?: string; full_name?: string | null } | null;
+    }>
+  >([]);
+  const [sharePickUserId, setSharePickUserId] = useState('');
+  const [shareLoading, setShareLoading] = useState(false);
+
   // Estados para modal de telefone
   const [isPhoneModalOpen, setIsPhoneModalOpen] = useState(false);
   const [phoneValue, setPhoneValue] = useState('');
@@ -253,7 +268,11 @@ const InstancesPage = () => {
         .select('status')
         .eq('id', userId)
         .single();
-      setIsAdmin(data?.status === 'admin' || data?.status === 'super_admin');
+      setIsAdmin(
+        data?.status === 'admin' ||
+          data?.status === 'super_admin' ||
+          data?.status === 'auditoria'
+      );
       setIsConsultor(data?.status === 'consultor');
       setIsGerente(data?.status === 'gerente');
       setIsDonoBanca(data?.status === 'dono_banca');
@@ -301,6 +320,87 @@ const InstancesPage = () => {
     loadAtendimentoAssignments();
   }, [loadAtendimentoAssignments]);
 
+  const openShareModal = async (inst: WhatsAppInstance) => {
+    if (!userId || !inst.instance_name) return;
+    setShareModalInst(inst);
+    setShareLoading(true);
+    setSharePickUserId('');
+    try {
+      const enc = encodeURIComponent(inst.instance_name);
+      const [elRes, shRes] = await Promise.all([
+        fetch(`/api/instances/${enc}/share?eligible=1`, {
+          headers: { 'X-User-Id': userId, ...getWlSlugHeadersForApi() },
+          credentials: 'include',
+        }),
+        fetch(`/api/instances/${enc}/share`, {
+          headers: { 'X-User-Id': userId, ...getWlSlugHeadersForApi() },
+          credentials: 'include',
+        }),
+      ]);
+      const elJson = await elRes.json();
+      const shJson = await shRes.json();
+      setShareEligible(elJson.success && Array.isArray(elJson.data) ? elJson.data : []);
+      setShareRows(
+        shJson.success && shJson.data?.shares && Array.isArray(shJson.data.shares)
+          ? shJson.data.shares
+          : []
+      );
+    } catch {
+      setShareEligible([]);
+      setShareRows([]);
+      showToast('Erro ao carregar compartilhamentos', 'error');
+    } finally {
+      setShareLoading(false);
+    }
+  };
+
+  const addShareUser = async () => {
+    if (!userId || !shareModalInst?.instance_name || !sharePickUserId) return;
+    setShareLoading(true);
+    try {
+      const enc = encodeURIComponent(shareModalInst.instance_name);
+      const res = await fetch(`/api/instances/${enc}/share`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId, ...getWlSlugHeadersForApi() },
+        credentials: 'include',
+        body: JSON.stringify({ target_user_id: sharePickUserId }),
+      });
+      const json = await res.json();
+      if (!json.success) {
+        showToast(json.error || 'Erro ao compartilhar', 'error');
+        return;
+      }
+      showToast('Acesso compartilhado no white label', 'success');
+      await openShareModal(shareModalInst);
+      await loadInitialData();
+    } finally {
+      setShareLoading(false);
+    }
+  };
+
+  const removeShareUser = async (uid: string) => {
+    if (!userId || !shareModalInst?.instance_name) return;
+    setShareLoading(true);
+    try {
+      const enc = encodeURIComponent(shareModalInst.instance_name);
+      const res = await fetch(`/api/instances/${enc}/share?user_id=${encodeURIComponent(uid)}`, {
+        method: 'DELETE',
+        headers: { 'X-User-Id': userId, ...getWlSlugHeadersForApi() },
+        credentials: 'include',
+      });
+      const json = await res.json();
+      if (!json.success) {
+        showToast(json.error || 'Erro ao remover', 'error');
+        return;
+      }
+      showToast('Acesso removido', 'success');
+      await openShareModal(shareModalInst);
+      await loadInitialData();
+    } finally {
+      setShareLoading(false);
+    }
+  };
+
   const handleCreateInstance = async () => {
     if (!userId) { showToast('Sessão inválida', 'error'); return; }
     if (!instanceName) { showToast('Digite um nome para a instância', 'error'); return; }
@@ -317,7 +417,7 @@ const InstancesPage = () => {
 
       const response = await fetch('/api/instances', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId, ...getWlSlugHeadersForApi() },
         body: JSON.stringify({
           instanceName,
           isMaster,
@@ -598,7 +698,7 @@ const InstancesPage = () => {
     try {
       const response = await fetch(`/api/instances/${inst.instance_name}`, {
         method: 'DELETE',
-        headers: { 'X-User-Id': userId },
+        headers: { 'X-User-Id': userId, ...getWlSlugHeadersForApi() },
       });
       const data = await response.json();
       if (response.ok) {
@@ -628,6 +728,7 @@ const InstancesPage = () => {
         headers: {
           'Content-Type': 'application/json',
           'X-User-Id': userId,
+          ...getWlSlugHeadersForApi(),
         },
         body: JSON.stringify({ blocked_from_maturation: next }),
       });
@@ -657,7 +758,8 @@ const InstancesPage = () => {
         method: 'PATCH',
         headers: { 
           'Content-Type': 'application/json',
-          'X-User-Id': userId 
+          'X-User-Id': userId,
+          ...getWlSlugHeadersForApi(),
         },
         body: JSON.stringify({ phone_number: phoneValue }),
       });
@@ -796,7 +898,9 @@ const InstancesPage = () => {
     setShowSummaryModal(true);
     setSummaryLoading(true);
     try {
-      const response = await fetch('/api/instances/summary', { headers: { 'X-User-Id': userId! } });
+      const response = await fetch('/api/instances/summary', {
+        headers: { 'X-User-Id': userId!, ...getWlSlugHeadersForApi() },
+      });
       const data = await response.json();
       if (response.ok && data.success && Array.isArray(data.data)) {
         setSummaryData(data.data);
@@ -1050,7 +1154,7 @@ const InstancesPage = () => {
       window.localStorage.removeItem('profile_id');
       document.cookie = 'user_id=; Path=/; Max-Age=0; SameSite=Lax';
     }
-    window.location.href = '/login';
+    window.location.href = withTenantSlug('/login');
   };
 
   // Lógica de filtro e paginação de instâncias
@@ -1335,12 +1439,24 @@ const InstancesPage = () => {
                           });
                         }
                         
+                        const sharedMe = inst.shared_with_me === true;
+                        const isOwner = !!userId && String(inst.user_id) === String(userId);
+                        const canManageShare = !sharedMe && (isOwner || isAdmin);
+
                         return (
                           <div key={inst.id || inst.instance_name} className="p-5 border-2 border-gray-200 dark:border-[#404040] rounded-lg hover:border-[#8CD95540] dark:hover:border-[#00ff0040] hover:bg-[#8CD95515] dark:hover:bg-[#00ff0015] transition-all duration-200 bg-white dark:bg-[#333] flex flex-col h-full shadow-sm">
                             <div className="flex justify-between items-start mb-3">
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2 mb-2 flex-wrap">
                                   <span className="font-semibold text-gray-800 dark:text-white truncate">{inst.instance_name}</span>
+                                  {sharedMe && (
+                                    <span
+                                      className="px-2 py-1 rounded text-xs font-medium bg-sky-100 dark:bg-sky-900/40 text-sky-800 dark:text-sky-200 flex-shrink-0"
+                                      title="Você acessa esta instância por compartilhamento no white label (mesmo cargo)"
+                                    >
+                                      Compartilhada
+                                    </span>
+                                  )}
                                   {/* Selo Em Maturação (virgem, bloqueada) */}
                                   {(inst as any).is_locked === true && (inst as any).maturation_type === 'virgem' && (
                                     <span
@@ -1441,13 +1557,25 @@ const InstancesPage = () => {
                                 </div>
                               </div>
                               <div className="flex gap-1 flex-shrink-0 ml-2">
-                                <button
-                                  onClick={() => handleDeleteInstance(inst)}
-                                  className="p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition text-gray-400 dark:text-[#888] hover:text-red-600 dark:hover:text-red-400"
+                                {canManageShare && (
+                                  <button
+                                    type="button"
+                                    onClick={() => void openShareModal(inst)}
+                                    className="p-2 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 rounded-lg transition text-gray-400 dark:text-[#888] hover:text-emerald-600 dark:hover:text-emerald-400"
+                                    title="Compartilhar com outro usuário do mesmo white label (mesmo cargo)"
+                                  >
+                                    <Share2 className="w-4 h-4" />
+                                  </button>
+                                )}
+                                {!sharedMe && (
+                                  <button
+                                    onClick={() => handleDeleteInstance(inst)}
+                                    className="p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition text-gray-400 dark:text-[#888] hover:text-red-600 dark:hover:text-red-400"
                                     title="Deletar instância"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                )}
                               </div>
                             </div>
                             <div className="flex gap-2 mt-auto">
@@ -1483,7 +1611,7 @@ const InstancesPage = () => {
                             <button
                               type="button"
                               onClick={() => handleToggleBlockedFromMaturation(inst)}
-                              disabled={maturationBlockSaving === inst.instance_name}
+                              disabled={sharedMe || maturationBlockSaving === inst.instance_name}
                               className={`w-full h-10 px-3 mt-2 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-2 border ${
                                 blockedFromMaturation
                                   ? 'bg-violet-100 dark:bg-violet-900/35 text-violet-900 dark:text-violet-200 border-violet-300 dark:border-violet-700 hover:bg-violet-200/80 dark:hover:bg-violet-900/50'
@@ -2076,6 +2204,91 @@ const InstancesPage = () => {
                     </tbody>
                   </table>
                 </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal compartilhar instância (white label) */}
+      {shareModalInst && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-xl max-w-md w-full max-h-[85vh] overflow-hidden flex flex-col border border-gray-200 dark:border-[#404040]">
+            <div className="p-4 border-b border-gray-200 dark:border-[#404040] flex justify-between items-center">
+              <h3 className="font-semibold text-gray-900 dark:text-white text-sm sm:text-base">
+                Compartilhar &quot;{shareModalInst.instance_name}&quot;
+              </h3>
+              <button
+                type="button"
+                className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#404040] text-gray-500"
+                onClick={() => setShareModalInst(null)}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 overflow-y-auto flex-1 space-y-4 text-sm">
+              <p className="text-gray-600 dark:text-gray-400 text-xs">
+                Apenas usuários do <strong>mesmo white label</strong> e do <strong>mesmo cargo</strong> que o dono da instância (ou você, se for o dono) podem receber acesso.
+              </p>
+              {shareLoading ? (
+                <div className="flex justify-center py-6">
+                  <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Adicionar usuário</label>
+                    <div className="flex gap-2 flex-col sm:flex-row">
+                      <select
+                        value={sharePickUserId}
+                        onChange={(e) => setSharePickUserId(e.target.value)}
+                        className="flex-1 px-3 py-2 rounded-lg border border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] text-gray-900 dark:text-white text-sm"
+                      >
+                        <option value="">Selecione…</option>
+                        {shareEligible.map((u) => (
+                          <option key={u.id} value={u.id}>
+                            {(u.full_name || u.email || u.id).slice(0, 48)}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        disabled={!sharePickUserId || shareLoading}
+                        onClick={() => void addShareUser()}
+                        className="px-4 py-2 bg-[#8CD955] hover:bg-[#7BC84A] disabled:opacity-50 text-white rounded-lg font-medium text-sm"
+                      >
+                        Adicionar
+                      </button>
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium text-gray-600 dark:text-gray-400 mb-2">Quem tem acesso compartilhado</p>
+                    {shareRows.length === 0 ? (
+                      <p className="text-xs text-gray-500">Ninguém além do dono.</p>
+                    ) : (
+                      <ul className="space-y-2">
+                        {shareRows.map((row) => (
+                          <li
+                            key={row.id}
+                            className="flex justify-between items-center gap-2 py-2 border-b border-gray-100 dark:border-[#404040] last:border-0"
+                          >
+                            <span className="text-gray-800 dark:text-gray-200 truncate text-xs">
+                              {row.profile?.full_name || row.profile?.email || row.user_id}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => void removeShareUser(row.user_id)}
+                              disabled={shareLoading}
+                              className="text-xs text-red-600 dark:text-red-400 hover:underline shrink-0"
+                            >
+                              Remover
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </>
               )}
             </div>
           </div>

@@ -2,7 +2,8 @@
 
 import React, { Suspense, useState, useEffect, useCallback, useRef } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { useRouter, useParams, useSearchParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
+import { useTenantRouter } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import { useSidebar } from '@/contexts/SidebarContext';
 import { useToast } from '@/hooks/useToast';
@@ -285,7 +286,7 @@ const NODE_TEMPLATES = {
 
 function FlowEditorPageContent() {
   const { checking, userId } = useRequireAuth();
-  const router = useRouter();
+  const router = useTenantRouter();
   const params = useParams();
   const searchParams = useSearchParams();
   const flowId = params?.flowId as string;

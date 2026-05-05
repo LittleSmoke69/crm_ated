@@ -1,6 +1,7 @@
 /**
- * GET /api/admin/meta/campaign-redirect?banca_id=uuid
- * Lista redirects/VSL da banca para seleção na tabela Meta Ads.
+ * GET /api/admin/meta/campaign-redirect?owner_user_id=uuid
+ * Projetos `vsl_projects` onde `owner_user_id` = esse gestor (`profiles.status = gestor`).
+ * `redirect_slug_options`: linhas ativas de `redirect_slugs` por `project_id` (+ fallback slug do projeto).
  *
  * POST /api/admin/meta/campaign-redirect
  * Body: { banca_id, campaign_id, redirect_project_id: uuid | null, name? }
@@ -18,23 +19,153 @@ function isMissingRedirectColumnError(err: { code?: string; message?: string } |
   return err?.code === '42703' || msg.includes('redirect_project_id');
 }
 
+async function userHasBancaInUserBancas(userId: string, bancaId: string): Promise<boolean> {
+  const uid = String(userId ?? '').trim();
+  const bid = String(bancaId ?? '').trim();
+  if (!uid || !bid) return false;
+  const { data: row, error } = await supabaseServiceRole
+    .from('user_bancas')
+    .select('banca_ids')
+    .eq('user_id', uid)
+    .maybeSingle();
+  if (error || !row) return false;
+  const bids = Array.isArray((row as { banca_ids?: unknown }).banca_ids)
+    ? ((row as { banca_ids: string[] }).banca_ids ?? []).map((x) => String(x ?? '').trim())
+    : [];
+  return bids.includes(bid);
+}
+
+/** Dono do projeto é perfil `gestor` (quem cria VSL nesse papel). */
+async function isGestorProfile(userId: string): Promise<boolean> {
+  const uid = String(userId ?? '').trim();
+  if (!uid) return false;
+  const { data: row, error } = await supabaseServiceRole
+    .from('profiles')
+    .select('id')
+    .eq('id', uid)
+    .eq('status', 'gestor')
+    .maybeSingle();
+  if (error || !row) return false;
+  return true;
+}
+
+export type RedirectSlugOptionRow = {
+  project_id: string;
+  owner_user_id: string | null;
+  redirect_slug_id: string | null;
+  slug: string;
+  project_name: string | null;
+  project_slug: string | null;
+};
+
+async function buildRedirectSlugOptionsFromGestorProjects(
+  projects: Array<{ id: string; name: string | null; slug: string | null; owner_user_id?: string | null }>
+): Promise<RedirectSlugOptionRow[]> {
+  if (projects.length === 0) return [];
+
+  const projectIds = projects.map((p) => String(p.id));
+  const slugRows: Array<{ id: string; project_id: string; slug: string }> = [];
+  const CHUNK = 80;
+  for (let i = 0; i < projectIds.length; i += CHUNK) {
+    const slice = projectIds.slice(i, i + CHUNK);
+    const { data, error } = await supabaseServiceRole
+      .from('redirect_slugs')
+      .select('id, project_id, slug')
+      .in('project_id', slice)
+      .eq('is_active', true);
+    if (error) throw new Error(error.message);
+    for (const row of data ?? []) {
+      slugRows.push({
+        id: String((row as { id: string }).id),
+        project_id: String((row as { project_id: string }).project_id),
+        slug: String((row as { slug: string }).slug),
+      });
+    }
+  }
+
+  const byProject = new Map<string, typeof slugRows>();
+  for (const s of slugRows) {
+    const list = byProject.get(s.project_id) ?? [];
+    list.push(s);
+    byProject.set(s.project_id, list);
+  }
+
+  const options: RedirectSlugOptionRow[] = [];
+  for (const p of projects) {
+    const pid = String(p.id);
+    const ownerUid = p.owner_user_id != null ? String(p.owner_user_id).trim() : null;
+    const rows = (byProject.get(pid) ?? []).slice().sort((a, b) => a.slug.localeCompare(b.slug, 'pt-BR'));
+    const pname = p.name ?? null;
+    const pslug = p.slug ?? null;
+    if (rows.length > 0) {
+      for (const rs of rows) {
+        options.push({
+          owner_user_id: ownerUid,
+          redirect_slug_id: rs.id,
+          project_id: pid,
+          slug: rs.slug,
+          project_name: pname,
+          project_slug: pslug,
+        });
+      }
+    } else {
+      options.push({
+        owner_user_id: ownerUid,
+        redirect_slug_id: null,
+        project_id: pid,
+        slug: String(pslug ?? '').trim() || 'redirect',
+        project_name: pname,
+        project_slug: pslug,
+      });
+    }
+  }
+
+  options.sort((a, b) => {
+    const na = `${a.project_name ?? ''} ${a.slug}`.toLocaleLowerCase('pt-BR');
+    const nb = `${b.project_name ?? ''} ${b.slug}`.toLocaleLowerCase('pt-BR');
+    return na.localeCompare(nb, 'pt-BR');
+  });
+
+  return options;
+}
+
 export async function GET(req: NextRequest) {
   try {
     await requireAdmin(req);
-    const bancaId = req.nextUrl.searchParams.get('banca_id')?.trim() || '';
-    if (!bancaId || !UUID_RE.test(bancaId)) {
-      return errorResponse('banca_id válido é obrigatório.', 400);
+    const ownerUserId = req.nextUrl.searchParams.get('owner_user_id')?.trim() || '';
+    if (!ownerUserId || !UUID_RE.test(ownerUserId)) {
+      return errorResponse('owner_user_id válido (UUID do perfil gestor) é obrigatório.', 400);
     }
 
-    const { data, error } = await supabaseServiceRole
+    const ownerIsGestor = await isGestorProfile(ownerUserId);
+    if (!ownerIsGestor) {
+      return errorResponse('owner_user_id deve ser um perfil com status «gestor».', 400);
+    }
+
+    const { data: projects, error } = await supabaseServiceRole
       .from('vsl_projects')
       .select('id, name, slug, banca_id, owner_user_id, created_at')
-      .eq('banca_id', bancaId)
+      .eq('owner_user_id', ownerUserId)
       .eq('is_active', true)
       .order('name', { ascending: true });
 
     if (error) return errorResponse(error.message, 500);
-    return successResponse({ redirects: data ?? [] });
+
+    const redirects = (projects ?? []).slice().sort((a, b) => {
+      const na = String(a.name ?? a.slug ?? '').toLocaleLowerCase('pt-BR');
+      const nb = String(b.name ?? b.slug ?? '').toLocaleLowerCase('pt-BR');
+      return na.localeCompare(nb, 'pt-BR');
+    });
+
+    let redirect_slug_options: RedirectSlugOptionRow[];
+    try {
+      redirect_slug_options = await buildRedirectSlugOptionsFromGestorProjects(redirects);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Erro ao carregar redirect_slugs.';
+      return errorResponse(msg, 500);
+    }
+
+    return successResponse({ redirects, redirect_slug_options, owner_user_id: ownerUserId });
   } catch (err: any) {
     if (err?.message?.includes('Acesso negado') || err?.message?.includes('não autenticado')) {
       return errorResponse(err.message, 403);
@@ -68,13 +199,30 @@ export async function POST(req: NextRequest) {
     if (redirectProjectId) {
       const { data: redirectProject, error: redirectErr } = await supabaseServiceRole
         .from('vsl_projects')
-        .select('id, banca_id, name, slug')
+        .select('id, banca_id, name, slug, owner_user_id')
         .eq('id', redirectProjectId)
         .maybeSingle();
       if (redirectErr) return errorResponse(redirectErr.message, 500);
       if (!redirectProject) return errorResponse('Redirect não encontrado.', 404);
-      if (String(redirectProject.banca_id ?? '') !== bancaId) {
-        return errorResponse('Este redirect não pertence à banca da campanha.', 400);
+
+      const rpBanca = String(redirectProject.banca_id ?? '').trim();
+      const ownerUidForBanca = redirectProject.owner_user_id != null ? String(redirectProject.owner_user_id) : '';
+      const bancaMatchesProject = rpBanca === bancaId;
+      const ownerLinkedToCampaignBanca =
+        ownerUidForBanca.length > 0 ? await userHasBancaInUserBancas(ownerUidForBanca, bancaId) : false;
+      if (!bancaMatchesProject && !ownerLinkedToCampaignBanca) {
+        return errorResponse(
+          'O projeto VSL não corresponde à banca da campanha e o gestor dono não tem esta banca em user_bancas.',
+          400
+        );
+      }
+
+      if (redirectProject.owner_user_id == null) {
+        return errorResponse('Só é possível vincular projetos VSL com dono (criador) definido.', 400);
+      }
+      const ownerIsGestor = await isGestorProfile(String(redirectProject.owner_user_id));
+      if (!ownerIsGestor) {
+        return errorResponse('Só é possível vincular redirects criados por perfil gestor à campanha.', 400);
       }
     }
 

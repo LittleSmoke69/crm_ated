@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { convertMetaSpendToBrl } from '@/lib/services/exchange-rate-service';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { useRouter } from 'next/navigation';
+import { useTenantRouter } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import {
   BarChart3,
@@ -350,7 +350,7 @@ function formatCostPerActionTypeCell(raw: unknown): { short: string; title: stri
 
 export default function AdminMetaPage() {
   const { checking, userId } = useRequireAuth();
-  const router = useRouter();
+  const router = useTenantRouter();
   const [bancas, setBancas] = useState<Banca[]>([]);
   /** Bancas vinculadas à integração em edição (multiseleção). */
   const [selectedBancaIds, setSelectedBancaIds] = useState<string[]>([]);
@@ -503,8 +503,19 @@ export default function AdminMetaPage() {
   const [campaignOwnerSavingKey, setCampaignOwnerSavingKey] = useState<string | null>(null);
   const [campaignRedirectDraft, setCampaignRedirectDraft] = useState<Record<string, string>>({});
   const [campaignRedirectSavingKey, setCampaignRedirectSavingKey] = useState<string | null>(null);
-  const [redirectsByBanca, setRedirectsByBanca] = useState<
-    Record<string, Array<{ id: string; name: string | null; slug: string | null; banca_id: string | null }>>
+  /** Por `owner_user_id` (gestor): opções `redirect_slugs` dos projetos desse dono. */
+  const [redirectSlugOptionsByOwner, setRedirectSlugOptionsByOwner] = useState<
+    Record<
+      string,
+      Array<{
+        project_id: string;
+        owner_user_id: string | null;
+        redirect_slug_id: string | null;
+        slug: string;
+        project_name: string | null;
+        project_slug: string | null;
+      }>
+    >
   >({});
   const [campaignKindSavingKey, setCampaignKindSavingKey] = useState<string | null>(null);
   /**
@@ -1874,24 +1885,39 @@ export default function AdminMetaPage() {
 
   useEffect(() => {
     if (!userId) return;
-    const bancaIds = Array.from(new Set((allCampaignsRows || []).map((row: any) => String(row.banca_id)).filter(Boolean)));
-    if (!bancaIds.length) return;
+    const ownerIds = new Set<string>();
+    for (const row of allCampaignsRows || []) {
+      const g = (row as { gestor_user_ids?: unknown }).gestor_user_ids;
+      if (!Array.isArray(g)) continue;
+      for (const x of g) {
+        const id = String(x ?? '').trim();
+        if (id) ownerIds.add(id);
+      }
+    }
+    if (ownerIds.size === 0) {
+      setRedirectSlugOptionsByOwner({});
+      return;
+    }
     void (async () => {
       const entries = await Promise.all(
-        bancaIds.map(async (bancaId) => {
+        [...ownerIds].map(async (ownerId) => {
           try {
-            const res = await fetch(`/api/admin/meta/campaign-redirect?banca_id=${encodeURIComponent(bancaId)}`, {
-              headers: { 'X-User-Id': userId },
-            });
+            const res = await fetch(
+              `/api/admin/meta/campaign-redirect?owner_user_id=${encodeURIComponent(ownerId)}`,
+              { headers: { 'X-User-Id': userId } }
+            );
             const data = await res.json();
-            if (!data.success) return [bancaId, []] as const;
-            return [bancaId, data.data?.redirects || []] as const;
+            if (!data.success) return [ownerId, []] as const;
+            const opts = Array.isArray(data.data?.redirect_slug_options)
+              ? data.data.redirect_slug_options
+              : [];
+            return [ownerId, opts] as const;
           } catch {
-            return [bancaId, []] as const;
+            return [ownerId, []] as const;
           }
         })
       );
-      setRedirectsByBanca(Object.fromEntries(entries));
+      setRedirectSlugOptionsByOwner(Object.fromEntries(entries));
     })();
   }, [userId, allCampaignsRows]);
 
@@ -2104,6 +2130,22 @@ export default function AdminMetaPage() {
     return m;
   }, [allCampaignsRows]);
 
+  /** Primeiro `gestor_user_ids` não vazio por banca vindo do cache `campaigns-all`. */
+  const bancaGestorUserIdsFromCampaignsCache = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const row of allCampaignsRows ?? []) {
+      const bid = String((row as any)?.banca_id ?? '').trim();
+      if (!bid || m.has(bid)) continue;
+      const g = (row as any)?.gestor_user_ids;
+      if (!Array.isArray(g)) continue;
+      const ids = Array.from(
+        new Set(g.map((x: unknown) => String(x ?? '').trim()).filter((s: string) => s.length > 0))
+      );
+      if (ids.length > 0) m.set(bid, ids);
+    }
+    return m;
+  }, [allCampaignsRows]);
+
   /** Cotação USD→BRL do último aggregate (usada só para reconversão local ao mudar moeda na linha). */
   const liveUsdBrlRate = useMemo(() => {
     const rates = liveAggregate?.exchange_rates ?? [];
@@ -2146,6 +2188,23 @@ export default function AdminMetaPage() {
         seenG.add(n);
         gestorMerged.push(n);
       }
+      const fromLiveU = (row as { gestor_user_ids?: unknown }).gestor_user_ids;
+      const fromLiveIds = Array.isArray(fromLiveU)
+        ? fromLiveU.map((x) => String(x ?? '').trim()).filter((s) => s.length > 0)
+        : [];
+      const fromDbIds = Array.isArray((dbRow as { gestor_user_ids?: unknown } | undefined)?.gestor_user_ids)
+        ? ((dbRow as { gestor_user_ids: unknown[] }).gestor_user_ids ?? [])
+            .map((x) => String(x ?? '').trim())
+            .filter((s) => s.length > 0)
+        : [];
+      const fromBancaCacheIds = bancaGestorUserIdsFromCampaignsCache.get(bancaId) ?? [];
+      const gestorUserIdsMerged: string[] = [];
+      const seenGu = new Set<string>();
+      for (const id of [...fromLiveIds, ...fromDbIds, ...fromBancaCacheIds]) {
+        if (!id || seenGu.has(id)) continue;
+        seenGu.add(id);
+        gestorUserIdsMerged.push(id);
+      }
       return {
         ...(dbRow || {}),
         id: dbRow?.id ?? campaignId,
@@ -2169,6 +2228,7 @@ export default function AdminMetaPage() {
           (dbRow?.campaign_kind as MetaCampaignKind) ||
           'normal',
         gestor_names: gestorMerged,
+        gestor_user_ids: gestorUserIdsMerged,
         reach: Number(row.reach) || 0,
         impressions: Number(row.impressions) || 0,
         clicks: Number(row.clicks) || 0,
@@ -2251,9 +2311,23 @@ export default function AdminMetaPage() {
         seenG.add(n);
         gestorMerged.push(n);
       }
+      const cacheGestorUids = Array.isArray((cacheRow as { gestor_user_ids?: unknown }).gestor_user_ids)
+        ? ((cacheRow as { gestor_user_ids: unknown[] }).gestor_user_ids ?? [])
+            .map((x) => String(x ?? '').trim())
+            .filter((s) => s.length > 0)
+        : [];
+      const fromBancaCacheUids = bancaGestorUserIdsFromCampaignsCache.get(bancaIdStr) ?? [];
+      const gestorUidsMerged: string[] = [];
+      const seenUid = new Set<string>();
+      for (const id of [...cacheGestorUids, ...fromBancaCacheUids]) {
+        if (!id || seenUid.has(id)) continue;
+        seenUid.add(id);
+        gestorUidsMerged.push(id);
+      }
       dedup.set(dedupKey, {
         ...cacheRow,
         gestor_names: gestorMerged,
+        gestor_user_ids: gestorUidsMerged,
         results_live: 0,
       });
     }
@@ -2270,6 +2344,7 @@ export default function AdminMetaPage() {
     cachedMetricRowsForCrmScope,
     scopedMetaBancaFilter,
     bancaGestorNamesFromCampaignsCache,
+    bancaGestorUserIdsFromCampaignsCache,
   ]);
 
   /**
@@ -3152,7 +3227,12 @@ export default function AdminMetaPage() {
                               <th className="px-4 py-2">Status</th>
                               <th className="px-4 py-2">Objetivo</th>
                               <th className="px-4 py-2 text-right">Orçamento diário</th>
-                              <th className="px-4 py-2">Redirect</th>
+                              <th
+                                className="px-4 py-2"
+                                title="redirect_slugs dos projetos cujo owner_user_id é um dos gestores da banca (agregado por perfil gestor, não por banca)."
+                              >
+                                Redirect
+                              </th>
                               <th className="px-4 py-2">Atribuir banca</th>
                             </tr>
                           </thead>
@@ -3191,17 +3271,73 @@ export default function AdminMetaPage() {
                               const ownerTarget = ownerOptions.some((b) => String(b.id) === String(ownerTargetRaw))
                                 ? ownerTargetRaw
                                 : sourceBancaId;
-                              const redirectOptions = redirectsByBanca[sourceBancaId] || [];
-                              const redirectTargetRaw =
-                                campaignRedirectDraft[ownerKey] ??
-                                (c.redirect_project_id ? String(c.redirect_project_id) : '');
-                              const redirectTarget = redirectOptions.some((r) => String(r.id) === String(redirectTargetRaw))
-                                ? String(redirectTargetRaw)
-                                : '';
                               const currentRedirectProject = c.redirect_project as
                                 | { id?: string; name?: string | null; slug?: string | null }
                                 | null
                                 | undefined;
+                              const gestorIdsForRedirect = Array.isArray(
+                                (c as { gestor_user_ids?: unknown }).gestor_user_ids
+                              )
+                                ? ((c as { gestor_user_ids: string[] }).gestor_user_ids ?? [])
+                                    .map((x) => String(x ?? '').trim())
+                                    .filter(Boolean)
+                                : [];
+                              const redirectOptsByKey = new Map<
+                                string,
+                                {
+                                  project_id: string;
+                                  owner_user_id: string | null;
+                                  redirect_slug_id: string | null;
+                                  slug: string;
+                                  project_name: string | null;
+                                  project_slug: string | null;
+                                }
+                              >();
+                              for (const gid of gestorIdsForRedirect) {
+                                for (const o of redirectSlugOptionsByOwner[gid] ?? []) {
+                                  const k = `${o.project_id}::${o.slug}`;
+                                  if (!redirectOptsByKey.has(k)) redirectOptsByKey.set(k, o);
+                                }
+                              }
+                              const baseRedirectOptions = Array.from(redirectOptsByKey.values()).sort((a, b) => {
+                                const na = `${a.project_name ?? ''} ${a.slug}`.toLocaleLowerCase('pt-BR');
+                                const nb = `${b.project_name ?? ''} ${b.slug}`.toLocaleLowerCase('pt-BR');
+                                return na.localeCompare(nb, 'pt-BR');
+                              });
+                              const assignedRedirectId = c.redirect_project_id ? String(c.redirect_project_id) : '';
+                              const assignedInBase = baseRedirectOptions.some(
+                                (r) => String(r.project_id) === assignedRedirectId
+                              );
+                              const redirectOptions =
+                                currentRedirectProject?.id && !assignedInBase
+                                  ? [
+                                      ...baseRedirectOptions,
+                                      {
+                                        project_id: String(currentRedirectProject.id),
+                                        owner_user_id: null,
+                                        redirect_slug_id: null,
+                                        slug: String(
+                                          currentRedirectProject.slug ?? currentRedirectProject.id
+                                        ),
+                                        project_name: currentRedirectProject.name ?? null,
+                                        project_slug: currentRedirectProject.slug ?? null,
+                                      },
+                                    ]
+                                  : baseRedirectOptions;
+                              const redirectTargetRaw =
+                                campaignRedirectDraft[ownerKey] ??
+                                (c.redirect_project_id ? String(c.redirect_project_id) : '');
+                              const redirectTarget = redirectOptions.some(
+                                (r) => String(r.project_id) === String(redirectTargetRaw)
+                              )
+                                ? String(redirectTargetRaw)
+                                : '';
+                              const firstRedirectOpt = redirectOptions.find(
+                                (o) => String(o.project_id) === redirectTarget
+                              );
+                              const redirectSelectComposite = firstRedirectOpt
+                                ? `${firstRedirectOpt.project_id}::${firstRedirectOpt.slug}`
+                                : '';
                               /** Não usar só campaign_id / id do CRM: a mesma campanha pode vir de 2 integrações Meta. */
                               const rowKey = [
                                 rowIndex,
@@ -3425,19 +3561,35 @@ export default function AdminMetaPage() {
                                       <div className="flex flex-col gap-1 min-w-[220px]">
                                         <div className="flex items-center gap-2">
                                           <select
-                                            value={redirectTarget}
-                                            onChange={(e) =>
+                                            value={redirectSelectComposite}
+                                            onChange={(e) => {
+                                              const v = e.target.value;
+                                              if (!v) {
+                                                setCampaignRedirectDraft((prev) => ({
+                                                  ...prev,
+                                                  [ownerKey]: '',
+                                                }));
+                                                return;
+                                              }
+                                              const sep = v.indexOf('::');
+                                              const pid = sep > 0 ? v.slice(0, sep) : '';
                                               setCampaignRedirectDraft((prev) => ({
                                                 ...prev,
-                                                [ownerKey]: e.target.value,
-                                              }))
-                                            }
-                                            className="px-2 py-1 rounded-lg border border-gray-200 dark:border-[#404040] text-xs text-gray-700 dark:text-gray-200 bg-white dark:bg-[#2a2a2a] max-w-[190px]"
+                                                [ownerKey]: pid,
+                                              }));
+                                            }}
+                                            className="px-2 py-1 rounded-lg border border-gray-200 dark:border-[#404040] text-xs text-gray-700 dark:text-gray-200 bg-white dark:bg-[#2a2a2a] max-w-[280px]"
                                           >
                                             <option value="">Sem redirect</option>
-                                            {redirectOptions.map((redirect) => (
-                                              <option key={redirect.id} value={redirect.id}>
-                                                {redirect.name || redirect.slug || redirect.id}
+                                            {redirectOptions.map((opt) => (
+                                              <option
+                                                key={
+                                                  opt.redirect_slug_id ?? `${opt.project_id}:${opt.slug}`
+                                                }
+                                                value={`${opt.project_id}::${opt.slug}`}
+                                              >
+                                                {(opt.project_name || opt.project_slug || opt.project_id)} · /r/
+                                                {opt.slug}
                                               </option>
                                             ))}
                                           </select>
@@ -3445,7 +3597,8 @@ export default function AdminMetaPage() {
                                             type="button"
                                             disabled={
                                               campaignRedirectSavingKey === ownerKey ||
-                                              String(redirectTarget || '') === String(c.redirect_project_id || '')
+                                              String(redirectTarget || '') ===
+                                                String(c.redirect_project_id || '')
                                             }
                                             onClick={() => handleSaveCampaignRedirect(c)}
                                             className="px-3 py-1.5 rounded-lg border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-950/40 text-xs font-medium disabled:opacity-50"
@@ -3459,7 +3612,7 @@ export default function AdminMetaPage() {
                                           </span>
                                         ) : redirectOptions.length === 0 ? (
                                           <span className="text-[11px] text-amber-600 dark:text-amber-400">
-                                            Nenhum redirect ativo nesta banca
+                                            Nenhum slug redirect do gestor (redirect_slugs) para esta banca
                                           </span>
                                         ) : null}
                                       </div>

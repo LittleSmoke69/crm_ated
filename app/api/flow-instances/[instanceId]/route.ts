@@ -30,7 +30,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ inst
 
     // Se está alterando a instância, verifica acesso
     if (instance_name && instance_name !== existing.instance_name) {
-      const hasAccess = await checkInstanceAccess(userId, instance_name);
+      const hasAccess = await checkInstanceAccess(req, userId, instance_name);
       if (!hasAccess) {
         return errorResponse('Acesso negado. Você não tem permissão para usar esta instância.', 403);
       }

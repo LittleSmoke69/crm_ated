@@ -6,12 +6,15 @@ import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { useToast } from '@/hooks/useToast';
 import ToastContainer from '@/components/Toast/ToastContainer';
-import { ArrowRightLeft, AlertCircle, Eye, RefreshCw, X, MessageSquare } from 'lucide-react';
+import { ArrowRightLeft, AlertCircle, Eye, RefreshCw, X, MessageSquare, Download } from 'lucide-react';
 import CrmSubNav from '@/components/CRM/CrmSubNav';
 import FilterBar from '@/components/CRM/FilterBar';
 import KanbanColumn from '@/components/CRM/KanbanColumn';
 import SortColumnModal from '@/components/CRM/SortColumnModal';
 import { Lead, Column, ThermalStatus } from '@/components/CRM/types';
+import { downloadLeadsCsv, canUserExportCrmLeadsCsv, firstNameFromFullName } from '@/lib/crm/export-leads-csv';
+import { buildCrmColumnLabelsMap, filterLeadsAssignedToCrmColumns } from '@/lib/crm/crm-column-export';
+import { isLeadPast90DaysInactivity } from '@/lib/crm/lead-inactivity';
 
 type SortField =
   | 'created_at'
@@ -49,8 +52,20 @@ function getMissingForNextStar(apostaEstrelas: number): number | null {
   return next ? Math.max(0, next.min - value) : null;
 }
 
+const TRANSFERIDO_CSV_COLUMN_TITLES: Record<string, string> = {
+  novo: 'Clientes cadastrados',
+  contactados: 'Clientes contactados',
+  deposito_sem_aposta: 'Com Saldo Disponível',
+  deposito_1x: '1º Depósito',
+  deposito_2x: '2º Depósito',
+  deposito_3x: 'Depositou 3x',
+  deposito_5x: 'Depositou 5x',
+  deposito_10x: 'Depositou 10x+',
+  ativo: 'Cliente ativo',
+};
+
 const TransferidoContent = () => {
-  const { checking, userId } = useRequireAuth();
+  const { checking, userId, userStatus } = useRequireAuth();
   const searchParams = useSearchParams();
   const targetUserId = searchParams.get('userId') || undefined;
   const [rawLeads, setRawLeads] = useState<Lead[]>([]);
@@ -84,6 +99,9 @@ const TransferidoContent = () => {
   /** Sinaliza que o carregamento terminou; usado para esconder o banner só após os leads aparecerem na página. */
   const [batchLoadFinished, setBatchLoadFinished] = useState(false);
   const { showToast, toasts, removeToast } = useToast();
+  const [csvConsultantFirstName, setCsvConsultantFirstName] = useState('');
+
+  const canExportLeadsCsv = canUserExportCrmLeadsCsv(userStatus);
 
   const isInitialLoadRef = useRef(true);
   /** Cancela o carregamento em background quando uma nova busca é iniciada (evita duplicação e commits obsoletos). */
@@ -97,9 +115,67 @@ const TransferidoContent = () => {
   const bancaKey = filters.banca ? (typeof filters.banca === 'object' ? filters.banca.value : filters.banca) : null;
   const dateKey = filters.date ? (typeof filters.date === 'object' ? filters.date.value : filters.date) : null;
 
+  const csvFilenameBancaLabel = useMemo(() => {
+    const b = filters.banca;
+    if (!b) return 'Todas as bancas';
+    if (typeof b === 'object') {
+      const v = (b as { value?: string }).value;
+      if (v === 'all') return 'Todas as bancas';
+      const label = (b as { label?: string }).label;
+      if (label && String(label).trim()) return String(label).trim();
+      return v && String(v).trim() ? String(v).trim() : 'Todas as bancas';
+    }
+    return String(b);
+  }, [filters.banca]);
+
   useEffect(() => {
     exclusiveBancasListRef.current = exclusiveBancasList;
   }, [exclusiveBancasList]);
+
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        if (targetUserId) {
+          const res = await fetch(`/api/admin/users/${targetUserId}`, {
+            headers: { 'X-User-Id': userId },
+            credentials: 'include',
+          });
+          const json = (await res.json()) as {
+            success?: boolean;
+            data?: { user?: { full_name?: string | null } };
+          };
+          if (cancelled) return;
+          const fn =
+            json.success && json.data?.user?.full_name != null
+              ? String(json.data.user.full_name)
+              : '';
+          setCsvConsultantFirstName(firstNameFromFullName(fn));
+          return;
+        }
+        const res = await fetch('/api/user/profile', {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+          credentials: 'include',
+        });
+        const text = await res.text();
+        if (cancelled) return;
+        if (!res.ok || !text.trim()) {
+          setCsvConsultantFirstName('');
+          return;
+        }
+        const json = JSON.parse(text) as { success?: boolean; data?: { full_name?: string | null } };
+        const fn = json.success && json.data?.full_name != null ? String(json.data.full_name) : '';
+        setCsvConsultantFirstName(firstNameFromFullName(fn));
+      } catch {
+        if (!cancelled) setCsvConsultantFirstName('');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, targetUserId]);
 
   // Só libera o banner verde após todos os leads aparecerem na página (commit + paint)
   useEffect(() => {
@@ -446,10 +522,21 @@ const TransferidoContent = () => {
     return sorted;
   };
 
-  const { columns, metrics: derivedMetrics } = useMemo(() => {
+  const { columns, metrics: derivedMetrics, filteredLeadsForCsv, crmCsvColumnLabels } = useMemo(() => {
     let formattedLeads: Lead[] = [...rawLeads];
 
     // Banca e período são filtrados na API (igual ao Kanban)
+
+    // Filtro: apenas leads em possível transferência (90+ dias) — mesmo critério do Kanban / FilterBar
+    if (filters.possivelTransferencia) {
+      const value =
+        typeof filters.possivelTransferencia === 'object'
+          ? filters.possivelTransferencia.value
+          : filters.possivelTransferencia;
+      if (value === 'only') {
+        formattedLeads = formattedLeads.filter((l) => isLeadPast90DaysInactivity(l));
+      }
+    }
 
     // Filtro de Afiliado
     if (filters.affiliate) {
@@ -660,6 +747,10 @@ const TransferidoContent = () => {
       if (count >= 10 && ok) colLeads.deposito_10x.push(l);
       if (l.status === 'ativo') colLeads.ativo.push(l);
     }
+
+    const crmCsvColumnLabels = buildCrmColumnLabelsMap(colLeads, TRANSFERIDO_CSV_COLUMN_TITLES);
+    const filteredLeadsForCsv = filterLeadsAssignedToCrmColumns(formattedLeads, crmCsvColumnLabels);
+
     const baseColumns: Column[] = [
       { id: 'novo', title: '👥 Clientes cadastrados', color: 'gray', leads: colLeads.novo, totalLeads: colLeads.novo.length },
       { id: 'contactados', title: '📞 Clientes Contactados', color: 'blue', leads: colLeads.contactados, totalLeads: colLeads.contactados.length },
@@ -685,6 +776,8 @@ const TransferidoContent = () => {
     return {
       columns: sortedColumns,
       metrics: { total_leads: totalLeads, total_deposited: totalDeposited, active_leads: activeLeads, conversion_rate: conversionRate },
+      filteredLeadsForCsv,
+      crmCsvColumnLabels,
     };
   }, [rawLeads, filters, searchTerm, leadsPerColumn, columnSorts]);
 
@@ -734,6 +827,22 @@ const TransferidoContent = () => {
 
   const formatCurrency = (val: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
 
+  const handleDownloadCsv = () => {
+    downloadLeadsCsv(filteredLeadsForCsv, {
+      filenamePrefix: 'crm-transferido',
+      includeTransferredFields: true,
+      crmColumnLabelsByLeadId: crmCsvColumnLabels,
+      filenameBancaLabel: csvFilenameBancaLabel,
+      filenameConsultantFirstName: csvConsultantFirstName || undefined,
+    });
+    showToast(
+      filteredLeadsForCsv.length === 0
+        ? 'CSV gerado sem linhas (nenhum lead com os filtros atuais).'
+        : `CSV com ${filteredLeadsForCsv.length} lead(s) baixado.`,
+      'success'
+    );
+  };
+
   /** Carregamento inicial: bancas ou leads ainda sem nenhum dado na tela. */
   const isInitialLoading = !bancasReady || ((loading || filterLoading) && rawLeads.length === 0);
   /** Mensagem do overlay: diferenciar "bancas" vs "leads". */
@@ -780,13 +889,31 @@ const TransferidoContent = () => {
                 <p className="text-[11px] md:text-sm text-gray-500 dark:text-gray-400">CRM dos leads que foram transferidos para você</p>
               </div>
             </div>
-            <button
-              onClick={() => setShowStatusModal(true)}
-              className="whitespace-nowrap flex items-center gap-2 bg-[#8CD955] text-white px-3 py-2 rounded-xl text-[11px] md:text-sm font-bold hover:bg-[#7BC84A] transition-all shadow-md flex-shrink-0"
-            >
-              <Eye className="w-3.5 h-3.5" />
-              Informações de Status
-            </button>
+            <div className="flex flex-wrap items-center gap-2 justify-end">
+              {canExportLeadsCsv && (
+                <button
+                  type="button"
+                  onClick={handleDownloadCsv}
+                  disabled={loading || filterLoading}
+                  title={
+                    loading || filterLoading
+                      ? 'Aguarde o carregamento dos leads'
+                      : 'Baixar CSV com nome, telefone, e-mail e demais dados (filtros aplicados)'
+                  }
+                  className="whitespace-nowrap flex items-center gap-2 bg-slate-700 hover:bg-slate-800 dark:bg-slate-600 dark:hover:bg-slate-500 text-white px-3 py-2 rounded-xl text-[11px] md:text-sm font-bold transition-all shadow-md flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Baixar CSV
+                </button>
+              )}
+              <button
+                onClick={() => setShowStatusModal(true)}
+                className="whitespace-nowrap flex items-center gap-2 bg-[#8CD955] text-white px-3 py-2 rounded-xl text-[11px] md:text-sm font-bold hover:bg-[#7BC84A] transition-all shadow-md flex-shrink-0"
+              >
+                <Eye className="w-3.5 h-3.5" />
+                Informações de Status
+              </button>
+            </div>
           </div>
 
           <CrmSubNav />

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
+import { withTenantSlug } from '@/lib/utils/tenant-href';
 import { 
   UserPlus, 
   Users, 
@@ -939,7 +940,7 @@ export default function GestorTrafegoClient({
       sessionStorage.removeItem('profile_id');
       window.localStorage.removeItem('profile_id');
       document.cookie = 'user_id=; Path=/; Max-Age=0; SameSite=Lax';
-      window.location.href = '/login';
+      window.location.href = withTenantSlug('/login');
     }
   };
 
@@ -1002,7 +1003,7 @@ export default function GestorTrafegoClient({
               {authError || serverError || apiError || 'Esta página é exclusiva para Gestores de Tráfego. Você não tem permissão para acessar este conteúdo.'}
             </p>
             <button
-              onClick={() => window.location.href = '/'}
+              onClick={() => (window.location.href = withTenantSlug('/'))}
               className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-3 rounded-xl font-bold transition-all"
             >
               Voltar ao Início

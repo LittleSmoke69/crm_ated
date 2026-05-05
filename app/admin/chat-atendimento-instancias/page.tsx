@@ -1,7 +1,7 @@
 'use client';
 
 import React, { Suspense } from 'react';
-import Link from 'next/link';
+import Link from '@/components/WhitelabelLink';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { Loader2, ArrowLeft } from 'lucide-react';

@@ -21,6 +21,25 @@ export const ZAPLOTO_EVOLUTION_PROD_WEBHOOK_URL =
   'https://zaploto.com/api/webhooks/evolution/prod' as const;
 
 /**
+ * URL pública do webhook prod (Evolution), com prefixo de slug em white label.
+ * Central: `{base}/api/webhooks/evolution/prod` — WL: `{base}/{slug}/api/webhooks/evolution/prod`
+ */
+export function buildEvolutionProdWebhookUrlFromBase(
+  publicBaseUrl: string,
+  tenantSlug: string | null | undefined
+): string {
+  const base = publicBaseUrl
+    .trim()
+    .replace(/\/+$/, '')
+    .replace(/([^:]\/)\/+/g, '$1');
+  const slug = tenantSlug?.trim().toLowerCase();
+  if (slug) {
+    return `${base}/${slug}/api/webhooks/evolution/prod`;
+  }
+  return `${base}/api/webhooks/evolution/prod`;
+}
+
+/**
  * Eventos registrados na Evolution em `/instance/create` (webhook).
  * Apenas mensagens recebidas (upsert) e confirmação de envio — alinhado ao painel Evolution (MESSAGES_UPSERT / SEND_MESSAGE).
  */

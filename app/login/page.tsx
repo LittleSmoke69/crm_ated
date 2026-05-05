@@ -1,10 +1,16 @@
 'use client';
 
 import React, { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { Mail, Lock, LogIn, AlertCircle, Sun, Moon } from 'lucide-react';
 import Logo from '@/components/Logo';
 import { useTheme } from '@/contexts/ThemeContext';
+import {
+  useTenantRouter,
+  useTenantHref,
+  getActiveTenantSlug,
+  clearZaplotoSlugCookie,
+  isCentralZaplotoAuthPath,
+} from '@/lib/utils/tenant-href';
 
 /** Mapeia o status (role) do perfil para a rota inicial de acesso. */
 function getLandingRouteByStatus(status: string | null | undefined): string {
@@ -30,7 +36,8 @@ function getLandingRouteByStatus(status: string | null | undefined): string {
 }
 
 const LoginPage = () => {
-  const router = useRouter();
+  const router = useTenantRouter();
+  const toTenantHref = useTenantHref();
   const { theme, toggleTheme } = useTheme();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -82,6 +89,7 @@ const LoginPage = () => {
         body: JSON.stringify({
           email: email.trim().toLowerCase(),
           password,
+          tenantSlug: getActiveTenantSlug() || '',
         }),
       });
 
@@ -101,6 +109,11 @@ const LoginPage = () => {
       }
 
       setSessionArtifacts(userId, userEmail, status);
+
+      // Login na ZapLoto central: remove cookie WL antigo (evita /admin → /suarifa/admin).
+      if (typeof window !== 'undefined' && isCentralZaplotoAuthPath(window.location.pathname)) {
+        clearZaplotoSlugCookie();
+      }
 
       // Redireciona para a rota da role do usuário (conforme status no banco)
       const landingRoute = getLandingRouteByStatus(status);
@@ -159,7 +172,7 @@ const LoginPage = () => {
                   value={email}
                   onChange={e => setEmail(e.target.value)}
                   placeholder="seu@email.com"
-                  className="w-full min-h-[48px] pl-10 pr-4 py-2.5 sm:py-3 border-2 border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-base text-gray-800 dark:text-white placeholder:text-gray-600 dark:placeholder:text-[#aaa] transition"
+                  className="w-full min-h-[48px] pl-10 pr-4 py-2.5 sm:py-3 border-2 border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] rounded-lg focus:ring-2 focus:ring-[var(--tenant-primary)] focus:border-[var(--tenant-primary)] text-base text-gray-800 dark:text-white placeholder:text-gray-600 dark:placeholder:text-[#aaa] transition"
                   disabled={loading}
                   autoComplete="username"
                   inputMode="email"
@@ -181,7 +194,7 @@ const LoginPage = () => {
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full min-h-[48px] pl-10 pr-4 py-2.5 sm:py-3 border-2 border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-base text-gray-800 dark:text-white placeholder:text-gray-600 dark:placeholder:text-[#aaa] transition"
+                  className="w-full min-h-[48px] pl-10 pr-4 py-2.5 sm:py-3 border-2 border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] rounded-lg focus:ring-2 focus:ring-[var(--tenant-primary)] focus:border-[var(--tenant-primary)] text-base text-gray-800 dark:text-white placeholder:text-gray-600 dark:placeholder:text-[#aaa] transition"
                   disabled={loading}
                   autoComplete="current-password"
                   required
@@ -193,7 +206,7 @@ const LoginPage = () => {
             <button
               type="submit"
               disabled={loading}
-              className="w-full min-h-[48px] py-3 rounded-lg text-white text-base font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-md hover:shadow-lg bg-[#8CD955] dark:bg-[#00ff00] hover:bg-[#7BC84A] dark:hover:bg-[#00e600]"
+              className="w-full min-h-[48px] py-3 rounded-lg text-white text-base font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-md hover:shadow-lg bg-[var(--tenant-primary)] hover:bg-[var(--tenant-primary-hover)]"
             >
               {loading ? (
                 <>
@@ -212,8 +225,8 @@ const LoginPage = () => {
           {/* Esqueceu a senha e Criar conta — empilhados no mobile */}
           <div className="mt-6 flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-x-4 sm:gap-y-2 text-sm text-center sm:text-left">
             <a
-              href="/forgot-password"
-              className="text-[#8CD955] dark:text-[#00ff00] hover:text-[#7BC84A] dark:hover:text-[#00e600] font-medium transition py-2.5 sm:py-0 -mx-1 px-1 rounded-lg inline-flex items-center justify-center sm:justify-start active:bg-black/5 dark:active:bg-white/10"
+              href={toTenantHref('/forgot-password')}
+              className="text-[var(--tenant-primary)] hover:text-[var(--tenant-primary-hover)] font-medium transition py-2.5 sm:py-0 -mx-1 px-1 rounded-lg inline-flex items-center justify-center sm:justify-start active:bg-black/5 dark:active:bg-white/10"
             >
               <span className="sm:hidden">Esqueceu a senha?</span>
               <span className="hidden sm:inline">Esqueceu a senha? Clique aqui</span>
@@ -221,8 +234,8 @@ const LoginPage = () => {
             <p className="text-gray-600 dark:text-[#aaa] py-2.5 sm:py-0 flex flex-wrap items-center justify-center sm:justify-end gap-x-1 gap-y-1">
               <span>Não tem conta?</span>
               <a
-                href="/register"
-                className="text-[#8CD955] dark:text-[#00ff00] hover:text-[#7BC84A] dark:hover:text-[#00e600] font-medium transition rounded-lg px-1 -mx-1 py-1 active:bg-black/5 dark:active:bg-white/10"
+                href={toTenantHref('/register')}
+                className="text-[var(--tenant-primary)] hover:text-[var(--tenant-primary-hover)] font-medium transition rounded-lg px-1 -mx-1 py-1 active:bg-black/5 dark:active:bg-white/10"
               >
                 Criar conta
               </a>

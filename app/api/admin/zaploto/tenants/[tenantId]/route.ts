@@ -2,6 +2,12 @@ import { NextRequest } from 'next/server';
 import { requireSuperAdmin } from '@/lib/middleware/auth';
 import { successResponse, errorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { resolveTenantBrandingRow } from '@/lib/server/tenant-branding';
+import {
+  normalizeThemeColorsInput,
+  resolveTenantPalettes,
+  type TenantThemeColorsStored,
+} from '@/lib/constants/tenant-theme-map';
 
 /**
  * GET /api/admin/zaploto/tenants/[tenantId] - Busca um tenant
@@ -21,7 +27,28 @@ export async function GET(
       .single();
 
     if (error || !data) return errorResponse('Tenant não encontrado', 404);
-    return successResponse(data);
+    const row = data as {
+      logo_url?: string | null;
+      favicon_url?: string | null;
+      theme_colors?: unknown;
+      primary_color?: string | null;
+      secondary_color?: string | null;
+    };
+    const branding = await resolveTenantBrandingRow(row);
+    const theme = resolveTenantPalettes({
+      theme_colors: (row.theme_colors as TenantThemeColorsStored | null) ?? null,
+      primary_color: row.primary_color,
+      secondary_color: row.secondary_color,
+    });
+    return successResponse({
+      ...data,
+      logo_url: branding.logo_url,
+      favicon_url: branding.favicon_url,
+      /** Valor bruto no banco (URL https ou caminho no storage); usar ao salvar */
+      logo_source: row.logo_url ?? null,
+      favicon_source: row.favicon_url ?? null,
+      theme,
+    });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Erro ao buscar tenant';
     return errorResponse(message, 403);
@@ -44,10 +71,22 @@ export async function PUT(
     if (body.name != null) update.name = body.name;
     if (body.slug != null) update.slug = body.slug;
     if (body.domain != null) update.domain = body.domain;
-    if (body.logo_url != null) update.logo_url = body.logo_url;
-    if (body.favicon_url != null) update.favicon_url = body.favicon_url;
+    if ('logo_url' in body) {
+      const v = body.logo_url;
+      update.logo_url = v == null || v === '' ? null : v;
+    }
+    if ('favicon_url' in body) {
+      const v = body.favicon_url;
+      update.favicon_url = v == null || v === '' ? null : v;
+    }
     if (body.primary_color != null) update.primary_color = body.primary_color;
-    if (body.secondary_color != null) update.secondary_color = body.secondary_color;
+    if ('secondary_color' in body) {
+      const v = body.secondary_color;
+      update.secondary_color = v == null || v === '' ? null : v;
+    }
+    if ('theme_colors' in body) {
+      update.theme_colors = normalizeThemeColorsInput(body.theme_colors);
+    }
     if (body.app_title != null) update.app_title = body.app_title;
     if (body.support_email != null) update.support_email = body.support_email;
     if (typeof body.is_active === 'boolean') update.is_active = body.is_active;
@@ -62,7 +101,27 @@ export async function PUT(
       .single();
 
     if (error) throw new Error(error.message);
-    return successResponse(data);
+    const row = data as {
+      logo_url?: string | null;
+      favicon_url?: string | null;
+      theme_colors?: unknown;
+      primary_color?: string | null;
+      secondary_color?: string | null;
+    };
+    const branding = await resolveTenantBrandingRow(row);
+    const theme = resolveTenantPalettes({
+      theme_colors: (row.theme_colors as TenantThemeColorsStored | null) ?? null,
+      primary_color: row.primary_color,
+      secondary_color: row.secondary_color,
+    });
+    return successResponse({
+      ...data,
+      logo_url: branding.logo_url,
+      favicon_url: branding.favicon_url,
+      logo_source: row.logo_url ?? null,
+      favicon_source: row.favicon_url ?? null,
+      theme,
+    });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Erro ao atualizar tenant';
     return errorResponse(message, 403);

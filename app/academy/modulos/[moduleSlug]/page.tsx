@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import Link from 'next/link';
+import Link from '@/components/WhitelabelLink';
 import { useParams } from 'next/navigation';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { Check, Play, Clock, Loader2, ChevronRight, ArrowLeft, CheckCircle2 } from 'lucide-react';
@@ -75,7 +75,7 @@ export default function AcademyModulePage() {
       {/* Back button */}
       <Link
         href="/academy/trilhas"
-        className="mb-6 inline-flex items-center gap-2 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-sm font-medium text-[var(--muted-foreground)] shadow-sm transition hover:border-[#4ade80]/50 hover:text-[#4ade80]"
+        className="mb-6 inline-flex items-center gap-2 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-sm font-medium text-[var(--muted-foreground)] shadow-sm transition hover:border-[var(--zaploto-green)]/50 hover:text-[var(--zaploto-green)]"
       >
         <ArrowLeft className="h-4 w-4" />
         Voltar às trilhas
@@ -99,7 +99,7 @@ export default function AcademyModulePage() {
               { s: 5, x: '48%', y: '85%', o: 0.3, d: 3.3  },
             ].map((dot, i) => (
               <div key={i}
-                className="academy-bokeh-dot absolute rounded-full bg-[#4ade80]"
+                className="academy-bokeh-dot absolute rounded-full bg-[var(--zaploto-green)]"
                 style={{
                   width: dot.s, height: dot.s, left: dot.x, top: dot.y,
                   filter: `blur(${dot.s > 5 ? 2 : 1}px)`,
@@ -110,13 +110,13 @@ export default function AcademyModulePage() {
               />
             ))}
             <div className="academy-grid-drift absolute inset-0 opacity-[0.04]"
-              style={{ backgroundImage: 'linear-gradient(#4ade80 1px, transparent 1px), linear-gradient(90deg, #4ade80 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
-            <div className="academy-scanline absolute inset-x-0 h-px bg-gradient-to-r from-transparent via-[#4ade80]/50 to-transparent" style={{ top: 0 }} />
+              style={{ backgroundImage: 'linear-gradient(var(--zaploto-green) 1px, transparent 1px), linear-gradient(90deg, var(--zaploto-green) 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
+            <div className="academy-scanline absolute inset-x-0 h-px bg-gradient-to-r from-transparent via-[var(--zaploto-green)]/50 to-transparent" style={{ top: 0 }} />
           </div>
 
           {/* Content */}
           <div className="relative">
-            <div className="mb-1 inline-flex items-center gap-1.5 rounded-full border border-[#4ade80]/30 bg-[#4ade80]/10 px-2.5 py-0.5 text-xs font-medium text-[#4ade80]">
+            <div className="mb-1 inline-flex items-center gap-1.5 rounded-full border border-[var(--zaploto-green)]/30 bg-[var(--zaploto-green)]/10 px-2.5 py-0.5 text-xs font-medium text-[var(--zaploto-green)]">
               Zaploto Academy
             </div>
             <h1 className="mt-2 text-2xl font-bold tracking-tight">{moduleTitle || 'Módulo'}</h1>
@@ -129,11 +129,11 @@ export default function AcademyModulePage() {
               <div className="mt-5">
                 <div className="mb-2 flex items-center justify-between text-sm">
                   <span className="font-medium text-white/70">Seu progresso</span>
-                  <span className="font-bold text-[#4ade80]">{progressPct}%</span>
+                  <span className="font-bold text-[var(--zaploto-green)]">{progressPct}%</span>
                 </div>
                 <div className="h-2 w-full overflow-hidden rounded-full bg-white/10">
                   <div
-                    className="h-2 rounded-full bg-[#4ade80] shadow-[0_0_8px_#4ade80aa] transition-all duration-500"
+                    className="h-2 rounded-full bg-[var(--zaploto-green)] shadow-[0_0_8px_var(--zaploto-green)] transition-all duration-500"
                     style={{ width: `${progressPct}%` }}
                   />
                 </div>
@@ -170,10 +170,10 @@ export default function AcademyModulePage() {
               <li key={lesson.id}>
                 <Link
                   href={`/academy/aula/${lesson.slug}`}
-                  className="group relative block overflow-hidden rounded-2xl border border-[#1e3a1e] bg-[#0a140a]/80 shadow-sm backdrop-blur-sm transition-all duration-300 hover:-translate-y-1 hover:border-[#4ade80]/50 hover:shadow-[0_0_24px_#4ade8028,0_0_48px_#4ade8012]"
+                  className="group relative block overflow-hidden rounded-2xl border border-[#1e3a1e] bg-[#0a140a]/80 shadow-sm backdrop-blur-sm transition-all duration-300 hover:-translate-y-1 hover:border-[var(--zaploto-green)]/50 hover:shadow-[0_0_24px_var(--zaploto-green),0_0_48px_var(--zaploto-green)]"
                 >
                   {/* Neon border top glow line */}
-                  <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[#4ade80]/60 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+                  <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[var(--zaploto-green)]/60 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
 
                   {/* Thumbnail */}
                   <div className="relative aspect-video w-full overflow-hidden bg-zinc-900">
@@ -186,7 +186,7 @@ export default function AcademyModulePage() {
                     ) : (
                       <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-zinc-800 to-zinc-900">
                         {isCompleted ? (
-                          <CheckCircle2 className="h-14 w-14 text-[#4ade80] drop-shadow-[0_0_12px_#4ade80]" />
+                          <CheckCircle2 className="h-14 w-14 text-[var(--zaploto-green)] drop-shadow-[0_0_12px_var(--zaploto-green)]" />
                         ) : (
                           <Play className="h-14 w-14 text-zinc-600" />
                         )}
@@ -195,23 +195,23 @@ export default function AcademyModulePage() {
 
                     {/* Play overlay com neon */}
                     <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
-                      <div className="flex h-14 w-14 items-center justify-center rounded-full bg-[#4ade80] shadow-[0_0_20px_#4ade80,0_0_40px_#4ade8066] transition-transform duration-300 group-hover:scale-110">
+                      <div className="flex h-14 w-14 items-center justify-center rounded-full bg-[var(--zaploto-green)] shadow-[0_0_20px_var(--zaploto-green),0_0_40px_var(--zaploto-green)] transition-transform duration-300 group-hover:scale-110">
                         <Play className="h-6 w-6 text-[#060f07]" fill="currentColor" />
                       </div>
                     </div>
 
                     {/* Scan line neon no hover */}
-                    <div className="absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-[#4ade80]/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+                    <div className="absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-[var(--zaploto-green)]/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
 
                     {/* Completed badge */}
                     {isCompleted && (
-                      <div className="absolute right-2 top-2 flex items-center gap-1 rounded-full bg-[#4ade80] px-2.5 py-1 text-xs font-semibold text-[#060f07] shadow-[0_0_10px_#4ade80]">
+                      <div className="absolute right-2 top-2 flex items-center gap-1 rounded-full bg-[var(--zaploto-green)] px-2.5 py-1 text-xs font-semibold text-[#060f07] shadow-[0_0_10px_var(--zaploto-green)]">
                         <Check className="h-3 w-3" /> Concluída
                       </div>
                     )}
 
                     {/* Lesson number com neon no hover */}
-                    <div className="absolute left-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border border-zinc-700 bg-black/70 text-xs font-bold text-white backdrop-blur-sm transition-all duration-300 group-hover:border-[#4ade80]/60 group-hover:text-[#4ade80] group-hover:shadow-[0_0_8px_#4ade8060]">
+                    <div className="absolute left-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border border-zinc-700 bg-black/70 text-xs font-bold text-white backdrop-blur-sm transition-all duration-300 group-hover:border-[var(--zaploto-green)]/60 group-hover:text-[var(--zaploto-green)] group-hover:shadow-[0_0_10px_var(--zaploto-green-border)]">
                       {index + 1}
                     </div>
                   </div>
@@ -219,7 +219,7 @@ export default function AcademyModulePage() {
                   {/* Info */}
                   <div className="flex items-center gap-3 bg-[#0a140a]/60 p-4">
                     <div className="min-w-0 flex-1">
-                      <h3 className="font-semibold leading-snug text-white/90 transition group-hover:text-[#4ade80]">
+                      <h3 className="font-semibold leading-snug text-white/90 transition group-hover:text-[var(--zaploto-green)]">
                         {lesson.title}
                       </h3>
                       <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-[var(--muted-foreground)]">

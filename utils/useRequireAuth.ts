@@ -1,11 +1,14 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter, usePathname } from 'next/navigation';
+import { usePathname } from 'next/navigation';
+import { useTenantRouter } from '@/lib/utils/tenant-href';
+import { getInternalAppPathname } from '@/lib/utils/white-label-path';
 
 export function useRequireAuth() {
-  const router = useRouter();
+  const router = useTenantRouter();
   const pathname = usePathname();
+  const routePath = pathname ? getInternalAppPathname(pathname) : '/';
   const [checking, setChecking] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
   const [userStatus, setUserStatus] = useState<string | null>(null);
@@ -14,9 +17,9 @@ export function useRequireAuth() {
     // Rotas públicas que não devem redirecionar (vitrine da Academy é pública)
     const publicPaths = ['/login', '/register', '/admin/login', '/academy', '/academy/trilhas'];
     const publicPrefixes = ['/academy/modulos/', '/academy/aula/'];
-    const isAcademyPublic = pathname.startsWith('/academy') && (
-      publicPaths.includes(pathname) ||
-      publicPrefixes.some((p) => pathname.startsWith(p))
+    const isAcademyPublic = routePath.startsWith('/academy') && (
+      publicPaths.includes(routePath) ||
+      publicPrefixes.some((p) => routePath.startsWith(p))
     );
 
     // Garante que só roda no cliente
@@ -29,7 +32,7 @@ export function useRequireAuth() {
     const statusFromStorage = sessionStorage.getItem('profile_status')?.trim() || null;
 
     // Se estiver numa rota pública (incluindo vitrine da Academy), não redireciona para login
-    if (publicPaths.includes(pathname) || isAcademyPublic) {
+    if (publicPaths.includes(routePath) || isAcademyPublic) {
       if (id) setUserId(id);
       setUserStatus(statusFromStorage);
       setChecking(false);
@@ -91,7 +94,7 @@ export function useRequireAuth() {
 
     setUserStatus(statusFromStorage);
     setChecking(false);
-  }, [router, pathname]);
+  }, [router, pathname, routePath]);
 
   return { checking, userId, userStatus };
 }
