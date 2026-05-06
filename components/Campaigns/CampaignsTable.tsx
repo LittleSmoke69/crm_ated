@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Campaign } from '@/hooks/useDashboardData';
 import { WhatsAppInstance } from '@/hooks/useDashboardData';
+import { instanceListUiStatusIsConnected } from '@/lib/utils/evolution-instance-status';
 import EditCampaignModal, { CampaignUpdates } from './EditCampaignModal';
 import { 
   Pause, 
@@ -455,11 +456,13 @@ const CampaignsTable: React.FC<CampaignsTableProps> = ({
                       {instancesInfo.map((info, idx) => (
                         <div key={idx} className="text-xs text-gray-700 dark:text-gray-300">
                           {info.name}
-                          {info.status === 'connected' && (
-                            <CheckCircle2 className="inline w-3 h-3 text-green-500 ml-1" />
+                          {instanceListUiStatusIsConnected(info.status) && (
+                            <CheckCircle2 className="inline w-3 h-3 text-green-500 ml-1" aria-hidden />
                           )}
-                          {info.status !== 'connected' && (
-                            <XCircle className="inline w-3 h-3 text-red-500 ml-1" />
+                          {String(info.status ?? '')
+                            .trim()
+                            .toLowerCase() === 'disconnected' && (
+                            <XCircle className="inline w-3 h-3 text-red-500 ml-1" aria-hidden />
                           )}
                         </div>
                       ))}

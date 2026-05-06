@@ -8,14 +8,8 @@ import { useRequireAuth } from '@/utils/useRequireAuth';
 import { getStoredUserId } from '@/lib/utils/stored-user-id';
 import { getTenantBaseUrl, getTenantLoginUrl } from '@/lib/utils/zaploto-tenant-url';
 import { ChevronLeft, Loader2, Copy, Check, Trash2, Upload } from 'lucide-react';
-import {
-  TENANT_THEME_KEYS,
-  TENANT_THEME_LABELS,
-  normalizeThemeColorsInput,
-  resolveTenantPalettes,
-  type TenantThemeColorsStored,
-  type TenantThemeToken,
-} from '@/lib/constants/tenant-theme-map';
+import { normalizeThemeColorsInput, resolveTenantPalettes, type TenantThemeColorsStored, type TenantThemeToken } from '@/lib/constants/tenant-theme-map';
+import { TenantThemeEditor, BrandColorField } from '@/components/Admin/TenantThemeEditor';
 
 interface TenantData {
   id: string;
@@ -287,7 +281,7 @@ export default function AdminZaplotoTenantDetailPage() {
 
   return (
     <Layout>
-      <div className="p-4 sm:p-6 max-w-2xl mx-auto">
+      <div className="p-4 sm:p-6 max-w-4xl mx-auto">
         <button
           onClick={() => router.push('/admin/zaploto')}
           className="flex items-center gap-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white mb-6"
@@ -407,70 +401,30 @@ export default function AdminZaplotoTenantDetailPage() {
               className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100"
             />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Cor primária (marca)</label>
-            <input
-              type="text"
-              value={form.primary_color ?? '#8CD955'}
-              onChange={(e) => setForm((f) => ({ ...f, primary_color: e.target.value }))}
-              className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100"
-            />
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Hex (#RRGGBB). Base para tokens que não tiverem override abaixo.</p>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Cor secundária / destaque</label>
-            <input
-              type="text"
-              value={form.secondary_color ?? ''}
-              onChange={(e) => setForm((f) => ({ ...f, secondary_color: e.target.value }))}
-              placeholder="Opcional — accent / CTAs"
-              className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500"
-            />
-          </div>
+          <BrandColorField
+            label="Cor primária (marca)"
+            hint="Hex (#RRGGBB). Base para tokens que não tiverem override abaixo."
+            value={form.primary_color ?? '#8CD955'}
+            placeholder="#8CD955"
+            previewLabel="Marca"
+            onChange={(v) => setForm((f) => ({ ...f, primary_color: v }))}
+          />
+          <BrandColorField
+            label="Cor secundária / destaque"
+            hint="Opcional — accent e CTAs quando diferente da primária."
+            value={form.secondary_color ?? ''}
+            placeholder={resolvedTheme.light.accent}
+            previewLabel="Destaque"
+            onChange={(v) => setForm((f) => ({ ...f, secondary_color: v }))}
+          />
 
-          <div className="pt-2 border-t border-gray-200 dark:border-gray-600 space-y-4">
-            <div>
-              <p className="text-sm font-medium text-gray-800 dark:text-gray-100">Tema do white label</p>
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                Tokens fixos no sistema (mesmos nomes em modo claro e escuro). Campo vazio usa o padrão ZapLoto + cores de marca acima — veja o placeholder.
-              </p>
-            </div>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="space-y-3 p-3 rounded-lg bg-white/80 dark:bg-gray-900/40 border border-gray-200 dark:border-gray-600">
-                <p className="text-xs font-semibold uppercase tracking-wide text-gray-600 dark:text-gray-300">Modo claro</p>
-                {TENANT_THEME_KEYS.map((key) => (
-                  <div key={`l-${key}`}>
-                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-0.5">
-                      {TENANT_THEME_LABELS[key]}
-                    </label>
-                    <input
-                      type="text"
-                      value={form.theme_colors?.light?.[key] ?? ''}
-                      placeholder={resolvedTheme.light[key]}
-                      onChange={(e) => setThemeSlot('light', key, e.target.value)}
-                      className="w-full px-2 py-1.5 text-sm border border-gray-200 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100"
-                    />
-                  </div>
-                ))}
-              </div>
-              <div className="space-y-3 p-3 rounded-lg bg-white/80 dark:bg-gray-900/40 border border-gray-200 dark:border-gray-600">
-                <p className="text-xs font-semibold uppercase tracking-wide text-gray-600 dark:text-gray-300">Modo escuro</p>
-                {TENANT_THEME_KEYS.map((key) => (
-                  <div key={`d-${key}`}>
-                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-0.5">
-                      {TENANT_THEME_LABELS[key]}
-                    </label>
-                    <input
-                      type="text"
-                      value={form.theme_colors?.dark?.[key] ?? ''}
-                      placeholder={resolvedTheme.dark[key]}
-                      onChange={(e) => setThemeSlot('dark', key, e.target.value)}
-                      className="w-full px-2 py-1.5 text-sm border border-gray-200 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100"
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
+          <div className="pt-4 border-t border-gray-200 dark:border-gray-600">
+            <TenantThemeEditor
+              theme_colors={form.theme_colors}
+              setThemeSlot={setThemeSlot}
+              resolvedLight={resolvedTheme.light}
+              resolvedDark={resolvedTheme.dark}
+            />
           </div>
 
           <label className="flex items-center gap-2 cursor-pointer">

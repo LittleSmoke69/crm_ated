@@ -1,12 +1,24 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { withTenantSlug } from '@/lib/utils/tenant-href';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import Layout from '@/components/Layout';
-import { useDashboardData, Contact, WhatsAppInstance, DbGroup, Campaign } from '@/hooks/useDashboardData';
+import { useDashboardData, Contact, DbGroup, Campaign } from '@/hooks/useDashboardData';
 import CampaignsTable from '@/components/Campaigns/CampaignsTable';
-import { Plus, Pause, Play, CheckCircle2, AlertCircle, Info, X, Clock, XCircle, Menu, } from 'lucide-react';
+import {
+  Plus,
+  Pause,
+  Play,
+  CheckCircle2,
+  AlertCircle,
+  Info,
+  X,
+  Menu,
+  Search,
+  ChevronDown,
+  AlertTriangle,
+} from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import { supabase } from '@/lib/supabase';
 
@@ -19,6 +31,123 @@ type GroupForAdd = {
   subject: string;
 };
 
+type SearchableOption = {
+  value: string;
+  label: string;
+  description?: string;
+};
+
+function SearchableSelect({
+  value,
+  onValueChange,
+  options,
+  placeholder,
+  emptyLabel,
+  disabled,
+  searchPlaceholder,
+  isLoading,
+}: {
+  value: string;
+  onValueChange: (v: string, meta?: SearchableOption) => void;
+  options: SearchableOption[];
+  placeholder: string;
+  emptyLabel?: string;
+  disabled?: boolean;
+  searchPlaceholder?: string;
+  isLoading?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const fn = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', fn);
+    return () => document.removeEventListener('mousedown', fn);
+  }, [open]);
+
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    if (!s) return options;
+    return options.filter(
+      o =>
+        o.label.toLowerCase().includes(s) ||
+        (o.description && o.description.toLowerCase().includes(s)) ||
+        o.value.toLowerCase().includes(s)
+    );
+  }, [options, q]);
+
+  const selected = options.find(o => o.value === value);
+
+  return (
+    <div className="relative" ref={rootRef}>
+      <button
+        type="button"
+        disabled={disabled || isLoading}
+        onClick={() => {
+          if (disabled || isLoading) return;
+          setOpen(prev => {
+            const next = !prev;
+            if (next) setQ('');
+            return next;
+          });
+        }}
+        className="w-full px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 text-gray-700 dark:text-white bg-white dark:bg-[#333] flex items-center justify-between gap-2 text-left min-h-[52px]"
+      >
+        <span className={`truncate ${selected ? '' : 'text-gray-400 dark:text-gray-500'}`}>
+          {isLoading ? 'Carregando…' : selected ? selected.label : placeholder}
+        </span>
+        <ChevronDown className={`w-5 h-5 shrink-0 opacity-60 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="absolute z-50 mt-1 w-full rounded-lg border-2 border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] shadow-xl overflow-hidden">
+          <div className="p-2 border-b border-gray-200 dark:border-[#555]">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                type="search"
+                autoComplete="off"
+                value={q}
+                onChange={e => setQ(e.target.value)}
+                placeholder={searchPlaceholder || 'Pesquisar…'}
+                className="w-full rounded-md border border-gray-200 dark:border-[#555] bg-gray-50 dark:bg-[#2a2a2a] py-2 pl-9 pr-3 text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-400 focus:border-[#8CD955] focus:outline-none focus:ring-1 focus:ring-[#8CD955]"
+              />
+            </div>
+          </div>
+          <ul className="max-h-56 overflow-y-auto py-1">
+            {filtered.length === 0 ? (
+              <li className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{emptyLabel || 'Nenhum resultado'}</li>
+            ) : (
+              filtered.map(o => (
+                <li key={o.value}>
+                  <button
+                    type="button"
+                    className={`w-full px-4 py-2.5 text-left text-sm transition hover:bg-[#8CD955]/15 dark:hover:bg-[#8CD955]/10 ${
+                      o.value === value ? 'bg-[#8CD955]/25 font-medium text-[#1a4d0d] dark:text-[#8CD955]' : 'text-gray-700 dark:text-gray-200'
+                    }`}
+                    onClick={() => {
+                      onValueChange(o.value, o);
+                      setOpen(false);
+                      setQ('');
+                    }}
+                  >
+                    <span className="block truncate">{o.label}</span>
+                    {o.description && o.description !== o.label && (
+                      <span className="block truncate text-xs text-gray-500 dark:text-gray-400 mt-0.5">{o.description}</span>
+                    )}
+                  </button>
+                </li>
+              ))
+            )}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function AddToGroupPage() {
   const { checking } = useRequireAuth();
@@ -46,6 +175,9 @@ function AddToGroupPage() {
   const [customLists, setCustomLists] = useState<any[]>([]);
   const [selectedListId, setSelectedListId] = useState<string>('');
   const [loadingLists, setLoadingLists] = useState(false);
+  const [loadingDbGroups, setLoadingDbGroups] = useState(false);
+  const [instanceMultiSearch, setInstanceMultiSearch] = useState('');
+  const [groupsMultiSearch, setGroupsMultiSearch] = useState('');
 
   const loadCustomLists = useCallback(async () => {
     if (!userId) return;
@@ -71,6 +203,44 @@ function AddToGroupPage() {
     }
   }, [userId, loadCustomLists]);
 
+  const instanceSelectOptions = useMemo(
+    () =>
+      instances.map(inst => ({
+        value: inst.instance_name,
+        label: `${inst.instance_name} (${inst.status})`,
+        description: inst.instance_name,
+      })),
+    [instances]
+  );
+
+  const groupSelectOptions = useMemo(
+    () =>
+      dbGroups.map(g => ({
+        value: g.group_id,
+        label: g.group_subject?.trim() ? g.group_subject : g.group_id,
+        description: g.group_id,
+      })),
+    [dbGroups]
+  );
+
+  const filteredInstancesMulti = useMemo(() => {
+    const s = instanceMultiSearch.trim().toLowerCase();
+    if (!s) return instances;
+    return instances.filter(
+      inst =>
+        inst.instance_name.toLowerCase().includes(s) || String(inst.status || '').toLowerCase().includes(s)
+    );
+  }, [instances, instanceMultiSearch]);
+
+  const filteredGroupsMulti = useMemo(() => {
+    const s = groupsMultiSearch.trim().toLowerCase();
+    if (!s) return dbGroups;
+    return dbGroups.filter(
+      g =>
+        (g.group_subject || '').toLowerCase().includes(s) || (g.group_id || '').toLowerCase().includes(s)
+    );
+  }, [dbGroups, groupsMultiSearch]);
+
   const activeCampaignsRef = useRef<HTMLDivElement>(null);
 
   const toggleInstanceForAdd = (name: string) => {
@@ -90,27 +260,96 @@ function AddToGroupPage() {
   };
 
   const loadDbGroups = useCallback(async () => {
-    if (!selectedInstance || !userId) {
+    if (!userId) {
       setDbGroups([]);
       return;
     }
-    const { data, error } = await supabase
-      .from('whatsapp_groups')
-      .select('group_id, group_subject')
-      .eq('user_id', userId)
-      .eq('instance_name', selectedInstance)
-      .order('group_subject', { ascending: true });
 
-    if (error) {
-      addLog(`Erro ao carregar grupos: ${error.message}`, 'error');
-    } else {
-      setDbGroups((data || []) as DbGroup[]);
+    if (multiInstancesMode) {
+      if (instancesForAdd.length === 0) {
+        setDbGroups([]);
+        return;
+      }
+      setLoadingDbGroups(true);
+      try {
+        const { data, error } = await supabase
+          .from('whatsapp_groups')
+          .select('group_id, group_subject, instance_name')
+          .eq('user_id', userId)
+          .in('instance_name', instancesForAdd);
+
+        if (error) {
+          addLog(`Erro ao carregar grupos: ${error.message}`, 'error');
+          setDbGroups([]);
+          return;
+        }
+
+        const rows = data || [];
+        const byGroup = new Map<string, Set<string>>();
+        for (const row of rows) {
+          const gid = row.group_id as string;
+          if (!byGroup.has(gid)) byGroup.set(gid, new Set());
+          byGroup.get(gid)!.add(row.instance_name as string);
+        }
+
+        const intersected: DbGroup[] = [];
+        for (const [gid, instSet] of byGroup) {
+          if (instancesForAdd.every(inst => instSet.has(inst))) {
+            const row = rows.find(r => r.group_id === gid);
+            intersected.push({
+              group_id: gid,
+              group_subject: row?.group_subject || gid,
+            });
+          }
+        }
+        intersected.sort((a, b) => (a.group_subject || '').localeCompare(b.group_subject || '', 'pt-BR'));
+        setDbGroups(intersected);
+      } finally {
+        setLoadingDbGroups(false);
+      }
+      return;
     }
-  }, [selectedInstance, userId, setDbGroups, addLog]);
+
+    if (!selectedInstance) {
+      setDbGroups([]);
+      return;
+    }
+
+    setLoadingDbGroups(true);
+    try {
+      const { data, error } = await supabase
+        .from('whatsapp_groups')
+        .select('group_id, group_subject')
+        .eq('user_id', userId)
+        .eq('instance_name', selectedInstance)
+        .order('group_subject', { ascending: true });
+
+      if (error) {
+        addLog(`Erro ao carregar grupos: ${error.message}`, 'error');
+        setDbGroups([]);
+      } else {
+        setDbGroups((data || []) as DbGroup[]);
+      }
+    } finally {
+      setLoadingDbGroups(false);
+    }
+  }, [selectedInstance, userId, addLog, multiInstancesMode, instancesForAdd]);
 
   useEffect(() => {
     loadDbGroups();
   }, [loadDbGroups]);
+
+  useEffect(() => {
+    if (!selectedGroupJid) return;
+    if (!dbGroups.some(g => g.group_id === selectedGroupJid)) {
+      setSelectedGroupJid('');
+      setSelectedGroupSubject('');
+    }
+  }, [dbGroups, selectedGroupJid]);
+
+  useEffect(() => {
+    setGroupsForAdd(prev => prev.filter(g => dbGroups.some(d => d.group_id === g.jid)));
+  }, [dbGroups]);
 
   const handleAddToGroup = async () => {
     if (!userId) {
@@ -347,26 +586,27 @@ function AddToGroupPage() {
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               Instância base:
             </label>
-            <select
+            <SearchableSelect
               value={selectedInstance}
-              onChange={e => setSelectedInstance(e.target.value)}
               disabled={multiInstancesMode}
-              className="w-full px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 text-gray-700 dark:text-white bg-white dark:bg-[#333]"
-            >
-              <option value="">Selecione uma Instância</option>
-              {instances.map(inst => (
-                <option key={inst.id || inst.instance_name} value={inst.instance_name}>
-                  {inst.instance_name} ({inst.status})
-                </option>
-              ))}
-            </select>
+              placeholder="Selecione uma instância"
+              searchPlaceholder="Pesquisar por nome ou status…"
+              emptyLabel={instances.length === 0 ? 'Nenhuma instância disponível' : 'Nenhuma instância encontrada'}
+              options={instanceSelectOptions}
+              onValueChange={v => setSelectedInstance(v)}
+            />
             <div className="mt-3 flex items-center gap-3">
               <label className="relative inline-flex items-center cursor-pointer flex-shrink-0">
                 <input
                   type="checkbox"
                   id="multiInstances"
                   checked={multiInstancesMode}
-                  onChange={e => setMultiInstancesMode(e.target.checked)}
+                  onChange={e => {
+                    const on = e.target.checked;
+                    setMultiInstancesMode(on);
+                    setInstanceMultiSearch('');
+                    if (on) setSelectedInstance('');
+                  }}
                   className="sr-only peer"
                 />
                 <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[#8CD955]/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#8CD955]"></div>
@@ -379,23 +619,42 @@ function AddToGroupPage() {
 
           {/* Múltiplas instâncias */}
           {multiInstancesMode && (
-            <div className="border border-blue-200 rounded-lg p-4 bg-blue-50/30" data-tour-id="adicao-multiplas-instancias">
-              <label className="block text-sm font-medium text-gray-700 mb-3">
-                Selecionar Instâncias:
+            <div className="border border-blue-200 dark:border-blue-800/50 rounded-lg p-4 bg-blue-50/30 dark:bg-blue-900/20" data-tour-id="adicao-multiplas-instancias">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+                Selecionar instâncias:
               </label>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                {instances.map(inst => (
-                  <button
-                    key={inst.id || inst.instance_name}
-                    onClick={() => toggleInstanceForAdd(inst.instance_name)}
-                    className={`px-4 py-3 rounded-lg border-2 transition font-medium ${instancesForAdd.includes(inst.instance_name)
-                        ? 'border-[#8CD955] bg-[#8CD955]/25 dark:bg-[#8CD955]/20 text-[#1a4d0d] dark:text-[#8CD955] ring-2 ring-[#8CD955] ring-offset-2 shadow-sm'
-                        : 'border-gray-200 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:border-[#8CD955]/50 hover:bg-gray-50 dark:hover:bg-[#404040]'
-                      }`}
-                  >
-                    {inst.instance_name}
-                  </button>
-                ))}
+              <div className="relative mb-3">
+                <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <input
+                  type="search"
+                  autoComplete="off"
+                  value={instanceMultiSearch}
+                  onChange={e => setInstanceMultiSearch(e.target.value)}
+                  placeholder="Pesquisar instâncias…"
+                  className="w-full rounded-lg border-2 border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] py-2.5 pl-10 pr-3 text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-400 focus:border-[#8CD955] focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30"
+                />
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-2 max-h-64 overflow-y-auto pr-1">
+                {filteredInstancesMulti.length === 0 ? (
+                  <p className="col-span-full text-sm text-gray-500 dark:text-gray-400 py-4 text-center">
+                    Nenhuma instância corresponde à pesquisa.
+                  </p>
+                ) : (
+                  filteredInstancesMulti.map(inst => (
+                    <button
+                      key={inst.id || inst.instance_name}
+                      type="button"
+                      onClick={() => toggleInstanceForAdd(inst.instance_name)}
+                      className={`px-4 py-3 rounded-lg border-2 transition font-medium text-left ${instancesForAdd.includes(inst.instance_name)
+                          ? 'border-[#8CD955] bg-[#8CD955]/25 dark:bg-[#8CD955]/20 text-[#1a4d0d] dark:text-[#8CD955] ring-2 ring-[#8CD955] ring-offset-2 shadow-sm'
+                          : 'border-gray-200 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:border-[#8CD955]/50 hover:bg-gray-50 dark:hover:bg-[#404040]'
+                        }`}
+                    >
+                      <span className="block truncate">{inst.instance_name}</span>
+                      <span className="block truncate text-xs opacity-70 mt-0.5">{inst.status}</span>
+                    </button>
+                  ))
+                )}
               </div>
               <div className="mt-3">
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Modo de rodízio</label>
@@ -412,34 +671,68 @@ function AddToGroupPage() {
           )}
 
           {/* Grupo salvo no banco */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              Grupo salvo no banco:
-            </label>
-            <select
-              value={selectedGroupJid}
-              disabled={multiGroupsMode}
-              onChange={e => {
-                const group = dbGroups.find(g => g.group_id === e.target.value);
-                setSelectedGroupJid(e.target.value);
-                setSelectedGroupSubject(group?.group_subject || '');
-              }}
-              className="w-full px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 text-gray-700 dark:text-white bg-white dark:bg-[#333]"
-            >
-              <option value="">Selecione um Grupo</option>
-              {dbGroups.map(group => (
-                <option key={group.group_id} value={group.group_id}>
-                  {group.group_subject || group.group_id}
-                </option>
-              ))}
-            </select>
-            <div className="mt-3 flex items-center gap-3">
+          <div className="space-y-3">
+            <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50/90 dark:border-amber-700/60 dark:bg-amber-950/40 px-4 py-3 text-sm text-amber-950 dark:text-amber-100">
+              <AlertTriangle className="w-5 h-5 shrink-0 text-amber-600 dark:text-amber-400 mt-0.5" aria-hidden />
+              <div>
+                <p className="font-semibold text-amber-900 dark:text-amber-50">Requisitos do WhatsApp</p>
+                <p className="mt-1 leading-relaxed text-amber-900/90 dark:text-amber-100/90">
+                  Cada instância usada precisa já estar <strong className="font-semibold">dentro do grupo</strong> e ser{' '}
+                  <strong className="font-semibold">administradora</strong> dele. Caso contrário, a API pode falhar ao adicionar participantes.
+                </p>
+                {multiInstancesMode && instancesForAdd.length > 1 && (
+                  <p className="mt-2 text-xs opacity-90">
+                    Com várias instâncias, só aparecem grupos que existem no banco para <strong className="font-semibold">todas</strong> as instâncias marcadas (mesmo grupo sincronizado em cada uma).
+                  </p>
+                )}
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Grupo salvo no banco:
+              </label>
+              {multiInstancesMode && instancesForAdd.length === 0 ? (
+                <p className="text-sm text-gray-500 dark:text-gray-400 py-3 px-4 rounded-lg border-2 border-dashed border-gray-300 dark:border-[#555] bg-gray-50 dark:bg-[#2a2a2a]">
+                  Marque ao menos uma instância acima para carregar os grupos compatíveis.
+                </p>
+              ) : (
+                <SearchableSelect
+                  value={selectedGroupJid}
+                  disabled={multiGroupsMode}
+                  isLoading={loadingDbGroups}
+                  placeholder="Selecione um grupo"
+                  searchPlaceholder="Pesquisar por nome ou ID do grupo…"
+                  emptyLabel={
+                    loadingDbGroups
+                      ? 'Carregando grupos…'
+                      : dbGroups.length === 0
+                        ? multiInstancesMode
+                          ? 'Nenhum grupo em comum para as instâncias selecionadas'
+                          : 'Nenhum grupo salvo para esta instância'
+                        : 'Nenhum grupo encontrado'
+                  }
+                  options={groupSelectOptions}
+                  onValueChange={(v, meta) => {
+                    setSelectedGroupJid(v);
+                    const subject =
+                      dbGroups.find(g => g.group_id === v)?.group_subject ||
+                      meta?.label ||
+                      '';
+                    setSelectedGroupSubject(subject);
+                  }}
+                />
+              )}
+            </div>
+            <div className="mt-1 flex items-center gap-3">
               <label className="relative inline-flex items-center cursor-pointer flex-shrink-0">
                 <input
                   type="checkbox"
                   id="multiGroups"
                   checked={multiGroupsMode}
-                  onChange={e => setMultiGroupsMode(e.target.checked)}
+                  onChange={e => {
+                    setMultiGroupsMode(e.target.checked);
+                    setGroupsMultiSearch('');
+                  }}
                   className="sr-only peer"
                 />
                 <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[#8CD955]/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#8CD955]"></div>
@@ -452,23 +745,50 @@ function AddToGroupPage() {
 
 
           {multiGroupsMode && (
-            <div className="border border-blue-200 dark:border-blue-800/50 rounded-lg p-4 bg-blue-50/30 dark:bg-blue-900/20" data-tour-id="adicao-multiplas-instancias">
+            <div className="border border-blue-200 dark:border-blue-800/50 rounded-lg p-4 bg-blue-50/30 dark:bg-blue-900/20" data-tour-id="adicao-multiplas-grupos">
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
-                Selecionar Grupos:
+                Selecionar grupos:
               </label>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                {dbGroups.map(inst => (
-                  <button
-                    key={inst.group_id || inst.group_subject}
-                    onClick={() => toggleGroupForAdd({ jid: inst.group_id, subject: inst.group_subject })}
-                    className={`px-4 py-3 rounded-lg border-2 transition font-medium ${groupsForAdd.some(g => g.jid === inst.group_id)
-                        ? 'border-[#8CD955] bg-[#8CD955]/25 dark:bg-[#8CD955]/20 text-[#1a4d0d] dark:text-[#8CD955] ring-2 ring-[#8CD955] ring-offset-2 shadow-sm'
-                        : 'border-gray-200 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:border-[#8CD955]/50 hover:bg-gray-50 dark:hover:bg-[#404040]'
-                      }`}
-                  >
-                    {inst.group_subject}
-                  </button>
-                ))}
+              <div className="relative mb-3">
+                <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <input
+                  type="search"
+                  autoComplete="off"
+                  value={groupsMultiSearch}
+                  onChange={e => setGroupsMultiSearch(e.target.value)}
+                  placeholder="Pesquisar grupos…"
+                  disabled={loadingDbGroups || dbGroups.length === 0}
+                  className="w-full rounded-lg border-2 border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] py-2.5 pl-10 pr-3 text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-400 focus:border-[#8CD955] focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 disabled:opacity-50"
+                />
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-2 max-h-64 overflow-y-auto pr-1">
+                {loadingDbGroups ? (
+                  <p className="col-span-full text-sm text-gray-500 dark:text-gray-400 py-4 text-center">Carregando grupos…</p>
+                ) : filteredGroupsMulti.length === 0 ? (
+                  <p className="col-span-full text-sm text-gray-500 dark:text-gray-400 py-4 text-center">
+                    {dbGroups.length === 0 ? 'Nenhum grupo disponível para seleção.' : 'Nenhum grupo corresponde à pesquisa.'}
+                  </p>
+                ) : (
+                  filteredGroupsMulti.map(g => (
+                    <button
+                      key={g.group_id}
+                      type="button"
+                      onClick={() =>
+                        toggleGroupForAdd({
+                          jid: g.group_id,
+                          subject: g.group_subject || g.group_id,
+                        })
+                      }
+                      className={`px-4 py-3 rounded-lg border-2 transition font-medium text-left ${groupsForAdd.some(x => x.jid === g.group_id)
+                          ? 'border-[#8CD955] bg-[#8CD955]/25 dark:bg-[#8CD955]/20 text-[#1a4d0d] dark:text-[#8CD955] ring-2 ring-[#8CD955] ring-offset-2 shadow-sm'
+                          : 'border-gray-200 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:border-[#8CD955]/50 hover:bg-gray-50 dark:hover:bg-[#404040]'
+                        }`}
+                    >
+                      <span className="block truncate">{g.group_subject || g.group_id}</span>
+                      <span className="block truncate text-xs opacity-70 mt-0.5 font-mono">{g.group_id}</span>
+                    </button>
+                  ))
+                )}
               </div>
               <div className="mt-3">
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Modo de rodízio</label>
