@@ -18,6 +18,7 @@ import { createClient } from '@supabase/supabase-js';
 import { maybeMarkEvolutionInstanceDisconnected } from '../../lib/evolution/mark-instance-disconnected';
 import { computeNextDelaySeconds } from '../../lib/chat/broadcast-delay';
 import { getSequenceDelaySeconds, parseBroadcastSteps } from '../../lib/chat/broadcast-sequence';
+import { coerceEvolutionSendMediaFields } from '../../lib/crm/evolution-send-media-meta';
 
 interface HandlerResponse {
   statusCode: number;
@@ -73,14 +74,20 @@ async function sendEvolutionMessage(
     fallbackEndpoint = `${baseUrl}/message/sendAudio/${instanceName}`;
     body.audio = msgConfig.attachment_url;
   } else {
+    const coerced = coerceEvolutionSendMediaFields({
+      mediatype: msgConfig.type,
+      mimetype: msgConfig.mimetype,
+      fileName: msgConfig.fileName,
+      mediaUrl: msgConfig.attachment_url,
+    });
     endpoint = `${baseUrl}/message/sendMedia/${instanceName}`;
     body = {
       ...body,
       media: msgConfig.attachment_url,
-      mediatype: msgConfig.type,
-      mimetype: msgConfig.mimetype,
+      mediatype: coerced.mediatype,
+      mimetype: coerced.mimetype,
       caption: msgConfig.caption,
-      fileName: msgConfig.fileName,
+      fileName: coerced.fileName,
     };
   }
 

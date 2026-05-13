@@ -45,6 +45,7 @@ export interface ChatConversation {
 }
 
 import { supabaseServiceRole } from './supabase-service';
+import { coerceEvolutionSendMediaFields } from '@/lib/crm/evolution-send-media-meta';
 
 const SAVE_MESSAGE_MAX_RETRIES = 4;
 const SAVE_MESSAGE_BASE_DELAY_MS = 400;
@@ -134,14 +135,20 @@ export class ChatService {
         audio: payload.media,
       };
     } else {
+      const coerced = coerceEvolutionSendMediaFields({
+        mediatype: payload.mediatype,
+        mimetype: payload.mimetype,
+        fileName: payload.fileName,
+        mediaUrl: payload.media,
+      });
       endpoint = `${baseUrl}/message/sendMedia/${instance_name}`;
       body = {
         ...body,
         media: payload.media,
-        mediatype: payload.mediatype,
-        mimetype: payload.mimetype,
+        mediatype: coerced.mediatype,
+        mimetype: coerced.mimetype,
         caption: payload.caption,
-        fileName: payload.fileName,
+        fileName: coerced.fileName,
       };
     }
 

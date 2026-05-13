@@ -9,6 +9,7 @@ import { supabase } from '@/lib/supabase';
 import { computeNextDelaySeconds } from '@/lib/chat/broadcast-delay';
 import { normalizeBroadcastPhoneDigits } from '@/lib/chat/broadcast-phone';
 import { getSequenceDelaySeconds, parseBroadcastSteps, type BroadcastStepConfig } from '@/lib/chat/broadcast-sequence';
+import { resolveEvolutionSendMediaMeta } from '@/lib/crm/evolution-send-media-meta';
 import {
   MessageSquare,
   Send,
@@ -160,6 +161,9 @@ interface BroadcastMessage {
   preview: string;
   message_type: 'text_only' | 'audio' | 'ptv' | 'text_with_attachment';
   attachment_url?: string | null;
+  /** CRM `messages`: image | video | audio — necessário para disparo não tratar vídeo como imagem */
+  attachment_type?: 'image' | 'video' | 'audio' | string | null;
+  attachment_mime?: string | null;
   has_attachment: boolean;
 }
 
@@ -186,9 +190,21 @@ function crmTemplateToBroadcastStep(msg: BroadcastMessage): BroadcastStepConfig 
   if (msg.message_type === 'ptv') {
     return { type: 'video', attachment_url: msg.attachment_url ?? '', source_message_id };
   }
+  if (msg.message_type === 'text_with_attachment' && msg.attachment_type === 'audio') {
+    return { type: 'audio', attachment_url: msg.attachment_url ?? '', source_message_id };
+  }
+  const meta = resolveEvolutionSendMediaMeta({
+    attachment_url: msg.attachment_url,
+    attachment_type: msg.attachment_type ?? null,
+    attachment_mime: msg.attachment_mime ?? null,
+  });
+  const stepType =
+    meta.mediatype === 'document' ? 'document' : meta.mediatype === 'video' ? 'video' : meta.mediatype === 'audio' ? 'audio' : 'image';
   return {
-    type: 'image',
+    type: stepType,
     attachment_url: msg.attachment_url ?? '',
+    mimetype: meta.mimetype,
+    fileName: meta.fileName,
     caption: msg.content,
     source_message_id,
   };
@@ -681,7 +697,7 @@ function MessageContent({
           retryFallback('document') || <span className={`text-sm italic ${textClass}`}>📄 Documento não disponível</span>
         )
       )}
-      {msg.caption && msg.media_type && msg.media_type !== 'text' && msg.media_type !== 'video' && (
+      {msg.caption && msg.media_type && msg.media_type !== 'text' && (
         <p className={`text-sm mt-1 ${textClass}`}>{msg.caption}</p>
       )}
       {(!msg.media_type || msg.media_type === 'text') && msg.text != null && msg.text !== '' && (
@@ -891,7 +907,7 @@ export default function ChatPage() {
   const [broadcastCustomQtyInput, setBroadcastCustomQtyInput] = useState('');
   const broadcastFileInputRef = useRef<HTMLInputElement>(null);
   // Runner (execução em tempo real)
-  const broadcastRunnerRef = useRef<{ stop: boolean }>({ stop: false });
+  const broadcastRunnerRef = useRef<{ stop: boolean; jobId: string | null }>({ stop: false, jobId: null });
   const [activeBroadcastJobId, setActiveBroadcastJobId] = useState<string | null>(null);
   const [activeBroadcastProgress, setActiveBroadcastProgress] = useState<{
     current: number;
@@ -960,6 +976,11 @@ export default function ChatPage() {
         (m.content && m.content.toLowerCase().includes(q))
     );
   }, [broadcastMessages, broadcastPickerQuery, broadcastPickerKind]);
+
+  const broadcastFilledStepCount = useMemo(
+    () => broadcastStepMessageIds.filter((id) => String(id).trim()).length,
+    [broadcastStepMessageIds]
+  );
 
   const broadcastsFilteredForHistory = useMemo(() => {
     let list = broadcasts;
@@ -1607,11 +1628,12 @@ export default function ChatPage() {
   }, [selectedChannel]);
 
   useEffect(() => {
-    if (!selectedChannel || selectedChannel.type !== 'evolution' || activeBroadcastJobId) return;
+    if (!selectedChannel || selectedChannel.type !== 'evolution') return;
     const running = broadcasts.find((b) => b.status === 'running');
-    if (running) {
-      startBroadcastRunner(running.id, running);
-    }
+    if (!running) return;
+    // Evita segundo loop: create já chama startBroadcastRunner e activeBroadcastJobId pode estar stale aqui
+    if (broadcastRunnerRef.current.jobId === running.id && !broadcastRunnerRef.current.stop) return;
+    startBroadcastRunner(running.id, running);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [broadcasts, selectedChannel]);
 
@@ -1693,7 +1715,9 @@ export default function ChatPage() {
 
   // ── Runner do Disparo (loop cliente) ──────────────────────────────────────
   const startBroadcastRunner = useCallback(async (jobId: string, jobConfig: BroadcastJob | null) => {
+    if (broadcastRunnerRef.current.jobId === jobId && !broadcastRunnerRef.current.stop) return;
     broadcastRunnerRef.current.stop = false;
+    broadcastRunnerRef.current.jobId = jobId;
     setBroadcastInstanceDown(false);
     setActiveBroadcastJobId(jobId);
     setActiveBroadcastProgress(null);
@@ -1711,6 +1735,7 @@ export default function ChatPage() {
       } catch {
         // Rede offline — para o runner
         setBroadcastInstanceDown(true);
+        broadcastRunnerRef.current.jobId = null;
         setActiveBroadcastJobId(null);
         loadBroadcasts();
         return;
@@ -1728,12 +1753,14 @@ export default function ChatPage() {
 
       if (!result.success || data?.instanceDown) {
         setBroadcastInstanceDown(true);
+        broadcastRunnerRef.current.jobId = null;
         setActiveBroadcastJobId(null);
         loadBroadcasts();
         return;
       }
 
       if (data?.paused || data?.done) {
+        broadcastRunnerRef.current.jobId = null;
         setActiveBroadcastJobId(null);
         setActiveBroadcastProgress(null);
         setActiveBroadcastCountdown(0);
@@ -1777,6 +1804,7 @@ export default function ChatPage() {
 
   const stopBroadcastRunner = () => {
     broadcastRunnerRef.current.stop = true;
+    broadcastRunnerRef.current.jobId = null;
     setActiveBroadcastJobId(null);
     setActiveBroadcastProgress(null);
     setActiveBroadcastCountdown(0);
@@ -1932,7 +1960,7 @@ export default function ChatPage() {
       setBroadcastError('No máximo 10 mensagens por contato');
       return;
     }
-    if (broadcastSequenceDelay < 1 || broadcastSequenceDelay > 7200) {
+    if (broadcastFilledStepCount > 1 && (broadcastSequenceDelay < 1 || broadcastSequenceDelay > 7200)) {
       setBroadcastError('Intervalo entre mensagens do mesmo contato: use entre 1 e 7200 segundos');
       return;
     }
@@ -1975,7 +2003,7 @@ export default function ChatPage() {
           instance_id: instanceIds[0],
           title: broadcastTitle || firstMsg?.title || 'Disparo',
           message_steps,
-          sequence_delay_seconds: broadcastSequenceDelay,
+          sequence_delay_seconds: broadcastFilledStepCount > 1 ? broadcastSequenceDelay : 15,
           contacts: contactsToSend,
           delay_mode: broadcastDelayMode,
           delay_seconds: broadcastDelay,
@@ -3943,9 +3971,11 @@ export default function ChatPage() {
                 </div>
               )}
 
-              {/* Novo Disparo: altura = conteúdo (shrink-0); max-height + scroll se passar da tela */}
+              {/* Formulário + histórico: dividem a altura; histórico fica sempre visível com scroll próprio */}
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              {/* Novo Disparo: altura limitada para não empurrar o histórico para fora da tela */}
               {showBroadcastForm && (
-                <div className="relative z-20 flex max-h-[min(85vh,640px)] w-full shrink-0 flex-col overflow-y-auto overscroll-y-contain border-b border-gray-200 bg-white dark:border-[#404040] dark:bg-[#2a2a2a]">
+                <div className="relative z-20 flex min-h-0 w-full max-h-[min(50vh,520px)] flex-shrink-0 flex-col overflow-y-auto overscroll-y-contain border-b border-gray-200 bg-white dark:border-[#404040] dark:bg-[#2a2a2a]">
                   <div className="flex flex-col gap-3 p-3">
                     <div className="flex-shrink-0 space-y-3">
                       <div className="flex items-center justify-between">
@@ -4326,6 +4356,7 @@ export default function ChatPage() {
                     )}
 
                     <div className="flex-shrink-0 space-y-3">
+                    {broadcastFilledStepCount > 1 ? (
                     <div className="space-y-2 rounded-lg border border-gray-200 bg-gray-50/80 p-2 dark:border-[#404040] dark:bg-[#333]/50">
                       <p className="text-xs font-medium text-gray-700 dark:text-gray-200">Intervalo entre mensagens (mesmo contato)</p>
                       <p className="text-[11px] text-gray-500 dark:text-gray-400">
@@ -4345,6 +4376,7 @@ export default function ChatPage() {
                         <span className="text-xs text-gray-500 dark:text-gray-400">segundos</span>
                       </div>
                     </div>
+                    ) : null}
 
                     {/* Intervalo entre contatos: fixo ou aleatório */}
                     <div className="space-y-2">
@@ -4472,8 +4504,8 @@ export default function ChatPage() {
                 </div>
               )}
 
-              {/* Histórico de disparos: filtros + lista em cards */}
-              <div className="relative z-0 flex min-h-0 flex-1 flex-col overflow-hidden">
+              {/* Histórico de disparos: filtros + lista em cards — ocupa o restante da coluna (mín. ~35vh) */}
+              <div className="relative z-0 flex min-h-0 flex-1 flex-col overflow-hidden border-t border-gray-100 bg-gray-50/30 dark:border-[#333] dark:bg-[#262626]/50">
                 {broadcastsLoading ? (
                   <div className="flex flex-1 items-center justify-center p-6">
                     <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
@@ -4733,6 +4765,7 @@ export default function ChatPage() {
                     </div>
                   </>
                 )}
+              </div>
               </div>
             </div>
           ) : activeView === 'agent' ? (

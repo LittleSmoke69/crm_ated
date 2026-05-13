@@ -640,7 +640,7 @@ function MessageContent({
           retryFallback('document') || <span className={`text-sm italic ${textClass}`}>📄 Documento não disponível</span>
         )
       )}
-      {msg.caption && msg.media_type && msg.media_type !== 'text' && msg.media_type !== 'video' && (
+      {msg.caption && msg.media_type && msg.media_type !== 'text' && (
         <p className={`text-sm mt-1 ${textClass}`}>{msg.caption}</p>
       )}
       {(!msg.media_type || msg.media_type === 'text') && msg.text != null && msg.text !== '' && (
