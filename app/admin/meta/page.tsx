@@ -349,6 +349,23 @@ function formatCostPerActionTypeCell(raw: unknown): { short: string; title: stri
   return { short, title };
 }
 
+/** Opções de imposto no card «Cobrado no Cartão» (percentual somado ao valor da Meta). */
+const CARD_CHARGE_TAX_OPTIONS = [12.25, 13, 14, 15] as const;
+type CardChargeTaxPct = (typeof CARD_CHARGE_TAX_OPTIONS)[number];
+const CARD_CHARGE_TAX_STORAGE_KEY = 'admin_meta_card_charge_tax_pct';
+
+function parseCardChargeTaxPct(raw: string | null): CardChargeTaxPct {
+  if (raw == null || raw === '') return 12.25;
+  const n = Number(String(raw).replace(',', '.'));
+  if (!Number.isFinite(n)) return 12.25;
+  const found = CARD_CHARGE_TAX_OPTIONS.find((o) => Math.abs(o - n) < 0.0001);
+  return found ?? 12.25;
+}
+
+function formatCardTaxPercentLabel(pct: CardChargeTaxPct): string {
+  return pct === 12.25 ? '12,25%' : `${pct}%`;
+}
+
 export default function AdminMetaPage() {
   const { checking, userId } = useRequireAuth();
   const router = useTenantRouter();
@@ -542,6 +559,15 @@ export default function AdminMetaPage() {
   const [consultorAdsFilterByBanca, setConsultorAdsFilterByBanca] = useState<Record<string, string>>({});
   /** Chave da campanha com o dropdown de consultores aberto (banca_id:campaign_id). */
   const [openAdsDropdownKey, setOpenAdsDropdownKey] = useState<string | null>(null);
+  /** Imposto estimado sobre cobranças no cartão (soma ao valor Meta no card e no selo de resumo). */
+  const [cardChargeTaxPercent, setCardChargeTaxPercent] = useState<CardChargeTaxPct>(() => {
+    if (typeof window === 'undefined') return 12.25;
+    try {
+      return parseCardChargeTaxPct(localStorage.getItem(CARD_CHARGE_TAX_STORAGE_KEY));
+    } catch {
+      return 12.25;
+    }
+  });
   const [consultorModalOpen, setConsultorModalOpen] = useState(false);
   const [consultorModalCampaignKey, setConsultorModalCampaignKey] = useState<string>('');
   const [consultorModalSearch, setConsultorModalSearch] = useState('');
@@ -693,6 +719,14 @@ export default function AdminMetaPage() {
   useEffect(() => {
     adminMetaSelectedIntegrationIdRef.current = adminMetaSelectedIntegrationId;
   }, [adminMetaSelectedIntegrationId]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(CARD_CHARGE_TAX_STORAGE_KEY, String(cardChargeTaxPercent));
+    } catch {
+      /* ignore */
+    }
+  }, [cardChargeTaxPercent]);
 
   useEffect(() => {
     if (!userId || checking) return;
@@ -2789,6 +2823,46 @@ export default function AdminMetaPage() {
     liveCardCharges,
   ]);
 
+  const cardChargeTaxMultiplier = useMemo(() => 1 + cardChargeTaxPercent / 100, [cardChargeTaxPercent]);
+
+  const cobradoCartaoComImposto = useMemo(() => {
+    const baseBrl = Number(metaSummaryCards.cardCharges) || 0;
+    const baseUsd = Number(liveCardChargesUsdComponent) || 0;
+    const baseWindowBrl = Number(liveCardChargesWindow) || 0;
+    const baseWindowUsd = Number(liveCardChargesWindowUsdComponent) || 0;
+    const m = cardChargeTaxMultiplier;
+    return {
+      baseBrl,
+      baseUsd,
+      taxBrl: baseBrl * (m - 1),
+      taxUsd: baseUsd * (m - 1),
+      totalBrl: baseBrl * m,
+      totalUsd: baseUsd * m,
+      windowTotalBrl: baseWindowBrl * m,
+      windowTotalUsd: baseWindowUsd * m,
+    };
+  }, [
+    metaSummaryCards.cardCharges,
+    liveCardChargesUsdComponent,
+    liveCardChargesWindow,
+    liveCardChargesWindowUsdComponent,
+    cardChargeTaxMultiplier,
+  ]);
+
+  const latestChargeTaxed = useMemo(() => {
+    if (!liveLatestCharge) return null;
+    const m = cardChargeTaxMultiplier;
+    return {
+      label: liveLatestCharge.label,
+      currency: liveLatestCharge.currency,
+      amount: liveLatestCharge.amount * m,
+      amount_brl:
+        liveLatestCharge.amount_brl != null && Number.isFinite(liveLatestCharge.amount_brl)
+          ? liveLatestCharge.amount_brl * m
+          : null,
+    };
+  }, [liveLatestCharge, cardChargeTaxMultiplier]);
+
   /** Ordenação estável para leitura humana: agrupa por banca e ordena por data dentro da banca. */
   const orderedDisplayMetricCampaignRows = useMemo(() => {
     const rows = Array.isArray(displayMetricCampaignRows) ? [...displayMetricCampaignRows] : [];
@@ -3201,9 +3275,30 @@ export default function AdminMetaPage() {
 
           {/* Card 2: Cobrado no Cartão */}
           <div className={`${metaCard} p-4`}>
-            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Cobrado no Cartão</p>
+            <div className="flex items-start justify-between gap-2">
+              <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide min-w-0">
+                Cobrado no Cartão
+              </p>
+              {usingLiveMetaCards && liveAggregate?.billing ? (
+                <label className="flex items-center gap-1 shrink-0 text-[10px] text-gray-600 dark:text-gray-300">
+                  <span className="whitespace-nowrap hidden sm:inline">Imposto</span>
+                  <select
+                    value={String(cardChargeTaxPercent)}
+                    onChange={(e) => setCardChargeTaxPercent(parseCardChargeTaxPct(e.target.value))}
+                    title="Percentual somado ao valor cobrado pela Meta (imposto estimado)."
+                    className="max-w-[5.5rem] rounded-md border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] px-1.5 py-0.5 text-[10px] font-semibold text-gray-800 dark:text-gray-100 cursor-pointer"
+                  >
+                    {CARD_CHARGE_TAX_OPTIONS.map((pct) => (
+                      <option key={pct} value={String(pct)}>
+                        {formatCardTaxPercentLabel(pct)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+            </div>
             <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1 leading-snug">
-              Débitos reais no cartão pela Meta no período. A cobrança ocorre ao atingir o limite da conta.
+              Débitos reais no cartão pela Meta no período. O total em destaque inclui o imposto do menu ao lado.
             </p>
             {metaSummaryCardsLoading ? (
               <div className="mt-3 flex items-center gap-2 text-gray-600 dark:text-gray-400 min-h-[2rem]">
@@ -3213,12 +3308,41 @@ export default function AdminMetaPage() {
             ) : usingLiveMetaCards && liveAggregate?.billing ? (
               <>
                 <p className="text-2xl font-bold text-gray-900 dark:text-gray-50 mt-2 tabular-nums tracking-tight">
-                  {formatBRL(metaSummaryCards.cardCharges)}
+                  {formatBRL(cobradoCartaoComImposto.totalBrl)}
                 </p>
-                {liveCardChargesUsdComponent > 0 ? (
+                {cobradoCartaoComImposto.baseUsd > 0 ? (
                   <p className="text-[11px] font-medium text-amber-700 dark:text-amber-300 mt-1 tabular-nums">
-                    {formatMoneyByCurrency(liveCardChargesUsdComponent, 'USD')}
-                    <span className="font-normal text-gray-500 dark:text-gray-400 ml-1">(contas USD)</span>
+                    {formatMoneyByCurrency(cobradoCartaoComImposto.totalUsd, 'USD')}
+                    <span className="font-normal text-gray-500 dark:text-gray-400 ml-1">(contas USD, c/ imposto)</span>
+                  </p>
+                ) : null}
+                {cobradoCartaoComImposto.baseBrl > 0 || cobradoCartaoComImposto.baseUsd > 0 ? (
+                  <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1.5 leading-snug tabular-nums">
+                    Base Meta{' '}
+                    <span className="font-medium text-gray-700 dark:text-gray-300">
+                      {formatBRL(cobradoCartaoComImposto.baseBrl)}
+                    </span>
+                    {cobradoCartaoComImposto.baseUsd > 0 ? (
+                      <>
+                        {' · '}
+                        <span className="font-medium text-amber-800/90 dark:text-amber-200/90">
+                          {formatMoneyByCurrency(cobradoCartaoComImposto.baseUsd, 'USD')}
+                        </span>
+                      </>
+                    ) : null}
+                    <span className="text-gray-400 dark:text-gray-500"> · </span>
+                    +{formatCardTaxPercentLabel(cardChargeTaxPercent)} → imposto{' '}
+                    <span className="font-medium text-gray-700 dark:text-gray-300">
+                      {formatBRL(cobradoCartaoComImposto.taxBrl)}
+                    </span>
+                    {cobradoCartaoComImposto.taxUsd > 0 ? (
+                      <>
+                        {' · '}
+                        <span className="font-medium text-amber-800/90 dark:text-amber-200/90">
+                          {formatMoneyByCurrency(cobradoCartaoComImposto.taxUsd, 'USD')}
+                        </span>
+                      </>
+                    ) : null}
                   </p>
                 ) : null}
                 <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1">
@@ -3229,47 +3353,47 @@ export default function AdminMetaPage() {
                 {(liveCardChargesCountWindow > liveCardChargesCount || liveLatestCharge) ? (
                   <p
                     className="text-[11px] text-gray-500 dark:text-gray-400 mt-1"
-                    title="Histórico dos últimos 90 dias."
+                    title="Histórico dos últimos 90 dias (valores com o mesmo imposto selecionado)."
                   >
                     Últimos 90d:{' '}
                     <span className="font-medium text-gray-700 dark:text-gray-300 tabular-nums">
-                      {formatBRL(liveCardChargesWindow)}
+                      {formatBRL(cobradoCartaoComImposto.windowTotalBrl)}
                     </span>
                     {liveCardChargesWindowUsdComponent > 0 ? (
                       <>
                         {' · '}
                         <span className="font-medium text-amber-700 dark:text-amber-300 tabular-nums">
-                          {formatMoneyByCurrency(liveCardChargesWindowUsdComponent, 'USD')}
+                          {formatMoneyByCurrency(cobradoCartaoComImposto.windowTotalUsd, 'USD')}
                         </span>
                       </>
                     ) : null}
                     {liveCardChargesCountWindow > 0
                       ? ` · ${liveCardChargesCountWindow} ${liveCardChargesCountWindow === 1 ? 'cobrança' : 'cobranças'}`
                       : ''}
-                    {liveLatestCharge ? (
+                    {latestChargeTaxed ? (
                       <>
                         {' · Última: '}
-                        {liveLatestCharge.currency === 'USD' ? (
+                        {latestChargeTaxed.currency === 'USD' ? (
                           <>
                             <span className="font-medium text-gray-700 dark:text-gray-300 tabular-nums">
-                              {formatMoneyByCurrency(liveLatestCharge.amount, 'USD')}
+                              {formatMoneyByCurrency(latestChargeTaxed.amount, 'USD')}
                             </span>
-                            {liveLatestCharge.amount_brl != null ? (
+                            {latestChargeTaxed.amount_brl != null ? (
                               <>
                                 {' ≈ '}
                                 <span className="font-medium text-gray-700 dark:text-gray-300 tabular-nums">
-                                  {formatBRL(liveLatestCharge.amount_brl)}
+                                  {formatBRL(latestChargeTaxed.amount_brl)}
                                 </span>
                               </>
                             ) : null}
                           </>
                         ) : (
                           <span className="font-medium text-gray-700 dark:text-gray-300 tabular-nums">
-                            {formatBRL(liveLatestCharge.amount_brl ?? liveLatestCharge.amount)}
+                            {formatBRL(latestChargeTaxed.amount_brl ?? latestChargeTaxed.amount)}
                           </span>
                         )}
                         {' em '}
-                        {liveLatestCharge.label}
+                        {latestChargeTaxed.label}
                       </>
                     ) : null}
                   </p>
@@ -3349,12 +3473,12 @@ export default function AdminMetaPage() {
                   <>
                     <span
                       className="inline-flex items-center gap-1 rounded-full bg-rose-100 dark:bg-rose-950/70 px-2.5 py-0.5 text-[11px] font-semibold uppercase text-rose-900 dark:text-rose-300 border border-rose-200/80 dark:border-rose-800"
-                      title="Total consolidado em R$ (USD convertido). Contas em dólar também mostram a soma bruta em US$."
+                      title={`Total no cartão em BRL (e USD bruto) com imposto ${formatCardTaxPercentLabel(cardChargeTaxPercent)} sobre o valor Meta.`}
                     >
                       <DollarSign className="w-3 h-3 shrink-0" />
-                      Cobrado no cartão: {formatBRL(liveCardCharges)}
+                      Cobrado no cartão: {formatBRL(cobradoCartaoComImposto.totalBrl)}
                       {liveCardChargesUsdComponent > 0
-                        ? ` · ${formatMoneyByCurrency(liveCardChargesUsdComponent, 'USD')}`
+                        ? ` · ${formatMoneyByCurrency(cobradoCartaoComImposto.totalUsd, 'USD')}`
                         : ''}
                       {liveCardChargesCount > 0
                         ? ` · ${liveCardChargesCount} ${liveCardChargesCount === 1 ? 'cobrança' : 'cobranças'}`
@@ -3463,7 +3587,7 @@ export default function AdminMetaPage() {
                               <th className="px-4 py-2.5">Início</th>
                               <th
                                 className="px-4 py-2 min-w-[200px]"
-                                title="Consultores que acumulam o spend Meta desta campanha no card «Ads (Meta/Redirect)» em Meu Desempenho (cada um com o valor integral). Sem seleção = regra automática (vínculos + redirect)."
+                                title="Consultores do card Ads (Meu Desempenho): seleção manual; mais os do redirect quando a campanha tem projeto vinculado (grupos do redirect). Badges «Redirect» / «Manual». Sem seleção manual = regra automática de spend (vínculos + redirect)."
                               >
                                 Consultores · card Ads
                               </th>
@@ -3644,6 +3768,24 @@ export default function AdminMetaPage() {
                                 }
                               }
                               const isAdsDropdownOpen = openAdsDropdownKey === adsPickKey;
+                              const assignedForAdsRow = Array.isArray(
+                                (c as { assigned_consultors?: unknown }).assigned_consultors
+                              )
+                                ? ((c as { assigned_consultors: any[] }).assigned_consultors ?? [])
+                                : [];
+                              const fromRedirectVinculo = assignedForAdsRow.filter(
+                                (ac: Record<string, unknown>) => Boolean(ac?.redirect_from_linked_project)
+                              );
+                              const redirectVinculoById = new Map<string, Record<string, unknown>>(
+                                fromRedirectVinculo.map((ac: Record<string, unknown>) => [
+                                  String(ac?.id ?? '').trim(),
+                                  ac,
+                                ])
+                              );
+                              const redirectVinculoIdSet = new Set(
+                                [...redirectVinculoById.keys()].filter((id) => id.length > 0)
+                              );
+                              const hasRedirectVinculoChips = redirectVinculoIdSet.size > 0;
                               return (
                                 <tr key={rowKey} className={rowClass}>
                                   <td className="px-4 py-2 text-gray-700 dark:text-white">{c.start_time ? formatDate(c.start_time) : '-'}</td>
@@ -3655,39 +3797,119 @@ export default function AdminMetaPage() {
                                           className="flex flex-wrap items-center gap-1 cursor-pointer"
                                           onClick={() => setOpenAdsDropdownKey(isAdsDropdownOpen ? null : adsPickKey)}
                                         >
-                                          {adsSelectedIds.length > 0 ? (
-                                            <>
-                                              {adsSelectedIds.map((sid) => {
+                                          {hasRedirectVinculoChips
+                                            ? [...redirectVinculoIdSet].map((sid) => {
+                                                const ac = redirectVinculoById.get(sid);
                                                 const selCo = rawAdsConsultors.find((co) => co.id === sid);
-                                                const name = selCo?.full_name || selCo?.email || sid;
+                                                const pick = (u: unknown) => (typeof u === 'string' ? u.trim() : '');
+                                                const name =
+                                                  pick(ac?.full_name) ||
+                                                  pick(ac?.email) ||
+                                                  selCo?.full_name ||
+                                                  selCo?.email ||
+                                                  sid;
+                                                const isAlsoManual = adsSelectedIds.includes(sid);
                                                 return (
                                                   <span
-                                                    key={sid}
-                                                    className="inline-flex items-center gap-1 rounded-full bg-indigo-100 dark:bg-indigo-900/50 text-indigo-800 dark:text-indigo-200 text-[10px] font-medium px-2 py-0.5 leading-tight max-w-full"
+                                                    key={`rv-${sid}`}
+                                                    className={`inline-flex items-center gap-1 rounded-full text-[10px] font-medium px-2 py-0.5 leading-tight max-w-full border ${
+                                                      isAlsoManual
+                                                        ? 'bg-indigo-50 dark:bg-indigo-900/40 text-indigo-900 dark:text-indigo-100 border-emerald-400/70 dark:border-emerald-600/50'
+                                                        : 'bg-emerald-50 dark:bg-emerald-900/30 text-emerald-900 dark:text-emerald-200 border-emerald-300/60 dark:border-emerald-700/50'
+                                                    }`}
                                                   >
-                                                    <span className="truncate max-w-[150px]">{name}</span>
-                                                    <button
-                                                      type="button"
-                                                      disabled={campaignAdsAttributionSavingKey === adsPickKey}
-                                                      className="shrink-0 opacity-60 hover:opacity-100 disabled:pointer-events-none"
-                                                      onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        const next = adsSelectedIds.filter((id) => id !== sid);
-                                                        setCampaignAdsAttributionDraft((prev) => ({ ...prev, [adsPickKey]: next }));
-                                                        void handleSaveCampaignAdsAttribution(String(c.banca_id), String(c.campaign_id), next, c.name ?? null);
-                                                      }}
+                                                    <span className="truncate max-w-[130px]">{name}</span>
+                                                    <span
+                                                      className={`shrink-0 rounded px-1 py-0 text-[8px] font-bold uppercase tracking-wide ${
+                                                        isAlsoManual
+                                                          ? 'bg-emerald-200/90 dark:bg-emerald-800/60 text-emerald-900 dark:text-emerald-100'
+                                                          : 'bg-emerald-200/90 dark:bg-emerald-800/50 text-emerald-900 dark:text-emerald-100'
+                                                      }`}
+                                                      title="Consultor dos grupos do projeto de redirect vinculado a esta campanha (coluna Redirect)."
                                                     >
-                                                      ×
-                                                    </button>
+                                                      {isAlsoManual ? 'Redirect + manual' : 'Redirect'}
+                                                    </span>
+                                                    {isAlsoManual ? (
+                                                      <button
+                                                        type="button"
+                                                        disabled={campaignAdsAttributionSavingKey === adsPickKey}
+                                                        className="shrink-0 opacity-60 hover:opacity-100 disabled:pointer-events-none"
+                                                        onClick={(e) => {
+                                                          e.stopPropagation();
+                                                          const next = adsSelectedIds.filter((id) => id !== sid);
+                                                          setCampaignAdsAttributionDraft((prev) => ({
+                                                            ...prev,
+                                                            [adsPickKey]: next,
+                                                          }));
+                                                          void handleSaveCampaignAdsAttribution(
+                                                            String(c.banca_id),
+                                                            String(c.campaign_id),
+                                                            next,
+                                                            c.name ?? null
+                                                          );
+                                                        }}
+                                                      >
+                                                        ×
+                                                      </button>
+                                                    ) : null}
                                                   </span>
                                                 );
-                                              })}
-                                            </>
-                                          ) : (
+                                              })
+                                            : null}
+                                          {adsSelectedIds
+                                            .filter((sid) => !redirectVinculoIdSet.has(sid))
+                                            .map((sid) => {
+                                              const selCo = rawAdsConsultors.find((co) => co.id === sid);
+                                              const name = selCo?.full_name || selCo?.email || sid;
+                                              return (
+                                                <span
+                                                  key={`m-${sid}`}
+                                                  className="inline-flex items-center gap-1 rounded-full bg-indigo-100 dark:bg-indigo-900/50 text-indigo-800 dark:text-indigo-200 text-[10px] font-medium px-2 py-0.5 leading-tight max-w-full"
+                                                >
+                                                  <span className="truncate max-w-[130px]">{name}</span>
+                                                  <span
+                                                    className="shrink-0 rounded px-1 py-0 text-[8px] font-bold uppercase tracking-wide bg-indigo-200/90 dark:bg-indigo-800/60 text-indigo-900 dark:text-indigo-100"
+                                                    title="Seleção explícita no card Ads (Meu Desempenho)."
+                                                  >
+                                                    Manual
+                                                  </span>
+                                                  <button
+                                                    type="button"
+                                                    disabled={campaignAdsAttributionSavingKey === adsPickKey}
+                                                    className="shrink-0 opacity-60 hover:opacity-100 disabled:pointer-events-none"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      const next = adsSelectedIds.filter((id) => id !== sid);
+                                                      setCampaignAdsAttributionDraft((prev) => ({
+                                                        ...prev,
+                                                        [adsPickKey]: next,
+                                                      }));
+                                                      void handleSaveCampaignAdsAttribution(
+                                                        String(c.banca_id),
+                                                        String(c.campaign_id),
+                                                        next,
+                                                        c.name ?? null
+                                                      );
+                                                    }}
+                                                  >
+                                                    ×
+                                                  </button>
+                                                </span>
+                                              );
+                                            })}
+                                          {adsSelectedIds.length === 0 && !hasRedirectVinculoChips ? (
                                             <span className="text-[10px] text-gray-400 dark:text-gray-500 italic">
                                               Automático (vínculos)
                                             </span>
-                                          )}
+                                          ) : null}
+                                          {adsSelectedIds.length === 0 && hasRedirectVinculoChips ? (
+                                            <span
+                                              className="text-[9px] text-gray-500 dark:text-gray-400 italic max-w-[200px] leading-tight"
+                                              title="Nenhum consultor marcado manualmente no card Ads; o spend no Meu Desempenho segue a regra automática (vínculos + redirect)."
+                                            >
+                                              Sem seleção manual no card Ads
+                                            </span>
+                                          ) : null}
                                           {/* Chevron toggle */}
                                           <span className="ml-auto shrink-0 text-gray-400 dark:text-gray-500 text-[10px] select-none">
                                             {isAdsDropdownOpen ? '▲' : '▼'}

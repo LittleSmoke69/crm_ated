@@ -71,7 +71,7 @@ BEGIN
     (v_zaploto_id, 'gestao_banca', 'Gestão de Banca', '/dono-banca', 'BarChart3', NULL, 18),
     (v_zaploto_id, 'gestao_trafego', 'Gestão de Tráfego', '/gestor-trafego', 'BarChart3', NULL, 19),
     (v_zaploto_id, 'gestao_consultores', 'Gestão de Consultores', '/gerente', 'Briefcase', NULL, 20),
-    (v_zaploto_id, 'meu_desempenho', 'Meu Desempenho', '/consultor', 'BarChart3', NULL, 21),
+    (v_zaploto_id, 'meu_desempenho', 'Desempenho', '/consultor', 'BarChart3', NULL, 21),
     (v_zaploto_id, 'vsl_redirect', 'VSL & Redirect', '/admin/vsl', 'ExternalLink', NULL, 22),
     (v_zaploto_id, 'profile', 'Meu Perfil', '/perfil', 'User', NULL, 99)
   ON CONFLICT (zaploto_id, code) DO NOTHING;

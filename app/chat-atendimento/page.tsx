@@ -6,6 +6,9 @@ import { useRequireAuth } from '@/utils/useRequireAuth';
 import Layout from '@/components/Layout';
 import Link from '@/components/WhitelabelLink';
 import { supabase } from '@/lib/supabase';
+import { computeNextDelaySeconds } from '@/lib/chat/broadcast-delay';
+import { normalizeBroadcastPhoneDigits } from '@/lib/chat/broadcast-phone';
+import { getSequenceDelaySeconds, parseBroadcastSteps, type BroadcastStepConfig } from '@/lib/chat/broadcast-sequence';
 import {
   MessageSquare,
   Send,
@@ -45,6 +48,8 @@ import {
   ToggleRight,
   ChevronDown,
   RefreshCw,
+  History,
+  ListFilter,
 } from 'lucide-react';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
@@ -105,6 +110,28 @@ type Channel = ChannelEvolution | ChannelWhatsAppOfficial;
 type ConversationFilter = 'mine' | 'unassigned';
 type ActiveView = 'chat' | 'contacts' | 'broadcast' | 'agent';
 
+/** Presets de intervalo aleatório (segundos entre envios). */
+const BROADCAST_DELAY_PRESETS = {
+  padrao: { min: 1, max: 120, label: 'Padrão 1–120 s' },
+  moderado: { min: 45, max: 400, label: 'Moderado 45–400 s' },
+  conservador: { min: 180, max: 1200, label: 'Conservador 3–20 min' },
+} as const;
+
+function formatBroadcastListDate(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleString('pt-BR', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return '—';
+  }
+}
+
 interface BroadcastJob {
   id: string;
   title: string;
@@ -112,11 +139,18 @@ interface BroadcastJob {
   total_count: number;
   current_index: number;
   delay_seconds: number;
+  delay_mode?: 'fixed' | 'random' | string;
+  delay_min_seconds?: number | null;
+  delay_max_seconds?: number | null;
+  broadcast_instances?: { id: string; name: string }[] | null;
   status: 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
   started_at: string | null;
   completed_at: string | null;
   created_at: string;
   last_error: string | null;
+  message_step_index?: number;
+  /** Quantidade de mensagens na sequência por contato (derivado do job). */
+  message_steps_count?: number;
 }
 
 interface BroadcastMessage {
@@ -129,9 +163,35 @@ interface BroadcastMessage {
   has_attachment: boolean;
 }
 
+const BROADCAST_MSG_TYPE_LABEL: Record<BroadcastMessage['message_type'], string> = {
+  text_only: 'Texto',
+  audio: 'Áudio',
+  ptv: 'Vídeo',
+  text_with_attachment: 'Mídia',
+};
+
 interface BroadcastContact {
   phone: string;
   name?: string;
+}
+
+function crmTemplateToBroadcastStep(msg: BroadcastMessage): BroadcastStepConfig {
+  const source_message_id = msg.id;
+  if (msg.message_type === 'text_only') {
+    return { type: 'text', content: msg.content, source_message_id };
+  }
+  if (msg.message_type === 'audio') {
+    return { type: 'audio', attachment_url: msg.attachment_url ?? '', source_message_id };
+  }
+  if (msg.message_type === 'ptv') {
+    return { type: 'video', attachment_url: msg.attachment_url ?? '', source_message_id };
+  }
+  return {
+    type: 'image',
+    attachment_url: msg.attachment_url ?? '',
+    caption: msg.content,
+    source_message_id,
+  };
 }
 
 interface FlowOption {
@@ -809,24 +869,53 @@ export default function ChatPage() {
   const [showBroadcastForm, setShowBroadcastForm] = useState(false);
   const [broadcastTitle, setBroadcastTitle] = useState('');
   const [broadcastDelay, setBroadcastDelay] = useState(120);
+  /** Instâncias Evolution em rotação (mínimo 1). */
+  const [broadcastInstanceIds, setBroadcastInstanceIds] = useState<Set<string>>(new Set());
+  const [broadcastDelayMode, setBroadcastDelayMode] = useState<'fixed' | 'random'>('random');
+  const [broadcastDelayMin, setBroadcastDelayMin] = useState(1);
+  const [broadcastDelayMax, setBroadcastDelayMax] = useState(120);
   const [broadcastCreating, setBroadcastCreating] = useState(false);
   const [broadcastError, setBroadcastError] = useState<string | null>(null);
   // Templates de mensagem
   const [broadcastMessages, setBroadcastMessages] = useState<BroadcastMessage[]>([]);
   const [broadcastMessagesLoading, setBroadcastMessagesLoading] = useState(false);
-  const [broadcastSelectedMsgId, setBroadcastSelectedMsgId] = useState('');
+  /** Ordem dos templates CRM enviados ao mesmo contato antes de passar ao próximo. */
+  const [broadcastStepMessageIds, setBroadcastStepMessageIds] = useState<string[]>(['']);
+  /** Segundos entre cada mensagem da sequência no mesmo número (1–7200). */
+  const [broadcastSequenceDelay, setBroadcastSequenceDelay] = useState(15);
   // Contatos via CSV
   const [broadcastContacts, setBroadcastContacts] = useState<BroadcastContact[]>([]);
   const [broadcastContactsFileName, setBroadcastContactsFileName] = useState('');
+  /** Índices da lista importada que entram no disparo (checkboxes + atalhos 50/100/N). */
+  const [broadcastSelectedIndices, setBroadcastSelectedIndices] = useState<Set<number>>(new Set());
+  const [broadcastCustomQtyInput, setBroadcastCustomQtyInput] = useState('');
   const broadcastFileInputRef = useRef<HTMLInputElement>(null);
   // Runner (execução em tempo real)
   const broadcastRunnerRef = useRef<{ stop: boolean }>({ stop: false });
   const [activeBroadcastJobId, setActiveBroadcastJobId] = useState<string | null>(null);
   const [activeBroadcastProgress, setActiveBroadcastProgress] = useState<{
-    current: number; total: number; contact?: BroadcastContact; lastSent?: BroadcastContact;
+    current: number;
+    total: number;
+    contact?: BroadcastContact;
+    lastSent?: BroadcastContact;
+    messageStep?: number;
+    messageStepsTotal?: number;
+    sameContactContinue?: boolean;
   } | null>(null);
   const [activeBroadcastCountdown, setActiveBroadcastCountdown] = useState(0);
   const [broadcastInstanceDown, setBroadcastInstanceDown] = useState(false);
+  /** Carregar job para refazer disparo (pendentes ou lista inteira). */
+  const [broadcastRetryLoadingId, setBroadcastRetryLoadingId] = useState<string | null>(null);
+  /** Quando true, não resetamos instâncias/intervalo ao abrir o formulário (valores vêm do job). */
+  const [broadcastRetryMode, setBroadcastRetryMode] = useState(false);
+  /** Seletor de template com busca (qual passo da sequência está aberto). */
+  const [broadcastPickerOpenStep, setBroadcastPickerOpenStep] = useState<number | null>(null);
+  const [broadcastPickerQuery, setBroadcastPickerQuery] = useState('');
+  const [broadcastPickerKind, setBroadcastPickerKind] = useState<'all' | BroadcastMessage['message_type']>('all');
+  const broadcastPickerSearchInputRef = useRef<HTMLInputElement>(null);
+  /** Filtro da lista de histórico de disparos. */
+  const [broadcastHistoryTab, setBroadcastHistoryTab] = useState<'all' | 'in_progress' | 'ended'>('all');
+  const [broadcastHistoryQuery, setBroadcastHistoryQuery] = useState('');
 
   // Agente de IA
   const [instanceFlowConfig, setInstanceFlowConfig] = useState<InstanceFlowConfig | null | undefined>(undefined);
@@ -858,6 +947,50 @@ export default function ChatPage() {
     }
     return chatContactsList.filter((c) => c.crm_sync_kind === 'transferred');
   }, [chatContactsList, chatContactsKindFilter]);
+
+  const broadcastMessagesForTemplatePicker = useMemo(() => {
+    let list = broadcastMessages;
+    if (broadcastPickerKind !== 'all') list = list.filter((m) => m.message_type === broadcastPickerKind);
+    const q = broadcastPickerQuery.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter(
+      (m) =>
+        m.title.toLowerCase().includes(q) ||
+        (m.preview && m.preview.toLowerCase().includes(q)) ||
+        (m.content && m.content.toLowerCase().includes(q))
+    );
+  }, [broadcastMessages, broadcastPickerQuery, broadcastPickerKind]);
+
+  const broadcastsFilteredForHistory = useMemo(() => {
+    let list = broadcasts;
+    const q = broadcastHistoryQuery.trim().toLowerCase();
+    if (q) list = list.filter((j) => (j.title || '').toLowerCase().includes(q));
+    if (broadcastHistoryTab === 'in_progress') {
+      return list.filter((j) => ['pending', 'running', 'paused'].includes(j.status));
+    }
+    if (broadcastHistoryTab === 'ended') {
+      return list.filter((j) => ['completed', 'cancelled', 'failed'].includes(j.status));
+    }
+    return list;
+  }, [broadcasts, broadcastHistoryTab, broadcastHistoryQuery]);
+
+  useEffect(() => {
+    if (broadcastPickerOpenStep === null) return;
+    const t = window.setTimeout(() => broadcastPickerSearchInputRef.current?.focus(), 0);
+    return () => clearTimeout(t);
+  }, [broadcastPickerOpenStep]);
+
+  useEffect(() => {
+    if (broadcastPickerOpenStep === null) return;
+    const onDoc = (e: MouseEvent) => {
+      const wrap = document.querySelector(`[data-broadcast-template-picker="${broadcastPickerOpenStep}"]`);
+      if (wrap && !wrap.contains(e.target as Node)) {
+        setBroadcastPickerOpenStep(null);
+      }
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [broadcastPickerOpenStep]);
 
   const authHeaders = (): Record<string, string> => (userId ? { 'X-User-Id': userId } : {});
 
@@ -1456,6 +1589,17 @@ export default function ChatPage() {
   }, [activeView, loadBroadcasts, loadBroadcastMessages]);
 
   useEffect(() => {
+    if (!showBroadcastForm || selectedChannel?.type !== 'evolution') return;
+    if (broadcastRetryMode) return;
+    setBroadcastInstanceIds(new Set([selectedChannel.id]));
+    setBroadcastDelayMode('random');
+    setBroadcastDelayMin(BROADCAST_DELAY_PRESETS.padrao.min);
+    setBroadcastDelayMax(BROADCAST_DELAY_PRESETS.padrao.max);
+    setBroadcastStepMessageIds(['']);
+    setBroadcastSequenceDelay(15);
+  }, [showBroadcastForm, selectedChannel?.id, selectedChannel?.type, broadcastRetryMode]);
+
+  useEffect(() => {
     if (selectedChannel?.type === 'evolution') {
       loadBroadcasts();
     }
@@ -1466,7 +1610,7 @@ export default function ChatPage() {
     if (!selectedChannel || selectedChannel.type !== 'evolution' || activeBroadcastJobId) return;
     const running = broadcasts.find((b) => b.status === 'running');
     if (running) {
-      startBroadcastRunner(running.id, running.delay_seconds || 120);
+      startBroadcastRunner(running.id, running);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [broadcasts, selectedChannel]);
@@ -1491,7 +1635,9 @@ export default function ChatPage() {
       const cols = lines[i].split(delimiter);
       const rawPhone = (cols[phoneCol] || '').replace(/\D/g, '');
       if (rawPhone.length < 8) continue;
-      result.push({ phone: rawPhone, name: cols[nameCol]?.trim() || undefined });
+      const phone = normalizeBroadcastPhoneDigits(rawPhone);
+      if (phone.length < 8) continue;
+      result.push({ phone, name: cols[nameCol]?.trim() || undefined });
     }
     return result;
   };
@@ -1505,6 +1651,8 @@ export default function ChatPage() {
       const text = ev.target?.result as string;
       const parsed = parseBroadcastCSV(text);
       setBroadcastContacts(parsed);
+      setBroadcastSelectedIndices(new Set(parsed.map((_, i) => i)));
+      setBroadcastCustomQtyInput('');
       if (parsed.length === 0) setBroadcastError('Nenhum contato válido encontrado no arquivo.');
       else setBroadcastError(null);
     };
@@ -1512,8 +1660,39 @@ export default function ChatPage() {
     e.target.value = '';
   };
 
+  const selectBroadcastFirstN = useCallback((n: number) => {
+    const len = broadcastContacts.length;
+    if (len === 0) return;
+    const cap = Math.max(0, Math.min(Math.floor(n), len));
+    setBroadcastSelectedIndices(new Set(Array.from({ length: cap }, (_, i) => i)));
+  }, [broadcastContacts]);
+
+  const selectBroadcastAll = useCallback(() => {
+    setBroadcastSelectedIndices(new Set(broadcastContacts.map((_, i) => i)));
+  }, [broadcastContacts]);
+
+  const toggleBroadcastContactIndex = useCallback((idx: number) => {
+    setBroadcastSelectedIndices((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  }, []);
+
+  const applyBroadcastCustomQty = useCallback(() => {
+    const raw = String(broadcastCustomQtyInput).trim();
+    const n = parseInt(raw, 10);
+    if (!Number.isFinite(n) || n < 1) {
+      setBroadcastError('Informe uma quantidade válida (número inteiro ≥ 1)');
+      return;
+    }
+    setBroadcastError(null);
+    selectBroadcastFirstN(n);
+  }, [broadcastCustomQtyInput, selectBroadcastFirstN]);
+
   // ── Runner do Disparo (loop cliente) ──────────────────────────────────────
-  const startBroadcastRunner = useCallback(async (jobId: string, delaySeconds: number) => {
+  const startBroadcastRunner = useCallback(async (jobId: string, jobConfig: BroadcastJob | null) => {
     broadcastRunnerRef.current.stop = false;
     setBroadcastInstanceDown(false);
     setActiveBroadcastJobId(jobId);
@@ -1541,6 +1720,10 @@ export default function ChatPage() {
         done?: boolean; paused?: boolean; instanceDown?: boolean; skipped?: boolean;
         current_index?: number; total_count?: number;
         contact?: BroadcastContact; success?: boolean;
+        next_delay_seconds?: number;
+        message_step_index?: number;
+        message_steps_total?: number;
+        same_contact_continue?: boolean;
       };
 
       if (!result.success || data?.instanceDown) {
@@ -1562,18 +1745,23 @@ export default function ChatPage() {
         current: data.current_index ?? (prev?.current ?? 0),
         total: data.total_count ?? (prev?.total ?? 0),
         contact: data.contact ?? prev?.contact,
-        lastSent: data.success ? data.contact ?? prev?.contact : prev?.lastSent,
+        lastSent: data.success ? data.contact ?? prev?.lastSent : prev?.lastSent,
+        messageStep: data.message_step_index,
+        messageStepsTotal: data.message_steps_total,
+        sameContactContinue: data.same_contact_continue,
       }));
 
-      if (data.done) {
-        setActiveBroadcastJobId(null);
-        setActiveBroadcastCountdown(0);
-        loadBroadcasts();
-        return;
-      }
+      const waitSecs =
+        typeof data.next_delay_seconds === 'number' && data.next_delay_seconds > 0
+          ? data.next_delay_seconds
+          : computeNextDelaySeconds(
+              jobConfig ?? {
+                delay_mode: 'fixed',
+                delay_seconds: 120,
+              }
+            );
 
-      // Countdown entre envios
-      for (let i = delaySeconds; i > 0; i--) {
+      for (let i = waitSecs; i > 0; i--) {
         if (broadcastRunnerRef.current.stop) return;
         setActiveBroadcastCountdown(i);
         await new Promise<void>((r) => setTimeout(r, 1000));
@@ -1594,25 +1782,187 @@ export default function ChatPage() {
     setActiveBroadcastCountdown(0);
   };
 
+  const toggleBroadcastInstanceId = useCallback((id: string) => {
+    setBroadcastInstanceIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        if (next.size <= 1) return prev;
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
+
+  const openBroadcastRetryFromJob = useCallback(
+    async (job: BroadcastJob, scope: 'pending' | 'all') => {
+      if (!userId) {
+        setBroadcastError('Faça login para refazer o disparo');
+        return;
+      }
+      if (channels.evolution.length === 0) {
+        setBroadcastError('Nenhuma instância Evolution disponível');
+        return;
+      }
+      setBroadcastRetryLoadingId(job.id);
+      setBroadcastError(null);
+      setBroadcastRetryMode(true);
+      setBroadcastPickerOpenStep(null);
+      setBroadcastPickerQuery('');
+      try {
+        const res = await fetch(`/api/chat/broadcast/${job.id}`, {
+          headers: authHeaders(),
+          credentials: 'include',
+        });
+        const result = await res.json();
+        if (!result.success || !result.data) {
+          setBroadcastError(result.error ?? 'Não foi possível carregar o disparo');
+          setBroadcastRetryMode(false);
+          return;
+        }
+        const row = result.data as {
+          contacts: unknown;
+          current_index?: number;
+          title?: string | null;
+          instance_id?: string;
+          broadcast_instances?: { id: string; name?: string }[] | null;
+          delay_mode?: string | null;
+          delay_seconds?: number | null;
+          delay_min_seconds?: number | null;
+          delay_max_seconds?: number | null;
+          message_config?: unknown;
+        };
+
+        const rawList = Array.isArray(row.contacts) ? row.contacts : [];
+        const normalized: BroadcastContact[] = rawList
+          .map((c: unknown) => {
+            const o = c as { phone?: string; name?: string };
+            const digits = String(o.phone ?? '').replace(/\D/g, '');
+            return { phone: normalizeBroadcastPhoneDigits(digits), name: o.name };
+          })
+          .filter((c) => c.phone.length >= 8);
+
+        const idx = Math.min(Math.max(0, Number(row.current_index) || 0), normalized.length);
+        const sliceList = scope === 'pending' ? normalized.slice(idx) : normalized;
+        if (sliceList.length === 0) {
+          setBroadcastError(
+            scope === 'pending' ? 'Não há contatos pendentes neste disparo' : 'Lista de contatos vazia'
+          );
+          setBroadcastRetryMode(false);
+          return;
+        }
+
+        const allowedEvolutionIds = new Set(channels.evolution.map((c) => c.id));
+        const fromJob =
+          Array.isArray(row.broadcast_instances) && row.broadcast_instances.length > 0
+            ? row.broadcast_instances.map((i) => i.id).filter(Boolean)
+            : row.instance_id
+              ? [row.instance_id]
+              : [];
+        let picked = new Set(fromJob.filter((id) => allowedEvolutionIds.has(id)));
+        if (picked.size === 0 && selectedChannel?.type === 'evolution') {
+          picked = new Set([selectedChannel.id]);
+        } else if (picked.size === 0 && channels.evolution[0]) {
+          picked = new Set([channels.evolution[0].id]);
+        }
+        if (picked.size === 0) {
+          setBroadcastError('Nenhuma instância do disparo original está disponível; selecione uma na lista.');
+          setBroadcastRetryMode(false);
+          return;
+        }
+
+        setBroadcastTitle((typeof row.title === 'string' && row.title.trim() ? row.title : job.title) || '');
+        setBroadcastContacts(sliceList);
+        setBroadcastSelectedIndices(new Set(sliceList.map((_, i) => i)));
+        setBroadcastContactsFileName(
+          scope === 'pending' ? `pendentes-${job.id.slice(0, 8)}.csv` : `lista-${job.id.slice(0, 8)}.csv`
+        );
+        setBroadcastSequenceDelay(getSequenceDelaySeconds(row.message_config));
+        const stepsFromJob = parseBroadcastSteps(row.message_config);
+        setBroadcastStepMessageIds(
+          stepsFromJob.length > 0
+            ? stepsFromJob.map((s) => (typeof s.source_message_id === 'string' ? s.source_message_id : ''))
+            : ['']
+        );
+        setBroadcastInstanceIds(picked);
+        setBroadcastCustomQtyInput('');
+
+        const dm = row.delay_mode === 'random' ? 'random' : 'fixed';
+        setBroadcastDelayMode(dm);
+        if (dm === 'random') {
+          const lo =
+            row.delay_min_seconds != null ? Number(row.delay_min_seconds) : BROADCAST_DELAY_PRESETS.padrao.min;
+          const hi =
+            row.delay_max_seconds != null ? Number(row.delay_max_seconds) : BROADCAST_DELAY_PRESETS.padrao.max;
+          setBroadcastDelayMin(Math.max(1, Math.min(7200, lo)));
+          setBroadcastDelayMax(Math.max(1, Math.min(7200, hi)));
+        } else {
+          const d = row.delay_seconds != null ? Number(row.delay_seconds) : job.delay_seconds ?? 120;
+          setBroadcastDelay(Math.max(10, Math.min(7200, d)));
+        }
+
+        setShowBroadcastForm(true);
+        setActiveView('broadcast');
+        void loadBroadcastMessages();
+      } catch {
+        setBroadcastError('Erro de rede ao carregar disparo');
+        setBroadcastRetryMode(false);
+      } finally {
+        setBroadcastRetryLoadingId(null);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [userId, channels.evolution, selectedChannel?.id, selectedChannel?.type, loadBroadcastMessages]
+  );
+
   // ── Criar Broadcast ────────────────────────────────────────────────────────
   const handleCreateBroadcast = async () => {
     if (!selectedChannel || selectedChannel.type !== 'evolution') return;
-    const selectedMsg = broadcastMessages.find((m) => m.id === broadcastSelectedMsgId);
-    if (!selectedMsg) { setBroadcastError('Selecione uma mensagem template'); return; }
     if (broadcastContacts.length === 0) { setBroadcastError('Importe os contatos (CSV)'); return; }
+    const contactsToSend = broadcastContacts.filter((_, i) => broadcastSelectedIndices.has(i));
+    if (contactsToSend.length === 0) { setBroadcastError('Selecione ao menos um contato para o disparo'); return; }
 
-    // Monta message_config a partir do template
-    let message_config: { type: string; content?: string; attachment_url?: string; caption?: string };
-    if (selectedMsg.message_type === 'text_only') {
-      message_config = { type: 'text', content: selectedMsg.content };
-    } else if (selectedMsg.message_type === 'audio') {
-      message_config = { type: 'audio', attachment_url: selectedMsg.attachment_url ?? '' };
-    } else if (selectedMsg.message_type === 'ptv') {
-      message_config = { type: 'video', attachment_url: selectedMsg.attachment_url ?? '' };
-    } else {
-      // text_with_attachment — usa caption = content
-      message_config = { type: 'image', attachment_url: selectedMsg.attachment_url ?? '', caption: selectedMsg.content };
+    const emptyStep = broadcastStepMessageIds.find((id) => !id.trim());
+    if (emptyStep !== undefined) {
+      setBroadcastError('Selecione um template CRM em cada passo da sequência');
+      return;
     }
+    if (broadcastStepMessageIds.length > 10) {
+      setBroadcastError('No máximo 10 mensagens por contato');
+      return;
+    }
+    if (broadcastSequenceDelay < 1 || broadcastSequenceDelay > 7200) {
+      setBroadcastError('Intervalo entre mensagens do mesmo contato: use entre 1 e 7200 segundos');
+      return;
+    }
+
+    const message_steps: BroadcastStepConfig[] = [];
+    for (const mid of broadcastStepMessageIds) {
+      const msg = broadcastMessages.find((m) => m.id === mid);
+      if (!msg) {
+        setBroadcastError('Template de mensagem inválido na sequência');
+        return;
+      }
+      message_steps.push(crmTemplateToBroadcastStep(msg));
+    }
+
+    const instanceIds = Array.from(broadcastInstanceIds).filter(Boolean);
+    if (instanceIds.length === 0) {
+      setBroadcastError('Selecione ao menos uma instância Evolution');
+      return;
+    }
+
+    if (broadcastDelayMode === 'random') {
+      let lo = Math.max(1, Math.min(7200, Math.floor(broadcastDelayMin)));
+      let hi = Math.max(1, Math.min(7200, Math.floor(broadcastDelayMax)));
+      if (lo > hi) [lo, hi] = [hi, lo];
+    } else if (broadcastDelay < 10 || broadcastDelay > 7200) {
+      setBroadcastError('Intervalo entre contatos (fixo): use entre 10 e 7200 segundos');
+      return;
+    }
+
+    const firstMsg = broadcastMessages.find((m) => m.id === broadcastStepMessageIds[0]);
 
     setBroadcastCreating(true);
     setBroadcastError(null);
@@ -1621,29 +1971,42 @@ export default function ChatPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
-          instance_id: selectedChannel.id,
-          title: broadcastTitle || selectedMsg.title,
-          message_config,
-          contacts: broadcastContacts,
+          instance_ids: instanceIds,
+          instance_id: instanceIds[0],
+          title: broadcastTitle || firstMsg?.title || 'Disparo',
+          message_steps,
+          sequence_delay_seconds: broadcastSequenceDelay,
+          contacts: contactsToSend,
+          delay_mode: broadcastDelayMode,
           delay_seconds: broadcastDelay,
+          delay_min_seconds: broadcastDelayMode === 'random' ? Math.min(broadcastDelayMin, broadcastDelayMax) : undefined,
+          delay_max_seconds: broadcastDelayMode === 'random' ? Math.max(broadcastDelayMin, broadcastDelayMax) : undefined,
         }),
       });
       const result = await res.json();
       if (!result.success) { setBroadcastError(result.error ?? 'Erro ao criar disparo'); return; }
       setShowBroadcastForm(false);
+      setBroadcastRetryMode(false);
+      setBroadcastPickerOpenStep(null);
+      setBroadcastPickerQuery('');
       setBroadcastTitle('');
-      setBroadcastSelectedMsgId('');
+      setBroadcastStepMessageIds(['']);
+      setBroadcastSequenceDelay(15);
       setBroadcastContacts([]);
       setBroadcastContactsFileName('');
-      const savedDelay = broadcastDelay;
+      setBroadcastSelectedIndices(new Set());
+      setBroadcastCustomQtyInput('');
       setBroadcastDelay(120);
+      setBroadcastDelayMode('random');
+      setBroadcastDelayMin(BROADCAST_DELAY_PRESETS.padrao.min);
+      setBroadcastDelayMax(BROADCAST_DELAY_PRESETS.padrao.max);
       const newJob = result.data as BroadcastJob;
       loadBroadcasts();
-      startBroadcastRunner(newJob.id, savedDelay);
+      startBroadcastRunner(newJob.id, newJob);
     } catch { setBroadcastError('Erro de rede'); } finally { setBroadcastCreating(false); }
   };
 
-  const handleBroadcastAction = async (jobId: string, status: 'running' | 'paused' | 'cancelled', delaySeconds?: number) => {
+  const handleBroadcastAction = async (jobId: string, status: 'running' | 'paused' | 'cancelled') => {
     if (status === 'paused' || status === 'cancelled') {
       stopBroadcastRunner();
     }
@@ -1656,7 +2019,7 @@ export default function ChatPage() {
       loadBroadcasts();
       if (status === 'running') {
         const job = broadcasts.find((b) => b.id === jobId);
-        startBroadcastRunner(jobId, delaySeconds ?? job?.delay_seconds ?? 120);
+        startBroadcastRunner(jobId, job ?? null);
       }
     } catch { /* silent */ }
   };
@@ -3491,7 +3854,7 @@ export default function ChatPage() {
             </div>
           ) : activeView === 'broadcast' ? (
             /* Vista Disparo em Massa */
-            <div className="min-w-0 flex-1 md:w-80 md:flex-shrink-0 overflow-hidden bg-white dark:bg-[#2a2a2a] border-r border-gray-200 dark:border-[#404040] flex flex-col">
+            <div className="min-w-0 flex-1 md:w-80 md:flex-shrink-0 min-h-0 overflow-hidden bg-white dark:bg-[#2a2a2a] border-r border-gray-200 dark:border-[#404040] flex flex-col">
               {/* Header */}
               <div className="flex-shrink-0 p-3 border-b border-gray-200 dark:border-[#404040] flex items-center gap-2">
                 {!chatSidebarOpen && (
@@ -3504,7 +3867,16 @@ export default function ChatPage() {
                 {!showBroadcastForm && (
                   <button
                     type="button"
-                    onClick={() => { setShowBroadcastForm(true); setBroadcastError(null); loadBroadcastMessages(); }}
+                    onClick={() => {
+                      setBroadcastRetryMode(false);
+                      setBroadcastPickerOpenStep(null);
+                      setBroadcastPickerQuery('');
+                      setBroadcastStepMessageIds(['']);
+                      setBroadcastSequenceDelay(15);
+                      setShowBroadcastForm(true);
+                      setBroadcastError(null);
+                      loadBroadcastMessages();
+                    }}
                     className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] text-gray-600 dark:text-gray-300 flex-shrink-0"
                     title="Novo disparo"
                   >
@@ -3551,130 +3923,508 @@ export default function ChatPage() {
                       Enviado: {activeBroadcastProgress.lastSent.name || activeBroadcastProgress.lastSent.phone}
                     </p>
                   )}
+                  {activeBroadcastProgress.messageStepsTotal != null &&
+                    activeBroadcastProgress.messageStepsTotal > 1 &&
+                    typeof activeBroadcastProgress.messageStep === 'number' && (
+                    <p className="text-[10px] text-blue-600/90 dark:text-blue-300/90">
+                      Sequência: próximo passo {activeBroadcastProgress.messageStep + 1}/
+                      {activeBroadcastProgress.messageStepsTotal}
+                      {activeBroadcastProgress.sameContactContinue ? ' · mesmo contato' : ''}
+                    </p>
+                  )}
                   {activeBroadcastCountdown > 0 && (
                     <p className="text-xs text-blue-500 dark:text-blue-400">
                       Próximo envio em <span className="font-semibold">{activeBroadcastCountdown}s</span>
+                      {activeBroadcastProgress.sameContactContinue && activeBroadcastProgress.messageStepsTotal != null && activeBroadcastProgress.messageStepsTotal > 1
+                        ? ' (entre mensagens)'
+                        : ''}
                     </p>
                   )}
                 </div>
               )}
 
-              {/* Formulário de novo disparo */}
+              {/* Novo Disparo: altura = conteúdo (shrink-0); max-height + scroll se passar da tela */}
               {showBroadcastForm && (
-                <div className="flex-shrink-0 overflow-y-auto border-b border-gray-200 dark:border-[#404040]">
-                  <div className="p-3 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <p className="text-xs font-semibold text-gray-700 dark:text-gray-200">Novo Disparo</p>
-                      <button type="button" onClick={() => setShowBroadcastForm(false)} className="text-gray-400 hover:text-gray-600"><X className="w-3.5 h-3.5" /></button>
-                    </div>
+                <div className="relative z-20 flex max-h-[min(85vh,640px)] w-full shrink-0 flex-col overflow-y-auto overscroll-y-contain border-b border-gray-200 bg-white dark:border-[#404040] dark:bg-[#2a2a2a]">
+                  <div className="flex flex-col gap-3 p-3">
+                    <div className="flex-shrink-0 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs font-semibold text-gray-700 dark:text-gray-200">
+                          {broadcastRetryMode ? 'Refazer disparo' : 'Novo Disparo'}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowBroadcastForm(false);
+                            setBroadcastRetryMode(false);
+                            setBroadcastPickerOpenStep(null);
+                            setBroadcastPickerQuery('');
+                            setBroadcastStepMessageIds(['']);
+                            setBroadcastSequenceDelay(15);
+                          }}
+                          className="text-gray-400 hover:text-gray-600"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
 
-                    {/* Título */}
-                    <input
-                      type="text"
-                      placeholder="Título (opcional)"
-                      value={broadcastTitle}
-                      onChange={(e) => setBroadcastTitle(e.target.value)}
-                      className="w-full px-3 py-1.5 text-sm border rounded-lg bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040] focus:ring-2 focus:ring-[#8CD955]"
-                    />
-
-                    {/* Selecionar mensagem template */}
-                    <div>
-                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Mensagem</label>
-                      {broadcastMessagesLoading ? (
-                        <div className="flex items-center gap-2 py-2"><Loader2 className="w-3.5 h-3.5 animate-spin text-gray-400" /><span className="text-xs text-gray-400">Carregando...</span></div>
-                      ) : broadcastMessages.length === 0 ? (
-                        <p className="text-xs text-gray-500 dark:text-gray-400 py-1">Nenhuma mensagem encontrada. Crie em CRM &gt; Mensagens.</p>
-                      ) : (
-                        <div className="space-y-1 max-h-36 overflow-y-auto border rounded-lg border-gray-200 dark:border-[#404040]">
-                          {broadcastMessages.map((msg) => {
-                            const typeLabel: Record<string, string> = {
-                              text_only: 'Texto',
-                              audio: 'Áudio',
-                              ptv: 'Vídeo (PTV)',
-                              text_with_attachment: 'Mídia',
-                            };
-                            return (
-                              <button
-                                key={msg.id}
-                                type="button"
-                                onClick={() => setBroadcastSelectedMsgId(msg.id)}
-                                className={`w-full text-left px-3 py-2 text-sm transition-colors ${
-                                  broadcastSelectedMsgId === msg.id
-                                    ? 'bg-[#8CD955] text-white'
-                                    : 'hover:bg-gray-50 dark:hover:bg-[#333] text-gray-900 dark:text-gray-100'
-                                }`}
-                              >
-                                <div className="flex items-center justify-between gap-1">
-                                  <span className="font-medium truncate">{msg.title}</span>
-                                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0 ${broadcastSelectedMsgId === msg.id ? 'bg-white/30 text-white' : 'bg-gray-100 dark:bg-[#444] text-gray-500'}`}>
-                                    {typeLabel[msg.message_type] ?? msg.message_type}
-                                  </span>
-                                </div>
-                                {msg.preview && (
-                                  <p className={`text-xs truncate mt-0.5 ${broadcastSelectedMsgId === msg.id ? 'text-white/80' : 'text-gray-500 dark:text-gray-400'}`}>{msg.preview}</p>
-                                )}
-                              </button>
-                            );
-                          })}
+                      {broadcastRetryMode && (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-900 dark:border-amber-800 dark:bg-amber-900/25 dark:text-amber-200">
+                          Escolha o <strong>template de mensagem</strong> abaixo para manter ou alterar texto e mídia.
+                          Instâncias e intervalos foram copiados do disparo anterior; ajuste se precisar e crie um novo job.
                         </div>
                       )}
+
+                      {/* Título */}
+                      <input
+                        type="text"
+                        placeholder="Título (opcional)"
+                        value={broadcastTitle}
+                        onChange={(e) => setBroadcastTitle(e.target.value)}
+                        className="w-full px-3 py-1.5 text-sm border rounded-lg bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040] focus:ring-2 focus:ring-[#8CD955]"
+                      />
+
+                      {/* Sequência de templates CRM (mesmo contato) */}
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                          Mensagens na ordem (por contato)
+                        </label>
+                        <p className="text-[11px] text-gray-500 dark:text-gray-400 mb-2">
+                          Cada contato recebe todas as mensagens desta lista, nesta ordem, antes de passar ao próximo número.
+                        </p>
+                        {broadcastMessagesLoading ? (
+                          <div className="flex items-center gap-2 py-2">
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-gray-400" />
+                            <span className="text-xs text-gray-400">Carregando...</span>
+                          </div>
+                        ) : broadcastMessages.length === 0 ? (
+                          <p className="text-xs text-gray-500 dark:text-gray-400 py-1">
+                            Nenhuma mensagem encontrada. Crie em CRM &gt; Mensagens.
+                          </p>
+                        ) : (
+                          <div className="space-y-2">
+                            {broadcastStepMessageIds.map((mid, stepI) => {
+                              const selectedMsg = mid ? broadcastMessages.find((m) => m.id === mid) : undefined;
+                              const isOpen = broadcastPickerOpenStep === stepI;
+                              return (
+                                <div key={`bstep-${stepI}`} className="flex flex-wrap items-start gap-2">
+                                  <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-[#8CD955]/20 text-[11px] font-bold text-[#5a9e2e] dark:text-[#8CD955]">
+                                    {stepI + 1}
+                                  </span>
+                                  <div
+                                    className="relative min-w-0 flex-1"
+                                    data-broadcast-template-picker={String(stepI)}
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setBroadcastPickerOpenStep((prev) => {
+                                          if (prev === stepI) return null;
+                                          setBroadcastPickerQuery('');
+                                          setBroadcastPickerKind('all');
+                                          return stepI;
+                                        });
+                                      }}
+                                      className={`flex w-full items-center justify-between gap-2 rounded-lg border px-2.5 py-2 text-left text-xs transition-colors ${
+                                        isOpen
+                                          ? 'border-[#8CD955] ring-1 ring-[#8CD955]/40 bg-white dark:bg-[#333]'
+                                          : 'border-gray-300 bg-white hover:border-gray-400 dark:border-[#404040] dark:bg-[#333] dark:hover:border-[#505050]'
+                                      } text-gray-900 dark:text-gray-100`}
+                                    >
+                                      <span className="min-w-0 flex-1 truncate">
+                                        {selectedMsg ? (
+                                          <>
+                                            <span className="font-medium">{selectedMsg.title}</span>
+                                            <span className="ml-1.5 text-[10px] font-normal text-gray-500 dark:text-gray-400">
+                                              ({BROADCAST_MSG_TYPE_LABEL[selectedMsg.message_type]})
+                                            </span>
+                                          </>
+                                        ) : (
+                                          <span className="text-gray-500 dark:text-gray-400">Buscar template…</span>
+                                        )}
+                                      </span>
+                                      <ChevronDown
+                                        className={`h-4 w-4 flex-shrink-0 text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}`}
+                                      />
+                                    </button>
+                                    {isOpen && (
+                                      <div className="absolute left-0 right-0 top-full z-[100] mt-1 flex max-h-[min(70vh,380px)] flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl dark:border-[#404040] dark:bg-[#2a2a2a]">
+                                        <div className="flex-shrink-0 space-y-2 border-b border-gray-100 p-2 dark:border-[#404040]">
+                                          <div className="relative">
+                                            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
+                                            <input
+                                              ref={isOpen ? broadcastPickerSearchInputRef : undefined}
+                                              type="search"
+                                              value={broadcastPickerQuery}
+                                              onChange={(e) => setBroadcastPickerQuery(e.target.value)}
+                                              placeholder="Buscar por nome ou conteúdo…"
+                                              className="w-full rounded-lg border border-gray-200 bg-gray-50 py-2 pl-8 pr-2 text-xs text-gray-900 placeholder:text-gray-400 focus:border-[#8CD955] focus:outline-none focus:ring-1 focus:ring-[#8CD955] dark:border-[#505050] dark:bg-[#333] dark:text-gray-100"
+                                            />
+                                          </div>
+                                          <div className="flex flex-wrap gap-1">
+                                            {(
+                                              [
+                                                ['all', 'Todos'],
+                                                ['text_only', 'Texto'],
+                                                ['audio', 'Áudio'],
+                                                ['text_with_attachment', 'Mídia'],
+                                                ['ptv', 'Vídeo'],
+                                              ] as const
+                                            ).map(([kind, label]) => (
+                                              <button
+                                                key={kind}
+                                                type="button"
+                                                onClick={() =>
+                                                  setBroadcastPickerKind(kind === 'all' ? 'all' : kind)
+                                                }
+                                                className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                                                  broadcastPickerKind === kind
+                                                    ? 'bg-[#8CD955] text-white'
+                                                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-[#404040] dark:text-gray-300 dark:hover:bg-[#505050]'
+                                                }`}
+                                              >
+                                                {label}
+                                              </button>
+                                            ))}
+                                          </div>
+                                        </div>
+                                        <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-1">
+                                          {broadcastMessagesForTemplatePicker.length === 0 ? (
+                                            <p className="px-2 py-6 text-center text-[11px] text-gray-500 dark:text-gray-400">
+                                              Nenhum template corresponde à busca.
+                                            </p>
+                                          ) : (
+                                            broadcastMessagesForTemplatePicker.map((msg) => (
+                                              <button
+                                                key={msg.id}
+                                                type="button"
+                                                onClick={() => {
+                                                  setBroadcastStepMessageIds((prev) =>
+                                                    prev.map((x, i) => (i === stepI ? msg.id : x))
+                                                  );
+                                                  setBroadcastPickerOpenStep(null);
+                                                  setBroadcastPickerQuery('');
+                                                }}
+                                                className={`flex w-full flex-col gap-0.5 rounded-lg px-2 py-2 text-left text-xs transition-colors ${
+                                                  mid === msg.id
+                                                    ? 'bg-[#8CD955]/15 text-gray-900 dark:text-gray-100'
+                                                    : 'text-gray-800 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-[#333]'
+                                                }`}
+                                              >
+                                                <div className="flex items-start justify-between gap-2">
+                                                  <span className="min-w-0 flex-1 truncate font-medium">{msg.title}</span>
+                                                  <span className="flex-shrink-0 rounded bg-gray-100 px-1.5 py-0.5 text-[9px] font-medium text-gray-600 dark:bg-[#404040] dark:text-gray-300">
+                                                    {BROADCAST_MSG_TYPE_LABEL[msg.message_type]}
+                                                  </span>
+                                                </div>
+                                                {msg.preview ? (
+                                                  <p className="line-clamp-2 text-[10px] leading-snug text-gray-500 dark:text-gray-400">
+                                                    {msg.preview}
+                                                  </p>
+                                                ) : null}
+                                              </button>
+                                            ))
+                                          )}
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                  {broadcastStepMessageIds.length > 1 ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setBroadcastPickerOpenStep(null);
+                                        setBroadcastStepMessageIds((prev) => prev.filter((_, i) => i !== stepI));
+                                      }}
+                                      className="mt-1.5 text-[11px] text-red-600 hover:underline dark:text-red-400"
+                                    >
+                                      Remover
+                                    </button>
+                                  ) : null}
+                                </div>
+                              );
+                            })}
+                            {broadcastStepMessageIds.length < 10 ? (
+                              <button
+                                type="button"
+                                onClick={() => setBroadcastStepMessageIds((prev) => [...prev, ''])}
+                                className="text-xs font-medium text-[#8CD955] hover:underline"
+                              >
+                                + Adicionar mensagem na sequência
+                              </button>
+                            ) : null}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Upload CSV contatos */}
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Contatos (CSV)</label>
+                        <input
+                          ref={broadcastFileInputRef}
+                          type="file"
+                          accept=".csv,.txt"
+                          className="hidden"
+                          onChange={handleBroadcastFileUpload}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => broadcastFileInputRef.current?.click()}
+                          className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm border-2 border-dashed rounded-lg border-gray-300 dark:border-[#505050] text-gray-600 dark:text-gray-400 hover:border-[#8CD955] hover:text-[#8CD955] transition-colors"
+                        >
+                          <FileText className="w-4 h-4" />
+                          {broadcastContactsFileName ? broadcastContactsFileName : 'Importar CSV'}
+                        </button>
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                          Instâncias Evolution (rotação)
+                        </label>
+                        <p className="mb-1.5 text-[11px] text-gray-500 dark:text-gray-400">
+                          Os envios alternam entre as instâncias marcadas, na ordem da lista.
+                        </p>
+                        <div className="max-h-32 space-y-1 overflow-y-auto rounded border border-gray-200 p-2 dark:border-[#404040]">
+                          {channels.evolution.length === 0 ? (
+                            <p className="text-xs text-gray-500">Nenhuma instância disponível.</p>
+                          ) : (
+                            channels.evolution.map((ch) => (
+                              <label
+                                key={ch.id}
+                                className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-xs hover:bg-gray-50 dark:hover:bg-[#333]"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={broadcastInstanceIds.has(ch.id)}
+                                  onChange={() => toggleBroadcastInstanceId(ch.id)}
+                                  className="flex-shrink-0 rounded border-gray-300 dark:border-[#505050]"
+                                />
+                                <span className="min-w-0 flex-1 truncate text-gray-800 dark:text-gray-100">{ch.instance_name}</span>
+                                {ch.status !== 'ok' ? (
+                                  <span className="flex-shrink-0 text-[10px] text-amber-600 dark:text-amber-400">{ch.status}</span>
+                                ) : null}
+                              </label>
+                            ))
+                          )}
+                        </div>
+                      </div>
                     </div>
 
-                    {/* Upload CSV contatos */}
-                    <div>
-                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Contatos (CSV)</label>
-                      <input
-                        ref={broadcastFileInputRef}
-                        type="file"
-                        accept=".csv,.txt"
-                        className="hidden"
-                        onChange={handleBroadcastFileUpload}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => broadcastFileInputRef.current?.click()}
-                        className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm border-2 border-dashed rounded-lg border-gray-300 dark:border-[#505050] text-gray-600 dark:text-gray-400 hover:border-[#8CD955] hover:text-[#8CD955] transition-colors"
-                      >
-                        <FileText className="w-4 h-4" />
-                        {broadcastContactsFileName ? broadcastContactsFileName : 'Importar CSV'}
-                      </button>
-                      {broadcastContacts.length > 0 && (
-                        <div className="mt-1.5">
-                          <div className="flex items-center justify-between mb-1">
+                    {broadcastContacts.length > 0 && (
+                      <div className="flex flex-shrink-0 flex-col gap-2">
+                        <div className="space-y-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
                             <p className="text-xs text-gray-600 dark:text-gray-400">
                               <span className="font-semibold text-[#8CD955]">{broadcastContacts.length}</span> contatos carregados
+                              <span className="text-gray-500 dark:text-gray-500"> · </span>
+                              <span className="font-semibold text-[#8CD955]">{broadcastSelectedIndices.size}</span>
+                              {' '}selecionados para envio
                             </p>
-                            <button type="button" onClick={() => { setBroadcastContacts([]); setBroadcastContactsFileName(''); }} className="text-xs text-red-500 hover:text-red-700">Limpar</button>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={selectBroadcastAll}
+                                className="text-xs text-[#8CD955] hover:underline"
+                              >
+                                Marcar todos
+                              </button>
+                              <span className="text-gray-300 dark:text-gray-600">|</span>
+                              <button
+                                type="button"
+                                onClick={() => setBroadcastSelectedIndices(new Set())}
+                                className="text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+                              >
+                                Desmarcar todos
+                              </button>
+                              <span className="text-gray-300 dark:text-gray-600">|</span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setBroadcastContacts([]);
+                                  setBroadcastContactsFileName('');
+                                  setBroadcastSelectedIndices(new Set());
+                                  setBroadcastCustomQtyInput('');
+                                }}
+                                className="text-xs text-red-500 hover:text-red-700"
+                              >
+                                Limpar
+                              </button>
+                            </div>
                           </div>
-                          <div className="max-h-24 overflow-y-auto border rounded border-gray-200 dark:border-[#404040] divide-y divide-gray-100 dark:divide-[#404040]">
-                            {broadcastContacts.slice(0, 50).map((c, i) => (
-                              <div key={i} className="px-2 py-1 flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300">
-                                <span className="font-mono flex-shrink-0">{c.phone}</span>
-                                {c.name && <span className="truncate text-gray-500 dark:text-gray-400">{c.name}</span>}
-                              </div>
-                            ))}
-                            {broadcastContacts.length > 50 && (
-                              <div className="px-2 py-1 text-xs text-gray-400">... e mais {broadcastContacts.length - 50}</div>
-                            )}
+                          <div>
+                            <p className="text-[11px] font-medium text-gray-600 dark:text-gray-400 mb-1">Atalhos de quantidade</p>
+                            <div className="flex flex-wrap gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => selectBroadcastFirstN(50)}
+                                className="px-2 py-1 text-[11px] rounded-md border border-gray-300 dark:border-[#505050] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333]"
+                              >
+                                Primeiros 50
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => selectBroadcastFirstN(100)}
+                                className="px-2 py-1 text-[11px] rounded-md border border-gray-300 dark:border-[#505050] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333]"
+                              >
+                                Primeiros 100
+                              </button>
+                              <button
+                                type="button"
+                                onClick={selectBroadcastAll}
+                                className="px-2 py-1 text-[11px] rounded-md border border-gray-300 dark:border-[#505050] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333]"
+                              >
+                                Todos ({broadcastContacts.length})
+                              </button>
+                            </div>
                           </div>
+                          <div className="flex flex-wrap items-end gap-2">
+                            <div className="flex-1 min-w-[120px]">
+                              <label className="block text-[11px] font-medium text-gray-600 dark:text-gray-400 mb-0.5">Quantidade personalizada</label>
+                              <input
+                                type="number"
+                                min={1}
+                                max={broadcastContacts.length}
+                                placeholder="Ex.: 200"
+                                value={broadcastCustomQtyInput}
+                                onChange={(e) => setBroadcastCustomQtyInput(e.target.value)}
+                                className="w-full px-2 py-1 text-xs border rounded-lg bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040]"
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={applyBroadcastCustomQty}
+                              className="px-2.5 py-1 text-[11px] rounded-lg border border-[#8CD955] text-[#5a9e2e] dark:text-[#8CD955] hover:bg-[#8CD955]/10"
+                            >
+                              Aplicar
+                            </button>
+                          </div>
+                          <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                            Marque ou desmarque contatos na lista (ordem do CSV).
+                          </p>
                         </div>
-                      )}
-                    </div>
+                        <div
+                          className="max-h-[min(45vh,320px)] overflow-y-auto overscroll-y-contain rounded border border-gray-200 divide-y divide-gray-100 dark:border-[#404040] dark:divide-[#404040]"
+                          style={{ WebkitOverflowScrolling: 'touch' }}
+                        >
+                            {broadcastContacts.map((c, i) => (
+                              <label
+                                key={`${c.phone}-${i}`}
+                                className="px-2 py-1 flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300 cursor-pointer hover:bg-gray-50 dark:hover:bg-[#333]"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={broadcastSelectedIndices.has(i)}
+                                  onChange={() => toggleBroadcastContactIndex(i)}
+                                  className="rounded border-gray-300 dark:border-[#505050] flex-shrink-0"
+                                />
+                                <span className="font-mono flex-shrink-0">{c.phone}</span>
+                                {c.name ? <span className="truncate text-gray-500 dark:text-gray-400">{c.name}</span> : null}
+                              </label>
+                            ))}
+                          </div>
+                      </div>
+                    )}
 
-                    {/* Intervalo */}
-                    <div className="flex items-center gap-3">
-                      <label className="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0">Intervalo entre envios:</label>
-                      <div className="flex items-center gap-2">
+                    <div className="flex-shrink-0 space-y-3">
+                    <div className="space-y-2 rounded-lg border border-gray-200 bg-gray-50/80 p-2 dark:border-[#404040] dark:bg-[#333]/50">
+                      <p className="text-xs font-medium text-gray-700 dark:text-gray-200">Intervalo entre mensagens (mesmo contato)</p>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                        Espera após cada envio da sequência, antes da próxima mensagem para o mesmo número (1–7200 s).
+                      </p>
+                      <div className="flex flex-wrap items-center gap-2">
                         <input
                           type="number"
-                          min={10}
-                          max={600}
-                          value={broadcastDelay}
-                          onChange={(e) => setBroadcastDelay(Math.min(600, Math.max(10, Number(e.target.value))))}
-                          className="w-16 px-2 py-1 text-sm border rounded-lg bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040] text-center"
+                          min={1}
+                          max={7200}
+                          value={broadcastSequenceDelay}
+                          onChange={(e) =>
+                            setBroadcastSequenceDelay(Math.min(7200, Math.max(1, Number(e.target.value) || 15)))
+                          }
+                          className="w-24 rounded-lg border border-gray-300 bg-white px-2 py-1 text-center text-sm dark:border-[#404040] dark:bg-[#333] dark:text-gray-100"
                         />
-                        <span className="text-xs text-gray-500">seg</span>
+                        <span className="text-xs text-gray-500 dark:text-gray-400">segundos</span>
                       </div>
+                    </div>
+
+                    {/* Intervalo entre contatos: fixo ou aleatório */}
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium text-gray-600 dark:text-gray-300">Intervalo entre contatos</p>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setBroadcastDelayMode('random')}
+                          className={`rounded-md px-2 py-1 text-[11px] border ${broadcastDelayMode === 'random' ? 'border-[#8CD955] bg-[#8CD955]/15 text-[#5a9e2e] dark:text-[#8CD955]' : 'border-gray-300 dark:border-[#505050] text-gray-600 dark:text-gray-300'}`}
+                        >
+                          Aleatório
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setBroadcastDelayMode('fixed')}
+                          className={`rounded-md px-2 py-1 text-[11px] border ${broadcastDelayMode === 'fixed' ? 'border-[#8CD955] bg-[#8CD955]/15 text-[#5a9e2e] dark:text-[#8CD955]' : 'border-gray-300 dark:border-[#505050] text-gray-600 dark:text-gray-300'}`}
+                        >
+                          Fixo
+                        </button>
+                      </div>
+                      {broadcastDelayMode === 'random' ? (
+                        <div className="space-y-2">
+                          <p className="text-[11px] text-gray-500 dark:text-gray-400">Entre um contato e o próximo: espera aleatória entre mín. e máx. (1–7200 s).</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {(Object.keys(BROADCAST_DELAY_PRESETS) as Array<keyof typeof BROADCAST_DELAY_PRESETS>).map((key) => {
+                              const p = BROADCAST_DELAY_PRESETS[key];
+                              return (
+                                <button
+                                  key={key}
+                                  type="button"
+                                  onClick={() => {
+                                    setBroadcastDelayMin(p.min);
+                                    setBroadcastDelayMax(p.max);
+                                  }}
+                                  className="rounded-md border border-gray-300 px-2 py-1 text-[10px] text-gray-700 hover:bg-gray-50 dark:border-[#505050] dark:text-gray-200 dark:hover:bg-[#333]"
+                                >
+                                  {p.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <div className="flex flex-wrap items-end gap-2">
+                            <div>
+                              <label className="mb-0.5 block text-[11px] text-gray-500">Mín. (s)</label>
+                              <input
+                                type="number"
+                                min={1}
+                                max={7200}
+                                value={broadcastDelayMin}
+                                onChange={(e) => setBroadcastDelayMin(Math.min(7200, Math.max(1, Number(e.target.value) || 1)))}
+                                className="w-20 rounded-lg border border-gray-300 bg-white px-2 py-1 text-center text-xs dark:border-[#404040] dark:bg-[#333] dark:text-gray-100"
+                              />
+                            </div>
+                            <div>
+                              <label className="mb-0.5 block text-[11px] text-gray-500">Máx. (s)</label>
+                              <input
+                                type="number"
+                                min={1}
+                                max={7200}
+                                value={broadcastDelayMax}
+                                onChange={(e) => setBroadcastDelayMax(Math.min(7200, Math.max(1, Number(e.target.value) || 120)))}
+                                className="w-20 rounded-lg border border-gray-300 bg-white px-2 py-1 text-center text-xs dark:border-[#404040] dark:bg-[#333] dark:text-gray-100"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <label className="text-[11px] text-gray-500 dark:text-gray-400">Segundos entre contatos (10–7200)</label>
+                          <input
+                            type="number"
+                            min={10}
+                            max={7200}
+                            value={broadcastDelay}
+                            onChange={(e) => setBroadcastDelay(Math.min(7200, Math.max(10, Number(e.target.value) || 120)))}
+                            className="w-24 rounded-lg border border-gray-300 bg-white px-2 py-1 text-center text-sm dark:border-[#404040] dark:bg-[#333] dark:text-gray-100"
+                          />
+                          <span className="text-xs text-gray-500">seg</span>
+                        </div>
+                      )}
                     </div>
 
                     {broadcastError && (
@@ -3688,86 +4438,300 @@ export default function ChatPage() {
                       <button
                         type="button"
                         onClick={handleCreateBroadcast}
-                        disabled={broadcastCreating || !broadcastSelectedMsgId || broadcastContacts.length === 0}
+                        disabled={
+                          broadcastCreating ||
+                          broadcastStepMessageIds.length === 0 ||
+                          broadcastStepMessageIds.some((id) => !id.trim()) ||
+                          broadcastContacts.length === 0 ||
+                          broadcastSelectedIndices.size === 0 ||
+                          broadcastInstanceIds.size === 0
+                        }
                         className="flex-1 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-50 flex items-center justify-center gap-2"
                         style={{ backgroundColor: '#8CD955' }}
                       >
                         {broadcastCreating ? <><Loader2 className="w-3.5 h-3.5 animate-spin" />Criando...</> : <><Megaphone className="w-3.5 h-3.5" />Criar e Iniciar</>}
                       </button>
-                      <button type="button" onClick={() => { setShowBroadcastForm(false); setBroadcastError(null); }} className="px-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-[#404040] text-gray-700 dark:text-gray-200">Cancelar</button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowBroadcastForm(false);
+                          setBroadcastError(null);
+                          setBroadcastRetryMode(false);
+                          setBroadcastPickerOpenStep(null);
+                          setBroadcastPickerQuery('');
+                          setBroadcastStepMessageIds(['']);
+                          setBroadcastSequenceDelay(15);
+                        }}
+                        className="px-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-[#404040] text-gray-700 dark:text-gray-200"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
                     </div>
                   </div>
                 </div>
               )}
 
-              {/* Lista de disparos */}
-              <div className="flex-1 overflow-y-auto">
+              {/* Histórico de disparos: filtros + lista em cards */}
+              <div className="relative z-0 flex min-h-0 flex-1 flex-col overflow-hidden">
                 {broadcastsLoading ? (
-                  <div className="p-6 text-center"><Loader2 className="w-5 h-5 animate-spin mx-auto text-gray-400" /></div>
-                ) : broadcasts.length === 0 ? (
-                  <div className="p-6 text-center text-sm text-gray-500 dark:text-gray-400">
-                    <Megaphone className="w-8 h-8 mx-auto mb-2 opacity-30" />
-                    Nenhum disparo encontrado.<br/>Clique em + para criar.
+                  <div className="flex flex-1 items-center justify-center p-6">
+                    <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
                   </div>
+                ) : broadcasts.length === 0 ? (
+                  !showBroadcastForm ? (
+                    <div className="flex flex-1 flex-col items-center justify-center p-6 text-center text-sm text-gray-500 dark:text-gray-400">
+                      <Megaphone className="mx-auto mb-2 h-10 w-10 opacity-25" />
+                      <p className="font-medium text-gray-600 dark:text-gray-300">Nenhum disparo ainda</p>
+                      <p className="mt-1 max-w-[220px] text-xs">Use o botão + acima para criar o primeiro envio em massa.</p>
+                    </div>
+                  ) : null
                 ) : (
-                  broadcasts.map((job) => {
-                    const statusColor: Record<string, string> = {
-                      pending: 'text-yellow-600 dark:text-yellow-400',
-                      running: 'text-blue-600 dark:text-blue-400',
-                      paused: 'text-orange-600 dark:text-orange-400',
-                      completed: 'text-green-600 dark:text-green-400',
-                      failed: 'text-red-600 dark:text-red-400',
-                      cancelled: 'text-gray-500 dark:text-gray-400',
-                    };
-                    const statusLabel: Record<string, string> = {
-                      pending: 'Pendente', running: 'Rodando', paused: 'Pausado',
-                      completed: 'Concluído', failed: 'Falhou', cancelled: 'Cancelado',
-                    };
-                    const pct = job.total_count > 0 ? Math.round((job.current_index / job.total_count) * 100) : 0;
-                    const isActive = activeBroadcastJobId === job.id;
-                    return (
-                      <div key={job.id} className={`p-3 border-b border-gray-100 dark:border-[#404040] ${isActive ? 'bg-blue-50/50 dark:bg-blue-900/10' : ''}`}>
-                        <div className="flex items-start justify-between gap-2 mb-1">
-                          <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">{job.title}</p>
-                          <span className={`text-xs font-medium flex-shrink-0 ${statusColor[job.status] ?? ''}`}>{statusLabel[job.status] ?? job.status}</span>
-                        </div>
-                        <p className="text-xs text-gray-500 dark:text-gray-400 mb-1.5">
-                          {job.instance_name} · {job.current_index}/{job.total_count} · {job.delay_seconds}s
-                        </p>
-                        <div className="mb-2">
-                          <div className="h-1.5 bg-gray-200 dark:bg-[#444] rounded-full">
-                            <div className="h-1.5 rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: '#8CD955' }} />
-                          </div>
-                          <div className="flex justify-between mt-0.5">
-                            <span className="text-[10px] text-gray-400">{pct}%</span>
-                            {isActive && activeBroadcastCountdown > 0 && (
-                              <span className="text-[10px] text-blue-500">próximo: {activeBroadcastCountdown}s</span>
-                            )}
-                          </div>
-                        </div>
-                        {job.last_error && <p className="text-xs text-red-500 truncate mb-1">{job.last_error}</p>}
-                        {isActive && activeBroadcastProgress?.lastSent && (
-                          <p className="text-xs text-blue-600 dark:text-blue-400 truncate mb-1">
-                            Enviado: {activeBroadcastProgress.lastSent.name || activeBroadcastProgress.lastSent.phone}
-                          </p>
-                        )}
-                        <div className="flex gap-1.5">
-                          {job.status === 'pending' && !isActive && (
-                            <button type="button" onClick={() => handleBroadcastAction(job.id, 'running', job.delay_seconds)} className="px-2 py-0.5 text-[11px] rounded border border-blue-400 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 flex items-center gap-1"><Play className="w-3 h-3" />Iniciar</button>
-                          )}
-                          {(job.status === 'running' || isActive) && (
-                            <button type="button" onClick={() => handleBroadcastAction(job.id, 'paused')} className="px-2 py-0.5 text-[11px] rounded border border-orange-400 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 flex items-center gap-1"><Pause className="w-3 h-3" />Pausar</button>
-                          )}
-                          {job.status === 'paused' && !isActive && (
-                            <button type="button" onClick={() => handleBroadcastAction(job.id, 'running', job.delay_seconds)} className="px-2 py-0.5 text-[11px] rounded border border-blue-400 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 flex items-center gap-1"><Play className="w-3 h-3" />Retomar</button>
-                          )}
-                          {(job.status === 'pending' || job.status === 'running' || job.status === 'paused' || isActive) && (
-                            <button type="button" onClick={() => handleBroadcastAction(job.id, 'cancelled')} className="px-2 py-0.5 text-[11px] rounded border border-gray-300 dark:border-[#505050] text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#3a3a3a] flex items-center gap-1"><Square className="w-3 h-3" />Cancelar</button>
-                          )}
-                        </div>
+                  <>
+                    <div className="flex-shrink-0 space-y-2 border-b border-gray-200 bg-gray-50/90 px-3 py-2.5 dark:border-[#404040] dark:bg-[#252525]/95">
+                      <div className="flex items-center gap-2">
+                        <History className="h-4 w-4 flex-shrink-0 text-[#8CD955]" />
+                        <p className="text-xs font-semibold text-gray-800 dark:text-gray-100">Histórico de disparos</p>
+                        <span className="ml-auto rounded-full bg-gray-200 px-2 py-0.5 text-[10px] font-medium text-gray-600 dark:bg-[#404040] dark:text-gray-300">
+                          {broadcasts.length}
+                        </span>
                       </div>
-                    );
-                  })
+                      <div className="relative">
+                        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
+                        <input
+                          type="search"
+                          value={broadcastHistoryQuery}
+                          onChange={(e) => setBroadcastHistoryQuery(e.target.value)}
+                          placeholder="Buscar por título do disparo…"
+                          className="w-full rounded-lg border border-gray-200 bg-white py-2 pl-8 pr-2 text-xs text-gray-900 placeholder:text-gray-400 focus:border-[#8CD955] focus:outline-none focus:ring-1 focus:ring-[#8CD955] dark:border-[#505050] dark:bg-[#333] dark:text-gray-100"
+                        />
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {(
+                          [
+                            ['all', 'Todos'],
+                            ['in_progress', 'Em andamento'],
+                            ['ended', 'Concluídos e parados'],
+                          ] as const
+                        ).map(([tab, label]) => (
+                          <button
+                            key={tab}
+                            type="button"
+                            onClick={() => setBroadcastHistoryTab(tab)}
+                            title={
+                              tab === 'ended'
+                                ? 'Concluído com sucesso, cancelado ou falha'
+                                : tab === 'in_progress'
+                                  ? 'Pendente, rodando ou pausado'
+                                  : undefined
+                            }
+                            className={`rounded-full px-2.5 py-1 text-[10px] font-medium transition-colors ${
+                              broadcastHistoryTab === tab
+                                ? 'bg-[#8CD955] text-white shadow-sm'
+                                : 'bg-white text-gray-600 ring-1 ring-gray-200 hover:bg-gray-100 dark:bg-[#333] dark:text-gray-300 dark:ring-[#505050] dark:hover:bg-[#3a3a3a]'
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-y-contain p-2">
+                      {broadcastsFilteredForHistory.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-gray-200 bg-gray-50/50 px-4 py-8 text-center dark:border-[#404040] dark:bg-[#2a2a2a]/50">
+                          <ListFilter className="mb-2 h-8 w-8 text-gray-300 dark:text-gray-600" />
+                          <p className="text-xs font-medium text-gray-600 dark:text-gray-300">Nada encontrado</p>
+                          <p className="mt-1 max-w-[200px] text-[11px] text-gray-500 dark:text-gray-400">
+                            Ajuste o filtro ou a busca — ou crie um novo disparo pelo formulário acima.
+                          </p>
+                        </div>
+                      ) : (
+                        broadcastsFilteredForHistory.map((job) => {
+                          const statusColor: Record<string, string> = {
+                            pending: 'text-yellow-700 dark:text-yellow-400',
+                            running: 'text-blue-700 dark:text-blue-400',
+                            paused: 'text-orange-700 dark:text-orange-400',
+                            completed: 'text-emerald-700 dark:text-emerald-400',
+                            failed: 'text-red-600 dark:text-red-400',
+                            cancelled: 'text-gray-600 dark:text-gray-400',
+                          };
+                          const statusLabel: Record<string, string> = {
+                            pending: 'Pendente',
+                            running: 'Rodando',
+                            paused: 'Pausado',
+                            completed: 'Concluído',
+                            failed: 'Falhou',
+                            cancelled: 'Cancelado',
+                          };
+                          const jobCardAccent: Record<string, string> = {
+                            completed: 'border-l-4 border-l-emerald-500',
+                            cancelled: 'border-l-4 border-l-zinc-500',
+                            failed: 'border-l-4 border-l-red-500',
+                            running: 'border-l-4 border-l-blue-500',
+                            paused: 'border-l-4 border-l-amber-500',
+                            pending: 'border-l-4 border-l-yellow-500',
+                          };
+                          const pct = job.total_count > 0 ? Math.round((job.current_index / job.total_count) * 100) : 0;
+                          const isActive = activeBroadcastJobId === job.id;
+                          return (
+                            <div
+                              key={job.id}
+                              className={`rounded-xl border border-gray-200 bg-white px-3 py-2.5 shadow-sm dark:border-[#404040] dark:bg-[#2d2d2d] ${
+                                jobCardAccent[job.status] ?? 'border-l-4 border-l-transparent'
+                              } ${isActive ? 'ring-1 ring-blue-400/40 dark:ring-blue-500/30' : ''}`}
+                            >
+                              <div className="mb-1.5 flex items-start justify-between gap-2">
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate text-sm font-semibold text-gray-900 dark:text-gray-100">{job.title}</p>
+                                  <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[10px] text-gray-500 dark:text-gray-400">
+                                    <Clock className="inline h-3 w-3 flex-shrink-0" />
+                                    <span>{formatBroadcastListDate(job.created_at)}</span>
+                                  </p>
+                                </div>
+                                <span
+                                  className={`flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                                    job.status === 'completed'
+                                      ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200'
+                                      : job.status === 'cancelled'
+                                        ? 'bg-gray-100 text-gray-700 dark:bg-[#404040] dark:text-gray-300'
+                                        : job.status === 'failed'
+                                          ? 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200'
+                                          : job.status === 'running' || isActive
+                                            ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200'
+                                            : job.status === 'paused'
+                                              ? 'bg-amber-100 text-amber-900 dark:bg-amber-900/35 dark:text-amber-200'
+                                              : 'bg-yellow-100 text-yellow-900 dark:bg-yellow-900/30 dark:text-yellow-200'
+                                  }`}
+                                >
+                                  {statusLabel[job.status] ?? job.status}
+                                </span>
+                              </div>
+                              <p className={`mb-2 text-[11px] leading-relaxed ${statusColor[job.status] ?? 'text-gray-600 dark:text-gray-400'}`}>
+                                {(job.broadcast_instances?.length ?? 0) > 1
+                                  ? `${job.broadcast_instances?.length ?? 0} instâncias (rotação)`
+                                  : job.instance_name}
+                                <span className="text-gray-400 dark:text-gray-500"> · </span>
+                                {job.current_index}/{job.total_count} contatos
+                                {(job.message_steps_count ?? 1) > 1 ? (
+                                  <>
+                                    <span className="text-gray-400 dark:text-gray-500"> · </span>
+                                    seq. {job.message_steps_count} msgs
+                                    {typeof job.message_step_index === 'number' ? (
+                                      <> · passo {job.message_step_index + 1}/{job.message_steps_count}</>
+                                    ) : null}
+                                  </>
+                                ) : null}
+                                <span className="text-gray-400 dark:text-gray-500"> · </span>
+                                {job.delay_mode === 'random'
+                                  ? `aleatório ${job.delay_min_seconds ?? 1}–${job.delay_max_seconds ?? 120}s`
+                                  : `fixo ${job.delay_seconds}s`}
+                              </p>
+                              <div className="mb-2">
+                                <div className="h-1.5 overflow-hidden rounded-full bg-gray-200 dark:bg-[#444]">
+                                  <div
+                                    className="h-1.5 rounded-full transition-all"
+                                    style={{ width: `${pct}%`, backgroundColor: '#8CD955' }}
+                                  />
+                                </div>
+                                <div className="mt-0.5 flex justify-between">
+                                  <span className="text-[10px] text-gray-400">{pct}%</span>
+                                  {isActive && activeBroadcastCountdown > 0 ? (
+                                    <span className="text-[10px] text-blue-500">próximo: {activeBroadcastCountdown}s</span>
+                                  ) : null}
+                                </div>
+                              </div>
+                              {job.last_error ? (
+                                <p className="mb-2 truncate text-[11px] text-red-600 dark:text-red-400" title={job.last_error}>
+                                  {job.last_error}
+                                </p>
+                              ) : null}
+                              {isActive && activeBroadcastProgress?.lastSent ? (
+                                <p className="mb-2 truncate text-[11px] text-blue-600 dark:text-blue-400">
+                                  Último envio: {activeBroadcastProgress.lastSent.name || activeBroadcastProgress.lastSent.phone}
+                                </p>
+                              ) : null}
+                              <div className="flex flex-wrap gap-1.5">
+                                {job.status === 'pending' && !isActive ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleBroadcastAction(job.id, 'running')}
+                                    className="inline-flex items-center gap-1 rounded-lg border border-blue-400 px-2 py-1 text-[11px] text-blue-600 hover:bg-blue-50 dark:border-blue-500 dark:text-blue-400 dark:hover:bg-blue-950/30"
+                                  >
+                                    <Play className="h-3 w-3" />
+                                    Iniciar
+                                  </button>
+                                ) : null}
+                                {(job.status === 'running' || isActive) ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleBroadcastAction(job.id, 'paused')}
+                                    className="inline-flex items-center gap-1 rounded-lg border border-orange-400 px-2 py-1 text-[11px] text-orange-600 hover:bg-orange-50 dark:text-orange-400 dark:hover:bg-orange-950/20"
+                                  >
+                                    <Pause className="h-3 w-3" />
+                                    Pausar
+                                  </button>
+                                ) : null}
+                                {job.status === 'paused' && !isActive ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleBroadcastAction(job.id, 'running')}
+                                    className="inline-flex items-center gap-1 rounded-lg border border-blue-400 px-2 py-1 text-[11px] text-blue-600 hover:bg-blue-50 dark:border-blue-500 dark:text-blue-400 dark:hover:bg-blue-950/30"
+                                  >
+                                    <Play className="h-3 w-3" />
+                                    Retomar
+                                  </button>
+                                ) : null}
+                                {(job.status === 'pending' || job.status === 'running' || job.status === 'paused' || isActive) ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleBroadcastAction(job.id, 'cancelled')}
+                                    className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-100 dark:border-[#505050] dark:text-gray-400 dark:hover:bg-[#3a3a3a]"
+                                  >
+                                    <Square className="h-3 w-3" />
+                                    Cancelar
+                                  </button>
+                                ) : null}
+                              </div>
+                              {['cancelled', 'failed', 'paused', 'completed'].includes(job.status) ? (
+                                <div className="mt-2 flex flex-wrap gap-1 border-t border-gray-100 pt-2 dark:border-[#404040]">
+                                  {job.current_index < job.total_count ? (
+                                    <button
+                                      type="button"
+                                      disabled={broadcastRetryLoadingId === job.id}
+                                      onClick={() => void openBroadcastRetryFromJob(job, 'pending')}
+                                      className="inline-flex items-center gap-1 rounded-lg border border-emerald-500/60 px-2 py-1 text-[11px] text-emerald-700 hover:bg-emerald-50 disabled:opacity-50 dark:text-emerald-400 dark:hover:bg-emerald-950/25"
+                                      title="Só contatos ainda não enviados"
+                                    >
+                                      {broadcastRetryLoadingId === job.id ? (
+                                        <Loader2 className="h-3 w-3 animate-spin" />
+                                      ) : (
+                                        <RefreshCw className="h-3 w-3" />
+                                      )}
+                                      Pendentes ({Math.max(0, job.total_count - job.current_index)})
+                                    </button>
+                                  ) : null}
+                                  <button
+                                    type="button"
+                                    disabled={broadcastRetryLoadingId === job.id}
+                                    onClick={() => void openBroadcastRetryFromJob(job, 'all')}
+                                    className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-[#505050] dark:text-gray-300 dark:hover:bg-[#3a3a3a]"
+                                    title="Todos os contatos do disparo original"
+                                  >
+                                    {broadcastRetryLoadingId === job.id ? (
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                    ) : (
+                                      <RefreshCw className="h-3 w-3" />
+                                    )}
+                                    {job.current_index < job.total_count ? 'Toda a lista' : 'Repetir campanha'}
+                                  </button>
+                                </div>
+                              ) : null}
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </>
                 )}
               </div>
             </div>

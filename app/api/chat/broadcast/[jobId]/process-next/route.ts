@@ -1,11 +1,14 @@
 /**
  * POST /api/chat/broadcast/[jobId]/process-next
  *
- * Processa o próximo contato na fila do disparo.
- * Retorna { done, contact, success, error, current_index, total_count }
+ * Processa o próximo envio: sequência de mensagens por contato (message_config.steps),
+ * depois avança para o próximo contato. Intervalos: sequence_delay_seconds (entre
+ * mensagens no mesmo contato) e delay_seconds / aleatório (entre contatos).
  *
- * Se a instância Evolution estiver offline, retorna {success: false, instanceDown: true}
- * sem avançar o índice — o cliente deve pausar e tentar novamente depois.
+ * Retorna { done, contact, success, error, current_index, total_count, next_delay_seconds, ... }
+ *
+ * Se a instância Evolution estiver offline, retorna { instanceDown: true }
+ * sem avançar índice nem passo — o cliente deve pausar e tentar novamente depois.
  */
 
 import { NextRequest } from 'next/server';
@@ -14,6 +17,8 @@ import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { chatService } from '@/lib/services/chat-service';
 import { messageIndicatesEvolutionSessionDropped, maybeMarkEvolutionInstanceDisconnected } from '@/lib/evolution/mark-instance-disconnected';
+import { computeNextDelaySeconds } from '@/lib/chat/broadcast-delay';
+import { getSequenceDelaySeconds, parseBroadcastSteps } from '@/lib/chat/broadcast-sequence';
 
 function normalizePhone(phone: string): string {
   const digits = String(phone || '').replace(/\D/g, '');
@@ -32,7 +37,6 @@ export async function POST(
     const { userId } = await requireAuth(req);
     const { jobId } = await params;
 
-    // Busca o job
     const { data: job, error: jobError } = await supabaseServiceRole
       .from('chat_broadcasts')
       .select('*')
@@ -44,10 +48,29 @@ export async function POST(
     if (job.status === 'cancelled') return errorResponse('Broadcast cancelado', 400);
     if (job.status === 'paused') return successResponse({ done: false, paused: true }, 'Broadcast pausado');
 
+    const steps = parseBroadcastSteps(job.message_config);
+    if (steps.length === 0) {
+      await supabaseServiceRole
+        .from('chat_broadcasts')
+        .update({
+          status: 'failed',
+          last_error: 'message_config sem mensagens válidas',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', jobId);
+      return errorResponse('Configuração de mensagens inválida', 400);
+    }
+
     const contacts = job.contacts as { phone: string; name?: string }[];
     const idx: number = job.current_index;
 
-    // Concluído
+    let stepIdx = Number(job.message_step_index);
+    if (!Number.isFinite(stepIdx) || stepIdx < 0) stepIdx = 0;
+    if (stepIdx >= steps.length) stepIdx = 0;
+
+    const delayBetweenContacts = () => ({ next_delay_seconds: computeNextDelaySeconds(job) });
+    const delayBetweenSequence = () => ({ next_delay_seconds: getSequenceDelaySeconds(job.message_config) });
+
     if (idx >= job.total_count || idx >= contacts.length) {
       await supabaseServiceRole
         .from('chat_broadcasts')
@@ -56,22 +79,43 @@ export async function POST(
       return successResponse({ done: true, current_index: idx, total_count: job.total_count }, 'Disparo concluído');
     }
 
+    const rawRotation = job.broadcast_instances as { id: string; name?: string }[] | null;
+    const rotation =
+      Array.isArray(rawRotation) && rawRotation.length > 0
+        ? rawRotation
+        : [{ id: job.instance_id as string, name: job.instance_name as string }];
+    const pick = rotation[idx % rotation.length];
+    const instanceUuid = pick?.id || job.instance_id;
+
     const contact = contacts[idx];
     const remoteJid = normalizePhone(contact.phone);
     if (!remoteJid) {
-      // Pula contato inválido
       await supabaseServiceRole
         .from('chat_broadcasts')
-        .update({ current_index: idx + 1, updated_at: new Date().toISOString() })
+        .update({
+          current_index: idx + 1,
+          message_step_index: 0,
+          updated_at: new Date().toISOString(),
+        })
         .eq('id', jobId);
-      return successResponse({ done: false, skipped: true, current_index: idx + 1, total_count: job.total_count });
+      return successResponse(
+        {
+          done: false,
+          skipped: true,
+          current_index: idx + 1,
+          total_count: job.total_count,
+          message_step_index: 0,
+          message_steps_total: steps.length,
+          ...delayBetweenContacts(),
+        },
+        'Contato inválido — pulado'
+      );
     }
 
-    // Busca instância com evolution_apis
     const { data: instance } = await supabaseServiceRole
       .from('evolution_instances')
       .select('id, instance_name, apikey, phone_number, workspace_id, user_id, evolution_apis(base_url)')
-      .eq('id', job.instance_id)
+      .eq('id', instanceUuid)
       .single();
 
     if (!instance) return errorResponse('Instância não encontrada', 404);
@@ -84,7 +128,6 @@ export async function POST(
       return errorResponse('Configuração incompleta da Evolution API', 400);
     }
 
-    // Atualiza status para running se ainda pending
     if (job.status === 'pending') {
       await supabaseServiceRole
         .from('chat_broadcasts')
@@ -92,16 +135,8 @@ export async function POST(
         .eq('id', jobId);
     }
 
-    const msgConfig = job.message_config as {
-      type: string;
-      content?: string;
-      attachment_url?: string;
-      mimetype?: string;
-      caption?: string;
-      fileName?: string;
-    };
+    const msgConfig = steps[stepIdx];
 
-    // Envia via Evolution API
     let evolutionRes: Record<string, unknown> | null = null;
     let sendError: string | null = null;
     let instanceDown = false;
@@ -128,7 +163,6 @@ export async function POST(
       const msg = err instanceof Error ? err.message : String(err);
       sendError = msg;
       await maybeMarkEvolutionInstanceDisconnected(supabaseServiceRole, instance.id, msg, 'chat/broadcast');
-      // Detecta instância offline (timeout, ECONNREFUSED, sessão encerrada na Evolution, etc.)
       instanceDown =
         messageIndicatesEvolutionSessionDropped(msg) ||
         /timeout|ECONNREFUSED|ENOTFOUND|network|socket|offline|disconnected/i.test(msg);
@@ -136,7 +170,6 @@ export async function POST(
 
     if (sendError) {
       if (instanceDown) {
-        // Não avança índice — cliente deve pausar e tentar novamente
         await supabaseServiceRole
           .from('chat_broadcasts')
           .update({ last_error: sendError, updated_at: new Date().toISOString() })
@@ -146,25 +179,33 @@ export async function POST(
           instanceDown: true,
           current_index: idx,
           total_count: job.total_count,
+          message_step_index: stepIdx,
+          message_steps_total: steps.length,
           error: sendError,
         }, 'Instância offline — disparo pausado no mesmo número');
       }
 
-      // Erro não relacionado à instância: pula o contato
       await supabaseServiceRole
         .from('chat_broadcasts')
-        .update({ current_index: idx + 1, last_error: sendError, updated_at: new Date().toISOString() })
+        .update({
+          current_index: idx + 1,
+          message_step_index: 0,
+          last_error: sendError,
+          updated_at: new Date().toISOString(),
+        })
         .eq('id', jobId);
       return successResponse({
         done: false,
         skipped: true,
         current_index: idx + 1,
         total_count: job.total_count,
+        message_step_index: 0,
+        message_steps_total: steps.length,
         error: sendError,
+        ...delayBetweenContacts(),
       });
     }
 
-    // Salva a mensagem no chat (para aparecer em tempo real na conversa)
     try {
       const mediaLabels: Record<string, string> = { audio: '🎵 Áudio', video: '🎬 Vídeo', image: '🖼️ Imagem', document: '📄 Documento' };
       const previewText =
@@ -212,18 +253,48 @@ export async function POST(
       // saveMessage failure não deve parar o disparo
     }
 
-    // Avança o índice
-    const nextIndex = idx + 1;
-    const isDone = nextIndex >= job.total_count;
+    const moreStepsOnSameContact = stepIdx < steps.length - 1;
+    const nowIso = new Date().toISOString();
+
+    if (moreStepsOnSameContact) {
+      const nextStep = stepIdx + 1;
+      await supabaseServiceRole
+        .from('chat_broadcasts')
+        .update({
+          message_step_index: nextStep,
+          last_sent_at: nowIso,
+          status: 'running',
+          last_error: null,
+          updated_at: nowIso,
+        })
+        .eq('id', jobId);
+
+      return successResponse({
+        done: false,
+        success: true,
+        contact: { phone: contact.phone, name: contact.name },
+        current_index: idx,
+        total_count: job.total_count,
+        message_step_index: nextStep,
+        message_steps_total: steps.length,
+        same_contact_continue: true,
+        ...delayBetweenSequence(),
+      }, 'Mensagem enviada (sequência)');
+    }
+
+    const nextContactIdx = idx + 1;
+    const isDone = nextContactIdx >= job.total_count;
 
     await supabaseServiceRole
       .from('chat_broadcasts')
       .update({
-        current_index: nextIndex,
-        last_sent_at: new Date().toISOString(),
+        current_index: nextContactIdx,
+        message_step_index: 0,
+        last_sent_at: nowIso,
         status: isDone ? 'completed' : 'running',
-        completed_at: isDone ? new Date().toISOString() : null,
-        updated_at: new Date().toISOString(),
+        completed_at: isDone ? nowIso : null,
+        last_error: null,
+        updated_at: nowIso,
       })
       .eq('id', jobId);
 
@@ -231,8 +302,12 @@ export async function POST(
       done: isDone,
       success: true,
       contact: { phone: contact.phone, name: contact.name },
-      current_index: nextIndex,
+      current_index: nextContactIdx,
       total_count: job.total_count,
+      message_step_index: 0,
+      message_steps_total: steps.length,
+      same_contact_continue: false,
+      ...delayBetweenContacts(),
     }, isDone ? 'Disparo concluído' : 'Mensagem enviada');
   } catch (err) {
     return serverErrorResponse(err as Error);

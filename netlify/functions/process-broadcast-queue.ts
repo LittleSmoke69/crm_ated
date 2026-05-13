@@ -16,6 +16,8 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { maybeMarkEvolutionInstanceDisconnected } from '../../lib/evolution/mark-instance-disconnected';
+import { computeNextDelaySeconds } from '../../lib/chat/broadcast-delay';
+import { getSequenceDelaySeconds, parseBroadcastSteps } from '../../lib/chat/broadcast-sequence';
 
 interface HandlerResponse {
   statusCode: number;
@@ -118,36 +120,21 @@ async function processOneBroadcast(
 ): Promise<{ sent: number; done: boolean; error?: string }> {
   let sent = 0;
   const contacts = job.contacts as { phone: string; name?: string }[];
-
-  const { data: instance } = await supabase
-    .from('evolution_instances')
-    .select('id, instance_name, apikey, phone_number, workspace_id, user_id, evolution_apis(base_url)')
-    .eq('id', job.instance_id)
-    .single();
-
-  if (!instance) return { sent: 0, done: false, error: 'Instância não encontrada' };
-
-  const evolutionApi = Array.isArray(instance.evolution_apis)
-    ? instance.evolution_apis[0]
-    : instance.evolution_apis;
-
-  if (!evolutionApi?.base_url || !instance.apikey) {
-    return { sent: 0, done: false, error: 'Configuração incompleta da Evolution API' };
+  const steps = parseBroadcastSteps(job.message_config);
+  if (steps.length === 0) {
+    console.error(`${logPrefix} message_config sem steps válidos`);
+    return { sent: 0, done: false, error: 'message_config inválido' };
   }
 
-  const baseUrl = normalizeBaseUrl(evolutionApi.base_url);
-  const msgConfig = job.message_config as {
-    type: string;
-    content?: string;
-    attachment_url?: string;
-    mimetype?: string;
-    caption?: string;
-    fileName?: string;
-  };
-
   let idx: number = job.current_index;
+  let stepIdx =
+    typeof job.message_step_index === 'number' && !Number.isNaN(job.message_step_index)
+      ? job.message_step_index
+      : 0;
+  if (stepIdx < 0 || stepIdx >= steps.length) stepIdx = 0;
+
   let lastSentAt = job.last_sent_at ? new Date(job.last_sent_at).getTime() : 0;
-  const delayMs = (job.delay_seconds || 120) * 1000;
+  let delayMs = 0;
 
   while (idx < job.total_count && idx < contacts.length) {
     const elapsed = Date.now() - workerStart;
@@ -158,20 +145,58 @@ async function processOneBroadcast(
 
     const sinceLastSend = Date.now() - lastSentAt;
     if (lastSentAt > 0 && sinceLastSend < delayMs) {
-      console.log(`${logPrefix} Delay não atingido (${Math.round(sinceLastSend / 1000)}s / ${job.delay_seconds}s)`);
+      console.log(
+        `${logPrefix} Delay não atingido (${Math.round(sinceLastSend / 1000)}s / ${Math.round(delayMs / 1000)}s)`,
+      );
       break;
     }
+
+    const rawRotation = job.broadcast_instances as { id: string; name?: string }[] | null;
+    const rotation =
+      Array.isArray(rawRotation) && rawRotation.length > 0
+        ? rawRotation
+        : [{ id: job.instance_id as string, name: job.instance_name as string }];
+    const instanceUuid = rotation[idx % rotation.length]?.id || job.instance_id;
+
+    const { data: instance } = await supabase
+      .from('evolution_instances')
+      .select('id, instance_name, apikey, phone_number, workspace_id, user_id, evolution_apis(base_url)')
+      .eq('id', instanceUuid)
+      .single();
+
+    if (!instance) {
+      console.error(`${logPrefix} Instância não encontrada: ${instanceUuid}`);
+      return { sent, done: false, error: 'Instância não encontrada' };
+    }
+
+    const evolutionApi = Array.isArray(instance.evolution_apis)
+      ? instance.evolution_apis[0]
+      : instance.evolution_apis;
+
+    if (!evolutionApi?.base_url || !instance.apikey) {
+      return { sent: 0, done: false, error: 'Configuração incompleta da Evolution API' };
+    }
+
+    const baseUrl = normalizeBaseUrl(evolutionApi.base_url);
 
     const contact = contacts[idx];
     const remoteJid = normalizePhone(contact.phone);
     if (!remoteJid) {
-      idx++;
+      idx += 1;
+      stepIdx = 0;
       await supabase
         .from('chat_broadcasts')
-        .update({ current_index: idx, updated_at: new Date().toISOString() })
+        .update({
+          current_index: idx,
+          message_step_index: 0,
+          updated_at: new Date().toISOString(),
+        })
         .eq('id', job.id);
+      delayMs = computeNextDelaySeconds(job) * 1000;
       continue;
     }
+
+    const msgConfig = steps[stepIdx];
 
     try {
       const evolutionRes = await sendEvolutionMessage(
@@ -250,28 +275,49 @@ async function processOneBroadcast(
         // falha ao persistir não para o disparo
       }
 
-      idx++;
-      sent++;
+      const moreSteps = stepIdx < steps.length - 1;
       lastSentAt = Date.now();
-      const isDone = idx >= job.total_count;
 
-      await supabase
-        .from('chat_broadcasts')
-        .update({
-          current_index: idx,
-          last_sent_at: new Date().toISOString(),
-          status: isDone ? 'completed' : 'running',
-          completed_at: isDone ? new Date().toISOString() : null,
-          last_error: null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', job.id);
-
-      console.log(
-        `${logPrefix} Enviado ${idx}/${job.total_count}: ${contact.name || contact.phone}`,
-      );
-
-      if (isDone) return { sent, done: true };
+      if (moreSteps) {
+        stepIdx += 1;
+        await supabase
+          .from('chat_broadcasts')
+          .update({
+            message_step_index: stepIdx,
+            last_sent_at: now,
+            status: 'running',
+            last_error: null,
+            updated_at: now,
+          })
+          .eq('id', job.id);
+        delayMs = getSequenceDelaySeconds(job.message_config) * 1000;
+        sent += 1;
+        console.log(
+          `${logPrefix} Sequência ${stepIdx}/${steps.length} contato ${idx + 1}/${job.total_count}: ${contact.name || contact.phone}`,
+        );
+      } else {
+        idx += 1;
+        stepIdx = 0;
+        const isDone = idx >= job.total_count;
+        await supabase
+          .from('chat_broadcasts')
+          .update({
+            current_index: idx,
+            message_step_index: 0,
+            last_sent_at: now,
+            status: isDone ? 'completed' : 'running',
+            completed_at: isDone ? now : null,
+            last_error: null,
+            updated_at: now,
+          })
+          .eq('id', job.id);
+        delayMs = computeNextDelaySeconds(job) * 1000;
+        sent += 1;
+        console.log(
+          `${logPrefix} Enviado ${idx}/${job.total_count}: ${contact.name || contact.phone} (instância ${instance.instance_name})`,
+        );
+        if (isDone) return { sent, done: true };
+      }
     } catch (err: any) {
       const msg = err?.message || String(err);
       await maybeMarkEvolutionInstanceDisconnected(supabase, instance.id, msg, 'netlify/broadcast');
@@ -287,15 +333,18 @@ async function processOneBroadcast(
         return { sent, done: false, error: msg };
       }
 
-      idx++;
+      idx += 1;
+      stepIdx = 0;
       await supabase
         .from('chat_broadcasts')
         .update({
           current_index: idx,
+          message_step_index: 0,
           last_error: msg,
           updated_at: new Date().toISOString(),
         })
         .eq('id', job.id);
+      delayMs = computeNextDelaySeconds(job) * 1000;
       console.warn(`${logPrefix} Contato ${idx} pulado: ${msg}`);
     }
   }

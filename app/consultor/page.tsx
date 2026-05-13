@@ -921,7 +921,7 @@ export default function ConsultorPage() {
               <LayoutDashboard className="w-6 h-6 text-[#8CD955]" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-gray-800 dark:text-white">Meu Desempenho</h1>
+              <h1 className="text-2xl font-bold text-gray-800 dark:text-white">Desempenho</h1>
               <p className="text-sm text-gray-500 dark:text-gray-400">Acompanhe suas métricas e resultados pessoais</p>
             </div>
           </div>

@@ -8,7 +8,10 @@ import {
 } from '@/lib/services/gestor-names-by-crm-banca';
 import {
   listRedirectCampaignConsultorAssignments,
+  listRedirectProjectLinkedConsultorAssignments,
   mergeCampaignConsultorAssignments,
+  mergeRedirectAssignmentLists,
+  type CombinedCampaignConsultorAssignment,
   type RedirectConsultorGroup,
 } from '@/lib/services/meta-redirect-consultor-attribution';
 /**
@@ -52,6 +55,10 @@ export interface CampaignAssignedConsultor {
   total_deposited: number;
   source: 'manual' | 'redirect' | 'manual_redirect';
   redirect_groups: RedirectConsultorGroup[];
+  /** Atribuição por UTM / cliques no redirect */
+  redirect_from_clicks?: boolean;
+  /** Atribuição pelos grupos do projeto em `redirect_project_id` da campanha */
+  redirect_from_linked_project?: boolean;
 }
 
 export interface CampaignConsultorSummary {
@@ -545,9 +552,14 @@ export async function buildCampaignConsultorSummary(
   const result = new Map<string, CampaignConsultorSummary>();
   if (!bancaId || !campaignIds.length) return result;
 
-  const [manualAssignments, redirectAssignments] = await Promise.all([
+  const [manualAssignments, redirectFromClicks, redirectFromLinkedProject] = await Promise.all([
     listCampaignConsultorAssignments(bancaId, campaignIds),
     listRedirectCampaignConsultorAssignments({ bancaId, campaignIds }),
+    listRedirectProjectLinkedConsultorAssignments({ bancaId, campaignIds }),
+  ]);
+  const redirectAssignments = mergeRedirectAssignmentLists([
+    ...redirectFromClicks,
+    ...redirectFromLinkedProject,
   ]);
   const assignments = mergeCampaignConsultorAssignments(manualAssignments, redirectAssignments);
   if (!assignments.length) {
@@ -579,20 +591,24 @@ export async function buildCampaignConsultorSummary(
   campaignIds.forEach((campaignId) => {
     const campaignAssignments = assignments.filter((a) => a.campaign_id === campaignId);
 
-    const assignedConsultors: CampaignAssignedConsultor[] = campaignAssignments.map((assignment) => {
-      const consultorId = assignment.consultor_id;
-      const p = profileById.get(consultorId);
-      const m = metricsByConsultorId.get(consultorId);
-      return {
-        id: consultorId,
-        email: p?.email || '',
-        full_name: p?.full_name || null,
-        total_leads: Number(m?.total_leads || 0),
-        total_deposited: Number(m?.total_deposited || 0),
-        source: assignment?.source ?? 'manual',
-        redirect_groups: assignment?.redirect_groups ?? [],
-      };
-    });
+    const assignedConsultors: CampaignAssignedConsultor[] = campaignAssignments.map(
+      (assignment: CombinedCampaignConsultorAssignment) => {
+        const consultorId = assignment.consultor_id;
+        const p = profileById.get(consultorId);
+        const m = metricsByConsultorId.get(consultorId);
+        return {
+          id: consultorId,
+          email: p?.email || '',
+          full_name: p?.full_name || null,
+          total_leads: Number(m?.total_leads || 0),
+          total_deposited: Number(m?.total_deposited || 0),
+          source: assignment.source,
+          redirect_groups: assignment.redirect_groups ?? [],
+          redirect_from_clicks: Boolean(assignment.redirect_from_clicks),
+          redirect_from_linked_project: Boolean(assignment.redirect_from_linked_project),
+        };
+      }
+    );
 
     const consultor_total_leads = assignedConsultors.reduce((sum, c) => sum + (c.total_leads || 0), 0);
     const consultor_total_deposited = assignedConsultors.reduce((sum, c) => sum + (c.total_deposited || 0), 0);

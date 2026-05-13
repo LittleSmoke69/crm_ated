@@ -96,7 +96,7 @@ function buildMetadataLines(meta: CsvExportMetadata): string[] {
     timeZone: 'America/Sao_Paulo',
   });
 
-  lines.push(`# Relatório Zaploto - Meu Desempenho`);
+  lines.push(`# Relatório Zaploto - Desempenho`);
   lines.push(`# Banca: ${meta.banca || 'Todas as bancas'}${meta.bancaUrl ? ` (${meta.bancaUrl})` : ''}`);
   lines.push(
     `# Período: ${meta.dateFrom ? formatDateBr(meta.dateFrom) : 'início'} a ${

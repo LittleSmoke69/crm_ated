@@ -833,16 +833,25 @@ export async function runMeshStart(
   }
 
   // ─── Disparo inicial ─────────────────────────────────────────────────────
-  // Cada instância DO USUÁRIO dispara uma mensagem para 1-5 destinatários sorteados.
-  // Assim o usuário vê na hora, no próprio WhatsApp, mensagens saindo dos telefones dele —
-  // sinal visual de que o maturador iniciou. Se não houver instâncias do usuário na rede
-  // (ex.: super-admin sem instâncias próprias), faz fallback pra primeira instância da rede.
-  const userOwnedSenders = participants.map((p, idx) => ({ p, idx, jobId: createdJobIds[idx] }))
-    .filter((x) => userOwnedEvoIds.has(x.p.evolutionInstanceId));
+  // Lógica invertida: 1-5 instâncias de OUTROS são os remetentes e as instâncias
+  // DO USUÁRIO são os destinatários. Assim o usuário VÊ mensagens chegando no
+  // próprio WhatsApp imediatamente após o Start — confirmação visual de que a rede
+  // está ativa. Fallback: se o usuário não tiver instâncias próprias, as instâncias
+  // do usuário passam a ser remetentes para as demais.
+  const withJobId = participants.map((p, idx) => ({ p, idx, jobId: createdJobIds[idx] }));
+  const userOwnedEntries  = withJobId.filter((x) =>  userOwnedEvoIds.has(x.p.evolutionInstanceId));
+  const otherEntries      = withJobId.filter((x) => !userOwnedEvoIds.has(x.p.evolutionInstanceId));
 
-  const initialSendersForFire = userOwnedSenders.length > 0
-    ? userOwnedSenders.slice(0, MESH_INITIAL_FIRE_MAX_TARGETS) // limita pra não inundar
-    : [{ p: participants[0], idx: 0, jobId: createdJobIds[0] }];
+  // Remetentes = instâncias alheias (sorteia 1-5); destinatários = instâncias do usuário
+  // Se não houver instâncias alheias suficientes, inverte os papéis como fallback.
+  const senderPool    = otherEntries.length   >= 1 ? otherEntries    : userOwnedEntries;
+  const recipientPool = userOwnedEntries.length >= 1 ? userOwnedEntries : otherEntries;
+
+  const senderCount = Math.max(
+    MESH_INITIAL_FIRE_MIN_TARGETS,
+    Math.min(MESH_INITIAL_FIRE_MAX_TARGETS, senderPool.length)
+  );
+  const initialSendersForFire = [...senderPool].sort(() => Math.random() - 0.5).slice(0, senderCount);
 
   const initialPool = await getVirginMessagesAsSteps(supabase);
   const initialFireSummary: Array<{ from: string; to: string[] }> = [];
@@ -850,20 +859,13 @@ export async function runMeshStart(
   if (initialPool.length > 0) {
     for (const sender of initialSendersForFire) {
       const senderPart = sender.p;
-      const others = participants.filter((p) => p.masterInstanceId !== senderPart.masterInstanceId);
-      if (others.length === 0) continue;
+      // Destinatários = instâncias do usuário (exceto o próprio remetente, se for o mesmo)
+      const targets = recipientPool
+        .filter((x) => x.p.masterInstanceId !== senderPart.masterInstanceId)
+        .map((x) => x.p);
+      if (targets.length === 0) continue;
 
-      const targetCount = Math.max(
-        MESH_INITIAL_FIRE_MIN_TARGETS,
-        Math.min(
-          MESH_INITIAL_FIRE_MAX_TARGETS,
-          others.length,
-          MESH_INITIAL_FIRE_MIN_TARGETS + Math.floor(Math.random() * MESH_INITIAL_FIRE_MAX_TARGETS)
-        )
-      );
-      const shuffledTargets = [...others].sort(() => Math.random() - 0.5).slice(0, targetCount);
-
-      const initialStepsToInsert = shuffledTargets.map((target, idx) => {
+      const initialStepsToInsert = targets.map((target, idx) => {
         const msg = initialPool[Math.floor(Math.random() * initialPool.length)];
         const phone = String(target.phoneNumber || '').trim();
         const jid = phone.includes('@') ? phone : `${phone}@s.whatsapp.net`;
@@ -887,7 +889,7 @@ export async function runMeshStart(
           .eq('id', sender.jobId);
         initialFireSummary.push({
           from: senderPart.instanceName,
-          to: shuffledTargets.map((t) => t.instanceName),
+          to: targets.map((t) => t.instanceName),
         });
       } else {
         console.warn(
@@ -903,9 +905,8 @@ export async function runMeshStart(
         .join(' | ')
     : '(pool de mensagens vazio ou sem alvos)';
 
-  // Marca os senders do disparo inicial em mesh_last_sender_master_ids do controller —
-  // assim a UI mostra "Último envio: <suas instâncias>" mesmo antes do primeiro ciclo do loop.
-  // Também conta o disparo inicial como "ciclo #1" (mesh_cycle_count=1).
+  // Registra os remetentes do disparo inicial no controller (equidade dos ciclos)
+  // e conta como ciclo #1.
   const initialSenderMasterIds = initialSendersForFire
     .filter((s) => initialFireSummary.some((sum) => sum.from === s.p.instanceName))
     .map((s) => s.p.masterInstanceId);

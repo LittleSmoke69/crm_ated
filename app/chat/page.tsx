@@ -6,6 +6,7 @@ import { withTenantSlug } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import Link from '@/components/WhitelabelLink';
 import { supabase } from '@/lib/supabase';
+import { normalizeBroadcastPhoneDigits } from '@/lib/chat/broadcast-phone';
 import {
   MessageSquare,
   Send,
@@ -905,7 +906,9 @@ export default function ChatPage() {
       const cols = lines[i].split(delimiter);
       const digits = (cols[telIdx] || '').replace(/\D/g, '');
       if (!digits || digits.length < 8) continue;
-      contacts.push({ phone: digits, name: nameIdx >= 0 ? (cols[nameIdx] || '').trim() : undefined });
+      const phone = normalizeBroadcastPhoneDigits(digits);
+      if (phone.length < 8) continue;
+      contacts.push({ phone, name: nameIdx >= 0 ? (cols[nameIdx] || '').trim() : undefined });
     }
     return contacts;
   }, []);
@@ -961,6 +964,7 @@ export default function ChatPage() {
     const MAX_DOWN_RETRIES = 5;
 
     while (!broadcastAbortRef.current) {
+      let nextWaitMs = (broadcastDelay || 30) * 1000;
       try {
         const res = await fetch(`/api/chat/broadcast/${jobId}/process-next`, {
           method: 'POST',
@@ -977,6 +981,7 @@ export default function ChatPage() {
           current_index?: number;
           total_count?: number;
           error?: string;
+          next_delay_seconds?: number;
         };
 
         if (d?.paused) { setBroadcastRunning(false); break; }
@@ -1025,11 +1030,15 @@ export default function ChatPage() {
         if (d?.success) {
           loadConversationsFromApi(false).catch(() => {});
         }
+        if (typeof d?.next_delay_seconds === 'number' && d.next_delay_seconds > 0) {
+          nextWaitMs = d.next_delay_seconds * 1000;
+        } else {
+          nextWaitMs = (broadcastDelay || 30) * 1000;
+        }
       } catch { /* falha de rede — continua */ }
 
       if (!broadcastAbortRef.current) {
-        // Aguarda o delay configurado
-        await new Promise((r) => setTimeout(r, (broadcastDelay || 30) * 1000));
+        await new Promise((r) => setTimeout(r, nextWaitMs));
       }
     }
     setBroadcastRunning(false);

@@ -357,7 +357,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const itemGestaoBanca: MenuItem = { href: '/dono-banca', icon: BarChart3, label: 'Gestão de Banca' };
   const itemGestaoTrafego: MenuItem = { href: '/gestor-trafego', icon: BarChart3, label: 'Gestão de Tráfego' };
   const itemGestaoConsultores: MenuItem = { href: '/gerente', icon: Briefcase, label: 'Gestão de Consultores' };
-  const itemMeuDesempenho: MenuItem = { href: '/consultor', icon: BarChart3, label: 'Meu Desempenho' };
+  const itemMeuDesempenho: MenuItem = { href: '/consultor', icon: BarChart3, label: 'Desempenho' };
   const itemDesempenhoDetalhado: MenuItem = { href: '/consultor/detalhado', icon: ClipboardList, label: 'Desempenho Detalhado' };
   const itemMetaAds: MenuItem = { href: '/admin/meta', icon: BarChart3, label: 'Meta Ads' };
   const itemVslRedirect: MenuItem = { href: '/admin/vsl', icon: ExternalLink, label: 'VSL & Redirect' };
